@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, writeFile, appendFile, rm, rename, stat, realpath } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, stat, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { collectShell, type ShellState } from "./main.ts";
+import { collectShell } from "./main.ts";
+import { runPlugin } from "../../hub/src/run-plugin.ts";
+import { setup } from "../../hub/test/helpers.ts";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 
 const temporary: string[] = [];
@@ -77,45 +79,79 @@ test("开启 errexit 时缓冲目录不可用也不退出用户 shell", async ()
   expect(code).toBe(0); expect(stderr).toBe(""); expect(stdout.trim()).toBe("继续工作");
 });
 
-test("按字节读取、保留半行、跳过坏行、识别 .git 文件及 inode 更换和截断", async () => {
+test("轮转读取遗留 pending、坏行及无末尾换行，重读自然键稳定", async () => {
   const dir = await temp(), file = path.join(dir, "shell.jsonl"), cwd = path.join(dir, "repo", "子目录");
   await mkdir(cwd, { recursive: true }); await writeFile(path.join(dir, "repo", ".git"), "gitdir: /合成路径");
-  const first = entry(cwd, 'echo "中文"\n第二行'), second = entry(cwd, "第二条", first.start_ms + 1);
-  const prefix = JSON.stringify(first) + "\n坏行\n{}\n";
-  const partial = JSON.stringify(second);
-  await writeFile(file, prefix + partial.slice(0, 20));
+  const first = entry(cwd, 'echo "中文"\n第二行', Date.now() - 9 * 86400_000);
+  const second = entry(cwd, "第二条", first.start_ms + 1);
+  const leftover = path.join(dir, "shell.000.pending.jsonl");
+  await writeFile(leftover, JSON.stringify(first) + "\n坏行\n{}\n残缺");
+  await writeFile(file, JSON.stringify(second));
   const records: RecordV1[] = [], logs: string[] = [];
-  const run = (state?: ShellState) => collectShell({ file, device: "test-mac", state, emit: (r) => records.push(r), log: (m) => logs.push(m) });
-  let state = await run();
-  expect(state.offset).toBe(Buffer.byteLength(prefix)); expect(records).toHaveLength(1); expect(logs).toEqual(["shell：跳过 2 条坏行"]);
-  expect(records[0]!.context).toEqual({ cwd, repo: path.dirname(cwd) });
+  const run = () => collectShell({ file, device: "test-mac", emit: (r) => records.push(r), log: (m) => logs.push(m) });
+  const result = await run();
+  expect(result.state).toEqual({ version: 2 }); expect(result.release).toHaveLength(2);
+  expect(result.release[0]).toBe(leftover); expect(logs).toEqual(["shell：跳过 3 条坏行"]);
+  expect(records).toHaveLength(2); expect(records[0]!.context).toEqual({ cwd, repo: path.dirname(cwd) });
   expect(records[0]!.source_ref).toBe(`123:${first.start_ms}`);
-  expect(records[0]!.title).not.toContain("\n"); expect(records[0]!.body).toContain(first.command);
-  await appendFile(file, partial.slice(20) + "\n"); state = await run(state);
-  expect(records).toHaveLength(2); expect(state.offset).toBe((await stat(file)).size);
-  state = await run(state); expect(records).toHaveLength(2);
-  await writeFile(file, JSON.stringify(entry(cwd, "截断")) + "\n"); state = await run(state); expect(records).toHaveLength(3);
-  await rename(file, file + ".old"); await writeFile(file, JSON.stringify(entry(cwd, "轮转")) + "\n");
-  await run(state); expect(records).toHaveLength(4);
+  await run(); expect(records).toHaveLength(4);
+  expect(records[2]!.source_ref).toBe(records[0]!.source_ref);
   for (const record of records) expect(validateRecord(record)).toEqual({ ok: true });
 });
 
-test("首次默认七天、--since 覆盖、长标题、缺失文件和 CLI 只读 state", async () => {
+test("--since 过滤、长标题、缺失目录以及 CLI 忽略旧 state 且只读", async () => {
   const dir = await temp(), file = path.join(dir, "shell.jsonl"), stateFile = path.join(dir, "state.json");
-  const old = entry(dir, "旧命令", Date.now() - 9 * 86400_000), recent = entry(dir, "中".repeat(180));
+  const old = entry(dir, "旧命令", 1000), recent = entry(dir, "中".repeat(180));
   await writeFile(file, [old, recent].map((value) => JSON.stringify(value)).join("\n") + "\n");
   const records: RecordV1[] = [];
-  await collectShell({ file, device: "mac", emit: (r) => records.push(r) });
+  await collectShell({ file, device: "mac", since: new Date(2000), emit: (r) => records.push(r) });
   expect(records).toHaveLength(1); expect(Array.from(records[0]!.title)).toHaveLength(120);
-  await collectShell({ file, device: "mac", since: new Date(0), emit: (r) => records.push(r) }); expect(records).toHaveLength(3);
-  expect(await collectShell({ file: file + ".absent", device: "mac", emit: () => {} })).toEqual({ offset: 0, inode: null });
-  const stateText = JSON.stringify({ offset: 0, inode: null }); await writeFile(stateFile, stateText);
+  expect(await collectShell({ file: path.join(dir, "absent", "shell.jsonl"), device: "mac", emit: () => {} })).toEqual({ state: { version: 2 }, release: [] });
+  const stateText = JSON.stringify({ offset: 999999, inode: "old" }); await writeFile(stateFile, stateText);
   const child = Bun.spawn([process.execPath, main, "--device", "mac", "--state", stateFile], {
     env: { ...process.env, RA_SHELL_LOG: file }, stdout: "pipe", stderr: "pipe",
   });
   const output = await new Response(child.stdout).text(); expect(await child.exited).toBe(0);
   const lines = output.trim().split("\n").map((line) => JSON.parse(line));
-  expect(lines.map((line) => line.type)).toEqual(["record", "checkpoint"]);
-  expect(validateRecord(lines[0].record)).toEqual({ ok: true });
+  expect(lines.map((line) => line.type)).toEqual(["record", "record", "checkpoint"]);
+  expect(lines[2].state).toEqual({ version: 2 }); expect(lines[2].release).toHaveLength(1);
   expect(await readFile(stateFile, "utf8")).toBe(stateText);
+});
+
+async function hookCommand(file: string, command: string) {
+  const child = Bun.spawn(["zsh", "-f", "-c", `source '${hook}'; _ra_shell_preexec '${command}'; ${command}; _ra_shell_precmd`], {
+    env: { ...process.env, RA_SHELL_LOG: file }, stdout: "pipe", stderr: "pipe",
+  });
+  expect(await child.exited).toBe(0);
+}
+
+test("真实钩子轮转期间的新命令写入新文件，runner 入库后只留下新 shell.jsonl", async () => {
+  const ctx = setup();
+  try {
+    const dir = path.join(ctx.dir, "buffer"), file = path.join(dir, "shell.jsonl");
+    await hookCommand(file, "echo first");
+    const records: RecordV1[] = [];
+    const collecting = collectShell({ file, device: "mac", emit: (r) => records.push(r) });
+    // 等观察到 rename，再模拟钩子按原路径追加。
+    for (let i = 0; i < 100; i++) {
+      if ((await readdir(dir)).some((name) => name.endsWith(".pending.jsonl"))) break;
+      await Bun.sleep(5);
+    }
+    await hookCommand(file, "echo second");
+    await collecting;
+    expect(records.map((r) => r.title)).toEqual(["echo first"]);
+    expect(await readFile(file, "utf8")).toContain("echo second");
+    // 用 zsh 设置子进程环境，真正以 CLI 运行插件。
+    const running = runPlugin({ db: ctx.db, dataDir: ctx.dir, name: "shell", command: ["env", `RA_SHELL_LOG=${file}`, process.execPath, main] });
+    for (let i = 0; i < 100; i++) {
+      if ((await readdir(dir)).filter((name) => name.endsWith(".pending.jsonl")).length === 2) break;
+      await Bun.sleep(5);
+    }
+    await hookCommand(file, "echo third");
+    const result = await running;
+    expect(result.stateWritten).toBe(true); expect(result.accepted).toBe(2); expect(result.released).toBe(2);
+    expect(await readdir(dir)).toEqual(["shell.jsonl"]);
+    expect(await readFile(file, "utf8")).toContain("echo third");
+    expect(JSON.parse(await readFile(path.join(ctx.dir, "plugins/shell/state.json"), "utf8"))).toEqual({ version: 2 });
+  } finally { ctx.cleanup(); }
 });

@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
-import { open, access } from "node:fs/promises";
+import { access, stat, rename, readdir } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 import path from "node:path";
 import os from "node:os";
-import { clampTitle, emitCheckpoint, emitRecord, parsePluginArgs, readState, toLocalIso, ulid, validateRecord, type RecordV1 } from "../../packages/record/index.ts";
+import { clampTitle, emitRecord, parsePluginArgs, toLocalIso, ulid, validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 
-export interface ShellState { offset: number; inode: string | null; device?: string; }
+export interface ShellState { version: 2; }
 interface ShellEntry { start_ms: number; duration_ms: number; exit_code: number; cwd: string; command: string; pid: number; }
 
 function isEntry(value: unknown): value is ShellEntry {
@@ -27,65 +29,53 @@ async function findRepo(cwd: string): Promise<string | null> {
 export async function collectShell(options: {
   file: string; device: string; state?: ShellState; since?: Date | null;
   emit: (record: RecordV1) => void; log?: (message: string) => void;
-}): Promise<ShellState> {
+}): Promise<{ state: ShellState; release: string[] }> {
   const log = options.log ?? ((message) => console.error(message));
-  let handle;
-  try { handle = await open(options.file, "r"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { offset: 0, inode: null }; throw error; }
+  const since = options.since?.valueOf() ?? -Infinity;
+  if (Number.isNaN(since)) throw new Error("无效的 --since 时间");
+  const file = path.resolve(options.file), dir = path.dirname(file);
   try {
-    const stat = await handle.stat({ bigint: true });
-    const inode = stat.ino.toString(), device = stat.dev.toString();
-    const old = options.state;
-    let offset = old?.inode === inode && (!old.device || old.device === device)
-      && Number.isSafeInteger(old.offset) && old.offset >= 0 && BigInt(old.offset) <= stat.size ? old.offset : 0;
-    const since = options.since?.valueOf() ?? (old?.inode ? -Infinity : Date.now() - 7 * 86400_000);
-    if (Number.isNaN(since)) throw new Error("无效的 --since 时间");
-    let position = offset, pending = Buffer.alloc(0), bad = 0;
-    const chunk = Buffer.alloc(64 * 1024);
-    const repoCache = new Map<string, string | null>();
-    while (BigInt(position) < stat.size) {
-      const length = Number(stat.size - BigInt(position) < BigInt(chunk.length) ? stat.size - BigInt(position) : BigInt(chunk.length));
-      const { bytesRead } = await handle.read(chunk, 0, length, position);
-      if (!bytesRead) break;
-      position += bytesRead;
-      pending = Buffer.concat([pending, chunk.subarray(0, bytesRead)]);
-      let begin = 0, end: number;
-      while ((end = pending.indexOf(10, begin)) !== -1) {
-        const line = pending.subarray(begin, end).toString("utf8");
-        const lineBytes = end + 1 - begin;
-        let value: unknown;
-        try { value = JSON.parse(line); } catch { bad++; }
-        if (value !== undefined) {
-          if (!isEntry(value)) bad++;
-          else if (value.start_ms >= since) {
-            if (!repoCache.has(value.cwd)) repoCache.set(value.cwd, await findRepo(value.cwd));
-            const record: RecordV1 = {
-              id: ulid(), schema: 1, device: options.device, source: "mac.shell", kind: "event",
-              source_ref: `${value.pid}:${value.start_ms}`, t_start: toLocalIso(value.start_ms),
-              context: { cwd: value.cwd, repo: repoCache.get(value.cwd) ?? null },
-              title: clampTitle(value.command, 120),
-              body: `${value.command}\n\n退出码：${value.exit_code}\n耗时：${value.duration_ms} ms`,
-              capture: { method: "hook" }, sensitivity: "normal",
-            };
-            if (validateRecord(record).ok) options.emit(record); else bad++;
-          }
-        }
-        offset += lineBytes;
-        begin = end + 1;
-      }
-      pending = Buffer.from(pending.subarray(begin));
+    if ((await stat(file)).size > 0) {
+      await rename(file, path.join(dir, `shell.${ulid()}.pending.jsonl`));
+      // 等待已经打开旧文件的钩子完成本次追加。
+      await Bun.sleep(200);
     }
-    if (bad) log(`shell：跳过 ${bad} 条坏行`);
-    // 尾部未完成的一行留到下一次，偏移始终按原始字节计算。
-    return { offset, inode, device };
-  } finally { await handle.close(); }
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  let names: string[];
+  try { names = await readdir(dir); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: { version: 2 }, release: [] }; throw error; }
+  const release: string[] = [], repoCache = new Map<string, string | null>();
+  let bad = 0;
+  for (const name of names.filter((name) => /^shell\..+\.pending\.jsonl$/.test(name)).sort()) {
+    const pendingFile = path.join(dir, name);
+    const lines = createInterface({ input: createReadStream(pendingFile), crlfDelay: Infinity });
+    for await (const line of lines) {
+      let value: unknown;
+      try { value = JSON.parse(line); } catch { bad++; continue; }
+      if (!isEntry(value)) { bad++; continue; }
+      if (value.start_ms < since) continue;
+      if (!repoCache.has(value.cwd)) repoCache.set(value.cwd, await findRepo(value.cwd));
+      const record: RecordV1 = {
+        id: ulid(), schema: 1, device: options.device, source: "mac.shell", kind: "event",
+        source_ref: `${value.pid}:${value.start_ms}`, t_start: toLocalIso(value.start_ms),
+        context: { cwd: value.cwd, repo: repoCache.get(value.cwd) ?? null },
+        title: clampTitle(value.command, 120),
+        body: `${value.command}\n\n退出码：${value.exit_code}\n耗时：${value.duration_ms} ms`,
+        capture: { method: "hook" }, sensitivity: "normal",
+      };
+      if (validateRecord(record).ok) options.emit(record); else bad++;
+    }
+    release.push(pendingFile);
+  }
+  if (bad) log(`shell：跳过 ${bad} 条坏行`);
+  return { state: { version: 2 }, release };
 }
 
 if (import.meta.main) {
   try {
     const args = parsePluginArgs();
-    const state = await collectShell({ file: process.env.RA_SHELL_LOG ?? path.join(os.homedir(), "Library/Application Support/record-anything/buffer/shell.jsonl"), device: args.device,
-      state: readState<ShellState>(args.stateFile, { offset: 0, inode: null }), since: args.since, emit: emitRecord });
-    emitCheckpoint(state);
+    const result = await collectShell({ file: process.env.RA_SHELL_LOG ?? path.join(os.homedir(), "Library/Application Support/record-anything/buffer/shell.jsonl"), device: args.device,
+      since: args.since, emit: emitRecord });
+    process.stdout.write(JSON.stringify({ type: "checkpoint", ...result }) + "\n");
   } catch (error) { console.error(`shell：${(error as Error).message}`); process.exitCode = 1; }
 }

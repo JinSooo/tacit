@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config.ts";
 import { HubDB } from "./db.ts";
@@ -8,7 +9,25 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, name] = argv;
   const separator = argv.indexOf("--");
   if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | run-plugin <name> -- <插件命令...>");
-  if (command === "run-plugin" && (!name || separator !== 2 || !argv[3])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
+  if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
+  if (command === "run-plugin") {
+    let hub: string | undefined, tokenFile: string | undefined;
+    for (let i = 2; i < separator; i += 2) {
+      const flag = argv[i], value = argv[i + 1];
+      if (!value || i + 1 >= separator) throw new Error("参数缺少值");
+      if (flag === "--hub") hub = value;
+      else if (flag === "--token-file") tokenFile = value;
+      else throw new Error("未知参数");
+    }
+    if (hub) {
+      const dataDir = process.env.RA_DATA_DIR ?? join(homedir(), "Library/Application Support/record-anything");
+      const summary = await runPlugin({ hub, tokenFile, dataDir, name: name!, command: argv.slice(separator + 1) });
+      console.log(JSON.stringify(summary));
+      if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors || summary.releaseErrors) process.exitCode = 1;
+      return;
+    }
+    if (tokenFile) throw new Error("--token-file 需要 --hub");
+  }
   const config = loadConfig();
   const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
   if (command === "serve") {
@@ -22,7 +41,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   } else {
     try {
       const summary = await runPlugin({ db, dataDir: config.dataDir, name: name!, command: argv.slice(separator + 1), report: result => console.log(JSON.stringify(result)) });
-      if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors) process.exitCode = 1;
+      if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors || summary.releaseErrors) process.exitCode = 1;
     } finally { db.close(); }
   }
 }

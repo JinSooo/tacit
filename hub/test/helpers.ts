@@ -1,3 +1,4 @@
+import { createServer } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,4 +16,16 @@ export function setup() {
   const file = join(dir, "history.db");
   const db = new HubDB(file, config.dbKey);
   return { dir, config, file, db, cleanup() { db.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+// 只跳过操作系统明确禁止监听的环境，其他网络错误仍使测试失败。
+export function networkDenied(): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EPERM" || error.code === "EACCES") resolve(true);
+      else reject(error);
+    });
+    probe.listen(0, "127.0.0.1", () => probe.close(() => resolve(false)));
+  });
 }

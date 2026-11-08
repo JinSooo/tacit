@@ -44,7 +44,7 @@ export interface RecordV1 {
 /** Lines a plugin writes to stdout, one JSON object per line. */
 export type PluginLine =
   | { type: "record"; record: RecordV1 }
-  | { type: "checkpoint"; state: unknown };
+  | { type: "checkpoint"; state: unknown; release?: string[] };
 
 // ---------- ULID ----------
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -104,8 +104,10 @@ export function readState<T>(stateFile: string | null, fallback: T): T {
 export function emitRecord(record: RecordV1): void {
   process.stdout.write(JSON.stringify({ type: "record", record } satisfies PluginLine) + "\n");
 }
-export function emitCheckpoint(state: unknown): void {
-  process.stdout.write(JSON.stringify({ type: "checkpoint", state } satisfies PluginLine) + "\n");
+/** release：已完整读完、hub 接收后可以删除的缓冲文件（绝对路径，必须在数据目录 buffer/ 下）。 */
+export function emitCheckpoint(state: unknown, release?: string[]): void {
+  const line: PluginLine = release?.length ? { type: "checkpoint", state, release } : { type: "checkpoint", state };
+  process.stdout.write(JSON.stringify(line) + "\n");
 }
 
 /** Trims to the schema's title limit on a code-point boundary. */
