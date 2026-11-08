@@ -247,7 +247,7 @@ AX 扫描约束（实验 0-B）：
 - **会话开始时注入**：SessionStart hook 带当前目录问中枢，注入当前状态 + 匹配项目的活跃线程简略版，**不超过 800 token**，附一行可用工具提示。会话压缩后重新注入。
   - Claude Code：hook 输出 `hookSpecificOutput.additionalContext`（必须嵌套，放顶层会被丢弃）；写在用户级 settings，不走插件（插件 hook 有已知 bug）。
   - Codex：SessionStart hook（需 `codex_hooks = true`，开工时核实）。
-- **MCP（只读，stdio）**：两边配置里只写一条命令（`bun …/hub/src/cli.ts mcp`），进程自己从钥匙串取 hub token 再调用 hub 的 `/v1/agent/*`，token 不出现在任何配置文件里。（2026-11-08 确认，原方案是本机 HTTP）读取逻辑和审计都在 hub 里，MCP 进程只做转发。
+- **MCP（只读，stdio）**：两边配置里只写一条命令（`bun …/hub/src/cli.ts mcp`），进程自己读数据目录里的 hub token 文件（0600） 再调用 hub 的 `/v1/agent/*`，token 不出现在任何配置文件里。（2026-11-08 确认，原方案是本机 HTTP）读取逻辑和审计都在 hub 里，MCP 进程只做转发。
   - `now()`：当前状态
   - `get(id, level)`：读线程、项目、人、日记；`level` = `brief` | `detail` | `evidence`，Agent 自己选读几层
   - `search(query, time_range)`
