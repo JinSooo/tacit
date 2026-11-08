@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { DistillStore } from "../src/distill/store.ts";
 import * as P from "../src/distill/prompts.ts";
-import { distillRound, type LLM } from "../src/distill/run.ts";
+import { classifyStep, digestStep, touchThread, projectStep, LIMITS, distillRound, type LLM } from "../src/distill/run.ts";
 import type { LLMRequest } from "../src/llm/index.ts";
 import { fixture, setup } from "./helpers.ts";
+import { AgentReads } from "../src/agent.ts";
+import { HubDB } from "../src/db.ts";
 import type { RecordV1 } from "../../packages/record/index.ts";
 
 // 全部用合成数据和假模型，不调用任何真实模型。
@@ -34,7 +36,7 @@ function framesIn(prompt: string): { id: string; key: string; records?: { id: st
 }
 
 interface Call { kind: string; req: LLMRequest }
-function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>, prompt: string) => P.AssignOutput["items"]; failAssign: boolean; done: boolean }> = {}) {
+function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>, prompt: string) => P.AssignOutput["items"]; failAssign: boolean; done: boolean; classification: P.Classification }> = {}) {
   const calls: Call[] = [];
   const llm: LLM = {
     async complete<T>(req: LLMRequest) {
@@ -52,7 +54,7 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
       if (kind === "thread") {
         const ids = framesIn(req.prompt).flatMap(f => (f.records ?? []).map(r => r.id)).filter(Boolean);
         return ok({
-          title: "合成线程", status_hint: behave.done ? "done_candidate" : "active", invalidate: [],
+          domain: behave.classification?.domain ?? "work", in_project: behave.classification?.in_project ?? true, title: "合成线程", status_hint: behave.done ? "done_candidate" : "active", invalidate: [],
           detail: { goal: "合成目标", progress: "合成进展", artifacts: { files: [], urls: [], commands: [], people: [] },
             quotes: [{ text: "合成原话", record_id: ids[0] }, { text: "编造的原话", record_id: "FAKE" }] },
           new_facts: [
@@ -170,4 +172,112 @@ test("遇到额度限制后本轮其余调用直接跳过，原因写进输出",
   expect(calls).toBe(1);
   expect(String(out.stopped)).toContain("5-hour limit");
   expect(ctx.db.db.prepare("SELECT status FROM frames").all()).toEqual([{ status: "new" }]);
+});
+
+async function contextText() {
+  return (await (await new AgentReads(ctx.db).handle("context", new URLSearchParams({ cwd: repo, event: "startup", tool: "codex" }))).json()).text as string;
+}
+
+test("回归：cwd 的生活线程只提名项目，digest 后不挂项目也不注入", async () => {
+  ctx.db.ingest([session(0, 20, "合成周复盘")]);
+  await round(fakeLLM().llm, base + 30 * MIN, false);
+  const t = (ctx.db.db.prepare("SELECT id FROM threads").get() as { id: string });
+  expect(store.thread(t.id)!.project_id).toBeNull();
+  expect(store.thread(t.id)!.project_hint).toBe(store.projects()[0]!.id);
+  const model = fakeLLM({ classification: { domain: "life", in_project: true } });
+  await digestStep({ db: ctx.db, llm: model.llm }, store, base + 30 * MIN);
+  expect(store.thread(t.id)!.domain).toBe("life");
+  expect(store.thread(t.id)!.project_id).toBeNull();
+  expect(await contextText()).not.toContain("合成线程");
+  expect(model.calls.find(c => c.kind === "thread")!.req.prompt).toContain("synthetic-repo");
+});
+
+test("digest 工作归属由 in_project 和候选共同决定", async () => {
+  ctx.db.ingest([session(0, 20, "合成开发")]);
+  await round(fakeLLM().llm, base + 30 * MIN, false);
+  const id = (ctx.db.db.prepare("SELECT id FROM threads").get() as { id: string }).id;
+  const project = store.projects()[0]!;
+  const model = fakeLLM();
+  await digestStep({ db: ctx.db, llm: model.llm }, store, base + 30 * MIN);
+  expect(store.thread(id)!.project_id).toBe(project.id);
+  expect(store.facts("thread_id", id).every(f => f.project_id === project.id)).toBe(true);
+  expect(await contextText()).toContain("合成线程");
+  // 强制重建同一合成片段，验证工作线程也可以判定不属于候选项目。
+  store.setState(`digest:${id}`, null); store.upsertThread({ ...store.thread(id)!, needs_regen: 1 });
+  await digestStep({ db: ctx.db, llm: fakeLLM({ classification: { domain: "work", in_project: false } }).llm }, store, base);
+  expect(store.thread(id)!.project_id).toBeNull();
+  store.setState(`digest:${id}`, null); store.upsertThread({ ...store.thread(id)!, project_hint: null, needs_regen: 1 });
+  const noHint = fakeLLM();
+  await digestStep({ db: ctx.db, llm: noHint.llm }, store, base);
+  expect(store.thread(id)!.project_id).toBeNull();
+  expect(noHint.calls.find(c => c.kind === "thread")!.req.prompt).toContain('候选项目："无"');
+});
+
+test("存量 classify 同步 facts 和新旧项目；失败隔离并在下轮重试，每轮上限 12", async () => {
+  for (const id of ["old", "new"]) store.upsertProject({ id, name: `合成项目${id}`, brief: `合成摘要${id}`, keys: { repos: [], hosts: [], chats: [] }, needs_regen: 0 });
+  const r = fixture(); ctx.db.ingest([r]);
+  for (let i = 0; i < LIMITS.threadsPerRound + 2; i++) store.upsertThread({ id: `t${String(i).padStart(2, "0")}`, title: "合成旧线程", brief: "合成简略", detail: { goal: "合成目标", progress: "合成进度" }, status: "paused", project_id: "old", project_hint: "new", needs_regen: 0 });
+  store.writeFact({ id: "fact", thread_id: "t01", project_id: "old", kind: "decision", text: "合成决定", evidence: [r.id], origin: "user", valid_at: iso(base), created_at: iso(base) });
+  let calls = 0;
+  const llm: LLM = { async complete<T>(req: LLMRequest) {
+    expect(req.system).toBe(P.CLASSIFY_SYSTEM); expect(req.tier).toBe("minute");
+    for (const text of ["合成目标", "合成进度", "合成简略", "合成项目new", "合成摘要new"]) expect(req.prompt).toContain(text);
+    calls++;
+    if (calls === 1) throw new Error("合成失败");
+    return { ok: true, data: { domain: "work", in_project: true } as T, ms: 1 };
+  } };
+  expect(await classifyStep({ db: ctx.db, llm }, store)).toEqual({ calls: 12, updated: 11, failed: 1 });
+  expect(store.thread("t00")!.domain).toBeNull(); expect(store.thread("t01")!.project_id).toBe("new");
+  expect(store.facts("thread_id", "t01")[0]!.project_id).toBe("new");
+  expect(store.project("old")!.needs_regen).toBe(1); expect(store.project("new")!.needs_regen).toBe(1);
+  expect((await classifyStep({ db: ctx.db, llm }, store)).updated).toBe(3);
+  expect(store.thread("t00")!.domain).toBe("work");
+});
+
+test("存量已 digest 且没有新片段时走 classify；有新片段留给 digest", async () => {
+  ctx.db.ingest([session(0, 20, "合成开发")]);
+  await round(fakeLLM().llm, base + 30 * MIN);
+  const t = store.thread((ctx.db.db.prepare("SELECT id FROM threads").get() as { id: string }).id)!;
+  store.upsertThread({ ...t, domain: null });
+  const llm: LLM = { async complete<T>() { return { ok: true, data: { domain: "life", in_project: false } as T, ms: 1 }; } };
+  expect((await classifyStep({ db: ctx.db, llm }, store)).updated).toBe(1);
+  expect(store.thread(t.id)!.project_id).toBeNull();
+  expect(store.facts("thread_id", t.id).every(f => f.project_id === null)).toBe(true);
+  store.upsertThread({ ...store.thread(t.id)!, domain: null }); store.setState(`digest:${t.id}`, null);
+  expect((await classifyStep({ db: ctx.db, llm }, store)).calls).toBe(0);
+});
+
+test("v3 加密库真实升级 v4：旧归属保留并复制成 hint，domain 留空，重开幂等", () => {
+  store.upsertThread({ id: "legacy", title: "合成旧线程", status: "active", project_id: "p" });
+  ctx.db.db.exec("ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=3;");
+  const db = new HubDB(ctx.file, ctx.config.dbKey);
+  try {
+    expect(db.db.pragma("user_version", { simple: true })).toBe(4);
+    const t = new DistillStore(db).thread("legacy")!;
+    expect(t.project_id).toBe("p"); expect(t.project_hint).toBe("p"); expect(t.domain).toBeNull();
+  } finally { db.close(); }
+  const again = new HubDB(ctx.file, ctx.config.dbKey); again.close();
+});
+
+
+test("touchThread 只填首次 hint，不覆盖已有 hint 或直接修改归属", () => {
+  store.upsertThread({ id: "hint", title: "合成线程", status: "active", project_id: "old", project_hint: "first" });
+  const frame = { id: "synthetic", t_start_ms: base, t_end_ms: base + MIN, key: `repo:${repo}`, record_ids: [], chars: 0, private: 0, status: "new" as const };
+  touchThread(store, "hint", frame);
+  expect(store.thread("hint")!.project_hint).toBe("first");
+  expect(store.thread("hint")!.project_id).toBe("old");
+  store.upsertThread({ id: "empty", title: "合成线程", status: "active" });
+  touchThread(store, "empty", frame);
+  expect(store.thread("empty")!.project_hint).toBe(store.projects()[0]!.id);
+  expect(store.thread("empty")!.project_id).toBeNull();
+});
+
+test("移走最后一条生活线程后清空旧项目摘要，防止旧生活内容继续注入", async () => {
+  store.upsertProject({ id: "p", name: "合成项目", keys: { repos: [repo], hosts: [], chats: [] }, brief: "合成生活旧摘要", detail: { goal: "合成生活旧目标" }, needs_regen: 0 });
+  store.upsertThread({ id: "t", title: "合成复盘", status: "active", project_id: "p", project_hint: "p", needs_regen: 0 });
+  const llm: LLM = { async complete<T>() { return { ok: true, data: { domain: "life", in_project: false } as T, ms: 1 }; } };
+  await classifyStep({ db: ctx.db, llm }, store);
+  await projectStep({ db: ctx.db, llm }, store, base);
+  expect(store.project("p")!.brief).toBeNull(); expect(store.project("p")!.detail).toBeNull();
+  expect(await contextText()).not.toContain("合成生活旧");
 });

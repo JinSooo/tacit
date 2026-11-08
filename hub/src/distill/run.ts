@@ -76,10 +76,10 @@ export function touchThread(store: DistillStore, threadId: string, frame: Frame)
   const t = store.thread(threadId);
   if (!t) return;
   const newSession = !t.last_ms || frame.t_start_ms - t.last_ms > LIMITS.newSession;
-  let project_id = t.project_id ?? null;
-  if (!project_id && frame.key.startsWith("repo:")) project_id = new DistillRules(store).projectForRepo(frame.key.slice(5))?.id ?? null;
+  let project_hint = t.project_hint ?? null;
+  if (!project_hint && frame.key.startsWith("repo:")) project_hint = new DistillRules(store).projectForRepo(frame.key.slice(5))?.id ?? null;
   store.upsertThread({
-    ...t, project_id,
+    ...t, project_hint,
     status: t.status === "paused" ? "active" : t.status,
     first_ms: Math.min(t.first_ms ?? frame.t_start_ms, frame.t_start_ms),
     last_ms: Math.max(t.last_ms ?? 0, frame.t_end_ms),
@@ -87,7 +87,7 @@ export function touchThread(store: DistillStore, threadId: string, frame: Frame)
     sessions: (t.sessions ?? 0) + (newSession ? 1 : 0),
     needs_regen: 1,
   });
-  if (project_id) store.hub.db.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(project_id);
+  if (t.project_id) store.hub.db.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(t.project_id);
 }
 
 // ---------------- 片段给模型看的样子 ----------------
@@ -172,7 +172,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
           if (frames.length) {
             const id = ulid(now);
             // last_ms 先留空，第一个片段由 touchThread 计为一段会话。
-            store.upsertThread({ id, project_id: cand.project_id, status: "active", title: cand.title, first_ms: frames[0]!.t_start_ms, active_minutes: 0, sessions: 0, needs_regen: 1 });
+            store.upsertThread({ id, project_hint: cand.project_id, status: "active", title: cand.title, first_ms: frames[0]!.t_start_ms, active_minutes: 0, sessions: 0, needs_regen: 1 });
             for (const fr of frames) { store.assign(fr.id, id, "llm", item.confidence); touchThread(store, id, fr); }
             created++; assigned += frames.length; real.add(id); byTitle.set(cand.title, id);
           }
@@ -204,6 +204,47 @@ async function makeBrief(d: Deps, title: string, detail: unknown, facts: P.FactV
 /** 已经提炼进详细版的片段，以及当时这些片段的记录总数（变少说明有记录被删，要整条重建）。 */
 interface DigestMark { frames: string[]; records: number }
 
+function projectHint(store: DistillStore, thread: Thread): P.ProjectHint {
+  const p = thread.project_hint ? store.project(thread.project_hint) : null;
+  return p ? { name: p.name, brief: p.brief ?? null } : null;
+}
+
+/** 归属更新集中在此处，未来用户手动指定归属可在这里加入优先级判断。 */
+function applyClassification(store: DistillStore, id: string, out: P.Classification) {
+  const t = store.thread(id)!;
+  const projectId = out.domain === "work" && out.in_project && projectHint(store, t) ? t.project_hint! : null;
+  store.upsertThread({ ...t, domain: out.domain, project_id: projectId });
+  if ((t.project_id ?? null) !== projectId) {
+    store.hub.db.prepare("UPDATE facts SET project_id=? WHERE thread_id=?").run(projectId, id);
+    for (const pid of new Set([t.project_id, projectId])) if (pid) {
+      store.hub.db.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(pid);
+    }
+  }
+}
+
+/** 没有新片段的存量线程走轻量判断；有新片段的留给 digest 一起判断。 */
+export async function classifyStep(d: Deps, store: DistillStore) {
+  let calls = 0, updated = 0, failed = 0;
+  const rows = store.hub.db.prepare("SELECT id FROM threads WHERE domain IS NULL ORDER BY last_ms DESC,id").all() as { id: string }[];
+  for (const { id } of rows) {
+    const frames = threadFrames(store, id), mark = store.getState<DigestMark>(`digest:${id}`);
+    if (frames.length && (!mark || frames.some(f => !mark.frames.includes(f.id))
+      || mark.frames.some(fid => !frames.some(f => f.id === fid))
+      || frames.reduce((n, f) => n + f.record_ids.length, 0) < mark.records)) continue;
+    if (calls >= LIMITS.threadsPerRound) break;
+    calls++;
+    try {
+      const t = store.thread(id)!;
+      const r = await d.llm.complete<P.Classification>({ tier: "minute", system: P.CLASSIFY_SYSTEM,
+        prompt: P.classifyPrompt(t, projectHint(store, t)), schema: P.CLASSIFY_SCHEMA });
+      if (!r.ok) { failed++; continue; }
+      store.hub.db.transaction(() => applyClassification(store, id, r.data))();
+      updated++;
+    } catch { failed++; }
+  }
+  return { calls, updated, failed };
+}
+
 export async function digestStep(d: Deps, store: DistillStore, now: number) {
   const log = d.log ?? (() => {});
   let updated = 0, failed = 0, facts = 0, calls = 0, dropped = 0;
@@ -227,18 +268,19 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     const views = fresh.map(f => ({ f, v: frameView(store, f, { maxRecords: LIMITS.digestRecords, excerpt: s => isSession(s) ? LIMITS.sessionExcerpt : LIMITS.otherExcerpt }) }));
     for (const chunk of batches(views, x => JSON.stringify(x.v).length, LIMITS.digestChars, 50)) {
       calls++;
-      const r = await d.llm.complete<P.ThreadOutput>({ tier: "hour", system: P.THREAD_SYSTEM, prompt: P.threadPrompt({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v)), schema: P.THREAD_SCHEMA });
+      const r = await d.llm.complete<P.ThreadOutput>({ tier: "hour", system: P.THREAD_SYSTEM, prompt: P.threadPrompt({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!)), schema: P.THREAD_SCHEMA });
       if (!r.ok) { ok = false; break; }
       const known = new Set(chunk.flatMap(x => x.v.records.map(rec => rec.id)).filter(Boolean));
       const out = r.data;
       store.hub.db.transaction(() => {
+        applyClassification(store, id, out);
         const kept = out.new_facts.map(f => P.keepGroundedFacts([f], known)[0] ?? null);
         dropped += kept.filter(k => !k).length;
         const ids = kept.map(f => {
           if (!f) return null;
           const fid = ulid(now);
           const when = Math.max(...f.evidence.map(e => Date.parse(store.hub.get(e)?.t_start ?? "") || 0));
-          store.writeFact({ id: fid, thread_id: id, project_id: thread.project_id ?? null, kind: f.kind, text: f.text, reason: f.reason ?? undefined, evidence: f.evidence, confidence: f.confidence, origin: "llm", valid_at: new Date(when || now).toISOString(), created_at: new Date(now).toISOString() });
+          store.writeFact({ id: fid, thread_id: id, project_id: store.thread(id)!.project_id ?? null, kind: f.kind, text: f.text, reason: f.reason ?? undefined, evidence: f.evidence, confidence: f.confidence, origin: "llm", valid_at: new Date(when || now).toISOString(), created_at: new Date(now).toISOString() });
           facts++; return fid;
         });
         const valid = new Set(store.facts("thread_id", id).filter(f => f.origin === "llm").map(f => f.id));
@@ -264,7 +306,8 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     if (brief === null) { failed++; continue; }
     store.hub.db.transaction(() => {
       store.upsertThread({ ...store.thread(id)!, brief, needs_regen: 0, updated_at: toLocalIso(now) });
-      if (thread.project_id) store.hub.db.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(thread.project_id);
+      const projectId = store.thread(id)!.project_id;
+      if (projectId) store.hub.db.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(projectId);
       if (doneHint) askDone(store, id, now);
     })();
     updated++;
@@ -290,7 +333,8 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
     const last = Math.max(0, ...threads.map(t => t.last_ms ?? 0));
     const salience = threads.reduce((s, t) => s + (t.active_minutes ?? 0) * Math.exp(-(now - (t.last_ms ?? 0)) / (7 * DAY)), 0);
     const described = threads.filter(t => t.brief);
-    if (!described.length) { store.upsertProject({ ...p, last_ms: last || p.last_ms, salience, needs_regen: 0, updated_at: toLocalIso(now) }); continue; }
+    // 没有可用线程时清掉旧摘要，避免已移出的生活内容继续从项目摘要注入。
+    if (!described.length) { store.upsertProject({ ...p, brief: null, detail: null, last_ms: last || p.last_ms, salience, needs_regen: 0, updated_at: toLocalIso(now) }); continue; }
     calls++;
     const views: P.ThreadView[] = described.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: p.name, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" }));
     const r = await d.llm.complete<P.ProjectOutput>({ tier: "hour", system: P.PROJECT_SYSTEM, prompt: P.projectPrompt(p.name, views, factViews(store, "project_id", p.id)), schema: P.PROJECT_SCHEMA });
@@ -385,6 +429,7 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
   const out: Record<string, unknown> = { at: toLocalIso(now) };
   out.slice = sliceStep(d.db, opts.backfill ?? false, now, opts.enabledDefault ?? now);
   out.assign = await assignStep(d, store, now);
+  out.classify = await classifyStep(d, store);
   if (opts.slow) {
     out.digest = await digestStep(d, store, now);
     out.projects = await projectStep(d, store, now);

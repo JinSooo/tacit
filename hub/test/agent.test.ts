@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { AgentReads, estimateTokens } from "../src/agent.ts";
 import { HubDB } from "../src/db.ts";
 import { DistillStore, type Thread } from "../src/distill/store.ts";
@@ -41,7 +41,7 @@ test("context 精确、子目录和最长仓库匹配，路径前缀不误配", 
 
 test("context 只含当前项目活跃或暂停线程，排除生活、其他项目、全 private 和日记", async () => {
   project(); project("other","/other");
-  thread("active",{ last_ms: 2000 }); thread("paused",{ status: "paused",last_ms: 1000 });
+  thread("active",{ last_ms: Date.now() + 1000 }); thread("paused",{ status: "paused",last_ms: Date.now() });
   thread("life",{ project_id: null }); thread("other",{ project_id: "other" });
   thread("done",{ status: "done" }); thread("private"); thread("mixed");
   assigned("private",true); assigned("mixed",true,true);
@@ -157,12 +157,12 @@ test("detail/evidence 超过 40000 字符时裁剪事实、记录及异常长正
   expect((store.thread("t")!.detail as any).text).toHaveLength(45000);
 });
 
-test("已有 v2 加密库迁移到 v3，保留记录和提炼数据，重开幂等", () => {
+test("已有 v2 加密库迁移到 v4，保留记录和提炼数据，重开幂等", () => {
   project(); const r = fixture(); ctx.db.ingest([r]);
-  ctx.db.db.exec("DROP TABLE agent_reads; PRAGMA user_version=2;");
+  ctx.db.db.exec("DROP TABLE agent_reads; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=2;");
   const upgraded = new HubDB(ctx.file,ctx.config.dbKey);
   try {
-    expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(3);
+    expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(4);
     expect(upgraded.get(r.id)?.body).toBe(r.body); expect(new DistillStore(upgraded).project("p")?.name).toBe("合成项目p");
     expect(new AgentReads(upgraded).audit(new URLSearchParams()).reads).toEqual([]);
   } finally { upgraded.close(); }
@@ -176,4 +176,23 @@ test("实际删除后审计只保留 id 和参数元数据，没有标题、正�
   const rows = await read("/v1/audit"), json = JSON.stringify(rows);
   expect(json).toContain(r.id); expect(json).not.toContain(r.title); expect(json).not.toContain(r.body);
   expect(ctx.db.get(r.id)).toBeNull(); expect(ctx.db.list(new URLSearchParams({ q: r.title })).records).toEqual([]);
+});
+
+
+test("回归：context 排除已判 life，暂停仅限 3 天内，active 不受时间限制", async () => {
+  project();
+  const now = Date.parse("2026-11-08T12:00:00+08:00"), cutoff = now - 3 * 24 * 60 * 60 * 1000;
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  try {
+    thread("old-active", { domain: "work", last_ms: 1 });
+    thread("boundary", { domain: "work", status: "paused", last_ms: cutoff });
+    thread("too-old", { domain: "work", status: "paused", last_ms: cutoff - 1 });
+    thread("unknown-time", { status: "paused" });
+    ctx.db.db.prepare("UPDATE threads SET last_ms=NULL WHERE id='unknown-time'").run();
+    thread("life-in-project", { domain: "life", last_ms: now });
+    thread("unclassified", { domain: null, last_ms: now });
+    const { text } = await context();
+    for (const id of ["old-active", "boundary", "unclassified"]) expect(text).toContain(`合成线程${id}`);
+    for (const id of ["too-old", "unknown-time", "life-in-project"]) expect(text).not.toContain(`合成线程${id}`);
+  } finally { clock.mockRestore(); }
 });

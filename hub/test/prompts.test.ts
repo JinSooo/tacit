@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import Ajv2020 from "ajv/dist/2020.js";
-import { ASSIGN_SCHEMA, BRIEF_SCHEMA, THREAD_SCHEMA, assignPrompt, briefPrompt, excerpt, keepGroundedFacts, threadPrompt } from "../src/distill/prompts.ts";
+import { ASSIGN_SCHEMA, BRIEF_SCHEMA, THREAD_SCHEMA, CLASSIFY_SCHEMA, assignPrompt, briefPrompt, excerpt, keepGroundedFacts, threadPrompt } from "../src/distill/prompts.ts";
 
 test("三个输出 schema 都能编译，并拒绝多余字段", () => {
   const ajv = new Ajv2020({ strict: false });
-  for (const s of [ASSIGN_SCHEMA, THREAD_SCHEMA, BRIEF_SCHEMA]) expect(() => ajv.compile(s)).not.toThrow();
+  for (const s of [ASSIGN_SCHEMA, THREAD_SCHEMA, BRIEF_SCHEMA, CLASSIFY_SCHEMA]) expect(() => ajv.compile(s)).not.toThrow();
   const brief = ajv.compile(BRIEF_SCHEMA);
   expect(brief({ brief: "合成" })).toBe(true);
   expect(brief({ brief: "合成", extra: 1 })).toBe(false);
@@ -33,4 +33,16 @@ test("History 内容包在 data 标签里，private 片段不带正文", () => {
 
 test("截断按码点，不切坏 emoji", () => {
   expect(excerpt("😀😀😀", 2)).toBe("😀😀…");
+});
+
+
+test("线程输出必须有领域和项目判断，classify 拒绝未知领域或缺失字段", () => {
+  const ajv = new Ajv2020({ strict: false }), validate = ajv.compile(CLASSIFY_SCHEMA);
+  expect(validate({ domain: "life", in_project: false })).toBe(true);
+  expect(validate({ domain: "other", in_project: false })).toBe(false);
+  expect(validate({ domain: "work" })).toBe(false);
+  const thread = ajv.compile(THREAD_SCHEMA);
+  const out = { title: "合成线程", detail: { goal: "", progress: "", artifacts: { files: [], urls: [], commands: [], people: [] }, quotes: [] }, new_facts: [], invalidate: [], status_hint: "active" };
+  expect(thread(out)).toBe(false);
+  expect(thread({ ...out, domain: "work", in_project: true })).toBe(true);
 });

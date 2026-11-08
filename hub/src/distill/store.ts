@@ -5,7 +5,7 @@ import { ulid } from "../../../packages/record/index.ts";
 export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" }
 export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[] }
 export interface Project { id: string; name: string; confirmed?: number; keys: ProjectKeys; brief?: string | null; detail?: unknown; salience?: number; last_ms?: number; needs_regen?: number; updated_at?: string }
-export interface Thread { id: string; project_id?: string | null; status: "active" | "paused" | "done" | "abandoned"; title: string; brief?: string | null; detail?: unknown; first_ms?: number; last_ms?: number; active_minutes?: number; sessions?: number; needs_regen?: number; updated_at?: string }
+export interface Thread { id: string; domain?: "work" | "life" | null; project_hint?: string | null; project_id?: string | null; status: "active" | "paused" | "done" | "abandoned"; title: string; brief?: string | null; detail?: unknown; first_ms?: number; last_ms?: number; active_minutes?: number; sessions?: number; needs_regen?: number; updated_at?: string }
 export interface Fact { id: string; thread_id?: string | null; project_id?: string | null; kind: "decision" | "rejected" | "open" | "next" | "inference"; text: string; reason?: string; evidence: string[]; confidence?: number; origin: "llm" | "user"; valid_at: string; invalid_at?: string | null; superseded_by?: string | null; created_at: string }
 export interface Pending { id: string; kind: "project" | "merge" | "thread_done"; payload: Record<string, unknown>; created_at: string; resolved_at?: string | null; resolution?: string | null }
 type Row = Record<string, any>;
@@ -160,6 +160,7 @@ export class DistillStore {
     for (const k of ["repos","hosts","chats"] as const) keys[k] = [...new Set([...keys[k],...project.keys[k]])];
     this.upsertProject({ ...dest, keys, needs_regen: 1 });
     this.sql.prepare("UPDATE threads SET project_id=?,needs_regen=1 WHERE project_id=?").run(dest.id,source);
+    this.sql.prepare("UPDATE threads SET project_hint=? WHERE project_hint=?").run(dest.id,source);
     this.sql.prepare("UPDATE facts SET project_id=? WHERE project_id=?").run(dest.id,source);
     this.sql.prepare("DELETE FROM projects WHERE id=?").run(source);
   }
@@ -189,6 +190,7 @@ export class DistillStore {
         } else if (action === "ignore") {
           this.sql.prepare("UPDATE threads SET project_id=NULL,needs_regen=1 WHERE project_id=?").run(pid);
           this.sql.prepare("UPDATE facts SET project_id=NULL WHERE project_id=?").run(pid);
+          this.sql.prepare("UPDATE threads SET project_hint=NULL WHERE project_hint=?").run(pid);
           this.sql.prepare("DELETE FROM projects WHERE id=?").run(pid);
         } else throw new InputError("项目操作无效");
       } else {

@@ -81,9 +81,26 @@ export interface AssignOutput {
 
 // ---------- 2. 更新线程详细版（hour 档） ----------
 
+export interface Classification { domain: "work" | "life"; in_project: boolean }
+export type ProjectHint = { name: string; brief: string | null } | null;
+const CLASSIFICATION_RULES = `
+- cwd 只提名候选项目，不能据此确定归属。按线程内容判断：是否在推进候选项目的代码或产品。
+- 工作内容 domain=work；生活、学习计划、复盘、娱乐等 domain=life，in_project=false。
+- 只有确实推进候选项目的代码或产品时 in_project=true；候选为“无”时必须 false。`;
+const classificationProperties = { domain: { enum: ["work", "life"] }, in_project: { type: "boolean" } } as const;
+export const CLASSIFY_SYSTEM = `${DATA_RULES}
+任务：判断存量线程的生活/工作领域和项目归属。${CLASSIFICATION_RULES}`;
+export const CLASSIFY_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["domain", "in_project"], properties: classificationProperties,
+} as const;
+export function classifyPrompt(thread: { title: string; detail?: unknown; brief?: string | null }, project: ProjectHint): string {
+  const detail = thread.detail as { goal?: string; progress?: string } | null;
+  return `<data>\n${json({ title: thread.title, goal: detail?.goal ?? "", progress: detail?.progress ?? "", brief: thread.brief ?? "", candidate_project: project ?? "无" })}\n</data>`;
+}
+
 export const THREAD_SYSTEM = `${DATA_RULES}
 
-任务：根据新片段更新一条线程的详细版。
+任务：根据新片段更新一条线程的详细版。${CLASSIFICATION_RULES}
 - detail.goal：这件事要达成什么；detail.progress：做到哪了、卡在哪（2–4 句）。
 - artifacts：相关文件路径、URL、关键命令、涉及的人，只列确实出现过的。
 - quotes：最多 3 条用户亲口说的关键原话（来自 [我] 开头或用户输入），带 record_id。
@@ -94,14 +111,15 @@ export const THREAD_SYSTEM = `${DATA_RULES}
   origin=user 的 fact 是用户亲手写的，不能 invalidate。
 - status_hint：active | paused | done_candidate（只有出现明确完成信号时，例如 PR 合并、发版、用户说做完了）。`;
 
-export function threadPrompt(thread: { title: string; detail: unknown }, facts: FactView[], frames: FrameView[]): string {
-  return `线程：${json({ title: thread.title, detail: thread.detail })}\n\n已有有效 facts：\n${json(facts)}\n\n新片段：\n${frameBlock(frames)}`;
+export function threadPrompt(thread: { title: string; detail: unknown }, facts: FactView[], frames: FrameView[], project: ProjectHint = null): string {
+  return `候选项目：${json(project ?? "无")}\n\n线程：${json({ title: thread.title, detail: thread.detail })}\n\n已有有效 facts：\n${json(facts)}\n\n新片段：\n${frameBlock(frames)}`;
 }
 
 export const THREAD_SCHEMA = {
   type: "object", additionalProperties: false,
-  required: ["title", "detail", "new_facts", "invalidate", "status_hint"],
+  required: ["title", "detail", "new_facts", "invalidate", "status_hint", "domain", "in_project"],
   properties: {
+    ...classificationProperties,
     title: { type: "string" },
     detail: {
       type: "object", additionalProperties: false, required: ["goal", "progress", "artifacts", "quotes"],
@@ -146,7 +164,7 @@ export const THREAD_SCHEMA = {
   },
 } as const;
 
-export interface ThreadOutput {
+export interface ThreadOutput extends Classification {
   title: string;
   detail: { goal: string; progress: string; artifacts: { files: string[]; urls: string[]; commands: string[]; people: string[] }; quotes: { text: string; record_id: string }[] };
   new_facts: { kind: "decision" | "rejected" | "open" | "next" | "inference"; text: string; reason: string | null; evidence: string[]; confidence: number }[];
