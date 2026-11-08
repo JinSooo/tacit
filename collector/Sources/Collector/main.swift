@@ -7,6 +7,11 @@ import CollectorCore
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   let config = Config.load()
   lazy var hub = HubClient(config: config)
+  lazy var audio = AudioCoordinator(config: config)
+  var recordingEnabled: Bool {
+    get { UserDefaults.standard.object(forKey: "recordingEnabled") as? Bool ?? true }
+    set { UserDefaults.standard.set(newValue, forKey: "recordingEnabled") }
+  }
   lazy var plugins = PluginScheduler(config: config)
   lazy var segmenter = Segmenter(device: config.device)
   let ax = AXReader()
@@ -47,7 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ]
     DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.plugins.runAll() }
 
+    updateAudio()
     let ws = NSWorkspace.shared.notificationCenter
+    ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.updateAudio() }
     ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.tick() }
     for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
       ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.closeSegment() }
@@ -58,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func applicationWillTerminate(_ n: Notification) {
+    audio.shutdown()
     closeSegment()
     let deadline = Date().addingTimeInterval(3)
     hub.flush()
@@ -133,7 +141,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   // MARK: 剪贴板
 
+  func updateAudio() {
+    audio.update(enabled: recordingEnabled && !paused, apps: Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)))
+  }
+
   func pollClipboard() {
+    updateAudio()
     let pb = NSPasteboard.general
     guard pb.changeCount != clipboardCount else { return }
     clipboardCount = pb.changeCount
@@ -180,6 +193,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.addItem(item("打开 History", #selector(openHistory)))
     menu.addItem(.separator())
 
+    let recording = item("录音", #selector(toggleRecording))
+    recording.state = recordingEnabled ? .on : .off; menu.addItem(recording)
+    for line in audio.status() { menu.addItem(disabled(line)) }
+
     let o = item("读不到文字时用 OCR", #selector(toggleOCR))
     o.state = ocrEnabled ? .on : .off
     menu.addItem(o)
@@ -209,8 +226,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let cal = Calendar.current
     pause(until: cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date()))!)
   }
-  func pause(until: Date) { pausedUntil = until; closeSegment(); updateIcon() }
-  @objc func resume() { pausedUntil = nil; updateIcon() }
+  func pause(until: Date) { pausedUntil = until; closeSegment(); updateAudio(); updateIcon() }
+  @objc func resume() { pausedUntil = nil; updateAudio(); updateIcon() }
+  @objc func toggleRecording() { recordingEnabled.toggle(); updateAudio() }
   @objc func toggleOCR() {
     ocrEnabled.toggle()
     if ocrEnabled && !ocr.granted { ocr.requestAccess() }

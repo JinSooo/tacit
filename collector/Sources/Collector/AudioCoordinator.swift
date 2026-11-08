@@ -1,0 +1,253 @@
+import AppKit
+import AVFoundation
+import CryptoKit
+import CollectorCore
+import AudioStore
+
+/// 音频状态只在 queue 上修改；菜单通过快照读取，不阻塞录音。
+final class AudioCoordinator {
+  let config: Config
+  private let queue = DispatchQueue(label: "record-anything.audio", qos: .utility)
+  private let slots = DispatchSemaphore(value: 32)
+  private let snapshotLock = NSLock()
+  private var snapshot: [String] = []
+  private var store: AudioStore?
+  private var mic: Microphone?
+  private var tapStop: (() -> Void)?
+  private var pipelines: [AudioTrack: AudioPipeline] = [:]
+  private var current: AudioMetadata?
+  private var boundary = ConversationBoundary()
+  private var health = MicrophoneHealth()
+  private var enabled = false
+  private var generation = UUID()
+  private var lastStart = Date.distantPast
+  private var lastSync = Date.distantPast
+  private var syncing = false
+  private var worker: Process?
+  private var lastWorker = Date.distantPast
+  private var voiceHash: String?
+  private var voiceChanged = false
+  private var workerFailureAt = Date.distantPast
+  private var retentionDays = 7
+  private var retentionKnown = false
+  private var meetingHistory: [(Date, Set<String>)] = []
+  private var failure: String?
+  private var lastMaintenance = Date.distantPast
+  private var lastInitialize = Date.distantPast
+  private var initialized = false
+  private var sessionStarted = Date.distantPast
+  private static let meetingBundles: Set<String> = [
+    "com.tencent.meeting", "com.tencent.wemeet", "com.ss.desktop.lark", "com.electron.lark",
+    "us.zoom.xos", "com.microsoft.teams", "com.microsoft.teams2", "com.apple.FaceTime", "com.tencent.xinWeChat", "com.tencent.xinwechat"
+  ]
+
+  init(config: Config) { self.config = config }
+  func status() -> [String] { snapshotLock.lock(); defer { snapshotLock.unlock() }; return snapshot }
+  func update(enabled: Bool, apps: Set<String>) {
+    queue.async { [self] in
+      let now = Date()
+      meetingHistory.append((now, apps.intersection(Self.meetingBundles)))
+      meetingHistory.removeAll { now.timeIntervalSince($0.0) > 90 }
+      if !initialized {
+        guard now.timeIntervalSince(lastInitialize) >= 60 else { return }
+        lastInitialize = now
+        do {
+          store = try AudioStore(dataDirectory: config.dataDir); try store?.recoverInterrupted()
+          let state = try? Data(contentsOf: config.dataDir.appendingPathComponent("collector-audio-state.json"))
+          if let state, let json = try? JSONSerialization.jsonObject(with: state) as? [String: Any] {
+            voiceHash = json["voice_hash"] as? String
+            voiceChanged = json["voice_changed"] as? Bool ?? false
+            if let days = json["retention_days"] as? Int, (1...365).contains(days) {
+              retentionDays = days; retentionKnown = true
+            }
+            lastWorker = AudioPolicy.date(json["last_worker"] as? String) ?? .distantPast
+          }
+          initialized = true
+        } catch { failure = "音频存储不可用：\(error)"; publish(); return }
+      }
+      self.enabled = enabled
+      if !enabled { stop() }
+      else if mic == nil && now.timeIntervalSince(lastStart) >= 60 { start() }
+      if current != nil {
+        // 给 VAD 的最短人声/静音窗口留 1 秒判定时间，避免第 60 秒附近的人声被提前切断。
+        if boundary.shouldClose(at: now.addingTimeInterval(-1)), !pipelines.values.contains(where: { $0.speechActive }) { tryOperation { try close() } }
+      }
+      // 没收到回调也视作持续静音，覆盖权限被拒绝却没有错误的系统行为。
+      if mic != nil, now.timeIntervalSince(sessionStarted) >= 600, healthLastFrame.map({ now.timeIntervalSince($0) >= 600 }) ?? true {
+        health.observe(dbfs: -160, start: healthLastFrame ?? sessionStarted, end: now, enabled: true)
+      }
+      if now.timeIntervalSince(lastSync) >= 300 || shouldRunWorker(now) { sync() }
+      if now.timeIntervalSince(lastMaintenance) >= 30 {
+        lastMaintenance = now
+        if worker == nil && retentionKnown { tryOperation { _ = try store?.cleanup(now: now, retentionDays: retentionDays) } }
+        publish()
+      }
+    }
+  }
+  private var healthLastFrame: Date?
+  func shutdown() {
+    queue.sync {
+      enabled = false; stop()
+      if let worker, worker.isRunning {
+        worker.terminate()
+        let deadline = Date().addingTimeInterval(3)
+        while worker.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        if worker.isRunning { kill(worker.processIdentifier, SIGKILL) }
+      }
+    }
+  }
+  private func start() {
+    lastStart = Date()
+    let model = config.dataDir.appendingPathComponent("models/silero_vad.onnx").path
+    guard FileManager.default.fileExists(atPath: model) else { failure = "缺少语音模型，请重新运行 ./install.sh"; return }
+    guard #available(macOS 14.2, *) else { failure = "系统声音录音需要 macOS 14.2 或更新版本"; return }
+    do {
+      generation = UUID(); let session = generation
+      for track in [AudioTrack.mic, .sys] {
+        pipelines[track] = try AudioPipeline(modelPath: model, emit: { [weak self] samples, start, end in
+          try self?.save(samples, track: track, start: start, end: end)
+        }, level: { [weak self] dbfs, start, end in
+          if track == .mic { self?.health.observe(dbfs: dbfs, start: start, end: end, enabled: true); self?.healthLastFrame = end }
+        })
+      }
+      func buffer(_ track: AudioTrack) -> CaptureBuffer {
+        CaptureBuffer(receive: { [weak self] samples, rate, host in
+          guard let self else { return }
+          guard self.slots.wait(timeout: .now()) == .success else {
+            self.inputFailure("音频处理跟不上，已停止录音", session: session); return
+          }
+          self.queue.async {
+            defer { self.slots.signal() }
+            guard self.enabled, self.generation == session else { return }
+            do { try self.pipelines[track]?.accept(samples, rate: rate, host: host) }
+            catch { self.failure = "音频处理失败：\(error)"; self.stop() }
+          }
+        }, failure: { [weak self] text in self?.inputFailure(text, session: session) })
+      }
+      sessionStarted = Date(); healthLastFrame = nil; health.reset()
+      let microphone = Microphone(buffer: buffer(.mic)); mic = microphone
+      try microphone.start()
+      let tap = SystemTap(buffer: buffer(.sys)); tapStop = { tap.stop() }
+      try tap.start()
+      failure = nil
+    } catch { failure = "录音启动失败：\(error)"; stop() }
+  }
+  private func inputFailure(_ text: String, session: UUID) {
+    queue.async { [weak self] in
+      guard let self, self.generation == session else { return }
+      self.failure = text; self.stop()
+    }
+  }
+  private func stop() {
+    guard mic != nil || !pipelines.isEmpty else { return }
+    generation = UUID(); mic?.stop(); mic = nil; tapStop?(); tapStop = nil
+    for pipeline in pipelines.values { tryOperation { try pipeline.flush() } }
+    tryOperation { try close() }
+    pipelines = [:]; health.reset(); healthLastFrame = nil
+  }
+  private func save(_ samples: [Float], track: AudioTrack, start: Date, end: Date) throws {
+    guard let store else { return }
+    if boundary.shouldClose(at: start) { try close() }
+    if current == nil { current = AudioMetadata(start: start); try store.writeMetadata(current!) }
+    var meta = current!
+    if start < AudioPolicy.date(meta.t_start)! {
+      let old = meta
+      meta.t_start = LocalTime.iso(start)
+      try store.moveOpenConversation(from: old, to: meta)
+      current = meta
+    }
+    let file = String(format: "%@-%04d.enc", track.rawValue, meta.segments.filter { $0.track == track }.count + 1)
+    try store.writeSegment(AudioCodec.encode(samples), file: file, meta: meta)
+    meta.segments.append(AudioSegment(file: file, track: track, start: start, end: end, dbfs: AudioPipeline.dbfs(samples)))
+    let since = boundary.lastSpeechEnd ?? start
+    let apps = meetingHistory.filter { $0.0 >= since.addingTimeInterval(-1) && $0.0 <= end }.reduce(Set<String>()) { $0.union($1.1) }
+    meta.meeting_apps = Array(Set(meta.meeting_apps).union(apps)).sorted(); meta.updated_at = LocalTime.iso(Date())
+    try store.writeMetadata(meta); current = meta
+    _ = boundary.observe(start: start, end: end)
+  }
+  private func close() throws {
+    guard var meta = current else { return }
+    let end = meta.segments.compactMap { AudioPolicy.date($0.t_end) }.max() ?? AudioPolicy.date(meta.t_start)!
+    meta.t_end = LocalTime.iso(end); try meta.transition(to: .closed, at: Date())
+    try store?.writeMetadata(meta); current = nil; boundary.reset()
+  }
+  private func tryOperation(_ operation: () throws -> Void) {
+    do { try operation() } catch { failure = "音频存储操作失败：\(error)" }
+  }
+  private func shouldRunWorker(_ now: Date) -> Bool {
+    guard worker == nil, now.timeIntervalSince(workerFailureAt) >= 60, FileManager.default.isExecutableFile(atPath: workerURL.path) else { return false }
+    if voiceChanged { return true }
+    guard now.timeIntervalSince(lastWorker) >= 600 else { return false }
+    return ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
+  }
+  private var workerURL: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ra-audio-worker") }
+  private func request(path: String, body: [String: Any]? = nil, completion: @escaping (Data?) -> Void) {
+    guard let token = config.token else { completion(nil); return }
+    var components = URLComponents(url: config.hubURL, resolvingAgainstBaseURL: false)!
+    components.path = path
+    if body == nil { components.queryItems = [URLQueryItem(name: "device", value: config.device)] }
+    var request = URLRequest(url: components.url!); request.timeoutInterval = 20
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    if let body { request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try? JSONSerialization.data(withJSONObject: body) }
+    URLSession.shared.dataTask(with: request) { data, response, error in
+      completion(error == nil && (response as? HTTPURLResponse)?.statusCode == 200 ? data : nil)
+    }.resume()
+  }
+  private func sync() {
+    guard !syncing else { return }
+    syncing = true; lastSync = Date()
+    request(path: "/v1/audio/sync") { [weak self] data in
+      guard let self else { return }
+      self.queue.async {
+        defer { self.syncing = false; self.publish() }
+        guard let data, let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let days = reply["retention_days"] as? Int, (1...365).contains(days),
+              let deleting = reply["delete_conversations"] as? [String] else { return }
+        do {
+          self.retentionDays = days; self.retentionKnown = true
+          if let voice = reply["voiceprint"] as? [String: Any] {
+            let canonical = try JSONSerialization.data(withJSONObject: voice, options: .sortedKeys)
+            let hash = SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
+            if hash != self.voiceHash { self.voiceChanged = true; self.voiceHash = hash }
+          } else { self.voiceHash = nil }
+          // worker 持有 closed 对话期间不删除，待它退出后再执行并 ack。
+          guard self.worker == nil else { return }
+          let purgeText = reply["purge_before"] as? String
+          let purge = AudioPolicy.date(purgeText)
+          if purgeText != nil && purge == nil { throw AudioError.invalidMetadata }
+          let deleted = try self.store?.cleanup(now: Date(), retentionDays: days, purgeBefore: purge, deleting: deleting) ?? []
+          var ack: [String: Any] = ["device": self.config.device, "deleted": deleting.filter { deleted.contains($0) }]
+          if let purgeText { ack["purged_at"] = purgeText }
+          if purgeText != nil || !deleting.isEmpty { self.request(path: "/v1/audio/sync/ack", body: ack) { _ in } }
+          if self.shouldRunWorker(Date()) { self.launchWorker() }
+          self.persistState()
+        } catch { self.failure = "音频同步清理失败：\(error)" }
+      }
+    }
+  }
+  private func launchWorker() {
+    let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/taskpolicy")
+    process.arguments = ["-b", workerURL.path, "--data-dir", config.dataDir.path, "--device", config.device, "--hub", config.hubURL.absoluteString]
+    var env = ProcessInfo.processInfo.environment; env["RA_DATA_DIR"] = config.dataDir.path; process.environment = env
+    process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.standardError
+    process.terminationHandler = { [weak self] _ in
+      self?.queue.async { [weak self] in self?.worker = nil; self?.lastSync = .distantPast }
+    }
+    do { try process.run(); worker = process; lastWorker = Date(); voiceChanged = false }
+    catch { failure = "转写进程启动失败"; workerFailureAt = Date() }
+  }
+  private func persistState() {
+    var state: [String: Any] = ["retention_days": retentionDays, "last_worker": LocalTime.iso(lastWorker), "voice_changed": voiceChanged]
+    if let voiceHash { state["voice_hash"] = voiceHash }
+    tryOperation { try JSONSerialization.data(withJSONObject: state).write(to: config.dataDir.appendingPathComponent("collector-audio-state.json"), options: .atomic) }
+  }
+  private func publish() {
+    let all = (try? store?.conversations()) ?? []
+    let today = all.filter { AudioPolicy.date($0.t_start).map { Calendar.current.isDateInToday($0) } ?? false }.count
+    let pending = all.filter { [.closed, .waiting_me, .failed].contains($0.status) }.count
+    var lines = ["今天 \(today) 段对话 · 待转写 \(pending) 段"]
+    if health.warning { lines.append("麦克风可能没有权限") }
+    if let failure { lines.append(failure) }
+    snapshotLock.lock(); snapshot = lines; snapshotLock.unlock()
+  }
+}

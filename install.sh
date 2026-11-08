@@ -84,6 +84,64 @@ PLIST
 }
 # 提炼 plist 辅助函数结束。
 
+# 音频资源辅助函数：下载只进入 staging，校验后再原子替换。
+audio_sha_ok() { [ -f "$1" ] && [ "$(shasum -a 256 "$1" | awk '{print $1}')" = "$2" ]; }
+audio_download() (
+  target="$1"; expected="$2"; url="$3"
+  if audio_sha_ok "$target" "$expected"; then return; fi
+  mkdir -p "$(dirname "$target")"
+  stage="$(mktemp "${target}.download.XXXXXX")"
+  trap 'rm -f "$stage"' EXIT HUP INT TERM
+  if ! curl -fL --retry 3 "$url" -o "$stage"; then rm -f "$stage"; return 1; fi
+  if ! audio_sha_ok "$stage" "$expected"; then
+    rm -f "$stage"; echo "语音模型 sha256 不符：$target" >&2; return 1
+  fi
+  mv "$stage" "$target"
+)
+install_audio_resources() (
+  set -eu
+  base="https://github.com/k2-fsa/sherpa-onnx/releases/download"
+  models="$DATA/models"
+  mkdir -p "$models"
+  audio_download "$models/silero_vad.onnx" 9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6 "$base/asr-models/silero_vad.onnx"
+  speaker="3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+  audio_download "$models/$speaker" 1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b "$base/speaker-recongition-models/$speaker"
+  model_sha=c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51
+  tokens_sha=f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc
+  staging="$(mktemp -d "$models/.install.XXXXXX")"
+  trap 'rm -rf "$staging"' EXIT HUP INT TERM
+  if ! audio_sha_ok "$models/sense-voice/model.int8.onnx" "$model_sha" || ! audio_sha_ok "$models/sense-voice/tokens.txt" "$tokens_sha"; then
+    archive=sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+    curl -fL --retry 3 "$base/asr-models/$archive.tar.bz2" -o "$staging/sense.tar.bz2"
+    tar -xjf "$staging/sense.tar.bz2" -C "$staging" "$archive/model.int8.onnx" "$archive/tokens.txt"
+    audio_sha_ok "$staging/$archive/model.int8.onnx" "$model_sha" && audio_sha_ok "$staging/$archive/tokens.txt" "$tokens_sha" || { echo "SenseVoice 模型 sha256 不符" >&2; exit 1; }
+    mkdir -p "$models/sense-voice"
+    mv "$staging/$archive/model.int8.onnx" "$models/sense-voice/model.int8.onnx"
+    mv "$staging/$archive/tokens.txt" "$models/sense-voice/tokens.txt"
+  fi
+  library=sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib
+  vendor="$REPO/collector/vendor"
+  capi_sha=2a169fe29c7e75168cc308b0d5b7f9085efebbb3a7f812d46c3a983d6788759f
+  ort_sha=3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b
+  header_sha=5698f38ba09ad2bdf085c56a6cbbd7741acf15e25f4ce5c7097b9702cadf437f
+  if ! audio_sha_ok "$vendor/$library/lib/libsherpa-onnx-c-api.dylib" "$capi_sha" || ! audio_sha_ok "$vendor/$library/lib/libonnxruntime.dylib" "$ort_sha"; then
+    curl -fL --retry 3 "$base/v2.0.1/$library.tar.bz2" -o "$staging/library.tar.bz2"
+    tar -xjf "$staging/library.tar.bz2" -C "$staging" "$library"
+    audio_sha_ok "$staging/$library/lib/libsherpa-onnx-c-api.dylib" "$capi_sha" && audio_sha_ok "$staging/$library/lib/libonnxruntime.dylib" "$ort_sha" || { echo "sherpa-onnx 库 sha256 不符" >&2; exit 1; }
+    mkdir -p "$vendor"
+    rm -rf "$vendor/$library"
+    mv "$staging/$library" "$vendor/$library"
+  fi
+  # 发布包未带头文件时，取与 dylib 一致的 v2.0.1 C API 头文件。
+  if ! audio_sha_ok "$vendor/include/sherpa-onnx/c-api/c-api.h" "$header_sha"; then
+    mkdir -p "$vendor/include/sherpa-onnx/c-api"
+    curl -fL --retry 3 "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v2.0.1/sherpa-onnx/c-api/c-api.h" -o "$staging/c-api.h"
+    audio_sha_ok "$staging/c-api.h" "$header_sha" || { echo "sherpa-onnx 头文件 sha256 不符" >&2; exit 1; }
+    mv "$staging/c-api.h" "$vendor/include/sherpa-onnx/c-api/c-api.h"
+  fi
+)
+# 音频资源辅助函数结束。
+
 BUN="$(command -v bun || true)"
 [ -n "$BUN" ] || { echo "需要 bun：https://bun.sh"; exit 1; }
 if [ "${RA_NO_DISTILL:-0}" != 1 ]; then DISTILL_PATH="$(distill_path)"; fi
@@ -94,6 +152,8 @@ step "安装依赖"
 "$BUN" install --frozen-lockfile
 step "构建网页"
 "$BUN" x vite build --config web/vite.config.ts --logLevel warn
+step "下载并校验语音模型和本机音频库"
+install_audio_resources
 step "构建并签名采集端（固定的自签名证书，升级后系统权限不丢）"
 collector/build.sh
 
@@ -101,6 +161,7 @@ step "停止旧进程"
 for l in collector distill hub; do launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/dev/null || true; done
 if [ "${RA_NO_DISTILL:-0}" = 1 ]; then rm -f "$AGENTS/dev.record-anything.distill.plist"; fi
 pkill -f 'Record Anything.app/Contents/MacOS/Collector' 2>/dev/null || true
+pkill -f 'Record Anything.app/Contents/MacOS/ra-audio-worker' 2>/dev/null || true
 
 step "安装采集端到 $APP"
 mkdir -p "$APP_DIR"
@@ -177,6 +238,7 @@ cat <<MSG
 - 打开 History：菜单里点"打开 History"，或运行 bun "$REPO/hub/src/cli.ts" open
 - 记录终端命令：在 ~/.zshrc 里加一行
     source "$REPO/plugins/shell/hook.zsh"
+- 语音模型：$DATA/models/；加密音频：$DATA/audio/（卸载保留）
 - 日志：$DATA/logs/
 - 提炼日志：$DATA/logs/distill.log；模型配置：$DATA/models.json
 MSG

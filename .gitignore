@@ -11,3 +11,7 @@ collector/build/
 
 experiments/02-audio/vendor/
 .cache/
+
+collector/vendor
+collector/.cache/
+node_modules

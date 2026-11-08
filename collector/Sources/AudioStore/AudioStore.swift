@@ -1,0 +1,124 @@
+import Foundation
+import CryptoKit
+import Security
+import CollectorCore
+
+/// 采集端和 worker 共用；不会把解密后的音频写到临时文件。
+public final class AudioStore {
+  public let root: URL
+  private let key: SymmetricKey
+  private let fm = FileManager.default
+  public init(dataDirectory: URL, key: SymmetricKey? = nil) throws {
+    root = dataDirectory.appendingPathComponent("audio", isDirectory: true)
+    self.key = try key ?? Self.loadKey()
+    try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try rejectLink(root)
+  }
+  public static func loadKey() throws -> SymmetricKey {
+    let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: "record-anything", kSecAttrAccount as String: "audio-key"]
+    func read() throws -> Data? {
+      var q = query; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
+      var result: CFTypeRef?
+      let status = SecItemCopyMatching(q as CFDictionary, &result)
+      if status == errSecItemNotFound { return nil }
+      guard status == errSecSuccess, let data = result as? Data, data.count == 32 else { throw AudioError.keychain(status) }
+      return data
+    }
+    if let data = try read() { return SymmetricKey(data: data) }
+    let key = SymmetricKey(size: .bits256)
+    let data = key.withUnsafeBytes { Data($0) }
+    var q = query; q[kSecValueData as String] = data
+    q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    let status = SecItemAdd(q as CFDictionary, nil)
+    if status == errSecDuplicateItem, let existing = try read() { return SymmetricKey(data: existing) }
+    guard status == errSecSuccess else { throw AudioError.keychain(status) }
+    return key
+  }
+  public func directory(for meta: AudioMetadata) throws -> URL {
+    try meta.validate()
+    let day = String(meta.t_start.prefix(10))
+    guard day.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", options: .regularExpression) != nil else { throw AudioError.invalidPath }
+    let parent = root.appendingPathComponent(day, isDirectory: true)
+    let dir = parent.appendingPathComponent(meta.id, isDirectory: true)
+    try rejectLink(parent); try rejectLink(dir)
+    return dir
+  }
+  /// 两路的首个人声段可能乱序返回；跨午夜时保持同一 ULID，移动整个 open 目录。
+  public func moveOpenConversation(from old: AudioMetadata, to new: AudioMetadata) throws {
+    guard old.status == .open, new.status == .open, old.id == new.id else { throw AudioError.invalidTransition }
+    let source = try directory(for: old), target = try directory(for: new)
+    guard source != target else { return }
+    try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try fm.moveItem(at: source, to: target)
+    do { try writeMetadata(new) }
+    catch { try? fm.moveItem(at: target, to: source); throw error }
+  }
+  public func writeMetadata(_ meta: AudioMetadata) throws {
+    let dir = try directory(for: meta)
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try atomic(try meta.encoded(), to: dir.appendingPathComponent("meta.json"))
+  }
+  public func readMetadata(at directory: URL) throws -> AudioMetadata {
+    try rejectLink(directory); try rejectLink(directory.appendingPathComponent("meta.json"))
+    let meta = try AudioMetadata.decode(Data(contentsOf: directory.appendingPathComponent("meta.json")))
+    guard try self.directory(for: meta).standardizedFileURL == directory.standardizedFileURL else { throw AudioError.invalidPath }
+    return meta
+  }
+  public func conversations() throws -> [AudioMetadata] {
+    var result: [AudioMetadata] = []
+    for day in try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
+      try rejectLink(day)
+      guard try day.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
+      for dir in try fm.contentsOfDirectory(at: day, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
+        try rejectLink(dir)
+        guard try dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
+        result.append(try readMetadata(at: dir))
+      }
+    }
+    return result
+  }
+  public func writeSegment(_ aac: Data, file: String, meta: AudioMetadata) throws {
+    try validateFile(file)
+    let dir = try directory(for: meta)
+    try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    let sealed = try AES.GCM.seal(aac, using: key)
+    guard let data = sealed.combined else { throw AudioError.invalidMetadata }
+    try atomic(data, to: dir.appendingPathComponent(file))
+  }
+  public func readSegment(_ file: String, meta: AudioMetadata) throws -> Data {
+    try validateFile(file)
+    let url = try directory(for: meta).appendingPathComponent(file); try rejectLink(url)
+    return try AES.GCM.open(AES.GCM.SealedBox(combined: Data(contentsOf: url)), using: key)
+  }
+  /// 调用者必须确保 worker 没在处理这些目录；open 对话始终保留。
+  @discardableResult public func cleanup(now: Date, retentionDays: Int, purgeBefore: Date? = nil, deleting: [String] = []) throws -> [String] {
+    guard (1...365).contains(retentionDays), deleting.allSatisfy(AudioPolicy.validID) else { throw AudioError.invalidMetadata }
+    let all = try conversations()
+    var deleted: [String] = []
+    for meta in all where meta.status != .open && (deleting.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: now, retentionDays: retentionDays, purgeBefore: purgeBefore)) {
+      try fm.removeItem(at: directory(for: meta)); deleted.append(meta.id)
+    }
+    // 已不在本机的目录也可以确认删除，仍在录的不能 ack。
+    return Array(Set(deleted + deleting.filter { id in !all.contains { $0.id == id && $0.status == .open } }))
+  }
+  public func recoverInterrupted() throws {
+    for var meta in try conversations() where meta.status == .open {
+      guard let end = meta.segments.compactMap({ AudioPolicy.date($0.t_end) }).max() else {
+        try fm.removeItem(at: directory(for: meta)); continue
+      }
+      meta.t_end = LocalTime.iso(end); try meta.transition(to: .closed, at: Date()); try writeMetadata(meta)
+    }
+  }
+  private func validateFile(_ file: String) throws {
+    guard file.range(of: "^(mic|sys)-[0-9]{4,}\\.enc$", options: .regularExpression) != nil else { throw AudioError.invalidPath }
+  }
+  private func rejectLink(_ url: URL) throws {
+    if (try? fm.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == .typeSymbolicLink { throw AudioError.invalidPath }
+  }
+  private func atomic(_ data: Data, to url: URL) throws {
+    try rejectLink(url)
+    try data.write(to: url, options: .atomic)
+    try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+  }
+}
