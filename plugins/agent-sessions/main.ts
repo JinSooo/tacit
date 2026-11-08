@@ -17,7 +17,7 @@ interface Bucket { part: number; messages: Message[] }
 interface Session { provider: Provider; id: string; cwd: string | null; seen: { [hour: string]: string[] }; buckets: { [hour: string]: Bucket }; mtime: number; lastActivity?: number }
 interface FileProgress { offset: number; mtime: number; size: number; identity: string; session: string | null; cwd?: string | null }
 export interface State { version: 2; since: number; replaySince: number; files: { [file: string]: FileProgress }; sessions: { [id: string]: Session } }
-export interface Options { device: string; now?: number; since?: number; state?: State; claudeDir?: string; codexDir?: string; onRecord?: (record: RecordV1) => void; onWarning?: (message: string) => void }
+export interface Options { device: string; now?: number; since?: number; state?: State; claudeDir?: string; codexDir?: string; excludeDirs?: string[]; onRecord?: (record: RecordV1) => void; onWarning?: (message: string) => void }
 
 function* walk(root: string): Generator<string> {
   if (!fs.existsSync(root)) return;
@@ -129,7 +129,12 @@ export async function collect(options: Options): Promise<State> {
     session.mtime = Math.max(session.mtime, progress.mtime);
     progress.cwd = session.cwd;
   }
+  // 提炼层自己调用 claude/codex 时在 distill-work 里运行；这些会话不是用户的活动，绝不能采回 History（否则会自己记录自己）。
+  const excluded = (options.excludeDirs ?? [path.join(process.env.RA_DATA_DIR ?? path.join(os.homedir(), "Library/Application Support/record-anything"), "distill-work")])
+    .flatMap(dir => { const all = [path.resolve(dir)]; try { all.push(fs.realpathSync(dir)); } catch {} return all; });
+  const isExcluded = (cwd: string | null) => !!cwd && excluded.some(dir => cwd === dir || cwd.startsWith(dir + path.sep));
   for (const session of Object.values(state.sessions)) for (const [hour, bucket] of Object.entries(session.buckets).sort(([a], [b]) => Number(a) - Number(b))) {
+    if (isExcluded(session.cwd)) { bucket.messages = []; continue; }
     if (!bucket.messages.length || !(now > Number(hour) + HOUR + 10 * 60_000 || now - session.mtime >= 30 * 60_000)) continue;
     const messages = bucket.messages.sort((a, b) => a.time - b.time);
     const app = session.provider === "claude" ? "claude-code" : "codex";

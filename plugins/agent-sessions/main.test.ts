@@ -35,6 +35,16 @@ function codex(role: string, text: unknown, time = base + 60_000, extra = {}) {
 function meta(cwd: string) { return { type: "session_meta", timestamp: new Date(base).toISOString(), payload: { id: "codex-session", cwd } }; }
 afterEach(() => { for (const dir of temporary.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
+// 回归：提炼层的 CLI 调用在 distill-work 里运行，不能被当成用户会话采回来（2026-11-08 设计时预防）。
+test("distill-work 目录下的会话不输出", async () => {
+  const s = setup(); const work = path.join(s.root, "data", "distill-work"); fs.mkdirSync(work, { recursive: true });
+  s.write(s.file("claude"), [claude("user", "提炼调用的合成提示词", base + 60_000, { cwd: work })]);
+  s.write(s.file("codex", "rollout-x.jsonl"), [meta(path.join(work, "sub")), codex("user", "提炼调用的合成提示词")]);
+  const records: RecordV1[] = [];
+  await collect({ device: "mac", claudeDir: s.claudeDir, codexDir: s.codexDir, now: base + 3_600_000, excludeDirs: [work], onRecord: r => records.push(r) });
+  expect(records).toHaveLength(0);
+});
+
 describe("注入过滤列表", async () => {
   const samples: { [name: string]: string } = {
     command: "<command-name>/synthetic</command-name>扩展正文", task: "<task-notification>完成</task-notification>",
