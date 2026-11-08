@@ -126,7 +126,7 @@ function App() {
     }
     const text = await response.text();
     const result = text ? JSON.parse(text) : undefined;
-    if (!response.ok) throw new Error(result?.error ?? `请求失败（${response.status}）`);
+    if (!response.ok) throw Object.assign(new Error(result?.error ?? `请求失败（${response.status}）`), { status: response.status });
     return result as T;
   }, [token]);
   const distillationApi = useMemo(() => createDistillationApi(api), [api]);

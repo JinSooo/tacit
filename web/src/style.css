@@ -103,3 +103,7 @@ textarea { width: 100%; resize: vertical; line-height: 1.8; }
 .audit-table td:nth-child(4) { min-width: 220px; max-width: 450px; overflow-wrap: anywhere; }
 .audit-ids { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); margin-top: 6px; }
 .heading-row nav { flex-wrap: wrap; }
+.audit-ids > a, .audit-ids > button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.audit-ids > button { padding: 0; min-height: 0; line-height: inherit; text-decoration: underline; }
+.audit-ids > a:active { background: var(--hover); }
+.audit-ids a .unconfirmed { display: inline-block; margin-left: 6px; text-decoration: none; }
