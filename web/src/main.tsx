@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { RecordV1 } from "../../packages/record/index.ts";
 import { buildCorrection, buildNote, dateTitle, duration, groupRecords, latestCorrection, safeUrl, sourceColor, sourceNames, timeRange, type Detail, type HistoryRow } from "./history.ts";
 import { toLocalIso } from "./record-helpers.ts";
+import { createDistillationApi } from "./distillation.ts";
+import { DistillationWorkspace, type View } from "./distillation-views.tsx";
 import "./style.css";
 
 const tokenKey = "record-anything-token";
@@ -97,6 +99,8 @@ function NoteDialog({ api, onSaved, onClose }: { api: Api; onSaved: () => void; 
 }
 function App() {
   const [token, setToken] = useState(initialToken);
+  const [view, setView] = useState<View>("history");
+  const [pendingCount, setPendingCount] = useState(0);
   const [q, setQ] = useState("");
   const [source, setSource] = useState("");
   const [device, setDevice] = useState("");
@@ -119,10 +123,12 @@ function App() {
       try { sessionStorage.removeItem(tokenKey); } catch { /* 浏览器可能禁用了存储。 */ }
       setToken(""); throw new Error("需要重新打开网页");
     }
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error ?? `请求失败（${response.status}）`);
+    const text = await response.text();
+    const result = text ? JSON.parse(text) : undefined;
+    if (!response.ok) throw new Error(result?.error ?? `请求失败（${response.status}）`);
     return result as T;
   }, [token]);
+  const distillationApi = useMemo(() => createDistillationApi(api), [api]);
   const load = useCallback(async (next: string | null, version: number, signal?: AbortSignal) => {
     if (loading.current) return;
     loading.current = true; setBusy(true); setError("");
@@ -150,11 +156,11 @@ function App() {
   }, [load, token, revision]);
   useEffect(() => {
     const target = sentinel.current;
-    if (!target || !cursor || busy || error) return;
+    if (view !== "history" || !target || !cursor || busy || error) return;
     const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) void load(cursor, generation.current); }, { rootMargin: "240px" });
     observer.observe(target);
     return () => observer.disconnect();
-  }, [cursor, busy, error, load]);
+  }, [cursor, busy, error, load, view]);
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
@@ -166,15 +172,17 @@ function App() {
     return () => document.removeEventListener("keydown", keyboard);
   }, []);
   if (!token) return <p className="token-prompt">在终端运行 <code>bun hub/src/cli.ts open</code></p>;
-  return <><a className="skip" href="#timeline">跳到 History</a><main>
-    <header><h1>History</h1><div className="toolbar">
+  return <><a className="skip" href="#content">跳到内容</a><main>
+    <header><div className="heading-row"><h1>History</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "当前"], ["pending", "待确认"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
       <input ref={search} type="search" aria-label="搜索 History" placeholder="搜索 History" value={q} onChange={event => setQ(event.target.value)} />
       <select aria-label="来源筛选" value={source} onChange={event => setSource(event.target.value)}><option value="">所有来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
       <input className="device" list="devices" aria-label="设备筛选" placeholder="所有设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
       <input className="date" type="date" aria-label="跳到日期" value={date} onChange={event => setDate(event.target.value)} />
       <button onClick={() => setNote(true)}>补写</button>
-    </div></header>
-    <div id="timeline" tabIndex={-1} aria-busy={busy}>
+    </div>}</header>
+    <div id="content" tabIndex={-1}>
+    <DistillationWorkspace view={view} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />
+    <div id="timeline" hidden={view !== "history"} tabIndex={-1} aria-busy={busy}>
       {groupRecords(records).map(group => <section key={group.day} aria-label={dateTitle(group.day)}><h2 className="day-heading">{dateTitle(group.day)}</h2><div className="day-records">{group.records.map(record => <article key={record.id} className={expanded === record.id ? "record expanded" : "record"}>
         <button className="record-row" style={{ "--source-color": sourceColor(record.source) } as React.CSSProperties} aria-expanded={expanded === record.id} aria-controls={`detail-${record.id}`} onClick={() => setExpanded(expanded === record.id ? null : record.id)}>
           <span className="record-time">{timeRange(record)}</span><span className="record-title">{record.title}</span><span className="record-meta">{sourceNames[record.source] ?? record.source}{duration(record) && <span>{duration(record)}</span>}</span>
@@ -184,6 +192,7 @@ function App() {
       {!records.length && !busy && !error && <p className="empty">没有记录</p>}
       {error && <div className="list-status" role="alert"><span className="error">{error}</span><button onClick={() => void load(cursor, generation.current)}>重试</button></div>}
       <div ref={sentinel} className="list-status" role="status">{busy ? "正在读取…" : ""}</div>
+    </div>
     </div>
     {note && <NoteDialog api={api} onClose={() => setNote(false)} onSaved={() => { setNote(false); setRevision(value => value + 1); }} />}
   </main></>;
