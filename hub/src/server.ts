@@ -1,3 +1,4 @@
+import { AgentReads } from "./agent.ts";
 import { DistillStore, type Fact } from "./distill/store.ts";
 import { ulid } from "../../packages/record/index.ts";
 import { timingSafeEqual } from "node:crypto";
@@ -59,6 +60,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
     const method = request.method;
     const host = request.headers.get("host");
     const port = options.port ?? 47823;
+    // 被拒的请求不写审计：未鉴权的来源（例如 DNS 重绑定的网页）不能往库里写东西。
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return new Response("Host 不被允许", { status: 421 });
     if (method === "GET" && url.pathname === "/v1/health") return Response.json({ ok: true });
     if (method === "GET" && url.pathname !== "/v1" && !url.pathname.startsWith("/v1/")) return serveWeb(url.pathname, options.webDir ?? defaultWebDir);
@@ -67,6 +69,8 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
       try { return await request.json(); } catch { throw new InputError("请求体必须是 JSON"); }
     };
     try {
+      if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
+      if (method === "GET" && url.pathname === "/v1/audit") return Response.json(new AgentReads(db).audit(url.searchParams));
       const store = new DistillStore(db);
       const respond = (value: unknown) => value === null ? Response.json({ error: "内容不存在" }, { status: 404 }) : Response.json(value);
       if (method === "GET" && url.pathname === "/v1/now") return Response.json({ now: store.getState("now") });

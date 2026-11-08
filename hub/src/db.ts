@@ -49,7 +49,7 @@ export class HubDB {
       this.db.pragma(`key='${key.replaceAll("'", "''")}'`);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 2) throw new Error("数据库版本比当前 hub 新");
+      if (version > 3) throw new Error("数据库版本比当前 hub 新");
       if (version === 1 && file !== ":memory:") {
         try { copyFileSync(file, join(dirname(file), "history.db.bak-v1"), constants.COPYFILE_EXCL); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
@@ -82,6 +82,15 @@ export class HubDB {
       })();
       if (version === 1) this.db.transaction(() => this.db.exec(distillSchema))();
       new DistillStore(this).ensureFrameRecords();
+      if (version < 3) this.db.transaction(() => {
+        this.db.exec(`CREATE TABLE agent_reads(
+          id TEXT PRIMARY KEY, at TEXT, tool TEXT, kind TEXT, args TEXT,
+          result_ids TEXT, bytes INTEGER, ok INTEGER
+        );
+        CREATE INDEX agent_reads_time ON agent_reads(at DESC,id DESC);
+        CREATE INDEX agent_reads_tool_time ON agent_reads(tool,at DESC,id DESC);
+        PRAGMA user_version=3;`);
+      })();
     } catch (e) { this.db.close(); throw e; }
   }
   close(): void { this.db.close(); }
