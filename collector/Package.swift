@@ -15,6 +15,11 @@ let package = Package(
     .systemLibrary(name: "CSherpa"),
     .target(name: "AudioStore", dependencies: ["CollectorCore"], swiftSettings: v5),
     .target(name: "CollectorCore", swiftSettings: v5),
+    .executableTarget(name: "ra-audio-worker", dependencies: ["AudioStore", "CollectorCore", "CSherpa"], path: "Sources/AudioWorker", swiftSettings: v5,
+      linkerSettings: [.unsafeFlags(["-L", lib, "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
+    // 测试直接运行构建产物，不在 app 包内；只有测试使用本地 vendor 的 rpath。
+    .testTarget(name: "AudioWorkerTests", dependencies: ["ra-audio-worker", "AudioStore", "CollectorCore"], swiftSettings: v5,
+      linkerSettings: [.unsafeFlags(["-L", lib, "-Xlinker", "-rpath", "-Xlinker", lib])]),
     .executableTarget(name: "Collector", dependencies: ["CollectorCore", "AudioStore", "CSherpa"], swiftSettings: v5,
       linkerSettings: [.unsafeFlags(["-L", lib, "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
     .testTarget(name: "AudioStoreTests", dependencies: ["AudioStore"], swiftSettings: v5),
