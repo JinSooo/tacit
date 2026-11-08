@@ -32,7 +32,7 @@ func generate() throws {
     try writeWave(result, path: "out/long.wav")
     print("已生成 out/long.wav：\(Double(result.count)/16000) 秒")
 }
-func benchmark(model: String, threads: Int32) throws {
+func benchmark(model: String, threads: Int32, directory: String? = nil) throws {
     let strings = Strings()
     let loadStart = now()
     var vc = SherpaOnnxVadModelConfig()
@@ -77,8 +77,22 @@ func benchmark(model: String, threads: Int32) throws {
         return Array(UnsafeBufferPointer(start: vector, count: dim))
     }
     var rows: [[String: Any]] = [], vectors: [String: [[Float]]] = [:]
-    for name in languages + ["long"] {
-        let path = name == "long" ? "out/long.wav" : "\(modelDir)/test_wavs/\(name).wav"
+    let fileURLs: [URL]
+    if let directory {
+        fileURLs = try FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: directory),
+            includingPropertiesForKeys: [.isRegularFileKey]).filter {
+                $0.pathExtension.lowercased() == "wav" && (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+            }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard !fileURLs.isEmpty else { throw ExperimentError("目录没有 WAV 文件") }
+    } else { fileURLs = [] }
+    let inputs: [(name: String, path: String, vendor: Bool)] = directory == nil
+        ? (languages + ["long"]).map { ($0, $0 == "long" ? "out/long.wav" : "\(modelDir)/test_wavs/\($0).wav", false) }
+        : fileURLs.map { ($0.deletingPathExtension().lastPathComponent, $0.path, false) }
+          + languages.map { ($0, "\(modelDir)/test_wavs/\($0).wav", true) }
+    var vendorRows: [[String: Any]] = []
+    for (index, input) in inputs.enumerated() {
+        let name = input.name, path = input.path
+        var texts: [String] = [], segmentRows: [[String: Any]] = [], fileVectors: [[Float]] = []
         let start = now(), cpuStart = usage().cpu
         let samples = try readWave(path)
         let readSeconds = now() - start
@@ -97,12 +111,18 @@ func benchmark(model: String, threads: Int32) throws {
                 audio.withUnsafeBufferPointer { SherpaOnnxAcceptWaveformOffline(stream, 16000, $0.baseAddress, Int32($0.count)) }
                 SherpaOnnxDecodeOfflineStream(recognizer, stream)
                 guard let result = SherpaOnnxGetOfflineStreamResult(stream) else { throw ExperimentError("转写无结果") }
-                if firstText == nil { firstText = String(String(cString: result.pointee.text).prefix(40)) }
+                if directory != nil {
+                    texts.append(String(cString: result.pointee.text))
+                } else if firstText == nil { firstText = String(String(cString: result.pointee.text).prefix(40)) }
                 SherpaOnnxDestroyOfflineRecognizerResult(result)
                 asrSeconds += now() - t
                 let st = now()
                 let v = try embedding(audio)
-                if name != "long" { vectors[name, default: []].append(v) }
+                if directory != nil {
+                    fileVectors.append(v)
+                    segmentRows.append(["start_seconds": Double(segment.pointee.start)/16000,
+                        "duration_seconds": Double(audio.count)/16000, "embedding": v])
+                } else if name != "long" { vectors[name, default: []].append(v) }
                 speakerSeconds += now() - st
             }
         }
@@ -122,9 +142,40 @@ func benchmark(model: String, threads: Int32) throws {
             "vad_and_overhead_seconds": elapsed - readSeconds - asrSeconds - speakerSeconds,
             "vad_segments": segments, "speech_seconds": Double(speechSamples)/16000]
         rows.append(row)
+        if let directory {
+            // 每段先做 L2 归一化，再等权平均并归一化；避免原始向量模长改变权重。
+            var mean = [Double](repeating: 0, count: dim)
+            for vector in fileVectors {
+                let norm = sqrt(vector.reduce(0.0) { $0 + Double($1) * Double($1) })
+                guard norm.isFinite && norm > 0 else { throw ExperimentError("声纹范数无效") }
+                for i in 0..<dim { mean[i] += Double(vector[i]) / norm }
+            }
+            let norm = sqrt(mean.reduce(0.0) { $0 + $1 * $1 })
+            guard norm.isFinite && norm > 0 else { throw ExperimentError("平均声纹无效") }
+            mean = mean.map { $0 / norm }
+            let output: [String: Any] = ["file": name, "model": model, "num_threads": threads,
+                "embedding_dim": dim, "metrics": row, "segments": segmentRows,
+                "mean_embedding": mean, "mean_method": "equal_weight_unit_segments_then_unit_mean"]
+            if input.vendor { vendorRows.append(output) }
+            else {
+                let base = URL(fileURLWithPath: path).deletingPathExtension().path
+                try texts.joined(separator: "\n").appending("\n").write(toFile: base + ".sv.txt", atomically: true, encoding: .utf8)
+                try writeJSON(output, path: base + ".emb.json")
+            }
+            // 新模式标准输出仅含序号、时长、处理秒数、RTF 和段数。
+            print("\(index + 1) \(duration) \(elapsed) \(elapsed / duration) \(segments)")
+            fflush(stdout)
+            if index == inputs.count - 1 {
+                try writeJSON(["model": model, "num_threads": threads,
+                    "load_seconds": vadLoad + asrLoad + speakerLoad, "files": vendorRows],
+                    path: URL(fileURLWithPath: directory).appendingPathComponent("vendor-embeddings.json").path)
+            }
+            continue
+        }
         print("\(model)/\(threads) \(name)：\(String(format: "%.3f", elapsed)) 秒，\(segments) 段，前40字：\(firstText ?? "")")
         fflush(stdout)
     }
+    if directory != nil { return }
     // 原始样例段不足两个时，额外取不重叠的前后窗口，仅用于相似度，不计入流水线 RTF。
     var same: [[String: Any]] = []
     for name in languages {
@@ -154,7 +205,10 @@ do {
     try FileManager.default.createDirectory(atPath: "out", withIntermediateDirectories: true)
     let args = Array(CommandLine.arguments.dropFirst())
     if args == ["generate"] { try generate() }
+    else if args.count == 2, args[0] == "files" {
+        try benchmark(model: "int8", threads: 4, directory: args[1])
+    }
     else if args.count == 2, ["int8", "fp32"].contains(args[0]), let threads = Int32(args[1]), [1,2,4].contains(threads) {
         try benchmark(model: args[0], threads: threads)
-    } else { throw ExperimentError("用法：bench generate | bench int8|fp32 1|2|4（在实验目录运行）") }
+    } else { throw ExperimentError("用法：bench generate | bench int8|fp32 1|2|4 | bench files <目录>（在实验目录运行）") }
 } catch { fputs("基准失败：\(error)\n", stderr); exit(1) }
