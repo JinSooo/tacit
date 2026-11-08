@@ -220,3 +220,116 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 - **归属**：cwd 只写 `project_hint`。每次生成线程详细版时，模型顺带输出 `domain` 和 `in_project`；只有 `domain=work` 且 `in_project=true` 才把 `project_id` 设为候选项目，否则清空。归属变化时同步改这条线程的 facts 的 `project_id`，新旧项目都置 `needs_regen=1`。`domain` 为 NULL 且没有新片段的存量线程，每轮最多做 12 次单独判断（minute 档）。
 - **仓库归一**：用 `git rev-parse --git-common-dir` 找主仓库，worktree 和子目录都归到主仓库的项目，worktree 路径作为别名追加进 `keys.repos`。目录已删除、git 探测失败时，按已登记的 `keys.repos` 做路径边界最长匹配。家目录本身不算仓库。git 探测带 500ms 超时和 60 秒缓存。
 - **线程状态**：2 小时没新记录 → `paused`；3 天没动静或有完成信号 → 进 `pending(kind=thread_done)`。这条待确认 **7 天**没人处理：线程改为 `archived`，待确认结项为 `resolution=expired`，同一事务。用户点"完成 / 继续 / 放弃"对应 `done` / `active` / `abandoned`。`archived` 和 `done` 分开，用来区分到期结掉和用户确认。`archived` 线程不再提问、不进注入、不参与归线程候选，`/v1/threads?status=archived`、`get`、`search` 仍能查到。
+
+## 5. 音频（v2，Mac）
+
+规则见 AGENTS.md 和 design.md 第 5 节。本节是采集端、转写进程、hub、网页之间的硬边界。
+
+### 5.1 进程分工
+
+| 进程 | 做什么 | 不做什么 |
+|---|---|---|
+| 采集端 Record Anything.app | 常驻录两路（麦克风 `mic`：AVAudioEngine；系统声音 `sys`：Core Audio process tap，全局混音），重采样到 16kHz 单声道，Silero VAD 只留人声段，按"两路人声间隔 ≥ 60 秒"切成对话，加密写盘；按保留天数清理；和 hub 同步（5.4）；调度转写进程 | 不加载 SenseVoice 和声纹模型（内存要 < 300MB） |
+| 转写进程 `ra-audio-worker`（同一个 app 包里的第二个可执行文件） | 由采集端按批启动、处理完退出：算声纹 → 对话内说话人区分 → 上传声纹 → 判断有没有"我" → 转写 → 写 History；截取试听样本 | 不常驻 |
+| hub | 收声纹、跨对话聚类成说话人、"新声音"待确认、存试听样本、下发"我"的声纹、保留天数设置和一键清理 | 不收原始音频（试听样本除外） |
+
+暂停记录时两路都停。录音开关在采集端菜单里，默认开。
+
+### 5.2 模型与库
+
+- sherpa-onnx v2.0.1（`sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib`），dylib 打进 app 的 `Contents/Frameworks` 并用同一张自签名证书签名；头文件 `sherpa-onnx/c-api/c-api.h`（同版本源码）。
+- 模型由 `install.sh` 下载到 `<数据目录>/models/`，不进安装包、不进仓库，下载后校验 sha256，不符就报错退出：
+
+| 文件 | 来源（github.com/k2-fsa/sherpa-onnx/releases/download/…） | sha256 |
+|---|---|---|
+| `silero_vad.onnx` | `asr-models/silero_vad.onnx` | `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6` |
+| `3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx` | `speaker-recongition-models/同名` | `1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b` |
+| `sense-voice/model.int8.onnx` | `asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2` 内 | `c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51` |
+| `sense-voice/tokens.txt` | 同上 | `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc` |
+
+- SenseVoice 用 int8、4 线程（实验 2-A）。声纹向量 512 维，余弦相似度，向量先 L2 归一化。
+- app 需要：Info.plist 的 `NSMicrophoneUsageDescription`、`NSAudioCaptureUsageDescription`；hardened runtime 的 `com.apple.security.device.audio-input` entitlement；加载自带 dylib 需要的库校验设置（同证书签名，不行再加 `disable-library-validation`）。
+
+### 5.3 本机音频存储（采集端和转写进程共用）
+
+```
+<数据目录>/audio/<YYYY-MM-DD>/<conversation_id>/   # conversation_id 是 ULID，也是记录的 source_ref
+  meta.json        # 明文元数据，不含任何文字内容
+  mic-0001.enc …   # 每个 VAD 人声段一个文件：16kHz 单声道 AAC（或 Opus），整段 AES-GCM 加密（CryptoKit combined 格式）
+  sys-0001.enc …
+```
+
+- 密钥：钥匙串 service `record-anything`、account `audio-key`，32 字节，首次使用时生成。
+- `meta.json`：`{ id, t_start, t_end（未结束为 null）, segments: [{ file, track: "mic"|"sys", t_start, t_end, dbfs }], meeting_apps: [bundle id], status, updated_at }`。
+  - `status`：`open`（还在录）→ `closed`（等转写进程）→ `waiting_me`（还没有"我"的声纹，只留本机）/ `skipped`（判定没有"我"，不留记录）/ `done`（已写 History）/ `failed`（附 `error`，下次重试，最多 3 次）。
+  - `meeting_apps`：对话期间运行过的会议软件（腾讯会议、飞书、Zoom、Teams、FaceTime、微信），用于"有会就保留"例外。日历例外这一版不做。
+- 写文件先写临时文件再改名；meta.json 只由当时持有该对话的一方写（采集端写 `open`/`closed`，之后由转写进程写）。
+- 清理：`t_end` 早于"现在 − 保留天数"的对话目录整体删除，不管状态。一键清理删掉 `t_end` 早于清理时刻的全部目录（还在录的不删）。删除用普通删除，不另外覆写。
+- 麦克风权限检查：录音开着、连续 10 分钟麦克风这路 < −70 dBFS 时，菜单显示"麦克风可能没有权限"。
+
+### 5.4 hub 接口（都要 Bearer token 和 Host 校验）
+
+| 方法 | 路径 | 谁调用 | 说明 |
+|---|---|---|---|
+| GET | `/v1/audio/sync?device` | 采集端，每 5 分钟和每次启动转写进程前 | `{ retention_days, purge_before: string\|null, voiceprint: { vector: number[512], threshold } \| null, sample_requests: [{ id, speaker_id, conversation_ref, local }], delete_conversations: [conversation_ref] }` |
+| POST | `/v1/audio/sync/ack` | 采集端 | `{ device, purged_at?, deleted?: [conversation_ref] }`，hub 收到后不再下发这些删除和清理 |
+| POST | `/v1/audio/embeddings` | 转写进程 | `{ device, conversation_ref, t_start, t_end, speakers: [{ local: "S1", track, seconds, centroid: number[512] }] }` → `{ speakers: [{ local, speaker_id, label, is_me }] }`。同一 `conversation_ref` 重复上传就覆盖 |
+| POST | `/v1/audio/conversations/:ref/skipped` | 转写进程 | 判定没有"我"：hub 删掉这段对话的逐条声纹行，说话人的聚合中心保留 |
+| POST | `/v1/audio/samples` | 采集端（转写进程截取） | `{ request_id, clips: [{ mime: "audio/mp4"\|"audio/wav", data: base64 }] }`，每个说话人最多 3 段、每段约 10 秒 |
+| GET | `/v1/audio/samples/:id` | 网页 | 返回音频二进制，`Cache-Control: no-store` |
+| GET / PUT | `/v1/audio/settings` | 网页 | `{ retention_days }`，1–365 的整数，默认 7 |
+| POST | `/v1/audio/purge` | 网页 | 一键清理：记下 `purge_before = 现在`，采集端下次同步时执行 |
+| GET | `/v1/speakers` | 网页 | `{ speakers: [{ id, label, name, is_me, confirmed, conversations, seconds }] }` |
+
+- 网页的 CSP 加 `media-src 'self' blob:`（样本用 fetch 带 token 取回后转成 blob 播放）。
+
+### 5.5 hub 存储（`user_version` 5）
+
+```sql
+speakers(id TEXT PRIMARY KEY,            -- ULID
+         label TEXT NOT NULL,            -- 临时标签："说话人 A"、"说话人 B"…，按创建顺序
+         name TEXT, is_me INTEGER NOT NULL DEFAULT 0,
+         status TEXT NOT NULL,           -- new | asked | confirmed | ignored | merged
+         merged_into TEXT, centroid BLOB NOT NULL,   -- 512 个 float32，按秒数加权平均后归一化
+         conversations INTEGER NOT NULL DEFAULT 0, seconds REAL NOT NULL DEFAULT 0,
+         created_at TEXT NOT NULL, updated_at TEXT)
+voice_embeddings(conversation_ref TEXT NOT NULL, local TEXT NOT NULL, device TEXT NOT NULL,
+                 speaker_id TEXT NOT NULL, track TEXT NOT NULL, seconds REAL NOT NULL,
+                 centroid BLOB NOT NULL, t_start TEXT NOT NULL, t_end TEXT NOT NULL,
+                 PRIMARY KEY(conversation_ref, local))
+voice_samples(id TEXT PRIMARY KEY, speaker_id TEXT NOT NULL, request_id TEXT NOT NULL,
+              mime TEXT NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL)
+sample_requests(id TEXT PRIMARY KEY, speaker_id TEXT NOT NULL, device TEXT NOT NULL,
+                conversation_ref TEXT NOT NULL, local TEXT NOT NULL,
+                created_at TEXT NOT NULL, fulfilled_at TEXT)
+audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、me_threshold、待下发的删除
+```
+
+- **聚类**（规则，不调模型）：上传的每个说话人中心和已有说话人（`status` 不是 `merged`）比余弦，最高的 ≥ `match_threshold`（起始 0.5）就归入并更新中心，否则新建 `new` 说话人。阈值是实验 2-C 的起始值，要用真实录音再调。
+- **进待确认**：说话人累计 ≥ 3 段对话或 ≥ 120 秒，且 `status=new`，就建 `pending(kind="voice", payload={ speaker_id })`，改成 `asked`，同时按秒数最长的 3 段对话建样本请求。
+- 待确认操作（`POST /v1/pending/:id`）：`me`（就是我：`is_me=1`、`name="我"`）、`rename`（填名字）、`merge_into`（和某人是同一人，`target` 是说话人 id）、`ignore`。处理后删掉这个说话人的试听样本。`GET /v1/pending` 里 voice 项的 payload 补 `{ speaker_id, label, conversations, seconds, samples: [{ id, mime }], samples_pending: bool }`。
+- `voiceprint` 下发 `is_me=1` 的说话人中心（有多个时按秒数加权合并），`threshold` 取 `audio_settings.me_threshold`，默认 0.49。
+- **删除联动**：删掉一条 `source=mac.audio` 的记录时，同一事务里删掉它 `source_ref` 对应的 `voice_embeddings` 行，并把 `source_ref` 加进待下发的 `delete_conversations`，采集端删本机音频后回 ack。
+
+### 5.6 转写进程与 History 记录
+
+每段 `closed`（和"我"的声纹变化后的 `waiting_me`）对话：
+
+1. 解密各段，每路按 3 秒窗口算声纹，对话内聚类成本地说话人 `S1`、`S2`…（起始阈值 0.6，可调），算中心，上传 5.4 的 embeddings，拿回说话人 id 和标签。
+2. 判断要不要转写：
+   - 没有 `voiceprint` → `waiting_me`，不转写；
+   - 麦克风这路有本地说话人中心和 voiceprint 的余弦 ≥ threshold，或 `meeting_apps` 非空 → 转写；
+   - 否则 → `skipped`，调 `/skipped`，不写记录。
+3. 转写每个人声段（SenseVoice）。**去回声**：麦克风这路的段和系统声音这路的段时间重叠、且转写文字相似度 ≥ 0.6 时，丢掉麦克风这路的那一段。
+4. 写一条记录，经 `POST /v1/ingest`：
+   - `source: "mac.audio"`，`source_ref: conversation_id`，`kind: "span"`，`t_start`、`t_end` 取对话首尾。
+   - `title`：`对话 · HH:MM–HH:MM · 我、说话人 B`（规则生成）。
+   - `body`：每段一行 `[HH:MM:SS] 标签：文字`，按时间排序。
+   - `people`：说话人 id 数组。`capture: { method: "asr", confidence }`（各段平均）。
+   - `context: { app: 第一个会议软件或 null, extra: { speech_seconds, mic_dbfs, sys_dbfs, tracks } }`。
+   - `media: [{ path: "audio/<日期>/<id>", kind: "audio", expires: t_end + 保留天数 }]`。
+   - 记录写入后不改；之后说话人改名，网页按 `people` 的 id 显示新名字。
+5. 处理样本请求：从对应本地说话人的段里截取不超过 10 秒，最多 3 段，上传 `/v1/audio/samples`。对话已经被清理的，请求留着，网页显示"样本待取"。
+
+- 采集端启动转写进程的时机：有 `closed` 对话且距上次运行 ≥ 10 分钟，或收到新的 voiceprint；同一时刻只跑一个；低优先级（`taskpolicy -b` 或 `setpriority`）。
+- 提炼切片：`mac.audio` 的分组键是 `audio:<source_ref>`，每段对话一个片段。
