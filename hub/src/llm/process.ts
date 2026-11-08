@@ -1,0 +1,52 @@
+import type { BackendContext } from "./types.ts";
+
+export function input(ctx: BackendContext): string {
+  return JSON.stringify({ system: ctx.req.system, prompt: ctx.req.prompt });
+}
+export function safeError(message: string, secrets: string[]): string {
+  // 子进程可能回显输入；出现任一输入行时舍弃整段诊断，避免残留片段。
+  const parts = secrets.flatMap(s => [s, JSON.stringify(s).slice(1, -1), ...s.split(/\r?\n/)]).filter(Boolean);
+  const fragments = new Set(Array.from({ length: Math.max(0, message.length - 7) }, (_, i) => message.slice(i, i + 8)));
+  const echoed = parts.some(s => message.includes(s) || (s.length >= 8 && Array.from({ length: s.length - 7 }, (_, i) => s.slice(i, i + 8)).some(p => fragments.has(p))));
+  return echoed ? "后端调用失败（诊断含输入内容，已隐藏）" : message.slice(0, 500);
+}
+export function run(ctx: BackendContext, command: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stdout = "", stderr = "", settled = false, failure: string | undefined;
+    // 不继承额外的终端输入通道；认证仍由 CLI 自己处理。
+    const child = ctx.spawn(command, args, { cwd: ctx.cwd, stdio: "pipe", detached: process.platform !== "win32", env: { ...process.env, CI: "1" } });
+    function stop() {
+      try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); }
+      catch { child.kill("SIGKILL"); }
+    }
+    function fail(message: string) {
+      if (settled) return;
+      settled = true; clearTimeout(timer); reject(new Error(message));
+    }
+    const timer = setTimeout(() => { failure = `模型调用超时（${ctx.timeoutMs}ms），已终止进程`; stop(); }, ctx.timeoutMs);
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (failure) return;
+      stdout += chunk;
+      ctx.metrics.outputChars += Array.from(chunk).length;
+      if (stdout.length > 8 * 1024 * 1024) { failure = "模型输出超过 8 MiB"; stop(); }
+    });
+    child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(0, 500); });
+    child.on("error", () => fail(`无法启动 ${command}`));
+    child.stdin.on("error", () => { /* 提前退出时由 close 统一报告。 */ });
+    child.on("close", code => {
+      if (settled) return;
+      if (failure) { fail(failure); return; }
+      if (code !== 0) { fail(`${command} 退出失败（${code}）：${safeError(stderr, [ctx.req.system, ctx.req.prompt, input(ctx)])}`); return; }
+      settled = true; clearTimeout(timer); resolve(stdout);
+    });
+    child.stdin.end(input(ctx));
+  });
+}
+
+export function parseJSON(text: string): unknown {
+  try { return JSON.parse(text); } catch { throw new Error("模型返回非法 JSON"); }
+}
+export function tokens(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
