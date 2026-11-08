@@ -8,3 +8,6 @@ web/dist/
 web/.vite/
 collector/.build/
 collector/build/
+
+experiments/02-audio/vendor/
+.cache/
