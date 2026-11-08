@@ -1,0 +1,69 @@
+import { expect, test } from "bun:test";
+import { redactString, redactRecord } from "../src/redact.ts";
+import { setup, fixture } from "./helpers.ts";
+
+// 全部为人为构造的假密钥，不含任何真实凭据。
+const examples: [string, string][] = [
+  ["私钥", "-----BEGIN RSA PRIVATE KEY-----\nSYNTHETICCONTENT\n-----END RSA PRIVATE KEY-----"],
+  ["AWS", "AKIAABCDEFGHIJKLMNOP"],
+  ["GitHub", "ghp_" + "aB3".repeat(12)],
+  ["GitHub", "gho_" + "aB3".repeat(12)],
+  ["GitHub", "ghs_" + "aB3".repeat(12)],
+  ["GitHub", "github_pat_" + "aB3_".repeat(20)],
+  ["OpenAI", "sk-proj-" + "aB3_".repeat(20)],
+  ["Anthropic", "sk-ant-api03-" + "aB3_".repeat(20)],
+  ["Slack", "xoxb-1234567890-abcdefghijk"],
+  ["Slack", "xoxp-1234567890-abcdefghijk"],
+  ["JWT", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljU2lnbmF0dXJl"],
+  ["URL密码", "https://fake-user:synth-pass@example.invalid/path"],
+  // 回归：curl 命令里的 Bearer 头曾经漏拦（2026-11-08 验收发现）。
+  ["Bearer", `curl -H "Authorization: Bearer ${"aB3.".repeat(6)}" https://example.invalid`],
+  ...["password", "token", "api_key", "secret", "client_secret"].map(key => ["赋值密钥", `${key}=aB3cD4eF5gH6iJ7kL8mN9pQ0`] as [string, string]),
+];
+for (const [i, [type, input]] of examples.entries()) test(`脱敏正例 ${i}：${type}`, () => {
+  const result = redactString(input);
+  expect(result.count).toBe(1);
+  expect(result.text).toContain(`[已脱敏:${type}]`);
+  expect(result.text).not.toContain(input);
+});
+
+test("普通 SHA、UUID、中文、单词和低熵赋值不误伤", () => {
+  for (const text of [
+    "12ab34cd56ef78ab90cd12ef34ab56cd78ef90ab", "b278b7dc-d7ad-4fe8-a3de-8d5a9d6f0123",
+    "这是一段很长的中文文字用来说明普通的日常讨论不应该被当作密钥进行替换而丢失内容",
+    "documentation internationalization base64 image ordinaryword",
+    "token=aaaaaaaaaaaaaaaaaaaaaaaa", "password=internationalization",
+  ]) expect(redactString(text)).toEqual({ text, count: 0 });
+});
+
+test("递归处理 context 的字符串，累加数量且 private 不降级", () => {
+  const key = examples[2]![1];
+  const r = fixture({ title: key, body: key, context: { window: key, extra: { nested: [key, { value: key }] } }, redactions: 2 });
+  expect(redactRecord(r).redactions).toBe(7);
+  expect(redactRecord(r).sensitivity).toBe("redacted");
+  expect(redactRecord({ ...r, sensitivity: "private" }).sensitivity).toBe("private");
+  expect(r.body).toBe(key);
+});
+
+test("实际解密后的 records 与 FTS 表中没有原始密钥", () => {
+  const ctx = setup();
+  try {
+    for (const [, secret] of examples) {
+      const record = fixture({ title: secret.slice(0, 180), body: secret, context: { extra: { value: secret } } });
+      expect(ctx.db.ingest([record]).accepted).toBe(1);
+    }
+    const stored = JSON.stringify(ctx.db.db.prepare("SELECT * FROM records").all());
+    const indexed = JSON.stringify(ctx.db.db.prepare("SELECT * FROM records_fts").all());
+    for (const [, secret] of examples) {
+      expect(stored).not.toContain(secret);
+      expect(indexed).not.toContain(secret);
+    }
+  } finally { ctx.cleanup(); }
+});
+
+test("赋值型密钥包含标点和 JSON 引号也能拦截", () => {
+  for (const input of ['password="aB3!cD4@eF5#gH6$iJ7%kL8";', '{"api_key":"aB3!cD4@eF5#gH6$iJ7%kL8"}']) {
+    expect(redactString(input).count).toBe(1);
+    expect(redactString(input).text).not.toContain("aB3!");
+  }
+});
