@@ -17,7 +17,7 @@
 | source | 生产方 |
 |---|---|
 | `mac.screen` | Mac 采集端（AX / OCR） |
-| `mac.app` | Mac 采集端：应用切换事件 |
+| `mac.app` | 保留，v1 不用：应用使用记录并入 `mac.screen` 时段（读不到正文时也照样记应用、窗口标题和时长） |
 | `mac.clipboard`、`mac.file`、`mac.calendar` | Mac 采集端 |
 | `mac.shell` | plugins/shell |
 | `mac.git` | plugins/git |
@@ -35,11 +35,13 @@
 
 - **stdout**：每行一个 JSON，两种：
   - `{"type":"record","record":{…RecordV1}}`
-  - `{"type":"checkpoint","state":{…任意 JSON}}`，最后输出一次，代表"处理到这里了"。
+  - `{"type":"checkpoint","state":{…任意 JSON},"release":["/abs/path", …]}`，最后输出一次，代表"处理到这里了"。`release` 可选，列出这次已经完整读完、可以删除的缓冲文件。
 - **stderr**：日志。**exit 0** 表示成功；非 0 时 runner 丢弃这次的 checkpoint，记录已发的照常入库（靠 `source_ref` 去重）。
 - **state 文件插件只读不写**。runner 在 hub 接收成功后把最后一个 checkpoint 写进 state 文件，下次传回来。这样采集失败不会丢数据。
 - 首次运行（没有 state）默认只回溯 7 天，`--since` 可覆盖。
-- 插件不联网、不调模型、不写任何文件（临时复制数据库到 `os.tmpdir()` 并在退出前删除除外）。
+- 插件不联网、不调模型、不写任何文件。两个例外：临时复制数据库到 `os.tmpdir()` 并在退出前删除；在数据目录的 `buffer/` 下把自己的缓冲文件改名"领走"（例如 `shell.jsonl` → `shell.<ULID>.pending.jsonl`）。
+- **缓冲文件的清理**：runner 只在插件 exit 0、全部批次被 hub 接收、state 已落盘之后，才删除 `release` 里的文件。路径解析后必须位于 `<数据目录>/buffer/` 之内，否则拒绝删除并报错。失败时这些文件保留，下次重读，靠 `source_ref` 去重。这样缓冲里的明文最多留到下一次成功运行。
+- **runner 两种模式**：`hub run-plugin` 默认直接写库（开发用）；加 `--hub <url>` 时经 `POST /v1/ingest` 交给运行中的 hub，token 取数据目录的 `token` 文件。Mac 采集端用 HTTP 模式，以子进程方式运行 runner，这样插件继承采集端的系统权限，数据库仍只由 hub 打开。
 - 插件只用 `packages/record`（相对路径导入）和 Bun / Node 内置模块。
 
 ## 3. Hub 接口
@@ -75,3 +77,9 @@
 | POST | `/v1/records` | 手动补写或修正（body 是一条 RecordV1，`source` 必须是 `manual.*`） |
 | DELETE | `/v1/records/:id` | 真删：记录、全文索引一起删，留墓碑（只存 id、source、source_ref、内容哈希、删除时间） |
 | GET | `/v1/health` | 不需要 token |
+
+### 网页
+
+- hub 在 `/` 下提供 `web/dist` 的静态文件（不需要 token），未知的非 `/v1/` 路径回退到 `index.html`。
+- 网页调用 API 时带 Bearer token。token 通过 URL 片段交给网页：`bun hub/src/cli.ts open` 打开 `http://127.0.0.1:<端口>/#token=<token>`，网页读取后存进 `sessionStorage`，并立刻从地址栏清掉片段。片段不会发给服务器，也不会进浏览器历史里的请求日志。
+- **所有请求都校验 `Host` 头**，只接受 `127.0.0.1:<端口>` 和 `localhost:<端口>`，其他一律 421，防止 DNS 重绑定。

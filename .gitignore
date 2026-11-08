@@ -4,3 +4,7 @@ build/
 *.db
 *.db-*
 .DS_Store
+web/dist/
+web/.vite/
+collector/.build/
+collector/build/
