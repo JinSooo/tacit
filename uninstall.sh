@@ -1,10 +1,10 @@
 #!/bin/sh
-# 卸载 record-anything：停止并移除 hub 与采集端的开机自启、采集端应用和系统权限。数据默认保留。
+# 卸载 record-anything：停止并移除 hub、提炼与采集端的开机自启、采集端应用和系统权限。数据默认保留。
 set -eu
 DATA="$HOME/Library/Application Support/record-anything"
 AGENTS="$HOME/Library/LaunchAgents"
 DOMAIN="gui/$(id -u)"
-for l in collector hub; do
+for l in collector distill hub; do
   launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/dev/null || true
   rm -f "$AGENTS/dev.record-anything.$l.plist"
 done

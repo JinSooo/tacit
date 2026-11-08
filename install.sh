@@ -1,5 +1,5 @@
 #!/bin/sh
-# 从源码安装 record-anything：构建网页和采集端，注册 hub 与采集端开机自启（launchd）。
+# 从源码安装 record-anything：构建网页和采集端，注册 hub、提炼与采集端开机自启（launchd）。
 # 重复运行就是升级（git pull && ./install.sh）。卸载：./uninstall.sh
 set -eu
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -10,8 +10,83 @@ APP="$APP_DIR/Record Anything.app"
 DOMAIN="gui/$(id -u)"
 step() { printf '\n== %s\n' "$1"; }
 
+# 提炼 plist 辅助函数：可单独提取，在临时目录验证，不执行安装流程。
+xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+distill_path() {
+  python3 -I - "$BUN" "$(command -v codex || true)" "$(command -v claude || true)" "$HOME" <<'PY'
+import os, sys
+bun, codex, claude, home = sys.argv[1:]
+system = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+fallback = [os.path.join(home, p) for p in (
+    ".local/share/mise/shims", ".local/bin", ".bun/bin", ".npm-global/bin",
+)] + system
+
+def temporary(path):
+    return (path.startswith(("/var/folders/", "/private/var/folders/", "/tmp/", "/private/tmp/"))
+            or "-shims" in path)
+
+def directories(path, name):
+    real = os.path.realpath(path)
+    if not os.path.isfile(real) or not os.access(real, os.X_OK) or temporary(real):
+        return None
+    # npm 等安装会把 codex 链接到 cli.js：真实目录之外还需保留同名入口。
+    real_dir = os.path.dirname(real)
+    entry = os.path.join(real_dir, name)
+    if os.path.isfile(entry) and os.access(entry, os.X_OK) and os.path.realpath(entry) == real:
+        return [real_dir]
+    if not temporary(os.path.abspath(path)) and os.path.basename(path) == name:
+        return [real_dir, os.path.dirname(os.path.abspath(path))]
+    return None
+
+paths = []
+for name, found in (("codex", codex), ("claude", claude)):
+    if not found:
+        print(f"未找到 {name}，跳过其 PATH 目录；使用该 CLI 前请安装、登录并重新运行安装脚本。", file=sys.stderr)
+        continue
+    dirs = directories(found, name)
+    if dirs is None:
+        for directory in fallback:
+            candidate = os.path.join(directory, name)
+            if not temporary(candidate):
+                dirs = directories(candidate, name)
+                if dirs is not None:
+                    break
+    if dirs is None:
+        sys.exit(f"{name} 仅有临时 shim 或无效入口，未找到稳定可执行文件；请安装到 ~/.local/share/mise/shims、~/.local/bin 或 /opt/homebrew/bin 等稳定位置后重试。")
+    paths.extend(dirs)
+paths.extend([os.path.dirname(bun)] + system)
+print(":".join(dict.fromkeys(paths)))
+PY
+}
+write_distill_plist() {
+  cat > "$AGENTS/dev.record-anything.distill.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.record-anything.distill</string>
+  <key>ProgramArguments</key><array>
+    <string>$(xml "$BUN")</string><string>$(xml "$REPO/hub/src/cli.ts")</string><string>distill</string>
+  </array>
+  <key>WorkingDirectory</key><string>$(xml "$REPO")</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>Nice</key><integer>10</integer>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>$(xml "$DISTILL_PATH")</string>
+  </dict>
+  <key>StandardOutPath</key><string>$(xml "$DATA/logs/distill.log")</string>
+  <key>StandardErrorPath</key><string>$(xml "$DATA/logs/distill.log")</string>
+</dict></plist>
+PLIST
+}
+# 提炼 plist 辅助函数结束。
+
 BUN="$(command -v bun || true)"
 [ -n "$BUN" ] || { echo "需要 bun：https://bun.sh"; exit 1; }
+if [ "${RA_NO_DISTILL:-0}" != 1 ]; then DISTILL_PATH="$(distill_path)"; fi
 xcode-select -p >/dev/null 2>&1 || { echo "需要 Xcode 命令行工具：xcode-select --install"; exit 1; }
 cd "$REPO"
 
@@ -23,7 +98,8 @@ step "构建并签名采集端（固定的自签名证书，升级后系统权�
 collector/build.sh
 
 step "停止旧进程"
-for l in collector hub; do launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/dev/null || true; done
+for l in collector distill hub; do launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/dev/null || true; done
+if [ "${RA_NO_DISTILL:-0}" = 1 ]; then rm -f "$AGENTS/dev.record-anything.distill.plist"; fi
 pkill -f 'Record Anything.app/Contents/MacOS/Collector' 2>/dev/null || true
 
 step "安装采集端到 $APP"
@@ -47,7 +123,6 @@ PY
 
 step "注册开机自启"
 mkdir -p "$AGENTS"
-xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 cat > "$AGENTS/dev.record-anything.hub.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -88,6 +163,12 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   sleep 1
 done
 curl -fsS http://127.0.0.1:47823/v1/health >/dev/null 2>&1 || { echo "hub 没有启动，看日志：$DATA/logs/hub.log"; exit 1; }
+if [ "${RA_NO_DISTILL:-0}" != 1 ]; then
+  write_distill_plist
+  launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.distill.plist"
+else
+  echo "RA_NO_DISTILL=1：已停用提炼自启并移除 plist。"
+fi
 launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.collector.plist"
 
 step "完成"
@@ -97,4 +178,6 @@ cat <<MSG
 - 记录终端命令：在 ~/.zshrc 里加一行
     source "$REPO/plugins/shell/hook.zsh"
 - 日志：$DATA/logs/
+- 提炼日志：$DATA/logs/distill.log；模型配置：$DATA/models.json
 MSG
+if [ ! -f "$DATA/models.json" ]; then echo "- models.json 不存在，提炼默认使用本机已登录的 claude CLI。"; fi
