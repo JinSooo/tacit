@@ -344,7 +344,8 @@ printf '%s\n' "$2"
     expect(new DistillRules(store).projectForRepo(repo)?.id).toBe(first?.id);
     expect(new DistillRules(store).projectForRepo(missing)).toBeNull();
     expect(new DistillRules(store).projectForRepo(missing)).toBeNull();
-    expect(readFileSync(count,"utf8").trim().split("\n")).toHaveLength(2);
+    // 成功路径探测 common-dir 和 toplevel 各一次，失败路径只探测一次。
+    expect(readFileSync(count,"utf8").trim().split("\n")).toHaveLength(3);
   } finally {
     envNames.forEach((name,i) => { if (previous[i] === undefined) delete process.env[name]; else process.env[name] = previous[i]; });
   }

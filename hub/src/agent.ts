@@ -1,7 +1,8 @@
-import { isAbsolute, resolve, sep } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { toLocalIso, ulid } from "../../packages/record/index.ts";
 import { HubDB, InputError } from "./db.ts";
 import { DistillStore, type Thread } from "./distill/store.ts";
+import { projectForPath, resolveRepoRoot } from "./distill/repos.ts";
 
 // 暂停线程只自动注入最近 3 天有活动的；进行中的线程不受时间限制。
 const PAUSED_CONTEXT_MS = 3 * 24 * 60 * 60 * 1000;
@@ -51,11 +52,11 @@ export class AgentReads {
     if (!isAbsolute(cwd)) throw new InputError("cwd 必须是绝对路径");
     if (!["startup", "resume", "clear", "compact"].includes(params.get("event") ?? "")) throw new InputError("event 无效");
     const absolute = resolve(cwd), projects = this.store.projects();
-    const matches = projects.flatMap(project => project.keys.repos.filter(repo => {
-      const path = resolve(repo);
-      return absolute === path || absolute.startsWith(path.endsWith(sep) ? path : path + sep);
-    }).map(repo => ({ project, length: resolve(repo).length }))).sort((a,b) => b.length - a.length);
-    const project = matches[0]?.project;
+    let project = projectForPath(absolute, projects);
+    if (!project) {
+      const repo = resolveRepoRoot(absolute, projects);
+      if (repo) project = projectForPath(repo, projects);
+    }
     const name = (p: typeof projects[number]) => `${line(p.name)}${p.confirmed ? "" : "（未确认）"}`;
     const entries: { id: string; text: string }[] = [];
     if (project) {

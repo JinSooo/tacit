@@ -1,33 +1,34 @@
 import { basename, resolve } from "node:path";
-import { homedir } from "node:os";
-import { spawnSync } from "node:child_process";
 import { ulid } from "../../../packages/record/index.ts";
 import { DistillStore, type Frame, type Project } from "./store.ts";
 
-const repoCache = new Map<string,string | null>();
+import { resolveRepository, resolveRepoRoot } from "./repos.ts";
 
 export class DistillRules {
   constructor(readonly store: DistillStore) {}
   projectForRepo(path: string): Project | null {
-    const absolute = resolve(path);
-    if (!repoCache.has(absolute)) {
-      const result = spawnSync("git",["-C",absolute,"rev-parse","--show-toplevel"],{ encoding: "utf8" });
-      repoCache.set(absolute,result.status === 0 ? result.stdout.trim() : null);
-    }
-    const repo = repoCache.get(absolute);
-    // 家目录本身是 git 仓库时不算项目：在 ~ 下开的零散会话不该被并成一个项目。
-    if (!repo || repo === homedir()) return null;
+    const repository = resolveRepository(path, this.store.projects());
+    if (!repository) return null;
+    const { root: repo, worktree } = repository;
     return this.store.hub.db.transaction(() => {
-      const existing = this.store.projects().find(p => p.keys.repos.includes(repo));
-      if (existing) return existing;
-      const project: Project = { id: ulid(),name: basename(repo),confirmed: 0,keys: { repos: [repo],hosts: [],chats: [] } };
+      const existing = this.store.projects().find(p => p.keys.repos.some(key => resolve(key) === repo));
+      if (existing) {
+        if (!existing.keys.repos.includes(worktree)) {
+          existing.keys.repos.push(worktree);
+          this.store.upsertProject(existing);
+        }
+        return existing;
+      }
+      const project: Project = { id: ulid(),name: basename(repo),confirmed: 0,keys: { repos: [...new Set([repo, worktree])],hosts: [],chats: [] } };
       this.store.upsertProject(project);
       this.store.createPending({ id: ulid(),kind: "project",payload: { project_id: project.id },created_at: new Date().toISOString() });
       return project;
     })();
   }
   assign(frame: Frame): { status: "assigned"; thread_id: string; project_id: string } | { status: "unassigned" } {
-    const project = this.store.projects().find(p => frame.key.startsWith("repo:") ? p.keys.repos.includes(frame.key.slice(5)) : frame.key.startsWith("host:") ? p.keys.hosts.includes(frame.key.slice(5)) : frame.key.startsWith("chat:") ? p.keys.chats.includes(frame.key.slice(5)) : false);
+    const projects = this.store.projects();
+    const repo = frame.key.startsWith("repo:") ? resolveRepoRoot(frame.key.slice(5), projects) : null;
+    const project = projects.find(p => frame.key.startsWith("repo:") ? repo !== null && p.keys.repos.some(key => resolve(key) === repo) : frame.key.startsWith("host:") ? p.keys.hosts.includes(frame.key.slice(5)) : frame.key.startsWith("chat:") ? p.keys.chats.includes(frame.key.slice(5)) : false);
     if (!project) return { status: "unassigned" };
     // 同一项目里可能同时在做几件事：只有恰好一条活跃线程、且它在这个片段前 2 小时内还在动，才按规则直接归；其余交给模型判断。
     const active = this.store.hub.db.prepare("SELECT id,last_ms FROM threads WHERE project_id=? AND status='active'").all(project.id) as { id: string; last_ms: number | null }[];
