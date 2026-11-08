@@ -55,7 +55,7 @@ function Facts({ facts, api, loadEvidence, onHistory, onChanged }: { facts: Fact
   const [correcting, setCorrecting] = useState<Fact>();
   return <>{groupFacts(facts).map(group => <section className="fact-group" key={group.kind}><h3>{group.label}</h3><ul>{group.facts.map(fact => <li key={fact.id}><p>{fact.text}{group.kind === "inference" && <span className="confidence">置信度 {fact.confidence == null ? "未知" : `${Math.round(fact.confidence * 100)}%`}</span>}</p>{fact.reason && <p className="muted">{fact.reason}</p>}<div className="fact-tools"><EvidenceList fact={fact} load={loadEvidence} onHistory={onHistory} />{(fact.kind === "decision" || fact.kind === "inference") && <button className="text-button compact" onClick={() => setCorrecting(fact)}>这条不对</button>}</div></li>)}</ul></section>)}{correcting && <CorrectionDialog fact={correcting} api={api} onClose={() => setCorrecting(undefined)} onSaved={() => { setCorrecting(undefined); onChanged(); }} />}</>;
 }
-function ThreadContent({ thread, api, onHistory }: { thread: Thread; api: DistillationApi; onHistory: (title: string) => void }) {
+export function ThreadContent({ thread, api, onHistory }: { thread: Thread; api: DistillationApi; onHistory: (title: string) => void }) {
   const resource = useResource(signal => api.thread(thread.id, "detail", signal), [api, thread.id]);
   if (!resource.data) return <Status error={resource.error} retry={resource.retry} />;
   const data = resource.data;
@@ -65,7 +65,7 @@ function ThreadRows({ threads, api, onHistory }: { threads: Thread[]; api: Disti
   const [expanded, setExpanded] = useState<string>();
   return <div className="entity-list">{threads.map(thread => <article className={expanded === thread.id ? "entity expanded" : "entity"} key={thread.id}><button className="entity-row" aria-expanded={expanded === thread.id} aria-controls={`thread-${thread.id}`} onClick={() => setExpanded(expanded === thread.id ? undefined : thread.id)}><span><strong>{thread.title}</strong>{thread.brief && <span className="entity-brief">{thread.brief}</span>}</span><ActivityTime value={thread.last_ms} /></button>{expanded === thread.id && <div id={`thread-${thread.id}`}><ThreadContent thread={thread} api={api} onHistory={onHistory} /></div>}</article>)}</div>;
 }
-function ProjectContent({ project, api, onHistory }: { project: Project; api: DistillationApi; onHistory: (title: string) => void }) {
+export function ProjectContent({ project, api, onHistory }: { project: Project; api: DistillationApi; onHistory: (title: string) => void }) {
   const resource = useResource(async signal => {
     const [detail, threads] = await Promise.all([api.project(project.id, "detail", signal), api.threads(project.id, signal)]);
     return { detail, threads };

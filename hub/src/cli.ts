@@ -11,6 +11,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     await runAgentCommand(argv);
     return;
   }
+  if (command === "agents") {
+    const { runAgents } = await import("./agents-install.ts");
+    try { runAgents(argv.slice(1)); }
+    catch (error) { console.error(error instanceof Error ? error.message : "Agent 注册失败"); process.exitCode = 1; }
+    return;
+  }
   const { loadConfig } = await import("./config.ts");
   const { HubDB } = await import("./db.ts");
   const { startServer } = await import("./server.ts");

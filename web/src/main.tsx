@@ -1,3 +1,4 @@
+import { AuditView } from "./audit-view.tsx";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { RecordV1 } from "../../packages/record/index.ts";
@@ -99,7 +100,7 @@ function NoteDialog({ api, onSaved, onClose }: { api: Api; onSaved: () => void; 
 }
 function App() {
   const [token, setToken] = useState(initialToken);
-  const [view, setView] = useState<View>("history");
+  const [view, setView] = useState<View | "audit">(() => /[?&](thread|project)=/.test(location.search) ? "audit" : "history");
   const [pendingCount, setPendingCount] = useState(0);
   const [q, setQ] = useState("");
   const [source, setSource] = useState("");
@@ -173,7 +174,7 @@ function App() {
   }, []);
   if (!token) return <p className="token-prompt">在终端运行 <code>bun hub/src/cli.ts open</code></p>;
   return <><a className="skip" href="#content">跳到内容</a><main>
-    <header><div className="heading-row"><h1>History</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "当前"], ["pending", "待确认"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
+    <header><div className="heading-row"><h1>History</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "当前"], ["pending", "待确认"], ["audit", "读取记录"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
       <input ref={search} type="search" aria-label="搜索 History" placeholder="搜索 History" value={q} onChange={event => setQ(event.target.value)} />
       <select aria-label="来源筛选" value={source} onChange={event => setSource(event.target.value)}><option value="">所有来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
       <input className="device" list="devices" aria-label="设备筛选" placeholder="所有设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
@@ -181,7 +182,8 @@ function App() {
       <button onClick={() => setNote(true)}>补写</button>
     </div>}</header>
     <div id="content" tabIndex={-1}>
-    <DistillationWorkspace view={view} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />
+    <DistillationWorkspace view={view === "audit" ? "history" : view} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />
+    {view === "audit" && <AuditView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />}
     <div id="timeline" hidden={view !== "history"} tabIndex={-1} aria-busy={busy}>
       {groupRecords(records).map(group => <section key={group.day} aria-label={dateTitle(group.day)}><h2 className="day-heading">{dateTitle(group.day)}</h2><div className="day-records">{group.records.map(record => <article key={record.id} className={expanded === record.id ? "record expanded" : "record"}>
         <button className="record-row" style={{ "--source-color": sourceColor(record.source) } as React.CSSProperties} aria-expanded={expanded === record.id} aria-controls={`detail-${record.id}`} onClick={() => setExpanded(expanded === record.id ? null : record.id)}>
