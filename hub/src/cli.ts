@@ -1,17 +1,23 @@
-import { runDistill, sliceStep } from "./distill/run.ts";
-import { DistillStore } from "./distill/store.ts";
-import { createLLM } from "./llm/index.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { loadConfig } from "./config.ts";
-import { HubDB } from "./db.ts";
-import { startServer } from "./server.ts";
-import { runPlugin } from "./run-plugin.ts";
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, name] = argv;
+  // Agent 侧薄进程不能加载数据库、提炼或模型模块。
+  if (command === "mcp" || command === "hook") {
+    const { runAgentCommand } = await import("./agent-cli/index.ts");
+    await runAgentCommand(argv);
+    return;
+  }
+  const { loadConfig } = await import("./config.ts");
+  const { HubDB } = await import("./db.ts");
+  const { startServer } = await import("./server.ts");
+  const { runPlugin } = await import("./run-plugin.ts");
+  const { runDistill, sliceStep } = await import("./distill/run.ts");
+  const { DistillStore } = await import("./distill/store.ts");
+  const { createLLM } = await import("./llm/index.ts");
   const separator = argv.indexOf("--");
   if (command === "init") {
     // 安装时在前台创建（或读取）钥匙串里的数据库密钥并试开一次数据库，失败当场可见。
