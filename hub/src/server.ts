@@ -1,3 +1,5 @@
+import { DistillStore, type Fact } from "./distill/store.ts";
+import { ulid } from "../../packages/record/index.ts";
 import { timingSafeEqual } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { resolve, extname, sep } from "node:path";
@@ -65,6 +67,38 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
       try { return await request.json(); } catch { throw new InputError("请求体必须是 JSON"); }
     };
     try {
+      const store = new DistillStore(db);
+      const respond = (value: unknown) => value === null ? Response.json({ error: "内容不存在" }, { status: 404 }) : Response.json(value);
+      if (method === "GET" && url.pathname === "/v1/now") return Response.json({ now: store.getState("now") });
+      if (method === "GET" && url.pathname === "/v1/threads") return Response.json(store.threads(url.searchParams));
+      if (method === "GET" && url.pathname === "/v1/projects") return Response.json({ projects: store.projectSummaries() });
+      if (method === "GET" && url.pathname === "/v1/pending") return Response.json({ pending: store.pending() });
+      const entity = /^\/v1\/(threads|projects)\/([^/]+)$/.exec(url.pathname);
+      if (method === "GET" && entity) return respond(store.view(entity[1] as "threads" | "projects",entity[2]!,url.searchParams.get("level") ?? "brief"));
+      const day = /^\/v1\/days\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
+      if (method === "GET" && day) return respond(store.day(day[1]!));
+      const pending = /^\/v1\/pending\/([^/]+)$/.exec(url.pathname);
+      if (method === "POST" && pending) {
+        const body = await readJSON() as Record<string,unknown> | null;
+        if (!body || typeof body !== "object" || typeof body.action !== "string" || body.name !== undefined && typeof body.name !== "string" || body.target !== undefined && typeof body.target !== "string") throw new InputError("待确认操作参数无效");
+        store.resolvePending(pending[1]!,body.action,body.name as string | undefined,body.target as string | undefined);
+        return Response.json({ resolved: true });
+      }
+      if (method === "POST" && url.pathname === "/v1/facts") {
+        const body = await readJSON() as Record<string,unknown> | null;
+        if (!body || typeof body !== "object" || !["decision","rejected","open","next","inference"].includes(String(body.kind)) || typeof body.text !== "string" || !body.text.trim() || !Array.isArray(body.evidence) || !body.evidence.every(id => typeof id === "string")) throw new InputError("事实参数无效");
+        // 网页把已有 fact 的字段原样回传，没有归属的字段是 null，按未提供处理。
+        for (const field of ["thread_id","project_id","reason","supersedes","valid_at"]) {
+          if (body[field] === null) delete body[field];
+          if (body[field] !== undefined && typeof body[field] !== "string") throw new InputError("事实字段类型无效");
+        }
+        if (body.confidence !== undefined && (typeof body.confidence !== "number" || !Number.isFinite(body.confidence) || body.confidence < 0 || body.confidence > 1)) throw new InputError("置信度无效");
+        if (body.valid_at !== undefined && !Number.isFinite(Date.parse(body.valid_at as string))) throw new InputError("事实时间无效");
+        const at = new Date().toISOString();
+        const fact: Fact = { id: ulid(),kind: body.kind as Fact["kind"],text: body.text,evidence: body.evidence as string[],origin: "user",valid_at: body.valid_at as string ?? at,created_at: at,thread_id: body.thread_id as string | undefined,project_id: body.project_id as string | undefined,reason: body.reason as string | undefined,confidence: body.confidence as number | undefined };
+        store.writeFact(fact,body.supersedes as string | undefined);
+        return Response.json(fact);
+      }
       if (method === "POST" && url.pathname === "/v1/ingest") {
         const body = await readJSON();
         if (!body || typeof body !== "object" || !Array.isArray((body as { records?: unknown }).records)

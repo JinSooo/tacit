@@ -16,7 +16,7 @@ test("SQLCipher 实际文件加密，错误密钥拒绝，正确密钥重开及�
   const reopened = new HubDB(ctx.file, ctx.config.dbKey);
   try {
     expect(reopened.get(record.id)?.body).toBe(record.body);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(1);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(2);
   } finally { reopened.close(); }
 });
 

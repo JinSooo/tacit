@@ -2,6 +2,10 @@
 import type DatabaseTypes from "../../node_modules/better-sqlite3-multiple-ciphers/index.d.ts";
 import { createRequire } from "node:module";
 const Database: typeof DatabaseTypes = createRequire(import.meta.url)("better-sqlite3-multiple-ciphers");
+import { copyFileSync, constants } from "node:fs";
+import { dirname, join } from "node:path";
+import { distillSchema } from "./distill/schema.ts";
+import { DistillStore } from "./distill/store.ts";
 import { createHash } from "node:crypto";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { redactRecord } from "./redact.ts";
@@ -43,8 +47,13 @@ export class HubDB {
       this.db.pragma("cipher='sqlcipher'");
       this.db.pragma("legacy=4");
       this.db.pragma(`key='${key.replaceAll("'", "''")}'`);
+      this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 1) throw new Error("数据库版本比当前 hub 新");
+      if (version > 2) throw new Error("数据库版本比当前 hub 新");
+      if (version === 1 && file !== ":memory:") {
+        try { copyFileSync(file, join(dirname(file), "history.db.bak-v1"), constants.COPYFILE_EXCL); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      }
       this.db.pragma("secure_delete=ON");
       // 不使用 WAL，避免删除后的明文页在额外日志里继续存留。
       this.db.pragma("journal_mode=DELETE");
@@ -68,9 +77,11 @@ export class HubDB {
           );
           CREATE VIRTUAL TABLE records_fts USING fts5(title, body, tokenize='unicode61');
           INSERT INTO records_fts(records_fts, rank) VALUES('secure-delete', 1);
-          PRAGMA user_version=1;
         `);
+        this.db.exec(distillSchema);
       })();
+      if (version === 1) this.db.transaction(() => this.db.exec(distillSchema))();
+      new DistillStore(this).ensureFrameRecords();
     } catch (e) { this.db.close(); throw e; }
   }
   close(): void { this.db.close(); }
@@ -164,6 +175,7 @@ export class HubDB {
       // 修正记录写的是关于原记录的内容，原记录真删时一并删掉，否则内容会残留在修正里。
       const corrections = this.db.prepare<[string], Row>("SELECT rowid,* FROM records WHERE corrects=? AND source='manual.correction'").all(id);
       for (const r of [row, ...corrections]) {
+        new DistillStore(this).removeRecord(r.id as string, r.t_start as string);
         const contentHash = createHash("sha256").update(JSON.stringify(decode(r))).digest("hex");
         this.db.prepare("INSERT INTO tombstones(id,source,source_ref,content_hash,deleted_at) VALUES(?,?,?,?,?)").run(r.id, r.source, r.source_ref, contentHash, new Date().toISOString());
         this.db.prepare("DELETE FROM records_fts WHERE rowid=?").run(r.rowid);

@@ -1,3 +1,4 @@
+import { runDistill } from "./distill/run.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -31,7 +32,15 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     return;
   }
-  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | run-plugin <name> [--hub <url>] -- <插件命令...>");
+  if (command === "distill") {
+    if (argv.slice(1).some(a => a !== "--once" && a !== "--backfill")) throw new Error("提炼参数无效");
+    const config = loadConfig();
+    const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
+    try { await runDistill({ db, once: argv.includes("--once"), backfill: argv.includes("--backfill") }); }
+    finally { db.close(); }
+    return;
+  }
+  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | distill [--once] [--backfill] | run-plugin <name> [--hub <url>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
   if (command === "run-plugin") {
     let hub: string | undefined, tokenFile: string | undefined;

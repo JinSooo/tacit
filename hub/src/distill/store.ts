@@ -1,0 +1,240 @@
+import { frameRecordsSchema } from "./schema.ts";
+import { HubDB, InputError } from "../db.ts";
+import { ulid } from "../../../packages/record/index.ts";
+
+export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" }
+export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[] }
+export interface Project { id: string; name: string; confirmed?: number; keys: ProjectKeys; brief?: string | null; detail?: unknown; salience?: number; last_ms?: number; needs_regen?: number; updated_at?: string }
+export interface Thread { id: string; project_id?: string | null; status: "active" | "paused" | "done" | "abandoned"; title: string; brief?: string | null; detail?: unknown; first_ms?: number; last_ms?: number; active_minutes?: number; sessions?: number; needs_regen?: number; updated_at?: string }
+export interface Fact { id: string; thread_id?: string | null; project_id?: string | null; kind: "decision" | "rejected" | "open" | "next" | "inference"; text: string; reason?: string; evidence: string[]; confidence?: number; origin: "llm" | "user"; valid_at: string; invalid_at?: string | null; superseded_by?: string | null; created_at: string }
+export interface Pending { id: string; kind: "project" | "merge" | "thread_done"; payload: Record<string, unknown>; created_at: string; resolved_at?: string | null; resolution?: string | null }
+type Row = Record<string, any>;
+const jsonColumns = new Set(["record_ids", "keys", "detail", "evidence", "payload"]);
+function decode<T>(row: Row): T {
+  return Object.fromEntries(Object.entries(row).map(([k,v]) => [k, jsonColumns.has(k) && v !== null ? JSON.parse(v) : v])) as T;
+}
+
+export class DistillStore {
+  constructor(readonly hub: HubDB) {}
+  private get sql() { return this.hub.db; }
+  private put(table: string, key: string, value: object) {
+    const entries = Object.entries(value).filter(([,v]) => v !== undefined);
+    const names = entries.map(([k]) => `"${k}"`);
+    this.sql.prepare(`INSERT INTO ${table} (${names}) VALUES (${names.map(() => "?")}) ON CONFLICT(${key}) DO UPDATE SET ${names.filter(n => n !== `"${key}"`).map(n => `${n}=excluded.${n}`)}`).run(...entries.map(([k,v]) => jsonColumns.has(k) && v !== null ? JSON.stringify(v) : v));
+  }
+  /** 兼容开发期已经升级到 v2、但尚无归属索引的库。 */
+  ensureFrameRecords() {
+    this.sql.transaction(() => {
+      const exists = this.sql.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='frame_records'").get();
+      this.sql.exec(frameRecordsSchema);
+      if (!exists) {
+        const insert = this.sql.prepare("INSERT INTO frame_records(record_id,frame_id) VALUES(?,?)");
+        for (const frame of this.frames()) for (const id of frame.record_ids) insert.run(id,frame.id);
+      }
+    })();
+  }
+  frames(): Frame[] { return this.sql.prepare("SELECT * FROM frames ORDER BY t_start_ms,id").all().map(r => decode<Frame>(r as Row)); }
+  createFrame(frame: Frame) {
+    if (!frame.record_ids.length || new Set(frame.record_ids).size !== frame.record_ids.length) throw new InputError("片段记录不能为空或重复");
+    this.sql.transaction(() => {
+      for (const id of frame.record_ids) {
+        if (!this.hub.get(id)) throw new InputError("片段引用的记录不存在");
+        if (this.sql.prepare("SELECT 1 FROM frame_records WHERE record_id=?").get(id)) throw new InputError("记录已有片段");
+      }
+      if (this.sql.prepare("SELECT 1 FROM frames WHERE id=?").get(frame.id)) throw new InputError("片段已存在");
+      this.put("frames", "id", frame);
+      const insert = this.sql.prepare("INSERT INTO frame_records(record_id,frame_id) VALUES(?,?)");
+      for (const id of frame.record_ids) insert.run(id,frame.id);
+    })();
+  }
+  assign(frameId: string, threadId: string, method: "rule" | "llm" | "user", confidence: number) {
+    this.sql.transaction(() => {
+      if (!this.thread(threadId) || !this.sql.prepare("SELECT 1 FROM frames WHERE id=?").get(frameId)) throw new InputError("线程或片段不存在");
+      this.put("assignments", "frame_id", { frame_id: frameId, thread_id: threadId, method, confidence });
+      this.sql.prepare("UPDATE frames SET status='assigned' WHERE id=?").run(frameId);
+    })();
+  }
+  upsertThread(thread: Thread) { this.put("threads", "id", thread); }
+  upsertProject(project: Project) { this.put("projects", "id", project); }
+  upsertDay(day: { date: string; brief?: string; detail?: unknown; needs_regen?: number; updated_at?: string }) { this.put("days", "date", day); }
+  projects(): Project[] { return this.sql.prepare("SELECT * FROM projects ORDER BY last_ms DESC,id DESC").all().map(r => decode<Project>(r as Row)); }
+  projectSummaries() {
+    return this.sql.prepare("SELECT p.*,(SELECT count(*) FROM threads t WHERE t.project_id=p.id) AS thread_count FROM projects p ORDER BY p.last_ms DESC,p.id DESC").all().map(r => {
+      const project = decode<Row>(r as Row); delete project.detail; return project;
+    });
+  }
+  project(id: string): Project | null { const r = this.sql.prepare("SELECT * FROM projects WHERE id=?").get(id); return r ? decode(r as Row) : null; }
+  thread(id: string): Thread | null { const r = this.sql.prepare("SELECT * FROM threads WHERE id=?").get(id); return r ? decode(r as Row) : null; }
+  day(date: string): Row | null { const r = this.sql.prepare("SELECT * FROM days WHERE date=?").get(date); return r ? decode(r as Row) : null; }
+  facts(field: "thread_id" | "project_id", id: string): Fact[] { return this.sql.prepare(`SELECT * FROM facts WHERE ${field}=? AND invalid_at IS NULL ORDER BY created_at,id`).all(id).map(r => decode<Fact>(r as Row)); }
+  writeFact(fact: Fact, supersedes?: string) {
+    this.sql.transaction(() => {
+      if (!fact.evidence.length || fact.evidence.some(id => !this.hub.get(id))) throw new InputError("事实需要至少一条存在的证据");
+      if (fact.thread_id && !this.thread(fact.thread_id) || fact.project_id && !this.project(fact.project_id)) throw new InputError("事实归属不存在");
+      this.sql.prepare(`INSERT INTO facts(id,thread_id,project_id,kind,text,reason,evidence,confidence,origin,valid_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(fact.id,fact.thread_id ?? null,fact.project_id ?? null,fact.kind,fact.text,fact.reason ?? null,JSON.stringify(fact.evidence),fact.confidence ?? null,fact.origin,fact.valid_at,fact.created_at);
+      if (supersedes) this.invalidateFact(supersedes, fact.id, fact.origin, fact.valid_at);
+    })();
+  }
+  invalidateFact(id: string, replacement: string, origin: "llm" | "user", at = new Date().toISOString()) {
+    const fact = this.sql.prepare("SELECT origin FROM facts WHERE id=? AND invalid_at IS NULL").get(id) as Row | undefined;
+    if (!fact || fact.origin === "user" && origin !== "user") throw new InputError("事实不存在、已失效或不允许推翻用户事实");
+    this.sql.prepare("UPDATE facts SET invalid_at=?,superseded_by=? WHERE id=?").run(at,replacement,id);
+  }
+  private mergeDismissed(a: string, b: string): boolean {
+    const pair = [a,b].sort();
+    return (this.getState<string[][]>("merge_dismissed") ?? []).some(p => p[0] === pair[0] && p[1] === pair[1]);
+  }
+  createPending(p: Pending) {
+    if (p.kind === "merge" && this.mergeDismissed(String(p.payload.a),String(p.payload.b))) return;
+    this.put("pending", "id", p);
+  }
+  pending(): Pending[] {
+    return this.sql.transaction(() => {
+      const result: Pending[] = [];
+      const rows = this.sql.prepare("SELECT * FROM pending WHERE resolved_at IS NULL ORDER BY created_at,id").all();
+      for (const row of rows) {
+        const p = decode<Pending>(row as Row);
+        let stale = false, dismissed = false;
+        if (p.kind === "project") {
+          const project = this.project(String(p.payload.project_id ?? p.payload.id ?? ""));
+          if (!project) stale = true;
+          else p.payload = { ...p.payload,name: project.name,keys: project.keys,threads: this.sql.prepare("SELECT id,title,brief FROM threads WHERE project_id=? ORDER BY last_ms DESC,id DESC LIMIT 5").all(project.id) };
+        } else if (p.kind === "thread_done") {
+          const thread = this.thread(String(p.payload.thread_id ?? p.payload.id ?? ""));
+          if (!thread) stale = true;
+          else p.payload = { ...p.payload,title: thread.title,brief: thread.brief };
+        } else {
+          const a = this.project(String(p.payload.a ?? "")), b = this.project(String(p.payload.b ?? ""));
+          if (!a || !b) stale = true;
+          else {
+            dismissed = this.mergeDismissed(a.id,b.id);
+            p.payload = { ...p.payload,a_name: a.name,b_name: b.name };
+          }
+        }
+        if (stale || dismissed) this.sql.prepare("UPDATE pending SET resolved_at=?,resolution=? WHERE id=?").run(new Date().toISOString(),stale ? "stale" : "keep",p.id);
+        else result.push(p);
+      }
+      return result;
+    })();
+  }
+  getState<T>(key: string): T | null { const row = this.sql.prepare("SELECT v FROM distill_state WHERE k=?").get(key) as Row | undefined; return row ? JSON.parse(row.v) : null; }
+  setState(key: string, value: unknown) { this.sql.prepare("INSERT INTO distill_state VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(key,JSON.stringify(value)); }
+  writeUsage(usage: { id?: string; at?: string; tier: string; provider: string; model: string; input_chars?: number; output_chars?: number; input_tokens?: number; output_tokens?: number; ms: number; ok: number; error?: string }) { this.put("llm_usage", "id", { id: ulid(), at: new Date().toISOString(), ...usage }); }
+  threads(params: URLSearchParams) {
+    const limit = Number(params.get("limit") ?? 50);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new InputError("limit 必须是 1–500 的整数");
+    const where: string[] = [], args: unknown[] = [];
+    for (const [param,col] of [["status","status"],["project","project_id"]]) if (params.has(param)) { where.push(`${col}=?`); args.push(params.get(param)); }
+    if (params.has("cursor")) {
+      try {
+        const c = JSON.parse(Buffer.from(params.get("cursor")!,"base64url").toString());
+        if (!Array.isArray(c) || c.length !== 2 || !Number.isSafeInteger(c[0]) || typeof c[1] !== "string") throw new Error();
+        where.push("(COALESCE(last_ms,0) < ? OR (COALESCE(last_ms,0)=? AND id<?))"); args.push(c[0],c[0],c[1]);
+      } catch { throw new InputError("cursor 无效"); }
+    }
+    const rows = this.sql.prepare(`SELECT * FROM threads ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY COALESCE(last_ms,0) DESC,id DESC LIMIT ?`).all(...args,limit+1) as Row[];
+    const page = rows.slice(0,limit), last = page.at(-1);
+    return { threads: page.map(r => { const t = decode<Row>(r); delete t.detail; return t; }), next_cursor: rows.length > limit && last ? Buffer.from(JSON.stringify([last.last_ms ?? 0,last.id])).toString("base64url") : null };
+  }
+  view(kind: "threads" | "projects", id: string, level: string) {
+    if (!["brief","detail","evidence"].includes(level)) throw new InputError("level 无效");
+    const entity = kind === "threads" ? this.thread(id) : this.project(id);
+    if (!entity) return null;
+    const result: Row = { ...entity };
+    if (level === "brief") { delete result.detail; return result; }
+    result.facts = this.facts(kind === "threads" ? "thread_id" : "project_id",id);
+    if (level === "evidence") {
+      const ids = new Set<string>(result.facts.flatMap((f: Fact) => f.evidence));
+      const threads = kind === "threads" ? [id] : (this.sql.prepare("SELECT id FROM threads WHERE project_id=?").all(id) as Row[]).map(t => t.id);
+      for (const tid of threads) for (const row of this.sql.prepare("SELECT f.record_ids FROM frames f JOIN assignments a ON a.frame_id=f.id WHERE a.thread_id=?").all(tid) as Row[]) for (const rid of JSON.parse(row.record_ids)) ids.add(rid);
+      const visit = (value: unknown): void => { if (!value || typeof value !== "object") return; for (const [k,v] of Object.entries(value)) { if (k === "record_id" && typeof v === "string") ids.add(v); else visit(v); } };
+      visit(result.detail);
+      result.records = [...ids].flatMap(rid => { const r = this.sql.prepare("SELECT id,title,t_start,source FROM records WHERE id=?").get(rid); return r ? [r] : []; });
+    }
+    return result;
+  }
+  private mergeProjects(source: string, target: string) {
+    const project = this.project(source), dest = this.project(target);
+    if (!project || !dest || source === target) throw new InputError("合并目标无效");
+    const keys = { ...dest.keys };
+    for (const k of ["repos","hosts","chats"] as const) keys[k] = [...new Set([...keys[k],...project.keys[k]])];
+    this.upsertProject({ ...dest, keys, needs_regen: 1 });
+    this.sql.prepare("UPDATE threads SET project_id=?,needs_regen=1 WHERE project_id=?").run(dest.id,source);
+    this.sql.prepare("UPDATE facts SET project_id=? WHERE project_id=?").run(dest.id,source);
+    this.sql.prepare("DELETE FROM projects WHERE id=?").run(source);
+  }
+  resolvePending(id: string, action: string, name?: string, target?: string) {
+    this.sql.transaction(() => {
+      const p = this.pending().find(p => p.id === id);
+      if (!p) throw new InputError("待确认项不存在或已处理");
+      if (p.kind === "merge") {
+        const a = String(p.payload.a), b = String(p.payload.b);
+        if (action === "merge") this.mergeProjects(a,b);
+        else if (action === "keep") {
+          const pairs = this.getState<string[][]>("merge_dismissed") ?? [];
+          if (!this.mergeDismissed(a,b)) pairs.push([a,b].sort());
+          this.setState("merge_dismissed",pairs);
+        } else throw new InputError("合并操作无效");
+      } else if (p.kind === "project") {
+        const pid = String(p.payload.project_id ?? p.payload.id ?? "");
+        const project = this.project(pid);
+        if (!project) throw new InputError("项目不存在");
+        if (action === "confirm") this.upsertProject({ ...project, confirmed: 1 });
+        else if (action === "rename") {
+          if (!name?.trim()) throw new InputError("需要项目名");
+          this.upsertProject({ ...project, name: name.trim(), confirmed: 1 });
+        } else if (action === "merge_into") {
+          if (!target) throw new InputError("需要合并目标");
+          this.mergeProjects(pid,target);
+        } else if (action === "ignore") {
+          this.sql.prepare("UPDATE threads SET project_id=NULL,needs_regen=1 WHERE project_id=?").run(pid);
+          this.sql.prepare("UPDATE facts SET project_id=NULL WHERE project_id=?").run(pid);
+          this.sql.prepare("DELETE FROM projects WHERE id=?").run(pid);
+        } else throw new InputError("项目操作无效");
+      } else {
+        const status = ({ done: "done", continue: "active", abandon: "abandoned" } as const)[action as "done"];
+        const thread = this.thread(String(p.payload.thread_id ?? p.payload.id ?? ""));
+        if (!status || !thread) throw new InputError("线程操作无效");
+        this.upsertThread({ ...thread, status });
+      }
+      this.sql.prepare("UPDATE pending SET resolved_at=?,resolution=? WHERE id=?").run(new Date().toISOString(),action,id);
+    })();
+  }
+  removeRecord(id: string, time: string) {
+    const affected = new Set<string>();
+    for (const row of this.sql.prepare("SELECT f.*,a.thread_id FROM frame_records r JOIN frames f ON f.id=r.frame_id LEFT JOIN assignments a ON a.frame_id=f.id WHERE r.record_id=?").all(id) as Row[]) {
+      if (row.thread_id) affected.add(row.thread_id);
+      const ids = (JSON.parse(row.record_ids) as string[]).filter(r => r !== id);
+      if (!ids.length) {
+        this.sql.prepare("DELETE FROM assignments WHERE frame_id=?").run(row.id);
+        this.sql.prepare("DELETE FROM frames WHERE id=?").run(row.id);
+      } else {
+        const records = ids.map(r => this.hub.get(r)!);
+        this.sql.prepare("UPDATE frames SET record_ids=?,chars=?,private=?,t_start_ms=?,t_end_ms=? WHERE id=?").run(JSON.stringify(ids),records.reduce((n,r) => n+r.body.length,0),Number(records.some(r => r.sensitivity === "private")),Math.min(...records.map(r => Date.parse(r.t_start))),Math.max(...records.map(r => Date.parse(r.t_end ?? r.t_start))),row.id);
+      }
+    }
+    this.sql.prepare("DELETE FROM frame_records WHERE record_id=?").run(id);
+    // 不等模型重生成，立即移除所有实体中引用已删记录的原话。
+    for (const table of ["threads","projects"]) {
+      for (const row of this.sql.prepare(`SELECT id,detail FROM ${table} WHERE detail IS NOT NULL`).all() as Row[]) {
+        const detail = decode<Row>(row).detail;
+        if (!detail || !Array.isArray(detail.quotes)) continue;
+        const quotes = detail.quotes.filter((q: Row) => q?.record_id !== id);
+        if (quotes.length === detail.quotes.length) continue;
+        this.sql.prepare(`UPDATE ${table} SET detail=?,needs_regen=1 WHERE id=?`).run(JSON.stringify({ ...detail,quotes }),row.id);
+        if (table === "threads") affected.add(row.id);
+      }
+    }
+    const facts = this.sql.prepare("SELECT * FROM facts WHERE EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value=?)").all(id) as Row[];
+    for (const f of facts) {
+      if (f.thread_id) affected.add(f.thread_id);
+      if (f.project_id) this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(f.project_id);
+      this.sql.prepare("DELETE FROM facts WHERE id=?").run(f.id);
+    }
+    for (const tid of affected) {
+      this.sql.prepare("UPDATE threads SET needs_regen=1 WHERE id=?").run(tid);
+      this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=(SELECT project_id FROM threads WHERE id=?)").run(tid);
+    }
+    this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=?").run(time.slice(0,10));
+  }
+}
