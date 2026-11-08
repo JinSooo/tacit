@@ -43,7 +43,12 @@ export function run(ctx: BackendContext, command: string, args: string[]): Promi
     child.on("close", code => {
       if (settled) return;
       if (failure) { fail(failure); return; }
-      if (code !== 0) { fail(`${command} 退出失败（${code}）：${safeError(stderr, [ctx.req.system, ctx.req.prompt, input(ctx)])}`); return; }
+      if (code !== 0) {
+        // claude -p 出错时常把原因写在 stdout 的 JSON（result 字段）里，stderr 是空的，例如"额度用完"。
+        let reason = stderr;
+        try { const o = JSON.parse(stdout); if (o?.is_error && typeof o.result === "string") reason = o.result; } catch { /* 不是 JSON 就用 stderr */ }
+        fail(`${command} 退出失败（${code}）：${safeError(reason, [ctx.req.system, ctx.req.prompt, input(ctx)])}`); return;
+      }
       settled = true; clearTimeout(timer); resolve(stdout);
     });
     child.stdin.end(input(ctx));

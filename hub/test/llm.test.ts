@@ -30,6 +30,7 @@ const stdin = await Bun.stdin.text();
 appendFileSync(log, JSON.stringify({event:"start", pid:process.pid, args, stdin, cwd:process.cwd(), mode:statSync(process.cwd()).mode & 0o777, at:Date.now()})+"\\n");
 if (mode === "timeout") await new Promise(() => setInterval(() => {}, 1000));
 await Bun.sleep(50);
+if (mode === "limit") { console.log(JSON.stringify({type:"result", subtype:"success", is_error:true, result:"You've hit your 5-hour limit · resets 7:20pm"})); process.exit(1); }
 if (mode === "exit" || mode === "echo") { console.error(mode === "echo" ? JSON.parse(stdin).prompt : "x".repeat(900)); process.exit(2); }
 const data = mode === "schema" ? {text:42} : {text:"hello"};
 if (args[0] === "exec") {
@@ -224,4 +225,12 @@ test("CLI 后端只继承白名单环境变量", async () => {
   const { cliEnv } = await import("../src/llm/process.ts");
   const env = cliEnv({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", ANTHROPIC_BASE_URL: "https://relay.invalid", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "m", CLAUDE_CODE_SESSION_ID: "s", CLAUDECODE: "1", CMUX_CLAUDE_PID: "1", OPENAI_API_KEY: "k" });
   expect(env).toEqual({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", CI: "1" });
+});
+
+// 回归：claude -p 把出错原因写在 stdout 的 JSON 里、stderr 为空，曾经只显示"退出失败（1）："（2026-11-08 首次真实运行发现）。
+test("Claude 出错原因从 stdout 的 result 取出", async () => {
+  const f = await fixture("claude-cli", "limit");
+  const r = await f.llm.complete({ tier: "minute", system: "合成", prompt: "合成", schema: { type: "object" } });
+  expect(r.ok).toBe(false);
+  expect(r.ok ? "" : r.error).toContain("5-hour limit");
 });

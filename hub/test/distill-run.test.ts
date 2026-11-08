@@ -159,3 +159,14 @@ test("不够门槛的新线程先当候选，下一段同一件事出现才建�
   await round(fakeLLM({ assign: frames => frames.map(f => ({ frame_id: f.id, thread_id: null, new_thread_title: "另一件合成的事", ignore: false, confidence: 0.9 })) }).llm, base + 8 * 60 * MIN, false);
   expect(ctx.db.db.prepare("SELECT count(*) n FROM threads WHERE title='另一件合成的事'").get()).toEqual({ n: 1 });
 });
+
+// 回归：官方账号额度用完时 claude -p 把原因写在 stdout，曾经只显示"退出失败（1）"，而且本轮其余调用继续发（2026-11-08 首次真实运行发现）。
+test("遇到额度限制后本轮其余调用直接跳过，原因写进输出", async () => {
+  ctx.db.ingest([session(0, 20, "合成会话")]);
+  let calls = 0;
+  const llm: LLM = { async complete() { calls++; return { ok: false as const, error: "claude 退出失败（1）：You've hit your 5-hour limit", ms: 1 }; } };
+  const out = await round(llm, base + 3 * 60 * MIN) as Record<string, unknown>;
+  expect(calls).toBe(1);
+  expect(String(out.stopped)).toContain("5-hour limit");
+  expect(ctx.db.db.prepare("SELECT status FROM frames").all()).toEqual([{ status: "new" }]);
+});

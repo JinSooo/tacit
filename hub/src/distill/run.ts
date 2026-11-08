@@ -356,7 +356,29 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
 export interface RoundOptions { backfill?: boolean; slow?: boolean; days?: "all" | "past" | "none"; enabledDefault?: number }
 
 /** 快步骤（切片、归线程、当前状态、生命周期）每轮都跑；slow=true 时再跑线程、项目和日记。 */
-export async function distillRound(d: Deps, opts: RoundOptions = {}) {
+/** 额度、频率限制类错误：本轮剩下的调用直接跳过，不再继续消耗。 */
+export const QUOTA_ERROR = /limit|quota|rate.?limit|usage|exceeded|429|额度|限额/i;
+export function withBreaker(llm: LLM, onTrip: (error: string) => void): LLM {
+  let tripped: string | null = null;
+  return {
+    async complete<T>(req: LLMRequest): Promise<LLMResult<T>> {
+      if (tripped) return { ok: false, error: `本轮已停止调用：${tripped}`, ms: 0 };
+      const r = await llm.complete<T>(req);
+      if (!r.ok && QUOTA_ERROR.test(r.error)) { tripped = r.error.slice(0, 200); onTrip(tripped); }
+      return r;
+    },
+  };
+}
+
+export async function distillRound(deps: Deps, opts: RoundOptions = {}) {
+  let stopped: string | null = null;
+  const d: Deps = { ...deps, llm: withBreaker(deps.llm, e => { stopped = e; }) };
+  const out = await distillRoundInner(d, opts);
+  if (stopped) out.stopped = stopped;
+  return out;
+}
+
+async function distillRoundInner(d: Deps, opts: RoundOptions) {
   const now = d.now?.() ?? Date.now();
   const store = new DistillStore(d.db);
   const out: Record<string, unknown> = { at: toLocalIso(now) };
