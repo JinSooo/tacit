@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { groupFacts, pendingSummary, relativeTime, type DistillationApi, type Evidence, type Fact, type Pending, type Project, type Resolution, type Thread } from "./distillation.ts";
 
+import { type AudioApi } from "./audio.ts";
+import { VoiceSamples } from "./audio-views.tsx";
+
 export type View = "history" | "now" | "pending";
 const message = (error: unknown) => error instanceof Error ? error.message : "请求失败，请重试";
 function useResource<T>(load: (signal: AbortSignal) => Promise<T>, deps: React.DependencyList) {
@@ -92,6 +95,28 @@ function NowView({ projects, api, onHistory }: { projects: Project[]; api: Disti
     <section><h2 className="day-heading">项目</h2>{!projects.length && <p className="empty">暂无项目</p>}<div className="entity-list">{projects.map(project => <article key={project.id} className={expanded === project.id ? "entity expanded" : "entity"}><button className="entity-row project-row" aria-expanded={expanded === project.id} aria-controls={`project-${project.id}`} onClick={() => setExpanded(expanded === project.id ? undefined : project.id)}><span><strong>{project.name}</strong>{!project.confirmed && <span className="muted unconfirmed">未确认</span>}{project.brief && <span className="entity-brief">{project.brief}</span>}</span><span className="muted">{project.thread_count} 个线程</span><ActivityTime value={project.last_ms} /></button>{expanded === project.id && <div id={`project-${project.id}`}><ProjectContent project={project} api={api} onHistory={onHistory} /></div>}</article>)}</div></section>
   </div>;
 }
+export function VoicePendingRow({ item, audio, api, onResolved }: { item: Pending; audio: AudioApi; api: DistillationApi; onResolved: (id: string) => void }) {
+  const [mode, setMode] = useState<"rename" | "merge_into">();
+  const [name, setName] = useState("");
+  const [target, setTarget] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const speakers = useResource(signal => audio.speakers(signal), [audio]);
+  async function resolve(resolution: Resolution) {
+    setBusy(true); setError("");
+    try { await api.resolve(item.id, resolution); onResolved(item.id); }
+    catch (error) { setError(message(error)); } finally { setBusy(false); }
+  }
+  return <article className="pending-row"><h3>{item.payload.label}</h3><p className="muted">{item.payload.conversations ?? 0} 段 · 累计 {Math.round(item.payload.seconds ?? 0)} 秒</p>
+    <VoiceSamples samples={item.payload.samples ?? []} api={audio} />
+    {item.payload.samples_pending && <p className="muted">样本待取</p>}
+    <div className="actions"><button disabled={busy} onClick={() => void resolve({ action: "me" })}>就是我</button><button disabled={busy} onClick={() => setMode("rename")}>填名字</button><button disabled={busy} onClick={() => setMode("merge_into")}>和某人是同一人</button><button disabled={busy} onClick={() => void resolve({ action: "ignore" })}>忽略</button></div>
+    {mode && <form className="pending-form" onSubmit={event => { event.preventDefault(); if (mode === "rename" ? !name.trim() : !target) return; void resolve(mode === "rename" ? { action: "rename", name: name.trim() } : { action: "merge_into", target }); }}>
+      {mode === "rename" ? <label>名字<input autoFocus required value={name} onChange={event => setName(event.target.value)} /></label> : <><label>同一说话人<select autoFocus required value={target} onChange={event => setTarget(event.target.value)}><option value="">选择说话人</option>{speakers.data?.speakers.filter(speaker => speaker.id !== item.payload.speaker_id).map(speaker => <option key={speaker.id} value={speaker.id}>{speaker.name || speaker.label}</option>)}</select></label>{!speakers.data && <Status error={speakers.error} retry={speakers.retry} />}</>}
+      <div className="actions"><button type="submit" disabled={busy || (mode === "rename" ? !name.trim() : !target)}>提交</button><button type="button" disabled={busy} onClick={() => setMode(undefined)}>取消</button></div>
+    </form>}{error && <p className="error" role="alert">{error}</p>}
+  </article>;
+}
 function PendingRow({ item, projects, api, onResolved }: { item: Pending; projects: Project[]; api: DistillationApi; onResolved: (id: string) => void }) {
   const [mode, setMode] = useState<"rename" | "merge_into">();
   const [name, setName] = useState(item.payload.name ?? "");
@@ -110,7 +135,7 @@ function PendingRow({ item, projects, api, onResolved }: { item: Pending; projec
     {error && <p className="error" role="alert">{error}</p>}
   </article>;
 }
-export function DistillationWorkspace({ view, api, onHistory, onCount }: { view: View; api: DistillationApi; onHistory: (title: string) => void; onCount: (count: number) => void }) {
+export function DistillationWorkspace({ view, api, audio, onHistory, onCount }: { view: View; api: DistillationApi; audio: AudioApi; onHistory: (title: string) => void; onCount: (count: number) => void }) {
   const [revision, setRevision] = useState(0);
   const projects = useResource(signal => api.projects(signal), [api, revision]);
   const pending = useResource(signal => api.pending(signal), [api]);
@@ -118,10 +143,10 @@ export function DistillationWorkspace({ view, api, onHistory, onCount }: { view:
   const items = (pending.data?.pending ?? []).filter(item => !resolved.includes(item.id));
   useEffect(() => { onCount(items.length); }, [pending.data, resolved, onCount]);
   if (view === "history") return null;
-  if (!projects.data) return <Status error={projects.error} retry={projects.retry} />;
-  if (view === "now") return <NowView key={revision} projects={projects.data.projects} api={api} onHistory={onHistory} />;
-  return <div className="distillation-view">{!pending.data ? <Status error={pending.error} retry={pending.retry} /> : !items.length ? <p className="empty">没有待确认项</p> : (["project", "thread_done", "merge"] as const).map(kind => {
+  if (view === "now" && !projects.data) return <Status error={projects.error} retry={projects.retry} />;
+  if (view === "now") return <NowView key={revision} projects={projects.data!.projects} api={api} onHistory={onHistory} />;
+  return <div className="distillation-view">{!pending.data ? <Status error={pending.error} retry={pending.retry} /> : !items.length ? <p className="empty">没有待确认项</p> : (["voice", "project", "thread_done", "merge"] as const).map(kind => {
     const rows = items.filter(item => item.kind === kind);
-    return rows.length > 0 && <section key={kind}><h2 className="day-heading">{{ project: "项目", thread_done: "线程完成", merge: "合并" }[kind]}</h2>{rows.map(item => <PendingRow key={item.id} item={item} projects={projects.data!.projects} api={api} onResolved={id => { setResolved(values => [...values, id]); setRevision(value => value + 1); }} />)}</section>;
+    return rows.length > 0 && <section key={kind}><h2 className="day-heading">{{ voice: "新声音", project: "项目", thread_done: "线程完成", merge: "合并" }[kind]}</h2>{kind !== "voice" && !projects.data ? <Status error={projects.error} retry={projects.retry} /> : rows.map(item => kind === "voice" ? <VoicePendingRow key={item.id} item={item} audio={audio} api={api} onResolved={id => { setResolved(values => [...values, id]); }} /> : <PendingRow key={item.id} item={item} projects={projects.data!.projects} api={api} onResolved={id => { setResolved(values => [...values, id]); setRevision(value => value + 1); }} />)}</section>;
   })}</div>;
 }

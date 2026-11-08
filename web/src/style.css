@@ -107,3 +107,6 @@ textarea { width: 100%; resize: vertical; line-height: 1.8; }
 .audit-ids > button { padding: 0; min-height: 0; line-height: inherit; text-decoration: underline; }
 .audit-ids > a:active { background: var(--hover); }
 .audit-ids a .unconfirmed { display: inline-block; margin-left: 6px; text-decoration: none; }
+
+.voice-samples > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.voice-samples audio { max-width: 100%; }

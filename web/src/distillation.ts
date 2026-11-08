@@ -20,10 +20,10 @@ export interface ProjectDetail extends Project {
   detail: { goal?: string; status?: string; people?: string[] } | null; facts: Fact[]; records?: Evidence[];
 }
 export interface Pending {
-  id: string; kind: "project" | "thread_done" | "merge";
-  payload: { project_id?: string; name?: string; keys?: { repos?: string[]; hosts?: string[]; chats?: string[] }; threads?: { id: string; title: string; brief?: string | null }[]; thread_id?: string; title?: string; brief?: string | null; a?: string; b?: string; a_name?: string; b_name?: string; reason?: string };
+  id: string; kind: "project" | "thread_done" | "merge" | "voice";
+  payload: { speaker_id?: string; label?: string; conversations?: number; seconds?: number; samples?: { id: string; mime: string }[]; samples_pending?: boolean; project_id?: string; name?: string; keys?: { repos?: string[]; hosts?: string[]; chats?: string[] }; threads?: { id: string; title: string; brief?: string | null }[]; thread_id?: string; title?: string; brief?: string | null; a?: string; b?: string; a_name?: string; b_name?: string; reason?: string };
 }
-export type Resolution = { action: "confirm" | "rename" | "merge_into" | "ignore" | "done" | "continue" | "abandon" | "merge" | "keep"; name?: string; target?: string };
+export type Resolution = { action: "me" | "confirm" | "rename" | "merge_into" | "ignore" | "done" | "continue" | "abandon" | "merge" | "keep"; name?: string; target?: string };
 export const factGroups: { kind: FactKind; label: string }[] = [
   { kind: "decision", label: "已定（决定）" }, { kind: "rejected", label: "否决" },
   { kind: "open", label: "未决" }, { kind: "next", label: "下一步" }, { kind: "inference", label: "推测" },

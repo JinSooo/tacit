@@ -6,6 +6,9 @@ import { buildCorrection, buildNote, dateTitle, duration, groupRecords, latestCo
 import { toLocalIso } from "./record-helpers.ts";
 import { createDistillationApi } from "./distillation.ts";
 import { DistillationWorkspace, type View } from "./distillation-views.tsx";
+import { createApi } from "./api.ts";
+import { createAudioApi, speakerNames, type Speaker } from "./audio.ts";
+import { AudioSettings } from "./audio-views.tsx";
 import "./style.css";
 
 const tokenKey = "record-anything-token";
@@ -27,7 +30,7 @@ function Body({ text }: { text: string }) {
   const lines = text.split("\n");
   return <><pre className="body-text">{full ? text : lines.slice(0, 40).join("\n")}</pre>{lines.length > 40 && <button className="text-button" onClick={() => setFull(!full)}>{full ? "收起正文" : `展开全部 ${lines.length} 行`}</button>}</>;
 }
-function RecordDetail({ id, api, onDelete }: { id: string; api: Api; onDelete: (ids: string[]) => void }) {
+function RecordDetail({ id, api, onDelete, speakers }: { id: string; api: Api; speakers: Speaker[]; onDelete: (ids: string[]) => void }) {
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
@@ -61,6 +64,7 @@ function RecordDetail({ id, api, onDelete }: { id: string; api: Api; onDelete: (
     {error && <p role="alert" className="error">{error}</p>}
     {!detail && !error && <p role="status">正在读取…</p>}
     {detail && current && <>
+      {detail.source === "mac.audio" && !!detail.people?.length && <p>{speakerNames(detail.people, speakers).join("、")}</p>}
       <Body key={current.id} text={current.body} />
       {current !== detail && <details className="original"><summary>原文</summary><Body text={detail.body} /></details>}
       {detail.context && <dl className="context">{Object.entries({ URL: detail.context.url, 仓库: detail.context.repo, 目录: detail.context.cwd, 窗口: detail.context.window }).filter(([, value]) => value).map(([label, value]) => <React.Fragment key={label}><dt>{label}</dt><dd>{label === "URL" && safeUrl(value!) ? <a href={safeUrl(value!)} target="_blank" rel="noreferrer">{value}</a> : value}</dd></React.Fragment>)}</dl>}
@@ -100,7 +104,7 @@ function NoteDialog({ api, onSaved, onClose }: { api: Api; onSaved: () => void; 
 }
 function App() {
   const [token, setToken] = useState(initialToken);
-  const [view, setView] = useState<View | "audit">(() => /[?&](thread|project)=/.test(location.search) ? "audit" : "history");
+  const [view, setView] = useState<View | "audit" | "settings">(() => /[?&](thread|project)=/.test(location.search) ? "audit" : "history");
   const [pendingCount, setPendingCount] = useState(0);
   const [q, setQ] = useState("");
   const [source, setSource] = useState("");
@@ -118,17 +122,20 @@ function App() {
   const sentinel = useRef<HTMLDivElement>(null);
   const generation = useRef(0);
   const loading = useRef(false);
-  const api = useCallback<Api>(async <T,>(path: string, init?: RequestInit): Promise<T> => {
-    const response = await fetch(path, { ...init, headers: { ...init?.headers, Authorization: `Bearer ${token}`, "Content-Type": "application/json" } });
-    if (response.status === 401) {
-      try { sessionStorage.removeItem(tokenKey); } catch { /* 浏览器可能禁用了存储。 */ }
-      setToken(""); throw new Error("需要重新打开网页");
-    }
-    const text = await response.text();
-    const result = text ? JSON.parse(text) : undefined;
-    if (!response.ok) throw Object.assign(new Error(result?.error ?? `请求失败（${response.status}）`), { status: response.status });
-    return result as T;
-  }, [token]);
+  const api = useMemo(() => createApi(token, () => {
+    try { sessionStorage.removeItem(tokenKey); } catch { /* 浏览器可能禁用了存储。 */ }
+    setToken("");
+  }), [token]);
+  const audioApi = useMemo(() => createAudioApi(api), [api]);
+  const [speakers, setSpeakers] = useState<Speaker[]>([]);
+  const [speakerError, setSpeakerError] = useState("");
+  useEffect(() => {
+    if (!token || view !== "history") return;
+    const controller = new AbortController();
+    setSpeakerError("");
+    audioApi.speakers(controller.signal).then(data => { if (!controller.signal.aborted) setSpeakers(data.speakers); }).catch(error => { if (!controller.signal.aborted) setSpeakerError(message(error)); });
+    return () => controller.abort();
+  }, [audioApi, token, view, revision]);
   const distillationApi = useMemo(() => createDistillationApi(api), [api]);
   const load = useCallback(async (next: string | null, version: number, signal?: AbortSignal) => {
     if (loading.current) return;
@@ -174,7 +181,7 @@ function App() {
   }, []);
   if (!token) return <p className="token-prompt">在终端运行 <code>bun hub/src/cli.ts open</code></p>;
   return <><a className="skip" href="#content">跳到内容</a><main>
-    <header><div className="heading-row"><h1>History</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "当前"], ["pending", "待确认"], ["audit", "读取记录"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
+    <header><div className="heading-row"><h1>History</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "当前"], ["pending", "待确认"], ["audit", "读取记录"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
       <input ref={search} type="search" aria-label="搜索 History" placeholder="搜索 History" value={q} onChange={event => setQ(event.target.value)} />
       <select aria-label="来源筛选" value={source} onChange={event => setSource(event.target.value)}><option value="">所有来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
       <input className="device" list="devices" aria-label="设备筛选" placeholder="所有设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
@@ -182,14 +189,16 @@ function App() {
       <button onClick={() => setNote(true)}>补写</button>
     </div>}</header>
     <div id="content" tabIndex={-1}>
-    <DistillationWorkspace view={view === "audit" ? "history" : view} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />
+    <DistillationWorkspace view={view === "audit" || view === "settings" ? "history" : view} audio={audioApi} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />
+    {view === "settings" && <AudioSettings api={audioApi} />}
     {view === "audit" && <AuditView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />}
     <div id="timeline" hidden={view !== "history"} tabIndex={-1} aria-busy={busy}>
+      {speakerError && records.some(record => record.source === "mac.audio") && <p className="error" role="alert">说话人名字读取失败：{speakerError} <button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
       {groupRecords(records).map(group => <section key={group.day} aria-label={dateTitle(group.day)}><h2 className="day-heading">{dateTitle(group.day)}</h2><div className="day-records">{group.records.map(record => <article key={record.id} className={expanded === record.id ? "record expanded" : "record"}>
         <button className="record-row" style={{ "--source-color": sourceColor(record.source) } as React.CSSProperties} aria-expanded={expanded === record.id} aria-controls={`detail-${record.id}`} onClick={() => setExpanded(expanded === record.id ? null : record.id)}>
           <span className="record-time">{timeRange(record)}</span><span className="record-title">{record.title}</span><span className="record-meta">{sourceNames[record.source] ?? record.source}{duration(record) && <span>{duration(record)}</span>}</span>
         </button>
-        {expanded === record.id && <RecordDetail id={record.id} api={api} onDelete={ids => { setRecords(previous => previous.filter(record => !ids.includes(record.id))); setExpanded(null); }} />}
+        {expanded === record.id && <RecordDetail id={record.id} api={api} speakers={speakers} onDelete={ids => { setRecords(previous => previous.filter(record => !ids.includes(record.id))); setExpanded(null); }} />}
       </article>)}</div></section>)}
       {!records.length && !busy && !error && <p className="empty">没有记录</p>}
       {error && <div className="list-status" role="alert"><span className="error">{error}</span><button onClick={() => void load(cursor, generation.current)}>重试</button></div>}
