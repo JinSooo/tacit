@@ -6,6 +6,8 @@ import Vision
 /// 需要录屏权限；没有权限时什么都不做。
 final class OCRReader {
   var granted: Bool { CGPreflightScreenCaptureAccess() }
+  /// 截图相对窗口点尺寸的最大放大倍数（Retina 屏 2 倍即原生分辨率）。
+  var maxScale: CGFloat = 2
 
   func requestAccess() { _ = CGRequestScreenCaptureAccess() }
 
@@ -23,7 +25,7 @@ final class OCRReader {
         guard let win = candidates.min(by: { distance($0) < distance($1) }) else { completion([], 0); return }
         let filter = SCContentFilter(desktopIndependentWindow: win)
         let cfg = SCStreamConfiguration()
-        let scale = min(2.0, 3000 / max(win.frame.width, 1))
+        let scale = min(self.maxScale, 3000 / max(win.frame.width, 1))
         cfg.width = Int(win.frame.width * scale)
         cfg.height = Int(win.frame.height * scale)
         cfg.showsCursor = false

@@ -81,6 +81,15 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
   #expect(r.capture.method == "ocr" && r.capture.confidence == 0.7)
 }
 
+@Test func mixedAXAndOCRSegmentMarkedOCR() {
+  let s = Segmenter(device: "mac")
+  _ = s.observe(obs(0, app: "com.tencent.xinWeChat", lines: ["微信"]))
+  let key = obs(0, app: "com.tencent.xinWeChat").key
+  _ = s.appendIfCurrent(key: key, lines: ["识别出的聊天内容"], method: "ocr", time: t0)
+  let r = s.flush()[0]
+  #expect(r.capture.method == "ocr" && r.capture.confidence == 0.7)
+}
+
 @Test func urlChangeIsNewSegment() {
   let s = Segmenter(device: "mac")
   _ = s.observe(obs(0, "Zen", app: "app.zen-browser.zen", lines: ["x"], url: "https://a.example/1"))

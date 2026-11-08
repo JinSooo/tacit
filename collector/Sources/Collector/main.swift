@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let menu = NSMenu(); menu.delegate = self
     statusItem.menu = menu
     updateIcon()
+    if ocrEnabled && !ocr.granted { ocr.requestAccess() }
     if !AXIsProcessTrusted() {
       AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
     }
@@ -112,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
           captureQueue.async { [self] in
             stats["ocrRuns", default: 0] += 1
             stats["ocrMsTotal", default: 0] += ms
+            stats["ocrMsMax"] = max(stats["ocrMsMax"] ?? 0, ms)
             stats["ocrLines", default: 0] += lines.count
             emit(segmenter.appendIfCurrent(key: key, lines: lines, method: "ocr", time: Date()))
           }
@@ -252,6 +254,8 @@ func cpuSeconds() -> Double {
   getrusage(RUSAGE_SELF, &usage)
   return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6
 }
+
+if CommandLine.arguments.contains("--probe-front") { runProbe(); exit(0) }
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

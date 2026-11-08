@@ -10,6 +10,13 @@ import { runPlugin } from "./run-plugin.ts";
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, name] = argv;
   const separator = argv.indexOf("--");
+  if (command === "init") {
+    // 安装时在前台创建（或读取）钥匙串里的数据库密钥并试开一次数据库，失败当场可见。
+    const config = loadConfig();
+    new HubDB(join(config.dataDir, "history.db"), config.dbKey).close();
+    console.log(config.dataDir);
+    return;
+  }
   if (command === "open") {
     const port = Number(process.env.RA_PORT ?? 47823);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("RA_PORT 必须是 1–65535 的整数");
@@ -24,7 +31,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     return;
   }
-  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | open [--print] | run-plugin <name> [--hub <url>] -- <插件命令...>");
+  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | run-plugin <name> [--hub <url>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
   if (command === "run-plugin") {
     let hub: string | undefined, tokenFile: string | undefined;

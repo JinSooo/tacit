@@ -8,78 +8,130 @@ struct AXSnapshot {
   var frame: CGRect?
   var chars: Int
   var elements: Int
+  var calls: Int
   var truncated: Bool
   var ms: Int
 }
 
 /// 读前台应用聚焦窗口的辅助功能树。
 /// 实验 0-B 的约束：只读聚焦窗口；每次扫描有元素数和时间上限；跳过与窗口可见区域不相交的子树。
+///
+/// 遍历方式：每个元素一次 IPC 批量取角色、子节点、位置、尺寸（逐个属性取要 3–5 次，实测慢一到三倍）；
+/// 所有元素都做可见性剪枝；同一层子节点按面积从大到小访问，让主内容区先于侧栏、工具栏用掉预算；
+/// 输出时再按文档顺序（子节点下标路径）排序，正文顺序不受访问顺序影响。
+/// 深度上限 60：Electron 应用（如 Claude 桌面版）的树超过 40 层。
 final class AXReader {
   var maxElements = 3000
   var budget: TimeInterval = 0.2
+  var maxDepth = 60
   private var manualEnabled = Set<pid_t>()
 
   private let textRoles: Set<String> = ["AXStaticText", "AXTextField", "AXHeading", "AXComboBox"]
-  /// 只在这些容器上取 frame 判断是否可见；逐个叶子取 frame 太贵。
-  private let containerRoles: Set<String> = ["AXGroup", "AXScrollArea", "AXList", "AXOutline", "AXTable",
-                                              "AXRow", "AXCell", "AXSplitGroup", "AXTabGroup", "AXLayoutArea"]
+  private let batchAttributes = [kAXRoleAttribute, kAXChildrenAttribute, kAXPositionAttribute, kAXSizeAttribute] as CFArray
 
   struct Walk {
     var deadline: Date
     var elements = 0
+    var calls = 0
     var truncated = false
-    var lines: [String] = []
-    var seen = Set<String>()
-    var chars = 0
+    var pieces: [(path: [Int], text: String)] = []
     var url: String?
+  }
+
+  struct Node { var el: AXUIElement; var role: String; var kids: [AXUIElement]; var frame: CGRect? }
+
+  /// Electron 需要显式打开辅助功能树；每个进程只设一次，反复设置会让前台卡顿。
+  func prepare(pid: pid_t) {
+    guard !manualEnabled.contains(pid) else { return }
+    AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    manualEnabled.insert(pid)
   }
 
   func snapshot(pid: pid_t) -> AXSnapshot? {
     let started = Date()
+    prepare(pid: pid)
     let app = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(app, 0.25)
-    if !manualEnabled.contains(pid) {
-      // Electron 需要显式打开辅助功能树；每个进程只设一次，反复设置会让前台卡顿。
-      AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-      manualEnabled.insert(pid)
-    }
     guard let win = element(app, kAXFocusedWindowAttribute) else { return nil }
     let title = string(win, kAXTitleAttribute) ?? ""
     let frame = frameOf(win)
     var w = Walk(deadline: started.addingTimeInterval(budget))
-    walk(win, visible: frame, depth: 0, &w)
-    return AXSnapshot(window: title, url: w.url, lines: w.lines, frame: frame, chars: w.chars,
-                      elements: w.elements, truncated: w.truncated, ms: Int(Date().timeIntervalSince(started) * 1000))
+    w.calls = 4
+    if let root = info(win, &w) { visitFast(root, visible: frame, depth: 0, path: [], &w) }
+    // 按文档顺序输出并去重。
+    var seen = Set<String>(), lines: [String] = [], chars = 0
+    for p in w.pieces.sorted(by: { $0.path.lexicographicallyPrecedes($1.path) }) {
+      for line in p.text.split(whereSeparator: \.isNewline) {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty || seen.contains(t) { continue }
+        seen.insert(t); lines.append(t); chars += t.count
+      }
+    }
+    return AXSnapshot(window: title, url: w.url, lines: lines, frame: frame, chars: chars, elements: w.elements,
+                      calls: w.calls, truncated: w.truncated, ms: Int(Date().timeIntervalSince(started) * 1000))
   }
 
   func forget(pid: pid_t) { manualEnabled.remove(pid) }
 
-  private func walk(_ el: AXUIElement, visible: CGRect?, depth: Int, _ w: inout Walk) {
-    if depth > 40 || w.elements >= maxElements || Date() > w.deadline { w.truncated = true; return }
-    w.elements += 1
-    let role = string(el, kAXRoleAttribute) ?? ""
-    if role == "AXSecureTextField" { return }
-    if depth > 0, containerRoles.contains(role), let vis = visible, let f = frameOf(el),
-       f.width > 0, f.height > 0, !f.intersects(vis) { return }
-
-    if textRoles.contains(role), let s = string(el, kAXValueAttribute) {
-      add(s, &w)
-    } else if role == "AXTextArea" {
-      add(visibleText(el), &w)
-    } else if role == "AXWebArea", w.url == nil, let u = url(el) {
-      w.url = u
-    }
-
-    // 表格和大纲优先只取可见行（Mail 不设限时会把整个邮件列表读出来）。
-    let kids = children(el, role == "AXTable" || role == "AXOutline" ? "AXVisibleRows" : nil)
-    for k in kids { walk(k, visible: visible, depth: depth + 1, &w) }
+  private func overBudget(_ w: inout Walk) -> Bool {
+    if w.elements >= maxElements || Date() > w.deadline { w.truncated = true; return true }
+    return false
   }
 
-  private func add(_ text: String, _ w: inout Walk) {
-    for line in text.split(whereSeparator: \.isNewline) {
-      let t = line.trimmingCharacters(in: .whitespaces)
-      if t.isEmpty || w.seen.contains(t) { continue }
-      w.seen.insert(t); w.lines.append(t); w.chars += t.count
+  // MARK: 遍历
+
+  private func info(_ el: AXUIElement, _ w: inout Walk) -> Node? {
+    w.calls += 1; w.elements += 1
+    var out: CFArray?
+    guard AXUIElementCopyMultipleAttributeValues(el, batchAttributes, AXCopyMultipleAttributeOptions(rawValue: 0), &out) == .success,
+          let vals = out as? [AnyObject], vals.count == 4 else { return nil }
+    return Node(el: el, role: vals[0] as? String ?? "", kids: vals[1] as? [AXUIElement] ?? [],
+                frame: rect(vals[2], vals[3]))
+  }
+
+  private func visitFast(_ n: Node, visible: CGRect?, depth: Int, path: [Int], _ w: inout Walk) {
+    if n.role == "AXSecureTextField" { return }
+    collectText(n.el, role: n.role, path: path, &w)
+    if depth >= maxDepth { w.truncated = true; return }
+
+    var kids = n.kids
+    // 表格和大纲只取可见行（Mail 不设限时会把整个邮件列表读出来）。
+    if n.role == "AXTable" || n.role == "AXOutline" {
+      w.calls += 1
+      if let rows = raw(n.el, "AXVisibleRows") as? [AXUIElement], !rows.isEmpty { kids = rows }
+    }
+    var nodes: [(index: Int, node: Node)] = []
+    for (i, k) in kids.enumerated() {
+      if overBudget(&w) { break }
+      guard let c = info(k, &w) else { continue }
+      if let vis = visible, let f = c.frame, f.width > 0, f.height > 0, !f.intersects(vis) { continue }
+      nodes.append((i, c))
+    }
+    let ordered = nodes.sorted { a, b in
+      let x = area(a.node.frame), y = area(b.node.frame)
+      return x != y ? x > y : a.index < b.index
+    }
+    for (i, c) in ordered {
+      if overBudget(&w) { return }
+      visitFast(c, visible: visible, depth: depth + 1, path: path + [i], &w)
+    }
+  }
+
+  private func area(_ f: CGRect?) -> CGFloat { guard let f else { return 0 }; return f.width * f.height }
+
+  // MARK: 文本
+
+  private func collectText(_ el: AXUIElement, role: String, path: [Int], _ w: inout Walk) {
+    if textRoles.contains(role) {
+      w.calls += 1
+      if let s = string(el, kAXValueAttribute), !s.isEmpty { w.pieces.append((path, s)) }
+    } else if role == "AXTextArea" {
+      w.calls += 2
+      let s = visibleText(el)
+      if !s.isEmpty { w.pieces.append((path, s)) }
+    } else if role == "AXWebArea", w.url == nil {
+      w.calls += 1
+      w.url = url(el)
     }
   }
 
@@ -105,21 +157,19 @@ final class AXReader {
     guard let v = raw(el, name), CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
     return (v as! AXUIElement)
   }
-  private func children(_ el: AXUIElement, _ preferred: String?) -> [AXUIElement] {
-    if let preferred, let arr = raw(el, preferred) as? [AXUIElement], !arr.isEmpty { return arr }
-    return raw(el, kAXChildrenAttribute) as? [AXUIElement] ?? []
-  }
   private func url(_ el: AXUIElement) -> String? {
     guard let v = raw(el, "AXURL") else { return nil }
     if let u = v as? URL { return u.absoluteString }
     return v as? String
   }
-  private func frameOf(_ el: AXUIElement) -> CGRect? {
-    guard let p = raw(el, kAXPositionAttribute), let s = raw(el, kAXSizeAttribute),
-          CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
+  private func rect(_ p: AnyObject?, _ s: AnyObject?) -> CGRect? {
+    guard let p, let s, CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
+    let pv = p as! AXValue, sv = s as! AXValue
+    guard AXValueGetType(pv) == .cgPoint, AXValueGetType(sv) == .cgSize else { return nil }
     var point = CGPoint.zero, size = CGSize.zero
-    AXValueGetValue(p as! AXValue, .cgPoint, &point)
-    AXValueGetValue(s as! AXValue, .cgSize, &size)
+    AXValueGetValue(pv, .cgPoint, &point)
+    AXValueGetValue(sv, .cgSize, &size)
     return CGRect(origin: point, size: size)
   }
+  private func frameOf(_ el: AXUIElement) -> CGRect? { rect(raw(el, kAXPositionAttribute), raw(el, kAXSizeAttribute)) }
 }

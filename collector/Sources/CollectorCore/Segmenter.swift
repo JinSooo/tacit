@@ -108,7 +108,8 @@ public final class Segmenter {
     current = nil
     let duration = c.last.timeIntervalSince(c.start)
     if c.lines.isEmpty && duration < config.minSpan { return [] }
-    let ocrOnly = c.methods == ["ocr"]
+    // 只要有 OCR 参与就标 ocr：这段文字可能有识别错误，下游要知道。
+    let usedOCR = c.methods.contains("ocr")
     let windowName = c.window.isEmpty ? "无标题" : c.window
     return [Record(
       device: device, source: "mac.screen", kind: "span", start: c.start, end: c.last,
@@ -116,7 +117,7 @@ public final class Segmenter {
       // 时长由起止时间表达，网页单独显示，不重复写进标题。
       title: "\(c.appName) · \(windowName)",
       body: c.lines.joined(separator: "\n"),
-      capture: Capture(method: ocrOnly ? "ocr" : "ax", confidence: ocrOnly ? 0.7 : nil)
+      capture: Capture(method: usedOCR ? "ocr" : "ax", confidence: usedOCR ? 0.7 : nil)
     )]
   }
 }
