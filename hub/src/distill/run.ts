@@ -16,7 +16,7 @@ const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 export const LIMITS = {
   assignBatch: 20, assignChars: 24_000, assignExcerpt: 240, assignRecords: 10, assignThreads: 40,
   digestChars: 45_000, sessionExcerpt: 3_000, otherExcerpt: 800, digestRecords: 40, threadsPerRound: 12,
-  candidateTTL: DAY, newSession: 30 * MIN, pauseAfter: 2 * HOUR, askDoneAfter: 3 * DAY,
+  candidateTTL: DAY, newSession: 30 * MIN, pauseAfter: 2 * HOUR, askDoneAfter: 3 * DAY, archiveAfter: 7 * DAY,
   // 门槛（AGENTS.md）：累计 15 分钟或跨两段活动才建线程，不够的只进日记。
   threadMinutes: 15, threadFrames: 2,
 };
@@ -318,7 +318,7 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
 /** 放进待确认问\"做完了吗\"；同一线程有未处理的、或在最后活动之后已经问过的，不再问。 */
 function askDone(store: DistillStore, threadId: string, now: number) {
   const t = store.thread(threadId);
-  if (!t || t.status === "done" || t.status === "abandoned") return;
+  if (!t || t.status === "done" || t.status === "abandoned" || t.status === "archived") return;
   const asked = (store.hub.db.prepare("SELECT created_at,resolved_at FROM pending WHERE kind='thread_done' AND json_extract(payload,'$.thread_id')=?").all(threadId) as { created_at: string; resolved_at: string | null }[])
     .some(p => !p.resolved_at || Date.parse(p.created_at) >= (t.last_ms ?? 0));
   if (!asked) store.createPending({ id: ulid(now), kind: "thread_done", payload: { thread_id: threadId }, created_at: new Date(now).toISOString() });
@@ -365,10 +365,21 @@ export function nowStep(store: DistillStore, now: number) {
 // ---------------- 6. 线程生命周期 ----------------
 
 export function lifecycleStep(store: DistillStore, now: number) {
-  const paused = store.hub.db.prepare("UPDATE threads SET status='paused' WHERE status='active' AND last_ms<?").run(now - LIMITS.pauseAfter).changes;
-  const stale = store.hub.db.prepare("SELECT id FROM threads WHERE status IN ('active','paused') AND last_ms<?").all(now - LIMITS.askDoneAfter) as { id: string }[];
-  store.hub.db.transaction(() => { for (const t of stale) askDone(store, t.id, now); })();
-  return { paused, asked: stale.length };
+  return store.hub.db.transaction(() => {
+    let archived = 0;
+    const expired = (store.hub.db.prepare("SELECT id,payload,created_at FROM pending WHERE kind='thread_done' AND resolved_at IS NULL").all() as { id: string; payload: string; created_at: string }[])
+      // RFC 3339 可以带不同时区，比较时间戳而非字符串。
+      .filter(p => Date.parse(p.created_at) < now - LIMITS.archiveAfter);
+    for (const p of expired) {
+      const payload = JSON.parse(p.payload) as { thread_id?: string };
+      archived += store.hub.db.prepare("UPDATE threads SET status='archived' WHERE id=? AND status IN ('active','paused')").run(payload.thread_id ?? null).changes;
+      store.hub.db.prepare("UPDATE pending SET resolved_at=?,resolution='expired' WHERE id=?").run(new Date(now).toISOString(), p.id);
+    }
+    const paused = store.hub.db.prepare("UPDATE threads SET status='paused' WHERE status='active' AND last_ms<?").run(now - LIMITS.pauseAfter).changes;
+    const stale = store.hub.db.prepare("SELECT id FROM threads WHERE status IN ('active','paused') AND last_ms<?").all(now - LIMITS.askDoneAfter) as { id: string }[];
+    for (const t of stale) askDone(store, t.id, now);
+    return { paused, asked: stale.length, archived };
+  })();
 }
 
 // ---------------- 7. 日记 ----------------

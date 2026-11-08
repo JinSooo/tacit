@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { DistillStore } from "../src/distill/store.ts";
 import * as P from "../src/distill/prompts.ts";
-import { classifyStep, digestStep, touchThread, projectStep, LIMITS, distillRound, type LLM } from "../src/distill/run.ts";
+import { assignStep, classifyStep, digestStep, touchThread, projectStep, LIMITS, distillRound, type LLM } from "../src/distill/run.ts";
 import type { LLMRequest } from "../src/llm/index.ts";
 import { fixture, setup } from "./helpers.ts";
 import { AgentReads } from "../src/agent.ts";
@@ -74,6 +74,32 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
 }
 
 const round = (llm: LLM, nowMs: number, slow = true) => distillRound({ db: ctx.db, llm, now: () => nowMs }, { slow, days: "all", enabledDefault: base - 60 * MIN });
+
+test("归档仍提炼并参与项目历史，模型提示完成也不再提问，归线程候选排除归档", async () => {
+  const record = session(0, 20, "合成归档历史");
+  ctx.db.ingest([record]);
+  store.upsertProject({ id: "p", name: "合成项目", keys: { repos: [repo], hosts: [], chats: [] }, needs_regen: 1 });
+  store.upsertThread({ id: "archived", title: "独有的合成归档标题", status: "archived", project_id: "p", project_hint: "p", last_ms: base, needs_regen: 1 });
+  store.createFrame({ id: "history-frame", key: `repo:${repo}`, record_ids: [record.id], t_start_ms: base, t_end_ms: base + 20 * MIN, chars: 10, private: 0, status: "new" });
+  store.assign("history-frame", "archived", "user", 1);
+  const fake = fakeLLM({ done: true });
+  const deps = { db: ctx.db, llm: fake.llm };
+  expect((await digestStep(deps, store, base + 60 * MIN)).updated).toBe(1);
+  expect(store.thread("archived")?.status).toBe("archived");
+  expect(store.thread("archived")?.brief).toBe("合成简略");
+  expect(store.pending()).toEqual([]);
+  expect((await projectStep(deps, store, base + 60 * MIN)).updated).toBe(1);
+  expect(fake.calls.find(c => c.kind === "project")?.req.prompt).toMatch(/"status"\s*:\s*"archived"/);
+
+  const fresh = session(80, 20, "合成新活动");
+  ctx.db.ingest([fresh]);
+  store.createFrame({ id: "fresh-frame", key: `repo:${repo}`, record_ids: [fresh.id], t_start_ms: base + 80 * MIN, t_end_ms: base + 100 * MIN, chars: 10, private: 0, status: "new" });
+  const assign = fakeLLM();
+  await assignStep({ db: ctx.db, llm: assign.llm }, store, base + 120 * MIN);
+  const prompt = assign.calls.find(c => c.kind === "assign")!.req.prompt;
+  expect(prompt).not.toMatch(/"id"\s*:\s*"archived"/);
+  expect(store.thread("archived")?.status).toBe("archived");
+});
 
 test("完整一轮：建线程与项目、事实有依据、private 不外发、简略版不含推测、日记与当前状态", async () => {
   const secret = fixture({ source: "mac.screen", kind: "span", t_start: iso(base + 5 * MIN), t_end: iso(base + 6 * MIN), context: { app: "x", repo }, body: "绝不能外发的私密正文", sensitivity: "private" });

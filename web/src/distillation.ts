@@ -8,7 +8,7 @@ export interface Fact {
 export interface Evidence { id: string; title: string; t_start: string; source?: string }
 export interface Thread {
   id: string; project_id: string | null; title: string; brief: string | null; last_ms: number | null;
-  status: "active" | "paused" | "done" | "abandoned";
+  status: "active" | "paused" | "done" | "abandoned" | "archived";
 }
 export interface Project {
   id: string; name: string; brief: string | null; confirmed: number | boolean; last_ms: number | null; thread_count: number;
