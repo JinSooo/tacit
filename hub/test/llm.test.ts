@@ -218,3 +218,10 @@ for (const provider of ["anthropic", "openai-compatible"]) {
     expect(rows).toHaveLength(5); expect(rows.every(r => r.ok === 0)).toBe(true);
   });
 }
+
+// 回归：CLI 后端曾继承调用方的 ANTHROPIC_BASE_URL 等变量，手动运行时走了中转站（2026-11-08 实测发现）。
+test("CLI 后端只继承白名单环境变量", async () => {
+  const { cliEnv } = await import("../src/llm/process.ts");
+  const env = cliEnv({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", ANTHROPIC_BASE_URL: "https://relay.invalid", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "m", CLAUDE_CODE_SESSION_ID: "s", CLAUDECODE: "1", CMUX_CLAUDE_PID: "1", OPENAI_API_KEY: "k" });
+  expect(env).toEqual({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", CI: "1" });
+});

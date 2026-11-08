@@ -48,7 +48,8 @@ export const ASSIGN_SYSTEM = `${DATA_RULES}
 - 线程 = 一件连贯的事（例如"调华刚大屏 mock 数据"），可以跨应用、跨天。
 - 同一个仓库、同一个话题的片段优先归到同一条已有线程。
 - 刷视频、随手查资料、系统设置这类零碎活动 ignore=true，它们只进日记。
-- 新线程标题 8–20 字，说清在做什么，不要写应用名。`;
+- 新线程标题 8–20 字，说清在做什么，不要写应用名。
+- 已有线程里 status 为 candidate 的是还没正式建立的候选线程（之前出现过、但还不够多），同一件事同样归进去，填它的 id。`;
 
 export function assignPrompt(frames: FrameView[], threads: ThreadView[]): string {
   return `已有线程：\n${json(threads)}\n\n待归属的片段：\n${frameBlock(frames)}`;
@@ -176,3 +177,53 @@ export function keepGroundedFacts<T extends { evidence: string[] }>(facts: T[], 
     .map(f => ({ ...f, evidence: f.evidence.filter(id => knownRecordIds.has(id)) }))
     .filter(f => f.evidence.length > 0);
 }
+
+// ---------- 4. 项目详细版（hour 档，输入是线程的简略版，不含原始记录） ----------
+
+export const PROJECT_SYSTEM = `${DATA_RULES}
+
+任务：根据一个项目下各条线程的简略版和状态，写项目的详细版。
+- goal：这个项目要做成什么（一句）。
+- status：整体进展、当前重点、卡在哪（2–3 句），以最近活跃的线程为主。
+- people：线程里出现过的相关的人，没有就空数组。
+- 只用给出的内容，不补充。`;
+
+export function projectPrompt(name: string, threads: ThreadView[], facts: FactView[]): string {
+  return `项目：${name}\n\n<data>\n${json({ threads, facts })}\n</data>`;
+}
+
+export const PROJECT_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["goal", "status", "people"],
+  properties: { goal: { type: "string" }, status: { type: "string" }, people: { type: "array", items: { type: "string" } } },
+} as const;
+
+export interface ProjectOutput { goal: string; status: string; people: string[] }
+
+// ---------- 5. 日记（day 档，输入是时间块：线程标题、简略版、零碎活动的应用或网站，不含原始记录） ----------
+
+export interface DayBlock { start: string; end: string; minutes: number; label: string; brief: string | null; kind: "thread" | "misc" }
+
+export const DAY_SYSTEM = `${DATA_RULES}
+
+任务：根据一天的活动时间块写日记，给本人回顾用。
+- summary：这一天主要做了哪几件事、各花了多少时间（2–4 句）。
+- timeline：按时间顺序合并成 3–12 段，每段一句话；零碎活动可以合并成一段（例如\"刷视频、看资讯约 40 分钟\"）。
+- 时间写成 HH:MM，只用给出的内容。`;
+
+export function dayPrompt(date: string, blocks: DayBlock[]): string {
+  return `日期：${date}\n\n<data>\n${json(blocks)}\n</data>`;
+}
+
+export const DAY_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["summary", "timeline"],
+  properties: {
+    summary: { type: "string" },
+    timeline: {
+      type: "array",
+      items: { type: "object", additionalProperties: false, required: ["start", "end", "text"],
+               properties: { start: { type: "string" }, end: { type: "string" }, text: { type: "string" } } },
+    },
+  },
+} as const;
+
+export interface DayOutput { summary: string; timeline: { start: string; end: string; text: string }[] }

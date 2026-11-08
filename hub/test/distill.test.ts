@@ -8,7 +8,7 @@ import { HubDB } from "../src/db.ts";
 import { DistillStore, type Frame, type Fact } from "../src/distill/store.ts";
 import { sliceFrames, frameKey, persistFrames } from "../src/distill/frames.ts";
 import { DistillRules } from "../src/distill/rules.ts";
-import { distillOnce } from "../src/distill/run.ts";
+import { sliceStep as distillOnce } from "../src/distill/run.ts";
 import { createHandler } from "../src/server.ts";
 import { fixture, setup } from "./helpers.ts";
 import { ulid } from "../../packages/record/index.ts";
@@ -121,13 +121,16 @@ test("开放片段阻止 cursor 越过它，重复轮次不丢失、不重复，
   expect(() => store.createFrame(frame([a.id]))).toThrow();
 });
 
-test("规则匹配项目 keys，仅归最近 active 线程，未知和无 active 保持未分配", () => {
-  project(); thread("old",base-100); thread("recent",base); store.upsertThread({ id: "done",title: "已完成",project_id: "p",status: "done",last_ms: base+100 });
+test("规则匹配项目 keys：唯一且 2 小时内活跃的线程才直接归，多条或久未活动交给模型", () => {
+  project(); thread("recent",base); store.upsertThread({ id: "done",title: "已完成",project_id: "p",status: "done",last_ms: base+100 });
   const rules = new DistillRules(store);
   for (const key of ["repo:/synthetic/repo","host:example.test","chat:chat.app:合成群"]) {
     const r = rec(0); ctx.db.ingest([r]); const f = frame([r.id],key); store.createFrame(f);
     expect(rules.assign(f)).toEqual({ status: "assigned",thread_id: "recent",project_id: "p" });
   }
+  expect(rules.assign({ ...frame([]),t_start_ms: base + 3 * 3_600_000 })).toEqual({ status: "unassigned" });
+  thread("other",base);
+  expect(rules.assign(frame([]))).toEqual({ status: "unassigned" });
   expect(rules.assign(frame([],"host:unknown.test"))).toEqual({ status: "unassigned" });
   ctx.db.db.prepare("UPDATE threads SET status='paused'").run();
   expect(rules.assign(frame([]))).toEqual({ status: "unassigned" });
@@ -206,11 +209,12 @@ test("较早的孤立辅助事件不会倒挂进未来同应用片段", () => {
   expect(result.frames.map(f => f.t_start_ms)).toEqual([base,base+30*60000]);
 });
 
-test("CLI distill --once --backfill 真实子进程处理后退出，未知参数拒绝", () => {
+// 测试不能调用真实模型：子进程测试用 --slice-only。
+test("CLI distill --slice-only --backfill 真实子进程处理后退出，未知参数拒绝", () => {
   ctx.db.ingest([rec(0)]);
   const cli = new URL("../src/cli.ts",import.meta.url).pathname;
   const env = { ...process.env,RA_DATA_DIR: ctx.dir,RA_DB_KEY: ctx.config.dbKey };
-  const result = spawnSync(process.execPath,[cli,"distill","--once","--backfill"],{ env,encoding: "utf8",timeout: 10000 });
+  const result = spawnSync(process.execPath,[cli,"distill","--slice-only","--backfill"],{ env,encoding: "utf8",timeout: 10000 });
   expect(result.status).toBe(0);
   expect(JSON.parse(result.stdout)).toMatchObject({ frames: 1,assigned: 0,unassigned: 1 });
   expect(store.getState("backfill_done")).toBe(true);

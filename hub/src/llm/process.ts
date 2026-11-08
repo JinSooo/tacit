@@ -10,11 +10,17 @@ export function safeError(message: string, secrets: string[]): string {
   const echoed = parts.some(s => message.includes(s) || (s.length >= 8 && Array.from({ length: s.length - 7 }, (_, i) => s.slice(i, i + 8)).some(p => fragments.has(p))));
   return echoed ? "后端调用失败（诊断含输入内容，已隐藏）" : message.slice(0, 500);
 }
+/** CLI 后端只继承这些变量。调用方环境里的中转站地址、模型映射（ANTHROPIC_*）和宿主 Agent 会话变量（CLAUDE_CODE_*、CMUX_* 等）
+ * 一律不传：提炼必须走 models.json 选定的通道，而且不能因为是谁启动的 distill 而改变（2026-11-08 实测：继承后会走中转站）。 */
+const KEEP_ENV = /^(HOME|USER|LOGNAME|PATH|SHELL|TMPDIR|LANG|LC_[A-Z_]+|TERM|__CF_USER_TEXT_ENCODING)$/;
+export function cliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...Object.fromEntries(Object.entries(source).filter(([k]) => KEEP_ENV.test(k))), CI: "1" };
+}
 export function run(ctx: BackendContext, command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = "", stderr = "", settled = false, failure: string | undefined;
     // 不继承额外的终端输入通道；认证仍由 CLI 自己处理。
-    const child = ctx.spawn(command, args, { cwd: ctx.cwd, stdio: "pipe", detached: process.platform !== "win32", env: { ...process.env, CI: "1" } });
+    const child = ctx.spawn(command, args, { cwd: ctx.cwd, stdio: "pipe", detached: process.platform !== "win32", env: cliEnv() });
     function stop() {
       try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); }
       catch { child.kill("SIGKILL"); }

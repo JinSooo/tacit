@@ -1,4 +1,6 @@
-import { runDistill } from "./distill/run.ts";
+import { runDistill, sliceStep } from "./distill/run.ts";
+import { DistillStore } from "./distill/store.ts";
+import { createLLM } from "./llm/index.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
@@ -33,14 +35,18 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "distill") {
-    if (argv.slice(1).some(a => a !== "--once" && a !== "--backfill")) throw new Error("提炼参数无效");
+    if (argv.slice(1).some(a => !["--once", "--backfill", "--slice-only"].includes(a))) throw new Error("提炼参数无效");
     const config = loadConfig();
     const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
-    try { await runDistill({ db, once: argv.includes("--once"), backfill: argv.includes("--backfill") }); }
+    // --slice-only：只做切片和规则归属，不调用模型（排查和测试用）。
+    if (argv.includes("--slice-only")) { try { console.log(JSON.stringify(sliceStep(db, argv.includes("--backfill")))); } finally { db.close(); } return; }
+    const store = new DistillStore(db);
+    const llm = createLLM({ dataDir: config.dataDir, recordUsage: row => store.writeUsage({ ...row, input_tokens: row.input_tokens ?? undefined, output_tokens: row.output_tokens ?? undefined, error: row.error ?? undefined }) });
+    try { await runDistill({ db, llm, once: argv.includes("--once"), backfill: argv.includes("--backfill") }); }
     finally { db.close(); }
     return;
   }
-  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | distill [--once] [--backfill] | run-plugin <name> [--hub <url>] -- <插件命令...>");
+  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | distill [--once] [--backfill] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
   if (command === "run-plugin") {
     let hub: string | undefined, tokenFile: string | undefined;
