@@ -1,0 +1,9 @@
+{
+  "name": "exp-storage",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@node-rs/jieba": "^2.0.4",
+    "better-sqlite3-multiple-ciphers": "^13.0.3"
+  }
+}
