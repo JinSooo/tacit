@@ -140,6 +140,9 @@ test("CLI 输出协议，state 只读，错误不泄露日志", async () => {
   const result = Bun.spawnSync(args, { env }); expect(result.exitCode).toBe(0);
   const output = result.stdout.toString().trim().split("\n").map(line => JSON.parse(line));
   expect(output.at(-1).type).toBe("checkpoint"); expect(output[0].type).toBe("record"); expect(validateRecord(output[0].record).ok).toBe(true);
+  // 回归：runner 首次运行传的 state 文件还不存在，曾经因此直接失败（2026-11-08 端到端验收发现）。
+  const first = Bun.spawnSync([...args, "--state", path.join(s.root, "missing-state.json")], { env });
+  expect(first.exitCode).toBe(0); expect(first.stdout.toString()).toContain('"type":"checkpoint"');
   const stateFile = path.join(s.root, "state.json"); const stateText = JSON.stringify(output.at(-1).state); fs.writeFileSync(stateFile, stateText);
   const next = Bun.spawnSync([...args, "--state", stateFile], { env }); expect(next.exitCode).toBe(0); expect(next.stdout.toString().trim().split("\n")).toHaveLength(1);
   expect(fs.readFileSync(stateFile, "utf8")).toBe(stateText);

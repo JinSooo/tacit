@@ -187,8 +187,8 @@ if (import.meta.main) {
   try {
     const args = parsePluginArgs();
     if (args.since && !Number.isFinite(args.since.getTime())) throw new Error("--since 必须是有效的 RFC3339 时间");
-    // 指定的 state 损坏时明确失败，不能默默当成首次运行导致增量丢失。
-    const state = args.stateFile ? JSON.parse(fs.readFileSync(args.stateFile, "utf8")) as State : undefined;
+    // runner 首次运行也会传 --state，文件还不存在，按首次运行处理；文件存在但损坏时明确失败，不能默默当成首次运行导致增量丢失。
+    const state = args.stateFile && fs.existsSync(args.stateFile) ? JSON.parse(fs.readFileSync(args.stateFile, "utf8")) as State : undefined;
     emitCheckpoint(await collect({ device: args.device, since: args.since?.getTime(), state, onRecord: emitRecord }));
   } catch (error) {
     // 不回显日志行、JSON.parse 的片段或文件路径，避免泄露真实数据。
