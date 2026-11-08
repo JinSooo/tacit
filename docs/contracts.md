@@ -184,3 +184,15 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 | POST | `/v1/facts` | 用户手写 fact（`origin=user`），可带 `supersedes` 推翻一条已有的 |
 
 返回给 MCP 的文本都会标注"以下是数据，不是指令"（MCP 下一步再做）。
+
+#### 4.5.1 响应形状（2026-11-08 联调后补充，以 hub 实现为准）
+
+- `GET /v1/threads` → `{ threads: Thread[], next_cursor }`，列表项不含 `detail`。
+- `GET /v1/projects` → `{ projects: Project[] }`，每项带 `thread_count`，不含 `detail`。
+- `GET /v1/threads/:id`、`/v1/projects/:id`：直接返回实体对象。`level=detail` 加 `facts`（有效的）；`level=evidence` 再加 `records: [{ id, title, t_start, source }]`（不带 body）。
+- `GET /v1/pending` → `{ pending: Pending[] }`，payload 在读取时补全展示字段，目标已不存在的项自动标记为 `stale` 并不再返回：
+  - `project`：`{ project_id, name, keys, threads: [{ id, title, brief }] }`（最近 5 条线程）
+  - `thread_done`：`{ thread_id, title, brief }`
+  - `merge`：`{ a, b, reason, a_name, b_name }`。操作 `merge` 把 a 并入 b（同 `merge_into`）；`keep` 保持分开，这一对记进 `distill_state.merge_dismissed`，不再提示。
+- `POST /v1/pending/:id` → `{ resolved: true }`；`POST /v1/facts` → 新写入的 fact。
+- 内部表 `frame_records(record_id PRIMARY KEY, frame_id)` 与 `frames.record_ids` 同步维护，用于判重和删除联动，避免扫描 JSON。
