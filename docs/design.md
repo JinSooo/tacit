@@ -247,7 +247,7 @@ AX 扫描约束（实验 0-B）：
 - **会话开始时注入**：SessionStart hook 带当前目录问中枢，注入当前状态 + 匹配项目的活跃线程简略版，**不超过 800 token**，附一行可用工具提示。会话压缩后重新注入。
   - Claude Code：hook 输出 `hookSpecificOutput.additionalContext`（必须嵌套，放顶层会被丢弃）；写在用户级 settings，不走插件（插件 hook 有已知 bug）。
   - Codex：SessionStart hook（需 `codex_hooks = true`，开工时核实）。
-- **MCP（只读，本机 HTTP）**：
+- **MCP（只读，stdio）**：两边配置里只写一条命令（`bun …/hub/src/cli.ts mcp`），进程自己从钥匙串取 hub token 再调用 hub 的 `/v1/agent/*`，token 不出现在任何配置文件里。（2026-11-08 确认，原方案是本机 HTTP）读取逻辑和审计都在 hub 里，MCP 进程只做转发。
   - `now()`：当前状态
   - `get(id, level)`：读线程、项目、人、日记；`level` = `brief` | `detail` | `evidence`，Agent 自己选读几层
   - `search(query, time_range)`
@@ -423,7 +423,7 @@ macOS 的权限按签名身份授权。暂时没有 Apple 开发者账号：
 - SenseVoice 在 M5 Pro 上的转写速度；Mac 采集端（Swift）调用 sherpa-onnx 的方式
 - SenseVoice 在小米 14 Ultra NPU 上的速度和耗电（参考：涛声在同芯片的小米 14 Pro 上实测处理时间不到录音时长的三分之一，耗电数字未校准）
 - Core Audio taps 的最低系统版本和行为
-- Codex hook 的配置方式；Claude Code 单次 MCP 输出上限
+- ✅ Codex hook：0.166 里 `hooks` 已是 stable 且默认开启，配置在 `~/.codex/hooks.json`，格式同 Claude Code，新 hook 需用户在 Codex 里批准一次（trusted_hash）；Claude Code 单次 MCP 输出上限未核实
 - 用 ChatGPT / Claude 订阅账号通过 CLI 做自动化调用是否符合各自的使用条款；CLI 后端的单次延迟和额度消耗
 - 小米 14 Ultra 持续录音的耗电；HyperOS 后台查杀；通话录音文件路径
 - 切分阈值、线程门槛的实际效果
