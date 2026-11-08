@@ -16,7 +16,7 @@ test("SQLCipher 实际文件加密，错误密钥拒绝，正确密钥重开及�
   const reopened = new HubDB(ctx.file, ctx.config.dbKey);
   try {
     expect(reopened.get(record.id)?.body).toBe(record.body);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(4);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(5);
   } finally { reopened.close(); }
 });
 
@@ -131,7 +131,7 @@ test("来源稳定键、修正目标和不可排序的日期逐条拒绝", () =>
 test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成迁移（10 次）", async () => {
   const script = new URL("./fixtures/migrate-worker.ts", import.meta.url).pathname;
   for (let round = 0; round < 10; round++) {
-    ctx.db.db.exec("DROP TABLE agent_reads; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=2;");
+    ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; DROP TABLE agent_reads; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=2;");
     const gate = `${ctx.dir}/gate-${round}`;
     const children = [0, 1].map(index => Bun.spawn([process.execPath, script, ctx.file, ctx.config.dbKey, gate, String(index)], { stdout: "pipe", stderr: "pipe" }));
     try {
@@ -142,8 +142,8 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
       }
       writeFileSync(gate, "go");
       const results = await Promise.all(children.map(async child => ({ code: await child.exited, error: await new Response(child.stderr).text(), output: await new Response(child.stdout).text() })));
-      expect(results).toEqual([{ code: 0, error: "", output: "4\n" }, { code: 0, error: "", output: "4\n" }]);
-      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(4);
+      expect(results).toEqual([{ code: 0, error: "", output: "5\n" }, { code: 0, error: "", output: "5\n" }]);
+      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(5);
       expect(ctx.db.db.pragma("table_info(threads)")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "domain" }), expect.objectContaining({ name: "project_hint" })]));
       expect(ctx.db.db.pragma("table_info(agent_reads)")).toHaveLength(8);
       expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'agent_reads_%'").all()).toHaveLength(2);

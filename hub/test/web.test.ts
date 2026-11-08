@@ -24,7 +24,7 @@ test("网页无需 token、静态类型正确，SPA 回退和 HTML CSP", async (
     const result = await request(path);
     expect(result.status).toBe(200);
     expect(result.headers.get("content-type")).toBe("text/html; charset=utf-8");
-    expect(result.headers.get("content-security-policy")).toBe("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'");
+    expect(result.headers.get("content-security-policy")).toBe("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'");
     expect(await result.text()).toContain("合成网页");
   }
   const script = await request("/assets/app.js");

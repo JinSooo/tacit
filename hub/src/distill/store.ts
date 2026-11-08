@@ -1,3 +1,4 @@
+import { AudioStore } from "../audio.ts";
 import { frameRecordsSchema } from "./schema.ts";
 import { HubDB, InputError } from "../db.ts";
 import { ulid } from "../../../packages/record/index.ts";
@@ -7,7 +8,7 @@ export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[]
 export interface Project { id: string; name: string; confirmed?: number; keys: ProjectKeys; brief?: string | null; detail?: unknown; salience?: number; last_ms?: number; needs_regen?: number; updated_at?: string }
 export interface Thread { id: string; domain?: "work" | "life" | null; project_hint?: string | null; project_id?: string | null; status: "active" | "paused" | "done" | "abandoned" | "archived"; title: string; brief?: string | null; detail?: unknown; first_ms?: number; last_ms?: number; active_minutes?: number; sessions?: number; needs_regen?: number; updated_at?: string }
 export interface Fact { id: string; thread_id?: string | null; project_id?: string | null; kind: "decision" | "rejected" | "open" | "next" | "inference"; text: string; reason?: string; evidence: string[]; confidence?: number; origin: "llm" | "user"; valid_at: string; invalid_at?: string | null; superseded_by?: string | null; created_at: string }
-export interface Pending { id: string; kind: "project" | "merge" | "thread_done"; payload: Record<string, unknown>; created_at: string; resolved_at?: string | null; resolution?: string | null }
+export interface Pending { id: string; kind: "project" | "merge" | "thread_done" | "voice"; payload: Record<string, unknown>; created_at: string; resolved_at?: string | null; resolution?: string | null }
 type Row = Record<string, any>;
 const jsonColumns = new Set(["record_ids", "keys", "detail", "evidence", "payload"]);
 function decode<T>(row: Row): T {
@@ -95,7 +96,11 @@ export class DistillStore {
       for (const row of rows) {
         const p = decode<Pending>(row as Row);
         let stale = false, dismissed = false;
-        if (p.kind === "project") {
+        if (p.kind === "voice") {
+          const payload = new AudioStore(this.hub).pendingPayload(String(p.payload.speaker_id ?? ""));
+          if (!payload) stale = true;
+          else p.payload = payload;
+        } else if (p.kind === "project") {
           const project = this.project(String(p.payload.project_id ?? p.payload.id ?? ""));
           if (!project) stale = true;
           else p.payload = { ...p.payload,name: project.name,keys: project.keys,threads: this.sql.prepare("SELECT id,title,brief FROM threads WHERE project_id=? ORDER BY last_ms DESC,id DESC LIMIT 5").all(project.id) };
@@ -168,7 +173,9 @@ export class DistillStore {
     this.sql.transaction(() => {
       const p = this.pending().find(p => p.id === id);
       if (!p) throw new InputError("待确认项不存在或已处理");
-      if (p.kind === "merge") {
+      if (p.kind === "voice") {
+        new AudioStore(this.hub).resolve(String(p.payload.speaker_id),action,name,target);
+      } else if (p.kind === "merge") {
         const a = String(p.payload.a), b = String(p.payload.b);
         if (action === "merge") this.mergeProjects(a,b);
         else if (action === "keep") {
@@ -203,6 +210,8 @@ export class DistillStore {
     })();
   }
   removeRecord(id: string, time: string) {
+    const record = this.hub.get(id);
+    if (record?.source === "mac.audio" && record.source_ref) new AudioStore(this.hub).removeConversation(record.source_ref,record.device);
     const affected = new Set<string>();
     for (const row of this.sql.prepare("SELECT f.*,a.thread_id FROM frame_records r JOIN frames f ON f.id=r.frame_id LEFT JOIN assignments a ON a.frame_id=f.id WHERE r.record_id=?").all(id) as Row[]) {
       if (row.thread_id) affected.add(row.thread_id);

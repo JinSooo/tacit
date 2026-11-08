@@ -157,12 +157,12 @@ test("detail/evidence 超过 40000 字符时裁剪事实、记录及异常长正
   expect((store.thread("t")!.detail as any).text).toHaveLength(45000);
 });
 
-test("已有 v2 加密库迁移到 v4，保留记录和提炼数据，重开幂等", () => {
+test("已有 v2 加密库迁移到 v5，保留记录和提炼数据，重开幂等", () => {
   project(); const r = fixture(); ctx.db.ingest([r]);
-  ctx.db.db.exec("DROP TABLE agent_reads; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=2;");
+  ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; DROP TABLE agent_reads; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=2;");
   const upgraded = new HubDB(ctx.file,ctx.config.dbKey);
   try {
-    expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(4);
+    expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(5);
     expect(upgraded.get(r.id)?.body).toBe(r.body); expect(new DistillStore(upgraded).project("p")?.name).toBe("合成项目p");
     expect(new AgentReads(upgraded).audit(new URLSearchParams()).reads).toEqual([]);
   } finally { upgraded.close(); }

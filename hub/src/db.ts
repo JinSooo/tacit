@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 const Database: typeof DatabaseTypes = createRequire(import.meta.url)("better-sqlite3-multiple-ciphers");
 import { copyFileSync, constants } from "node:fs";
 import { dirname, join } from "node:path";
+import { audioSchema } from "./audio.ts";
 import { distillSchema } from "./distill/schema.ts";
 import { DistillStore } from "./distill/store.ts";
 import { createHash } from "node:crypto";
@@ -49,7 +50,7 @@ export class HubDB {
       this.db.pragma(`key='${key.replaceAll("'", "''")}'`);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 4) throw new Error("数据库版本比当前 hub 新");
+      if (version > 5) throw new Error("数据库版本比当前 hub 新");
       if (version === 1 && file !== ":memory:") {
         try { copyFileSync(file, join(dirname(file), "history.db.bak-v1"), constants.COPYFILE_EXCL); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
@@ -60,7 +61,7 @@ export class HubDB {
       // 必须先拿写锁再读取版本，等待另一进程迁移完成后才能决定迁移步骤。
       this.db.transaction(() => {
         const version = this.db.pragma("user_version", { simple: true }) as number;
-        if (version > 4) throw new Error("数据库版本比当前 hub 新");
+        if (version > 5) throw new Error("数据库版本比当前 hub 新");
         if (version === 0) {
           this.db.exec(`
             CREATE TABLE records (
@@ -101,6 +102,7 @@ export class HubDB {
             UPDATE threads SET project_hint=project_id;
             PRAGMA user_version=4;`);
         }
+        if (version < 5) this.db.exec(audioSchema);
       }).immediate();
     } catch (e) { this.db.close(); throw e; }
   }

@@ -1,3 +1,4 @@
+import { AudioStore } from "./audio.ts";
 import { AgentReads } from "./agent.ts";
 import { DistillStore, type Fact } from "./distill/store.ts";
 import { ulid } from "../../packages/record/index.ts";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { HubDB, InputError } from "./db.ts";
 
 const defaultWebDir = fileURLToPath(new URL("../../web/dist/", import.meta.url));
-const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'";
+const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'";
 const contentTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
@@ -71,6 +72,26 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
     try {
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "GET" && url.pathname === "/v1/audit") return Response.json(new AgentReads(db).audit(url.searchParams));
+      const audio = new AudioStore(db);
+      if (method === "GET" && url.pathname === "/v1/audio/sync") return Response.json(audio.sync(url.searchParams.get("device")));
+      if (method === "POST" && url.pathname === "/v1/audio/sync/ack") return Response.json(audio.ack(await readJSON()));
+      if (method === "POST" && url.pathname === "/v1/audio/embeddings") return Response.json(audio.embeddings(await readJSON()));
+      if (method === "GET" && url.pathname === "/v1/audio/settings") return Response.json(audio.settings());
+      if (method === "PUT" && url.pathname === "/v1/audio/settings") return Response.json(audio.updateSettings(await readJSON()));
+      if (method === "POST" && url.pathname === "/v1/audio/purge") return Response.json(audio.purge());
+      if (method === "GET" && url.pathname === "/v1/speakers") return Response.json(audio.speakers());
+      if (method === "POST" && url.pathname === "/v1/audio/samples") return Response.json(audio.uploadSamples(await readJSON()));
+      const sample = /^\/v1\/audio\/samples\/([^/]+)$/.exec(url.pathname);
+      if (method === "GET" && sample) {
+        const clip = audio.sample(sample[1]!);
+        return clip ? new Response(new Uint8Array(clip.data), { headers: { "Content-Type": clip.mime, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } }) : Response.json({ error: "样本不存在" }, { status: 404 });
+      }
+      const skipped = /^\/v1\/audio\/conversations\/([^/]+)\/skipped$/.exec(url.pathname);
+      if (method === "POST" && skipped) {
+        let ref: string;
+        try { ref = decodeURIComponent(skipped[1]!); } catch { throw new InputError("对话键无效"); }
+        return Response.json(audio.skipped(ref));
+      }
       const store = new DistillStore(db);
       const respond = (value: unknown) => value === null ? Response.json({ error: "内容不存在" }, { status: 404 }) : Response.json(value);
       if (method === "GET" && url.pathname === "/v1/now") return Response.json({ now: store.getState("now") });

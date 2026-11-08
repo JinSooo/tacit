@@ -5,6 +5,7 @@ import { DistillStore, type Frame } from "./store.ts";
 
 const gap = 10 * 60_000, maxDuration = 2 * 60 * 60_000;
 export function frameKey(record: RecordV1): string {
+  if (record.source === "mac.audio") return `audio:${record.source_ref}`;
   const c = record.context;
   if (c?.repo) return `repo:${c.repo}`;
   if ((record.source === "codex.session" || record.source === "claude_code.session") && c?.cwd) return `repo:${c.cwd}`;
