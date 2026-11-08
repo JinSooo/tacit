@@ -11,7 +11,7 @@ beforeEach(() => {
 });
 afterEach(() => ctx.cleanup());
 function call(path: string, method = "GET", body?: unknown) {
-  return handler(new Request(base + path, { method, headers: { authorization: `Bearer ${ctx.config.token}`, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+  return handler(new Request(base + path, { method, headers: { host: "127.0.0.1:47823", authorization: `Bearer ${ctx.config.token}`, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
 }
 
 // 仅在 OS 明确拒绝 bind 时跳过真实网络集成；处理器测试始终执行。
@@ -34,11 +34,11 @@ test.skipIf(bindDenied)("真实网络：Bun 只监听 127.0.0.1，缺 token 返�
 });
 
 test("处理器：health 公开，其余路由必须 Bearer", async () => {
-  expect((await handler(new Request(base + "/v1/health"))).status).toBe(200);
+  expect((await handler(new Request(base + "/v1/health", { headers: { host: "127.0.0.1:47823" } }))).status).toBe(200);
   for (const [method, path] of [["GET", "/v1/records"], ["POST", "/v1/ingest"], ["POST", "/v1/records"], ["GET", "/v1/records/00000000000000000000000000"], ["DELETE", "/v1/records/00000000000000000000000000"]]) {
-    expect((await handler(new Request(base + path, { method }))).status).toBe(401);
+    expect((await handler(new Request(base + path, { method, headers: { host: "127.0.0.1:47823" } }))).status).toBe(401);
   }
-  expect((await handler(new Request(base + "/v1/records", { headers: { authorization: "Bearer wrong" } }))).status).toBe(401);
+  expect((await handler(new Request(base + "/v1/records", { headers: { host: "127.0.0.1:47823", authorization: "Bearer wrong" } }))).status).toBe(401);
 });
 
 test("HTTP 完整写入、读取、分页、修正、删除及墓碑回放", async () => {
@@ -73,7 +73,7 @@ test("HTTP 不接收非 manual 写入、坏 JSON、无效列表参数", async ()
   expect((await call("/v1/records", "POST", fixture())).status).toBe(400);
   expect((await call("/v1/ingest", "POST", { records: [] })).status).toBe(400);
   expect((await call("/v1/records?cursor=bad")).status).toBe(400);
-  const response = await handler(new Request(base + "/v1/ingest", { method: "POST", headers: { authorization: `Bearer ${ctx.config.token}` }, body: "{" }));
+  const response = await handler(new Request(base + "/v1/ingest", { method: "POST", headers: { host: "127.0.0.1:47823", authorization: `Bearer ${ctx.config.token}` }, body: "{" }));
   expect(response.status).toBe(400);
   const rejected = await (await call("/v1/records", "POST", { source: "manual.note" })).json();
   expect(rejected.rejected).toHaveLength(1);

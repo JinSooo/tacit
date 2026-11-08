@@ -4,5 +4,5 @@
     "strict": true, "skipLibCheck": true, "noEmit": true, "types": ["bun"],
     "allowImportingTsExtensions": true
   },
-  "exclude": ["experiments", "node_modules"]
+  "exclude": ["experiments", "node_modules", "web"]
 }

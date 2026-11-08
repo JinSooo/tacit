@@ -48,3 +48,14 @@ console.log(JSON.stringify({type:'checkpoint',state:{version:2},release:[${JSON.
     expect(existsSync(outside)).toBe(true);
   } finally { await server?.stop(true); ctx.cleanup(); }
 });
+
+test("CLI open --print 读取已有 token 和端口，不访问数据库密钥", () => {
+  const ctx = setup();
+  try {
+    const env = { ...process.env, RA_DATA_DIR: ctx.dir, RA_PORT: "48901", RA_DB_KEY: "" };
+    const result = spawnSync(process.execPath, [cli, "open", "--print"], { env, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(`http://127.0.0.1:48901/#token=${ctx.config.token}`);
+    expect(result.stderr).toBe("");
+  } finally { ctx.cleanup(); }
+});

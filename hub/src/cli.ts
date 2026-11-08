@@ -1,5 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { loadConfig } from "./config.ts";
 import { HubDB } from "./db.ts";
 import { startServer } from "./server.ts";
@@ -8,7 +10,21 @@ import { runPlugin } from "./run-plugin.ts";
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, name] = argv;
   const separator = argv.indexOf("--");
-  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | run-plugin <name> -- <插件命令...>");
+  if (command === "open") {
+    const port = Number(process.env.RA_PORT ?? 47823);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("RA_PORT 必须是 1–65535 的整数");
+    const dataDir = process.env.RA_DATA_DIR ?? join(homedir(), "Library/Application Support/record-anything");
+    const token = readFileSync(join(dataDir, "token"), "utf8").trim();
+    if (!token) throw new Error("本地 token 文件为空");
+    const url = `http://127.0.0.1:${port}/#token=${encodeURIComponent(token)}`;
+    if (argv.includes("--print")) console.log(url);
+    else {
+      const opened = spawnSync("open", [url]);
+      if (opened.status !== 0) throw new Error("无法打开浏览器");
+    }
+    return;
+  }
+  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | open [--print] | run-plugin <name> [--hub <url>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
   if (command === "run-plugin") {
     let hub: string | undefined, tokenFile: string | undefined;

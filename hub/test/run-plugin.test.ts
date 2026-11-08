@@ -136,7 +136,13 @@ test("插件非零退出及非法 release 协议不会清理缓冲", async () =>
 test("HTTP 传输使用真实 handler，超时与连接失败均不提交 state 或 release", async () => {
   const file = bufferFile(), handler = createHandler({ db: ctx.db, token: ctx.config.token });
   const timeout = spyOn(AbortSignal, "timeout");
-  const fetchMock = spyOn(globalThis, "fetch").mockImplementation((async (input, init) => handler(new Request(input as URL, init))) as typeof fetch);
+  // 真实 fetch 会带 Host 头；直接 new Request 不会，hub 的 Host 校验会拒绝。
+  const toRequest = (input: unknown, init?: RequestInit) => {
+    const request = new Request(input as URL, init);
+    request.headers.set("host", new URL(request.url).host);
+    return request;
+  };
+  const fetchMock = spyOn(globalThis, "fetch").mockImplementation((async (input, init) => handler(toRequest(input, init))) as typeof fetch);
   const runHTTP = (record = fixture()) => runPlugin({ hub: "http://127.0.0.1:47823", dataDir: ctx.dir, name: "fake",
     command: fakePlugin([{ type: "record", record }, { ...checkpoint, release: [file] }]) });
   try {
@@ -150,7 +156,7 @@ test("HTTP 传输使用真实 handler，超时与连接失败均不提交 state 
       if (mode === "500") ctx.db.ingest = () => { throw new Error("合成失败"); };
       fetchMock.mockImplementation((async (input, init) => {
         if (mode === "malformed") return Response.json({});
-        const request = new Request(input as URL, init);
+        const request = toRequest(input, init);
         if (mode === "unauthorized") request.headers.set("authorization", "Bearer wrong");
         return handler(request);
       }) as typeof fetch);
