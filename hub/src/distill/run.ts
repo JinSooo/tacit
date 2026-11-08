@@ -312,7 +312,8 @@ export function nowStep(store: DistillStore, now: number) {
   const names = new Map(store.projects().map(p => [p.id, p.name]));
   const items = threads.map(t => ({ thread_id: t.id, title: t.title, brief: t.brief, project: t.project_id ? names.get(t.project_id) ?? null : null, last: toLocalIso(t.last_ms) }));
   const top = items[0];
-  const brief = top ? `${top.project ? `${top.project} · ` : ""}${top.title}：${top.brief}` : "最近 24 小时没有活跃的线程。";
+  // 简略版本身已说清在做什么，只在它没提到项目名时补上项目名。
+  const brief = top ? (top.project && !top.brief!.includes(top.project) ? `${top.project}：${top.brief}` : top.brief!) : "最近 24 小时没有活跃的线程。";
   store.setState("now", { brief, detail: { threads: items }, updated_at: toLocalIso(now) });
   return { threads: items.length };
 }

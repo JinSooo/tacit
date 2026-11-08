@@ -89,7 +89,8 @@ export const THREAD_SYSTEM = `${DATA_RULES}
 - quotes：最多 3 条用户亲口说的关键原话（来自 [我] 开头或用户输入），带 record_id。
 - new_facts：本批新出现的 decision（已定，附 reason）、rejected（被否决的方案）、open（未决问题）、next（下一步）、inference（推测，置信度 <0.8）。
   每条必须在 evidence 里引用输入中真实存在的 record id。不要重复已有 facts。
-- invalidate：已有 facts 里被新证据推翻或已经完成的，给出 fact_id；被新 fact 取代的填 replaced_by（new_facts 的下标）。
+- invalidate：逐条检查已有 facts。被新证据推翻的决定、已经解决的 open、已经做完的 next，都要给出 fact_id；被新 fact 取代的填 replaced_by（new_facts 的下标）。宁可多作废过时的 open/next，也不要让它们留着误导读者。
+- progress 写的是截至最新片段的状态，不要沿用旧 progress 里已经过时的说法。
   origin=user 的 fact 是用户亲手写的，不能 invalidate。
 - status_hint：active | paused | done_candidate（只有出现明确完成信号时，例如 PR 合并、发版、用户说做完了）。`;
 

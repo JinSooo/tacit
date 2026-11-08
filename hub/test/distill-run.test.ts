@@ -96,7 +96,8 @@ test("完整一轮：建线程与项目、事实有依据、private 不外发、
   expect(store.pending().map(p => p.kind).sort()).toEqual(["project", "thread_done"]);
   expect(ctx.db.db.prepare("SELECT status FROM frames WHERE key LIKE 'host:%'").get()).toEqual({ status: "ignored" });
   expect(store.day("2026-11-08")?.brief).toBe("合成简略");
-  expect((store.getState<{ brief: string }>("now"))!.brief).toContain("合成线程");
+  // 当前状态用线程的简略版，简略版没提到项目名时补上项目名，不重复拼标题。
+  expect((store.getState<{ brief: string }>("now"))!.brief).toBe("synthetic-repo：合成简略");
 
   for (const c of calls) expect(c.req.prompt).not.toContain("绝不能外发的私密正文");
   for (const c of calls.filter(c => c.kind === "brief")) { expect(c.req.prompt).not.toContain("合成推测内容"); expect(c.req.prompt).not.toContain("第一段合成会话"); }
