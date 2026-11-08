@@ -57,46 +57,51 @@ export class HubDB {
       this.db.pragma("secure_delete=ON");
       // 不使用 WAL，避免删除后的明文页在额外日志里继续存留。
       this.db.pragma("journal_mode=DELETE");
-      if (version === 0) this.db.transaction(() => {
-        this.db.exec(`
-          CREATE TABLE records (
-            id TEXT NOT NULL UNIQUE, schema INTEGER NOT NULL, device TEXT NOT NULL,
-            source TEXT NOT NULL, source_ref TEXT, kind TEXT NOT NULL,
-            t_start TEXT NOT NULL, t_end TEXT, context TEXT, people TEXT,
-            title TEXT NOT NULL, body TEXT NOT NULL, media TEXT, capture TEXT NOT NULL,
-            sensitivity TEXT NOT NULL, redactions INTEGER NOT NULL, corrects TEXT,
-            t_received TEXT NOT NULL, t_start_ms INTEGER NOT NULL,
-            UNIQUE(source, source_ref)
+      // 必须先拿写锁再读取版本，等待另一进程迁移完成后才能决定迁移步骤。
+      this.db.transaction(() => {
+        const version = this.db.pragma("user_version", { simple: true }) as number;
+        if (version > 4) throw new Error("数据库版本比当前 hub 新");
+        if (version === 0) {
+          this.db.exec(`
+            CREATE TABLE records (
+              id TEXT NOT NULL UNIQUE, schema INTEGER NOT NULL, device TEXT NOT NULL,
+              source TEXT NOT NULL, source_ref TEXT, kind TEXT NOT NULL,
+              t_start TEXT NOT NULL, t_end TEXT, context TEXT, people TEXT,
+              title TEXT NOT NULL, body TEXT NOT NULL, media TEXT, capture TEXT NOT NULL,
+              sensitivity TEXT NOT NULL, redactions INTEGER NOT NULL, corrects TEXT,
+              t_received TEXT NOT NULL, t_start_ms INTEGER NOT NULL,
+              UNIQUE(source, source_ref)
+            );
+            CREATE INDEX records_time ON records(t_start_ms DESC, id DESC);
+            CREATE INDEX records_corrects ON records(corrects);
+            CREATE TABLE tombstones (
+              id TEXT PRIMARY KEY, source TEXT NOT NULL, source_ref TEXT,
+              content_hash TEXT NOT NULL, deleted_at TEXT NOT NULL,
+              UNIQUE(source, source_ref)
+            );
+            CREATE VIRTUAL TABLE records_fts USING fts5(title, body, tokenize='unicode61');
+            INSERT INTO records_fts(records_fts, rank) VALUES('secure-delete', 1);
+          `);
+          this.db.exec(distillSchema);
+        }
+        if (version === 1) this.db.exec(distillSchema);
+        new DistillStore(this).ensureFrameRecords();
+        if (version < 3) {
+          this.db.exec(`CREATE TABLE agent_reads(
+            id TEXT PRIMARY KEY, at TEXT, tool TEXT, kind TEXT, args TEXT,
+            result_ids TEXT, bytes INTEGER, ok INTEGER
           );
-          CREATE INDEX records_time ON records(t_start_ms DESC, id DESC);
-          CREATE INDEX records_corrects ON records(corrects);
-          CREATE TABLE tombstones (
-            id TEXT PRIMARY KEY, source TEXT NOT NULL, source_ref TEXT,
-            content_hash TEXT NOT NULL, deleted_at TEXT NOT NULL,
-            UNIQUE(source, source_ref)
-          );
-          CREATE VIRTUAL TABLE records_fts USING fts5(title, body, tokenize='unicode61');
-          INSERT INTO records_fts(records_fts, rank) VALUES('secure-delete', 1);
-        `);
-        this.db.exec(distillSchema);
-      })();
-      if (version === 1) this.db.transaction(() => this.db.exec(distillSchema))();
-      new DistillStore(this).ensureFrameRecords();
-      if (version < 3) this.db.transaction(() => {
-        this.db.exec(`CREATE TABLE agent_reads(
-          id TEXT PRIMARY KEY, at TEXT, tool TEXT, kind TEXT, args TEXT,
-          result_ids TEXT, bytes INTEGER, ok INTEGER
-        );
-        CREATE INDEX agent_reads_time ON agent_reads(at DESC,id DESC);
-        CREATE INDEX agent_reads_tool_time ON agent_reads(tool,at DESC,id DESC);
-        PRAGMA user_version=3;`);
-      })();
-      if (version < 4) this.db.transaction(() => {
-        this.db.exec(`ALTER TABLE threads ADD COLUMN domain TEXT CHECK(domain IN ('work','life'));
-          ALTER TABLE threads ADD COLUMN project_hint TEXT;
-          UPDATE threads SET project_hint=project_id;
-          PRAGMA user_version=4;`);
-      })();
+          CREATE INDEX agent_reads_time ON agent_reads(at DESC,id DESC);
+          CREATE INDEX agent_reads_tool_time ON agent_reads(tool,at DESC,id DESC);
+          PRAGMA user_version=3;`);
+        }
+        if (version < 4) {
+          this.db.exec(`ALTER TABLE threads ADD COLUMN domain TEXT CHECK(domain IN ('work','life'));
+            ALTER TABLE threads ADD COLUMN project_hint TEXT;
+            UPDATE threads SET project_hint=project_id;
+            PRAGMA user_version=4;`);
+        }
+      }).immediate();
     } catch (e) { this.db.close(); throw e; }
   }
   close(): void { this.db.close(); }

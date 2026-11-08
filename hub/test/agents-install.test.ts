@@ -121,3 +121,72 @@ test("默认子进程执行器只运行临时假命令，并隔离 HOME 和工�
   expect(log).toContain("mcp\nadd\nrecord-anything\n--\n/tmp/bun bin\n/tmp/合成仓库 with 'quote'/hub/src/cli.ts\nmcp\n--tool\ncodex\n");
   expect(readdirSync(join(ctx.home, ".codex")).some(name => name.includes(".ra-tmp-"))).toBe(false);
 });
+
+test("Codex 预览只显示缺失工具的追加，不泄露其他配置且不写入", () => {
+  const ctx = setup(), file = join(ctx.home, ".codex/config.toml");
+  mkdirSync(dirname(file));
+  const original = '[mcp_servers.record-anything]\ncommand = "bun"\n[mcp_servers.record-anything.tools.now]\napproval_mode = "prompt"\n[mcp_servers.other]\ncommand = "合成保密配置"\n';
+  writeFileSync(file, original);
+  runAgents(["install", "--tool", "codex"], ctx.env);
+  const output = ctx.output.join("\n");
+  expect(output).toContain('+[mcp_servers.record-anything.tools.get]');
+  expect(output).toContain('+approval_mode = "approve"');
+  expect(output).not.toContain("合成保密配置");
+  expect(output).not.toContain('+[mcp_servers.record-anything.tools.now]');
+  expect(readFileSync(file, "utf8")).toBe(original);
+  expect(ctx.calls).toEqual([]);
+});
+
+test("Codex 文本补齐保留现有工具规则、其他服务、权限并备份，重复安装不追加", () => {
+  const ctx = setup(), file = join(ctx.home, ".codex/config.toml");
+  mkdirSync(dirname(file));
+  const original = '# 合成配置\n[mcp_servers.record-anything]\ncommand = "bun"\n[mcp_servers."record-anything".tools."now"] # 保留用户规则\napproval_mode = "prompt"\n[mcp_servers.other]\ncommand = "other"\n';
+  writeFileSync(file, original); chmodSync(file, 0o640);
+  runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
+  const installed = readFileSync(file, "utf8"), data = Bun.TOML.parse(installed) as any;
+  expect(data.mcp_servers["record-anything"].tools).toEqual({ now: { approval_mode: "prompt" }, get: { approval_mode: "approve" }, search: { approval_mode: "approve" }, timeline: { approval_mode: "approve" } });
+  expect(installed).toContain('[mcp_servers."record-anything".tools."now"] # 保留用户规则\napproval_mode = "prompt"');
+  expect(installed).toContain('[mcp_servers.other]\ncommand = "other"\n');
+  expect(installed.indexOf("tools.get")).toBeLessThan(installed.indexOf('tools."now"'));
+  expect(statSync(file).mode & 0o777).toBe(0o640);
+  expect(readdirSync(dirname(file)).filter(name => name.startsWith("config.toml.ra-backup-")).some(name => readFileSync(join(dirname(file), name), "utf8") === original)).toBe(true);
+  runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
+  expect(readFileSync(file, "utf8")).toBe(installed);
+  runAgents(["uninstall", "--tool", "codex", "--yes"], ctx.env);
+  const removed = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
+  expect(removed.mcp_servers["record-anything"].tools).toBeUndefined();
+  expect(removed.mcp_servers.other.command).toBe("other");
+});
+
+test("Codex 卸载兜底仅清理四表，保留其他工具、数组表和多行字符串", () => {
+  const ctx = setup(), file = join(ctx.home, ".codex/config.toml");
+  mkdirSync(dirname(file));
+  const literal = 'description = """\n[mcp_servers.record-anything.tools.now]\n这是合成字符串\n"""\n';
+  writeFileSync(file, literal + '[mcp_servers.record-anything.tools.now]\napproval_mode = "approve"\n[[custom]]\nname = "保留数组项"\n[mcp_servers.record-anything.tools.other]\napproval_mode = "prompt"\n');
+  runAgents(["uninstall", "--tool", "codex", "--yes"], ctx.env);
+  const content = readFileSync(file, "utf8"), data = Bun.TOML.parse(content) as any;
+  expect(content).toStartWith(literal);
+  expect(data.custom).toEqual([{ name: "保留数组项" }]);
+  expect(data.mcp_servers["record-anything"].tools).toEqual({ other: { approval_mode: "prompt" } });
+});
+
+test.skipIf(!Bun.which("codex"))("真实 Codex 在临时 HOME 安装、重装保留既有工具规则，卸载连带移除子表", () => {
+  const command = Bun.which("codex");
+  if (!command) throw new Error("本回归需要本机 codex CLI");
+  const ctx = setup(), file = join(ctx.home, ".codex/config.toml");
+  mkdirSync(dirname(file));
+  writeFileSync(file, '# 合成配置\n[mcp_servers.unrelated]\ncommand = "/usr/bin/true"\n');
+  ctx.env.which = () => command;
+  ctx.env.run = undefined;
+  runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
+  let data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
+  expect(Object.keys(data.mcp_servers["record-anything"].tools).sort()).toEqual(["get", "now", "search", "timeline"]);
+  writeFileSync(file, readFileSync(file, "utf8").replace('approval_mode = "approve"', 'approval_mode = "prompt"'));
+  runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
+  data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
+  expect(data.mcp_servers["record-anything"].tools.now.approval_mode).toBe("prompt");
+  runAgents(["uninstall", "--tool", "codex", "--yes"], ctx.env);
+  data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
+  expect(data.mcp_servers["record-anything"]).toBeUndefined();
+  expect(data.mcp_servers.unrelated.command).toBe("/usr/bin/true");
+});

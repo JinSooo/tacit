@@ -59,3 +59,34 @@ test("CLI open --print 读取已有 token 和端口，不访问数据库密钥",
     expect(result.stderr).toBe("");
   } finally { ctx.cleanup(); }
 });
+
+test("CLI 数据库迁移错误保留中文首行并输出真实 name/message，不输出堆栈或密钥", () => {
+  const ctx = setup();
+  try {
+    // 合成的不完整 v2 结构让打开阶段产生可识别的迁移错误。
+    ctx.db.db.exec("DROP TABLE agent_reads; PRAGMA user_version=2;");
+    const result = spawnSync(process.execPath, [cli, "init"], { env: { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey }, encoding: "utf8" });
+    expect(result.status).toBe(1);
+    expect(result.stderr.split("\n")[0]).toBe("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。");
+    expect(result.stderr).toContain("SqliteError: duplicate column name: domain");
+    expect(result.stderr).not.toContain(ctx.config.dbKey);
+    expect(result.stderr).not.toContain("at ");
+    expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(2);
+    expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE name='agent_reads'").get()).toBeUndefined();
+  } finally { ctx.cleanup(); }
+});
+
+test("CLI 非数据库错误只打印 name/code，不打印可能夹带正文的 message", async () => {
+  const { cliErrorDetail } = await import("../src/cli.ts");
+  const error = Object.assign(new Error("合成记录正文 token=synthetic-sensitive-value"), { code: "EACCES" });
+  expect(cliErrorDetail(error)).toBe("Error (EACCES)");
+  expect(cliErrorDetail(new TypeError("合成正文"))).toBe("TypeError (UNKNOWN)");
+  expect(cliErrorDetail("合成正文")).toBe("Error (UNKNOWN)");
+  const ctx = setup();
+  try {
+    const result = spawnSync(process.execPath, [cli, "open", "--print"], { env: { ...process.env, RA_DATA_DIR: join(ctx.dir, "合成隐私路径"), RA_DB_KEY: "" }, encoding: "utf8" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Error (ENOENT)");
+    expect(result.stderr).not.toContain("合成隐私路径");
+  } finally { ctx.cleanup(); }
+});

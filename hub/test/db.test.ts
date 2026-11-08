@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { HubDB } from "../src/db.ts";
 import { fixture, setup } from "./helpers.ts";
 import { ulid } from "../../packages/record/index.ts";
@@ -126,3 +126,30 @@ test("来源稳定键、修正目标和不可排序的日期逐条拒绝", () =>
   expect(result.accepted).toBe(1);
   expect(result.rejected.map(r => r.index)).toEqual([0, 1, 2]);
 });
+
+// 两个进程都先读到旧版本，再同时继续，稳定覆盖旧版本快照竞争。
+test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成迁移（10 次）", async () => {
+  const script = new URL("./fixtures/migrate-worker.ts", import.meta.url).pathname;
+  for (let round = 0; round < 10; round++) {
+    ctx.db.db.exec("DROP TABLE agent_reads; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=2;");
+    const gate = `${ctx.dir}/gate-${round}`;
+    const children = [0, 1].map(index => Bun.spawn([process.execPath, script, ctx.file, ctx.config.dbKey, gate, String(index)], { stdout: "pipe", stderr: "pipe" }));
+    try {
+      const deadline = Date.now() + 10000;
+      while (![0, 1].every(i => { try { return readFileSync(`${gate}-${i}`, "utf8") === "ready"; } catch { return false; } })) {
+        if (Date.now() > deadline) throw new Error("迁移子进程未就绪");
+        await Bun.sleep(10);
+      }
+      writeFileSync(gate, "go");
+      const results = await Promise.all(children.map(async child => ({ code: await child.exited, error: await new Response(child.stderr).text(), output: await new Response(child.stdout).text() })));
+      expect(results).toEqual([{ code: 0, error: "", output: "4\n" }, { code: 0, error: "", output: "4\n" }]);
+      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(4);
+      expect(ctx.db.db.pragma("table_info(threads)")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "domain" }), expect.objectContaining({ name: "project_hint" })]));
+      expect(ctx.db.db.pragma("table_info(agent_reads)")).toHaveLength(8);
+      expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'agent_reads_%'").all()).toHaveLength(2);
+    } finally {
+      for (const child of children) child.kill();
+      await Promise.all(children.map(child => child.exited));
+    }
+  }
+}, 30000);

@@ -2,6 +2,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { redactString } from "./redact.ts";
+
+const databaseFailures = new WeakMap<object, string>();
+/** 只有打开数据库时的消息可展示；运行期错误可能夹带记录正文。 */
+export function cliErrorDetail(error: unknown): string {
+  const value = error as { name?: unknown; code?: unknown } | null;
+  const label = (input: unknown, fallback: string) => typeof input === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(input) ? input : fallback;
+  const name = label(value?.name, "Error");
+  if (error && typeof error === "object" && databaseFailures.has(error)) return `${name}: ${databaseFailures.get(error)}`;
+  return `${name} (${label(value?.code, "UNKNOWN")})`;
+}
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, name] = argv;
@@ -24,11 +35,22 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const { runDistill, sliceStep } = await import("./distill/run.ts");
   const { DistillStore } = await import("./distill/store.ts");
   const { createLLM } = await import("./llm/index.ts");
+  const openDatabase = (file: string, key: string, token: string) => {
+    try { return new HubDB(file, key); }
+    catch (error) {
+      if (error instanceof Error) {
+        let message = error.message;
+        for (const secret of [key, token, process.env.RA_DB_KEY, process.env.RA_TOKEN]) if (secret) message = message.replaceAll(secret, "[已脱敏]");
+        databaseFailures.set(error, redactString(message).text.replace(/[\r\n]/g, " "));
+      }
+      throw error;
+    }
+  };
   const separator = argv.indexOf("--");
   if (command === "init") {
     // 安装时在前台创建（或读取）钥匙串里的数据库密钥并试开一次数据库，失败当场可见。
     const config = loadConfig();
-    new HubDB(join(config.dataDir, "history.db"), config.dbKey).close();
+    openDatabase(join(config.dataDir, "history.db"), config.dbKey, config.token).close();
     console.log(config.dataDir);
     return;
   }
@@ -49,7 +71,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (command === "distill") {
     if (argv.slice(1).some(a => !["--once", "--backfill", "--slice-only"].includes(a))) throw new Error("提炼参数无效");
     const config = loadConfig();
-    const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
+    const db = openDatabase(join(config.dataDir, "history.db"), config.dbKey, config.token);
     // --slice-only：只做切片和规则归属，不调用模型（排查和测试用）。
     if (argv.includes("--slice-only")) { try { console.log(JSON.stringify(sliceStep(db, argv.includes("--backfill")))); } finally { db.close(); } return; }
     const store = new DistillStore(db);
@@ -79,7 +101,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     if (tokenFile) throw new Error("--token-file 需要 --hub");
   }
   const config = loadConfig();
-  const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
+  const db = openDatabase(join(config.dataDir, "history.db"), config.dbKey, config.token);
   if (command === "serve") {
     try {
       const server = startServer({ db, token: config.token, port: config.port });
@@ -96,7 +118,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
 }
 
-if (import.meta.main) main().catch(() => {
+if (import.meta.main) main().catch(error => {
   console.error("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。");
+  console.error(cliErrorDetail(error));
   process.exitCode = 1;
 });

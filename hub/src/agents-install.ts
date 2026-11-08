@@ -4,6 +4,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
+import { redactString } from "./redact.ts";
+import { tools as mcpTools } from "./agent-cli/mcp.ts";
+
 export type AgentTool = "claude-code" | "codex";
 type Json = Record<string, any>;
 export interface InstallEnvironment {
@@ -59,6 +62,68 @@ function save(plan: ReturnType<typeof hookFile>) {
   } finally { if (existsSync(temp)) unlinkSync(temp); }
 }
 
+// 配置可能包含其他服务的凭据，预览仅展示实际变动的行。
+function approvalDiff(plan: ReturnType<typeof codexApprovals>) {
+  const before = plan.before.split("\n"), after = plan.after.split("\n");
+  let first = 0, tail = 0;
+  while (first < Math.min(before.length, after.length) && before[first] === after[first]) first++;
+  while (tail < Math.min(before.length, after.length) - first && before[before.length - tail - 1] === after[after.length - tail - 1]) tail++;
+  return redactString([`--- ${plan.existed ? plan.file : "/dev/null"}`, `+++ ${plan.file}`,
+    `@@ -${first + 1},${before.length - first - tail} +${first + 1},${after.length - first - tail} @@`,
+    ...before.slice(first, before.length - tail).map(line => `-${line}`), ...after.slice(first, after.length - tail).map(line => `+${line}`)].join("\n")).text;
+}
+
+// 只定位普通 TOML 表；解析表头以兼容引号和空白，不重排其余文本。
+function codexApprovals(file: string, install: boolean, preserved: string[] = []) {
+  const existed = existsSync(file), before = existed ? readFileSync(file, "utf8") : "";
+  const data = Bun.TOML.parse(before) as Json;
+  const target = data.mcp_servers?.["record-anything"]?.tools ?? {};
+  const names = new Set(mcpTools.map(tool => tool.name));
+  const sections: { start: number; end: number; path: string[] }[] = [];
+  let offset = 0, multiline = "";
+  for (const line of before.split(/(?<=\n)/)) {
+    const header = !multiline && line.match(/^\s*(\[(?!\[).*?\])\s*(?:#.*)?(?:\r?\n)?$/);
+    if (!multiline && /^\s*\[\[/.test(line)) {
+      if (sections.length) sections[sections.length - 1]!.end = offset;
+      sections.push({ start: offset, end: before.length, path: [] });
+    }
+    if (header) {
+      const parsed = Bun.TOML.parse(`${header[1]}\n__ra_marker = true`);
+      const keys: string[] = [];
+      let node = parsed as Json;
+      while (!("__ra_marker" in node)) { const key = Object.keys(node)[0]!; keys.push(key); node = node[key]; }
+      if (sections.length) sections[sections.length - 1]!.end = offset;
+      sections.push({ start: offset, end: before.length, path: keys });
+    }
+    // 多行字符串里的表头是用户数据，不能作为配置段处理。
+    const tokens = line.match(/"""|'''|"(?:\\.|[^"\\])*"|'[^']*'|#.*$/g) ?? [];
+    for (const token of tokens) {
+      if (multiline) { if (token === multiline) multiline = ""; }
+      else if (token.startsWith("#")) break;
+      else if (token === "'''" || token === '"""') multiline = token;
+    }
+    offset += line.length;
+  }
+  const ours = (keys: string[]) => keys.length === 4 && keys[0] === "mcp_servers" && keys[1] === "record-anything" && keys[2] === "tools" && names.has(keys[3]!);
+  let after = before;
+  if (install) {
+    const missing = mcpTools.filter(tool => !Object.hasOwn(target, tool.name));
+    const additions = missing.map(tool => preserved.find(text => {
+      const parsed = Bun.TOML.parse(text) as Json;
+      return Object.hasOwn(parsed.mcp_servers?.["record-anything"]?.tools ?? {}, tool.name);
+    }) ?? `[mcp_servers.record-anything.tools.${tool.name}]\napproval_mode = "approve"\n`).join("\n");
+    if (additions) {
+      const parent = sections.find(section => section.path.join(".") === "mcp_servers.record-anything");
+      const at = parent?.end ?? before.length;
+      after = before.slice(0, at) + (at && before[at - 1] !== "\n" ? "\n" : "") + "\n" + additions + "\n" + before.slice(at);
+    }
+  } else {
+    for (const section of sections.filter(section => ours(section.path)).reverse()) after = after.slice(0, section.start) + after.slice(section.end);
+  }
+  Bun.TOML.parse(after);
+  return { file, existed, before, after, preserved: sections.filter(section => ours(section.path)).map(section => before.slice(section.start, section.end)) };
+}
+
 export function runAgents(argv: string[], env: InstallEnvironment = {}) {
   const [action, ...flags] = argv;
   if (action !== "install" && action !== "uninstall") throw new Error("用法：agents <install|uninstall> [--tool claude-code|codex] [--yes]");
@@ -78,6 +143,9 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}) {
   // 全部解析成功后才可能写入，防止第二份 JSON 无效时已改第一份。
   const plans = tools.map(tool => hookFile(resolve(home, tool === "codex" ? ".codex/hooks.json" : ".claude/settings.json"), action === "install", cli, bun, tool));
   const commands = tools.map(tool => ({ tool, command: which(tool === "codex" ? "codex" : "claude") }));
+  const codexFile = resolve(home, ".codex/config.toml");
+  // 提前校验 TOML，避免改完 MCP 后才发现原配置损坏。
+  const approvalPlan = tools.includes("codex") ? codexApprovals(codexFile, action === "install") : undefined;
   print(yes ? "将执行以下改动：" : "预览（未写入；加 --yes 执行）：");
   for (const plan of plans) {
     if (plan.before !== plan.after) print(diff(plan.file, plan.before, plan.after, plan.existed));
@@ -91,11 +159,17 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}) {
     print(`$ ${[command, ...get].map(quote).join(" ")}`);
     print(`已注册时执行：${[command, ...remove].map(quote).join(" ")}`);
     if (action === "install") print(`$ ${[command, ...add].map(quote).join(" ")}`);
+    if (tool === "codex" && !yes && approvalPlan && approvalPlan.before !== approvalPlan.after) print(approvalDiff(approvalPlan));
     if (yes) {
       const registered = run(command, get, home);
       if (registered.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(registered.stderr + registered.stdout)) throw new Error(`${tool} MCP 查询失败，未继续注册`);
+      if (tool === "codex" && approvalPlan?.existed) copyFileSync(codexFile, `${codexFile}.ra-backup-${Date.now()}-${crypto.randomUUID()}`);
       for (const args of [...(registered.status === 0 ? [remove] : []), ...(action === "install" ? [add] : [])]) {
         if (run(command, args, home).status !== 0) throw new Error(`${tool} MCP ${args[1]} 失败，请检查该工具配置后重试`);
+      }
+      if (tool === "codex") {
+        const plan = codexApprovals(codexFile, action === "install", approvalPlan?.preserved);
+        if (plan.before !== plan.after) { print(approvalDiff(plan)); save(plan); }
       }
     }
   }
