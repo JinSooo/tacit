@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     set { UserDefaults.standard.set(newValue, forKey: "recordingEnabled") }
   }
   lazy var plugins = PluginScheduler(config: config)
+  lazy var viewer: ViewerWindow = MainActor.assumeIsolated {
+    ViewerWindow(store: ViewerStore(api: HubAPI(base: config.hubURL, token: { [config] in config.token }), device: config.device, controls: self))
+  }
   lazy var segmenter = Segmenter(device: config.device)
   let ax = AXReader()
   let ocr = OCRReader()
@@ -71,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     DistributedNotificationCenter.default().addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
       self?.closeSegment()
     }
+  }
+
+  /// 从 Finder、Spotlight 或 Dock 再次打开 App 时弹出主窗口。
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    MainActor.assumeIsolated { viewer.show() }; return true
   }
 
   func applicationWillTerminate(_ n: Notification) {
@@ -206,7 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       menu.addItem(item("暂停 1 小时", #selector(pauseHour)))
       menu.addItem(item("暂停到明天", #selector(pauseTomorrow)))
     }
-    menu.addItem(item("打开 History", #selector(openHistory)))
+    let open = item("打开 Record Anything", #selector(openHistory)); open.keyEquivalent = "o"
+    menu.addItem(open)
     menu.addItem(.separator())
 
     let recording = item("录音", #selector(toggleRecording))
@@ -281,12 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if ocrEnabled && !ocr.granted { ocr.requestAccess() }
   }
   @objc func runPlugins() { plugins.runAll() }
-  @objc func openHistory() {
-    guard let token = config.token else { return }
-    var c = URLComponents(url: config.hubURL, resolvingAgainstBaseURL: false)!
-    c.path = "/"; c.fragment = "token=\(token)"
-    if let u = c.url { NSWorkspace.shared.open(u) }
-  }
+  @objc func openHistory() { MainActor.assumeIsolated { viewer.show() } }
   @objc func quit() { NSApp.terminate(nil) }
 
   func writeStatus() {
@@ -321,9 +325,52 @@ func cpuSeconds() -> Double {
 }
 
 if CommandLine.arguments.contains("--probe-front") { runProbe(); exit(0) }
+if let i = CommandLine.arguments.firstIndex(of: "--render-icon"), i + 1 < CommandLine.arguments.count {
+  do { try AppIconArt.writeIconset(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])); exit(0) }
+  catch { FileHandle.standardError.write(Data("\(error)\n".utf8)); exit(1) }
+}
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()
+
+// MARK: 主窗口读取采集状态
+
+extension AppDelegate: CaptureControlling {
+  func captureSnapshot() -> CaptureSnapshot {
+    var c = CaptureSnapshot()
+    let trusted = AXIsProcessTrusted()
+    if !trusted { c.state = .noPermission } else if let p = pausedUntil, paused { c.state = .paused(p) }
+    c.queue = hub.queue.count
+    c.hubError = hub.lastError
+    c.recordingEnabled = recordingEnabled
+    c.ocrEnabled = ocrEnabled
+    let f = DateFormatter(); f.dateFormat = "HH:mm"
+    c.lines = [
+      .init(id: "ax", title: "屏幕文字（辅助功能）", value: trusted ? "已授权" : "未授权", ok: trusted),
+      .init(id: "ocr", title: "OCR 兜底", value: ocrEnabled ? (ocr.granted ? "已开启" : "需要录屏权限") : "关闭", ok: !ocrEnabled || ocr.granted),
+      .init(id: "files", title: "文件", value: files.unavailable ? "监听异常" : (files.last.map { "最近 " + f.string(from: $0) } ?? "等待新文件"), ok: !files.unavailable),
+      .init(id: "calendar", title: "日历", value: calendar.authorized ? (calendar.last.map { "最近 " + f.string(from: $0) } ?? "等待首次读取") : "未授权", ok: calendar.authorized),
+      .init(id: "hub", title: "发送到中枢", value: hub.lastError ?? (c.queue > 0 ? "待发送 \(c.queue) 条" : "已送达 \(hub.sent) 条"), ok: hub.lastError == nil),
+    ]
+    c.audio = audio.status()
+    let status = plugins.status()
+    c.plugins = plugins.available ? plugins.plugins.map { .init(id: $0, title: $0, value: status[$0] ?? "等待首次运行", ok: !(status[$0] ?? "").hasPrefix("失败")) } : []
+    return c
+  }
+
+  func perform(_ action: CaptureAction) {
+    switch action {
+    case .pauseHour: pauseHour()
+    case .pauseTomorrow: pauseTomorrow()
+    case .resume: resume()
+    case .requestAX: requestAX()
+    case .requestCalendar: requestCalendar()
+    case .toggleRecording: toggleRecording()
+    case .toggleOCR: toggleOCR()
+    case .runPlugins: runPlugins()
+    }
+  }
+}

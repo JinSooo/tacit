@@ -15,6 +15,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>dev.record-anything.collector</string>
   <key>CFBundleName</key><string>Record Anything</string>
   <key>CFBundleExecutable</key><string>Collector</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
@@ -31,6 +32,12 @@ PLIST
 mkdir -p "$APP/Contents/Frameworks"
 LIB="vendor/sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib/lib"
 for lib in "$LIB"/*.dylib; do cp -L "$lib" "$APP/Contents/Frameworks/"; done
+# 应用图标由采集端自己画（AppIconArt），这里导出成 icns。
+mkdir -p "$APP/Contents/Resources"
+rm -rf build/AppIcon.iconset
+"$APP/Contents/MacOS/Collector" --render-icon build/AppIcon.iconset
+iconutil -c icns build/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
+rm -rf build/AppIcon.iconset
 # 第二个可执行文件由转写任务提供；不存在时采集端照常构建。
 if [ -f "$BIN/ra-audio-worker" ]; then cp "$BIN/ra-audio-worker" "$APP/Contents/MacOS/"; fi
 cat > build/audio.entitlements <<'PLIST'

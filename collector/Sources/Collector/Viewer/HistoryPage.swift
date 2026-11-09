@@ -1,0 +1,470 @@
+import AppKit
+import SwiftUI
+import CollectorCore
+
+struct HistoryPage: View {
+  @Environment(ViewerStore.self) private var store
+  @State private var records: [HistoryRecord] = []
+  @State private var diary: DayDiary?
+  @State private var loading = false
+  @State private var error: String?
+  @State private var selection: String?
+  @State private var expanded: Set<String> = []
+  @State private var brush: ClosedRange<Date>?
+  @State private var lane: Lane?
+  @State private var device: String?
+  @State private var showDiary = true
+  @State private var note = false
+  @State private var picking = false
+  // 搜索
+  @State private var results: [HistoryRecord] = []
+  @State private var cursor: String?
+  @State private var searching = false
+
+  var day: Date { store.historyDay }
+  var isSearch: Bool { !store.historySearch.trimmingCharacters(in: .whitespaces).isEmpty }
+
+  var visible: [HistoryRecord] {
+    records.filter { r in
+      (lane == nil || Lane.of(r.source) == lane) && (device == nil || r.device == device) &&
+        (brush.map { r.start <= $0.upperBound && (r.end ?? r.start) >= $0.lowerBound } ?? true)
+    }
+  }
+
+  var chapters: [DayStrata.Chapter] {
+    (diary?.detail?.timeline ?? []).enumerated().compactMap { i, c in
+      guard let s = ViewerTime.clockOnDay(c.start, day: day), var e = ViewerTime.clockOnDay(c.end, day: day) else { return nil }
+      if e <= s { e = ViewerTime.dayBounds(day).end }
+      return .init(id: i, start: s, end: e, text: c.text)
+    }
+  }
+
+  var body: some View {
+    @Bindable var store = store
+    ScrollViewReader { proxy in
+      ScrollView {
+        if isSearch { searchList } else { dayList }
+      }
+      .scrollContentBackground(.hidden)
+      .background(Palette.paper)
+      .onChange(of: selection) { _, id in
+        guard let id, let run = runs.first(where: { $0.records.contains { $0.id == id } }) else { return }
+        if run.records.count > 1 && run.id != id { expanded.insert(run.id) }
+        withAnimation(.smooth) { proxy.scrollTo(id == run.id ? run.id : id, anchor: .center) }
+      }
+    }
+    .navigationTitle(isSearch ? "搜索" : ViewerFormat.dayTitle(day))
+    .navigationSubtitle(isSearch ? "" : ViewerFormat.weekday(day))
+    .searchable(text: $store.historySearch, placement: .toolbar, prompt: "搜索 History")
+    .toolbar { toolbar }
+    .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { selection = nil } })) {
+      Group {
+        if let id = selection {
+          RecordInspector(id: id) { deleted in
+            records.removeAll { deleted.contains($0.id) }
+            results.removeAll { deleted.contains($0.id) }
+            selection = nil
+          }
+          .id(id)
+        }
+      }
+      .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
+    }
+    .sheet(isPresented: $note) { NoteSheet { store.revision += 1 } }
+    .task(id: LoadKey(day: day, revision: store.revision)) { await loadDay() }
+    .task(id: store.historySearch) { await search(reset: true) }
+    .onChange(of: day) { brush = nil; lane = nil; selection = nil; expanded = [] }
+    .onAppear { consumeFocus() }
+    .onChange(of: store.historyFocus) { consumeFocus() }
+    .onChange(of: records) { consumeFocus() }
+    .onKeyPress(.escape) { if selection != nil { selection = nil; return .handled }; if brush != nil { brush = nil; return .handled }; return .ignored }
+  }
+
+  struct LoadKey: Equatable { let day: Date; let revision: Int }
+
+  func consumeFocus() {
+    guard let id = store.historyFocus, records.contains(where: { $0.id == id }) else {
+      if let id = store.historyFocus, !loading, !records.isEmpty, !records.contains(where: { $0.id == id }) {
+        // 不在当天列表里（例如修正记录），直接在检查器里打开。
+        selection = id; store.historyFocus = nil
+      }
+      return
+    }
+    lane = nil; brush = nil
+    selection = id
+    store.historyFocus = nil
+  }
+
+  // MARK: 读取
+
+  func loadDay() async {
+    loading = true; error = nil
+    defer { loading = false }
+    do {
+      async let r = store.api.day(day)
+      async let d = store.api.diary(day)
+      let (rows, diary) = try await (r, d)
+      records = rows.sorted { ($0.start, $0.id) > ($1.start, $1.id) }
+      self.diary = diary
+    } catch is CancellationError {
+    } catch { self.error = error.localizedDescription; records = []; diary = nil }
+  }
+
+  func search(reset: Bool) async {
+    guard isSearch else { results = []; cursor = nil; return }
+    if reset { try? await Task.sleep(for: .milliseconds(280)); if Task.isCancelled { return } }
+    searching = true; defer { searching = false }
+    do {
+      var q = HubAPI.RecordQuery(); q.q = store.historySearch.trimmingCharacters(in: .whitespaces); q.limit = 100
+      let page = try await store.api.records(q, cursor: reset ? nil : cursor)
+      results = reset ? page.records : results + page.records.filter { r in !results.contains { $0.id == r.id } }
+      cursor = page.nextCursor
+      error = nil
+    } catch is CancellationError {
+    } catch { self.error = error.localizedDescription }
+  }
+
+  var runs: [RecordRun] { RecordRuns.collapse(visible) }
+
+  // MARK: 一天
+
+  @ViewBuilder var dayList: some View {
+    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+      dayHeader
+        .padding(.horizontal, 32).padding(.top, 26).padding(.bottom, 18)
+      Section {
+        if loading && records.isEmpty {
+          Placeholder(kind: .loading).frame(height: 240)
+        } else if let error, records.isEmpty {
+          Placeholder(kind: .error(error) { store.revision += 1 }).frame(height: 240)
+        } else if records.isEmpty {
+          Placeholder(kind: .empty("moon.zzz", "这一天没有记录")).frame(height: 260)
+        } else if visible.isEmpty {
+          Placeholder(kind: .empty("line.3.horizontal.decrease", "筛选后没有记录")).frame(height: 200)
+        } else {
+          // 修饰符加在 ForEach 上会分发给每一行，留白用独立的占位视图。
+          Color.clear.frame(height: 6)
+          rows(runs, hourMarks: true)
+          Color.clear.frame(height: 40)
+        }
+      } header: {
+        if !records.isEmpty { strataHeader }
+      }
+    }
+  }
+
+  var dayHeader: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        Text(longDate).font(.serif(30, .semibold)).foregroundStyle(Palette.ink)
+        Text(ViewerFormat.weekday(day)).font(.serif(17)).foregroundStyle(.secondary)
+        Spacer()
+        if !records.isEmpty { stats }
+      }
+      if let summary = diary?.detail?.summary ?? diary?.brief, !summary.isEmpty {
+        VStack(alignment: .leading, spacing: 8) {
+          Text(summary)
+            .font(.serif(15.5))
+            .lineSpacing(5)
+            .foregroundStyle(Palette.ink.opacity(0.88))
+            .lineLimit(showDiary ? nil : 2)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+          Button(showDiary ? "收起日记" : "展开日记") { withAnimation(.smooth) { showDiary.toggle() } }
+            .buttonStyle(.link).font(.caption)
+        }
+        .frame(maxWidth: 760, alignment: .leading)
+        .padding(.leading, 14)
+        .overlay(alignment: .leading) { Capsule().fill(Palette.accent.opacity(0.5)).frame(width: 2.5) }
+      }
+    }
+  }
+
+  var longDate: String {
+    let c = Calendar.current.dateComponents([.year, .month, .day], from: day)
+    let year = c.year != Calendar.current.component(.year, from: Date()) ? "\(c.year!) 年 " : ""
+    return "\(year)\(c.month!) 月 \(c.day!) 日"
+  }
+
+  var stats: some View {
+    let active = activeSeconds(records)
+    return HStack(spacing: 18) {
+      stat(String(records.count), "条记录")
+      stat(ViewerFormat.compact(active), "活跃")
+      if let first = records.map(\.start).min() { stat(ViewerFormat.clock(first), "开始") }
+    }
+  }
+  func stat(_ value: String, _ label: String) -> some View {
+    VStack(alignment: .trailing, spacing: 1) {
+      Text(value).font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit()
+      Text(label).font(.system(size: 10.5)).foregroundStyle(.secondary)
+    }
+  }
+
+  /// 并集时长：重叠的时段只算一次。
+  func activeSeconds(_ rows: [HistoryRecord]) -> TimeInterval {
+    let spans = rows.compactMap { r in r.end.map { (r.start, $0) } }.filter { $0.1 > $0.0 }.sorted { $0.0 < $1.0 }
+    var total: TimeInterval = 0, cur: (Date, Date)?
+    for s in spans {
+      if let c = cur, s.0 <= c.1 { cur = (c.0, max(c.1, s.1)) }
+      else { if let c = cur { total += c.1.timeIntervalSince(c.0) }; cur = s }
+    }
+    if let c = cur { total += c.1.timeIntervalSince(c.0) }
+    return total
+  }
+
+  var strataHeader: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      DayStrata(records: records.filter { device == nil || $0.device == device }, chapters: chapters, day: day, selected: selection,
+                brush: $brush, lane: $lane) { r in selection = r.id }
+      if brush != nil || lane != nil {
+        HStack(spacing: 8) {
+          if let b = brush { chip("\(ViewerFormat.clock(b.lowerBound))–\(ViewerFormat.clock(b.upperBound))", "clock") { brush = nil } }
+          if let l = lane { chip(l.title, "line.3.horizontal.decrease") { lane = nil } }
+          Text("\(visible.count) 条").font(.caption).foregroundStyle(.secondary)
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
+      }
+    }
+    .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 12)
+    .background {
+      Rectangle().fill(.bar)
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.hairline).frame(height: 1) }
+    }
+    .zIndex(2)
+    .animation(.smooth(duration: 0.2), value: brush != nil || lane != nil)
+  }
+
+  func chip(_ text: String, _ symbol: String, clear: @escaping () -> Void) -> some View {
+    Button(action: clear) {
+      HStack(spacing: 5) {
+        Image(systemName: symbol)
+        Text(text).monospacedDigit()
+        Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).opacity(0.6)
+      }
+      .font(.system(size: 11, weight: .medium))
+      .padding(.horizontal, 9).padding(.vertical, 4)
+      .foregroundStyle(Palette.accent)
+      .background(Palette.accent.opacity(0.12), in: Capsule())
+    }
+    .buttonStyle(.plain)
+  }
+
+  // MARK: 行
+
+  @ViewBuilder func rows(_ runs: [RecordRun], hourMarks: Bool) -> some View {
+    let cal = Calendar.current
+    ForEach(Array(runs.enumerated()), id: \.element.id) { i, run in
+      let hour = cal.component(.hour, from: run.newest.start)
+      if hourMarks, i == 0 || cal.component(.hour, from: runs[i - 1].newest.start) != hour {
+        HourMark(hour: hour).padding(.top, i == 0 ? 4 : 14).padding(.horizontal, 20)
+      }
+      RecordRow(record: run.newest, run: run, selected: selection == run.id, expanded: expanded.contains(run.id)) {
+        if run.records.count > 1 {
+          withAnimation(.smooth(duration: 0.25)) { if expanded.contains(run.id) { expanded.remove(run.id) } else { expanded.insert(run.id) } }
+        }
+        selection = run.id
+      }
+      .padding(.horizontal, 20)
+      .id(run.id)
+      if expanded.contains(run.id) {
+        ForEach(run.records.dropFirst()) { r in
+          RecordRow(record: r, run: nil, selected: selection == r.id, expanded: false, nested: true) { selection = r.id }
+            .padding(.horizontal, 20)
+            .id(r.id)
+            .transition(.opacity)
+        }
+      }
+    }
+  }
+
+  // MARK: 搜索
+
+  @ViewBuilder var searchList: some View {
+    LazyVStack(alignment: .leading, spacing: 0) {
+      if results.isEmpty {
+        if searching { Placeholder(kind: .loading).frame(height: 300) }
+        else if let error { Placeholder(kind: .error(error) { Task { await search(reset: true) } }).frame(height: 300) }
+        else { Placeholder(kind: .empty("magnifyingglass", "没有找到「\(store.historySearch)」")).frame(height: 300) }
+      } else {
+        let groups = Dictionary(grouping: results) { Calendar.current.startOfDay(for: $0.start) }.sorted { $0.key > $1.key }
+        ForEach(groups, id: \.key) { day, rows in
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(ViewerFormat.dayTitle(day)).font(.serif(19, .semibold))
+            Text(ViewerFormat.weekday(day)).font(.serif(13)).foregroundStyle(.secondary)
+            Spacer()
+            Button("看这一天") { store.historySearch = ""; store.historyDay = day }.buttonStyle(.link).font(.caption)
+          }
+          .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 6)
+          self.rows(RecordRuns.collapse(rows.sorted { $0.start > $1.start }), hourMarks: false)
+        }
+        if cursor != nil {
+          ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(24)
+            .onAppear { Task { await search(reset: false) } }
+        }
+      }
+    }
+    .padding(.bottom, 40)
+  }
+
+  // MARK: 工具栏
+
+  @ToolbarContentBuilder var toolbar: some ToolbarContent {
+    ToolbarItemGroup(placement: .navigation) {
+      if !isSearch {
+        ControlGroup {
+          Button { shift(-1) } label: { Image(systemName: "chevron.left") }.help("前一天").keyboardShortcut("[", modifiers: .command)
+          Button("今天") { store.historyDay = Calendar.current.startOfDay(for: Date()) }
+            .disabled(Calendar.current.isDateInToday(day)).keyboardShortcut("t", modifiers: .command)
+          Button { shift(1) } label: { Image(systemName: "chevron.right") }.help("后一天").keyboardShortcut("]", modifiers: .command)
+            .disabled(Calendar.current.isDateInToday(day))
+        }
+        Button { picking = true } label: { Image(systemName: "calendar") }
+          .help("跳到日期")
+          .popover(isPresented: $picking, arrowEdge: .bottom) {
+            DatePicker("", selection: Binding(get: { day }, set: { store.historyDay = Calendar.current.startOfDay(for: $0); picking = false }),
+                       in: ...Date(), displayedComponents: .date)
+              .datePickerStyle(.graphical).labelsHidden().padding(12)
+          }
+      }
+    }
+    ToolbarItemGroup(placement: .primaryAction) {
+      if !isSearch {
+        Menu {
+          Picker("来源", selection: $lane) {
+            Text("全部来源").tag(Lane?.none)
+            ForEach(Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } }, id: \.self) { Text($0.title).tag(Lane?.some($0)) }
+          }
+          .pickerStyle(.inline)
+          let devices = Set(records.map(\.device)).sorted()
+          if devices.count > 1 {
+            Picker("设备", selection: $device) {
+              Text("全部设备").tag(String?.none)
+              ForEach(devices, id: \.self) { Text($0).tag(String?.some($0)) }
+            }
+            .pickerStyle(.inline)
+          }
+        } label: {
+          Image(systemName: lane == nil && device == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+        }
+        .help("筛选")
+      }
+      Button { note = true } label: { Image(systemName: "square.and.pencil") }
+        .help("补写 History").keyboardShortcut("n", modifiers: .command)
+    }
+  }
+
+  func shift(_ days: Int) {
+    guard let d = Calendar.current.date(byAdding: .day, value: days, to: day), d <= Date() else { return }
+    store.historyDay = Calendar.current.startOfDay(for: d)
+  }
+}
+
+struct HourMark: View {
+  let hour: Int
+  var body: some View {
+    HStack(spacing: 10) {
+      Text(String(format: "%02d:00", hour)).font(.mono(10.5, .medium)).foregroundStyle(.tertiary)
+        .frame(width: RecordRow.timeWidth, alignment: .trailing)
+      Rectangle().fill(Palette.hairline).frame(height: 1)
+    }
+    .padding(.vertical, 6)
+  }
+}
+
+struct RecordRow: View {
+  static let timeWidth: CGFloat = 86
+  let record: HistoryRecord
+  let run: RecordRun?
+  let selected: Bool
+  let expanded: Bool
+  var nested = false
+  let action: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(alignment: .center, spacing: 12) {
+        Text(timeText)
+          .font(.mono(11))
+          .foregroundStyle(.secondary)
+          .frame(width: Self.timeWidth, alignment: .trailing)
+          .lineLimit(1)
+        Group {
+          if nested { Circle().fill(Palette.source(record.source)).frame(width: 5, height: 5) }
+          else { SourceGlyph(source: record.source, app: record.contextText("app"), size: 22) }
+        }
+        .frame(width: 26)
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(spacing: 6) {
+            Text(record.title.isEmpty ? SourceInfo.name(record.source) : record.title)
+              .font(.system(size: nested ? 12 : 13, weight: nested ? .regular : .medium))
+              .foregroundStyle(nested ? .secondary : .primary)
+              .lineLimit(1)
+            badges
+          }
+          if !nested, let sub = subtitle {
+            Text(sub).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+          }
+        }
+        Spacer(minLength: 8)
+        if let run, run.records.count > 1 {
+          HStack(spacing: 3) {
+            Text("×\(run.records.count)").monospacedDigit()
+            Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
+          }
+          .font(.system(size: 10.5, weight: .semibold))
+          .foregroundStyle(.secondary)
+          .padding(.horizontal, 6).padding(.vertical, 2)
+          .background(.primary.opacity(0.06), in: Capsule())
+        }
+        if let d = durationText {
+          Text(d).font(.system(size: 11)).monospacedDigit().foregroundStyle(.tertiary).frame(minWidth: 44, alignment: .trailing)
+        }
+      }
+      .padding(.vertical, nested ? 3 : 6)
+      .padding(.horizontal, 8)
+      .background(alignment: .leading) {
+        Rectangle().fill(Palette.hairline).frame(width: 1).padding(.leading, 8 + Self.timeWidth + 12 + 12.5)
+      }
+      .background {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .fill(selected ? Palette.accent.opacity(0.13) : (hovering ? Color.primary.opacity(0.04) : .clear))
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+  }
+
+  @ViewBuilder var badges: some View {
+    if record.capture?.method == "ocr" { badge("OCR") }
+    if record.sensitivity == "redacted" || (record.redactions ?? 0) > 0 { badge("已脱敏", tint: .orange) }
+    if record.sensitivity == "private" { Image(systemName: "lock.fill").font(.system(size: 9)).foregroundStyle(.secondary) }
+  }
+  func badge(_ text: String, tint: Color = .secondary) -> some View {
+    Text(text).font(.system(size: 9, weight: .semibold)).foregroundStyle(tint)
+      .padding(.horizontal, 4).padding(.vertical, 1)
+      .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(tint.opacity(0.4), lineWidth: 0.5))
+  }
+
+  var timeText: String {
+    let start = run?.start ?? record.start
+    let end = run?.end ?? record.end
+    if let end, ViewerFormat.clock(end) != ViewerFormat.clock(start), !nested || record.isSpan {
+      return ViewerFormat.clock(start) + "–" + ViewerFormat.clock(end)
+    }
+    return ViewerFormat.clock(record.start)
+  }
+
+  var durationText: String? {
+    let s = run?.seconds ?? record.seconds
+    return s >= 1 ? ViewerFormat.duration(s) : nil
+  }
+
+  var subtitle: String? {
+    if let url = record.contextText("url"), let host = URL(string: url)?.host() { return host }
+    if let repo = record.contextText("repo") ?? record.contextText("cwd") { return (repo as NSString).abbreviatingWithTildeInPath }
+    return nil
+  }
+}
