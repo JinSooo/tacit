@@ -4,7 +4,10 @@ import CollectorCore
 
 /// 右侧检查器：一条记录的全部内容、上下文、修正和删除。
 struct RecordInspector: View {
+  /// 记录所在的活动段，点了回到那一段。
+  struct Back { let title: String; let action: () -> Void }
   let id: String
+  var back: Back? = nil
   let onDelete: ([String]) -> Void
   @Environment(ViewerStore.self) private var store
   @State private var detail: RecordDetail?
@@ -37,6 +40,16 @@ struct RecordInspector: View {
     let r = d.record, cur = d.current
     return ScrollView {
       VStack(alignment: .leading, spacing: 20) {
+        if let back {
+          Button(action: back.action) {
+            HStack(spacing: 4) {
+              Image(systemName: "chevron.left").font(.system(size: 9, weight: .semibold))
+              Text(back.title).lineLimit(1)
+            }
+          }
+          .buttonStyle(.link).font(.caption)
+          .padding(.bottom, -8)
+        }
         header(r)
         if cur.id != r.id {
           HStack(spacing: 6) {

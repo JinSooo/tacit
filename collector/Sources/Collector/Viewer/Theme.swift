@@ -92,9 +92,14 @@ enum SourceInfo {
     cache[bundle] = image
     return image
   }
+  private static var names: [String: String?] = [:]
   static func name(_ bundle: String?) -> String? {
-    guard let bundle, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else { return nil }
-    return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+    guard let bundle else { return nil }
+    if let hit = names[bundle] { return hit }
+    let name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
+      .map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") }
+    names[bundle] = name
+    return name
   }
 }
 

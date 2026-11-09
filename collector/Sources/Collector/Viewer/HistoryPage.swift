@@ -2,14 +2,19 @@ import AppKit
 import SwiftUI
 import CollectorCore
 
+/// 一天的 History：列表按活动段聚合（线程或应用），展开才是原始记录；搜索时按记录显示命中。
 struct HistoryPage: View {
+  enum Selection: Hashable { case segment(String), record(String) }
+
   @Environment(ViewerStore.self) private var store
   @State private var records: [HistoryRecord] = []
+  @State private var segments: [HistorySegment] = []
   @State private var diary: DayDiary?
   @State private var loading = false
   @State private var error: String?
-  @State private var selection: String?
+  @State private var selection: Selection?
   @State private var expanded: Set<String> = []
+  @State private var scrollTarget: String?
   @State private var brush: ClosedRange<Date>?
   @State private var lane: Lane?
   @State private var device: String?
@@ -31,6 +36,22 @@ struct HistoryPage: View {
     }
   }
 
+  /// 全部活动段（检查器、定位记录用）；列表用按筛选裁过的 blocks。
+  var allBlocks: [SegmentBlock] { SegmentBlocks.join(segments, records: records) }
+  var blocks: [SegmentBlock] {
+    lane == nil && device == nil && brush == nil ? allBlocks : SegmentBlocks.join(segments, records: records, visible: Set(visible.map(\.id)))
+  }
+  var selectedRecord: String? { if case .record(let id)? = selection { return id }; return nil }
+
+  /// 选中一条记录：展开它所在的段并滚过去。
+  func reveal(_ id: String) {
+    selection = .record(id)
+    if let block = allBlocks.first(where: { $0.segment.recordIds.contains(id) }) {
+      expanded.insert(block.id)
+      scrollTarget = block.id
+    }
+  }
+
   var chapters: [DayStrata.Chapter] {
     (diary?.detail?.timeline ?? []).enumerated().compactMap { i, c in
       guard let s = ViewerTime.clockOnDay(c.start, day: day), var e = ViewerTime.clockOnDay(c.end, day: day) else { return nil }
@@ -47,10 +68,10 @@ struct HistoryPage: View {
       }
       .scrollContentBackground(.hidden)
       .background(Palette.paper)
-      .onChange(of: selection) { _, id in
-        guard let id, let run = runs.first(where: { $0.records.contains { $0.id == id } }) else { return }
-        if run.records.count > 1 && run.id != id { expanded.insert(run.id) }
-        withAnimation(.smooth) { proxy.scrollTo(id == run.id ? run.id : id, anchor: .center) }
+      .onChange(of: scrollTarget) { _, id in
+        guard let id else { return }
+        withAnimation(.smooth) { proxy.scrollTo(id, anchor: .center) }
+        scrollTarget = nil
       }
     }
     .navigationTitle(isSearch ? "搜索" : ViewerFormat.dayTitle(day))
@@ -58,17 +79,8 @@ struct HistoryPage: View {
     .searchable(text: $store.historySearch, placement: .toolbar, prompt: "搜索 History")
     .toolbar { toolbar }
     .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { selection = nil } })) {
-      Group {
-        if let id = selection {
-          RecordInspector(id: id) { deleted in
-            records.removeAll { deleted.contains($0.id) }
-            results.removeAll { deleted.contains($0.id) }
-            selection = nil
-          }
-          .id(id)
-        }
-      }
-      .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
+      inspector
+        .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
     }
     .sheet(isPresented: $note) { NoteSheet { store.revision += 1 } }
     .task(id: LoadKey(day: day, revision: store.revision)) { await loadDay() }
@@ -80,19 +92,39 @@ struct HistoryPage: View {
     .onKeyPress(.escape) { if selection != nil { selection = nil; return .handled }; if brush != nil { brush = nil; return .handled }; return .ignored }
   }
 
+  @ViewBuilder var inspector: some View {
+    switch selection {
+    case .segment(let id)?:
+      if let block = allBlocks.first(where: { $0.id == id }) {
+        SegmentInspector(block: block) { selection = .record($0) }
+          .id(id)
+      }
+    case .record(let id)?:
+      // 从段里点进来的记录可以回到那一段。
+      let parent = isSearch ? nil : allBlocks.first { $0.segment.recordIds.contains(id) }
+      RecordInspector(id: id, back: parent.map { b in .init(title: SegmentText.title(b)) { selection = .segment(b.id) } }) { deleted in
+        records.removeAll { deleted.contains($0.id) }
+        results.removeAll { deleted.contains($0.id) }
+        selection = nil
+      }
+      .id(id)
+    case nil:
+      EmptyView()
+    }
+  }
+
   struct LoadKey: Equatable { let day: Date; let revision: Int }
 
   func consumeFocus() {
-    guard let id = store.historyFocus, records.contains(where: { $0.id == id }) else {
-      if let id = store.historyFocus, !loading, !records.isEmpty, !records.contains(where: { $0.id == id }) {
-        // 不在当天列表里（例如修正记录），直接在检查器里打开。
-        selection = id; store.historyFocus = nil
-      }
-      return
+    guard let id = store.historyFocus else { return }
+    if records.contains(where: { $0.id == id }) {
+      lane = nil; brush = nil
+      reveal(id)
+      store.historyFocus = nil
+    } else if !loading, !records.isEmpty {
+      // 不在当天列表里（例如修正记录），直接在检查器里打开。
+      selection = .record(id); store.historyFocus = nil
     }
-    lane = nil; brush = nil
-    selection = id
-    store.historyFocus = nil
   }
 
   // MARK: 读取
@@ -102,12 +134,14 @@ struct HistoryPage: View {
     defer { loading = false }
     do {
       async let r = store.api.day(day)
+      async let s = store.api.segments(day)
       async let d = store.api.diary(day)
-      let (rows, diary) = try await (r, d)
+      let (rows, segs, diary) = try await (r, s, d)
+      segments = segs
       records = rows.sorted { ($0.start, $0.id) > ($1.start, $1.id) }
       self.diary = diary
     } catch is CancellationError {
-    } catch { self.error = error.localizedDescription; records = []; diary = nil }
+    } catch { self.error = error.localizedDescription; records = []; segments = []; diary = nil }
   }
 
   func search(reset: Bool) async {
@@ -124,11 +158,10 @@ struct HistoryPage: View {
     } catch { self.error = error.localizedDescription }
   }
 
-  var runs: [RecordRun] { RecordRuns.collapse(visible) }
-
   // MARK: 一天
 
   @ViewBuilder var dayList: some View {
+    let blocks = self.blocks
     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
       dayHeader
         .padding(.horizontal, 32).padding(.top, 26).padding(.bottom, 18)
@@ -139,12 +172,12 @@ struct HistoryPage: View {
           Placeholder(kind: .error(error) { store.revision += 1 }).frame(height: 240)
         } else if records.isEmpty {
           Placeholder(kind: .empty("moon.zzz", "这一天没有记录")).frame(height: 260)
-        } else if visible.isEmpty {
+        } else if blocks.isEmpty {
           Placeholder(kind: .empty("line.3.horizontal.decrease", "筛选后没有记录")).frame(height: 200)
         } else {
           // 修饰符加在 ForEach 上会分发给每一行，留白用独立的占位视图。
           Color.clear.frame(height: 6)
-          rows(runs, hourMarks: true)
+          segmentRows(blocks)
           Color.clear.frame(height: 40)
         }
       } header: {
@@ -189,7 +222,7 @@ struct HistoryPage: View {
   var stats: some View {
     let active = activeSeconds(records)
     return HStack(spacing: 18) {
-      stat(String(records.count), "条记录")
+      stat(String(allBlocks.count), "段活动")
       stat(ViewerFormat.compact(active), "活跃")
       if let first = records.map(\.start).min() { stat(ViewerFormat.clock(first), "开始") }
     }
@@ -215,8 +248,8 @@ struct HistoryPage: View {
 
   var strataHeader: some View {
     VStack(alignment: .leading, spacing: 8) {
-      DayStrata(records: records.filter { device == nil || $0.device == device }, chapters: chapters, day: day, selected: selection,
-                brush: $brush, lane: $lane) { r in selection = r.id }
+      DayStrata(records: records.filter { device == nil || $0.device == device }, chapters: chapters, day: day, selected: selectedRecord,
+                brush: $brush, lane: $lane) { r in reveal(r.id) }
       if brush != nil || lane != nil {
         HStack(spacing: 8) {
           if let b = brush { chip("\(ViewerFormat.clock(b.lowerBound))–\(ViewerFormat.clock(b.upperBound))", "clock") { brush = nil } }
@@ -252,30 +285,40 @@ struct HistoryPage: View {
 
   // MARK: 行
 
-  @ViewBuilder func rows(_ runs: [RecordRun], hourMarks: Bool, query: String? = nil) -> some View {
+  /// 每段一张卡片；展开后列出原始记录（相邻同标题的合成一行）。
+  @ViewBuilder func segmentRows(_ blocks: [SegmentBlock]) -> some View {
     let cal = Calendar.current
-    ForEach(Array(runs.enumerated()), id: \.element.id) { i, run in
-      let hour = cal.component(.hour, from: run.newest.start)
-      if hourMarks, i == 0 || cal.component(.hour, from: runs[i - 1].newest.start) != hour {
+    ForEach(Array(blocks.enumerated()), id: \.element.id) { i, block in
+      let hour = cal.component(.hour, from: block.segment.start)
+      if i == 0 || cal.component(.hour, from: blocks[i - 1].segment.start) != hour {
         HourMark(hour: hour).padding(.top, i == 0 ? 4 : 14).padding(.horizontal, 20)
       }
-      RecordRow(record: run.newest, run: run, selected: selection == run.id, expanded: expanded.contains(run.id),
-                snippet: query.flatMap { SearchSnippet.make(run.newest.body ?? "", query: $0) }) {
-        if run.records.count > 1 {
-          withAnimation(.smooth(duration: 0.25)) { if expanded.contains(run.id) { expanded.remove(run.id) } else { expanded.insert(run.id) } }
-        }
-        selection = run.id
+      SegmentRow(block: block, selected: selection == .segment(block.id), expanded: expanded.contains(block.id)) {
+        withAnimation(.smooth(duration: 0.25)) { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
+        selection = .segment(block.id)
       }
       .padding(.horizontal, 20)
-      .id(run.id)
-      if expanded.contains(run.id) {
-        ForEach(run.records.dropFirst()) { r in
-          RecordRow(record: r, run: nil, selected: selection == r.id, expanded: false, nested: true) { selection = r.id }
-            .padding(.horizontal, 20)
-            .id(r.id)
-            .transition(.opacity)
+      .id(block.id)
+      if expanded.contains(block.id) {
+        ForEach(RecordRuns.collapse(block.records)) { run in
+          RecordRow(record: run.newest, run: run, selected: run.records.contains { $0.id == selectedRecord }, expanded: false, nested: true) {
+            selection = .record(run.newest.id)
+          }
+          .padding(.horizontal, 20)
+          .id(run.id)
+          .transition(.opacity)
         }
+        Color.clear.frame(height: 6)
       }
+    }
+  }
+
+  func searchRows(_ rows: [HistoryRecord]) -> some View {
+    ForEach(rows) { r in
+      RecordRow(record: r, run: nil, selected: selectedRecord == r.id, expanded: false,
+                snippet: SearchSnippet.make(r.body ?? "", query: store.historySearch)) { selection = .record(r.id) }
+        .padding(.horizontal, 20)
+        .id(r.id)
     }
   }
 
@@ -297,8 +340,7 @@ struct HistoryPage: View {
             Button("看这一天") { store.historySearch = ""; store.historyDay = day }.buttonStyle(.link).font(.caption)
           }
           .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 6)
-          self.rows(rows.sorted { $0.start > $1.start }.map { RecordRun(records: [$0]) }, hourMarks: false,
-                    query: store.historySearch)
+          searchRows(rows.sorted { $0.start > $1.start })
         }
         if cursor != nil {
           ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(24)
@@ -417,7 +459,9 @@ struct RecordRow: View {
         if let run, run.records.count > 1 {
           HStack(spacing: 3) {
             Text("×\(run.records.count)").monospacedDigit()
-            Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
+            if !nested {
+              Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
+            }
           }
           .font(.system(size: 10.5, weight: .semibold))
           .foregroundStyle(.secondary)

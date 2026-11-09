@@ -139,6 +139,39 @@ public struct SearchSnippet: Equatable, Sendable {
   }
 }
 
+/// History 列表里的一块：一段活动和它当前可见的记录（新的在前）。
+public struct SegmentBlock: Identifiable, Hashable, Sendable {
+  public let segment: HistorySegment
+  public let records: [HistoryRecord]
+  public init(segment: HistorySegment, records: [HistoryRecord]) { self.segment = segment; self.records = records }
+  public var id: String { segment.id }
+}
+
+public enum SegmentBlocks {
+  /// 把 hub 给的活动段和当天读到的记录对上，按开始时间从新到旧排列。
+  /// visible 不为 nil 时只保留其中的记录，一条都不剩的段不显示。
+  /// 不在任何段里的记录（两次读取之间新到的）各自成一段，不让记录从列表里消失。
+  public static func join(_ segments: [HistorySegment], records: [HistoryRecord], visible: Set<String>? = nil) -> [SegmentBlock] {
+    let byID = Dictionary(records.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    let keep = { (id: String) in visible?.contains(id) ?? true }
+    var covered = Set<String>()
+    var blocks: [SegmentBlock] = []
+    for s in segments {
+      covered.formUnion(s.recordIds)
+      let rows = s.recordIds.compactMap { byID[$0] }.filter { keep($0.id) }
+      if !rows.isEmpty { blocks.append(SegmentBlock(segment: s, records: rows.sorted { ($0.start, $0.id) > ($1.start, $1.id) })) }
+    }
+    for r in records where !covered.contains(r.id) && keep(r.id) {
+      let s = HistorySegment(id: "r:\(r.id)", kind: "app", startMs: r.start.timeIntervalSince1970 * 1000,
+                             endMs: (r.end ?? r.start).timeIntervalSince1970 * 1000, thread: nil,
+                             apps: [.init(app: r.contextText("app"), source: r.source, records: 1, seconds: r.seconds)],
+                             activeSeconds: r.seconds, recordIds: [r.id], privateCount: r.sensitivity == "private" ? 1 : 0)
+      blocks.append(SegmentBlock(segment: s, records: [r]))
+    }
+    return blocks.sorted { ($0.segment.startMs, $0.id) > ($1.segment.startMs, $1.id) }
+  }
+}
+
 /// 一天的条带图里，来源归到的泳道。
 public enum Lane: Int, CaseIterable, Sendable {
   case screen, browser, agent, terminal, voice, other

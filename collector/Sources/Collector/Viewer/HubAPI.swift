@@ -94,6 +94,13 @@ final class HubAPI: @unchecked Sendable {
   }
 
   func record(_ id: String) async throws -> RecordDetail { try await get(RecordDetail.self, "/v1/records/\(id)") }
+
+  /// 一天的活动段（hub 按线程或应用聚合，不调用模型）。
+  func segments(_ day: Date, device: String? = nil) async throws -> [HistorySegment] {
+    struct R: Decodable { let segments: [HistorySegment] }
+    let bounds = ViewerTime.dayQuery(day)
+    return try await get(R.self, "/v1/history/segments", ["from": bounds.from, "to": bounds.to, "device": device]).segments
+  }
   func deleteRecord(_ id: String) async throws { try await send("DELETE", "/v1/records/\(id)") }
 
   func saveManual(_ record: [String: Any]) async throws {

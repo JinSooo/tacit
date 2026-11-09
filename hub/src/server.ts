@@ -7,6 +7,7 @@ import { realpath, stat } from "node:fs/promises";
 import { resolve, extname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HubDB, InputError } from "./db.ts";
+import { historySegments } from "./history.ts";
 
 const defaultWebDir = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'";
@@ -134,6 +135,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
         return Response.json(db.ingest((body as { records: unknown[] }).records));
       }
       if (method === "GET" && url.pathname === "/v1/records") return Response.json(db.list(url.searchParams));
+      if (method === "GET" && url.pathname === "/v1/history/segments") return Response.json(historySegments(db,url.searchParams));
       if (method === "POST" && url.pathname === "/v1/records") {
         const record = await readJSON();
         if (!record || typeof record !== "object" || typeof (record as { source?: unknown }).source !== "string"

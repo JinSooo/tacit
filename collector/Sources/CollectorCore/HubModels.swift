@@ -247,3 +247,47 @@ public enum HubJSON {
     return d
   }
 }
+
+/// History 列表的一段活动（hub 的 /v1/history/segments）：同一线程接得上的记录合成一段，未提炼的按应用临时分组。
+public struct HistorySegment: Decodable, Identifiable, Hashable, Sendable {
+  public struct App: Decodable, Hashable, Sendable {
+    public let app: String?
+    public let source: String
+    public let records: Int
+    public let seconds: Double
+    public init(app: String?, source: String, records: Int, seconds: Double) {
+      self.app = app; self.source = source; self.records = records; self.seconds = seconds
+    }
+  }
+  public struct ThreadRef: Decodable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+    public let brief: String?
+    public let status: String?
+    public let domain: String?
+    public let projectId: String?
+    public let projectName: String?
+  }
+  public let id: String
+  /// "thread"，或 "app"（还没提炼，按应用临时分组）。
+  public let kind: String
+  public let startMs: Double
+  public let endMs: Double
+  public let thread: ThreadRef?
+  public let apps: [App]
+  public let activeSeconds: Double
+  /// 从早到晚。
+  public let recordIds: [String]
+  public let privateCount: Int
+
+  enum CodingKeys: String, CodingKey { case id, kind, startMs, endMs, thread, apps, activeSeconds, recordIds, privateCount = "private" }
+
+  public init(id: String, kind: String, startMs: Double, endMs: Double, thread: ThreadRef?, apps: [App], activeSeconds: Double,
+              recordIds: [String], privateCount: Int) {
+    self.id = id; self.kind = kind; self.startMs = startMs; self.endMs = endMs; self.thread = thread
+    self.apps = apps; self.activeSeconds = activeSeconds; self.recordIds = recordIds; self.privateCount = privateCount
+  }
+
+  public var start: Date { Date(timeIntervalSince1970: startMs / 1000) }
+  public var end: Date { Date(timeIntervalSince1970: endMs / 1000) }
+}
