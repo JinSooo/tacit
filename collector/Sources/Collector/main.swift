@@ -195,6 +195,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     let recording = item("录音", #selector(toggleRecording))
     recording.state = recordingEnabled ? .on : .off; menu.addItem(recording)
+    let microphones = NSMenu()
+    let micSetting = UserDefaults.standard.string(forKey: "micDevice") ?? "builtin"
+    func addMicrophone(_ name: String, _ value: String) {
+      let choice = item(name, #selector(selectMicrophone(_:)))
+      choice.representedObject = value; choice.state = micSetting == value ? .on : .off
+      microphones.addItem(choice)
+    }
+    addMicrophone("自带麦克风（默认）", "builtin")
+    addMicrophone("跟随系统默认", "system")
+    microphones.addItem(.separator())
+    do {
+      let devices = try MicrophoneDevices.inputs()
+      for device in devices { addMicrophone(device.name, device.uid) }
+      if micSetting != "builtin", micSetting != "system", !devices.contains(where: { $0.uid == micSetting }) {
+        let missing = disabled("所选设备已断开"); missing.state = .on; microphones.addItem(missing)
+      }
+    } catch { microphones.addItem(disabled("无法读取输入设备")) }
+    let microphoneMenu = NSMenuItem(title: "麦克风", action: nil, keyEquivalent: "")
+    microphoneMenu.submenu = microphones; menu.addItem(microphoneMenu)
     for line in audio.status() { menu.addItem(disabled(line)) }
 
     let o = item("读不到文字时用 OCR", #selector(toggleOCR))
@@ -229,6 +248,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func pause(until: Date) { pausedUntil = until; closeSegment(); updateAudio(); updateIcon() }
   @objc func resume() { pausedUntil = nil; updateAudio(); updateIcon() }
   @objc func toggleRecording() { recordingEnabled.toggle(); updateAudio() }
+  @objc func selectMicrophone(_ sender: NSMenuItem) {
+    guard let setting = sender.representedObject as? String else { return }
+    audio.selectMicrophone(setting)
+  }
   @objc func toggleOCR() {
     ocrEnabled.toggle()
     if ocrEnabled && !ocr.granted { ocr.requestAccess() }

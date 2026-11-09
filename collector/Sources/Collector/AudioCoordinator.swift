@@ -13,6 +13,16 @@ final class AudioCoordinator {
   private var snapshot: [String] = []
   private var store: AudioStore?
   private var mic: Microphone?
+  private var micGeneration = UUID()
+  private var micSetting = UserDefaults.standard.string(forKey: "micDevice") ?? "builtin"
+  private var inputDevices: [InputAudioDevice] = []
+  private var defaultInput: UInt32?
+  private var micStatus = "麦克风未录音"
+  private var micFailure: String?
+  private var lastMicStart = Date.distantPast
+  private lazy var deviceObserver = MicrophoneDeviceObserver(queue: queue) { [weak self] in
+    self?.devicesChanged()
+  }
   private var tapStop: (() -> Void)?
   private var pipelines: [AudioTrack: AudioPipeline] = [:]
   private var current: AudioMetadata?
@@ -62,7 +72,8 @@ final class AudioCoordinator {
       }
       self.enabled = enabled
       if !enabled { stop() }
-      else if mic == nil && now.timeIntervalSince(lastStart) >= 60 { start() }
+      else if tapStop == nil && now.timeIntervalSince(lastStart) >= 60 { start() }
+      else if tapStop != nil && mic == nil && now.timeIntervalSince(lastMicStart) >= 60 { rebuildMicrophone() }
       if current != nil {
         // 给 VAD 的最短人声/静音窗口留 1 秒判定时间，避免第 60 秒附近的人声被提前切断。
         if boundary.shouldClose(at: now.addingTimeInterval(-1)), !pipelines.values.contains(where: { $0.speechActive }) { tryOperation { try close() } }
@@ -82,7 +93,7 @@ final class AudioCoordinator {
   private var healthLastFrame: Date?
   func shutdown() {
     queue.sync {
-      enabled = false; stop()
+      enabled = false; deviceObserver.stop(); stop()
       if let worker, worker.isRunning {
         worker.terminate()
         let deadline = Date().addingTimeInterval(3)
@@ -98,47 +109,115 @@ final class AudioCoordinator {
     guard #available(macOS 14.2, *) else { failure = "系统声音录音需要 macOS 14.2 或更新版本"; return }
     do {
       generation = UUID(); let session = generation
-      for track in [AudioTrack.mic, .sys] {
-        pipelines[track] = try AudioPipeline(modelPath: model, emit: { [weak self] samples, start, end in
-          try self?.save(samples, track: track, start: start, end: end)
-        }, level: { [weak self] dbfs, start, end in
-          if track == .mic { self?.health.observe(dbfs: dbfs, start: start, end: end, enabled: true); self?.healthLastFrame = end }
-        })
-      }
-      func buffer(_ track: AudioTrack) -> CaptureBuffer {
-        CaptureBuffer(receive: { [weak self] samples, rate, host in
-          guard let self else { return }
-          guard self.slots.wait(timeout: .now()) == .success else {
-            self.inputFailure("音频处理跟不上，已停止录音", session: session); return
-          }
-          self.queue.async {
-            defer { self.slots.signal() }
-            guard self.enabled, self.generation == session else { return }
-            do { try self.pipelines[track]?.accept(samples, rate: rate, host: host) }
-            catch { self.failure = "音频处理失败：\(error)"; self.stop() }
-          }
-        }, failure: { [weak self] text in self?.inputFailure(text, session: session) })
-      }
-      sessionStarted = Date(); healthLastFrame = nil; health.reset()
-      let microphone = Microphone(buffer: buffer(.mic)); mic = microphone
-      try microphone.start()
-      let tap = SystemTap(buffer: buffer(.sys)); tapStop = { tap.stop() }
+      pipelines[.sys] = try AudioPipeline(modelPath: model, emit: { [weak self] samples, start, end in
+        try self?.save(samples, track: .sys, start: start, end: end)
+      }, level: { _, _, _ in })
+      rebuildMicrophone()
+      let tap = SystemTap(buffer: captureBuffer(.sys, session: session)); tapStop = { tap.stop() }
       try tap.start()
       failure = nil
     } catch { failure = "录音启动失败：\(error)"; stop() }
+    publish()
   }
-  private func inputFailure(_ text: String, session: UUID) {
+  /// 每路分别标记代次，设备切换后丢弃旧麦克风排队中的帧，不影响系统声音。
+  private func captureBuffer(_ track: AudioTrack, session: UUID) -> CaptureBuffer {
+    CaptureBuffer(receive: { [weak self] samples, rate, host in
+      guard let self else { return }
+      guard self.slots.wait(timeout: .now()) == .success else {
+        self.inputFailure("音频处理跟不上，已停止该路录音", track: track, session: session); return
+      }
+      self.queue.async {
+        defer { self.slots.signal() }
+        guard self.enabled, self.isCurrent(track, session: session) else { return }
+        do { try self.pipelines[track]?.accept(samples, rate: rate, host: host) }
+        catch {
+          if track == .mic { self.micFailure = "麦克风处理失败：\(error)"; self.stopMicrophone() }
+          else { self.failure = "音频处理失败：\(error)"; self.stop() }
+          self.publish()
+        }
+      }
+    }, failure: { [weak self] text in self?.inputFailure(text, track: track, session: session) })
+  }
+  private func isCurrent(_ track: AudioTrack, session: UUID) -> Bool {
+    (track == .mic ? micGeneration : generation) == session
+  }
+  private func inputFailure(_ text: String, track: AudioTrack, session: UUID) {
     queue.async { [weak self] in
-      guard let self, self.generation == session else { return }
-      self.failure = text; self.stop()
+      guard let self, self.isCurrent(track, session: session) else { return }
+      if track == .mic { self.micFailure = text; self.stopMicrophone() }
+      else { self.failure = text; self.stop() }
+      self.publish()
     }
+  }
+  func selectMicrophone(_ setting: String) {
+    queue.async { [self] in
+      UserDefaults.standard.set(setting, forKey: "micDevice")
+      micSetting = setting
+      if enabled && tapStop != nil { rebuildMicrophone() }
+      else {
+        do { try deviceObserver.observe(systemDefault: micSetting == "system") }
+        catch { micFailure = "监听麦克风设备失败：\(error)" }
+      }
+      publish()
+    }
+  }
+  private func devicesChanged() {
+    do {
+      let devices = try MicrophoneDevices.inputs()
+      let defaultDevice = micSetting == "system" ? MicrophoneDevices.defaultInput() : nil
+      // process tap 的 aggregate device 也会触发设备列表事件；输入列表没变就不重建。
+      guard devices != inputDevices || defaultDevice != defaultInput else { return }
+      inputDevices = devices; defaultInput = defaultDevice
+      if enabled && tapStop != nil { rebuildMicrophone() }
+      publish()
+    } catch { micFailure = "读取麦克风设备失败：\(error)"; publish() }
+  }
+  private func stopMicrophone() {
+    micGeneration = UUID(); mic?.stop(); mic = nil
+    if let pipeline = pipelines.removeValue(forKey: .mic) { tryOperation { try pipeline.flush() } }
+    health.reset(); healthLastFrame = nil; micStatus = "麦克风未录音"
+  }
+  private func rebuildMicrophone() {
+    stopMicrophone(); lastMicStart = Date(); micFailure = nil
+    do {
+      try deviceObserver.observe(systemDefault: micSetting == "system")
+      inputDevices = try MicrophoneDevices.inputs()
+      defaultInput = micSetting == "system" ? MicrophoneDevices.defaultInput() : nil
+      let selection = MicrophoneSelection.resolve(devices: inputDevices.map(\.descriptor), setting: micSetting)
+      let device: UInt32?
+      switch selection {
+      case .system: device = nil
+      case .device(let uid, _):
+        guard let selected = inputDevices.first(where: { $0.uid == uid }) else { throw AudioCaptureError("所选麦克风已断开") }
+        device = selected.id
+      case .unavailable:
+        micStatus = selection.notice ?? "找不到自带麦克风"; publish(); return
+      }
+      let model = config.dataDir.appendingPathComponent("models/silero_vad.onnx").path
+      pipelines[.mic] = try AudioPipeline(modelPath: model, emit: { [weak self] samples, start, end in
+        try self?.save(samples, track: .mic, start: start, end: end)
+      }, level: { [weak self] dbfs, start, end in
+        self?.health.observe(dbfs: dbfs, start: start, end: end, enabled: true); self?.healthLastFrame = end
+      })
+      sessionStarted = Date()
+      let microphone = Microphone(buffer: captureBuffer(.mic, session: micGeneration), device: device)
+      mic = microphone
+      try microphone.start()
+      let actualName = inputDevices.first { $0.id == microphone.actualDevice }?.name ?? "系统默认输入"
+      micStatus = "麦克风：\(actualName)"
+      if let notice = selection.notice { micStatus += " · \(notice)" }
+    } catch {
+      stopMicrophone(); micFailure = "麦克风启动失败：\(error)"
+    }
+    publish()
   }
   private func stop() {
     guard mic != nil || !pipelines.isEmpty else { return }
-    generation = UUID(); mic?.stop(); mic = nil; tapStop?(); tapStop = nil
+    generation = UUID(); stopMicrophone(); tapStop?(); tapStop = nil
     for pipeline in pipelines.values { tryOperation { try pipeline.flush() } }
     tryOperation { try close() }
     pipelines = [:]; health.reset(); healthLastFrame = nil
+    publish()
   }
   private func save(_ samples: [Float], track: AudioTrack, start: Date, end: Date) throws {
     guard let store else { return }
@@ -241,6 +320,8 @@ final class AudioCoordinator {
     let today = all.filter { AudioPolicy.date($0.t_start).map { Calendar.current.isDateInToday($0) } ?? false }.count
     let pending = all.filter { [.closed, .waiting_me, .failed].contains($0.status) }.count
     var lines = ["今天 \(today) 段对话 · 待转写 \(pending) 段"]
+    lines.append(micStatus)
+    if let micFailure { lines.append(micFailure) }
     if health.warning { lines.append("麦克风可能没有权限") }
     if let failure { lines.append(failure) }
     snapshotLock.lock(); snapshot = lines; snapshotLock.unlock()

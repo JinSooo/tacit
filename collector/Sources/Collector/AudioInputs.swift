@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import CoreAudio
+import AudioToolbox
 import Darwin
 import CollectorCore
 
@@ -24,10 +25,21 @@ struct AudioCaptureError: Error, CustomStringConvertible { let description: Stri
 final class Microphone {
     let engine = AVAudioEngine()
     let buffer: CaptureBuffer
-    init(buffer: CaptureBuffer) { self.buffer = buffer }
+    let device: AudioDeviceID?
+    private(set) var actualDevice: AudioDeviceID?
+    init(buffer: CaptureBuffer, device: AudioDeviceID?) { self.buffer = buffer; self.device = device }
     var installed = false
     func start() throws {
         let input = engine.inputNode
+        guard let unit = input.audioUnit else { throw AudioCaptureError("麦克风 AudioUnit 不可用") }
+        if var device {
+            try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                           &device, UInt32(MemoryLayout<AudioDeviceID>.size)), "选择麦克风")
+        }
+        var actual: AudioDeviceID = 0, size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        try check(AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &actual, &size), "读取实际麦克风")
+        guard actual != 0, device == nil || actual == device else { throw AudioCaptureError("麦克风未切换到指定设备") }
+        actualDevice = actual
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw AudioCaptureError("麦克风格式不可用") }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [buffer] pcm, time in
