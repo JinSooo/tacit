@@ -77,8 +77,8 @@ enum SourceInfo {
     }
   }
   static let factLabels: [(kind: String, label: String, symbol: String)] = [
-    ("decision", "已定", "checkmark.seal.fill"), ("next", "下一步", "arrow.right.circle.fill"), ("open", "未决", "questionmark.circle.fill"),
-    ("rejected", "否决", "xmark.circle.fill"), ("inference", "推测", "sparkle"),
+    ("next", "下一步", "arrow.right.circle.fill"), ("open", "未决", "questionmark.circle.fill"), ("decision", "已定", "checkmark.seal.fill"),
+    ("inference", "推测", "sparkle"), ("rejected", "否决", "xmark.circle.fill"),
   ]
 }
 
