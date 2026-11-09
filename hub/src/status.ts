@@ -99,15 +99,11 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number }) {
   const nowState = state("now") as { updated_at?: unknown } | null;
   const deletes = (sql.prepare("SELECT v FROM audio_settings WHERE k GLOB 'delete:*'").all() as { v: string }[])
     .reduce((n, r) => { try { const v = JSON.parse(r.v); return n + (Array.isArray(v) ? v.length : 0); } catch { return n; } }, 0);
-  // 提炼请求队列（distill_requests，库版本 6）可能还不存在；没有表时如实返回 null，有 status 列再按状态计数。
-  let requests: { total: number; by_status: Counts | null } | null = null;
-  if (sql.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='distill_requests'").get()) {
-    const hasStatus = (sql.prepare("PRAGMA table_info(distill_requests)").all() as { name: string }[]).some(c => c.name === "status");
-    requests = {
-      total: scalar<number>("SELECT COUNT(*) FROM distill_requests"),
-      by_status: hasStatus ? counts("SELECT status AS k,COUNT(*) AS n FROM distill_requests GROUP BY status") : null,
-    };
-  }
+  // 提炼请求队列（distill_requests，库版本 6 起一定存在）。
+  const requests = {
+    total: scalar<number>("SELECT COUNT(*) FROM distill_requests"),
+    by_status: counts("SELECT status AS k,COUNT(*) AS n FROM distill_requests GROUP BY status"),
+  };
 
   return {
     generated_at: toLocalIso(now),

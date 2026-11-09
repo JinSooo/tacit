@@ -77,16 +77,15 @@ test("GET /v1/status 需要 token；空库也能返回", async () => {
   expect(body.distill.last_round_at).toBeNull();
   expect(body.distill.last_error).toBeNull();
   expect(body.llm_today.total.calls).toBe(0);
-  expect(body.distill.requests).toBeNull();
+  expect(body.distill.requests).toEqual({ total: 0, by_status: {} });
 });
 
-test("心跳是 ISO 字符串；提炼请求表存在时按状态计数", () => {
+test("心跳是 ISO 字符串；提炼请求按状态计数", () => {
   const sql = ctx.db.db;
   const beat = toLocalIso(now - 5_000);
   sql.prepare("INSERT INTO distill_state VALUES(?,?)").run("heartbeat_at", JSON.stringify(beat));
-  // 只在测试库里模拟另一分支的表，状态接口不建表。
-  sql.exec("CREATE TABLE distill_requests(id TEXT PRIMARY KEY,status TEXT)");
-  sql.prepare("INSERT INTO distill_requests VALUES(?,?),(?,?),(?,?)").run("a", "queued", "b", "queued", "c", "failed");
+  const add = sql.prepare("INSERT INTO distill_requests(id,kind,status,created_at) VALUES(?,'round',?,?)");
+  for (const [id, st] of [["a", "queued"], ["b", "queued"], ["c", "failed"]]) add.run(id, st, beat);
   const status = hubStatus(ctx.db, { port: 47823, now });
   expect(status.distill.heartbeat_at).toBe(beat);
   expect(status.distill.requests).toEqual({ total: 3, by_status: { queued: 2, failed: 1 } });
