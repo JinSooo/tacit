@@ -241,5 +241,6 @@ cat <<MSG
 - 语音模型：$DATA/models/；加密音频：$DATA/audio/（卸载保留）
 - 日志：$DATA/logs/
 - 提炼日志：$DATA/logs/distill.log；模型配置：$DATA/models.json
+- 备份密钥：密钥只在钥匙串里，丢了数据就打不开。运行 bun "$REPO/hub/src/cli.ts" keys export，把输出存进密码管理器。
 MSG
 if [ ! -f "$DATA/models.json" ]; then echo "- models.json 不存在，提炼默认使用本机已登录的 claude CLI。"; fi

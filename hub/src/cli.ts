@@ -28,6 +28,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     catch (error) { console.error(error instanceof Error ? error.message : "Agent 注册失败"); process.exitCode = 1; }
     return;
   }
+  if (command === "keys") {
+    if (name !== "export" || argv.length !== 2) throw new Error("用法：bun hub/src/cli.ts keys export");
+    const { exportKeys } = await import("./keys.ts");
+    const { text, missing } = exportKeys();
+    console.log(text);
+    if (missing.length) { console.error(`没有导出：${missing.join("、")}密钥`); process.exitCode = 1; }
+    return;
+  }
   const { loadConfig } = await import("./config.ts");
   const { HubDB } = await import("./db.ts");
   const { startServer } = await import("./server.ts");
@@ -102,7 +110,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     finally { db.close(); }
     return;
   }
-  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
+  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | keys export | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
   if (command === "run-plugin") {
     let hub: string | undefined, tokenFile: string | undefined;

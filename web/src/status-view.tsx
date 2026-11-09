@@ -100,5 +100,8 @@ export function StatusView({ api }: { api: Api }) {
       <dt>删除</dt><dd>{audio.deletes_pending ? `${audio.deletes_pending} 段对话等设备同步删除` : "无待同步"}</dd>
       <dt>转写</dt><dd className="muted">在各设备本地进行，中枢没有转写队列</dd>
     </dl>
+
+    <h2 className="day-heading">密钥备份</h2>
+    <p className="muted">数据库和音频的密钥只在这台 Mac 的钥匙串里，丢了就打不开任何记录。在仓库目录运行 <code>bun hub/src/cli.ts keys export</code>，把输出存进密码管理器。</p>
   </section>;
 }

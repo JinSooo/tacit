@@ -90,3 +90,16 @@ test("CLI 非数据库错误只打印 name/code，不打印可能夹带正文的
     expect(result.stderr).not.toContain("合成隐私路径");
   } finally { ctx.cleanup(); }
 });
+
+test("keys export 输出两个密钥的恢复命令，缺失或格式不对时不拼进命令", async () => {
+  const { exportKeys } = await import("../src/keys.ts");
+  const fake = "ab".repeat(32);
+  const ok = exportKeys(() => ({ status: 0, value: fake }), new Date("2026-11-10T00:00:00Z"));
+  expect(ok.missing).toEqual([]);
+  expect(ok.text).toContain(`-a db-key -w '${fake}'`);
+  expect(ok.text).toContain(`-a audio-key-hex -w '${fake}'`);
+  const bad = exportKeys(account => account === "db-key" ? { status: 0, value: "x'; rm -rf ~" } : { status: 44, value: "" });
+  expect(bad.missing).toEqual(["数据库", "音频"]);
+  expect(bad.text).not.toContain("rm -rf");
+  expect(bad.text).not.toContain("add-generic-password -U");
+});
