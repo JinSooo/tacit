@@ -1,5 +1,4 @@
 import Foundation
-import AVFoundation
 import CoreAudio
 import AudioToolbox
 import Darwin
@@ -23,36 +22,45 @@ final class CaptureBuffer: @unchecked Sendable {
 }
 struct AudioCaptureError: Error, CustomStringConvertible { let description: String; init(_ text: String) { description = text } }
 final class Microphone {
-    let engine = AVAudioEngine()
     let buffer: CaptureBuffer
-    let device: AudioDeviceID?
+    let device: AudioDeviceID
     private(set) var actualDevice: AudioDeviceID?
-    init(buffer: CaptureBuffer, device: AudioDeviceID?) { self.buffer = buffer; self.device = device }
-    var installed = false
+    private var io: AudioDeviceIOProcID?
+    private var started = false
+    private let queue = DispatchQueue(label: "record-anything.audio.microphone")
+    init(buffer: CaptureBuffer, device: AudioDeviceID) { self.buffer = buffer; self.device = device }
+
     func start() throws {
-        let input = engine.inputNode
-        guard let unit = input.audioUnit else { throw AudioCaptureError("麦克风 AudioUnit 不可用") }
-        if var device {
-            try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                           &device, UInt32(MemoryLayout<AudioDeviceID>.size)), "选择麦克风")
+        guard device != 0 else { throw AudioCaptureError("没有可用的麦克风设备") }
+        // 属性查询只针对选中的 ID；不创建 AVAudioEngine，也不打开默认输入。
+        let formats = try MicrophoneDevices.inputFormats(device)
+        guard let rate = formats.first?.rate, formats.allSatisfy({ $0.rate == rate }) else {
+            throw AudioCaptureError("麦克风各输入流采样率不一致")
         }
-        var actual: AudioDeviceID = 0, size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        try check(AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &actual, &size), "读取实际麦克风")
-        guard actual != 0, device == nil || actual == device else { throw AudioCaptureError("麦克风未切换到指定设备") }
-        actualDevice = actual
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { throw AudioCaptureError("麦克风格式不可用") }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [buffer] pcm, time in
-            guard time.isHostTimeValid, let channels = pcm.floatChannelData else { buffer.fail("麦克风无有效 hostTime 或 Float32 数据"); return }
-            let count = Int(pcm.frameLength), c = Int(pcm.format.channelCount)
-            var mono = [Float](repeating: 0, count: count)
-            for i in 0..<count { for j in 0..<c { mono[i] += channels[j][i * pcm.stride] / Float(c) } }
-            buffer.append(mono, rate: pcm.format.sampleRate, host: time.hostTime)
-        }
-        installed = true
-        try engine.start()
+        do {
+            try check(AudioDeviceCreateIOProcIDWithBlock(&io, device, queue) { [buffer] _, input, inputTime, _, _ in
+                guard inputTime.pointee.mFlags.contains(.hostTimeValid) else { buffer.fail("麦克风缺少有效 hostTime"); return }
+                let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+                do {
+                    let buffers = try list.map { value -> PCMInputBuffer in
+                        guard value.mData != nil || value.mDataByteSize == 0 else { throw PCMInputError.buffers }
+                        return PCMInputBuffer(channels: Int(value.mNumberChannels),
+                            bytes: UnsafeRawBufferPointer(start: value.mData, count: Int(value.mDataByteSize)))
+                    }
+                    let mono = try PCMInputFormat.downmix(formats: formats, buffers: buffers)
+                    if !mono.isEmpty { buffer.append(mono, rate: rate, host: inputTime.pointee.mHostTime) }
+                } catch { buffer.fail("麦克风输入格式或缓冲不匹配：\(error)") }
+            }, "创建麦克风 IOProc")
+            try check(AudioDeviceStart(device, io), "启动指定麦克风")
+            started = true; actualDevice = device
+        } catch { stop(); throw error }
     }
-    func stop() { engine.stop(); if installed { engine.inputNode.removeTap(onBus: 0); installed = false } }
+    func stop() {
+        if started { AudioDeviceStop(device, io); started = false }
+        if let io { AudioDeviceDestroyIOProcID(device, io); self.io = nil }
+        queue.sync {}
+        actualDevice = nil
+    }
     deinit { stop() }
 }
 @available(macOS 14.2, *)

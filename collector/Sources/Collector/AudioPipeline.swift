@@ -1,5 +1,5 @@
 import Foundation
-import AVFoundation
+import Darwin
 import CSherpa
 import CollectorCore
 
@@ -8,7 +8,7 @@ final class AudioPipeline {
   let vad: OpaquePointer
   let model: UnsafeMutablePointer<CChar>
   let provider = strdup("cpu")!
-  var converter: AVAudioConverter?
+  var converter: PCMResampler?
   var rate = 0.0
   var origin: Date?
   var nextTime: Date?
@@ -33,32 +33,26 @@ final class AudioPipeline {
   deinit { SherpaOnnxDestroyVoiceActivityDetector(vad); free(model); free(provider) }
 
   func accept(_ samples: [Float], rate: Double, host: UInt64) throws {
-    guard !samples.isEmpty, rate > 0 else { return }
-    let start = Date().addingTimeInterval(AVAudioTime.seconds(forHostTime: host) - ProcessInfo.processInfo.systemUptime)
+    guard !samples.isEmpty else { return }
+    guard rate.isFinite, (8000...384000).contains(rate), samples.count <= Int(UInt32.max) / 4 else {
+      throw AudioCaptureError("音频采样率或帧数不可用")
+    }
+    var timebase = mach_timebase_info_data_t()
+    guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom > 0 else { throw AudioCaptureError("无法读取 hostTime 时基") }
+    let seconds = Double(host) * Double(timebase.numer) / Double(timebase.denom) / 1_000_000_000
+    let start = Date().addingTimeInterval(seconds - ProcessInfo.processInfo.systemUptime)
     let end = start.addingTimeInterval(Double(samples.count) / rate)
     level(Self.dbfs(samples), start, end)
     // 丢帧或设备格式变化时重建流，避免错误的时间戳持续累积。
     if self.rate != rate || nextTime.map({ abs(start.timeIntervalSince($0)) > 0.2 }) == true {
       try flush(); SherpaOnnxVoiceActivityDetectorReset(vad); origin = nil; pending = []
       self.rate = rate
-      let input = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
-      converter = AVAudioConverter(from: input, to: AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!)
-      guard converter != nil else { throw AudioCaptureError("音频重采样器创建失败") }
+      converter = try PCMResampler(rate: rate)
     }
     nextTime = end
     if origin == nil { origin = start }
-    let input = AVAudioPCMBuffer(pcmFormat: converter!.inputFormat, frameCapacity: AVAudioFrameCount(samples.count))!
-    input.frameLength = input.frameCapacity
-    samples.withUnsafeBufferPointer { input.floatChannelData![0].update(from: $0.baseAddress!, count: $0.count) }
-    let output = AVAudioPCMBuffer(pcmFormat: converter!.outputFormat, frameCapacity: AVAudioFrameCount(ceil(Double(samples.count) * 16000 / rate) + 64))!
-    var supplied = false, error: NSError?
-    let status = converter!.convert(to: output, error: &error) { _, state in
-      if supplied { state.pointee = .noDataNow; return nil }
-      supplied = true; state.pointee = .haveData; return input
-    }
-    if let error { throw error }
-    guard status != .error else { throw AudioCaptureError("音频重采样失败") }
-    pending.append(contentsOf: UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
+    guard let converter else { throw AudioCaptureError("音频重采样器未初始化") }
+    pending.append(contentsOf: try converter.convert(samples))
     var offset = 0
     while pending.count - offset >= 512 {
       pending.withUnsafeBufferPointer { SherpaOnnxVoiceActivityDetectorAcceptWaveform(vad, $0.baseAddress! + offset, 512) }

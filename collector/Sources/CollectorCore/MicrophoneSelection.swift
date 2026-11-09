@@ -25,6 +25,17 @@ public enum MicrophoneSelection: Equatable, Sendable {
     return .unavailable(disconnected: disconnected)
   }
 
+  /// 默认 ID 通过惰性闭包读取：固定设备模式不会查询系统默认输入。
+  public func inputID(devices: [String: UInt32], defaultInput: () -> UInt32?) -> UInt32? {
+    let id: UInt32?
+    switch self {
+    case .system: id = defaultInput()
+    case .device(let uid, _): id = devices[uid]
+    case .unavailable: id = nil
+    }
+    return id == 0 ? nil : id
+  }
+
   public var notice: String? {
     switch self {
     case .device(_, true): return "已断开，暂用自带麦克风"

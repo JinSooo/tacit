@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 import CryptoKit
 import CollectorCore
 import AudioStore
@@ -47,7 +46,24 @@ final class AudioCoordinator {
   private var initialized = false
   private var sessionStarted = Date.distantPast
 
-  init(config: Config) { self.config = config }
+  private let startGuard: RecordingStartGuard
+  let initiallyBlocked: Bool
+  init(config: Config) {
+    self.config = config
+    startGuard = RecordingStartGuard(dataDirectory: config.dataDir)
+    initiallyBlocked = startGuard.blocked
+    if initiallyBlocked {
+      let notice = "上次开启录音时崩溃，已暂停录音"
+      failure = notice; snapshot = [notice]
+    }
+  }
+  func allowManualStart() {
+    queue.async { [self] in
+      do { try startGuard.allowManualRetry(); failure = nil; lastStart = .distantPast; lastMicStart = .distantPast }
+      catch { failure = "无法解除录音启动保护：\(error)" }
+      publish()
+    }
+  }
   func status() -> [String] { snapshotLock.lock(); defer { snapshotLock.unlock() }; return snapshot }
   func update(enabled: Bool) {
     queue.async { [self] in
@@ -69,6 +85,10 @@ final class AudioCoordinator {
           }
           initialized = true
         } catch { failure = "音频存储不可用：\(error)"; publish(); return }
+      }
+      if startGuard.blocked {
+        self.enabled = false; stop()
+        failure = "上次开启录音时崩溃，已暂停录音"; publish(); return
       }
       self.enabled = enabled
       if !enabled { stop() }
@@ -105,17 +125,19 @@ final class AudioCoordinator {
   private func start() {
     lastStart = Date()
     let model = config.dataDir.appendingPathComponent("models/silero_vad.onnx").path
-    guard FileManager.default.fileExists(atPath: model) else { failure = "缺少语音模型，请重新运行 ./install.sh"; return }
-    guard #available(macOS 14.2, *) else { failure = "系统声音录音需要 macOS 14.2 或更新版本"; return }
+    guard FileManager.default.fileExists(atPath: model) else { failure = "缺少语音模型，请重新运行 ./install.sh"; publish(); return }
+    guard #available(macOS 14.2, *) else { failure = "系统声音录音需要 macOS 14.2 或更新版本"; publish(); return }
     do {
-      generation = UUID(); let session = generation
-      pipelines[.sys] = try AudioPipeline(modelPath: model, emit: { [weak self] samples, start, end in
-        try self?.save(samples, track: .sys, start: start, end: end)
-      }, level: { _, _, _ in })
-      rebuildMicrophone()
-      let tap = SystemTap(buffer: captureBuffer(.sys, session: session)); tapStop = { tap.stop() }
-      try tap.start()
-      failure = nil
+      try startGuard.attempt {
+        generation = UUID(); let session = generation
+        pipelines[.sys] = try AudioPipeline(modelPath: model, emit: { [weak self] samples, start, end in
+          try self?.save(samples, track: .sys, start: start, end: end)
+        }, level: { _, _, _ in })
+        rebuildMicrophone()
+        let tap = SystemTap(buffer: captureBuffer(.sys, session: session)); tapStop = { tap.stop() }
+        try tap.start()
+        failure = nil
+      }
     } catch { failure = "录音启动失败：\(error)"; stop() }
     publish()
   }
@@ -184,28 +206,25 @@ final class AudioCoordinator {
       inputDevices = try MicrophoneDevices.inputs()
       defaultInput = micSetting == "system" ? MicrophoneDevices.defaultInput() : nil
       let selection = MicrophoneSelection.resolve(devices: inputDevices.map(\.descriptor), setting: micSetting)
-      let device: UInt32?
-      switch selection {
-      case .system: device = nil
-      case .device(let uid, _):
-        guard let selected = inputDevices.first(where: { $0.uid == uid }) else { throw AudioCaptureError("所选麦克风已断开") }
-        device = selected.id
-      case .unavailable:
-        micStatus = selection.notice ?? "找不到自带麦克风"; publish(); return
+      guard let device = selection.inputID(devices: inputDevices.reduce(into: [:]) { $0[$1.uid] = $1.id },
+                                          defaultInput: { self.defaultInput }) else {
+        throw AudioCaptureError(selection.notice ?? "没有可用的系统默认输入")
       }
-      let model = config.dataDir.appendingPathComponent("models/silero_vad.onnx").path
-      pipelines[.mic] = try AudioPipeline(modelPath: model, emit: { [weak self] samples, start, end in
-        try self?.save(samples, track: .mic, start: start, end: end)
-      }, level: { [weak self] dbfs, start, end in
-        self?.health.observe(dbfs: dbfs, start: start, end: end, enabled: true); self?.healthLastFrame = end
-      })
-      sessionStarted = Date()
-      let microphone = Microphone(buffer: captureBuffer(.mic, session: micGeneration), device: device)
-      mic = microphone
-      try microphone.start()
-      let actualName = inputDevices.first { $0.id == microphone.actualDevice }?.name ?? "系统默认输入"
-      micStatus = "麦克风：\(actualName)"
-      if let notice = selection.notice { micStatus += " · \(notice)" }
+      try startGuard.attempt {
+        let model = config.dataDir.appendingPathComponent("models/silero_vad.onnx").path
+        pipelines[.mic] = try AudioPipeline(modelPath: model, emit: { [weak self] samples, start, end in
+          try self?.save(samples, track: .mic, start: start, end: end)
+        }, level: { [weak self] dbfs, start, end in
+          self?.health.observe(dbfs: dbfs, start: start, end: end, enabled: true); self?.healthLastFrame = end
+        })
+        sessionStarted = Date()
+        let microphone = Microphone(buffer: captureBuffer(.mic, session: micGeneration), device: device)
+        mic = microphone
+        try microphone.start()
+        let actualName = inputDevices.first { $0.id == microphone.actualDevice }?.name ?? "系统默认输入"
+        micStatus = "麦克风：\(actualName)"
+        if let notice = selection.notice { micStatus += " · \(notice)" }
+      }
     } catch {
       stopMicrophone(); micFailure = "麦克风启动失败：\(error)"
     }

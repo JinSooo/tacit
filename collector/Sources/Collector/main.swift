@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ]
     DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.plugins.runAll() }
 
+    if audio.initiallyBlocked { recordingEnabled = false }
     updateAudio()
     let ws = NSWorkspace.shared.notificationCenter
     ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.updateAudio() }
@@ -247,7 +248,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
   func pause(until: Date) { pausedUntil = until; closeSegment(); updateAudio(); updateIcon() }
   @objc func resume() { pausedUntil = nil; updateAudio(); updateIcon() }
-  @objc func toggleRecording() { recordingEnabled.toggle(); updateAudio() }
+  @objc func toggleRecording() {
+    recordingEnabled.toggle()
+    if recordingEnabled { audio.allowManualStart() }
+    updateAudio()
+  }
   @objc func selectMicrophone(_ sender: NSMenuItem) {
     guard let setting = sender.representedObject as? String else { return }
     audio.selectMicrophone(setting)

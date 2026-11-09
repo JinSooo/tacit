@@ -1,3 +1,4 @@
+import AudioToolbox
 import CoreAudio
 import Foundation
 import CollectorCore
@@ -37,6 +38,29 @@ enum MicrophoneDevices {
   }
 
   static func defaultInput() -> AudioDeviceID? { number(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice) }
+
+  static func inputFormats(_ id: AudioDeviceID) throws -> [PCMInputFormat] {
+    var a = property(kAudioDevicePropertyStreams, scope: kAudioDevicePropertyScopeInput)
+    var size: UInt32 = 0
+    try check(AudioObjectGetPropertyDataSize(id, &a, 0, nil, &size), "读取麦克风输入流")
+    guard size > 0, Int(size) % MemoryLayout<AudioStreamID>.size == 0 else { throw AudioCaptureError("麦克风没有输入流") }
+    var streams = [AudioStreamID](repeating: 0, count: Int(size) / MemoryLayout<AudioStreamID>.size)
+    try check(streams.withUnsafeMutableBytes { AudioObjectGetPropertyData(id, &a, 0, nil, &size, $0.baseAddress!) }, "读取麦克风输入流列表")
+    return try streams.prefix(Int(size) / MemoryLayout<AudioStreamID>.size).map { stream in
+      var format = AudioStreamBasicDescription()
+      var bytes = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+      var virtual = property(kAudioStreamPropertyVirtualFormat)
+      var status = AudioObjectGetPropertyData(stream, &virtual, 0, nil, &bytes, &format)
+      if status != noErr, streams.count == 1 {
+        var deviceFormat = property(kAudioDevicePropertyStreamFormat, scope: kAudioDevicePropertyScopeInput)
+        bytes = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        status = AudioObjectGetPropertyData(id, &deviceFormat, 0, nil, &bytes, &format)
+      }
+      try check(status, "读取所选麦克风格式")
+      guard bytes == MemoryLayout<AudioStreamBasicDescription>.size else { throw PCMInputError.format }
+      return try PCMInputFormat(format)
+    }
+  }
 
   private static func number(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
     var a = property(selector), value: UInt32 = 0, size = UInt32(MemoryLayout<UInt32>.size)
