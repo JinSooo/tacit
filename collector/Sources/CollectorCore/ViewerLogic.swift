@@ -94,6 +94,7 @@ public enum ViewerFormat {
 /// 一条或多条相邻、同来源、同标题的记录，列表里合并成一行显示（记录本身不变）。
 public struct RecordRun: Identifiable, Hashable, Sendable {
   public let records: [HistoryRecord]  // 新的在前
+  public init(records: [HistoryRecord]) { self.records = records }
   public var id: String { records[0].id }
   public var newest: HistoryRecord { records[0] }
   public var start: Date { records.last!.start }
@@ -114,6 +115,27 @@ public enum RecordRuns {
       }
     }
     return runs.map(RecordRun.init)
+  }
+}
+
+/// 搜索结果里命中位置附近的一段正文，压成一行。
+public struct SearchSnippet: Equatable, Sendable {
+  public let before: String
+  public let match: String
+  public let after: String
+
+  /// 不区分大小写找第一个命中；前后各留 radius 个字符，被截断的一侧加省略号。没命中返回 nil。
+  public static func make(_ body: String, query: String, radius: Int = 36) -> SearchSnippet? {
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !q.isEmpty else { return nil }
+    let text = body.split(whereSeparator: \.isNewline).joined(separator: " ")
+      .split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ")
+    guard let r = text.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) else { return nil }
+    let lo = text.index(r.lowerBound, offsetBy: -radius, limitedBy: text.startIndex) ?? text.startIndex
+    let hi = text.index(r.upperBound, offsetBy: radius, limitedBy: text.endIndex) ?? text.endIndex
+    return SearchSnippet(before: (lo > text.startIndex ? "…" : "") + text[lo..<r.lowerBound],
+                         match: String(text[r]),
+                         after: text[r.upperBound..<hi] + (hi < text.endIndex ? "…" : ""))
   }
 }
 

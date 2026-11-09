@@ -13,7 +13,7 @@ struct HistoryPage: View {
   @State private var brush: ClosedRange<Date>?
   @State private var lane: Lane?
   @State private var device: String?
-  @State private var showDiary = true
+  @AppStorage("historyDiaryExpanded") private var showDiary = false
   @State private var note = false
   @State private var picking = false
   // 搜索
@@ -115,7 +115,7 @@ struct HistoryPage: View {
     if reset { try? await Task.sleep(for: .milliseconds(280)); if Task.isCancelled { return } }
     searching = true; defer { searching = false }
     do {
-      var q = HubAPI.RecordQuery(); q.q = store.historySearch.trimmingCharacters(in: .whitespaces); q.limit = 100
+      var q = HubAPI.RecordQuery(); q.q = store.historySearch.trimmingCharacters(in: .whitespaces); q.limit = 50; q.body = true
       let page = try await store.api.records(q, cursor: reset ? nil : cursor)
       results = reset ? page.records : results + page.records.filter { r in !results.contains { $0.id == r.id } }
       cursor = page.nextCursor
@@ -252,14 +252,15 @@ struct HistoryPage: View {
 
   // MARK: 行
 
-  @ViewBuilder func rows(_ runs: [RecordRun], hourMarks: Bool) -> some View {
+  @ViewBuilder func rows(_ runs: [RecordRun], hourMarks: Bool, query: String? = nil) -> some View {
     let cal = Calendar.current
     ForEach(Array(runs.enumerated()), id: \.element.id) { i, run in
       let hour = cal.component(.hour, from: run.newest.start)
       if hourMarks, i == 0 || cal.component(.hour, from: runs[i - 1].newest.start) != hour {
         HourMark(hour: hour).padding(.top, i == 0 ? 4 : 14).padding(.horizontal, 20)
       }
-      RecordRow(record: run.newest, run: run, selected: selection == run.id, expanded: expanded.contains(run.id)) {
+      RecordRow(record: run.newest, run: run, selected: selection == run.id, expanded: expanded.contains(run.id),
+                snippet: query.flatMap { SearchSnippet.make(run.newest.body ?? "", query: $0) }) {
         if run.records.count > 1 {
           withAnimation(.smooth(duration: 0.25)) { if expanded.contains(run.id) { expanded.remove(run.id) } else { expanded.insert(run.id) } }
         }
@@ -296,7 +297,8 @@ struct HistoryPage: View {
             Button("看这一天") { store.historySearch = ""; store.historyDay = day }.buttonStyle(.link).font(.caption)
           }
           .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 6)
-          self.rows(RecordRuns.collapse(rows.sorted { $0.start > $1.start }), hourMarks: false)
+          self.rows(rows.sorted { $0.start > $1.start }.map { RecordRun(records: [$0]) }, hourMarks: false,
+                    query: store.historySearch)
         }
         if cursor != nil {
           ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(24)
@@ -378,6 +380,7 @@ struct RecordRow: View {
   let run: RecordRun?
   let selected: Bool
   let expanded: Bool
+  var snippet: SearchSnippet? = nil
   var nested = false
   let action: () -> Void
   @State private var hovering = false
@@ -403,7 +406,10 @@ struct RecordRow: View {
               .lineLimit(1)
             badges
           }
-          if !nested, let sub = subtitle {
+          if let snippet {
+            (Text(snippet.before) + Text(snippet.match).foregroundStyle(Palette.accent).bold() + Text(snippet.after))
+              .font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+          } else if !nested, let sub = subtitle {
             Text(sub).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
           }
         }
@@ -463,7 +469,7 @@ struct RecordRow: View {
   }
 
   var subtitle: String? {
-    if let url = record.contextText("url"), let host = URL(string: url)?.host() { return host }
+    if let url = record.contextText("url").flatMap(URL.init(string:)), ["http", "https"].contains(url.scheme ?? ""), let host = url.host() { return host }
     if let repo = record.contextText("repo") ?? record.contextText("cwd") { return (repo as NSString).abbreviatingWithTildeInPath }
     return nil
   }

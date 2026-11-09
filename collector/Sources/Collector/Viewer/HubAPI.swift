@@ -68,12 +68,14 @@ final class HubAPI: @unchecked Sendable {
     var from: String?
     var to: String?
     var limit = 200
+    /// 带上正文（搜索结果要显示命中片段）。
+    var body = false
   }
 
   func records(_ query: RecordQuery, cursor: String?) async throws -> RecordPage {
     try await get(RecordPage.self, "/v1/records", [
       "limit": String(query.limit), "q": query.q, "source": query.source, "device": query.device,
-      "from": query.from, "to": query.to, "cursor": cursor,
+      "from": query.from, "to": query.to, "cursor": cursor, "body": query.body ? "1" : nil,
     ])
   }
 

@@ -161,12 +161,13 @@ struct DayStrata: View {
     for (i, c) in chapters.enumerated() {
       let a = x(max(c.start, d.lowerBound), plot, d), b = x(min(c.end, d.upperBound), plot, d)
       guard b - a > 1 else { continue }
-      let rect = CGRect(x: a + 0.5, y: chapterTop, width: b - a - 1, height: Self.chapterHeight)
+      let full = CGRect(x: a + 0.5, y: chapterTop, width: b - a - 1, height: Self.chapterHeight)
       let active = brush == c.start...c.end
-      ctx.fill(Path(roundedRect: rect, cornerRadius: 6), with: .color(Palette.accent.opacity(active ? 0.32 : (i % 2 == 0 ? 0.13 : 0.08))))
-      if rect.width > 40, let label = fitted(c.text, width: rect.width - 12, ctx: ctx) {
-        ctx.draw(label, at: CGPoint(x: rect.minX + 6, y: rect.midY), anchor: .leading)
-      }
+      let label = full.width > 40 ? fitted(c.text, width: full.width - 12, ctx: ctx) : nil
+      let rect = label == nil ? CGRect(x: full.minX, y: full.midY - 3, width: full.width, height: 6) : full
+      ctx.fill(Path(roundedRect: rect, cornerRadius: min(6, rect.height / 2)),
+               with: .color(Palette.accent.opacity(active ? 0.45 : (label == nil ? 0.3 : (i % 2 == 0 ? 0.13 : 0.08)))))
+      if let label { ctx.draw(label, at: CGPoint(x: rect.minX + 6, y: rect.midY), anchor: .leading) }
     }
 
     // 泳道底色

@@ -293,7 +293,7 @@ struct WarmthBar: View {
       }
     }
     .frame(height: 4)
-    .help("热度：按最近活动时间衰减")
+    .accessibilityHidden(true)
   }
 }
 

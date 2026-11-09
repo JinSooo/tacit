@@ -103,3 +103,12 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(ViewerFormat.duration(59) == "59 秒")
   #expect(ViewerFormat.duration(3600) == "1 小时")
 }
+
+@Test func searchSnippetCentersOnMatch() {
+  let body = "第一行\n" + String(repeating: "甲", count: 50) + "梦诚大屏接口" + String(repeating: "乙", count: 50)
+  let s = SearchSnippet.make(body, query: "梦诚", radius: 4)
+  #expect(s == SearchSnippet(before: "…甲甲甲甲", match: "梦诚", after: "大屏接口…"))
+  // 不区分大小写，保留原文写法；换行压成空格；没命中返回 nil。
+  #expect(SearchSnippet.make("Open\nCodex now", query: "codex", radius: 20) == SearchSnippet(before: "Open ", match: "Codex", after: " now"))
+  #expect(SearchSnippet.make("abc", query: "z") == nil)
+}
