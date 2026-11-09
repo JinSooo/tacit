@@ -13,7 +13,7 @@ struct RootView: View {
     } detail: {
       NavigationStack(path: $store.path) {
         page
-          .toolbar { ToolbarAnchor() }
+          .toolbar { if needsAnchor { ToolbarAnchor() } }
           .navigationDestination(for: Route.self) { route in
             switch route {
             case .thread(let id): ThreadPage(id: id)
@@ -33,6 +33,14 @@ struct RootView: View {
         await store.refreshShared()
         try? await Task.sleep(for: .seconds(60))
       }
+    }
+  }
+
+  /// 只有本身没有工具栏项的页面才放占位：占位项也占一格间距，放在别的页面上会把标题和按钮推开 8pt。
+  var needsAnchor: Bool {
+    switch store.section {
+    case .settings, .project: return true
+    default: return false
     }
   }
 
@@ -84,12 +92,13 @@ struct Sidebar: View {
 
 /// 页面一个工具栏项都没有时（设置、从侧栏进的项目页），SwiftUI 会把整条工具栏拆掉，
 /// 标题栏从 52pt 缩到 32pt，红绿灯和侧栏跟着跳。放一个看不见的固定项让工具栏一直在。
+/// 放在右侧：这两页右侧本来是空的，放左侧会把标题推开。
 struct ToolbarAnchor: ToolbarContent {
   var body: some ToolbarContent {
     if #available(macOS 26.0, *) {
-      ToolbarItem(placement: .navigation) { anchor }.sharedBackgroundVisibility(.hidden)
+      ToolbarItem(placement: .primaryAction) { anchor }.sharedBackgroundVisibility(.hidden)
     } else {
-      ToolbarItem(placement: .navigation) { anchor }
+      ToolbarItem(placement: .primaryAction) { anchor }
     }
   }
   var anchor: some View { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }

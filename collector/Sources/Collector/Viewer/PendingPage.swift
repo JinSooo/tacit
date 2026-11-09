@@ -20,6 +20,14 @@ struct PendingPage: View {
         if items.isEmpty, let error = store.sharedError {
           Placeholder(kind: .error(error) { Task { await store.refreshShared() } })
             .transition(.opacity)
+        } else if let error = store.sharedError {
+          // 刷新失败时下面是上一次读到的列表，可能已经过时。
+          HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Text("连不上中枢，下面是上次读到的内容：\(error)").lineLimit(2).textSelection(.enabled)
+            Button("重试") { Task { await store.refreshShared() } }.buttonStyle(.link)
+          }
+          .font(.callout).foregroundStyle(.secondary)
         } else if items.isEmpty {
           VStack(spacing: 14) {
             Image(systemName: "checkmark.circle").font(.system(size: 44, weight: .ultraLight)).foregroundStyle(Palette.factColors["decision"]!)

@@ -162,3 +162,22 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   let items = SegmentFold.fold([block("a"), block("b"), block("c"), block("T", thread: true), block("d"), block("e"), block("U", thread: true)])
   #expect(items.map(\.id) == ["minor:a", "T", "d", "e", "U"])
 }
+
+/// 回归：界面声明 zh-Hans 后，FileManager.displayName 把 WeChat 显示成"微信"，和记录标题、搜索词对不上。
+/// 显示名必须按用户的系统语言取。
+@Test func appNameFollowsSystemLanguageNotViewerLanguage() throws {
+  let app = FileManager.default.temporaryDirectory.appendingPathComponent("ra-appname-\(UUID().uuidString)/WeChat.app")
+  let res = app.appendingPathComponent("Contents/Resources")
+  for (lang, name) in [("en", "WeChat"), ("zh-Hans", "微信")] {
+    let dir = res.appendingPathComponent("\(lang).lproj")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try "\"CFBundleDisplayName\" = \"\(name)\";\n".write(to: dir.appendingPathComponent("InfoPlist.strings"), atomically: true, encoding: .utf8)
+  }
+  let plist = #"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.test.wechat</string><key>CFBundleName</key><string>Weixin</string></dict></plist>"#
+  try plist.write(to: app.appendingPathComponent("Contents/Info.plist"), atomically: true, encoding: .utf8)
+  defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
+
+  #expect(AppNames.systemLanguageName(app, preferences: ["en-US"]) == "WeChat")
+  #expect(AppNames.systemLanguageName(app, preferences: ["zh-Hans-CN", "en"]) == "微信")
+  #expect(AppNames.systemLanguageName(app.deletingLastPathComponent().appendingPathComponent("Missing.app"), preferences: ["en"]) == "Missing")
+}

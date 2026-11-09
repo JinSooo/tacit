@@ -96,8 +96,9 @@ enum SourceInfo {
   static func name(_ bundle: String?) -> String? {
     guard let bundle else { return nil }
     if let hit = names[bundle] { return hit }
-    let name = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
-      .map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") }
+    let name = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first?.localizedName
+      // 不在运行时按系统语言读应用的 InfoPlist.strings，见 AppNames。
+      ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle).map { AppNames.systemLanguageName($0) }
     names[bundle] = name
     return name
   }
