@@ -449,7 +449,7 @@ struct FactsView: View {
   }
 }
 
-/// 一组事实默认只列前 5 条（接口顺序），其余点"展开全部"再看。
+/// 一组事实最新的在前（中枢按 created_at 升序返回），默认只列 5 条，其余点"展开全部"再看。
 struct FactGroup: View {
   let kind: String
   let label: String
@@ -462,7 +462,8 @@ struct FactGroup: View {
   private let limit = 5
 
   var body: some View {
-    let shown = expanded ? rows : Array(rows.prefix(limit))
+    let newest = Array(rows.reversed())
+    let shown = expanded ? newest : Array(newest.prefix(limit))
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 6) {
         Image(systemName: symbol).foregroundStyle(Palette.factColors[kind] ?? .secondary)
