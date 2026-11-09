@@ -36,6 +36,7 @@ export function timeRange(record: HistoryRow): string {
 export function duration(record: HistoryRow): string {
   if (record.kind !== "span" || !record.t_end) return "";
   const seconds = Math.max(0, Math.floor((Date.parse(record.t_end) - Date.parse(record.t_start)) / 1000));
+  if (seconds < 1) return "";
   if (seconds < 60) return `${seconds}秒`;
   const minutes = Math.floor(seconds / 60);
   return minutes < 60 ? `${minutes}分钟` : `${Math.floor(minutes / 60)}小时${minutes % 60 ? `${minutes % 60}分钟` : ""}`;
@@ -66,7 +67,46 @@ export const sourceNames: Record<string, string> = {
   "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
   "manual.note": "补写", "manual.correction": "修正",
 };
+/** 每个来源一种固定颜色，与 Mac 客户端一致；颜色在 style.css 里按深浅色模式定义。 */
+const sourceKeys: Record<string, string> = {
+  "mac.screen": "screen", "mac.app": "screen", "mac.browser": "browser", "claude_code.session": "claude", "codex.session": "codex",
+  "mac.shell": "shell", "mac.git": "git", "mac.clipboard": "clipboard", "mac.file": "file", "mac.calendar": "calendar",
+  "mac.audio": "audio", "manual.note": "manual", "manual.correction": "manual",
+};
 export function sourceColor(source: string): string {
-  const colors = ["#658d76", "#7889ae", "#b28a59", "#a77d96", "#699397", "#98905c"];
-  return colors[Array.from(source).reduce((sum, char) => sum + char.charCodeAt(0), 0) % colors.length];
+  return `var(--src-${sourceKeys[source] ?? "other"})`;
+}
+/** 条带图的泳道：同类来源放在一条里。 */
+export const lanes = [
+  { key: "screen", label: "屏幕" }, { key: "browser", label: "浏览" }, { key: "agent", label: "Agent" },
+  { key: "terminal", label: "终端" }, { key: "voice", label: "对话" }, { key: "other", label: "其他" },
+] as const;
+export type LaneKey = typeof lanes[number]["key"];
+export function laneOf(source: string): LaneKey {
+  if (source === "mac.screen" || source === "mac.app") return "screen";
+  if (source === "mac.browser") return "browser";
+  if (source === "claude_code.session" || source === "codex.session") return "agent";
+  if (source === "mac.shell" || source === "mac.git") return "terminal";
+  if (source === "mac.audio" || source === "mac.calendar") return "voice";
+  return "other";
+}
+/** 本地日历某天的起止（毫秒），以及给 /v1/records 用的 from/to（to 是闭区间）。 */
+export function dayRange(key: string): { start: number; end: number; from: string; to: string } {
+  const start = new Date(`${key}T00:00:00`);
+  const end = new Date(start); end.setDate(end.getDate() + 1);
+  const withMs = (date: Date, ms: string) => toLocalIso(date).replace(/(?=[+-]\d\d:\d\d$)/, ms);
+  return { start: start.getTime(), end: end.getTime(), from: withMs(start, ".000"), to: withMs(new Date(end.getTime() - 1), ".999") };
+}
+/** 日记时间线的 "HH:mm" 换成当天的毫秒；结束不晚于开始时（如 "00:00"）视为当天结束。 */
+export function chapterSpans(key: string, timeline: { start: string; end: string; text: string }[] = []) {
+  const { start: day, end: dayEnd } = dayRange(key);
+  const at = (hhmm: string) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm);
+    return m && Number(m[1]) <= 24 && Number(m[2]) < 60 ? day + (Number(m[1]) * 60 + Number(m[2])) * 60000 : null;
+  };
+  return timeline.flatMap(item => {
+    const start = at(item.start), end = at(item.end);
+    if (start === null || end === null) return [];
+    return [{ start, end: end <= start ? dayEnd : end, text: item.text }];
+  });
 }

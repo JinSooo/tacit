@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ulid as sharedUlid, toLocalIso as sharedIso, validateRecord } from "../../packages/record/index.ts";
 import { ulid, toLocalIso } from "../src/record-helpers.ts";
-import { buildNote, buildCorrection, dateTitle, dayKey, duration, groupRecords, latestCorrection, safeUrl, timeRange } from "../src/history.ts";
+import { buildNote, buildCorrection, chapterSpans, dateTitle, dayKey, dayRange, duration, groupRecords, laneOf, latestCorrection, safeUrl, sourceColor, timeRange } from "../src/history.ts";
 
 const note = () => buildNote({ start: "2026-11-06T14:02:00", end: "2026-11-06T14:27:00", title: "合成工作片段", body: "第一行\n第二行" });
 test("浏览器辅助函数与共享包格式一致，包括时区和 ULID 时间前缀", () => {
@@ -39,6 +39,8 @@ test("事件、时段、跨天与秒/分钟/小时时长", () => {
   expect(timeRange({ ...record, t_end: "2026-11-06T14:02:40" })).toBe("14:02");
   expect(duration({ ...record, kind: "event" })).toBe("");
   expect(duration({ ...record, t_end: "2026-11-06T14:02:28" })).toBe("28秒");
+  // 同一秒内开始和结束的片段不显示时长。
+  expect(duration({ ...record, t_end: record.t_start })).toBe("");
   expect(duration({ ...record, t_end: "2026-11-06T15:03" })).toBe("1小时1分钟");
   expect(timeRange({ ...record, t_end: "2026-11-07T00:03" })).toBe("14:02–11月7日 00:03");
 });
@@ -66,4 +68,22 @@ test("最新修正按时间及 ID 选择，外部 URL 仅允许 HTTP(S)", () => 
   expect(safeUrl("javascript:alert(1)")).toBeUndefined();
   expect(safeUrl("file:///etc/passwd")).toBeUndefined();
   expect(safeUrl("https://example.invalid/path")).toBe("https://example.invalid/path");
+});
+
+test("条带图：泳道归类、来源颜色、整天范围和日记章节", () => {
+  expect(laneOf("codex.session")).toBe("agent");
+  expect(laneOf("mac.git")).toBe("terminal");
+  expect(laneOf("mac.clipboard")).toBe("other");
+  expect(sourceColor("mac.screen")).toBe("var(--src-screen)");
+  expect(sourceColor("plugin.unknown")).toBe("var(--src-other)");
+  const day = dayRange("2026-11-09");
+  expect(day.end - day.start).toBe(86400000);
+  expect(Date.parse(day.from)).toBe(day.start);
+  // hub 的 to 是闭区间，停在次日零点前 1 毫秒。
+  expect(Date.parse(day.to)).toBe(day.end - 1);
+  expect(day.to).toMatch(/T23:59:59\.999[+-]\d\d:\d\d$/);
+  const spans = chapterSpans("2026-11-09", [{ start: "22:42", end: "00:00", text: "跨午夜" }, { start: "9:05", end: "10:30", text: "上午" }, { start: "坏", end: "10:00", text: "跳过" }]);
+  expect(spans.map(s => s.text)).toEqual(["跨午夜", "上午"]);
+  expect(spans[0]!.end).toBe(day.end);
+  expect(spans[1]!.start - day.start).toBe((9 * 60 + 5) * 60000);
 });

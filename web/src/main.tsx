@@ -2,7 +2,8 @@ import { AuditView } from "./audit-view.tsx";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { RecordV1 } from "../../packages/record/index.ts";
-import { buildCorrection, buildNote, dateTitle, duration, groupRecords, latestCorrection, safeUrl, sourceColor, sourceNames, timeRange, type Detail, type HistoryRow } from "./history.ts";
+import { buildCorrection, buildNote, dateTitle, dayKey, duration, groupRecords, latestCorrection, safeUrl, sourceColor, sourceNames, timeRange, type Detail, type HistoryRow } from "./history.ts";
+import { DayOverview } from "./day-overview.tsx";
 import { toLocalIso } from "./record-helpers.ts";
 import { createDistillationApi } from "./distillation.ts";
 import { DistillationWorkspace, type View } from "./distillation-views.tsx";
@@ -116,6 +117,8 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
+  // 从条带图点到还没加载的记录时，列表改为从那条记录的时间开始。
+  const [anchor, setAnchor] = useState<{ id: string; t_start: string } | null>(null);
   const [note, setNote] = useState(false);
   const [revision, setRevision] = useState(0);
   const search = useRef<HTMLInputElement>(null);
@@ -144,7 +147,8 @@ function App() {
     if (q.trim()) params.set("q", q.trim());
     if (source) params.set("source", source);
     if (device) params.set("device", device);
-    if (date) params.set("to", toLocalIso(new Date(`${date}T23:59:59.999`)).replace(/(?=[+-]\d\d:\d\d$)/, ".999"));
+    if (anchor) params.set("to", anchor.t_start);
+    else if (date) params.set("to", toLocalIso(new Date(`${date}T23:59:59.999`)).replace(/(?=[+-]\d\d:\d\d$)/, ".999"));
     if (next) params.set("cursor", next);
     try {
       const page = await api<{ records: HistoryRow[]; next_cursor: string | null }>(`/v1/records?${params}`, { signal });
@@ -154,7 +158,19 @@ function App() {
       setCursor(page.next_cursor);
     } catch (error) { if (version === generation.current && !signal?.aborted) setError(message(error)); }
     finally { if (version === generation.current) { loading.current = false; setBusy(false); } }
-  }, [api, q, source, device, date]);
+  }, [api, q, source, device, date, anchor]);
+  useEffect(() => { setAnchor(null); }, [q, source, device, date]);
+  useEffect(() => {
+    if (!anchor || !records.some(record => record.id === anchor.id)) return;
+    setExpanded(anchor.id);
+    requestAnimationFrame(() => document.getElementById(`row-${anchor.id}`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
+  }, [anchor, records]);
+  function pick(record: HistoryRow) {
+    if (records.some(row => row.id === record.id)) {
+      setExpanded(record.id);
+      requestAnimationFrame(() => document.getElementById(`row-${record.id}`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
+    } else setAnchor({ id: record.id, t_start: record.t_start });
+  }
   useEffect(() => {
     const version = ++generation.current;
     const controller = new AbortController();
@@ -181,7 +197,7 @@ function App() {
   }, []);
   if (!token) return <p className="token-prompt">在终端运行 <code>bun hub/src/cli.ts open</code></p>;
   return <><a className="skip" href="#content">跳到内容</a><main>
-    <header><div className="heading-row"><h1>History</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "当前"], ["pending", "待确认"], ["audit", "读取记录"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
+    <header><div className="heading-row"><h1>Record Anything</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "当前"], ["pending", "待确认"], ["audit", "读取记录"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
       <input ref={search} type="search" aria-label="搜索 History" placeholder="搜索 History" value={q} onChange={event => setQ(event.target.value)} />
       <select aria-label="来源筛选" value={source} onChange={event => setSource(event.target.value)}><option value="">所有来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
       <input className="device" list="devices" aria-label="设备筛选" placeholder="所有设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
@@ -192,11 +208,13 @@ function App() {
     <DistillationWorkspace view={view === "audit" || view === "settings" ? "history" : view} audio={audioApi} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />
     {view === "settings" && <AudioSettings api={audioApi} />}
     {view === "audit" && <AuditView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />}
+    {view === "history" && !q.trim() && <DayOverview api={api} day={date || dayKey(new Date())} selected={expanded} onPick={pick} />}
+    {view === "history" && anchor && <p className="anchor-note">从 {timeRange({ ...records.find(r => r.id === anchor.id) ?? { kind: "event", t_start: anchor.t_start } } as HistoryRow)} 起显示 <button className="text-button compact" onClick={() => setAnchor(null)}>回到最新</button></p>}
     <div id="timeline" hidden={view !== "history"} tabIndex={-1} aria-busy={busy}>
       {speakerError && records.some(record => record.source === "mac.audio") && <p className="error" role="alert">说话人名字读取失败：{speakerError} <button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
-      {groupRecords(records).map(group => <section key={group.day} aria-label={dateTitle(group.day)}><h2 className="day-heading">{dateTitle(group.day)}</h2><div className="day-records">{group.records.map(record => <article key={record.id} className={expanded === record.id ? "record expanded" : "record"}>
+      {groupRecords(records).map(group => <section key={group.day} aria-label={dateTitle(group.day)}><h2 className="day-heading">{dateTitle(group.day)}</h2><div className="day-records">{group.records.map(record => <article key={record.id} id={`row-${record.id}`} className={expanded === record.id ? "record expanded" : "record"}>
         <button className="record-row" style={{ "--source-color": sourceColor(record.source) } as React.CSSProperties} aria-expanded={expanded === record.id} aria-controls={`detail-${record.id}`} onClick={() => setExpanded(expanded === record.id ? null : record.id)}>
-          <span className="record-time">{timeRange(record)}</span><span className="record-title">{record.title}</span><span className="record-meta">{sourceNames[record.source] ?? record.source}{duration(record) && <span>{duration(record)}</span>}</span>
+          <span className="record-time">{timeRange(record)}</span><span className="record-title">{record.title}{record.context?.url && safeUrl(record.context.url) && <span className="record-host">{new URL(record.context.url).host}</span>}</span><span className="record-meta">{sourceNames[record.source] ?? record.source}{duration(record) && <span>{duration(record)}</span>}</span>
         </button>
         {expanded === record.id && <RecordDetail id={record.id} api={api} speakers={speakers} onDelete={ids => { setRecords(previous => previous.filter(record => !ids.includes(record.id))); setExpanded(null); }} />}
       </article>)}</div></section>)}
