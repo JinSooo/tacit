@@ -47,6 +47,8 @@ cat > build/audio.entitlements <<'PLIST'
   <key>com.apple.security.device.audio-input</key><true/>
 </dict></plist>
 PLIST
+# Hardened Runtime 下缺这项时，日历授权请求会被直接拒绝，不弹窗。
+sed 's#</dict>#  <key>com.apple.security.personal-information.calendars</key><true/>\n</dict>#' build/audio.entitlements > build/app.entitlements
 ../scripts/dev-cert.sh
 KC="$HOME/Library/Keychains/ra-dev.keychain-db"
 for lib in "$APP/Contents/Frameworks/"*.dylib; do
@@ -55,7 +57,9 @@ done
 if [ -f "$APP/Contents/MacOS/ra-audio-worker" ]; then
   codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements build/audio.entitlements "$APP/Contents/MacOS/ra-audio-worker"
 fi
-codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements build/audio.entitlements "$APP"
+codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements build/app.entitlements "$APP"
 codesign -d -r- "$APP" 2>&1 | grep designated
 codesign --verify --strict "$APP"
 codesign -d --entitlements - "$APP"
+# 回归检查：日历 entitlement 丢了不会报错，只会让授权按钮失效。
+codesign -d --entitlements - "$APP" 2>/dev/null | grep -q personal-information.calendars || { echo "缺少日历 entitlement" >&2; exit 1; }

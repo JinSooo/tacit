@@ -54,11 +54,13 @@ struct Sidebar: View {
     @Bindable var store = store
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
       Section {
-        Label("此刻", systemImage: "sun.horizon").tag(Page.now)
-        Label("History", systemImage: "clock.arrow.circlepath").tag(Page.history)
-        Label("待确认", systemImage: "tray.full").tag(Page.pending)
+        SidebarLabel(title: "此刻", icon: "sun.horizon").tag(Page.now)
+        SidebarLabel(title: "History", icon: "clock.arrow.circlepath").tag(Page.history)
+        // badge 必须在 tag 之前：放在 tag 之后，这一行在 macOS 侧栏里选不中。
+        SidebarLabel(title: "待确认", icon: "tray.full")
           .badge(store.pending.count)
-        Label("读取记录", systemImage: "eye").tag(Page.audit)
+          .tag(Page.pending)
+        SidebarLabel(title: "读取记录", icon: "eye").tag(Page.audit)
       }
       if !store.projects.isEmpty {
         Section("项目") {
@@ -76,6 +78,19 @@ struct Sidebar: View {
     }
     .listStyle(.sidebar)
     .safeAreaInset(edge: .bottom, spacing: 0) { CaptureFooter() }
+  }
+}
+
+/// 侧栏默认图标偏大，压到和正文差不多的视觉重量。
+struct SidebarLabel: View {
+  let title: String
+  let icon: String
+  var body: some View {
+    Label {
+      Text(title)
+    } icon: {
+      Image(systemName: icon).font(.system(size: 12, weight: .regular)).frame(width: 16)
+    }
   }
 }
 

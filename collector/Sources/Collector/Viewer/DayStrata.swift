@@ -2,7 +2,7 @@ import SwiftUI
 import CollectorCore
 
 /// 一天的条带图：上面一条是日记的章节，下面按来源分泳道画出每一段活动。
-/// 悬停看标题，点一下选中记录，拖动框选一个时间段来筛选列表。
+/// 悬停看标题，点一下选中记录，拖动框选一个时间段来筛选列表；捏合或 ⌘ 滚轮缩放，横向滑动平移。
 struct DayStrata: View {
   struct Chapter: Identifiable, Hashable { let id: Int; let start: Date; let end: Date; let text: String }
 
@@ -16,6 +16,7 @@ struct DayStrata: View {
 
   @State private var hover: CGPoint?
   @State private var dragStart: CGFloat?
+  @State private var zoom = StrataZoom()
   @Environment(\.colorScheme) private var scheme
 
   static let labelWidth: CGFloat = 48
@@ -30,7 +31,7 @@ struct DayStrata: View {
   var height: CGFloat { lanesTop + CGFloat(lanes.count) * (Self.laneHeight + Self.laneGap) + 2 }
 
   /// 时间轴只覆盖有活动的小时，前后各留一点；今天会延伸到此刻。
-  var domain: ClosedRange<Date> {
+  var fullDomain: ClosedRange<Date> {
     let bounds = ViewerTime.dayBounds(day)
     let cal = Calendar.current
     var lo = records.map(\.start).min() ?? bounds.start.addingTimeInterval(8 * 3600)
@@ -45,15 +46,17 @@ struct DayStrata: View {
 
   var body: some View {
     GeometryReader { geo in
-      let d = domain
+      let full = fullDomain
+      let d = zoom.visible(full)
       let plot = CGRect(x: Self.labelWidth, y: 0, width: max(10, geo.size.width - Self.labelWidth - 6), height: height)
+      let _ = { zoom.full = full; zoom.plot = plot }()
       ZStack(alignment: .topLeading) {
         Canvas { ctx, _ in draw(ctx, plot: plot, domain: d) }
         laneLabels
       }
       .contentShape(Rectangle())
       .onContinuousHover { phase in
-        if case .active(let p) = phase { hover = p } else { hover = nil }
+        if case .active(let p) = phase { hover = p; zoom.hoverX = p.x } else { hover = nil; zoom.hoverX = nil }
       }
       .gesture(
         DragGesture(minimumDistance: 0)
@@ -72,9 +75,13 @@ struct DayStrata: View {
           }
       )
       .overlay(alignment: .topLeading) { tooltip(plot: plot, domain: d, width: geo.size.width) }
+      .overlay(alignment: .topTrailing) { zoomControls }
     }
     .frame(height: height)
     .animation(.smooth(duration: 0.25), value: lane)
+    .onAppear { zoom.install() }
+    .onDisappear { zoom.uninstall() }
+    .onChange(of: day) { zoom.window = nil }
   }
 
   // MARK: 交互
@@ -122,7 +129,41 @@ struct DayStrata: View {
     }
   }
 
+  /// 有框选时可以放大到选区；放大后可以复位。
+  @ViewBuilder var zoomControls: some View {
+    let canZoomToBrush = brush.map { b in
+      zoom.window.map { b.upperBound.timeIntervalSince(b.lowerBound) < $0.upperBound.timeIntervalSince($0.lowerBound) * 0.9 } ?? true
+    } ?? false
+    if canZoomToBrush || zoom.window != nil {
+      HStack(spacing: 2) {
+        if canZoomToBrush, let b = brush {
+          Button { withAnimation(.smooth(duration: 0.3)) { zoom.show(b) } } label: { Image(systemName: "plus.magnifyingglass") }
+            .help("放大到选区")
+        }
+        if zoom.window != nil {
+          Button { withAnimation(.smooth(duration: 0.3)) { zoom.window = nil } } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+            .help("看整天")
+        }
+      }
+      .buttonStyle(.plain)
+      .font(.system(size: 11, weight: .medium))
+      .foregroundStyle(.secondary)
+      .padding(.horizontal, 7).padding(.vertical, 4)
+      .glassPanel(8)
+      .offset(y: -4)
+      .transition(.opacity)
+    }
+  }
+
   // MARK: 绘制
+
+  /// 刻度：主刻度标时间，次刻度只画淡线。按可见宽度挑最细的一档。
+  static let tickSteps: [TimeInterval] = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800]
+  static func ticks(span: TimeInterval, width: CGFloat) -> (major: TimeInterval, minor: TimeInterval?) {
+    let major = tickSteps.first { span / $0 <= Double(width) / 72 } ?? tickSteps.last!
+    let minor = tickSteps.last { $0 < major && major.truncatingRemainder(dividingBy: $0) == 0 && span / $0 <= Double(width) / 12 }
+    return (major, minor)
+  }
 
   var laneLabels: some View {
     VStack(alignment: .leading, spacing: Self.laneGap) {
@@ -140,21 +181,28 @@ struct DayStrata: View {
   func draw(_ ctx: GraphicsContext, plot: CGRect, domain d: ClosedRange<Date>) {
     let cal = Calendar.current
     let span = d.upperBound.timeIntervalSince(d.lowerBound)
-    let step: TimeInterval = span > 14 * 3600 ? 3 * 3600 : span > 7 * 3600 ? 2 * 3600 : 3600
+    let (major, minor) = Self.ticks(span: span, width: plot.width)
+    let step = minor ?? major
     let bottom = height - 2
+    let dayStart = cal.startOfDay(for: day)
+    // 缩放后画在可见范围外的部分要裁掉，泳道标签在左边不受影响。
+    let labels = ctx
+    var ctx = ctx
+    ctx.clip(to: Path(CGRect(x: plot.minX - 4, y: 0, width: plot.width + 8, height: height)))
 
-    // 小时刻度
-    var t = cal.dateInterval(of: .hour, for: d.lowerBound)?.start ?? d.lowerBound
-    if t < d.lowerBound { t = t.addingTimeInterval(3600) }
+    // 刻度：按当天零点对齐
+    var t = dayStart.addingTimeInterval((d.lowerBound.timeIntervalSince(dayStart) / step).rounded(.up) * step)
     while t <= d.upperBound {
       let px = x(t, plot, d)
-      let h = cal.component(.hour, from: t)
+      let offset = t.timeIntervalSince(dayStart)
+      let isMajor = abs(offset.remainder(dividingBy: major)) < 1
       var line = Path(); line.move(to: CGPoint(x: px, y: Self.axisHeight)); line.addLine(to: CGPoint(x: px, y: bottom))
-      ctx.stroke(line, with: .color(.primary.opacity(h % Int(step / 3600) == 0 ? 0.08 : 0.035)), lineWidth: 1)
-      if h % Int(step / 3600) == 0 {
-        ctx.draw(Text(String(format: "%02d", h)).font(.mono(9.5, .medium)).foregroundStyle(.tertiary), at: CGPoint(x: px, y: 8), anchor: .center)
+      ctx.stroke(line, with: .color(.primary.opacity(isMajor ? 0.08 : 0.035)), lineWidth: 1)
+      if isMajor {
+        let label = major >= 3600 ? String(format: "%02d", cal.component(.hour, from: t)) : ViewerFormat.clock(t)
+        labels.draw(Text(label).font(.mono(9.5, .medium)).foregroundStyle(.tertiary), at: CGPoint(x: px, y: 8), anchor: .center)
       }
-      t = t.addingTimeInterval(3600)
+      t = t.addingTimeInterval(step)
     }
 
     // 日记章节
