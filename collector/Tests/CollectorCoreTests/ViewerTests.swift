@@ -181,3 +181,18 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(AppNames.systemLanguageName(app, preferences: ["zh-Hans-CN", "en"]) == "微信")
   #expect(AppNames.systemLanguageName(app.deletingLastPathComponent().appendingPathComponent("Missing.app"), preferences: ["en"]) == "Missing")
 }
+
+/// 回归：较新的系统应用（查找、语音备忘录）的名字只在 InfoPlist.loctable 里，Info.plist 里是 "FindMy"。
+@Test func appNameReadsLoctable() throws {
+  let app = FileManager.default.temporaryDirectory.appendingPathComponent("ra-appname-\(UUID().uuidString)/FindMy.app")
+  let res = app.appendingPathComponent("Contents/Resources")
+  try FileManager.default.createDirectory(at: res, withIntermediateDirectories: true)
+  let table: NSDictionary = ["en": ["CFBundleDisplayName": "Find My"], "zh_CN": ["CFBundleDisplayName": "查找"]]
+  try PropertyListSerialization.data(fromPropertyList: table, format: .binary, options: 0).write(to: res.appendingPathComponent("InfoPlist.loctable"))
+  let plist = #"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.test.findmy</string><key>CFBundleName</key><string>FindMy</string></dict></plist>"#
+  try plist.write(to: app.appendingPathComponent("Contents/Info.plist"), atomically: true, encoding: .utf8)
+  defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
+
+  #expect(AppNames.systemLanguageName(app, preferences: ["en-US"]) == "Find My")
+  #expect(AppNames.systemLanguageName(app, preferences: ["zh-Hans-CN"]) == "查找")
+}
