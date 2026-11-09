@@ -7,6 +7,10 @@ import CollectorCore
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   let config = Config.load()
   lazy var hub = HubClient(config: config)
+  lazy var files = FileCollector(device: config.device, isPaused: { [weak self] in self?.paused ?? true },
+                                send: { [weak self] in self?.hub.enqueue($0) })
+  lazy var calendar = CalendarCollector(device: config.device, isPaused: { [weak self] in self?.paused ?? true },
+                                       send: { [weak self] in self?.hub.enqueue($0) })
   lazy var audio = AudioCoordinator(config: config)
   var recordingEnabled: Bool {
     get { UserDefaults.standard.object(forKey: "recordingEnabled") as? Bool ?? true }
@@ -49,7 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.hub.flush() },
       Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.writeStatus() },
       Timer.scheduledTimer(withTimeInterval: config.pluginInterval, repeats: true) { [weak self] _ in self?.plugins.runAll() },
+      Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateFiles() },
+      Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in self?.calendar.poll() },
     ]
+    files.start()
+    calendar.start()
     DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.plugins.runAll() }
 
     if audio.initiallyBlocked { recordingEnabled = false }
@@ -66,6 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func applicationWillTerminate(_ n: Notification) {
+    files.flush(force: true)
+    files.stop()
     audio.shutdown()
     closeSegment()
     let deadline = Date().addingTimeInterval(3)
@@ -164,6 +174,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   // MARK: 菜单
 
+  func updateFiles() {
+    if paused { files.stop() }
+    else { files.start(); files.flush() }
+  }
+
   func updateIcon() {
     let symbol = paused ? "pause.circle" : (AXIsProcessTrusted() ? "record.circle" : "exclamationmark.circle")
     statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "record-anything")
@@ -221,6 +236,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     o.state = ocrEnabled ? .on : .off
     menu.addItem(o)
     if ocrEnabled && !ocr.granted { menu.addItem(disabled("OCR 需要录屏权限")) }
+    menu.addItem(disabled(files.unavailable ? "文件 · 监听异常" : "文件 · " + (files.last.map { "最近 " + f.string(from: $0) } ?? "等待新文件")))
+    menu.addItem(disabled(calendar.authorized ? "日历 · " + (calendar.last.map { "最近 " + f.string(from: $0) } ?? "等待首次读取") : "日历未授权"))
+    if !calendar.authorized { menu.addItem(item("授权日历…", #selector(requestCalendar))) }
     if plugins.available {
       let sub = NSMenu()
       for p in plugins.plugins { sub.addItem(disabled("\(p) · \(plugins.status()[p] ?? "等待首次运行")")) }
@@ -241,13 +259,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc func requestAX() {
     AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
   }
+  @objc func requestCalendar() { calendar.requestAccess() }
   @objc func pauseHour() { pause(until: Date().addingTimeInterval(3600)) }
   @objc func pauseTomorrow() {
     let cal = Calendar.current
     pause(until: cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date()))!)
   }
-  func pause(until: Date) { pausedUntil = until; closeSegment(); updateAudio(); updateIcon() }
-  @objc func resume() { pausedUntil = nil; updateAudio(); updateIcon() }
+  func pause(until: Date) { pausedUntil = until; files.stop(); closeSegment(); updateAudio(); updateIcon() }
+  @objc func resume() { pausedUntil = nil; updateFiles(); updateAudio(); updateIcon() }
   @objc func toggleRecording() {
     recordingEnabled.toggle()
     if recordingEnabled { audio.allowManualStart() }

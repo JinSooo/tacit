@@ -2,12 +2,33 @@ import Foundation
 
 // 与 schema/record.schema.json 对应的子集；采集端只产出这些字段。
 
+public enum ContextValue: Codable, Equatable {
+  case string(String)
+  case integer(Int64)
+
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.singleValueContainer()
+    if let n = try? c.decode(Int64.self) { self = .integer(n) }
+    else { self = .string(try c.decode(String.self)) }
+  }
+  public func encode(to encoder: Encoder) throws {
+    var c = encoder.singleValueContainer()
+    switch self {
+    case .string(let s): try c.encode(s)
+    case .integer(let n): try c.encode(n)
+    }
+  }
+}
+
 public struct RecordContext: Codable, Equatable {
   public var app: String?
   public var window: String?
   public var url: String?
-  public init(app: String? = nil, window: String? = nil, url: String? = nil) {
+  public var extra: [String: ContextValue]?
+  public init(app: String? = nil, window: String? = nil, url: String? = nil,
+              extra: [String: ContextValue]? = nil) {
     self.app = app; self.window = window; self.url = url
+    self.extra = extra
   }
 }
 
@@ -22,6 +43,8 @@ public struct Record: Codable, Equatable {
   public var schema: Int
   public var device: String
   public var source: String
+  public var source_ref: String?
+  public var people: [String]?
   public var kind: String
   public var t_start: String
   public var t_end: String?
@@ -32,11 +55,14 @@ public struct Record: Codable, Equatable {
   public var sensitivity: String
 
   public init(device: String, source: String, kind: String, start: Date, end: Date? = nil,
-              context: RecordContext?, title: String, body: String, capture: Capture) {
+              context: RecordContext?, title: String, body: String, capture: Capture,
+              sourceRef: String? = nil, people: [String]? = nil) {
     self.id = ULID.make(start)
     self.schema = 1
     self.device = device
     self.source = source
+    self.source_ref = sourceRef
+    self.people = people
     self.kind = kind
     self.t_start = LocalTime.iso(start)
     self.t_end = end.map { LocalTime.iso($0) }

@@ -22,6 +22,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>录制麦克风中的人声，在本机加密保存并整理对话记录。</string>
   <key>NSAudioCaptureUsageDescription</key><string>录制系统播放的人声，在本机加密保存并整理对话记录。</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>读取已结束的日程，将标题、地点和参会人整理成活动记录。</string>
+  <key>NSDesktopFolderUsageDescription</key><string>记录桌面中新出现的文件名和路径，不读取文件内容。</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>记录文稿中新出现的文件名和路径，不读取文件内容。</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>记录下载完成的文件名、路径和来源，不读取文件内容。</string>
 </dict></plist>
 PLIST
 mkdir -p "$APP/Contents/Frameworks"
