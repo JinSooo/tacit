@@ -14,26 +14,49 @@ public final class AudioStore {
     try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     try rejectLink(root)
   }
+  private static let service = "record-anything", account = "audio-key-hex", legacyAccount = "audio-key"
+  /// 用系统 security 命令读写（和 hub 的数据库密钥一样）：钥匙串只认 /usr/bin/security，
+  /// 自签名的 app 重新构建后不用再授权，也不会因为授权框没人点而卡住录音线程。（2026-11-09 确认）
   public static func loadKey() throws -> SymmetricKey {
-    let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: "record-anything", kSecAttrAccount as String: "audio-key"]
-    func read() throws -> Data? {
-      var q = query; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
-      var result: CFTypeRef?
-      let status = SecItemCopyMatching(q as CFDictionary, &result)
-      if status == errSecItemNotFound { return nil }
-      guard status == errSecSuccess, let data = result as? Data, data.count == 32 else { throw AudioError.keychain(status) }
-      return data
+    if let key = try readKey() { return key }
+    // 旧版用 SecItem 存二进制密钥，只认具体构建：迁移一次（这次会弹授权框），之后只用 security。
+    let legacy = try readLegacy()
+    let key = legacy.map { SymmetricKey(data: $0) } ?? SymmetricKey(size: .bits256)
+    let hex = key.withUnsafeBytes { $0.map { String(format: "%02x", $0) }.joined() }
+    let added = try security(["add-generic-password", "-s", service, "-a", account, "-w", hex]).status
+    guard added == 0 || added == 45, let stored = try readKey() else { throw AudioError.keychain(added) }
+    let same = stored.withUnsafeBytes { a in key.withUnsafeBytes { b in a.elementsEqual(b) } }
+    if legacy != nil && same {
+      SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: legacyAccount] as CFDictionary)
     }
-    if let data = try read() { return SymmetricKey(data: data) }
-    let key = SymmetricKey(size: .bits256)
-    let data = key.withUnsafeBytes { Data($0) }
-    var q = query; q[kSecValueData as String] = data
-    q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-    let status = SecItemAdd(q as CFDictionary, nil)
-    if status == errSecDuplicateItem, let existing = try read() { return SymmetricKey(data: existing) }
-    guard status == errSecSuccess else { throw AudioError.keychain(status) }
-    return key
+    return stored
+  }
+  private static func readKey() throws -> SymmetricKey? {
+    let (status, text) = try security(["find-generic-password", "-s", service, "-a", account, "-w"])
+    if status == 44 { return nil }
+    guard status == 0, text.count == 64, text.allSatisfy(\.isHexDigit) else { throw AudioError.keychain(status) }
+    var bytes: [UInt8] = []; var i = text.startIndex
+    while i < text.endIndex { let j = text.index(i, offsetBy: 2); bytes.append(UInt8(text[i..<j], radix: 16)!); i = j }
+    return SymmetricKey(data: bytes)
+  }
+  private static func readLegacy() throws -> Data? {
+    let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+      kSecAttrAccount as String: legacyAccount, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+    var result: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &result)
+    if status == errSecItemNotFound { return nil }
+    guard status == errSecSuccess, let data = result as? Data, data.count == 32 else { throw AudioError.keychain(status) }
+    return data
+  }
+  /// 10 秒没返回就放弃，交给调用方报错并稍后重试，不无限等待。
+  private static func security(_ arguments: [String]) throws -> (status: Int32, text: String) {
+    let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/security"); process.arguments = arguments
+    let output = Pipe(); process.standardOutput = output; process.standardError = FileHandle.nullDevice
+    let done = DispatchSemaphore(value: 0); process.terminationHandler = { _ in done.signal() }
+    try process.run()
+    if done.wait(timeout: .now() + 10) == .timedOut { process.terminate(); throw AudioError.keychain(-1) }
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    return (process.terminationStatus, String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
   }
   public func directory(for meta: AudioMetadata) throws -> URL {
     try meta.validate()
