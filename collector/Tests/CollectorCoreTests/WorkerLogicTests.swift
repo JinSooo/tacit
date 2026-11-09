@@ -6,8 +6,7 @@ import Foundation
   #expect(WorkerLogic.windows(count: 23999, segment: 0).isEmpty)
   #expect(WorkerLogic.windows(count: 72000, segment: 2).map(\.count) == [48000, 24000])
   #expect(WorkerLogic.windows(count: 71999, segment: 2).map(\.count) == [48000])
-  #expect(WorkerLogic.trimPadding([0, 0, 1, 2, 3], duration: 3.0 / 16000) == [1, 2, 3])
-  #expect(WorkerLogic.trimPadding([1, 2], duration: 1) == [1, 2])
+  #expect(WorkerLogic.trimPadding([Float](repeating: 0, count: 2112) + [1, 2, 3]) == [1, 2, 3])
 }
 @Test func clusteringAndMajorityAreStable() {
   var speakers: [LocalSpeaker] = []
@@ -57,6 +56,10 @@ import Foundation
   #expect(record["people"] as? [String] == ["speaker-test"])
   #expect(AudioPolicy.validID(record["id"] as! String))
   #expect(throws: Never.self) { _ = try JSONSerialization.data(withJSONObject: record) }
+  // 回归：同一人被拆成多个本地标签时，标题不重复列名字。
+  let split = WorkerLogic.record(meta: meta, device: "mac-test", lines: ["S1", "S2", "S3"].map { TranscriptLine(segment: segment, local: $0, text: "合成") },
+    labels: ["S1": "我", "S2": "同事", "S3": "我"], ids: [:], retention: 7)
+  #expect((split["title"] as! String).hasSuffix(" · 我、同事"))
   let wav = WorkerLogic.wav([0, 1, -1]); #expect(wav.count == 50)
   #expect(String(data: wav.prefix(4), encoding: .utf8) == "RIFF")
 }

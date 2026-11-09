@@ -54,6 +54,18 @@ func aacCodecRoundTripInMemory() throws {
   #expect(decoded.allSatisfy { $0.isFinite })
 }
 
+// 回归：段时间戳只精确到秒，不足 1 秒的段首尾相同；去空白不能依赖时间戳，否则短段被截空、长段段首丢人声。
+@Test func aacPrimingTrimKeepsOnsetForShortSegments() throws {
+  for n in [3000, 16500, 48123] {
+    var samples = [Float](repeating: 0, count: n)
+    for i in 0..<200 { samples[1000 + i] = Float(sin(Double(i) * 0.5) * 0.5) }
+    let trimmed = WorkerLogic.trimPadding(try AudioCodec.decode(AudioCodec.encode(samples)))
+    #expect(trimmed.count >= n && trimmed.count < n + 1024)
+    let onset = trimmed.firstIndex { abs($0) > 0.05 }
+    #expect(onset.map { abs($0 - 1000) <= 2 } == true)
+  }
+}
+
 @Test func earlierTrackAcrossMidnightKeepsConversationAndEncryptedSegments() throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }

@@ -33,9 +33,11 @@ public enum WorkerLogic {
       return n >= 24000 ? VoiceWindow(segment: segment, offset: $0, count: n) : nil
     }
   }
-  public static func trimPadding(_ samples: [Float], duration: Double) -> [Float] {
-    let expected = max(0, Int((duration * 16000).rounded()))
-    return Array(samples.suffix(min(samples.count, expected)))
+  /// 系统 AAC 编码器固定在开头加 2112 个采样的空白（实测），末尾只补到 1024 的整数倍。
+  /// 不按段的时间戳推算：时间戳只精确到秒，推算会截掉段首最多约 1 秒人声，短段会被截空。
+  public static let aacPriming = 2112
+  public static func trimPadding(_ samples: [Float]) -> [Float] {
+    Array(samples.dropFirst(aacPriming))
   }
   public static func unit(_ vector: [Float]) -> [Float] {
     let norm = sqrt(vector.reduce(0.0) { $0 + Double($1) * Double($1) })
@@ -105,7 +107,9 @@ public enum WorkerLogic {
       return a == b ? $0.segment.file < $1.segment.file : a < b
     }
     let used = Array(Set(lines.map(\.local))).sorted()
-    let names = used.map { labels[$0] ?? ($0.isEmpty ? "未知说话人" : $0) }.joined(separator: "、")
+    // 同一人在对话内可能被拆成多个本地标签，标题按名字去重。
+    var seen = Set<String>()
+    let names = used.map { labels[$0] ?? ($0.isEmpty ? "未知说话人" : $0) }.filter { seen.insert($0).inserted }.joined(separator: "、")
     let title = "对话 · \(clock(meta.t_start, seconds: false))–\(clock(meta.t_end!, seconds: false)) · \(names)"
     let body = lines.map { "[\(clock($0.segment.t_start, seconds: true))] \(labels[$0.local] ?? "未知说话人")：\($0.text)" }.joined(separator: "\n")
     func dbfs(_ track: AudioTrack) -> Any {

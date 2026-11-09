@@ -61,7 +61,7 @@ final class Worker {
   }
   func audio(_ segment: AudioSegment, _ meta: AudioMetadata) throws -> [Float] {
     let decoded = try decode(store.readSegment(segment.file, meta: meta))
-    return WorkerLogic.trimPadding(decoded, duration: AudioPolicy.date(segment.t_end)!.timeIntervalSince(AudioPolicy.date(segment.t_start)!))
+    return WorkerLogic.trimPadding(decoded)
   }
   func cacheURL(_ meta: AudioMetadata) throws -> URL {
     let url = try store.directory(for: meta).appendingPathComponent("speakers.json")
