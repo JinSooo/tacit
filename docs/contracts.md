@@ -235,6 +235,8 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 
 暂停记录时两路都停。录音开关在采集端菜单里，默认开。
 
+麦克风输入设备：默认固定用自带麦克风（transport 为 built-in 且有输入流的设备），不跟随系统默认输入。菜单“麦克风”子菜单可选“自带麦克风（默认）”“跟随系统默认”或当前任一输入设备，选择存 UserDefaults（存设备 UID）。设备列表变化或选中的设备断开时重建麦克风这一路；指定设备不在时回落到自带麦克风，菜单注明。系统声音这一路不受影响。
+
 ### 5.2 模型与库
 
 - sherpa-onnx v2.0.1（`sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib`），dylib 打进 app 的 `Contents/Frameworks` 并用同一张自签名证书签名；头文件 `sherpa-onnx/c-api/c-api.h`（同版本源码）。
