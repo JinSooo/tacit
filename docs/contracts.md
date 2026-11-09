@@ -197,7 +197,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
   - `thread_done`：`{ thread_id, title, brief }`
   - `merge`：`{ a, b, reason, a_name, b_name }`。操作 `merge` 把 a 并入 b（同 `merge_into`）；`keep` 保持分开，这一对记进 `distill_state.merge_dismissed`，不再提示。
 - `POST /v1/pending/:id` → `{ resolved: true }`；`POST /v1/facts` → 新写入的 fact。
-- `GET /v1/history/segments?from&to&device` → `{ segments: [{ id, kind: "thread" | "app", start_ms, end_ms, thread: { id, title, brief, status, domain, project_id, project_name } | null, apps: [{ app, source, records, seconds }], active_seconds, record_ids, private }] }`。`from`、`to` 必填，都包含边界，跨度不超过 31 天。记录经 `frame_records` → `assignments` 归到线程；同一线程（或未归属记录的同一应用，`context.app`，没有时用 `source`）相邻记录间隔不超过 10 分钟就合成一段。`apps` 按时长倒序，`seconds`、`active_seconds` 是记录区间的并集（瞬时事件不计）；`record_ids` 从早到晚；`private` 是段里私密记录的条数，私密记录和 `/v1/records` 一样照常返回。段按开始时间倒序。
+- `GET /v1/history/segments?from&to&device` → `{ segments: [{ id, kind: "thread" | "app", start_ms, end_ms, thread: { id, title, brief, status, domain, project_id, project_name } | null, apps: [{ app, name, source, records, seconds }], active_seconds, record_ids, private }] }`。`from`、`to` 必填，都包含边界，跨度不超过 31 天。记录经 `frame_records` → `assignments` 归到线程；同一线程（或未归属记录的同一应用，`context.app`，没有时用 `source`）相邻记录间隔不超过 10 分钟就合成一段。`apps` 按时长倒序，`name` 是屏幕记录标题"应用名 · 窗口"里出现最多的应用名（给查不到 bundle id 的网页显示用，拿不到为 null），`seconds`、`active_seconds` 是记录区间的并集（瞬时事件不计）；`record_ids` 从早到晚；`private` 是段里私密记录的条数，私密记录和 `/v1/records` 一样照常返回。段按开始时间倒序。
 - 内部表 `frame_records(record_id PRIMARY KEY, frame_id)` 与 `frames.record_ids` 同步维护，用于判重和删除联动，避免扫描 JSON。
 
 ### 4.6 Agent 读取接口与审计（`user_version` 3）

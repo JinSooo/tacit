@@ -68,7 +68,9 @@ struct SegmentRow: View {
           HStack(spacing: 8) {
             Text(SegmentText.title(block))
               .font(.system(size: 13.5, weight: .semibold))
-              .lineLimit(1)
+              .lineLimit(segment.thread == nil ? 1 : 2)
+              .fixedSize(horizontal: false, vertical: true)
+              .layoutPriority(1)
             if let p = segment.thread?.projectName { ProjectTag(name: p) }
             if segment.privateCount > 0 { Image(systemName: "lock.fill").font(.system(size: 9)).foregroundStyle(.secondary) }
           }
@@ -94,6 +96,7 @@ struct SegmentRow: View {
           .background(.primary.opacity(0.06), in: Capsule())
           .help("\(block.records.count) 条原始记录")
         }
+        .fixedSize()
         .padding(.top, 3)
       }
       .padding(.vertical, 8)
@@ -273,5 +276,67 @@ struct SegmentInspector: View {
         .transition(.opacity)
       }
     }
+  }
+}
+
+/// 连续几段零碎活动折成的一行：列出涉及的应用，点开再逐段显示。
+struct MinorSegmentsRow: View {
+  let blocks: [SegmentBlock]
+  let expanded: Bool
+  let action: () -> Void
+  @State private var hovering = false
+
+  /// 按出现次数排的应用，同一应用只算一次。
+  var apps: [HistorySegment.App] {
+    var seen = Set<String>(), out: [HistorySegment.App] = []
+    for b in blocks { for a in b.segment.apps where seen.insert(a.app ?? a.source).inserted { out.append(a) } }
+    return out
+  }
+
+  var span: String {
+    guard let first = blocks.last?.segment, let last = blocks.first?.segment else { return "" }
+    let a = ViewerFormat.clock(first.start), b = ViewerFormat.clock(last.end)
+    return a == b ? a : "\(a)–\(b)"
+  }
+
+  var body: some View {
+    Button(action: action) {
+      HStack(alignment: .center, spacing: 12) {
+        Text(span)
+          .font(.mono(11))
+          .foregroundStyle(.tertiary)
+          .frame(width: RecordRow.timeWidth, alignment: .trailing)
+          .lineLimit(1)
+        // 最多叠 3 个 14pt 图标，总宽正好 26pt，和其他行的图标列对齐。
+        HStack(spacing: -8) {
+          ForEach(Array(apps.prefix(3).enumerated()), id: \.offset) { _, a in
+            SourceGlyph(source: a.source, app: a.app, size: 14)
+          }
+        }
+        .frame(width: 26, alignment: .leading)
+        Text(apps.prefix(4).map(SegmentText.appName).joined(separator: "、") + (apps.count > 4 ? " 等" : ""))
+          .font(.system(size: 12))
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        Spacer(minLength: 8)
+        HStack(spacing: 3) {
+          Text("\(blocks.count) 段").monospacedDigit()
+          Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
+        }
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(.tertiary)
+        .fixedSize()
+      }
+      .padding(.vertical, 6)
+      .padding(.horizontal, 8)
+      .background {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .fill(hovering ? Color.primary.opacity(0.04) : .clear)
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+    .help("\(blocks.count) 段零碎活动")
   }
 }

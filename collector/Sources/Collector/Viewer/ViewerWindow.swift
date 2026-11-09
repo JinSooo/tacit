@@ -29,7 +29,7 @@ import CollectorCore
     w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
     w.toolbarStyle = .unified
     w.title = "Record Anything"
-    w.contentMinSize = NSSize(width: 980, height: 640)
+    w.contentMinSize = NSSize(width: 1080, height: 640)
     w.setContentSize(NSSize(width: 1360, height: 880))
     w.isReleasedWhenClosed = false
     w.delegate = self

@@ -10,7 +10,8 @@ import { HubDB, InputError } from "./db.ts";
 export const SEGMENT_GAP_MS = 10 * 60_000;
 const MAX_RANGE_MS = 31 * 24 * 3600_000;
 
-export interface SegmentApp { app: string | null; source: string; records: number; seconds: number }
+/** name：给不能查 bundle id 的网页用的显示名，取屏幕记录标题"应用名 · 窗口"里出现最多的应用名；拿不到时为 null。 */
+export interface SegmentApp { app: string | null; name: string | null; source: string; records: number; seconds: number }
 export interface SegmentThread { id: string; title: string; brief: string | null; status: string; domain: string | null; project_id: string | null; project_name: string | null }
 export interface Segment {
   id: string;
@@ -26,8 +27,8 @@ export interface Segment {
   private: number;
 }
 
-interface Row { id: string; source: string; t_start_ms: number; t_end: string | null; context: string | null; sensitivity: string; thread_id: string | null }
-interface Item { id: string; source: string; app: string | null; start: number; end: number; private: boolean }
+interface Row { id: string; source: string; title: string; t_start_ms: number; t_end: string | null; context: string | null; sensitivity: string; thread_id: string | null }
+interface Item { id: string; source: string; app: string | null; name: string | null; start: number; end: number; private: boolean }
 
 /** 区间并集的总秒数：重叠的时段只算一次，瞬时事件不计时长。 */
 export function unionSeconds(spans: [number, number][]): number {
@@ -41,6 +42,14 @@ export function unionSeconds(spans: [number, number][]): number {
   return Math.round(total/1000);
 }
 
+function mostCommon(values: (string | null)[]): string | null {
+  const counts = new Map<string, number>();
+  for (const v of values) if (v) counts.set(v,(counts.get(v) ?? 0)+1);
+  let best: string | null = null, n = 0;
+  for (const [v,c] of counts) if (c > n) { best = v; n = c; }
+  return best;
+}
+
 function appOf(context: string | null): string | null {
   if (!context) return null;
   try { const app = (JSON.parse(context) as { app?: unknown }).app; return typeof app === "string" && app ? app : null; }
@@ -52,7 +61,7 @@ export function historySegments(hub: HubDB, params: URLSearchParams): { segments
   if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) throw new InputError("需要有效的 from 和 to");
   if (to - from > MAX_RANGE_MS) throw new InputError("时间范围不能超过 31 天");
   const device = params.get("device");
-  const rows = hub.db.prepare(`SELECT r.id,r.source,r.t_start_ms,r.t_end,r.context,r.sensitivity,a.thread_id
+  const rows = hub.db.prepare(`SELECT r.id,r.source,r.title,r.t_start_ms,r.t_end,r.context,r.sensitivity,a.thread_id
     FROM records r LEFT JOIN frame_records fr ON fr.record_id=r.id LEFT JOIN assignments a ON a.frame_id=fr.frame_id
     WHERE r.t_start_ms>=? AND r.t_start_ms<=? ${device ? "AND r.device=?" : ""} ORDER BY r.t_start_ms,r.id`).all(...[from,to,...device ? [device] : []]) as Row[];
 
@@ -68,7 +77,8 @@ export function historySegments(hub: HubDB, params: URLSearchParams): { segments
   const groups: Open[] = [], open = new Map<string, Open>();
   for (const r of rows) {
     const start = r.t_start_ms, parsedEnd = r.t_end ? Date.parse(r.t_end) : NaN;
-    const item: Item = { id: r.id,source: r.source,app: appOf(r.context),start,end: Number.isFinite(parsedEnd) ? Math.max(start,parsedEnd) : start,private: r.sensitivity === "private" };
+    const app0 = appOf(r.context), sep = r.title.indexOf(" · ");
+    const item: Item = { id: r.id,source: r.source,app: app0,name: app0 && sep > 0 ? r.title.slice(0,sep).trim() || null : null,start,end: Number.isFinite(parsedEnd) ? Math.max(start,parsedEnd) : start,private: r.sensitivity === "private" };
     // 归属的线程已不存在时（例如被合并删掉）按未提炼处理，不让记录从列表里消失。
     const thread = r.thread_id ? threads.get(r.thread_id) ?? null : null;
     const app = item.app ?? item.source;
@@ -94,7 +104,7 @@ export function historySegments(hub: HubDB, params: URLSearchParams): { segments
       start_ms: g.items[0]!.start,
       end_ms: Math.max(...g.items.map(i => i.end)),
       thread: g.thread,
-      apps: [...apps.values()].map(a => ({ app: a.app,source: a.source,records: a.items.length,seconds: unionSeconds(a.items.map(i => [i.start,i.end])) }))
+      apps: [...apps.values()].map(a => ({ app: a.app,name: mostCommon(a.items.map(i => i.name)),source: a.source,records: a.items.length,seconds: unionSeconds(a.items.map(i => [i.start,i.end])) }))
         .sort((a,b) => b.seconds-a.seconds || b.records-a.records || (a.app ?? a.source).localeCompare(b.app ?? b.source)),
       active_seconds: unionSeconds(g.items.map(i => [i.start,i.end])),
       record_ids: g.items.map(i => i.id),

@@ -104,6 +104,31 @@ input.date { width: 158px; }
 .record.expanded { background: var(--raised); box-shadow: 0 0 0 1px var(--line), 0 6px 20px rgb(0 0 0 / .06); margin: 6px 0; }
 .record.expanded .record-row::before { box-shadow: 0 0 0 3px var(--raised); }
 @media (hover: hover) { .record-row:hover:not(:disabled) { background: var(--hover); } .record.expanded .record-row:hover { background: transparent; } }
+/* 活动段：一段一行，标题是线程名或应用名，点开列出原始记录。 */
+.segment { border-radius: 12px; }
+.segment-row { position: relative; width: 100%; display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 32px; align-items: baseline; text-align: left; padding: 10px 10px 10px 0; border: 0; border-radius: 12px; background: transparent; min-height: 0; }
+.segment-row::before { content: ""; position: absolute; left: 107px; top: 16px; width: 9px; height: 9px; border-radius: 50%; background: var(--source-color, var(--faint)); box-shadow: 0 0 0 3px var(--paper); }
+.segment-row.minor { padding: 6px 10px 6px 0; }
+.segment-row.minor::before { width: 5px; height: 5px; left: 109px; top: 13px; background: var(--faint); }
+.segment-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.segment-title { font-weight: 600; font-size: 14.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.segment-project { margin-left: 10px; font-weight: 500; font-size: 11.5px; color: var(--accent); white-space: nowrap; }
+.segment-project::before { content: "● "; font-size: 8px; vertical-align: 2px; }
+.segment-private { margin-left: 8px; font-weight: 500; font-size: 11px; color: var(--muted); }
+.segment-brief { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.segment-windows { color: var(--faint); font-size: 12.5px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.segment-apps { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 12px; }
+.segment-apps > span::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--source-color); vertical-align: 1px; }
+.segment-apps em { font-style: normal; color: var(--faint); margin-left: 5px; font-variant-numeric: tabular-nums; }
+.segment-count { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--hover); color: var(--muted); font-weight: 600; text-align: center; }
+.segment.expanded { background: var(--raised); box-shadow: 0 0 0 1px var(--line), 0 6px 20px rgb(0 0 0 / .06); margin: 8px 0; }
+.segment.expanded > .segment-row::before { box-shadow: 0 0 0 3px var(--raised); }
+.segment-records { padding: 0 0 8px; }
+.segment-records .record-row { padding-top: 5px; padding-bottom: 5px; }
+.segment-records .record-title { font-weight: 400; font-size: 13px; color: var(--muted); }
+.segment-records .record-row::before { width: 5px; height: 5px; left: 109px; top: 12px; }
+.segment-loading { margin: 6px 0 6px 124px; }
+@media (hover: hover) { .segment-row:hover { background: var(--hover); } .segment.expanded > .segment-row:hover { background: transparent; } }
 .record-detail { margin-left: 118px; padding: 2px 24px 20px 0; }
 .body-text { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 13px; line-height: 1.75; margin: 8px 0 14px; padding: 14px 16px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
 .context { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 6px 12px; font-size: 12px; line-height: 1.65; margin: 18px 0 10px; }
@@ -210,6 +235,11 @@ textarea { width: 100%; resize: vertical; line-height: 1.75; }
   .record-row::before { left: 68px; }
   .record-meta { grid-column: 2; }
   .record-time { white-space: normal; }
+  .segment-row { grid-template-columns: 52px minmax(0, 1fr); gap: 4px 32px; }
+  .segment-row::before { left: 67px; }
+  .segment-row.minor::before, .segment-records .record-row::before { left: 69px; }
+  .segment-row .record-meta { grid-column: 2; }
+  .segment-loading { margin-left: 84px; }
   .record-detail { margin-left: 16px; padding-right: 16px; }
   .now-brief p { font-size: 21px; }
   .project-row { grid-template-columns: minmax(0, 1fr) auto; }

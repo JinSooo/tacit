@@ -147,3 +147,18 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(filtered.map(\.id) == ["a:3", "t:1"])
   #expect(filtered[1].records.map(\.id) == ["1"])
 }
+
+@Test func minorSegmentsFoldOnlyInRunsOfThree() {
+  func block(_ id: String, thread: Bool = false, records: Int = 1, seconds: Double = 10) -> SegmentBlock {
+    let t = thread ? try! HubJSON.decoder().decode(HistorySegment.ThreadRef.self, from: Data(#"{"id":"t","title":"合成线程"}"#.utf8)) : nil
+    let s = HistorySegment(id: id, kind: thread ? "thread" : "app", startMs: 0, endMs: 0, thread: t, apps: [], activeSeconds: seconds, recordIds: [], privateCount: 0)
+    let rs = (0..<records).map { i in try! record("\(id)-\(i)", "mac.screen", "合成", "2026-11-08T11:00:00+08:00") }
+    return SegmentBlock(segment: s, records: rs)
+  }
+  // 线程段、记录多或时长长的都不算零碎。
+  #expect(!SegmentFold.isMinor(block("t", thread: true)))
+  #expect(!SegmentFold.isMinor(block("many", records: 3)))
+  #expect(!SegmentFold.isMinor(block("long", seconds: 300)))
+  let items = SegmentFold.fold([block("a"), block("b"), block("c"), block("T", thread: true), block("d"), block("e"), block("U", thread: true)])
+  #expect(items.map(\.id) == ["minor:a", "T", "d", "e", "U"])
+}

@@ -48,6 +48,10 @@ struct HistoryPage: View {
     selection = .record(id)
     if let block = allBlocks.first(where: { $0.segment.recordIds.contains(id) }) {
       expanded.insert(block.id)
+      // 所在的段被折进"其他 N 段"时，先展开那一组，否则这一行不在列表里、滚不过去。
+      for case .minor(let group) in SegmentFold.fold(blocks) where group.contains(where: { $0.id == block.id }) {
+        expanded.insert(SegmentListItem.minor(group).id)
+      }
       scrollTarget = block.id
     }
   }
@@ -80,7 +84,7 @@ struct HistoryPage: View {
     .toolbar { toolbar }
     .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { selection = nil } })) {
       inspector
-        .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
+        .inspectorColumnWidth(min: 300, ideal: 360, max: 520)
     }
     .sheet(isPresented: $note) { NoteSheet { store.revision += 1 } }
     .task(id: LoadKey(day: day, revision: store.revision)) { await loadDay() }
@@ -188,11 +192,16 @@ struct HistoryPage: View {
 
   var dayHeader: some View {
     VStack(alignment: .leading, spacing: 14) {
-      HStack(alignment: .firstTextBaseline, spacing: 12) {
-        Text(longDate).font(.serif(30, .semibold)).foregroundStyle(Palette.ink)
-        Text(ViewerFormat.weekday(day)).font(.serif(17)).foregroundStyle(.secondary)
-        Spacer()
-        if !records.isEmpty { stats }
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+          dateTitle
+          Spacer(minLength: 16)
+          if !records.isEmpty { stats }
+        }
+        VStack(alignment: .leading, spacing: 10) {
+          dateTitle
+          if !records.isEmpty { stats }
+        }
       }
       if let summary = diary?.detail?.summary ?? diary?.brief, !summary.isEmpty {
         VStack(alignment: .leading, spacing: 8) {
@@ -211,6 +220,15 @@ struct HistoryPage: View {
         .overlay(alignment: .leading) { Capsule().fill(Palette.accent.opacity(0.5)).frame(width: 2.5) }
       }
     }
+  }
+
+  var dateTitle: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      Text(longDate).font(.serif(30, .semibold)).foregroundStyle(Palette.ink)
+      Text(ViewerFormat.weekday(day)).font(.serif(17)).foregroundStyle(.secondary)
+    }
+    .lineLimit(1)
+    .fixedSize()
   }
 
   var longDate: String {
@@ -232,6 +250,8 @@ struct HistoryPage: View {
       Text(value).font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit()
       Text(label).font(.system(size: 10.5)).foregroundStyle(.secondary)
     }
+    .lineLimit(1)
+    .fixedSize()
   }
 
   /// 并集时长：重叠的时段只算一次。
@@ -285,31 +305,48 @@ struct HistoryPage: View {
 
   // MARK: 行
 
-  /// 每段一张卡片；展开后列出原始记录（相邻同标题的合成一行）。
+  /// 每段一张卡片；展开后列出原始记录（相邻同标题的合成一行）。连续的零碎段折成一行"其他 N 段"。
   @ViewBuilder func segmentRows(_ blocks: [SegmentBlock]) -> some View {
     let cal = Calendar.current
-    ForEach(Array(blocks.enumerated()), id: \.element.id) { i, block in
-      let hour = cal.component(.hour, from: block.segment.start)
-      if i == 0 || cal.component(.hour, from: blocks[i - 1].segment.start) != hour {
+    let items = SegmentFold.fold(blocks)
+    ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+      let hour = cal.component(.hour, from: item.start)
+      if i == 0 || cal.component(.hour, from: items[i - 1].start) != hour {
         HourMark(hour: hour).padding(.top, i == 0 ? 4 : 14).padding(.horizontal, 20)
       }
-      SegmentRow(block: block, selected: selection == .segment(block.id), expanded: expanded.contains(block.id)) {
-        withAnimation(.smooth(duration: 0.25)) { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
-        selection = .segment(block.id)
-      }
-      .padding(.horizontal, 20)
-      .id(block.id)
-      if expanded.contains(block.id) {
-        ForEach(RecordRuns.collapse(block.records)) { run in
-          RecordRow(record: run.newest, run: run, selected: run.records.contains { $0.id == selectedRecord }, expanded: false, nested: true) {
-            selection = .record(run.newest.id)
-          }
-          .padding(.horizontal, 20)
-          .id(run.id)
-          .transition(.opacity)
+      switch item {
+      case .single(let block):
+        segmentRow(block)
+      case .minor(let group):
+        MinorSegmentsRow(blocks: group, expanded: expanded.contains(item.id)) {
+          withAnimation(.smooth(duration: 0.25)) { if expanded.contains(item.id) { expanded.remove(item.id) } else { expanded.insert(item.id) } }
         }
-        Color.clear.frame(height: 6)
+        .padding(.horizontal, 20)
+        .id(item.id)
+        if expanded.contains(item.id) {
+          ForEach(group) { block in segmentRow(block) }
+        }
       }
+    }
+  }
+
+  @ViewBuilder func segmentRow(_ block: SegmentBlock) -> some View {
+    SegmentRow(block: block, selected: selection == .segment(block.id), expanded: expanded.contains(block.id)) {
+      withAnimation(.smooth(duration: 0.25)) { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
+      selection = .segment(block.id)
+    }
+    .padding(.horizontal, 20)
+    .id(block.id)
+    if expanded.contains(block.id) {
+      ForEach(RecordRuns.collapse(block.records)) { run in
+        RecordRow(record: run.newest, run: run, selected: run.records.contains { $0.id == selectedRecord }, expanded: false, nested: true) {
+          selection = .record(run.newest.id)
+        }
+        .padding(.horizontal, 20)
+        .id(run.id)
+        .transition(.opacity)
+      }
+      Color.clear.frame(height: 6)
     }
   }
 

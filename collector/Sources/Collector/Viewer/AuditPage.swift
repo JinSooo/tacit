@@ -17,7 +17,7 @@ struct AuditPage: View {
       LazyVStack(alignment: .leading, spacing: 0) {
         VStack(alignment: .leading, spacing: 8) {
           Text("读取记录").font(.serif(30, .semibold))
-          Text("Claude Code、Codex 每次读你的上下文都会留在这里：读了什么、拿走多少。").font(.serif(15)).foregroundStyle(.secondary)
+          Text("Claude Code、Codex 每次读取你的上下文、往 History 写入内容，都会留在这里。").font(.serif(15)).foregroundStyle(.secondary)
         }
         .padding(.bottom, 24)
         if reads.isEmpty {

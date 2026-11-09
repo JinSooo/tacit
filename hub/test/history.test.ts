@@ -17,7 +17,8 @@ const day = `from=${encodeURIComponent(at("00:00"))}&to=${encodeURIComponent("20
 test("活动段：同一线程接得上的片段合成一段，未提炼的按应用临时分组", async () => {
   const store = new DistillStore(ctx.db);
   // 线程 A：编辑器 10:00–10:20，浏览器 10:25–10:30（不同片段，同一线程）；13:00 又回到线程 A，间隔太久另起一段。
-  const editor = fixture({ kind: "span", t_start: at("10:00"), t_end: at("10:20"), context: { app: "com.synthetic.editor" } });
+  // 屏幕记录标题是"应用名 · 窗口"，应用名作为网页显示名。
+  const editor = fixture({ kind: "span", title: "合成编辑器 · 文件甲", t_start: at("10:00"), t_end: at("10:20"), context: { app: "com.synthetic.editor" } });
   const browser = fixture({ source: "mac.browser", source_ref: "synthetic-visit-1", t_start: at("10:25"), t_end: at("10:30"), context: { app: "com.synthetic.browser", url: "https://example.com/a" } });
   const later = fixture({ kind: "span", t_start: at("13:00"), t_end: at("13:05"), context: { app: "com.synthetic.editor" } });
   // 未提炼：聊天 10:02–10:04、10:08–10:10 合成一段；私密记录照常列出，只计数。
@@ -50,15 +51,15 @@ test("活动段：同一线程接得上的片段合成一段，未提炼的按�
   expect(main.end_ms).toBe(Date.parse(at("10:30")));
   expect(main.active_seconds).toBe(25 * 60);
   expect(main.apps).toEqual([
-    { app: "com.synthetic.editor", source: "mac.screen", records: 1, seconds: 20 * 60 },
-    { app: "com.synthetic.browser", source: "mac.browser", records: 1, seconds: 5 * 60 },
+    { app: "com.synthetic.editor", name: "合成编辑器", source: "mac.screen", records: 1, seconds: 20 * 60 },
+    { app: "com.synthetic.browser", name: null, source: "mac.browser", records: 1, seconds: 5 * 60 },
   ]);
   const chat = segments[2];
   expect(chat.thread).toBeNull();
   expect(chat.private).toBe(1);
   expect(chat.active_seconds).toBe(4 * 60);
   // 没有 context.app 的记录按来源归类。
-  expect(segments[1].apps).toEqual([{ app: null, source: "mac.shell", records: 1, seconds: 0 }]);
+  expect(segments[1].apps).toEqual([{ app: null, name: null, source: "mac.shell", records: 1, seconds: 0 }]);
 
   // 不带 device 时包含其他设备的记录。
   const all = await (await call(`/v1/history/segments?${day}`)).json();

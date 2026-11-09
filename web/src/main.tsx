@@ -1,4 +1,5 @@
 import { AuditView } from "./audit-view.tsx";
+import { SegmentList } from "./segment-list.tsx";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { RecordV1 } from "../../packages/record/index.ts";
@@ -180,7 +181,11 @@ function App() {
     setExpanded(anchor.id);
     requestAnimationFrame(() => document.getElementById(`row-${anchor.id}`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
   }, [anchor, records]);
+  // 没有搜索和来源筛选时按活动段看某一天，否则按原始记录逐条列出。
+  const segmentMode = !q.trim() && !source && !anchor;
+  const shownDay = date || dayKey(new Date());
   function pick(record: HistoryRow) {
+    if (segmentMode) { setExpanded(record.id); return; }
     if (records.some(row => row.id === record.id)) {
       setExpanded(record.id);
       requestAnimationFrame(() => document.getElementById(`row-${record.id}`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
@@ -226,7 +231,10 @@ function App() {
     {view === "audit" && <AuditView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />}
     {view === "history" && !q.trim() && <DayOverview api={api} day={date || dayKey(new Date())} selected={expanded} onPick={pick} />}
     {view === "history" && anchor && <p className="anchor-note">从 {timeRange({ ...records.find(r => r.id === anchor.id) ?? { kind: "event", t_start: anchor.t_start } } as HistoryRow)} 起显示 <button className="text-button compact" onClick={() => setAnchor(null)}>回到最新</button></p>}
-    <div id="timeline" hidden={view !== "history"} tabIndex={-1} aria-busy={busy}>
+    {view === "history" && segmentMode && <div id="segments" tabIndex={-1}><SegmentList api={api} day={shownDay} device={device} focus={expanded} revision={revision}
+      renderDetail={(id, onDelete) => <RecordDetail id={id} api={api} speakers={speakers} onDelete={onDelete} />}
+      onEarlier={() => { const d = new Date(`${shownDay}T12:00:00`); d.setDate(d.getDate() - 1); setDate(dayKey(d)); window.scrollTo({ top: 0 }); }} /></div>}
+    <div id="timeline" hidden={view !== "history" || segmentMode} tabIndex={-1} aria-busy={busy}>
       {speakerError && records.some(record => record.source === "mac.audio") && <p className="error" role="alert">说话人名字读取失败：{speakerError} <button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
       {groupRecords(records).map(group => <section key={group.day} aria-label={dateTitle(group.day)}><h2 className="day-heading">{dateTitle(group.day)}</h2><div className="day-records">{group.records.map(record => <article key={record.id} id={`row-${record.id}`} className={expanded === record.id ? "record expanded" : "record"}>
         <button className="record-row" style={{ "--source-color": sourceColor(record.source) } as React.CSSProperties} aria-expanded={expanded === record.id} aria-controls={`detail-${record.id}`} onClick={() => setExpanded(expanded === record.id ? null : record.id)}>

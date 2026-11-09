@@ -172,6 +172,45 @@ public enum SegmentBlocks {
   }
 }
 
+/// History 列表里一行：一段活动，或者连续几段零碎活动折成的一行。
+public enum SegmentListItem: Identifiable, Hashable, Sendable {
+  case single(SegmentBlock)
+  case minor([SegmentBlock])
+  public var id: String {
+    switch self {
+    case .single(let b): return b.id
+    case .minor(let bs): return "minor:" + (bs.first?.id ?? "")
+    }
+  }
+  public var start: Date {
+    switch self {
+    case .single(let b): return b.segment.start
+    case .minor(let bs): return bs.first?.segment.start ?? .distantPast
+    }
+  }
+}
+
+public enum SegmentFold {
+  /// 零碎段：还没归入线程、最多 2 条记录、活跃不到 2 分钟（比如顺手切到音乐、通知窗口）。
+  public static func isMinor(_ b: SegmentBlock) -> Bool {
+    b.segment.thread == nil && b.records.count <= 2 && b.segment.activeSeconds < 120
+  }
+
+  /// 连续至少 minRun 段零碎活动折成一行，不足的照常单独显示；顺序不变。
+  public static func fold(_ blocks: [SegmentBlock], minRun: Int = 3) -> [SegmentListItem] {
+    var out: [SegmentListItem] = [], run: [SegmentBlock] = []
+    func flush() {
+      if run.count >= minRun { out.append(.minor(run)) } else { out.append(contentsOf: run.map { .single($0) }) }
+      run = []
+    }
+    for b in blocks {
+      if isMinor(b) { run.append(b) } else { flush(); out.append(.single(b)) }
+    }
+    flush()
+    return out
+  }
+}
+
 /// 一天的条带图里，来源归到的泳道。
 public enum Lane: Int, CaseIterable, Sendable {
   case screen, browser, agent, terminal, voice, other
