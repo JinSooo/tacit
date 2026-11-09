@@ -48,14 +48,30 @@ export type PluginLine =
 
 // ---------- ULID ----------
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+// 同一毫秒内生成的 id 按生成顺序递增（monotonic ULID）：审计、修正等按 id 排序取"最新"时才不会排反。
+// 按时间记住最近一次的随机部分：显式传入的旧时间和当前时间交替生成时也能各自递增。
+const recent = new Map<number, number[]>();
 export function ulid(timeMs: number = Date.now()): string {
-  let t = Math.floor(timeMs);
+  const time = Math.floor(timeMs);
+  let rand: number[];
+  const last = recent.get(time);
+  if (last) {
+    rand = [...last];
+    let i = rand.length - 1;
+    while (i >= 0 && rand[i] === 31) rand[i--] = 0;
+    if (i < 0) throw new Error("同一毫秒内的 ULID 用尽");
+    rand[i]!++;
+  } else {
+    rand = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b % 32);
+    // 首位留余量，避免同一毫秒内递增时溢出。
+    rand[0] = rand[0]! % 16;
+  }
+  recent.delete(time); recent.set(time, rand);
+  if (recent.size > 256) recent.delete(recent.keys().next().value!);
+  let t = time;
   let ts = "";
   for (let i = 0; i < 10; i++) { ts = CROCKFORD[t % 32] + ts; t = Math.floor(t / 32); }
-  const rnd = crypto.getRandomValues(new Uint8Array(16));
-  let r = "";
-  for (let i = 0; i < 16; i++) r += CROCKFORD[rnd[i] % 32];
-  return ts + r;
+  return ts + rand.map((n) => CROCKFORD[n]).join("");
 }
 
 // ---------- time ----------

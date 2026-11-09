@@ -16,6 +16,12 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
   #expect(a.prefix(10) < b.prefix(10))
 }
 
+@Test func ulidMonotonicWithinMillisecond() {
+  // 和其他时间交替生成也要保持递增；并行测试也会在中间插入别的时间。
+  let ids = (0..<1000).map { i -> String in _ = ULID.make(t0.addingTimeInterval(Double(i + 1))); return ULID.make(t0) }
+  #expect(zip(ids, ids.dropFirst()).allSatisfy { $0 < $1 })
+}
+
 @Test func localTimeHasOffset() {
   let s = LocalTime.iso(t0, timeZone: TimeZone(identifier: "Asia/Shanghai")!)
   #expect(s.hasSuffix("+08:00"))

@@ -16,3 +16,11 @@ test("span without t_end fails", () => expect(validateRecord({ ...base(), kind: 
 test("unknown field fails", () => expect(validateRecord({ ...base(), foo: 1 }).ok).toBe(false));
 test("local iso has offset", () => expect(toLocalIso(0)).toMatch(/[+-]\d\d:\d\d$/));
 test("clampTitle respects limit", () => expect(Array.from(clampTitle("长".repeat(500))).length).toBe(200));
+
+test("同一毫秒内生成的 ulid 严格递增（审计和修正按 id 取最新）", () => {
+  const t = Date.UTC(2026, 10, 9, 12);
+  // 和其他时间交替生成（采集端用记录开始时间生成 id 时就是这样）也要保持递增。
+  const ids = Array.from({ length: 1000 }, (_, i) => { ulid(t + 1 + i); return ulid(t); });
+  expect(ids.every((id, i) => i === 0 || ids[i - 1]! < id)).toBe(true);
+  expect(ids.every((id) => /^[0-9A-HJKMNP-TV-Z]{26}$/.test(id))).toBe(true);
+});
