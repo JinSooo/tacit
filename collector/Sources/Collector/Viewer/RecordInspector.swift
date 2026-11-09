@@ -17,6 +17,9 @@ struct RecordInspector: View {
   @State private var correcting = false
   @State private var confirmDelete = false
   @State private var busy = false
+  @State private var copied = false
+  @State private var copyReset: Task<Void, Never>?
+  @State private var deleteError: String?
 
   var body: some View {
     Group {
@@ -50,7 +53,7 @@ struct RecordInspector: View {
           .buttonStyle(.link).font(.caption)
           .padding(.bottom, -8)
         }
-        header(r)
+        header(d)
         if cur.id != r.id {
           HStack(spacing: 6) {
             Image(systemName: "pencil.and.outline")
@@ -78,15 +81,15 @@ struct RecordInspector: View {
           }
         }
         contextGrid(r)
-        actions(d)
       }
       .padding(20)
     }
     .background(Palette.paper)
   }
 
-  func header(_ r: HistoryRecord) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
+  func header(_ d: RecordDetail) -> some View {
+    let r = d.record
+    return VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 10) {
         SourceGlyph(source: r.source, app: r.contextText("app"), size: 34)
         VStack(alignment: .leading, spacing: 2) {
@@ -95,6 +98,7 @@ struct RecordInspector: View {
         }
       }
       Text(r.title).font(.serif(19, .semibold)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+      actions(d)
     }
   }
 
@@ -187,18 +191,26 @@ struct RecordInspector: View {
   }
 
   func actions(_ d: RecordDetail) -> some View {
-    HStack(spacing: 10) {
-      Button { correcting = true } label: { Label("修正", systemImage: "pencil") }
-      Button {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(d.current.body ?? d.record.title, forType: .string)
-      } label: { Label("复制", systemImage: "doc.on.doc") }
-      Spacer()
-      Button(role: .destructive) { confirmDelete = true } label: { Label("删除", systemImage: "trash") }
-        .disabled(busy)
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 8) {
+        Button { correcting = true } label: { Label("修正", systemImage: "pencil") }
+        Button {
+          NSPasteboard.general.clearContents()
+          NSPasteboard.general.setString(d.current.body ?? d.record.title, forType: .string)
+          copied = true
+          copyReset?.cancel()
+          copyReset = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if !Task.isCancelled { copied = false }
+          }
+        } label: { Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc") }
+        Spacer()
+        Button(role: .destructive) { confirmDelete = true } label: { Label("删除", systemImage: "trash") }
+          .disabled(busy)
+      }
+      if let deleteError { Text(deleteError).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
     }
-    .controlSize(.regular)
-    .padding(.top, 6)
+    .controlSize(.small)
     .confirmationDialog("删除这条记录？", isPresented: $confirmDelete) {
       Button("删除", role: .destructive) { Task { await delete(d) } }
     } message: {
@@ -207,12 +219,12 @@ struct RecordInspector: View {
   }
 
   func delete(_ d: RecordDetail) async {
-    busy = true; defer { busy = false }
+    busy = true; deleteError = nil; defer { busy = false }
     do {
       try await store.api.deleteRecord(d.record.id)
       onDelete([d.record.id] + d.corrections.map(\.id))
       store.revision += 1
-    } catch { self.error = error.localizedDescription; detail = nil }
+    } catch { deleteError = error.localizedDescription }
   }
 }
 
