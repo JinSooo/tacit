@@ -2,7 +2,7 @@
 
 多设备全量记录 → 文字版 Computer / Mobile History → 云端模型异步提炼 → Codex、Claude Code 等 AI 工具自己来读上下文。完整设计见 `docs/design.md`。
 
-状态（2026-11-08）：v1 的"采集和查看"已完成并在开发机上真实安装运行（`./install.sh`，卸载 `./uninstall.sh`）。下一步是提炼层。
+状态（2026-11-09）：v1（采集、提炼、交给 Agent）和 v2 的 Mac 音频已完成，在开发机上真实安装运行（`./install.sh`，卸载 `./uninstall.sh`），进入试用验收（design.md 第 11 节"v1 验收"）。
 
 ## 产品规则（已和用户确认）
 

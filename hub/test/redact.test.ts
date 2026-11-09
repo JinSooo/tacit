@@ -14,6 +14,12 @@ const examples: [string, string][] = [
   ["Anthropic", "sk-ant-api03-" + "aB3_".repeat(20)],
   ["Slack", "xoxb-1234567890-abcdefghijk"],
   ["Slack", "xoxp-1234567890-abcdefghijk"],
+  // 回归：以下四种在 2026-11-09 假密钥实测里漏拦。
+  ["Stripe", "sk_live_" + "aB3".repeat(8)],
+  ["Stripe", "rk_test_" + "aB3".repeat(8)],
+  ["Google", "AIzaSy" + "aB3-".repeat(8) + "a"],
+  ["GitLab", "glpat-" + "aB3_".repeat(5)],
+  ["HuggingFace", "hf_" + "aB3".repeat(11)],
   ["JWT", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljU2lnbmF0dXJl"],
   ["URL密码", "https://fake-user:synth-pass@example.invalid/path"],
   // 回归：curl 命令里的 Bearer 头曾经漏拦（2026-11-08 验收发现）。
@@ -33,6 +39,7 @@ test("普通 SHA、UUID、中文、单词和低熵赋值不误伤", () => {
     "这是一段很长的中文文字用来说明普通的日常讨论不应该被当作密钥进行替换而丢失内容",
     "documentation internationalization base64 image ordinaryword",
     "token=aaaaaaaaaaaaaaaaaaaaaaaa", "password=internationalization",
+    "from huggingface_hub import hf_hub_download", "task_live_update_handler",
   ]) expect(redactString(text)).toEqual({ text, count: 0 });
 });
 

@@ -18,6 +18,10 @@ export function redactString(input: string): { text: string; count: number } {
     ["Anthropic", /\bsk-ant-[A-Za-z0-9_-]{16,}/g],
     ["OpenAI", /\bsk-(?!ant-)[A-Za-z0-9_-]{16,}/g],
     ["Slack", /\bxox[a-z]-[A-Za-z0-9-]{10,}/g],
+    ["Stripe", /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g],
+    ["Google", /\bAIza[0-9A-Za-z_-]{35}/g],
+    ["GitLab", /\bglpat-[A-Za-z0-9_-]{20,}/g],
+    ["HuggingFace", /\bhf_[A-Za-z0-9]{30,}\b/g],
     ["JWT", /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{8,}\b/g],
     // curl -H "Authorization: Bearer …" 这类命令行里最常见；只要求长度，不要求熵，Bearer 后面的值几乎总是凭据。
     ["Bearer", /(?<=\b(?:Bearer|Token)\s+)[A-Za-z0-9._~+\/-]{16,}=*/gi],
