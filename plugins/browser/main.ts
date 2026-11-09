@@ -135,9 +135,11 @@ export async function collectBrowserHistory(options: CollectOptions): Promise<{ 
             `SELECT v.id, ${engine.time} AS time, ${engine.url} AS url,
              ${engine.title} AS title, ${engine.transition} AS transition
              FROM ${engine.from} WHERE v.id > ? ORDER BY ${engine.time}, v.id`,
-          ).all(previous?.lastId ?? 0);
+          // 传 --since 时从头扫一遍、按时间截断（重新导入）；靠 source_ref 去重，lastId 不倒退。
+          ).all(options.since ? 0 : previous?.lastId ?? 0);
           let lastId = previous?.lastId ?? 0;
-          const recent = new Map(previous?.recent ?? []);
+          // 重新扫描时按原顺序重放 30 秒去重，结果与当初逐次增量一致。
+          const recent = new Map(options.since ? [] : previous?.recent ?? []);
           let latest = Math.max(-Infinity, ...recent.values());
           for (const row of rows) {
             lastId = Math.max(lastId, row.id);

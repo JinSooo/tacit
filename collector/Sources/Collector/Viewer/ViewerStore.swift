@@ -4,22 +4,39 @@ import SwiftUI
 import struct CollectorCore.Project
 import struct CollectorCore.PendingItem
 import struct CollectorCore.Speaker
+import struct CollectorCore.DataSourceStatus
+import enum CollectorCore.MaintenanceTask
 
 /// 采集端自己的运行状态，由 AppDelegate 提供给窗口显示。只含计数和开关，不含内容。
 struct CaptureSnapshot: Equatable {
   enum State: Equatable { case recording, paused(Date), noPermission }
-  struct Line: Equatable, Identifiable { let id: String; let title: String; let value: String; let ok: Bool }
+  struct Job: Equatable { var running = false; var text = "" }
   var state: State = .recording
   var queue = 0
+  var sent = 0
   var hubError: String?
-  var recordingEnabled = false
-  var ocrEnabled = false
-  var lines: [Line] = []
+  /// 按注册表顺序的全部数据源。
+  var sources: [DataSourceStatus] = []
   var audio: [String] = []
-  var plugins: [Line] = []
+  var pluginsAvailable = false
+  /// 采集端执行的维护任务（同步、导入）的状态。整理历史由 hub 的请求队列跟踪。
+  var jobs: [MaintenanceTask: Job] = [:]
+
+  func source(_ id: String) -> DataSourceStatus? { sources.first { $0.id == id } }
+  var recordingEnabled: Bool { source("audio")?.enabled ?? false }
+  /// 侧栏底部的一行：正在采集的数据源。
+  var summary: String {
+    let builtin = sources.filter { $0.enabled && $0.kind == .builtin }.map(\.title)
+    let plugins = sources.filter { $0.enabled && $0.kind == .plugin }.count
+    return (builtin + (plugins > 0 ? ["插件 \(plugins)"] : [])).joined(separator: " · ")
+  }
 }
 
-enum CaptureAction { case pauseHour, pauseTomorrow, resume, requestAX, requestCalendar, toggleRecording, toggleOCR, runPlugins }
+enum CaptureAction {
+  case pauseHour, pauseTomorrow, resume, requestAX
+  case setSource(String, Bool), requestPermission(String), runSource(String)
+  case maintenance(MaintenanceTask)
+}
 
 protocol CaptureControlling: AnyObject {
   func captureSnapshot() -> CaptureSnapshot

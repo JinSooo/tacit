@@ -29,7 +29,7 @@ export async function discoverRepos(roots: string[]): Promise<string[]> {
 
 async function git(args: string[], deadline: number, cwd?: string, optional = false): Promise<string> {
   const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("超过 10 秒时限");
+  if (remaining <= 0) throw new Error("超过时限");
   const child = Bun.spawn(["git", "--no-pager", "-c", "color.ui=false", ...args], {
     cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat", PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
     stdin: "ignore", stdout: "pipe", stderr: "pipe",
@@ -38,7 +38,7 @@ async function git(args: string[], deadline: number, cwd?: string, optional = fa
   const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, remaining);
   try {
     const [stdout, , code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    if (timedOut) throw new Error("超过 10 秒时限");
+    if (timedOut) throw new Error("超过时限");
     if (code !== 0 && !(optional && code === 1)) throw new Error(`git ${args[0]} 失败（退出码 ${code}）`);
     return stdout;
   } finally { clearTimeout(timer); }
@@ -78,7 +78,8 @@ export async function collectGit(options: {
   const progress = { ...options.state?.progress };
   const globalEmail = options.emails ? "" : (await git(["config", "--global", "--get", "user.email"], Date.now() + 10_000, undefined, true)).trim();
   for (const repo of repos) {
-    const started = Date.now(), deadline = started + 10_000;
+    // 显式 --since（导入全部历史）要读的提交可能很多，放宽到 2 分钟；常规增量仍是 10 秒。
+    const started = Date.now(), deadline = started + (options.since ? 120_000 : 10_000);
     try {
       const top = (await git(["rev-parse", "--show-toplevel"], deadline, repo)).trim();
       if (await realpath(top) !== await realpath(repo)) throw new Error("路径不是仓库根目录");
@@ -107,7 +108,7 @@ export async function collectGit(options: {
         if (!validation.ok) throw new Error(`记录不符合契约：${validation.errors.join("；")}`);
         records.push(record);
       }
-      if (Date.now() > deadline) throw new Error("超过 10 秒时限");
+      if (Date.now() > deadline) throw new Error("超过时限");
       for (const record of records) options.emit(record);
       // --since 覆盖到未来时不把游标倒退，否则下一次会意外回溯。
       const boundary = new Date(Math.max(nextSince.valueOf(), since.valueOf()));

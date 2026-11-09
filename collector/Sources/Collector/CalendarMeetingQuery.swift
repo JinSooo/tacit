@@ -6,7 +6,9 @@ final class CalendarMeetingQuery {
   private lazy var store = EKEventStore()
 
   func meetingApps(_ apps: [String], start: Date, end: Date) -> [String] {
-    guard EKEventStore.authorizationStatus(for: .event) == .fullAccess, end > start else { return apps }
+    // 日历数据源停用时不读日程，按没有日历授权处理。
+    guard SourceToggles(store: UserDefaults.standard).isEnabled("calendar"),
+          EKEventStore.authorizationStatus(for: .event) == .fullAccess, end > start else { return apps }
     let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
     // EventKit 的同步查询没有抛错接口；查询失败时返回空结果，按无日程处理。
     let events = store.events(matching: predicate).compactMap { event -> CalendarEventSnapshot? in

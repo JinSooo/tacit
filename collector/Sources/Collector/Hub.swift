@@ -96,49 +96,74 @@ final class HubClient {
 
 /// 定时运行外部插件。插件是采集端的子进程，继承采集端的系统权限（实验 0-C）；
 /// runner 以 HTTP 模式把记录交给 hub，数据库只由 hub 打开。
+/// 所有运行排在一个串行队列里：常规增量、单个"立即运行"和维护导入互不并发，同一插件不会同时跑两份。
 final class PluginScheduler {
+  struct Outcome { let ok: Bool; let accepted: Int; let text: String; let at: Date }
   let config: Config
-  let plugins = ["agent-sessions", "browser", "shell", "git"]
-  private(set) var last: [String: String] = [:]
-  private(set) var running = false
+  let plugins = DataSourceCatalog.plugins.map(\.id)
+  /// 由注册表提供：停用的插件不运行。
+  var isEnabled: (String) -> Bool = { _ in true }
+  private var last: [String: Outcome] = [:]
+  private var current: String?
+  private var regularQueued = false
   private let lock = NSLock()
+  private let jobs = DispatchQueue(label: "record-anything.plugins", qos: .utility)
 
   init(config: Config) { self.config = config }
 
   var available: Bool { config.repo != nil && FileManager.default.isExecutableFile(atPath: config.bun) }
 
+  /// 常规增量：已有一轮在排队时不再重复排。
   func runAll() {
     guard available else { return }
-    lock.lock(); if running { lock.unlock(); return }; running = true; lock.unlock()
-    DispatchQueue.global(qos: .utility).async {
-      for p in self.plugins { self.run(p) }
-      self.lock.lock(); self.running = false; self.lock.unlock()
+    lock.lock(); if regularQueued { lock.unlock(); return }; regularQueued = true; lock.unlock()
+    jobs.async {
+      self.lock.lock(); self.regularQueued = false; self.lock.unlock()
+      for p in self.plugins where self.isEnabled(p) { _ = self.run(p, since: nil) }
     }
   }
 
-  private func run(_ name: String) {
-    guard let repo = config.repo else { return }
+  /// 指定插件运行一次（立即运行、同步、导入）。完成回调在后台线程，参数是每个插件的结果。
+  func run(_ names: [String], since: Date?, completion: (([String: Outcome]) -> Void)? = nil) {
+    guard available else { completion?([:]); return }
+    jobs.async {
+      var results: [String: Outcome] = [:]
+      for p in names where self.isEnabled(p) { results[p] = self.run(p, since: since) }
+      completion?(results)
+    }
+  }
+
+  private func run(_ name: String, since: Date?) -> Outcome {
+    guard let repo = config.repo else { return Outcome(ok: false, accepted: 0, text: "未配置仓库", at: Date()) }
+    lock.lock(); current = name; lock.unlock()
+    defer { lock.lock(); current = nil; lock.unlock() }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: config.bun)
     p.arguments = ["\(repo)/hub/src/cli.ts", "run-plugin", name, "--hub", config.hubURL.absoluteString,
-                   "--", config.bun, "\(repo)/plugins/\(name)/main.ts"]
+                   "--", config.bun, "\(repo)/plugins/\(name)/main.ts"] + PluginImport.arguments(plugin: name, since: since)
     var env = ProcessInfo.processInfo.environment
     env["RA_DATA_DIR"] = config.dataDir.path
     p.environment = env
     let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
     let started = Date()
-    do { try p.run() } catch { set(name, "启动失败"); return }
+    do { try p.run() } catch { return set(name, Outcome(ok: false, accepted: 0, text: "启动失败", at: Date())) }
     let timer = DispatchWorkItem { if p.isRunning { p.terminate() } }
-    DispatchQueue.global().asyncAfter(deadline: .now() + 180, execute: timer)
+    DispatchQueue.global().asyncAfter(deadline: .now() + PluginImport.timeout(since: since), execute: timer)
     let data = out.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit(); timer.cancel()
     let summary = String(data: data, encoding: .utf8)?.split(separator: "\n").last.map(String.init) ?? ""
-    var text = p.terminationStatus == 0 ? "成功" : "失败（\(p.terminationStatus)）"
+    let ok = p.terminationStatus == 0
+    var text = ok ? "成功" : "失败（\(p.terminationStatus)）"
+    var accepted = 0
     if let d = summary.data(using: .utf8), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-       let a = j["accepted"] as? Int { text += " · 新增 \(a)" }
-    set(name, "\(text) · \(Int(Date().timeIntervalSince(started)))s")
+       let a = j["accepted"] as? Int { accepted = a; text += " · 新增 \(a)" }
+    text += " · \(Int(Date().timeIntervalSince(started)))s"
+    return set(name, Outcome(ok: ok, accepted: accepted, text: text, at: Date()))
   }
 
-  private func set(_ name: String, _ v: String) { lock.lock(); last[name] = v; lock.unlock() }
-  func status() -> [String: String] { lock.lock(); defer { lock.unlock() }; return last }
+  private func set(_ name: String, _ v: Outcome) -> Outcome { lock.lock(); last[name] = v; lock.unlock(); return v }
+  func outcome(_ name: String) -> Outcome? { lock.lock(); defer { lock.unlock() }; return last[name] }
+  func isRunning(_ name: String) -> Bool { lock.lock(); defer { lock.unlock() }; return current == name }
+  /// collector-status.json 用。
+  func status() -> [String: String] { lock.lock(); defer { lock.unlock() }; return last.mapValues(\.text) }
 }

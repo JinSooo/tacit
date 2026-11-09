@@ -79,15 +79,19 @@ export async function collect(options: Options): Promise<State> {
     ["codex", path.join(options.codexDir ?? process.env.RA_CODEX_DIR ?? path.join(os.homedir(), ".codex"), "sessions")],
     ["codex", path.join(options.codexDir ?? process.env.RA_CODEX_DIR ?? path.join(os.homedir(), ".codex"), "archived_sessions")],
   ];
+  // 已有 state 时再传 --since 表示从该时刻起重新读取（重新导入、导入全部历史）：之后改过的文件从头读，
+  // 窗口内已输出过的消息靠 seen 跳过，更早的靠 hub 按 source_ref 去重；state 的增量游标不倒退。
+  const rescan = options.state !== undefined && options.since !== undefined;
+  const floor = rescan ? options.since! : Math.max(state.since, state.replaySince);
   const seen = new Map<string, Set<string>>();
   for (const [provider, root] of roots) for (const file of walk(root)) {
     // Claude 的子 Agent 日志不是用户直接参与的会话。
     if (provider === "claude" && file.split(path.sep).includes("subagents")) continue;
     const stat = fs.statSync(file);
     const old = state.files[file];
-    if (!old && stat.mtimeMs < state.since) continue;
+    if (!old && stat.mtimeMs < (rescan ? floor : state.since)) continue;
     const identity = `${stat.dev}:${stat.ino}`;
-    const reset = (file.endsWith(".zst") && (stat.size !== old?.size || stat.mtimeMs !== old?.mtime)) || !old || old.identity !== identity || stat.size < old.size || (stat.size === old.size && stat.mtimeMs !== old.mtime);
+    const reset = (rescan && stat.mtimeMs >= floor) || (file.endsWith(".zst") && (stat.size !== old?.size || stat.mtimeMs !== old?.mtime)) || !old || old.identity !== identity || stat.size < old.size || (stat.size === old.size && stat.mtimeMs !== old.mtime);
     const progress: FileProgress = reset ? { offset: 0, mtime: stat.mtimeMs, size: stat.size, identity, session: old?.session ?? null, cwd: old?.cwd ?? null } : { ...old };
     // 未修改文件不读取，但仍在下面检查它的待关闭桶。
     if (reset || stat.size !== old?.size || stat.mtimeMs !== old?.mtime) {
@@ -104,7 +108,7 @@ export async function collect(options: Options): Promise<State> {
         if (typeof cwd === "string") session.cwd = cwd;
         progress.cwd = session.cwd;
         const time = Date.parse(event.timestamp);
-        if (!Number.isFinite(time) || time < Math.max(state.since, state.replaySince)) continue;
+        if (!Number.isFinite(time) || time < floor) continue;
         const visible = visibleMessage(event, provider);
         if (!visible) continue;
         session.lastActivity = Math.max(session.lastActivity ?? session.mtime, time);

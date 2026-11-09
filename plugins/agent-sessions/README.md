@@ -7,7 +7,7 @@ bun plugins/agent-sessions/main.ts --device mac [--state /path/state.json] [--si
 stdout 按契约输出 record，最后输出 checkpoint；state 文件只读，由 runner 在接收成功后保存。`RA_CLAUDE_DIR`、`RA_CODEX_DIR` 分别覆盖 `.claude`、`.codex` 根目录。
 
 - `filters.ts` 集中列出丢弃规则及原因。只读取双方可见文字；澄清回答只保留用户答案。消息内部保留真实换行，消息之间空一行，各以 `[我] ` 或 `[AI] ` 开头。
-- 首次默认按文件 mtime 和消息时间回溯七天。普通 JSONL 按完整行字节偏移续读，末尾未换行的半行下次再读。完整行 JSON 损坏则跳过，结束时仅向 stderr 汇总“跳过 N 行损坏数据”，不回显路径或正文。
+- 首次默认按文件 mtime 和消息时间回溯七天。已有 checkpoint 时再传 `--since` 表示重新导入：该时刻之后改过的文件从头重读，只取该时刻之后的消息；八天窗口内已输出的消息靠 seen 哈希跳过，更早的会以相同 `source_ref` 再输出一次由 hub 去重；checkpoint 的 since 和重放下界不倒退。普通 JSONL 按完整行字节偏移续读，末尾未换行的半行下次再读。完整行 JSON 损坏则跳过，结束时仅向 stderr 汇总“跳过 N 行损坏数据”，不回显路径或正文。
 - `json-lines.ts` 按 64 KiB 块读取并投影 JSON，只保存消息所需的字段；工具输出、图片和其他大字符串不拼接进内存。字段顺序不影响结果。可见文本字段仅保存有界前缀，超长消息在输出时附截断标记。
 - `.zst` 使用 `createZstdDecompress()` 流式解压，未变化时不读，变化后重新解压并以消息摘要去重。压缩文件 offset 按解压后的字节计，允许归档最后一行不带换行。
 - 同一会话在活动目录和归档目录统一去重。source_ref 的小时使用 UTC RFC3339，避免机器时区变化影响稳定键。记录时间使用共享的 `toLocalIso()`。

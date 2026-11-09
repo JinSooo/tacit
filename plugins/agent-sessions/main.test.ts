@@ -126,6 +126,25 @@ test("首次按文件 mtime 和消息时间回溯七天，--since 覆盖默认�
   expect((await s.run(now, undefined, base - 1)).records).toHaveLength(2); // 同会话同桶跨文件合并，另一个小时仍单独成条。
 });
 
+test("已有 state 时 --since 重新读取：补出首次窗口外的旧会话，已输出的不重发，增量游标不倒退", async () => {
+  const s = setup(); const now = base + 20 * 86400_000;
+  const old = s.file("claude", "old.jsonl"), recent = s.file("claude", "recent.jsonl");
+  s.write(old, [claude("user", "很早的会话")], base);
+  s.write(recent, [claude("user", "近期已输出", now - 3 * 3_600_000, { sessionId: "recent-session" })], now - 3 * 3_600_000);
+  const first = await s.run(now);
+  expect(first.records.map(r => r.body)).toEqual(["[我] 近期已输出"]);
+  const imported = await s.run(now, first.state, base - 1);
+  expect(imported.records.map(r => r.body)).toEqual(["[我] 很早的会话"]);
+  expect(imported.state.replaySince).toBe(first.state.replaySince); expect(imported.state.since).toBe(first.state.since);
+  // 之后的常规增量不再重读。
+  expect((await s.run(now + 60_000, imported.state)).records).toHaveLength(0);
+  // 超出八天去重窗口的消息重新导入时可能再输出一次，但 source_ref 与原记录相同，由 hub 去重，不会出现新条目。
+  const again = await s.run(now + 10 * 86400_000, imported.state, base - 1);
+  const known = new Set([...first.records, ...imported.records].map(r => r.source_ref));
+  expect(again.records.length).toBeGreaterThan(0);
+  expect(again.records.every(r => known.has(r.source_ref))).toBe(true);
+});
+
 test("压缩归档、迁移去重、重跑和 AI 四千字截断", async () => {
   const s = setup(); const archive = path.join(s.codexDir, "archived_sessions/session.jsonl.zst"); fs.mkdirSync(path.dirname(archive), { recursive: true });
   const events = [meta(s.cwd), codex("user", "压缩请求"), codex("assistant", "答".repeat(4001), base + 120_000)];

@@ -174,6 +174,22 @@ final class HubAPI: @unchecked Sendable {
     try await send("POST", "/v1/facts", body)
   }
 
+  // MARK: 提炼请求（由常驻提炼进程领取执行，见 docs/contracts.md 4.8）
+
+  @discardableResult
+  func requestDistill(kind: String, range: DistillDateRange? = nil) async throws -> DistillRequestInfo {
+    var body: [String: Any] = ["kind": kind]
+    if let range { body["from"] = range.from; body["to"] = range.to }
+    let data = try await request("/v1/distill/requests", method: "POST", body: try JSONSerialization.data(withJSONObject: body))
+    do { return try HubJSON.decoder().decode(DistillRequestInfo.self, from: data) }
+    catch { throw HubError(message: "hub 返回的数据无法解析：\(error)", status: 0) }
+  }
+
+  func distillRequests() async throws -> [DistillRequestInfo] {
+    struct R: Decodable { let requests: [DistillRequestInfo] }
+    return try await get(R.self, "/v1/distill/requests").requests
+  }
+
   // MARK: 音频
 
   func speakers() async throws -> [Speaker] {
