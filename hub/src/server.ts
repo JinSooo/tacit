@@ -1,6 +1,7 @@
 import { AudioStore } from "./audio.ts";
 import { AgentReads } from "./agent.ts";
 import { DistillStore, type Fact } from "./distill/store.ts";
+import { DistillRequests } from "./distill/requests.ts";
 import { ulid } from "../../packages/record/index.ts";
 import { timingSafeEqual } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
@@ -94,6 +95,14 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
       }
       const store = new DistillStore(db);
       const respond = (value: unknown) => value === null ? Response.json({ error: "内容不存在" }, { status: 404 }) : Response.json(value);
+      if (url.pathname === "/v1/distill/requests") {
+        const requests = new DistillRequests(db);
+        if (method === "GET") return Response.json({ requests: requests.list() });
+        if (method === "POST") {
+          const { request: r, created } = requests.create(await readJSON());
+          return Response.json(r, { status: created ? 202 : 200 });
+        }
+      }
       if (method === "GET" && url.pathname === "/v1/now") return Response.json({ now: store.getState("now") });
       if (method === "GET" && url.pathname === "/v1/threads") return Response.json(store.threads(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/projects") return Response.json({ projects: store.projectSummaries() });

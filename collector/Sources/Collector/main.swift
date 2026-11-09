@@ -6,19 +6,18 @@ import CollectorCore
 /// 菜单栏采集端。所有读取都在这里做，hub 只接收数据。
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   let config = Config.load()
+  let toggles = SourceToggles(store: UserDefaults.standard)
+  lazy var sources = DataSourceRegistry(toggles: toggles)
   lazy var hub = HubClient(config: config)
-  lazy var files = FileCollector(device: config.device, isPaused: { [weak self] in self?.paused ?? true },
+  lazy var api = HubAPI(base: config.hubURL, token: { [config] in config.token })
+  lazy var files = FileCollector(device: config.device, isPaused: { [weak self] in self.map { $0.paused || !$0.enabled("files") } ?? true },
                                 send: { [weak self] in self?.hub.enqueue($0) })
-  lazy var calendar = CalendarCollector(device: config.device, isPaused: { [weak self] in self?.paused ?? true },
+  lazy var calendar = CalendarCollector(device: config.device, isPaused: { [weak self] in self.map { $0.paused || !$0.enabled("calendar") } ?? true },
                                        send: { [weak self] in self?.hub.enqueue($0) })
   lazy var audio = AudioCoordinator(config: config)
-  var recordingEnabled: Bool {
-    get { UserDefaults.standard.object(forKey: "recordingEnabled") as? Bool ?? true }
-    set { UserDefaults.standard.set(newValue, forKey: "recordingEnabled") }
-  }
   lazy var plugins = PluginScheduler(config: config)
   lazy var viewer: ViewerWindow = MainActor.assumeIsolated {
-    ViewerWindow(store: ViewerStore(api: HubAPI(base: config.hubURL, token: { [config] in config.token }), device: config.device, controls: self))
+    ViewerWindow(store: ViewerStore(api: api, device: config.device, controls: self))
   }
   lazy var segmenter = Segmenter(device: config.device)
   let ax = AXReader()
@@ -28,27 +27,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var statusItem: NSStatusItem!
   var timers: [Timer] = []
   var pausedUntil: Date?
-  var ocrEnabled: Bool {
-    get { UserDefaults.standard.bool(forKey: "ocrEnabled") }
-    set { UserDefaults.standard.set(newValue, forKey: "ocrEnabled") }
-  }
   var lastOCR: [String: Date] = [:]
   var clipboardCount = NSPasteboard.general.changeCount
+  // 以下只在主线程读写，给"上次运行"用。
+  var lastScreen: Date?
+  var lastOCRRun: Date?
+  var lastClipboard: Date?
+  /// 维护任务（同步、导入）的进行状态，只在主线程读写。
+  var jobs: [MaintenanceTask: CaptureSnapshot.Job] = [:]
 
   // 只计数，不含任何内容；写到 collector-status.json 便于排查和验收。
   var stats: [String: Int] = ["ticks": 0, "scanMsTotal": 0, "scanMsMax": 0, "truncated": 0,
                               "ocrRuns": 0, "ocrMsTotal": 0, "ocrLines": 0, "screenRecords": 0,
                               "clipboardRecords": 0, "skippedPolicy": 0, "skippedSecureInput": 0]
 
+  func enabled(_ id: String) -> Bool { toggles.isEnabled(id) }
+
   func applicationDidFinishLaunching(_ n: Notification) {
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let menu = NSMenu(); menu.delegate = self
     statusItem.menu = menu
+    registerSources()
+    // 上次开启录音时崩溃：先关掉录音开关，再启动各数据源。
+    if audio.initiallyBlocked { toggles.setEnabled("audio", false) }
+    sources.launch(paused: paused)
     updateIcon()
-    if ocrEnabled && !ocr.granted { ocr.requestAccess() }
-    if !AXIsProcessTrusted() {
-      AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
-    }
 
     timers = [
       Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.tick() },
@@ -59,12 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateFiles() },
       Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in self?.calendar.poll() },
     ]
-    files.start()
-    calendar.start()
     DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.plugins.runAll() }
 
-    if audio.initiallyBlocked { recordingEnabled = false }
-    updateAudio()
     let ws = NSWorkspace.shared.notificationCenter
     ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.updateAudio() }
     ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.tick() }
@@ -74,6 +73,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     DistributedNotificationCenter.default().addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
       self?.closeSegment()
     }
+  }
+
+  /// 把各采集器接到统一的数据源接口上。顺序以 DataSourceCatalog 为准。
+  func registerSources() {
+    let ocr = ocr, files = files, calendar = calendar
+    sources.register(BlockSource("screen") { s in
+      s.permissionName = "辅助功能"
+      s.permissionCheck = { AXIsProcessTrusted() ? .granted : .denied }
+      s.request = { [weak self] in self?.requestAX() }
+      s.onEnable = { [weak self] _ in if !AXIsProcessTrusted() { self?.requestAX() } }
+      s.onApply = { [weak self] active in if !active { self?.closeSegment() }; self?.updateIcon() }
+      s.last = { [weak self] in self?.lastScreen }
+    })
+    sources.register(BlockSource("ocr") { s in
+      s.permissionName = "录屏"
+      s.permissionCheck = { ocr.granted ? .granted : .denied }
+      s.request = { ocr.requestAccess(); if !ocr.granted { SystemPermissions.openPrivacyPane("Privacy_ScreenCapture") } }
+      s.onEnable = { _ in if !ocr.granted { ocr.requestAccess() } }
+      s.last = { [weak self] in self?.lastOCRRun }
+      s.describe = { [weak self] in self?.enabled("screen") == false ? ("屏幕文字停用时不运行", false) : ("", true) }
+    })
+    sources.register(BlockSource("clipboard") { s in
+      s.last = { [weak self] in self?.lastClipboard }
+    })
+    sources.register(BlockSource("audio") { s in
+      s.permissionName = "麦克风"
+      s.permissionCheck = SystemPermissions.microphone
+      s.request = SystemPermissions.requestMicrophone
+      // 用户手动打开录音时解除"上次启动崩溃"的保护（与原来的菜单开关一致）；启动时不解除。
+      s.onEnable = { [weak self] user in if user { self?.audio.allowManualStart() } }
+      s.onApply = { [weak self] _ in self?.updateAudio() }
+      s.describe = { [weak self] in
+        let line = self?.audio.status().first ?? ""
+        return (line, !["失败", "崩溃", "不可用", "缺少", "跟不上"].contains { line.contains($0) })
+      }
+    })
+    sources.register(BlockSource("files") { s in
+      s.onApply = { active in if active { files.start() } else { files.stop() } }
+      s.last = { files.last }
+      s.describe = { files.unavailable ? ("监听异常", false) : (files.recoveredFromDrop ? "曾丢失事件，已恢复" : "", true) }
+    })
+    sources.register(BlockSource("calendar") { s in
+      s.permissionName = "日历"
+      s.permissionCheck = SystemPermissions.calendar
+      s.request = { calendar.requestAccess() }
+      s.onEnable = { _ in calendar.start() }
+      s.last = { calendar.last }
+      s.run = { calendar.poll() }
+    })
+    plugins.isEnabled = { [toggles] in toggles.isEnabled($0) }
+    for name in plugins.plugins { sources.register(PluginSource(name, scheduler: plugins)) }
   }
 
   /// 从 Finder、Spotlight 或 Dock 再次打开 App 时弹出主窗口。
@@ -100,7 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func tick() {
-    guard !paused, AXIsProcessTrusted() else { closeSegment(); updateIcon(); return }
+    guard !paused, enabled("screen"), AXIsProcessTrusted() else { closeSegment(); updateIcon(); return }
     let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: UInt32.max)!)
     if idle > segmenter.config.idleLimit { closeSegment(); return }
     // 有密码框处于输入状态（安全输入）时什么都不读。
@@ -113,6 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let bundle = app.bundleIdentifier ?? "unknown"
     let name = app.localizedName ?? bundle
     let now = Date()
+    lastScreen = now
+    let ocrOn = enabled("ocr")
 
     captureQueue.async { [self] in
       let snap = ax.snapshot(pid: pid)
@@ -133,10 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
       // 辅助功能几乎读不到正文时用 OCR 兜底，同一段至少隔 15 秒才再识别一次。
       let key = o.key
-      if ocrEnabled, (snap?.chars ?? 0) < 80, now.timeIntervalSince(lastOCR[key] ?? .distantPast) > 15, ocr.granted {
+      if ocrOn, (snap?.chars ?? 0) < 80, now.timeIntervalSince(lastOCR[key] ?? .distantPast) > 15, ocr.granted {
         lastOCR[key] = now
         if lastOCR.count > 500 { lastOCR = lastOCR.filter { now.timeIntervalSince($0.value) < 600 } }
         ocr.recognize(pid: pid, frame: snap?.frame) { [self] lines, ms in
+          DispatchQueue.main.async { [self] in lastOCRRun = Date() }
           captureQueue.async { [self] in
             stats["ocrRuns", default: 0] += 1
             stats["ocrMsTotal", default: 0] += ms
@@ -161,7 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   // MARK: 剪贴板
 
   func updateAudio() {
-    audio.update(enabled: recordingEnabled && !paused)
+    audio.update(enabled: enabled("audio") && !paused)
   }
 
   func pollClipboard() {
@@ -169,12 +222,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let pb = NSPasteboard.general
     guard pb.changeCount != clipboardCount else { return }
     clipboardCount = pb.changeCount
-    guard !paused else { return }
+    guard !paused, enabled("clipboard") else { return }
     let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
     if let front, CapturePolicy.shouldSkip(bundleID: front, window: "") { return }
     let types = pb.types?.map(\.rawValue) ?? []
     if let r = ClipboardPolicy.record(text: pb.string(forType: .string), types: types, app: front,
                                        time: Date(), device: config.device) {
+      lastClipboard = Date()
       captureQueue.async { [self] in stats["clipboardRecords", default: 0] += 1 }
       hub.enqueue([r])
     }
@@ -183,12 +237,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   // MARK: 菜单
 
   func updateFiles() {
-    if paused { files.stop() }
+    if paused || !enabled("files") { files.stop() }
     else { files.start(); files.flush() }
   }
 
+  /// 屏幕文字停用时不需要辅助功能权限，不显示缺权限。
+  var missingAX: Bool { enabled("screen") && !AXIsProcessTrusted() }
+
   func updateIcon() {
-    let symbol = paused ? "pause.circle" : (AXIsProcessTrusted() ? "record.circle" : "exclamationmark.circle")
+    guard let statusItem else { return }
+    let symbol = paused ? "pause.circle" : (missingAX ? "exclamationmark.circle" : "record.circle")
     statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "record-anything")
     statusItem.button?.image?.isTemplate = true
   }
@@ -198,7 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     updateIcon()
     let f = DateFormatter(); f.dateFormat = "HH:mm"
     let state: String
-    if !AXIsProcessTrusted() { state = "缺少辅助功能权限" }
+    if missingAX { state = "缺少辅助功能权限" }
     else if let p = pausedUntil, paused { state = "已暂停，到 \(f.string(from: p))" }
     else { state = "正在记录" }
     menu.addItem(disabled(state))
@@ -208,7 +266,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if hub.queue.dropped > 0 { menu.addItem(disabled("队列溢出丢弃 \(hub.queue.dropped) 条")) }
     menu.addItem(.separator())
 
-    if !AXIsProcessTrusted() { menu.addItem(item("授权辅助功能…", #selector(requestAX))) }
     if paused { menu.addItem(item("继续记录", #selector(resume))) }
     else {
       menu.addItem(item("暂停 1 小时", #selector(pauseHour)))
@@ -218,8 +275,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.addItem(open)
     menu.addItem(.separator())
 
-    let recording = item("录音", #selector(toggleRecording))
-    recording.state = recordingEnabled ? .on : .off; menu.addItem(recording)
+    // 数据源从注册表生成：勾选即开关，缺权限时给授权入口。
+    func sourceItems(_ s: DataSourceStatus, into target: NSMenu) {
+      var title = s.title
+      if s.enabled {
+        if s.running { title += " · 运行中" }
+        else if !s.ok, !s.detail.isEmpty { title += " · " + s.detail }
+        else if let last = s.lastRun { title += " · 最近 " + f.string(from: last) }
+      }
+      let toggle = item(title, #selector(toggleSource(_:)))
+      toggle.representedObject = s.id; toggle.state = s.enabled ? .on : .off
+      target.addItem(toggle)
+      if s.needsPermission, let name = s.permissionName {
+        let grant = item("    授权\(name)…", #selector(requestSourcePermission(_:)))
+        grant.representedObject = s.id; target.addItem(grant)
+      }
+    }
+    let statuses = sources.statuses()
+    for s in statuses where s.kind == .builtin {
+      sourceItems(s, into: menu)
+      if s.id == "audio" {
+        menu.addItem(microphoneMenu())
+        if s.enabled { for line in audio.status().dropFirst() { menu.addItem(disabled("    " + line)) } }
+      }
+    }
+    let sub = NSMenu()
+    if !plugins.available { sub.addItem(disabled("未配置 bun 或仓库路径")) }
+    for s in statuses where s.kind == .plugin { sourceItems(s, into: sub) }
+    sub.addItem(.separator())
+    let runAll = item("立即运行", #selector(runPlugins)); runAll.isEnabled = plugins.available
+    sub.addItem(runAll)
+    let pi = NSMenuItem(title: "插件", action: nil, keyEquivalent: ""); pi.submenu = sub
+    menu.addItem(pi)
+    menu.addItem(.separator())
+    menu.addItem(item("退出", #selector(quit)))
+  }
+
+  func microphoneMenu() -> NSMenuItem {
     let microphones = NSMenu()
     let micSetting = UserDefaults.standard.string(forKey: "micDevice") ?? "builtin"
     func addMicrophone(_ name: String, _ value: String) {
@@ -237,27 +329,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let missing = disabled("所选设备已断开"); missing.state = .on; microphones.addItem(missing)
       }
     } catch { microphones.addItem(disabled("无法读取输入设备")) }
-    let microphoneMenu = NSMenuItem(title: "麦克风", action: nil, keyEquivalent: "")
-    microphoneMenu.submenu = microphones; menu.addItem(microphoneMenu)
-    for line in audio.status() { menu.addItem(disabled(line)) }
-
-    let o = item("读不到文字时用 OCR", #selector(toggleOCR))
-    o.state = ocrEnabled ? .on : .off
-    menu.addItem(o)
-    if ocrEnabled && !ocr.granted { menu.addItem(disabled("OCR 需要录屏权限")) }
-    menu.addItem(disabled(files.unavailable ? "文件 · 监听异常" : "文件 · " + (files.last.map { "最近 " + f.string(from: $0) } ?? "等待新文件") + (files.recoveredFromDrop ? "（曾丢失事件，已恢复）" : "")))
-    menu.addItem(disabled(calendar.authorized ? "日历 · " + (calendar.last.map { "最近 " + f.string(from: $0) } ?? "等待首次读取") : "日历未授权"))
-    if !calendar.authorized { menu.addItem(item("授权日历…", #selector(requestCalendar))) }
-    if plugins.available {
-      let sub = NSMenu()
-      for p in plugins.plugins { sub.addItem(disabled("\(p) · \(plugins.status()[p] ?? "等待首次运行")")) }
-      sub.addItem(.separator())
-      sub.addItem(item("立即运行", #selector(runPlugins)))
-      let pi = NSMenuItem(title: "数据源", action: nil, keyEquivalent: ""); pi.submenu = sub
-      menu.addItem(pi)
-    }
-    menu.addItem(.separator())
-    menu.addItem(item("退出", #selector(quit)))
+    let microphoneMenu = NSMenuItem(title: "    麦克风", action: nil, keyEquivalent: "")
+    microphoneMenu.submenu = microphones
+    return microphoneMenu
   }
 
   func item(_ title: String, _ sel: Selector) -> NSMenuItem {
@@ -268,37 +342,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc func requestAX() {
     AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
   }
-  @objc func requestCalendar() { calendar.requestAccess() }
   @objc func pauseHour() { pause(until: Date().addingTimeInterval(3600)) }
   @objc func pauseTomorrow() {
     let cal = Calendar.current
     pause(until: cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date()))!)
   }
-  func pause(until: Date) { pausedUntil = until; files.stop(); closeSegment(); updateAudio(); updateIcon() }
-  @objc func resume() { pausedUntil = nil; updateFiles(); updateAudio(); updateIcon() }
-  @objc func toggleRecording() {
-    recordingEnabled.toggle()
-    if recordingEnabled { audio.allowManualStart() }
-    updateAudio()
+  func pause(until: Date) { pausedUntil = until; sources.applyAll(paused: true); updateIcon() }
+  @objc func resume() { pausedUntil = nil; sources.applyAll(paused: false); updateFiles(); updateIcon() }
+  @objc func toggleSource(_ sender: NSMenuItem) {
+    guard let id = sender.representedObject as? String else { return }
+    setSource(id, !enabled(id))
+  }
+  func setSource(_ id: String, _ on: Bool) { sources.setEnabled(id, on, paused: paused); updateIcon() }
+  @objc func requestSourcePermission(_ sender: NSMenuItem) {
+    guard let id = sender.representedObject as? String else { return }
+    sources.source(id)?.requestPermission()
   }
   @objc func selectMicrophone(_ sender: NSMenuItem) {
     guard let setting = sender.representedObject as? String else { return }
     audio.selectMicrophone(setting)
   }
-  @objc func toggleOCR() {
-    ocrEnabled.toggle()
-    if ocrEnabled && !ocr.granted { ocr.requestAccess() }
-  }
-  @objc func runPlugins() { plugins.runAll() }
+  @objc func runPlugins() { plugins.run(plugins.plugins, since: nil) }
   @objc func openHistory() { MainActor.assumeIsolated { viewer.show() } }
   @objc func quit() { NSApp.terminate(nil) }
 
+  // MARK: 维护
+
+  /// 立即同步全部、重新导入最近 7 天、导入全部历史。整理启用前的历史由窗口直接向 hub 提交请求。
+  func runMaintenance(_ task: MaintenanceTask) {
+    guard task != .backfill, jobs[task]?.running != true else { return }
+    guard plugins.available else { jobs[task] = .init(running: false, text: "未配置 bun 或仓库路径，插件无法运行"); return }
+    let names = plugins.plugins.filter(enabled)
+    jobs[task] = .init(running: true, text: task == .syncAll ? "同步中…" : "导入中…")
+    if task == .syncAll { hub.flush(); files.flush(); calendar.poll() }
+    let api = api
+    plugins.run(names, since: PluginImport.since(task)) { [weak self] results in
+      let accepted = results.values.reduce(0) { $0 + $1.accepted }
+      let failed = results.filter { !$0.value.ok }.keys.sorted().map { DataSourceCatalog.descriptor($0)?.title ?? $0 }
+      let summary = "新增 \(accepted) 条" + (failed.isEmpty ? "" : " · 失败：\(failed.joined(separator: "、"))")
+      Task {
+        var text = summary
+        // 同步全部之后请常驻的提炼进程立即跑一轮；采集端不自己启动提炼。
+        if task == .syncAll {
+          do { try await api.requestDistill(kind: "round"); text += " · 已请求提炼" }
+          catch { text += " · 提炼请求失败：\(error.localizedDescription)" }
+        }
+        let f = DateFormatter(); f.dateFormat = "HH:mm"
+        let done = "\(f.string(from: Date())) 完成 · " + text
+        DispatchQueue.main.async { self?.jobs[task] = .init(running: false, text: done) }
+      }
+    }
+  }
+
   func writeStatus() {
+    let enabledSources = Dictionary(uniqueKeysWithValues: DataSourceCatalog.all.map { ($0.id, enabled($0.id)) })
     captureQueue.async { [self] in
       var s: [String: Any] = stats
       s["queue"] = hub.queue.count; s["dropped"] = hub.queue.dropped
       s["sent"] = hub.sent; s["rejected"] = hub.rejected; s["hubError"] = hub.lastError ?? NSNull()
-      s["axTrusted"] = AXIsProcessTrusted(); s["ocrEnabled"] = ocrEnabled; s["ocrGranted"] = ocr.granted
+      s["axTrusted"] = AXIsProcessTrusted(); s["ocrEnabled"] = enabledSources["ocr"] ?? false; s["ocrGranted"] = ocr.granted
+      s["sources"] = enabledSources
       s["paused"] = pausedUntil != nil; s["plugins"] = plugins.status()
       s["rssMB"] = Int(residentMB()); s["cpuSeconds"] = Int(cpuSeconds())
       s["time"] = LocalTime.iso(Date())
@@ -341,23 +444,14 @@ app.run()
 extension AppDelegate: CaptureControlling {
   func captureSnapshot() -> CaptureSnapshot {
     var c = CaptureSnapshot()
-    let trusted = AXIsProcessTrusted()
-    if !trusted { c.state = .noPermission } else if let p = pausedUntil, paused { c.state = .paused(p) }
+    if missingAX { c.state = .noPermission } else if let p = pausedUntil, paused { c.state = .paused(p) }
     c.queue = hub.queue.count
+    c.sent = hub.sent
     c.hubError = hub.lastError
-    c.recordingEnabled = recordingEnabled
-    c.ocrEnabled = ocrEnabled
-    let f = DateFormatter(); f.dateFormat = "HH:mm"
-    c.lines = [
-      .init(id: "ax", title: "屏幕文字（辅助功能）", value: trusted ? "已授权" : "未授权", ok: trusted),
-      .init(id: "ocr", title: "OCR 兜底", value: ocrEnabled ? (ocr.granted ? "已开启" : "需要录屏权限") : "关闭", ok: !ocrEnabled || ocr.granted),
-      .init(id: "files", title: "文件", value: files.unavailable ? "监听异常" : (files.last.map { "最近 " + f.string(from: $0) } ?? "等待新文件"), ok: !files.unavailable),
-      .init(id: "calendar", title: "日历", value: calendar.authorized ? (calendar.last.map { "最近 " + f.string(from: $0) } ?? "等待首次读取") : "未授权", ok: calendar.authorized),
-      .init(id: "hub", title: "发送到中枢", value: hub.lastError ?? (c.queue > 0 ? "待发送 \(c.queue) 条" : "已送达 \(hub.sent) 条"), ok: hub.lastError == nil),
-    ]
-    c.audio = audio.status()
-    let status = plugins.status()
-    c.plugins = plugins.available ? plugins.plugins.map { .init(id: $0, title: $0, value: status[$0] ?? "等待首次运行", ok: !(status[$0] ?? "").hasPrefix("失败")) } : []
+    c.sources = sources.statuses()
+    c.audio = enabled("audio") ? audio.status() : []
+    c.pluginsAvailable = plugins.available
+    c.jobs = jobs
     return c
   }
 
@@ -367,10 +461,10 @@ extension AppDelegate: CaptureControlling {
     case .pauseTomorrow: pauseTomorrow()
     case .resume: resume()
     case .requestAX: requestAX()
-    case .requestCalendar: requestCalendar()
-    case .toggleRecording: toggleRecording()
-    case .toggleOCR: toggleOCR()
-    case .runPlugins: runPlugins()
+    case .setSource(let id, let on): setSource(id, on)
+    case .requestPermission(let id): sources.source(id)?.requestPermission()
+    case .runSource(let id): sources.source(id)?.runNow()
+    case .maintenance(let task): runMaintenance(task)
     }
   }
 }

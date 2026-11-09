@@ -163,7 +163,7 @@ struct CaptureFooter: View {
     let c = store.capture
     if let e = c.hubError { return e }
     if c.queue > 0 { return "待发送 \(c.queue) 条" }
-    return c.recordingEnabled ? "屏幕 · 录音 · 数据源" : "屏幕 · 数据源"
+    return c.summary.isEmpty ? "全部数据源已停用" : c.summary
   }
 }
 

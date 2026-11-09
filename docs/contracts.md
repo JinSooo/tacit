@@ -38,7 +38,7 @@
   - `{"type":"checkpoint","state":{…任意 JSON},"release":["/abs/path", …]}`，最后输出一次，代表"处理到这里了"。`release` 可选，列出这次已经完整读完、可以删除的缓冲文件。
 - **stderr**：日志。**exit 0** 表示成功；非 0 时 runner 丢弃这次的 checkpoint，记录已发的照常入库（靠 `source_ref` 去重）。
 - **state 文件插件只读不写**。runner 在 hub 接收成功后把最后一个 checkpoint 写进 state 文件，下次传回来。这样采集失败不会丢数据。
-- 首次运行（没有 state）默认只回溯 7 天，`--since` 可覆盖。
+- 首次运行（没有 state）默认只回溯 7 天，`--since` 可覆盖。已有 state 时再传 `--since` 表示从该时刻起重新读取（采集端的"重新导入最近 7 天""导入全部历史"）：插件忽略增量游标重读该时刻之后的数据，已入库的靠 `source_ref` 去重，输出的 checkpoint 不能把游标倒退。没有历史可回溯的插件（shell 只读缓冲）由采集端不传 `--since`。
 - 插件不联网、不调模型、不写任何文件。两个例外：临时复制数据库到 `os.tmpdir()` 并在退出前删除；在数据目录的 `buffer/` 下把自己的缓冲文件改名"领走"（例如 `shell.jsonl` → `shell.<ULID>.pending.jsonl`）。
 - **缓冲文件的清理**：runner 只在插件 exit 0、全部批次被 hub 接收、state 已落盘之后，才删除 `release` 里的文件。路径解析后必须位于 `<数据目录>/buffer/` 之内，否则拒绝删除并报错。失败时这些文件保留，下次重读，靠 `source_ref` 去重。这样缓冲里的明文最多留到下一次成功运行。
 - **runner 两种模式**：`hub run-plugin` 默认直接写库（开发用）；加 `--hub <url>` 时经 `POST /v1/ingest` 交给运行中的 hub，token 取数据目录的 `token` 文件。Mac 采集端用 HTTP 模式，以子进程方式运行 runner，这样插件继承采集端的系统权限，数据库仍只由 hub 打开。
@@ -88,12 +88,12 @@
 
 ### 4.1 进程与节奏
 
-- 提炼是独立进程：`bun hub/src/cli.ts distill [--once] [--backfill]`，和 `serve` 共用同一个加密库（`HubDB`，`busy_timeout=5000`）。提炼进程崩溃不影响 ingest。
+- 提炼是独立进程：`bun hub/src/cli.ts distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]]`，和 `serve` 共用同一个加密库（`HubDB`，`busy_timeout=5000`）。提炼进程崩溃不影响 ingest。常驻时每 5 秒看一次请求队列（4.8），常规轮次仍按 15 分钟。
 - 节奏：每 15 分钟做一次"切片 + 归线程"（CLI 后端一次调用开销大，不按分钟跑）；每小时更新活跃线程、项目、当前状态；每天 04:00 写前一天的日记，把疑似完成的线程放进待确认。
-- 首次启用时 `distill_state.cursor_ms` 设为启用时刻，增量只处理之后的记录。`--backfill` 对之前的全部记录**按天**做一次批量整理：每天先规则切片，再一次调用归线程，最后统一合并项目。只跑一次，跑完写 `distill_state.backfill_done`。
+- 首次启用时 `distill_state.cursor_ms` 设为启用时刻，增量只处理之后的记录。`--backfill` 对之前的全部记录**按天**做一次批量整理：每天先规则切片，再一次调用归线程，最后统一合并项目。只跑一次，跑完写 `distill_state.backfill_done`。按日期范围的整理（`--from/--to` 或 4.8 的 backfill 请求）不看也不写这个标志，可以对任意范围重复执行。
 - `sensitivity = private` 的记录照样切片，但正文不进任何模型调用；片段里只给模型看"应用 + 时长"。
 
-### 4.2 表（`user_version` 2，迁移前自动备份库文件为 `history.db.bak-v1`；之后的版本见 4.6、4.7）
+### 4.2 表（`user_version` 2，迁移前自动备份库文件为 `history.db.bak-v1`；之后的版本见 4.6、4.7、4.8）
 
 ```sql
 frames(id TEXT PRIMARY KEY,            -- ULID
@@ -220,6 +220,22 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 - **归属**：cwd 只写 `project_hint`。每次生成线程详细版时，模型顺带输出 `domain` 和 `in_project`；只有 `domain=work` 且 `in_project=true` 才把 `project_id` 设为候选项目，否则清空。归属变化时同步改这条线程的 facts 的 `project_id`，新旧项目都置 `needs_regen=1`。`domain` 为 NULL 且没有新片段的存量线程，每轮最多做 12 次单独判断（minute 档）。
 - **仓库归一**：用 `git rev-parse --git-common-dir` 找主仓库，worktree 和子目录都归到主仓库的项目，worktree 路径作为别名追加进 `keys.repos`。目录已删除、git 探测失败时，按已登记的 `keys.repos` 做路径边界最长匹配。家目录本身不算仓库。git 探测带 500ms 超时和 60 秒缓存。
 - **线程状态**：2 小时没新记录 → `paused`；3 天没动静或有完成信号 → 进 `pending(kind=thread_done)`。这条待确认 **7 天**没人处理：线程改为 `archived`，待确认结项为 `resolution=expired`，同一事务。用户点"完成 / 继续 / 放弃"对应 `done` / `active` / `abandoned`。`archived` 和 `done` 分开，用来区分到期结掉和用户确认。`archived` 线程不再提问、不进注入、不参与归线程候选，`/v1/threads?status=archived`、`get`、`search` 仍能查到。
+
+### 4.8 提炼请求队列（`user_version` 6）
+
+客户端不自己启动提炼进程（会和常驻进程重复调用模型、争库），只往队列里放请求，由常驻的 `distill` 进程领取执行。都要 Bearer token 和 Host 校验。
+
+| 方法 | 路径 | 返回 |
+|---|---|---|
+| POST | `/v1/distill/requests` | 体 `{"kind":"round"}` 或 `{"kind":"backfill","from":"YYYY-MM-DD","to":"YYYY-MM-DD"}`（本地日期闭区间，from/to 同时省略时默认含今天的最近 30 天）。新入队返回 202 + 请求对象；同一 kind 已有 `queued` / `running` 时返回那一个（200），不重复入队；参数非法 400 `{ error }` |
+| GET | `/v1/distill/requests` | `{ requests }`，按创建时间倒序最多 20 条 |
+
+- 请求对象：`{ id, kind, from?, to?, status: queued|running|done|failed, created_at, started_at?, finished_at?, error?, progress?: { done, total } }`，时间是 UTC ISO。
+- 表 `distill_requests(id, kind, date_from, date_to, status, created_at, started_at, finished_at, error, progress_done, progress_total)`。
+- **领取**：常驻循环每 5 秒在一个 immediate 事务里取最早的 `queued` 置为 `running`，执行完置 `done`，出错置 `failed` 并写 `error`。执行完一条立刻再看队列。进程启动时把遗留的 `running` 标为 `failed`（`error=提炼进程中断`），用户可以重新提交。常驻进程没在跑时请求一直是 `queued`。
+- **round**：立即跑一轮常规增量（快慢档判断与定时轮次相同），并把下一次定时轮次顺延 15 分钟。
+- **backfill**：范围取 `[from 当天 0 点, to 次日 0 点)` 与 `enabled_ms` 之前的交集，按天切片（与 `--backfill` 同一套逻辑），`progress` 是已切的天数 / 范围内有记录的天数；已在片段里的记录由 `frame_records` 排除，所以重复整理同一范围不会重复切。切完接着跑一轮慢档（归线程、线程、项目、日记），处理不完的由后续常规轮次继续。启用之后的记录归增量处理，范围外的历史（例如"导入全部历史"导入的旧记录）不提炼。
+- **心跳**：常驻进程每次看队列时、以及执行长任务期间每 30 秒，把 `distill_state.heartbeat_at` 写成当前本地时间（带时区偏移的 ISO）。
 
 ## 5. 音频（v2，Mac）
 

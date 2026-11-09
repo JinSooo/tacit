@@ -32,7 +32,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const { HubDB } = await import("./db.ts");
   const { startServer } = await import("./server.ts");
   const { runPlugin } = await import("./run-plugin.ts");
-  const { runDistill, sliceStep } = await import("./distill/run.ts");
+  const { runDistill, sliceStep, backfillRange, startOfDay } = await import("./distill/run.ts");
+  const { localDayStart } = await import("./distill/requests.ts");
   const { DistillStore } = await import("./distill/store.ts");
   const { createLLM } = await import("./llm/index.ts");
   const openDatabase = (file: string, key: string, token: string) => {
@@ -69,18 +70,39 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "distill") {
-    if (argv.slice(1).some(a => !["--once", "--backfill", "--slice-only"].includes(a))) throw new Error("提炼参数无效");
+    const flags: string[] = [];
+    let range: { from: string; to: string } | undefined;
+    for (let i = 1; i < argv.length; i++) {
+      const a = argv[i]!;
+      if (a === "--from" || a === "--to") {
+        const v = argv[++i];
+        if (!v || localDayStart(v) === null) throw new Error("--from/--to 必须是 YYYY-MM-DD");
+        range ??= { from: "", to: "" };
+        range[a === "--from" ? "from" : "to"] = v;
+      } else if (["--once", "--backfill", "--slice-only"].includes(a)) flags.push(a);
+      else throw new Error("提炼参数无效");
+    }
+    // --from/--to 只配合 --backfill：按范围重复整理，不看 backfill_done。
+    if (range && (!range.from || !range.to || range.from > range.to || !flags.includes("--backfill"))) throw new Error("--from/--to 需要同时给出、from 不晚于 to，并配合 --backfill");
     const config = loadConfig();
     const db = openDatabase(join(config.dataDir, "history.db"), config.dbKey, config.token);
     // --slice-only：只做切片和规则归属，不调用模型（排查和测试用）。
-    if (argv.includes("--slice-only")) { try { console.log(JSON.stringify(sliceStep(db, argv.includes("--backfill")))); } finally { db.close(); } return; }
+    if (flags.includes("--slice-only")) {
+      try {
+        const out: Record<string, unknown> = {};
+        if (range) out.backfill = backfillRange(db, range.from, range.to, { enabledDefault: startOfDay(Date.now()) });
+        Object.assign(out, sliceStep(db, !range && flags.includes("--backfill")));
+        console.log(JSON.stringify(out));
+      } finally { db.close(); }
+      return;
+    }
     const store = new DistillStore(db);
     const llm = createLLM({ dataDir: config.dataDir, recordUsage: row => store.writeUsage({ ...row, input_tokens: row.input_tokens ?? undefined, output_tokens: row.output_tokens ?? undefined, error: row.error ?? undefined }) });
-    try { await runDistill({ db, llm, once: argv.includes("--once"), backfill: argv.includes("--backfill") }); }
+    try { await runDistill({ db, llm, once: flags.includes("--once"), backfill: flags.includes("--backfill"), range }); }
     finally { db.close(); }
     return;
   }
-  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | distill [--once] [--backfill] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
+  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
   if (command === "run-plugin") {
     let hub: string | undefined, tokenFile: string | undefined;

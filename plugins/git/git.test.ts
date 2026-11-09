@@ -125,5 +125,5 @@ if test "$1" = rev-parse; then pwd; else exec /bin/sleep 20; fi
   const logs: string[] = [], started = Date.now();
   const state = await collectGit({ device: "mac", roots: [], state: { repos: [dir], progress: {} }, emails: ["test@example.test"], emit: () => { throw new Error("不应输出记录"); }, log: (m) => logs.push(m) });
   expect(Date.now() - started).toBeGreaterThanOrEqual(9900); expect(Date.now() - started).toBeLessThan(13_000);
-  expect(logs).toHaveLength(1); expect(logs[0]).toContain("超过 10 秒时限"); expect(state.progress[dir]).toBeUndefined();
+  expect(logs).toHaveLength(1); expect(logs[0]).toContain("超过时限"); expect(state.progress[dir]).toBeUndefined();
 }, 15_000);

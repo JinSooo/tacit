@@ -123,7 +123,12 @@ describe.each([BROWSERS[0]!, BROWSERS[3]!, BROWSERS[4]!])("$name 引擎", (brows
     // 长时间未调用时，已有 profile 仍从主键继续，不受首次七天窗口限制。
     f.add(7, NOW - 20 * 86400_000, "https://example.org/backdated");
     expect((await collect(f.home, [browser], third.state)).records).toHaveLength(1);
-    expect((await collect(f.home, [browser], third.state, new Date(NOW))).records).toHaveLength(0);
+    // 显式 --since（重新导入）从头扫描：已有 state 也能读到比游标旧的访问，重放结果与增量一致（hub 按 source_ref 去重），游标不倒退。
+    const rescan = await collect(f.home, [browser], third.state, new Date(NOW));
+    expect(rescan.records.map((r) => r.source_ref?.split(":").at(-1))).toEqual(["1", "5"]);
+    expect(Object.values(rescan.state.profiles)[0]!.lastId).toBe(7);
+    const all = await collect(f.home, [browser], third.state, new Date(NOW - 30 * 86400_000));
+    expect(all.records.map((r) => r.source_ref?.split(":").at(-1))).toEqual(["7", "1", "5"]);
   });
 
   test("读取未 checkpoint 的 WAL，复制后源库不变", async () => {

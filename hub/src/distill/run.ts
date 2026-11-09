@@ -7,6 +7,7 @@ import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { DistillStore, type Frame, type Thread } from "./store.ts";
 import { persistFrames } from "./frames.ts";
 import { DistillRules } from "./rules.ts";
+import { DistillRequests, localDayStart } from "./requests.ts";
 import * as P from "./prompts.ts";
 
 export interface LLM { complete<T>(req: LLMRequest): Promise<LLMResult<T>> }
@@ -458,23 +459,86 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
   return out;
 }
 
-export async function runDistill({ db, llm, once, backfill, log = console.log }: { db: HubDB; llm: LLM; once: boolean; backfill: boolean; log?: (line: string) => void }) {
+/** 按日期范围整理启用前的历史：[from 当天 0 点, to 次日 0 点) 与启用时刻取交集，按天切片。
+ * 不看 backfill_done，可以对同一范围重复执行；已进片段的记录由 frame_records 自动排除。范围外不处理。 */
+export function backfillRange(db: HubDB, from: string, to: string, opts: { enabledDefault?: number; onProgress?: (done: number, total: number) => void } = {}) {
+  const start = localDayStart(from), last = localDayStart(to);
+  if (start === null || last === null || start > last) throw new Error("日期范围无效");
+  const store = new DistillStore(db);
+  const enabled = store.getState<number>("enabled_ms") ?? opts.enabledDefault ?? startOfDay(Date.now());
+  store.setState("enabled_ms", enabled);
+  const end = new Date(last); end.setDate(end.getDate() + 1);
+  const stop = Math.min(end.getTime(), enabled);
+  const rows = db.db.prepare("SELECT t_start_ms FROM records WHERE t_start_ms>=? AND t_start_ms<? ORDER BY t_start_ms").all(start, stop) as { t_start_ms: number }[];
+  const days = [...new Set(rows.map(r => startOfDay(r.t_start_ms)))];
+  let frames = 0;
+  opts.onProgress?.(0, days.length);
+  days.forEach((day, i) => {
+    const next = new Date(day); next.setDate(next.getDate() + 1);
+    const r = persistFrames(db, Math.max(day, start) - 1, Number.MAX_SAFE_INTEGER, Math.min(next.getTime(), stop));
+    for (const f of r.frames) store.upsertDay({ date: localDate(f.t_start_ms), needs_regen: 1 });
+    frames += r.frames.length;
+    opts.onProgress?.(i + 1, days.length);
+  });
+  return { days: days.length, frames };
+}
+
+/** 常驻循环的一步：有排队请求就领取执行；否则到时间了跑常规一轮。返回这一步做了什么。 */
+export interface LoopState { lastRound: number; enabledDefault: number }
+export async function distillTick(d: Deps, state: LoopState, now = d.now?.() ?? Date.now()): Promise<"request" | "round" | "idle"> {
+  const store = new DistillStore(d.db), requests = new DistillRequests(d.db);
+  const log = d.log ?? console.log;
+  store.setState("heartbeat_at", toLocalIso(now));
+  const req = requests.claim(now);
+  if (req) {
+    try {
+      if (req.kind === "backfill") {
+        const r = backfillRange(d.db, req.from!, req.to!, { enabledDefault: state.enabledDefault, onProgress: (done, total) => requests.progress(req.id, done, total) });
+        log(JSON.stringify({ request: req.id, backfill: r }));
+        // 切好的片段接着归线程、写线程和日记；一轮处理不完的由后续常规轮次继续。
+        log(JSON.stringify(await distillRound(d, { slow: true, days: "all", enabledDefault: state.enabledDefault })));
+      } else await regularRound(d, state);
+      requests.finish(req.id);
+    } catch (e) {
+      const error = e instanceof Error ? e.message.slice(0, 200) : "提炼失败";
+      requests.finish(req.id, error);
+      log(JSON.stringify({ request: req.id, error }));
+    }
+    return "request";
+  }
+  if (now - state.lastRound < 15 * MIN) return "idle";
+  try { await regularRound(d, state); }
+  catch (e) { log(JSON.stringify({ error: e instanceof Error ? e.message.slice(0, 200) : "提炼失败" })); }
+  return "round";
+}
+
+async function regularRound(d: Deps, state: LoopState) {
+  const store = new DistillStore(d.db), log = d.log ?? console.log;
+  const now = d.now?.() ?? Date.now();
+  // 失败也算跑过一轮，避免出错时每 5 秒重试一次。
+  state.lastRound = now;
+  const slowDue = now - (store.getState<number>("slow_ms") ?? 0) >= HOUR;
+  // 当天的日记每 3 小时刷新一次；过去的日子有变化就在每小时那轮重写。
+  const todayDue = now - (store.getState<number>("today_ms") ?? 0) >= 3 * HOUR;
+  log(JSON.stringify(await distillRound(d, { slow: slowDue, days: todayDue ? "all" : "past", enabledDefault: state.enabledDefault })));
+  if (slowDue) store.setState("slow_ms", now);
+  if (slowDue && todayDue) store.setState("today_ms", now);
+}
+
+export async function runDistill({ db, llm, once, backfill, range, log = console.log, pollMs = 5000 }: { db: HubDB; llm: LLM; once: boolean; backfill: boolean; range?: { from: string; to: string }; log?: (line: string) => void; pollMs?: number }) {
   const store = new DistillStore(db);
   const d: Deps = { db, llm, log };
   const enabledDefault = startOfDay(Date.now());
-  if (once || backfill) { log(JSON.stringify(await distillRound(d, { backfill, slow: true, days: "all", enabledDefault }))); if (once) return; }
-  for (;;) {
-    const now = Date.now();
-    const slowDue = now - (store.getState<number>("slow_ms") ?? 0) >= HOUR;
-    // 当天的日记每 3 小时刷新一次；过去的日子有变化就在每小时那轮重写。
-    const todayDue = now - (store.getState<number>("today_ms") ?? 0) >= 3 * HOUR;
-    try {
-      log(JSON.stringify(await distillRound(d, { slow: slowDue, days: todayDue ? "all" : "past", enabledDefault })));
-      if (slowDue) store.setState("slow_ms", now);
-      if (slowDue && todayDue) store.setState("today_ms", now);
-    } catch (e) {
-      log(JSON.stringify({ error: e instanceof Error ? e.message.slice(0, 200) : "提炼失败" }));
+  if (range) log(JSON.stringify(backfillRange(db, range.from, range.to, { enabledDefault })));
+  if (once || backfill) { log(JSON.stringify(await distillRound(d, { backfill: backfill && !range, slow: true, days: "all", enabledDefault }))); if (once) return; }
+  new DistillRequests(db).recoverInterrupted();
+  // 长任务（一轮可能几分钟）期间也写心跳，状态页据此判断提炼进程是否还活着。
+  const beat = setInterval(() => { try { store.setState("heartbeat_at", toLocalIso(Date.now())); } catch { /* 库忙时下一次再写 */ } }, 30_000);
+  const state: LoopState = { lastRound: 0, enabledDefault };
+  try {
+    for (;;) {
+      // 刚执行完请求时立刻再看一次队列；空闲时每 pollMs 看一次，常规轮次仍按 15 分钟。
+      if (await distillTick(d, state) !== "request") await new Promise(r => setTimeout(r, pollMs));
     }
-    await new Promise(r => setTimeout(r, 15 * MIN));
-  }
+  } finally { clearInterval(beat); }
 }
