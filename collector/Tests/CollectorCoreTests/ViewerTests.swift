@@ -112,3 +112,38 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(SearchSnippet.make("Open\nCodex now", query: "codex", radius: 20) == SearchSnippet(before: "Open ", match: "Codex", after: " now"))
   #expect(SearchSnippet.make("abc", query: "z") == nil)
 }
+
+@Test func segmentsJoinRecordsAndKeepStragglers() throws {
+  // hub 的活动段：线程段带项目名，"private" 字段映射到 privateCount。
+  let json = #"""
+  {"segments":[
+    {"id":"a:3","kind":"app","start_ms":1794106920000,"end_ms":1794107040000,"thread":null,
+     "apps":[{"app":"com.synthetic.chat","source":"mac.screen","records":1,"seconds":120}],"active_seconds":120,"record_ids":["3"],"private":1},
+    {"id":"t:1","kind":"thread","start_ms":1794106800000,"end_ms":1794108600000,
+     "thread":{"id":"ta","title":"合成线程","brief":"在写合成功能","status":"active","domain":null,"project_id":"p","project_name":"合成项目"},
+     "apps":[{"app":null,"source":"codex.session","records":2,"seconds":1500}],"active_seconds":1500,"record_ids":["1","2"],"private":0}
+  ]}
+  """#
+  struct R: Decodable { let segments: [HistorySegment] }
+  let segments = try HubJSON.decoder().decode(R.self, from: Data(json.utf8)).segments
+  #expect(segments[0].privateCount == 1)
+  #expect(segments[1].thread?.projectName == "合成项目")
+  #expect(segments[1].apps[0].app == nil)
+  #expect(segments[1].start == Date(timeIntervalSince1970: 1_794_106_800))
+
+  let rows = [
+    try record("1", "codex.session", "合成会话", "2026-11-08T11:00:00+08:00", "2026-11-08T11:20:00+08:00"),
+    try record("2", "codex.session", "合成会话", "2026-11-08T11:25:00+08:00", "2026-11-08T11:30:00+08:00"),
+    try record("3", "mac.screen", "Chat · 合成群", "2026-11-08T11:02:00+08:00", "2026-11-08T11:04:00+08:00"),
+    // 两次读取之间新到的记录，不在任何段里。
+    try record("4", "mac.shell", "合成命令", "2026-11-08T12:00:00+08:00"),
+  ]
+  let blocks = SegmentBlocks.join(segments, records: rows)
+  #expect(blocks.map(\.id) == ["r:4", "a:3", "t:1"])
+  #expect(blocks[2].records.map(\.id) == ["2", "1"])
+  #expect(blocks[0].segment.kind == "app" && blocks[0].segment.recordIds == ["4"])
+  // 筛选后段里只剩可见记录，一条不剩的段不显示。
+  let filtered = SegmentBlocks.join(segments, records: rows, visible: ["1", "3"])
+  #expect(filtered.map(\.id) == ["a:3", "t:1"])
+  #expect(filtered[1].records.map(\.id) == ["1"])
+}
