@@ -161,3 +161,44 @@ private func event() -> CalendarEventSnapshot {
   #expect(buffer.records([future], now: sourceTime, device: "mac").isEmpty)
   #expect(buffer.records([future], now: sourceTime.addingTimeInterval(120), device: "mac").count == 1)
 }
+
+@Test func calendarMeetingRequiresPositiveOverlap() {
+  let start = sourceTime
+  let end = start.addingTimeInterval(60)
+  // 部分交集、包含、被包含；随后是不相交、两端相接和无效日程。
+  for (from, to, expected) in [(-30.0, 30.0, true), (30, 90, true), (-30, 90, true),
+                               (10, 50, true), (0, 60, true), (-60, -1, false), (61, 90, false),
+                               (-60, 0, false), (60, 90, false), (30, 30, false), (40, 20, false)] {
+    var e = event(); e.start = start.addingTimeInterval(from); e.end = start.addingTimeInterval(to)
+    let apps = CalendarMeetingPolicy.meetingApps([], events: [e], start: start, end: end, authorized: true)
+    #expect(apps == (expected ? ["com.apple.iCal"] : []), "日程区间：\(from)–\(to)")
+  }
+  #expect(CalendarMeetingPolicy.meetingApps([], events: [event()], start: end, end: start, authorized: true).isEmpty)
+  #expect(CalendarMeetingPolicy.meetingApps([], events: [event()], start: start, end: start, authorized: true).isEmpty)
+}
+
+@Test func calendarMeetingExcludesAllDayDeclinedCanceledAndUnauthorized() {
+  let e = event()
+  var allDay = e; allDay.allDay = true
+  var declined = e; declined.declined = true
+  var canceled = e; canceled.canceled = true
+  let apps = ["us.zoom.xos"]
+  for excluded in [allDay, declined, canceled] {
+    #expect(CalendarMeetingPolicy.meetingApps(apps, events: [excluded], start: e.start, end: e.end,
+                                             authorized: true) == apps)
+  }
+  #expect(CalendarMeetingPolicy.meetingApps(apps, events: [e], start: e.start, end: e.end,
+                                           authorized: false) == apps)
+  // 空结果（包括查询失败）保留已有会议软件标记。
+  #expect(CalendarMeetingPolicy.meetingApps(apps, events: [], start: e.start, end: e.end, authorized: true) == apps)
+}
+
+@Test func calendarMeetingMergesOneEligibleEventWithoutDuplicates() {
+  let e = event()
+  var declined = e; declined.declined = true
+  let apps = ["us.zoom.xos", "com.apple.iCal", "com.apple.FaceTime", "us.zoom.xos"]
+  #expect(CalendarMeetingPolicy.meetingApps(apps, events: [declined, e, e], start: e.start, end: e.end,
+                                           authorized: true) == ["com.apple.FaceTime", "com.apple.iCal", "us.zoom.xos"])
+  #expect(CalendarMeetingPolicy.meetingApps(["us.zoom.xos"], events: [declined, e], start: e.start, end: e.end,
+                                           authorized: true) == ["com.apple.iCal", "us.zoom.xos"])
+}

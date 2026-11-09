@@ -2,7 +2,7 @@ import AppKit
 import EventKit
 import CollectorCore
 
-/// 与文件来源一样，只由采集端持有权限；不把日历接入音频判定。
+/// 与文件来源一样，只由采集端持有权限；音频例外由独立的只读查询器处理。
 final class CalendarCollector {
   private let store = EKEventStore()
   private let device: String

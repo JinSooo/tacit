@@ -53,3 +53,17 @@ public struct CalendarRecordBuffer {
     }
   }
 }
+
+/// 只认可有正时长交集的日程；边界相接不算开会，不要求日程已经结束。
+public enum CalendarMeetingPolicy {
+  public static func meetingApps(_ apps: [String], events: [CalendarEventSnapshot],
+                                 start: Date, end: Date, authorized: Bool) -> [String] {
+    var result = Set(apps)
+    if authorized, end > start, events.contains(where: {
+      !$0.allDay && !$0.declined && !$0.canceled && $0.end > $0.start && $0.start < end && $0.end > start
+    }) {
+      result.insert("com.apple.iCal")
+    }
+    return result.sorted()
+  }
+}

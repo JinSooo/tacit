@@ -40,6 +40,7 @@ final class AudioCoordinator {
   private var retentionDays = 7
   private var retentionKnown = false
   private var meetingHistory = MeetingMicrophoneHistory()
+  private let calendarMeetings = CalendarMeetingQuery()
   private var failure: String?
   private var lastMaintenance = Date.distantPast
   private var lastInitialize = Date.distantPast
@@ -261,6 +262,7 @@ final class AudioCoordinator {
   private func close() throws {
     guard var meta = current else { return }
     let end = meta.segments.compactMap { AudioPolicy.date($0.t_end) }.max() ?? AudioPolicy.date(meta.t_start)!
+    meta.meeting_apps = calendarMeetings.meetingApps(meta.meeting_apps, start: AudioPolicy.date(meta.t_start)!, end: end)
     meta.t_end = LocalTime.iso(end); try meta.transition(to: .closed, at: Date())
     try store?.writeMetadata(meta); current = nil; boundary.reset()
   }
