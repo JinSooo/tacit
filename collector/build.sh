@@ -14,6 +14,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>dev.record-anything.collector</string>
   <key>CFBundleName</key><string>Record Anything</string>
+  <!-- 界面文字全是中文；不声明的话系统提供的菜单项和对话框按钮（Undo、Cancel、Close All）会显示英文。 -->
+  <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
+  <key>CFBundleLocalizations</key><array><string>zh-Hans</string></array>
   <key>CFBundleExecutable</key><string>Collector</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>

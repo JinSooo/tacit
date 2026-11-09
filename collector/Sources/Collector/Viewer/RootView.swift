@@ -13,6 +13,7 @@ struct RootView: View {
     } detail: {
       NavigationStack(path: $store.path) {
         page
+          .toolbar { ToolbarAnchor() }
           .navigationDestination(for: Route.self) { route in
             switch route {
             case .thread(let id): ThreadPage(id: id)
@@ -79,6 +80,19 @@ struct Sidebar: View {
     .listStyle(.sidebar)
     .safeAreaInset(edge: .bottom, spacing: 0) { CaptureFooter() }
   }
+}
+
+/// 页面一个工具栏项都没有时（设置、从侧栏进的项目页），SwiftUI 会把整条工具栏拆掉，
+/// 标题栏从 52pt 缩到 32pt，红绿灯和侧栏跟着跳。放一个看不见的固定项让工具栏一直在。
+struct ToolbarAnchor: ToolbarContent {
+  var body: some ToolbarContent {
+    if #available(macOS 26.0, *) {
+      ToolbarItem(placement: .navigation) { anchor }.sharedBackgroundVisibility(.hidden)
+    } else {
+      ToolbarItem(placement: .navigation) { anchor }
+    }
+  }
+  var anchor: some View { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
 }
 
 /// 侧栏默认图标偏大，压到和正文差不多的视觉重量。
