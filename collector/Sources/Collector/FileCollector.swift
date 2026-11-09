@@ -11,21 +11,34 @@ final class FileCollector {
   private let home = FileManager.default.homeDirectoryForCurrentUser.path
   private var stream: FSEventStreamRef?
   private var buffer = FileAppearanceBuffer()
+  private var recovery = FileStreamRecovery()
+  private var rebuildScheduled = false
   private(set) var last: Date?
-  private(set) var unavailable = false
+  var unavailable: Bool { recovery.unavailable }
+  var recoveredFromDrop: Bool { recovery.recoveredFromDrop }
 
   init(device: String, isPaused: @escaping () -> Bool, send: @escaping ([Record]) -> Void) {
     self.device = device; self.isPaused = isPaused; self.send = send
   }
 
   func start() {
-    guard stream == nil, !isPaused() else { return }
+    guard !rebuildScheduled,
+          recovery.shouldStart(now: ProcessInfo.processInfo.systemUptime,
+            paused: isPaused(), hasStream: stream != nil) else { return }
+    if stream != nil { stop() }
     let paths = FileSourcePolicy.directories.map { home + "/" + $0 }
     var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                        retain: nil, release: nil, copyDescription: nil)
     let callback: FSEventStreamCallback = { _, info, count, rawPaths, flags, _ in
       guard let info else { return }
       let owner = Unmanaged<FileCollector>.fromOpaque(info).takeUnretainedValue()
+      // 整批先检查丢失标志，避免前半批触发 flush 后才发现这批事件已不完整。
+      for index in 0..<count {
+        if flags[index] & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0 {
+          owner.eventsDropped()
+          return
+        }
+      }
       let paths = unsafeBitCast(rawPaths, to: NSArray.self)
       for index in 0..<count {
         if let path = paths[index] as? String { owner.receive(path: path, flags: flags[index]) }
@@ -34,12 +47,16 @@ final class FileCollector {
     guard let stream = FSEventStreamCreate(nil, callback, &context, paths as CFArray,
       FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 1,
       FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer)) else {
-      unavailable = true; return
+      recovery.startFailed(now: ProcessInfo.processInfo.systemUptime); return
     }
     self.stream = stream
     FSEventStreamSetDispatchQueue(stream, .main)
-    unavailable = !FSEventStreamStart(stream)
-    if unavailable { stop() }
+    if FSEventStreamStart(stream) {
+      recovery.startSucceeded()
+    } else {
+      stop()
+      recovery.startFailed(now: ProcessInfo.processInfo.systemUptime)
+    }
   }
 
   func stop() {
@@ -51,17 +68,29 @@ final class FileCollector {
   }
 
   func flush(force: Bool = false) {
-    guard !isPaused() else { buffer.discardPending(); return }
+    guard !isPaused(), !recovery.unavailable else { buffer.discardPending(); return }
     let records = buffer.drain(now: Date(), device: device, force: force)
-    if !records.isEmpty { last = Date(); send(records) }
+    if !records.isEmpty { last = Date(); recovery.recordEmitted(); send(records) }
+  }
+
+  private func eventsDropped() {
+    guard !isPaused() else { return }
+    // 丢失事件时不回扫用户目录，避免把旧文件错当作新文件。
+    buffer.discardPending()
+    recovery.eventsDropped()
+    guard !rebuildScheduled else { return }
+    rebuildScheduled = true
+    // 不能在 FSEvents 回调栈内释放当前 stream；下一轮主队列再处理。
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.rebuildScheduled = false
+      self.stop()
+      self.start()
+    }
   }
 
   private func receive(path: String, flags: FSEventStreamEventFlags) {
-    guard !isPaused() else { return }
-    // 丢失事件时不回扫用户目录，避免把旧文件错当作新文件。
-    if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped) != 0 {
-      unavailable = true; return
-    }
+    guard !isPaused(), !recovery.needsRebuild else { return }
     let created = flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemCreated) != 0
     let moved = flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRenamed) != 0
     let removed = flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved) != 0

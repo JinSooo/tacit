@@ -236,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     o.state = ocrEnabled ? .on : .off
     menu.addItem(o)
     if ocrEnabled && !ocr.granted { menu.addItem(disabled("OCR 需要录屏权限")) }
-    menu.addItem(disabled(files.unavailable ? "文件 · 监听异常" : "文件 · " + (files.last.map { "最近 " + f.string(from: $0) } ?? "等待新文件")))
+    menu.addItem(disabled(files.unavailable ? "文件 · 监听异常" : "文件 · " + (files.last.map { "最近 " + f.string(from: $0) } ?? "等待新文件") + (files.recoveredFromDrop ? "（曾丢失事件，已恢复）" : "")))
     menu.addItem(disabled(calendar.authorized ? "日历 · " + (calendar.last.map { "最近 " + f.string(from: $0) } ?? "等待首次读取") : "日历未授权"))
     if !calendar.authorized { menu.addItem(item("授权日历…", #selector(requestCalendar))) }
     if plugins.available {
