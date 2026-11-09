@@ -7,7 +7,8 @@ import AudioStore
 final class AudioCoordinator {
   let config: Config
   private let queue = DispatchQueue(label: "record-anything.audio", qos: .utility)
-  private let slots = DispatchSemaphore(value: 32)
+  // 每个 IOProc 缓冲约 10ms；留约 4 秒余量，偶尔的磁盘或设备操作不会让整路录音停掉，又能限制真跟不上时的内存。
+  private let slots = DispatchSemaphore(value: 400)
   private let snapshotLock = NSLock()
   private var snapshot: [String] = []
   private var store: AudioStore?
@@ -275,8 +276,13 @@ final class AudioCoordinator {
     if voiceChanged { return true }
     guard now.timeIntervalSince(lastWorker) >= 600 else { return false }
     // hub 要试听样本时也要跑一次，否则新声音要等下一段对话录完才有样本。
-    return samplesRequested || ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
+    if samplesRequested { return true }
+    // 本函数每秒被调用，扫描全部 meta.json 会拖慢音频队列导致丢帧停录；磁盘扫描最多每分钟一次。
+    guard now.timeIntervalSince(lastPendingScan) >= 60 else { return false }
+    lastPendingScan = now
+    return ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
   }
+  private var lastPendingScan = Date.distantPast
   private static let workerLaunchFailure = "转写进程启动失败"
   private var workerURL: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ra-audio-worker") }
   private func request(path: String, body: [String: Any]? = nil, completion: @escaping (Data?) -> Void) {

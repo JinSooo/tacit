@@ -403,7 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s["axTrusted"] = AXIsProcessTrusted(); s["ocrEnabled"] = enabledSources["ocr"] ?? false; s["ocrGranted"] = ocr.granted
       s["sources"] = enabledSources
       s["paused"] = pausedUntil != nil; s["plugins"] = plugins.status()
-      s["rssMB"] = Int(residentMB()); s["cpuSeconds"] = Int(cpuSeconds())
+      s["footprintMB"] = Int(footprintMB()); s["cpuSeconds"] = Int(cpuSeconds())
       s["time"] = LocalTime.iso(Date())
       if let d = try? JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted, .sortedKeys]) {
         try? d.write(to: config.dataDir.appendingPathComponent("collector-status.json"), options: .atomic)
@@ -412,13 +412,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 }
 
-func residentMB() -> Double {
-  var info = mach_task_basic_info()
-  var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+/// 与活动监视器的"内存"一致；RSS 会把共享库和映射的模型文件算进来，偏高且可被系统回收。
+func footprintMB() -> Double {
+  var info = task_vm_info_data_t()
+  var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
   let r = withUnsafeMutablePointer(to: &info) {
-    $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count) }
+    $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
   }
-  return r == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : 0
+  return r == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : 0
 }
 
 func cpuSeconds() -> Double {

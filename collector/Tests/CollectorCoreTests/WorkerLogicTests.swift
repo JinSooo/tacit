@@ -63,3 +63,25 @@ import Foundation
   let wav = WorkerLogic.wav([0, 1, -1]); #expect(wav.count == 50)
   #expect(String(data: wav.prefix(4), encoding: .utf8) == "RIFF")
 }
+
+// 回归：采集端每秒扫描全部对话的 meta.json，每个时间戳都新建格式器，音频队列被拖慢到丢帧停录（2026-11-10）。
+@Test func audioPolicyDateParsingIsCheap() {
+  let texts = ["2026-11-09T16:23:06+09:00", "2026-11-09T07:23:06.123Z"]
+  let begin = Date()
+  for i in 0..<20000 { #expect(AudioPolicy.date(texts[i % 2]) != nil) }
+  #expect(Date().timeIntervalSince(begin) < 0.5)
+  #expect(AudioPolicy.date("2026-11-09T07:23:06.123Z")!.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) > 0.1)
+  #expect(AudioPolicy.date("bad") == nil && AudioPolicy.date(nil) == nil && AudioPolicy.date("0001-01-01T09:18:59+09:18") != nil)
+}
+
+@Test func fastRFC3339MatchesFormatter() {
+  let plain = ISO8601DateFormatter(), frac = ISO8601DateFormatter(); frac.formatOptions.insert(.withFractionalSeconds)
+  for text in ["2026-11-09T16:23:06+09:00", "2026-11-09T07:23:06Z", "2026-11-09T07:23:06.123Z", "2024-02-29T23:59:59-05:30",
+               "2000-03-01T00:00:00+00:00", "1970-01-01T00:00:00Z", "2100-12-31T12:00:00.5+14:00"] {
+    let expected = plain.date(from: text) ?? frac.date(from: text)!
+    #expect(abs(AudioPolicy.fastRFC3339(text)!.timeIntervalSince(expected)) < 0.001, "\(text)")
+  }
+  for text in ["2026-02-30T00:00:00Z", "2026-13-01T00:00:00Z", "2026-11-09 16:23:06Z", "2026-11-09T16:23:06", "2026-11-09T16:23:06+0900", "2026-11-09T16:23:06.Z", "2026-11-09T24:00:00Z", "0001-01-01T09:18:59+09:18"] {
+    #expect(AudioPolicy.fastRFC3339(text) == nil, "\(text)")
+  }
+}

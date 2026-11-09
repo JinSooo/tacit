@@ -70,10 +70,48 @@ public enum AudioPolicy {
   public static func validID(_ id: String) -> Bool { id.range(of: "^[0-9A-HJKMNP-TV-Z]{26}$", options: .regularExpression) != nil }
   public static func date(_ text: String?) -> Date? {
     guard let text else { return nil }
-    let f = ISO8601DateFormatter()
-    if let d = f.date(from: text) { return d }
-    f.formatOptions.insert(.withFractionalSeconds); return f.date(from: text)
+    return fastRFC3339(text) ?? plain.date(from: text) ?? fractional.date(from: text)
   }
+  /// 只认 `YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)`；其他写法返回 nil 交给格式器。
+  /// ISO8601DateFormatter 解析一次约 36µs，采集端扫描对话时每个时间戳都要解析，会拖慢音频队列。
+  static func fastRFC3339(_ text: String) -> Date? {
+    let b = Array(text.utf8)
+    func num(_ i: Int, _ n: Int) -> Int? {
+      guard i + n <= b.count else { return nil }
+      var v = 0
+      for c in b[i..<(i + n)] { guard c >= 48 && c <= 57 else { return nil }; v = v * 10 + Int(c - 48) }
+      return v
+    }
+    guard b.count >= 20, b[4] == 45, b[7] == 45, b[10] == 84, b[13] == 58, b[16] == 58,
+          let y = num(0, 4), let mo = num(5, 2), let d = num(8, 2), let h = num(11, 2), let mi = num(14, 2), let s = num(17, 2),
+          y >= 1900, (1...12).contains(mo), d >= 1, h < 24, mi < 60, s < 60 else { return nil }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
+    guard d <= [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1] else { return nil }
+    var i = 19, fraction = 0.0
+    if b[i] == 46 {
+      var scale = 0.1; i += 1; let start = i
+      while i < b.count, b[i] >= 48 && b[i] <= 57 { fraction += Double(b[i] - 48) * scale; scale /= 10; i += 1 }
+      guard i > start else { return nil }
+    }
+    guard i < b.count else { return nil }
+    var offset = 0
+    if b[i] == 90 { i += 1 }
+    else if b[i] == 43 || b[i] == 45, i + 6 == b.count, b[i + 3] == 58, let oh = num(i + 1, 2), let om = num(i + 4, 2), oh < 24, om < 60 {
+      offset = (oh * 3600 + om * 60) * (b[i] == 43 ? 1 : -1); i += 6
+    } else { return nil }
+    guard i == b.count else { return nil }
+    // 公历日期转 Unix 天数（Howard Hinnant 的 days_from_civil）。
+    let yy = mo <= 2 ? y - 1 : y
+    let era = (yy >= 0 ? yy : yy - 399) / 400, yoe = yy - era * 400
+    let doy = (153 * (mo > 2 ? mo - 3 : mo + 9) + 2) / 5 + d - 1
+    let days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468
+    return Date(timeIntervalSince1970: Double(days * 86400 + h * 3600 + mi * 60 + s - offset) + fraction)
+  }
+  // 格式器只作兜底；ISO8601DateFormatter 线程安全，复用避免每次初始化 ICU。
+  private static let plain = ISO8601DateFormatter()
+  private static let fractional: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter(); f.formatOptions.insert(.withFractionalSeconds); return f
+  }()
   public static func shouldDelete(_ meta: AudioMetadata, now: Date, retentionDays: Int, purgeBefore: Date? = nil) -> Bool {
     guard meta.status != .open, let end = date(meta.t_end) else { return false }
     return end < now.addingTimeInterval(-Double(retentionDays) * 86400) || purgeBefore.map { end < $0 } == true
