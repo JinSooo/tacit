@@ -48,6 +48,13 @@ final class HubAPI: @unchecked Sendable {
     return data
   }
 
+  /// 中枢网页的状态页地址，和 `bun hub/src/cli.ts open` 一样把 token 放在 hash 里（不会发给服务器）。
+  func statusPageURL() -> URL? {
+    guard let token = tokenProvider(), !token.isEmpty,
+          let encoded = token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return nil }
+    return URL(string: "\(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/#token=\(encoded)&status")
+  }
+
   private func get<T: Decodable>(_ type: T.Type, _ path: String, _ query: [String: String?] = [:]) async throws -> T {
     let data = try await request(path, query: query)
     do { return try HubJSON.decoder().decode(T.self, from: data) }

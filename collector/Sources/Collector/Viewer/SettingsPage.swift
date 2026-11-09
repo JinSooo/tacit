@@ -8,6 +8,8 @@ struct SettingsPage: View {
   @State private var error: String?
   @State private var status: String?
   @State private var confirmPurge = false
+  @State private var hubLinkError: String?
+  @Environment(\.openURL) private var openURL
 
   var body: some View {
     let c = store.capture
@@ -60,6 +62,10 @@ struct SettingsPage: View {
         LabeledContent("状态") {
           Text(store.sharedError ?? c.hubError ?? "已连接").foregroundStyle(store.sharedError == nil && c.hubError == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
         }
+        Button("中枢状态…") {
+          if let url = store.api.statusPageURL() { hubLinkError = nil; openURL(url) } else { hubLinkError = "找不到 hub 的 token，hub 是否启动过？" }
+        }
+        if let hubLinkError { Text(hubLinkError).foregroundStyle(.orange) }
       }
     }
     .formStyle(.grouped)
