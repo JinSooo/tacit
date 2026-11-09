@@ -29,12 +29,19 @@ final class FakeHub: HubTransport {
       reply = ["retention_days": 7, "voiceprint": voice ? ["vector": vector, "threshold": 0.49] : NSNull(), "sample_requests": requests, "delete_conversations": [], "purge_before": NSNull()]
     } else if path == "/v1/audio/embeddings" {
       let speakers = json["speakers"] as! [[String: Any]]
+      // 与 hub 一致：空说话人列表返回 400。
+      if speakers.isEmpty { throw WorkerError.http }
       #expect(speakers.allSatisfy { ($0["centroid"] as? [Double])?.count == 512 })
       reply = ["speakers": speakers.map { ["local": $0["local"]!, "speaker_id": "speaker-test", "label": "说话人 A", "is_me": true] }]
     } else if path == "/v1/ingest" {
       records += json["records"] as! [[String: Any]]
       reply = ["accepted": reject || duplicate ? 0 : 1, "duplicates": duplicate ? 1 : 0, "rejected": reject ? [["index": 0]] : []]
-    } else if path == "/v1/audio/samples" { samples.append(json) }
+    } else if path == "/v1/audio/samples" {
+      // 和 hub 一样：每个说话人（测试里只有一个）最多存 3 段。
+      let stored = samples.reduce(0) { $0 + ($1["clips"] as! [Any]).count }
+      guard stored + (json["clips"] as! [Any]).count <= 3 else { throw WorkerError.http }
+      samples.append(json)
+    }
     return try JSONSerialization.data(withJSONObject: reply)
   }
 }
@@ -91,6 +98,35 @@ func fixture(_ samples: [[Float]], meetings: [String] = [], encode: ([Float]) th
   #expect(try otherStore.conversations().first?.status == .skipped)
   #expect(otherHub.records.isEmpty)
   #expect(otherHub.paths.contains { $0.hasSuffix("/skipped") })
+}
+
+// 回归：每段都短于 1.5 秒时算不出声纹，曾因上传空说话人被 hub 拒绝而一直 failed。
+@Test func workerHandlesConversationTooShortForVoiceprint() async throws {
+  let short: [Float] = Array(repeating: 0.1, count: 16000)
+  for (voice, meetings, expected) in [(false, [String](), AudioStatus.waiting_me), (true, [], .skipped), (true, ["us.zoom.xos"], .done)] {
+    let (root, store, _) = try fixture([short], meetings: meetings)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let hub = FakeHub(); hub.voice = voice
+    let worker = Worker(store: store, hub: hub, device: "mac-test") { FakeModels() }
+    #expect(try await worker.run() == 0)
+    #expect(try store.conversations().first?.status == expected)
+    #expect(!hub.paths.contains("/v1/audio/embeddings"))
+  }
+}
+
+// 回归：一段对话里同一说话人有多段连续人声时，旧逻辑一次请求发多段，占满 hub 的 3 段上限，其余请求永远 400。
+@Test func workerSendsOneClipPerSampleRequest() async throws {
+  let step = 2.0 * Double.pi * 440.0 / 16000.0
+  let synthetic: [Float] = (0..<96000).map { Float(sin(Double($0) * step) * 0.2) }
+  let (root, store, meta) = try fixture([synthetic, synthetic, synthetic], encode: { _ in Data([1, 2, 3]) })
+  defer { try? FileManager.default.removeItem(at: root) }
+  let hub = FakeHub(); hub.voice = false
+  let worker = Worker(store: store, hub: hub, device: "mac-test", decode: { _ in synthetic }) { FakeModels() }
+  #expect(try await worker.run() == 0)
+  hub.requests = (1...3).map { ["id": "request-\($0)", "speaker_id": "speaker-test", "local": "S1", "conversation_ref": meta.id] }
+  #expect(try await worker.run() == 0)
+  #expect(hub.samples.count == 3)
+  #expect(hub.samples.allSatisfy { ($0["clips"] as! [Any]).count == 1 })
 }
 
 @Test func workerContinuesAfterCorruptConversationAndCapsRetries() async throws {

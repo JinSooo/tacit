@@ -106,9 +106,12 @@ final class Worker {
           return a == b ? $0.file < $1.file : a < b
         }
         var cache = try clustered(meta)
-        let response = try await post("/v1/audio/embeddings", ["device": device, "conversation_ref": meta.id, "t_start": meta.t_start,
-          "t_end": meta.t_end!, "speakers": cache.speakers.map { ["local": $0.local, "track": $0.track.rawValue, "seconds": $0.seconds, "centroid": $0.centroid] as [String: Any] }])
-        cache.hub = try JSONDecoder().decode(EmbeddingsResponse.self, from: response).speakers
+        // 每段都不足 1.5 秒时算不出声纹：不上传，按"没有可识别说话人"走后面的判定。
+        if !cache.speakers.isEmpty {
+          let response = try await post("/v1/audio/embeddings", ["device": device, "conversation_ref": meta.id, "t_start": meta.t_start,
+            "t_end": meta.t_end!, "speakers": cache.speakers.map { ["local": $0.local, "track": $0.track.rawValue, "seconds": $0.seconds, "centroid": $0.centroid] as [String: Any] }])
+          cache.hub = try JSONDecoder().decode(EmbeddingsResponse.self, from: response).speakers
+        }
         guard Set(cache.hub.map(\.local)) == Set(cache.speakers.map(\.local)), Set(cache.hub.map(\.local)).count == cache.hub.count else { throw WorkerError.response }
         try save(cache, meta)
         let next = WorkerLogic.decision(speakers: cache.speakers, voiceprint: sync.voiceprint?.vector, threshold: sync.voiceprint?.threshold ?? 1, meetings: meta.meeting_apps)
@@ -147,25 +150,25 @@ final class Worker {
         meta.segments.sort { AudioPolicy.date($0.t_start)! == AudioPolicy.date($1.t_start)! ? $0.file < $1.file : AudioPolicy.date($0.t_start)! < AudioPolicy.date($1.t_start)! }
         let cache = try clustered(meta)
         guard cache.hub.contains(where: { $0.local == request.local && $0.speaker_id == request.speaker_id }) else { continue }
-        var clips: [[String: String]] = []
-        // 只截该说话人的连续窗口，避免多数票段里混入其他人的试听。
+        // hub 每个说话人最多存 3 段、每段对话发一次请求：每次只发该说话人最长的一段连续窗口，
+        // 3 段样本分别来自 3 段对话。只截连续窗口，避免多数票段里混入其他人的试听。
+        var best: (segment: Int, range: Range<Int>)?
         for i in meta.segments.indices {
           let selected = cache.windows.filter { $0.segment == i && $0.local == request.local }.sorted { $0.offset < $1.offset }
-          guard !selected.isEmpty else { continue }
-          let samples = try audio(meta.segments[i], meta)
           var ranges: [Range<Int>] = []
           for w in selected {
             if let last = ranges.last, last.upperBound == w.offset { ranges[ranges.count - 1] = last.lowerBound..<(w.offset + w.count) }
             else { ranges.append(w.offset..<(w.offset + w.count)) }
           }
-          for range in ranges where clips.count < 3 {
-            let end = min(range.upperBound, range.lowerBound + 160000)
-            guard end <= samples.count else { throw WorkerError.cache }
-            clips.append(["mime": "audio/wav", "data": WorkerLogic.wav(Array(samples[range.lowerBound..<end])).base64EncodedString()])
-          }
-          if clips.count == 3 { break }
+          for range in ranges where range.count > (best?.range.count ?? 0) { best = (i, range) }
         }
-        if !clips.isEmpty { _ = try await post("/v1/audio/samples", ["request_id": request.id, "clips": clips]) }
+        if let best {
+          let samples = try audio(meta.segments[best.segment], meta)
+          let end = min(best.range.upperBound, best.range.lowerBound + 160000)
+          guard end <= samples.count else { throw WorkerError.cache }
+          let clip = ["mime": "audio/wav", "data": WorkerLogic.wav(Array(samples[best.range.lowerBound..<end])).base64EncodedString()]
+          _ = try await post("/v1/audio/samples", ["request_id": request.id, "clips": [clip]])
+        }
       } catch { failures += 1; fputs("\(meta.id) sample_failed\n", stderr) }
     }
     return failures

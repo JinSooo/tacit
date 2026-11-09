@@ -275,6 +275,7 @@ final class AudioCoordinator {
     guard now.timeIntervalSince(lastWorker) >= 600 else { return false }
     return ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
   }
+  private static let workerLaunchFailure = "转写进程启动失败"
   private var workerURL: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ra-audio-worker") }
   private func request(path: String, body: [String: Any]? = nil, completion: @escaping (Data?) -> Void) {
     guard let token = config.token else { completion(nil); return }
@@ -321,15 +322,17 @@ final class AudioCoordinator {
     }
   }
   private func launchWorker() {
-    let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/taskpolicy")
+    let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/taskpolicy")
     process.arguments = ["-b", workerURL.path, "--data-dir", config.dataDir.path, "--device", config.device, "--hub", config.hubURL.absoluteString]
     var env = ProcessInfo.processInfo.environment; env["RA_DATA_DIR"] = config.dataDir.path; process.environment = env
     process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.standardError
     process.terminationHandler = { [weak self] _ in
       self?.queue.async { [weak self] in self?.worker = nil; self?.lastSync = .distantPast }
     }
-    do { try process.run(); worker = process; lastWorker = Date(); voiceChanged = false }
-    catch { failure = "转写进程启动失败"; workerFailureAt = Date() }
+    do {
+      try process.run(); worker = process; lastWorker = Date(); voiceChanged = false
+      if failure?.hasPrefix(Self.workerLaunchFailure) == true { failure = nil }
+    } catch { failure = "\(Self.workerLaunchFailure)：\(error.localizedDescription)"; workerFailureAt = Date() }
   }
   private func persistState() {
     var state: [String: Any] = ["retention_days": retentionDays, "last_worker": LocalTime.iso(lastWorker), "voice_changed": voiceChanged]
