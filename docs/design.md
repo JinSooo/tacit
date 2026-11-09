@@ -247,13 +247,14 @@ AX 扫描约束（实验 0-B）：
 - **会话开始时注入**：SessionStart hook 带当前目录问中枢，注入当前状态 + 匹配项目的活跃线程简略版，**不超过 800 token**，附一行可用工具提示。会话压缩后重新注入。
   - Claude Code：hook 输出 `hookSpecificOutput.additionalContext`（必须嵌套，放顶层会被丢弃）；写在用户级 settings，不走插件（插件 hook 有已知 bug）。
   - Codex：SessionStart hook（需 `codex_hooks = true`，开工时核实）。
-- **MCP（只读，stdio）**：两边配置里只写一条命令（`bun …/hub/src/cli.ts mcp`），进程自己读数据目录里的 hub token 文件（0600） 再调用 hub 的 `/v1/agent/*`，token 不出现在任何配置文件里。（2026-11-08 确认，原方案是本机 HTTP）读取逻辑和审计都在 hub 里，MCP 进程只做转发。
+- **MCP（stdio，以读取为主）**：两边配置里只写一条命令（`bun …/hub/src/cli.ts mcp`），进程自己读数据目录里的 hub token 文件（0600） 再调用 hub 的 `/v1/agent/*`，token 不出现在任何配置文件里。（2026-11-08 确认，原方案是本机 HTTP）读取逻辑和审计都在 hub 里，MCP 进程只做转发。
   - `now()`：当前状态
   - `get(id, level)`：读线程、项目、人、日记；`level` = `brief` | `detail` | `evidence`，Agent 自己选读几层
   - `search(query, time_range)`
   - `timeline(range, device)`
   - 返回结果分页，控制单次大小。
-- **Agent 没有写入工具**：它的会话本身就是数据源，会被自动采进来。纠错只在网页上做。
+  - `history_append(title, body, source_ref?, …)`：唯一的写入工具，见下。
+- **Agent 只有一个追加工具**：它的会话本身就是数据源，会被自动采进来，纠错只在网页上做。唯一例外是用户明确要求"把这些存进来"（Notion 页面、自己整理的内容）时，用 `history_append` 往 History 追加：只追加、不改不删；同一外部条目重复写入去重，内容变了挂修正记录；写入前拦密钥；审计标注是哪个 Agent 写的。Codex 里这个工具每次都要用户确认。（2026-11-09 确认）
 - **审计**：Agent 每次读了什么，在网页上留一条记录。
 
 ### 7.2 范围

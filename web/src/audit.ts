@@ -9,8 +9,9 @@ export function auditPath(tool: string, cursor: string | null) {
   if (cursor) params.set("cursor", cursor);
   return `/v1/audit?${params}`;
 }
+const appendResults: Record<string, string> = { created: "新增", unchanged: "已存在，未重复写入", corrected: "内容有变，已挂修正", deleted: "已被删除过，未写入" };
 export function auditSummary(args: AuditRead["args"]) {
-  return [args.cwd, args.id && `${args.id}${args.level ? ` / ${args.level}` : ""}`, args.q_length !== undefined && `q_length=${args.q_length}`, (args.from || args.to) && `${args.from || "不限"} 至 ${args.to || "不限"}`].filter(value => value !== undefined && value !== false && value !== "").join(" · ") || "无";
+  return [args.cwd, args.id && `${args.id}${args.level ? ` / ${args.level}` : ""}`, args.q_length !== undefined && `q_length=${args.q_length}`, (args.from || args.to) && `${args.from || "不限"} 至 ${args.to || "不限"}`, args.result !== undefined && `写入：${appendResults[args.result] ?? args.result}`, args.redactions !== undefined && `拦下 ${args.redactions} 处密钥`].filter(value => value !== undefined && value !== false && value !== "").join(" · ") || "无";
 }
 // 只把 404 当作不存在，权限、网络和存储故障必须交给页面报错。
 async function resolveTarget(api: Api, id: string, signal?: AbortSignal): Promise<AuditTarget | null> {

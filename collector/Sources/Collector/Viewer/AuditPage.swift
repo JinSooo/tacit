@@ -157,6 +157,7 @@ struct AuditRow: View {
     case "get": return "读取\(["brief": "简略版", "detail": "详细版", "evidence": "证据"][read.args["level"]?.text ?? ""] ?? "内容")"
     case "search": return "搜索 History"
     case "timeline": return "读取时间线"
+    case "append": return "写入 History"
     default: return read.kind
     }
   }
@@ -166,6 +167,8 @@ struct AuditRow: View {
     if let cwd = read.args["cwd"]?.text { parts.append((cwd as NSString).abbreviatingWithTildeInPath) }
     if let id = read.args["id"]?.text, let t = targets[id], let title = t?.title { parts.append(title) }
     if let n = read.args["q_length"]?.text { parts.append("查询 \(n) 字") }
+    if let r = read.args["result"]?.text { parts.append(["created": "新增", "unchanged": "已存在，未重复写入", "corrected": "内容有变，已挂修正", "deleted": "已被删除过，未写入"][r] ?? r) }
+    if let n = read.args["redactions"]?.text { parts.append("拦下 \(n) 处密钥") }
     if let from = read.args["from"]?.text ?? read.args["to"]?.text { parts.append(from) }
     return parts.isEmpty ? nil : parts.joined(separator: " · ")
   }

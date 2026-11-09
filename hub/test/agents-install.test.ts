@@ -144,7 +144,7 @@ test("Codex 文本补齐保留现有工具规则、其他服务、权限并备�
   writeFileSync(file, original); chmodSync(file, 0o640);
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   const installed = readFileSync(file, "utf8"), data = Bun.TOML.parse(installed) as any;
-  expect(data.mcp_servers["record-anything"].tools).toEqual({ now: { approval_mode: "prompt" }, get: { approval_mode: "approve" }, search: { approval_mode: "approve" }, timeline: { approval_mode: "approve" } });
+  expect(data.mcp_servers["record-anything"].tools).toEqual({ now: { approval_mode: "prompt" }, get: { approval_mode: "approve" }, search: { approval_mode: "approve" }, timeline: { approval_mode: "approve" }, history_append: { approval_mode: "prompt" } });
   expect(installed).toContain('[mcp_servers."record-anything".tools."now"] # 保留用户规则\napproval_mode = "prompt"');
   expect(installed).toContain('[mcp_servers.other]\ncommand = "other"\n');
   expect(installed.indexOf("tools.get")).toBeLessThan(installed.indexOf('tools."now"'));
@@ -180,7 +180,8 @@ test.skipIf(!Bun.which("codex"))("真实 Codex 在临时 HOME 安装、重装保
   ctx.env.run = undefined;
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   let data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
-  expect(Object.keys(data.mcp_servers["record-anything"].tools).sort()).toEqual(["get", "now", "search", "timeline"]);
+  expect(Object.keys(data.mcp_servers["record-anything"].tools).sort()).toEqual(["get", "history_append", "now", "search", "timeline"]);
+  expect(data.mcp_servers["record-anything"].tools.history_append.approval_mode).toBe("prompt");
   writeFileSync(file, readFileSync(file, "utf8").replace('approval_mode = "approve"', 'approval_mode = "prompt"'));
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;

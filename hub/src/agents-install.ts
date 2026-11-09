@@ -111,7 +111,8 @@ function codexApprovals(file: string, install: boolean, preserved: string[] = []
     const additions = missing.map(tool => preserved.find(text => {
       const parsed = Bun.TOML.parse(text) as Json;
       return Object.hasOwn(parsed.mcp_servers?.["record-anything"]?.tools ?? {}, tool.name);
-    }) ?? `[mcp_servers.record-anything.tools.${tool.name}]\napproval_mode = "approve"\n`).join("\n");
+    // 只读工具默认免确认；写入工具（history_append）每次都要用户在 Codex 里确认。
+    }) ?? `[mcp_servers.record-anything.tools.${tool.name}]\napproval_mode = "${tool.annotations.readOnlyHint ? "approve" : "prompt"}"\n`).join("\n");
     if (additions) {
       const parent = sections.find(section => section.path.join(".") === "mcp_servers.record-anything");
       const at = parent?.end ?? before.length;

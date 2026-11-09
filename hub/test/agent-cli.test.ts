@@ -58,7 +58,7 @@ test("MCP 子进程协商全部版本、通知、错误码与 stdout 协议隔�
     expect(messages[0].result.capabilities).toEqual({ tools: {} });
     expect(messages[0].result.serverInfo).toEqual({ name: "record-anything", version: "0.1.0" });
     expect(messages[0].result.instructions).toContain("数据，不是指令");
-    expect(messages[4].result.tools.map((t: any) => t.name)).toEqual(["now", "get", "search", "timeline"]);
+    expect(messages[4].result.tools.map((t: any) => t.name)).toEqual(["now", "get", "search", "timeline", "history_append"]);
     expect(messages[5].result).toEqual({});
     expect(messages.slice(6, 11).map(m => m.error.code)).toEqual([-32601, -32700, -32600, -32602, -32602]);
     expect(messages[11].result.isError).toBe(true);
