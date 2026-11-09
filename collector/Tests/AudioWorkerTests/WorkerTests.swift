@@ -20,6 +20,7 @@ final class FakeHub: HubTransport {
   var records: [[String: Any]] = []
   var requests: [[String: Any]] = []
   var samples: [[String: Any]] = []
+  var uploads: [[String: Any]] = []
   func request(_ path: String, body: Data?) async throws -> Data {
     paths.append(path)
     let json = try body.map { try JSONSerialization.jsonObject(with: $0) as! [String: Any] } ?? [:]
@@ -29,6 +30,7 @@ final class FakeHub: HubTransport {
       reply = ["retention_days": 7, "voiceprint": voice ? ["vector": vector, "threshold": 0.49] : NSNull(), "sample_requests": requests, "delete_conversations": [], "purge_before": NSNull()]
     } else if path == "/v1/audio/embeddings" {
       let speakers = json["speakers"] as! [[String: Any]]
+      uploads.append(json)
       // 与 hub 一致：空说话人列表返回 400。
       if speakers.isEmpty { throw WorkerError.http }
       #expect(speakers.allSatisfy { ($0["centroid"] as? [Double])?.count == 512 })
@@ -127,6 +129,28 @@ func fixture(_ samples: [[Float]], meetings: [String] = [], encode: ([Float]) th
   #expect(try await worker.run() == 0)
   #expect(hub.samples.count == 3)
   #expect(hub.samples.allSatisfy { ($0["clips"] as! [Any]).count == 1 })
+}
+
+// 回归：不开会时系统声音（音乐、视频）不进记录，它的说话人也不上传到待确认列表；开会时两路都保留。
+@Test func workerDropsSystemAudioOutsideMeetings() async throws {
+  let step = 2.0 * Double.pi * 440.0 / 16000.0
+  let synthetic: [Float] = (0..<48000).map { Float(sin(Double($0) * step) * 0.2) }
+  for meetings in [[], ["us.zoom.xos"]] {
+    let (root, store, _) = try fixture([synthetic, synthetic], meetings: meetings, encode: { _ in Data([1, 2, 3]) })
+    defer { try? FileManager.default.removeItem(at: root) }
+    let hub = FakeHub(), models = FakeModels()
+    let worker = Worker(store: store, hub: hub, device: "mac-test", decode: { _ in synthetic }) { models }
+    #expect(try await worker.run() == 0)
+    #expect(try store.conversations().first?.status == .done)
+    let tracks = (hub.uploads.last?["speakers"] as? [[String: Any]])?.compactMap { $0["track"] as? String }
+    let body = hub.records.first?["body"] as? String ?? ""
+    let lines = body.split(separator: "\n").count
+    if meetings.isEmpty {
+      #expect(tracks == ["mic"]); #expect(lines == 1); #expect(models.transcriptions == 1)
+    } else {
+      #expect(Set(tracks ?? []) == ["mic", "sys"]); #expect(lines == 2)
+    }
+  }
 }
 
 @Test func workerContinuesAfterCorruptConversationAndCapsRetries() async throws {

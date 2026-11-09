@@ -334,7 +334,7 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 ```
 
 - **聚类**（规则，不调模型）：上传的每个说话人中心和已有说话人（`status` 不是 `merged`）比余弦，最高的 ≥ `match_threshold`（起始 0.5）就归入并更新中心，否则新建 `new` 说话人。阈值是实验 2-C 的起始值，要用真实录音再调。
-- **进待确认**：说话人累计 ≥ 3 段对话或 ≥ 120 秒，且 `status=new`，就建 `pending(kind="voice", payload={ speaker_id })`，改成 `asked`，同时按秒数最长的 3 段对话建样本请求。
+- **进待确认**：`status=new` 的说话人，录到过麦克风这路的累计 ≥ 2 段对话或 ≥ 30 秒、只在系统声音这路的累计 ≥ 3 段对话或 ≥ 120 秒，就建 `pending(kind="voice", payload={ speaker_id })`，改成 `asked`，同时按秒数最长的 3 段对话建样本请求。除了上传 embeddings 时检查，`/v1/audio/sync` 也会重查一遍 `new` 说话人（门槛调整后不必等新上传）。
 - 待确认操作（`POST /v1/pending/:id`）：`me`（就是我：`is_me=1`、`name="我"`）、`rename`（填名字）、`merge_into`（和某人是同一人，`target` 是说话人 id）、`ignore`。处理后删掉这个说话人的试听样本。`GET /v1/pending` 里 voice 项的 payload 补 `{ speaker_id, label, conversations, seconds, samples: [{ id, mime }], samples_pending: bool }`。
 - `voiceprint` 下发 `is_me=1` 的说话人中心（有多个时按秒数加权合并），`threshold` 取 `audio_settings.me_threshold`，默认 0.49。
 - **删除联动**：删掉一条 `source=mac.audio` 的记录时，同一事务里删掉它 `source_ref` 对应的 `voice_embeddings` 行，并把 `source_ref` 加进待下发的 `delete_conversations`，采集端删本机音频后回 ack。
@@ -343,12 +343,12 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 
 每段 `closed`（和"我"的声纹变化后的 `waiting_me`）对话：
 
-1. 解密各段，每路按 3 秒窗口算声纹，对话内聚类成本地说话人 `S1`、`S2`…（起始阈值 0.6，可调），算中心，上传 5.4 的 embeddings，拿回说话人 id 和标签。
+1. 解密各段，每路按 3 秒窗口算声纹，对话内聚类成本地说话人 `S1`、`S2`…（起始阈值 0.6，可调），算中心，上传 5.4 的 embeddings，拿回说话人 id 和标签。`meeting_apps` 为空时只上传麦克风这路的说话人。
 2. 判断要不要转写：
    - 没有 `voiceprint` → `waiting_me`，不转写；
    - 麦克风这路有本地说话人中心和 voiceprint 的余弦 ≥ threshold，或 `meeting_apps` 非空 → 转写；
    - 否则 → `skipped`，调 `/skipped`，不写记录。
-3. 转写每个人声段（SenseVoice）。**去回声**：麦克风这路的段和系统声音这路的段时间重叠、且转写文字相似度 ≥ 0.6 时，丢掉麦克风这路的那一段。
+3. 转写每个人声段（SenseVoice）。**去回声**：麦克风这路的段和系统声音这路的段时间重叠、且转写文字相似度 ≥ 0.6 时，丢掉麦克风这路的那一段。`meeting_apps` 为空时，系统声音这路只转写和麦克风段重叠的部分，去回声后不写进记录。
 4. 写一条记录，经 `POST /v1/ingest`：
    - `source: "mac.audio"`，`source_ref: conversation_id`，`kind: "span"`，`t_start`、`t_end` 取对话首尾。
    - `title`：`对话 · HH:MM–HH:MM · 我、说话人 B`（规则生成）。
@@ -357,7 +357,7 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
    - `context: { app: 第一个会议软件或 null, extra: { speech_seconds, mic_dbfs, sys_dbfs, tracks } }`。
    - `media: [{ path: "audio/<日期>/<id>", kind: "audio", expires: t_end + 保留天数 }]`。
    - 记录写入后不改；之后说话人改名，网页按 `people` 的 id 显示新名字。
-5. 处理样本请求：从对应本地说话人的段里截取不超过 10 秒，最多 3 段，上传 `/v1/audio/samples`。对话已经被清理的，请求留着，网页显示"样本待取"。
+5. 处理样本请求：每个请求只取对应本地说话人最长的一段连续人声，不超过 10 秒，上传 `/v1/audio/samples`。对话已经被清理的，请求留着，网页显示"样本待取"。
 
-- 采集端启动转写进程的时机：有 `closed` 对话且距上次运行 ≥ 10 分钟，或收到新的 voiceprint；同一时刻只跑一个；低优先级（`taskpolicy -b` 或 `setpriority`）。
+- 采集端启动转写进程的时机：有 `closed` 对话且距上次运行 ≥ 10 分钟，或收到新的 voiceprint，或 hub 有未完成的样本请求（同样间隔 ≥ 10 分钟）；同一时刻只跑一个；低优先级（`taskpolicy -b` 或 `setpriority`）。
 - 提炼切片：`mac.audio` 的分组键是 `audio:<source_ref>`，每段对话一个片段。

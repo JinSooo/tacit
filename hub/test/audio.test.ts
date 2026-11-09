@@ -13,10 +13,10 @@ beforeEach(() => { ctx = setup(); audio = new AudioStore(ctx.db); handler = crea
 afterEach(() => ctx.cleanup());
 // 仅用坐标轴上的合成向量和文本字节，不读取用户音频。
 function vector(axis = 0, other = 0) { const v = Array<number>(512).fill(0); v[axis] = 1; if (other) v[1] = other; return v; }
-function body(ref: string, seconds = 40, axis = 0, device = "mac") {
-  return { device, conversation_ref: ref, t_start: "2026-11-09T01:00:00Z", t_end: "2026-11-09T01:03:00Z", speakers: [{ local: "S1", track: "mic", seconds, centroid: vector(axis) }] };
+function body(ref: string, seconds = 40, axis = 0, device = "mac", track = "mic") {
+  return { device, conversation_ref: ref, t_start: "2026-11-09T01:00:00Z", t_end: "2026-11-09T01:03:00Z", speakers: [{ local: "S1", track, seconds, centroid: vector(axis) }] };
 }
-function upload(ref: string, seconds = 40, axis = 0, device = "mac") { return audio.embeddings(body(ref,seconds,axis,device)).speakers[0]!; }
+function upload(ref: string, seconds = 40, axis = 0, device = "mac", track = "mic") { return audio.embeddings(body(ref,seconds,axis,device,track)).speakers[0]!; }
 function pending() { return new DistillStore(ctx.db).pending().filter(p => p.kind === "voice"); }
 function resolve(action: string, axis = 0, name?: string, target?: string) {
   const s = upload(`resolve-${axis}`,120,axis);
@@ -54,20 +54,34 @@ test("跨对话按余弦聚类，同人归一、异人分开、中心按秒数�
   expect(Math.hypot(...v)).toBeCloseTo(1,6);
 });
 
-test("3 段或 120 秒只提问一次，同对话重复上传与覆盖不增加次数", () => {
-  const a = upload("one",10);
-  upload("one",10); upload("one",20);
+test("系统声音 3 段或 120 秒只提问一次，同对话重复上传与覆盖不增加次数", () => {
+  const sys = (ref: string, seconds: number, axis = 0) => upload(ref,seconds,axis,"mac","sys");
+  const a = sys("one",10);
+  sys("one",10); sys("one",20);
   expect(audio.speaker(a.speaker_id)?.seconds).toBe(20);
   expect(audio.speaker(a.speaker_id)?.conversations).toBe(1);
-  upload("two",20); expect(pending()).toHaveLength(0);
-  upload("three",30); upload("four",10);
+  sys("two",20); expect(pending()).toHaveLength(0);
+  sys("three",30); sys("four",10);
   expect(pending()).toHaveLength(1);
   const requests = audio.sync("mac").sample_requests as { conversation_ref: string }[];
   expect(requests.map(r => r.conversation_ref).sort()).toEqual(["one","three","two"]);
   expect(pending()[0]!.payload).toMatchObject({ label: "说话人 A", conversations: 4, seconds: 80, samples: [], samples_pending: true });
-  upload("long",120,2);
+  sys("long",120,2);
   expect(pending()).toHaveLength(2);
   expect(audio.sync("mac").voiceprint).toBeNull();
+});
+
+test("麦克风说话人 2 段或 30 秒就提问；门槛下调后已有说话人在同步时补问", () => {
+  upload("m1",10); expect(pending()).toHaveLength(0);
+  upload("m2",10); expect(pending()).toHaveLength(1);
+  upload("long-mic",30,2); expect(pending()).toHaveLength(2);
+  // 模拟旧门槛下已累计到 2 段、但一直没被问的麦克风说话人。
+  const old = upload("old-1",10,3);
+  ctx.db.db.prepare("DELETE FROM pending WHERE payload LIKE ?").run(`%${old.speaker_id}%`);
+  ctx.db.db.prepare("UPDATE speakers SET status='new',conversations=2 WHERE id=?").run(old.speaker_id);
+  expect(pending().some(p => p.payload.speaker_id === old.speaker_id)).toBe(false);
+  audio.sync("mac");
+  expect(pending().some(p => p.payload.speaker_id === old.speaker_id)).toBe(true);
 });
 
 test("同对话多个标签归到同人只计一段，并只向相应设备请求样本", () => {

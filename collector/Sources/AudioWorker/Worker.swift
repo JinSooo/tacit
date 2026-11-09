@@ -106,26 +106,31 @@ final class Worker {
           return a == b ? $0.file < $1.file : a < b
         }
         var cache = try clustered(meta)
+        // 不开会时系统声音不转写，它的说话人也不上传，不进待确认列表。
+        let meeting = !meta.meeting_apps.isEmpty
+        let uploaded = cache.speakers.filter { meeting || $0.track == .mic }
         // 每段都不足 1.5 秒时算不出声纹：不上传，按"没有可识别说话人"走后面的判定。
-        if !cache.speakers.isEmpty {
+        if uploaded.isEmpty { cache.hub = [] } else {
           let response = try await post("/v1/audio/embeddings", ["device": device, "conversation_ref": meta.id, "t_start": meta.t_start,
-            "t_end": meta.t_end!, "speakers": cache.speakers.map { ["local": $0.local, "track": $0.track.rawValue, "seconds": $0.seconds, "centroid": $0.centroid] as [String: Any] }])
+            "t_end": meta.t_end!, "speakers": uploaded.map { ["local": $0.local, "track": $0.track.rawValue, "seconds": $0.seconds, "centroid": $0.centroid] as [String: Any] }])
           cache.hub = try JSONDecoder().decode(EmbeddingsResponse.self, from: response).speakers
         }
-        guard Set(cache.hub.map(\.local)) == Set(cache.speakers.map(\.local)), Set(cache.hub.map(\.local)).count == cache.hub.count else { throw WorkerError.response }
+        guard Set(cache.hub.map(\.local)) == Set(uploaded.map(\.local)), Set(cache.hub.map(\.local)).count == cache.hub.count else { throw WorkerError.response }
         try save(cache, meta)
         let next = WorkerLogic.decision(speakers: cache.speakers, voiceprint: sync.voiceprint?.vector, threshold: sync.voiceprint?.threshold ?? 1, meetings: meta.meeting_apps)
         if next == .skipped { _ = try await post("/v1/audio/conversations/\(meta.id)/skipped", [:]) }
         if next == .done {
           var lines: [TranscriptLine] = []
           for (i, segment) in meta.segments.enumerated() {
+            // 不开会时系统声音只用来去掉麦克风录到的回声：只转写和麦克风段重叠的部分，结果不写进记录。
+            if !meeting && segment.track == .sys && !WorkerLogic.overlapsMic(segment, meta.segments) { continue }
             let recognition = try inference().transcribe(audio(segment, meta))
             let text = recognition.text
             if !text.isEmpty { lines.append(TranscriptLine(segment: segment, local: WorkerLogic.majority(cache.windows.filter { $0.segment == i }), text: text, confidence: recognition.confidence)) }
           }
           let labels = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.is_me ? "我" : $0.label) })
           let ids = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.speaker_id) })
-          let record = WorkerLogic.record(meta: meta, device: device, lines: WorkerLogic.removeEcho(lines), labels: labels, ids: ids, retention: sync.retention_days)
+          let record = WorkerLogic.record(meta: meta, device: device, lines: WorkerLogic.removeEcho(lines).filter { meeting || $0.segment.track == .mic }, labels: labels, ids: ids, retention: sync.retention_days)
           guard (record["body"] as! String).unicodeScalars.count <= 200000 else { throw WorkerError.recordTooLarge }
           let result = try JSONDecoder().decode(IngestResponse.self, from: await post("/v1/ingest", ["device": device, "records": [record]]))
           guard result.rejected.isEmpty, result.accepted + result.duplicates == 1 else { throw WorkerError.response }

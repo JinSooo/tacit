@@ -83,6 +83,9 @@ public enum WorkerLogic {
     }
     return 1 - Double(row[b.count]) / Double(max(a.count, b.count))
   }
+  public static func overlapsMic(_ segment: AudioSegment, _ all: [AudioSegment]) -> Bool {
+    all.contains { $0.track == .mic && AudioPolicy.date($0.t_start)! < AudioPolicy.date(segment.t_end)! && AudioPolicy.date(segment.t_start)! < AudioPolicy.date($0.t_end)! }
+  }
   public static func removeEcho(_ lines: [TranscriptLine]) -> [TranscriptLine] {
     lines.filter { mic in
       guard mic.segment.track == .mic else { return true }

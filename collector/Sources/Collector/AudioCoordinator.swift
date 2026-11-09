@@ -36,6 +36,7 @@ final class AudioCoordinator {
   private var lastWorker = Date.distantPast
   private var voiceHash: String?
   private var voiceChanged = false
+  private var samplesRequested = false
   private var workerFailureAt = Date.distantPast
   private var retentionDays = 7
   private var retentionKnown = false
@@ -273,7 +274,8 @@ final class AudioCoordinator {
     guard worker == nil, now.timeIntervalSince(workerFailureAt) >= 60, FileManager.default.isExecutableFile(atPath: workerURL.path) else { return false }
     if voiceChanged { return true }
     guard now.timeIntervalSince(lastWorker) >= 600 else { return false }
-    return ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
+    // hub 要试听样本时也要跑一次，否则新声音要等下一段对话录完才有样本。
+    return samplesRequested || ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
   }
   private static let workerLaunchFailure = "转写进程启动失败"
   private var workerURL: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ra-audio-worker") }
@@ -306,6 +308,7 @@ final class AudioCoordinator {
             let hash = SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
             if hash != self.voiceHash { self.voiceChanged = true; self.voiceHash = hash }
           } else { self.voiceHash = nil }
+          self.samplesRequested = !((reply["sample_requests"] as? [Any]) ?? []).isEmpty
           // worker 持有 closed 对话期间不删除，待它退出后再执行并 ack。
           guard self.worker == nil else { return }
           let purgeText = reply["purge_before"] as? String

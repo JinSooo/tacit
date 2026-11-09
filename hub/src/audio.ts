@@ -3,7 +3,9 @@ import { HubDB, InputError } from "./db.ts";
 
 export const MATCH_THRESHOLD = 0.5;
 export const DEFAULT_ME_THRESHOLD = 0.49;
-const VECTOR_SIZE = 512, ASK_CONVERSATIONS = 3, ASK_SECONDS = 120;
+const VECTOR_SIZE = 512;
+// 麦克风那路的说话人门槛低，让"我"尽快进待确认；系统声音只在开会时上传。
+const ASK = { mic: { conversations: 2, seconds: 30 }, sys: { conversations: 3, seconds: 120 } };
 const MAX_CLIPS = 3, MAX_CLIP_BYTES = 2 * 1024 * 1024;
 
 export const audioSchema = `
@@ -96,6 +98,8 @@ export class AudioStore {
   sync(value: unknown) {
     const device = deviceName(value);
     return this.sql.transaction(() => {
+      // 门槛调整后，已达新门槛但没有新上传的说话人也要进待确认。
+      for (const s of this.sql.prepare("SELECT id FROM speakers WHERE status='new'").all() as { id: string }[]) this.ask(s.id);
       const me = this.activeSpeakers().filter(s => s.is_me);
       const purge = this.setting<string | null>("purge_before", null);
       const ack = this.setting<string | null>(`purged:${device}`, null);
@@ -105,7 +109,7 @@ export class AudioStore {
         sample_requests: this.sql.prepare("SELECT id,speaker_id,conversation_ref,local FROM sample_requests WHERE device=? AND fulfilled_at IS NULL ORDER BY created_at,id").all(device),
         delete_conversations: this.setting<string[]>(`delete:${device}`, []),
       };
-    })();
+    }).immediate();
   }
   ack(value: unknown) {
     const b = object(value), device = deviceName(b.device);
@@ -181,7 +185,10 @@ export class AudioStore {
   }
   private ask(id: string) {
     const s = this.speaker(id)!;
-    if (s.status !== "new" || s.conversations < ASK_CONVERSATIONS && s.seconds < ASK_SECONDS) return;
+    if (s.status !== "new") return;
+    const mic = Boolean(this.sql.prepare("SELECT 1 FROM voice_embeddings WHERE speaker_id=? AND track='mic' LIMIT 1").get(id));
+    const limit = ASK[mic ? "mic" : "sys"];
+    if (s.conversations < limit.conversations && s.seconds < limit.seconds) return;
     const now = new Date().toISOString();
     this.sql.prepare("INSERT INTO pending(id,kind,payload,created_at) VALUES(?,'voice',?,?)").run(ulid(),JSON.stringify({ speaker_id: id }),now);
     this.sql.prepare("UPDATE speakers SET status='asked',updated_at=? WHERE id=?").run(now,id);
