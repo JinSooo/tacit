@@ -8,6 +8,7 @@ import { resolve, extname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HubDB, InputError } from "./db.ts";
 import { historySegments } from "./history.ts";
+import { hubStatus } from "./status.ts";
 
 const defaultWebDir = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'";
@@ -73,6 +74,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
     try {
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
+      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port }));
       if (method === "GET" && url.pathname === "/v1/audit") return Response.json(new AgentReads(db).audit(url.searchParams));
       const audio = new AudioStore(db);
       if (method === "GET" && url.pathname === "/v1/audio/sync") return Response.json(audio.sync(url.searchParams.get("device")));

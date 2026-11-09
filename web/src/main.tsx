@@ -10,9 +10,13 @@ import { DistillationWorkspace, type View } from "./distillation-views.tsx";
 import { createApi } from "./api.ts";
 import { createAudioApi, speakerNames, type Speaker } from "./audio.ts";
 import { AudioSettings } from "./audio-views.tsx";
+import { StatusView } from "./status-view.tsx";
 import "./style.css";
 
 const tokenKey = "record-anything-token";
+// #status（可与 token 同写：#token=…&status）直达状态页；读取 token 时会清掉 hash，所以先记下。
+const statusHash = () => new URLSearchParams(location.hash.slice(1)).has("status");
+const initialStatus = statusHash();
 function readToken(): string {
   const hash = new URLSearchParams(location.hash.slice(1));
   const supplied = hash.get("token");
@@ -105,7 +109,18 @@ function NoteDialog({ api, onSaved, onClose }: { api: Api; onSaved: () => void; 
 }
 function App() {
   const [token, setToken] = useState(initialToken);
-  const [view, setView] = useState<View | "audit" | "settings">(() => /[?&](thread|project)=/.test(location.search) ? "audit" : "history");
+  const [view, setView] = useState<View | "audit" | "settings" | "status">(() => initialStatus ? "status" : /[?&](thread|project)=/.test(location.search) ? "audit" : "history");
+  useEffect(() => {
+    const open = () => {
+      if (!statusHash()) return;
+      const supplied = new URLSearchParams(location.hash.slice(1)).get("token");
+      if (supplied !== null) { try { sessionStorage.setItem(tokenKey, supplied); } catch { /* 浏览器可能禁用了存储。 */ } setToken(supplied); }
+      history.replaceState(null, "", location.pathname + location.search);
+      setView("status");
+    };
+    window.addEventListener("hashchange", open);
+    return () => window.removeEventListener("hashchange", open);
+  }, []);
   const [pendingCount, setPendingCount] = useState(0);
   const [q, setQ] = useState("");
   const [source, setSource] = useState("");
@@ -197,7 +212,7 @@ function App() {
   }, []);
   if (!token) return <p className="token-prompt">在终端运行 <code>bun hub/src/cli.ts open</code></p>;
   return <><a className="skip" href="#content">跳到内容</a><main>
-    <header><div className="heading-row"><h1>Record Anything</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "当前"], ["pending", "待确认"], ["audit", "读取记录"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
+    <header><div className="heading-row"><h1>Record Anything</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "当前"], ["pending", "待确认"], ["audit", "读取记录"], ["status", "状态"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => setView(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
       <input ref={search} type="search" aria-label="搜索 History" placeholder="搜索 History" value={q} onChange={event => setQ(event.target.value)} />
       <select aria-label="来源筛选" value={source} onChange={event => setSource(event.target.value)}><option value="">所有来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
       <input className="device" list="devices" aria-label="设备筛选" placeholder="所有设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
@@ -205,8 +220,9 @@ function App() {
       <button onClick={() => setNote(true)}>补写</button>
     </div>}</header>
     <div id="content" tabIndex={-1}>
-    <DistillationWorkspace view={view === "audit" || view === "settings" ? "history" : view} audio={audioApi} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />
+    <DistillationWorkspace view={view === "audit" || view === "settings" || view === "status" ? "history" : view} audio={audioApi} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />
     {view === "settings" && <AudioSettings api={audioApi} />}
+    {view === "status" && <StatusView api={api} />}
     {view === "audit" && <AuditView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); setView("history"); setRevision(value => value + 1); }} />}
     {view === "history" && !q.trim() && <DayOverview api={api} day={date || dayKey(new Date())} selected={expanded} onPick={pick} />}
     {view === "history" && anchor && <p className="anchor-note">从 {timeRange({ ...records.find(r => r.id === anchor.id) ?? { kind: "event", t_start: anchor.t_start } } as HistoryRow)} 起显示 <button className="text-button compact" onClick={() => setAnchor(null)}>回到最新</button></p>}

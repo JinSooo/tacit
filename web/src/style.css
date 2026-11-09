@@ -218,3 +218,20 @@ textarea { width: 100%; resize: vertical; line-height: 1.75; }
   .evidence-link { flex-wrap: wrap; gap: 0 12px; }
 }
 @media (max-width: 440px) { .time-fields { grid-template-columns: 1fr; gap: 0; } dialog { padding: 20px; } }
+
+/* 状态 */
+.status-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.status-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 0 0 6px; }
+.status-stats div { display: flex; flex-direction: column-reverse; gap: 2px; padding: 12px 14px; background: var(--raised); border: 1px solid var(--line); border-radius: 12px; }
+.status-stats dt { font-size: 11px; }
+.status-stats dd { margin: 0; font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-stats .mono { font-family: var(--mono); font-size: 13px; font-weight: 500; }
+.status-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 0 18px; }
+.status-columns .audit-table-wrap, .status-view > .audit-table-wrap { margin-top: 0; }
+.status-table td:first-child { min-width: 0; font-family: inherit; font-size: 12px; color: var(--ink); }
+.status-table td:nth-child(4) { min-width: 0; }
+.status-table .num { text-align: right; }
+.status-total td { font-weight: 600; background: var(--paper); }
+.source-dot { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--source-color); }
+.status-lines { grid-template-columns: 64px minmax(0, 1fr); font-size: 12.5px; margin-top: 14px; }
+.status-table th, .status-table td { white-space: nowrap; }
