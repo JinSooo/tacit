@@ -427,7 +427,7 @@ struct ArtifactChip: View {
   }
 }
 
-/// 已定 / 下一步 / 未决 / 否决 / 推测，各自一组；失效的不显示。
+/// 下一步 / 未决 / 已定 / 推测 / 否决，各自一组；失效的不显示。
 struct FactsView: View {
   let facts: [Fact]
   let loadEvidence: () async throws -> [Evidence]
@@ -441,24 +441,46 @@ struct FactsView: View {
       ForEach(SourceInfo.factLabels, id: \.kind) { g in
         let rows = live.filter { $0.kind == g.kind }
         if !rows.isEmpty {
-          VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-              Image(systemName: g.symbol).foregroundStyle(Palette.factColors[g.kind] ?? .secondary)
-              Text(g.label).font(.system(size: 12, weight: .semibold))
-              Text("\(rows.count)").font(.system(size: 11)).foregroundStyle(.tertiary)
-            }
-            VStack(alignment: .leading, spacing: 0) {
-              ForEach(Array(rows.enumerated()), id: \.element.id) { i, f in
-                FactRow(fact: f, evidence: evidence, loadEvidence: loadEvidence) { correcting = f }
-                if i < rows.count - 1 { Divider().padding(.leading, 14) }
-              }
-            }
-            .card(12)
-          }
+          FactGroup(kind: g.kind, label: g.label, symbol: g.symbol, rows: rows, evidence: evidence, loadEvidence: loadEvidence) { correcting = $0 }
         }
       }
     }
     .sheet(item: $correcting) { f in FactCorrectionSheet(fact: f) { onChanged() } }
+  }
+}
+
+/// 一组事实默认只列前 5 条（接口顺序），其余点"展开全部"再看。
+struct FactGroup: View {
+  let kind: String
+  let label: String
+  let symbol: String
+  let rows: [Fact]
+  let evidence: Loader<[Evidence]>
+  let loadEvidence: () async throws -> [Evidence]
+  let onCorrect: (Fact) -> Void
+  @State private var expanded = false
+  private let limit = 5
+
+  var body: some View {
+    let shown = expanded ? rows : Array(rows.prefix(limit))
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 6) {
+        Image(systemName: symbol).foregroundStyle(Palette.factColors[kind] ?? .secondary)
+        Text(label).font(.system(size: 12, weight: .semibold))
+        Text("\(rows.count)").font(.system(size: 11)).foregroundStyle(.tertiary)
+      }
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(Array(shown.enumerated()), id: \.element.id) { i, f in
+          FactRow(fact: f, evidence: evidence, loadEvidence: loadEvidence) { onCorrect(f) }
+          if i < shown.count - 1 { Divider().padding(.leading, 14) }
+        }
+      }
+      .card(12)
+      if rows.count > limit {
+        Button(expanded ? "收起" : "展开全部 \(rows.count) 条") { withAnimation(.smooth) { expanded.toggle() } }
+          .buttonStyle(.link).font(.caption)
+      }
+    }
   }
 }
 
@@ -667,8 +689,8 @@ struct ProjectPage: View {
         }
       }
       DetailBody(detail: d, progressLabel: "状态", progress: d.detail?.status)
-      FactsView(facts: d.facts ?? [], loadEvidence: { try await store.api.project(id, level: "evidence").records ?? [] }) { Task { await load() } }
       threadList
+      FactsView(facts: d.facts ?? [], loadEvidence: { try await store.api.project(id, level: "evidence").records ?? [] }) { Task { await load() } }
     }
   }
 
