@@ -30,24 +30,19 @@ final class AudioCoordinator {
   private var workerFailureAt = Date.distantPast
   private var retentionDays = 7
   private var retentionKnown = false
-  private var meetingHistory: [(Date, Set<String>)] = []
+  private var meetingHistory = MeetingMicrophoneHistory()
   private var failure: String?
   private var lastMaintenance = Date.distantPast
   private var lastInitialize = Date.distantPast
   private var initialized = false
   private var sessionStarted = Date.distantPast
-  private static let meetingBundles: Set<String> = [
-    "com.tencent.meeting", "com.tencent.wemeet", "com.ss.desktop.lark", "com.electron.lark",
-    "us.zoom.xos", "com.microsoft.teams", "com.microsoft.teams2", "com.apple.FaceTime", "com.tencent.xinWeChat", "com.tencent.xinwechat"
-  ]
 
   init(config: Config) { self.config = config }
   func status() -> [String] { snapshotLock.lock(); defer { snapshotLock.unlock() }; return snapshot }
-  func update(enabled: Bool, apps: Set<String>) {
+  func update(enabled: Bool) {
     queue.async { [self] in
       let now = Date()
-      meetingHistory.append((now, apps.intersection(Self.meetingBundles)))
-      meetingHistory.removeAll { now.timeIntervalSince($0.0) > 90 }
+      meetingHistory.observe(inputBundles: microphoneInputBundles(), at: now)
       if !initialized {
         guard now.timeIntervalSince(lastInitialize) >= 60 else { return }
         lastInitialize = now
@@ -160,7 +155,7 @@ final class AudioCoordinator {
     try store.writeSegment(AudioCodec.encode(samples), file: file, meta: meta)
     meta.segments.append(AudioSegment(file: file, track: track, start: start, end: end, dbfs: AudioPipeline.dbfs(samples)))
     let since = boundary.lastSpeechEnd ?? start
-    let apps = meetingHistory.filter { $0.0 >= since.addingTimeInterval(-1) && $0.0 <= end }.reduce(Set<String>()) { $0.union($1.1) }
+    let apps = meetingHistory.apps(since: since, through: end)
     meta.meeting_apps = Array(Set(meta.meeting_apps).union(apps)).sorted(); meta.updated_at = LocalTime.iso(Date())
     try store.writeMetadata(meta); current = meta
     _ = boundary.observe(start: start, end: end)

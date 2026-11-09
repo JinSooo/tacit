@@ -142,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   // MARK: 剪贴板
 
   func updateAudio() {
-    audio.update(enabled: recordingEnabled && !paused, apps: Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)))
+    audio.update(enabled: recordingEnabled && !paused)
   }
 
   func pollClipboard() {
