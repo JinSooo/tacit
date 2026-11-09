@@ -262,7 +262,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 - 密钥：钥匙串 service `record-anything`、account `audio-key`，32 字节，首次使用时生成。
 - `meta.json`：`{ id, t_start, t_end（未结束为 null）, segments: [{ file, track: "mic"|"sys", t_start, t_end, dbfs }], meeting_apps: [bundle id], status, updated_at }`。
   - `status`：`open`（还在录）→ `closed`（等转写进程）→ `waiting_me`（还没有"我"的声纹，只留本机）/ `skipped`（判定没有"我"，不留记录）/ `done`（已写 History）/ `failed`（附 `error`，下次重试，最多 3 次）。
-  - `meeting_apps`：对话期间运行过的会议软件（腾讯会议、飞书、Zoom、Teams、FaceTime、微信），用于"有会就保留"例外。日历例外这一版不做。
+  - `meeting_apps`：对话期间**正在用麦克风**的会议软件（腾讯会议、飞书、Zoom、Teams、FaceTime、微信；用 Core Audio 进程对象的 `kAudioProcessPropertyIsRunningInput` 判断，只开着不算），用于"有会就保留"例外。（2026-11-09 真机验证：微信通话、腾讯会议都能识别）日历例外这一版不做。
 - 写文件先写临时文件再改名；meta.json 只由当时持有该对话的一方写（采集端写 `open`/`closed`，之后由转写进程写）。
 - 清理：`t_end` 早于"现在 − 保留天数"的对话目录整体删除，不管状态。一键清理删掉 `t_end` 早于清理时刻的全部目录（还在录的不删）。删除用普通删除，不另外覆写。
 - 麦克风权限检查：录音开着、连续 10 分钟麦克风这路 < −70 dBFS 时，菜单显示"麦克风可能没有权限"。
