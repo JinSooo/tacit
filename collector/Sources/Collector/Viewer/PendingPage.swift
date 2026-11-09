@@ -17,10 +17,13 @@ struct PendingPage: View {
           Text("系统先自己判断、先往下处理；这里攒着需要你拍板的事，不处理也不会卡住。")
             .font(.serif(15)).foregroundStyle(.secondary)
         }
-        if items.isEmpty {
+        if items.isEmpty, let error = store.sharedError {
+          Placeholder(kind: .error(error) { Task { await store.refreshShared() } })
+            .transition(.opacity)
+        } else if items.isEmpty {
           VStack(spacing: 14) {
             Image(systemName: "checkmark.circle").font(.system(size: 44, weight: .ultraLight)).foregroundStyle(Palette.factColors["decision"]!)
-            Text(store.sharedError ?? "都处理完了").font(.serif(18)).foregroundStyle(.secondary)
+            Text("都处理完了").font(.serif(18)).foregroundStyle(.secondary)
           }
           .frame(maxWidth: .infinity).padding(.vertical, 80)
           .transition(.opacity)
@@ -32,7 +35,7 @@ struct PendingPage: View {
               Text(g.title).sectionTitle()
               Text("\(g.items.count)").font(.caption).foregroundStyle(.tertiary)
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 340, maximum: 560), spacing: 14)], alignment: .leading, spacing: 14) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 340, maximum: 560), spacing: 14, alignment: .top)], alignment: .leading, spacing: 14) {
               ForEach(g.items) { item in
                 PendingCard(item: item) { withAnimation(.smooth(duration: 0.35)) { _ = resolved.insert(item.id) }; Task { await store.refreshShared() } }
                   .transition(.asymmetric(insertion: .opacity, removal: .scale(scale: 0.92).combined(with: .opacity)))
