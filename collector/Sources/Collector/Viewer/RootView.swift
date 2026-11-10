@@ -162,7 +162,7 @@ struct CaptureFooter: View {
         .buttonStyle(.plain).foregroundStyle(Palette.accent)
         .help("继续记录").accessibilityLabel("继续记录")
     case .noPermission:
-      Button("去授权…") { store.perform(.requestAX) }.buttonStyle(.link)
+      Button("去授权…") { store.perform(.requestAX) }.buttonStyle(.accentLink)
     }
   }
 

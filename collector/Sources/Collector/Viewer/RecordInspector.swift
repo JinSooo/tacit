@@ -50,7 +50,7 @@ struct RecordInspector: View {
               Text(back.title).lineLimit(1)
             }
           }
-          .buttonStyle(.link).font(.system(size: TextSize.body))
+          .buttonStyle(.accentLink).font(.system(size: TextSize.body))
           .padding(.bottom, -8)
         }
         header(d)
@@ -60,7 +60,7 @@ struct RecordInspector: View {
             PhIcon("note-pencil", size: 14)
             Text(ViewerFormat.relative(cur.start) == "刚刚" ? "刚刚修正过" : "\(ViewerFormat.relative(cur.start))修正过")
             Spacer()
-            Button(showOriginal ? "收起原文" : "查看原文") { withAnimation(.easeOut(duration: 0.2)) { showOriginal.toggle() } }.buttonStyle(.link)
+            Button(showOriginal ? "收起原文" : "查看原文") { withAnimation(.easeOut(duration: 0.2)) { showOriginal.toggle() } }.buttonStyle(.accentLink)
           }
           .font(.system(size: TextSize.body))
           .foregroundStyle(Palette.muted)
@@ -126,7 +126,7 @@ struct RecordInspector: View {
           .padding(16)
           .card()
         if lines.count > 60 {
-          Button(showAll ? "收起" : "展开全部 \(Fmt.count(lines.count)) 行") { showAll.toggle() }.buttonStyle(.link).font(.system(size: TextSize.body))
+          Button(showAll ? "收起" : "展开全部 \(Fmt.count(lines.count)) 行") { showAll.toggle() }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
         }
       }
     }

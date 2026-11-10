@@ -208,7 +208,7 @@ struct SegmentInspector: View {
       Button { store.path.append(.thread(t.id)) } label: {
         HStack(spacing: 4) { Text("打开这件事项"); PhIcon("arrow-right", size: 12) }
       }
-        .buttonStyle(.link).font(.system(size: TextSize.body))
+        .buttonStyle(.accentLink).font(.system(size: TextSize.body))
     }
   }
 

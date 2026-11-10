@@ -113,7 +113,7 @@ struct NowPage: View {
         Button { store.historyDay = Calendar.current.startOfDay(for: Date()); store.historySearch = ""; store.section = .history } label: {
           HStack(spacing: 4) { Text("打开历史记录"); PhIcon("arrow-right", size: 12) }
         }
-        .buttonStyle(.link).font(.system(size: TextSize.body))
+        .buttonStyle(.accentLink).font(.system(size: TextSize.body))
       }
       if let (rows, diary) = today.value {
         if rows.isEmpty {
@@ -490,7 +490,7 @@ struct FactGroup: View {
       .card()
       if rows.count > limit {
         Button(expanded ? "收起" : "展开全部 \(rows.count) 条") { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } }
-          .buttonStyle(.link).font(.system(size: TextSize.caption))
+          .buttonStyle(.accentLink).font(.system(size: TextSize.caption))
       }
     }
   }
@@ -526,14 +526,14 @@ struct FactRow: View {
           HStack(spacing: 4) { PhIcon("user", size: 12); Text("你写的") }.foregroundStyle(Palette.muted)
         }
         Button("依据 \(fact.evidence.count) 条") { showEvidence = true }
-          .buttonStyle(.link)
+          .buttonStyle(.accentLink)
           .popover(isPresented: $showEvidence, arrowEdge: .bottom) { evidencePopover }
         // 两种纠错（AGENTS.md）：文案写错用"这条不对"改写；内容根本不是这件事的用"不属于这里"。悬停时出现，右键菜单也有。
         Group {
           if canCorrect { Button("这条不对", action: onCorrect) }
           if canDetach { Button(detaching ? "正在移出…" : "不属于这里") { confirmDetach = true }.disabled(detaching) }
         }
-        .buttonStyle(.link)
+        .buttonStyle(.accentLink)
         .opacity(hovering || confirmDetach || detaching ? 1 : 0)
         if let detachError { Text(detachError).foregroundStyle(Palette.attention).lineLimit(2) }
       }

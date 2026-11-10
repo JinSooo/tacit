@@ -24,7 +24,7 @@ struct PendingPage: View {
           HStack(spacing: 8) {
             PhIcon("warning", size: 14).foregroundStyle(Palette.attention)
             Text("连不上后台服务，下面是上次读到的内容。").help(error)
-            Button("重试") { Task { await store.refreshShared() } }.buttonStyle(.link)
+            Button("重试") { Task { await store.refreshShared() } }.buttonStyle(.accentLink)
           }
           .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
         } else if items.isEmpty {

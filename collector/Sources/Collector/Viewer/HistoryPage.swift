@@ -219,7 +219,7 @@ struct HistoryPage: View {
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
           Button(showDiary ? "收起日记" : "展开日记") { withAnimation(.easeOut(duration: 0.2)) { showDiary.toggle() } }
-            .buttonStyle(.link).font(.system(size: TextSize.body))
+            .buttonStyle(.accentLink).font(.system(size: TextSize.body))
         }
         .frame(maxWidth: 760, alignment: .leading)
       }
@@ -359,7 +359,7 @@ struct HistoryPage: View {
             Text(ViewerFormat.dayTitle(day)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
             Text(ViewerFormat.weekday(day)).font(.serif(TextSize.title)).foregroundStyle(Palette.muted)
             Spacer()
-            Button("打开这一天") { store.historySearch = ""; store.historyDay = day }.buttonStyle(.link).font(.system(size: TextSize.body))
+            Button("打开这一天") { store.historySearch = ""; store.historyDay = day }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
           }
           .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 8)
           searchRows(rows.sorted { $0.start > $1.start })

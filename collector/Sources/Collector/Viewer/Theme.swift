@@ -200,6 +200,20 @@ extension ButtonStyle where Self == AccentButtonStyle {
   static var accent: AccentButtonStyle { AccentButtonStyle() }
 }
 
+/// 文字链接：强调色，按下变淡。系统的 .link 固定用系统链接蓝，不跟随 .tint 和 AccentColor。
+struct AccentLinkStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var enabled
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(Palette.accent)
+      .opacity(!enabled ? 0.5 : configuration.isPressed ? 0.7 : 1)
+      .contentShape(Rectangle())
+  }
+}
+extension ButtonStyle where Self == AccentLinkStyle {
+  static var accentLink: AccentLinkStyle { AccentLinkStyle() }
+}
+
 /// 加载中 / 出错 / 空，三种状态统一的占位。
 struct Placeholder: View {
   enum Kind { case loading, error(String, () -> Void), empty(String, String) }
