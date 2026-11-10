@@ -1,4 +1,5 @@
 import type { Api } from "./distillation.ts";
+import { durationText } from "./history.ts";
 
 type Counts = Record<string, number>;
 export interface TierUsage { tier: string; models: string[]; calls: number; ok: number; failed: number; input_tokens: number | null; output_tokens: number | null; ms: number }
@@ -25,11 +26,12 @@ export interface HubStatus {
 export const STATUS_REFRESH_MS = 15_000;
 export const fetchStatus = (api: Api, signal?: AbortSignal) => api<HubStatus>("/v1/status", { signal });
 
-export const tierNames: Record<string, string> = { minute: "分钟档", hour: "小时档", day: "每日档" };
-export const frameNames: Record<string, string> = { new: "待归属", assigned: "已归属", ignored: "已忽略" };
-export const threadNames: Record<string, string> = { active: "进行中", paused: "暂停", done: "完成", archived: "归档", abandoned: "放弃" };
-export const pendingNames: Record<string, string> = { project: "新项目", merge: "合并建议", thread_done: "做完了吗", voice: "新声音" };
-export const requestNames: Record<string, string> = { queued: "排队", running: "进行中", done: "完成", failed: "失败" };
+/** 模型档位的界面名，设置页和状态页共用（docs/ui.md 用词表）。 */
+export const tierNames: Record<string, string> = { minute: "实时整理", hour: "每小时汇总", day: "每日日记" };
+export const frameNames: Record<string, string> = { new: "等待整理", assigned: "已归入事项", ignored: "已忽略" };
+export const threadNames: Record<string, string> = { active: "进行中", paused: "暂停", done: "完成", archived: "已归档", abandoned: "不做了" };
+export const pendingNames: Record<string, string> = { project: "新项目", merge: "可能是同一件事", thread_done: "做完了吗", voice: "新声音" };
+export const requestNames: Record<string, string> = { queued: "排队中", running: "进行中", done: "完成", failed: "失败" };
 export const speakerNames: Record<string, string> = { new: "新出现", asked: "待确认", confirmed: "已确认", ignored: "已忽略", merged: "已合并" };
 
 const number = new Intl.NumberFormat("zh-CN");
@@ -47,10 +49,10 @@ export function formatUptime(seconds: number): string {
   if (hours) return `${hours} 小时 ${minutes} 分`;
   return minutes ? `${minutes} 分钟` : `${seconds} 秒`;
 }
+/** 模型调用的累计耗时，写法同其他时长。 */
 export function formatMs(ms: number): string {
-  if (ms < 1000) return `${ms} ms`;
-  const seconds = ms / 1000;
-  return seconds < 60 ? `${seconds.toFixed(1)} 秒` : `${(seconds / 60).toFixed(1)} 分钟`;
+  if (ms < 1000) return ms > 0 ? "不到 1 秒" : "0 秒";
+  return ms < 60_000 ? `${Math.round(ms / 1000)} 秒` : durationText(ms / 1000);
 }
 /** 计数按给定顺序列出，已知名称在前，未知状态原样附在后面。 */
 export function countList(counts: Counts, names: Record<string, string>): { key: string; label: string; count: number }[] {

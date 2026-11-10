@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { chapterSpans, dayRange, laneOf, lanes, sourceColor, sourceNames, timeRange, type HistoryRow } from "./history.ts";
+import { chapterSpans, dayRange, durationText, laneOf, lanes, sourceNames, timeRange, type HistoryRow } from "./history.ts";
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 interface Diary { brief?: string; detail?: { summary?: string; timeline?: { start: string; end: string; text: string }[] } }
@@ -8,10 +8,6 @@ const diaryKey = "record-anything-diary-expanded";
 const pad = (n: number) => String(n).padStart(2, "0");
 const clock = (ms: number) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
-function compact(seconds: number) {
-  const m = Math.floor(seconds / 60);
-  return m < 60 ? `${m}m` : m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 60)}h`;
-}
 /** 重叠的时段只算一次。 */
 function activeSeconds(rows: HistoryRow[]) {
   const spans = rows.filter(r => r.t_end).map(r => [Date.parse(r.t_start), Date.parse(r.t_end!)] as const).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
@@ -29,7 +25,7 @@ function longDate(key: string) {
 }
 
 /**
- * History 顶部：这一天的日期、统计、日记和条带图。点条带图里的一段，列表从那条记录开始显示。
+ * 历史记录顶部：这一天的日期、统计、日记和条带图。点条带图里的一段，列表从那条记录开始显示。
  * revision 变了（删除、补写、修正之后）就重新读取，读取期间保留旧数据；换日期才清空。
  */
 export function DayOverview({ api, day, revision, selected, onPick }: { api: Api; day: string; revision: number; selected: string | null; onPick: (record: HistoryRow) => void }) {
@@ -70,16 +66,17 @@ export function DayOverview({ api, day, revision, selected, onPick }: { api: Api
   return <section className="day-overview" aria-label={`${date}概览`}>
     <div className="day-title">
       <h2>{date}<span>{weekday}</span></h2>
-      {!!rows?.length && <dl className="day-stats"><div><dt>条记录</dt><dd>{rows.length}</dd></div><div><dt>活跃</dt><dd>{compact(activeSeconds(rows))}</dd></div>{first !== null && <div><dt>开始</dt><dd>{clock(first)}</dd></div>}</dl>}
+      {/* 记录数：这一天开始的记录条数；活跃：有起止时间的记录合起来的时长，重叠只算一次；最早：第一条记录的开始时间。 */}
+      {!!rows?.length && <dl className="day-stats"><div><dt>条记录</dt><dd>{rows.length.toLocaleString("zh-CN")}</dd></div>{activeSeconds(rows) >= 1 && <div><dt>活跃时长</dt><dd>{durationText(activeSeconds(rows))}</dd></div>}{first !== null && <div><dt>最早一条</dt><dd>{clock(first)}</dd></div>}</dl>}
     </div>
     {summary && <div className="diary"><p className={expanded ? "" : "clamped"}>{summary}</p><button className="text-button compact" onClick={toggleDiary}>{expanded ? "收起日记" : "展开日记"}</button></div>}
     {error ? <p className="error" role="alert">{error} <button onClick={() => setRetry(v => v + 1)}>重试</button></p>
-      : !rows ? <div className="strata-placeholder" role="status">正在读取…</div>
+      : !rows ? <div className="strata-placeholder group" role="status">正在读取…</div>
       : rows.length > 0 && <Strata rows={rows} day={day} chapters={chapterSpans(day, diary?.detail?.timeline)} selected={selected} onPick={onPick} />}
   </section>;
 }
 
-const labelWidth = 52, axis = 18, chapterH = 22, laneH = 16, gap = 5;
+const labelWidth = 60, axis = 20, chapterH = 22, laneH = 16, gap = 5;
 function Strata({ rows, day, chapters, selected, onPick }: { rows: HistoryRow[]; day: string; chapters: { start: number; end: number; text: string }[]; selected: string | null; onPick: (record: HistoryRow) => void }) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(900);
@@ -106,12 +103,12 @@ function Strata({ rows, day, chapters, selected, onPick }: { rows: HistoryRow[];
   const step = (hi - lo) > 14 * hour ? 3 : (hi - lo) > 7 * hour ? 2 : 1;
   const ticks: number[] = [];
   for (let t = Math.ceil(lo / hour) * hour; t <= hi; t += hour) ticks.push(t);
-  const charW = 10.5;
-  return <div className="strata" ref={box} onMouseLeave={() => setHover(null)}>
+  const charW = 12.5;
+  return <div className="strata group" ref={box} onMouseLeave={() => setHover(null)}>
     <svg width={width} height={height} role="img" aria-label="这一天的活动条带图">
       {ticks.map(t => { const h = new Date(t).getHours(); const major = h % step === 0; return <g key={t}>
         <line x1={x(t)} x2={x(t)} y1={axis} y2={height} className={major ? "tick major" : "tick"} />
-        {major && <text x={x(t)} y={10} className="tick-label">{pad(h)}</text>}
+        {major && <text x={x(t)} y={12} className="tick-label">{pad(h)}</text>}
       </g>; })}
       {chapters.map((c, i) => {
         const a = x(Math.max(c.start, lo)), b = x(Math.min(c.end, hi)), w = b - a - 1;
@@ -120,11 +117,11 @@ function Strata({ rows, day, chapters, selected, onPick }: { rows: HistoryRow[];
         const label = fits >= 2 ? (c.text.length > fits ? `${c.text.slice(0, fits - 1)}…` : c.text) : "";
         return <g key={i} className="chapter" onMouseMove={() => setHover({ x: a, text: c.text, sub: `${clock(c.start)}–${clock(c.end)}` })}>
           {label ? <rect x={a + .5} y={axis + 4} width={w} height={chapterH} rx={6} className={i % 2 ? "odd" : ""} /> : <rect x={a + .5} y={axis + 4 + chapterH / 2 - 3} width={w} height={6} rx={3} className="thin" />}
-          {label && <text x={a + 6} y={axis + 4 + chapterH / 2 + 3.5}>{label}</text>}
+          {label && <text x={a + 6} y={axis + 4 + chapterH / 2 + 4}>{label}</text>}
         </g>;
       })}
       {used.map((lane, i) => <g key={lane.key}>
-        <text x={0} y={lanesTop + i * (laneH + gap) + laneH / 2 + 3.5} className="lane-label">{lane.label}</text>
+        <text x={0} y={lanesTop + i * (laneH + gap) + laneH / 2 + 4} className="lane-label">{lane.label}</text>
         <rect x={labelWidth} y={lanesTop + i * (laneH + gap)} width={plotW} height={laneH} rx={4} className="lane" />
       </g>)}
       {rows.map(r => {
@@ -133,8 +130,8 @@ function Strata({ rows, day, chapters, selected, onPick }: { rows: HistoryRow[];
         const a = x(Date.parse(r.t_start)), b = x(Date.parse(r.t_end ?? r.t_start));
         const span = r.kind === "span" && b - a >= 2;
         const props = span ? { x: a, y: y + 2, width: b - a, height: laneH - 4, rx: 3 } : { x: a - 1, y: y + 3, width: 2, height: laneH - 6, rx: 1 };
-        return <rect key={r.id} {...props} fill={sourceColor(r.source)} className={r.id === selected ? "seg selected" : "seg"}
-          onMouseMove={() => setHover({ x: a, text: r.title, sub: `${sourceNames[r.source] ?? r.source} · ${timeRange(r)}` })}
+        return <rect key={r.id} {...props} className={r.id === selected ? "seg selected" : "seg"}
+          onMouseMove={() => setHover({ x: a, text: r.title, sub: `${timeRange(r)}，${sourceNames[r.source] ?? r.source}` })}
           onClick={() => onPick(r)} />;
       })}
       {isToday && <g className="now"><line x1={x(now)} x2={x(now)} y1={axis - 2} y2={height} /><circle cx={x(now)} cy={axis - 2} r={3} /></g>}

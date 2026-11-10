@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ulid as sharedUlid, toLocalIso as sharedIso, validateRecord } from "../../packages/record/index.ts";
 import { ulid, toLocalIso } from "../src/record-helpers.ts";
-import { buildNote, buildCorrection, chapterSpans, dateTitle, dayKey, dayRange, duration, groupRecords, laneOf, latestCorrection, safeUrl, sourceColor, timeRange } from "../src/history.ts";
+import { buildNote, buildCorrection, chapterSpans, dateTitle, dayKey, dayRange, duration, groupRecords, laneOf, latestCorrection, safeUrl, speechText, timeRange } from "../src/history.ts";
 
 const note = () => buildNote({ start: "2026-11-06T14:02:00", end: "2026-11-06T14:27:00", title: "合成工作片段", body: "第一行\n第二行" });
 test("浏览器辅助函数与共享包格式一致，包括时区和 ULID 时间前缀", () => {
@@ -34,14 +34,17 @@ test("日期标题处理今天、跨月昨天、星期和跨年", () => {
 test("事件、时段、跨天与秒/分钟/小时时长", () => {
   const record = note();
   expect(timeRange(record)).toBe("14:02–14:27");
-  expect(duration(record)).toBe("25分钟");
+  expect(duration(record)).toBe("25 分钟");
   expect(timeRange({ ...record, kind: "event" })).toBe("14:02");
   expect(timeRange({ ...record, t_end: "2026-11-06T14:02:40" })).toBe("14:02");
   expect(duration({ ...record, kind: "event" })).toBe("");
-  expect(duration({ ...record, t_end: "2026-11-06T14:02:28" })).toBe("28秒");
+  expect(duration({ ...record, t_end: "2026-11-06T14:02:28" })).toBe("不到 1 分钟");
   // 同一秒内开始和结束的片段不显示时长。
   expect(duration({ ...record, t_end: record.t_start })).toBe("");
-  expect(duration({ ...record, t_end: "2026-11-06T15:03" })).toBe("1小时1分钟");
+  expect(duration({ ...record, t_end: "2026-11-06T15:03" })).toBe("1 小时 1 分");
+  expect(duration({ ...record, t_end: "2026-11-06T16:02" })).toBe("2 小时");
+  expect(speechText(12.4)).toBe("12 秒");
+  expect(speechText(1082)).toBe("18 分钟");
   expect(timeRange({ ...record, t_end: "2026-11-07T00:03" })).toBe("14:02–11月7日 00:03");
 });
 test("补写事件和时段、修正均通过共享校验，不携带 hub 或来源字段", () => {
@@ -70,12 +73,10 @@ test("最新修正按时间及 ID 选择，外部 URL 仅允许 HTTP(S)", () => 
   expect(safeUrl("https://example.invalid/path")).toBe("https://example.invalid/path");
 });
 
-test("条带图：泳道归类、来源颜色、整天范围和日记章节", () => {
+test("条带图：泳道归类、整天范围和日记章节", () => {
   expect(laneOf("codex.session")).toBe("agent");
   expect(laneOf("mac.git")).toBe("terminal");
   expect(laneOf("mac.clipboard")).toBe("other");
-  expect(sourceColor("mac.screen")).toBe("var(--src-screen)");
-  expect(sourceColor("plugin.unknown")).toBe("var(--src-other)");
   const day = dayRange("2026-11-09");
   expect(day.end - day.start).toBe(86400000);
   expect(Date.parse(day.from)).toBe(day.start);

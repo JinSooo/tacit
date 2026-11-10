@@ -33,13 +33,22 @@ export function timeRange(record: HistoryRow): string {
   const end = dayKey(record.t_start) === dayKey(record.t_end) ? clock(record.t_end) : `${new Date(record.t_end).getMonth() + 1}月${new Date(record.t_end).getDate()}日 ${clock(record.t_end)}`;
   return `${clock(record.t_start)}–${end}`;
 }
+/** 时长按 docs/ui.md 写：不足 1 分钟写"不到 1 分钟"，不足 1 小时写"x 分钟"，否则"x 小时 y 分"。0 秒返回空串。 */
+export function durationText(seconds: number): string {
+  if (!(seconds >= 1)) return "";
+  if (seconds < 60) return "不到 1 分钟";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟`;
+  return `${Math.floor(minutes / 60)} 小时${minutes % 60 ? ` ${minutes % 60} 分` : ""}`;
+}
+/** 说话时长要精确到秒：不足 1 分钟写"x 秒"，其余同 durationText。 */
+export function speechText(seconds: number): string {
+  const s = Math.round(seconds);
+  return s < 60 ? `${s} 秒` : durationText(s);
+}
 export function duration(record: HistoryRow): string {
   if (record.kind !== "span" || !record.t_end) return "";
-  const seconds = Math.max(0, Math.floor((Date.parse(record.t_end) - Date.parse(record.t_start)) / 1000));
-  if (seconds < 1) return "";
-  if (seconds < 60) return `${seconds}秒`;
-  const minutes = Math.floor(seconds / 60);
-  return minutes < 60 ? `${minutes}分钟` : `${Math.floor(minutes / 60)}小时${minutes % 60 ? `${minutes % 60}分钟` : ""}`;
+  return durationText(Math.max(0, Math.floor((Date.parse(record.t_end) - Date.parse(record.t_start)) / 1000)));
 }
 export interface NoteInput { start: string; end?: string; title: string; body: string }
 export function buildNote(input: NoteInput): RecordV1 {
@@ -67,18 +76,13 @@ export const sourceNames: Record<string, string> = {
   "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
   "manual.note": "补写", "manual.correction": "修正",
 };
-/** 每个来源一种固定颜色，与 Mac 客户端一致；颜色在 style.css 里按深浅色模式定义。 */
-const sourceKeys: Record<string, string> = {
-  "mac.screen": "screen", "mac.app": "screen", "mac.browser": "browser", "claude_code.session": "claude", "codex.session": "codex",
-  "mac.shell": "shell", "mac.git": "git", "mac.clipboard": "clipboard", "mac.file": "file", "mac.calendar": "calendar",
-  "mac.audio": "audio", "manual.note": "manual", "manual.correction": "manual",
+/** 记录详情里的"采集方式"，对应 schema 的 capture.method。 */
+export const captureNames: Record<string, string> = {
+  ax: "读取窗口文字", ocr: "截图识字", asr: "语音转写", db: "读取应用数据", file: "读取文件", hook: "终端记录", api: "应用接口", manual: "手动填写",
 };
-export function sourceColor(source: string): string {
-  return `var(--src-${sourceKeys[source] ?? "other"})`;
-}
 /** 条带图的泳道：同类来源放在一条里。 */
 export const lanes = [
-  { key: "screen", label: "屏幕" }, { key: "browser", label: "浏览" }, { key: "agent", label: "Agent" },
+  { key: "screen", label: "屏幕" }, { key: "browser", label: "浏览" }, { key: "agent", label: "AI 工具" },
   { key: "terminal", label: "终端" }, { key: "voice", label: "对话" }, { key: "other", label: "其他" },
 ] as const;
 export type LaneKey = typeof lanes[number]["key"];

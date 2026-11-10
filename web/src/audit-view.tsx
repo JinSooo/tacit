@@ -1,9 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
-import { auditAction, auditPath, auditResults, auditSummary, auditTargets, auditVisible, type AuditPage, type AuditRead, type AuditTarget, type AuditTargetCache } from "./audit.ts";
+import { auditAction, auditPath, auditResults, auditSummary, auditTargets, auditVisible, toolNames, type AuditPage, type AuditRead, type AuditTarget, type AuditTargetCache } from "./audit.ts";
 import type { Api, DistillationApi } from "./distillation.ts";
 import { ProjectContent, ThreadContent } from "./distillation-views.tsx";
 const message = (error: unknown) => error instanceof Error ? error.message : "请求失败，请重试";
 type Selection = { id: string; kind: "thread" | "project"; rowId?: string };
+const pad = (n: number) => String(n).padStart(2, "0");
+/** 今天只写时刻，今年写月日，更早的带年份；完整时间放在悬停提示里。 */
+function auditTime(at: string, now = new Date()) {
+  const d = new Date(at), clock = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (d.toDateString() === now.toDateString()) return `今天 ${clock}`;
+  return `${d.getFullYear() !== now.getFullYear() ? `${d.getFullYear()}年` : ""}${d.getMonth() + 1}月${d.getDate()}日 ${clock}`;
+}
 export function AuditView({ api, distillation, onHistory }: { api: Api; distillation: DistillationApi; onHistory: (title: string) => void }) {
   const [tool, setTool] = useState("");
   const [reads, setReads] = useState<AuditRead[]>([]);
@@ -14,7 +21,7 @@ export function AuditView({ api, distillation, onHistory }: { api: Api; distilla
   const [selection, setSelection] = useState<Selection>();
   const [target, setTarget] = useState<AuditTarget>();
   const [detailError, setDetailError] = useState("");
-  // 结果多的行默认只列前 3 个，点"另 N 项"展开。
+  // 结果多的行默认只列前 3 个，点"还有 N 项"展开。
   const [more, setMore] = useState(new Set<string>());
   const toggleMore = (id: string) => setMore(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const controller = useRef<AbortController>(null);
@@ -63,21 +70,21 @@ export function AuditView({ api, distillation, onHistory }: { api: Api; distilla
     setSelection(selection?.id === id && selection.kind === kind && expandedRow === rowId ? undefined : { id, kind, rowId });
   }
   const detail = selection && <div id={detailId}>
-    <article className="entity expanded"><div className="entity-row"><h2>{target?.title}</h2><button onClick={() => setSelection(undefined)}>收起</button></div>
-      {detailError ? <p className="error" role="alert">{detailError}</p> : !target ? <p role="status">正在读取…</p> : target.kind === "thread" ? <ThreadContent thread={target.item} api={distillation} onHistory={onHistory} /> : target.kind === "project" ? <ProjectContent project={target.item} api={distillation} onHistory={onHistory} /> : null}
+    <article className={expandedRow ? "entity audit-detail" : "entity audit-detail group"}><div className="entity-row"><h2>{target?.title}</h2><button onClick={() => setSelection(undefined)}>收起</button></div>
+      {detailError ? <p className="error" role="alert">{detailError}</p> : !target ? <p className="muted" role="status">正在读取…</p> : target.kind === "thread" ? <ThreadContent thread={target.item} api={distillation} onHistory={onHistory} /> : target.kind === "project" ? <ProjectContent project={target.item} api={distillation} onHistory={onHistory} /> : null}
     </article>
   </div>;
   return <section className="distillation-view" aria-label="读取记录">
-    <div className="toolbar"><select aria-label="工具筛选" value={tool} onChange={event => setTool(event.target.value)}><option value="">所有工具</option>{[...new Set(["claude-code", "codex", ...reads.map(row => row.tool)])].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
+    <div className="status-head"><h2 className="section-title">AI 工具读取了什么</h2><select aria-label="AI 工具" value={tool} onChange={event => setTool(event.target.value)}><option value="">所有 AI 工具</option>{[...new Set(["claude-code", "codex", ...reads.map(row => row.tool)])].map(value => <option key={value} value={value}>{toolNames[value] ?? value}</option>)}</select></div>
     {selection && !expandedRow && detail}
-    <div className="audit-table-wrap" role="region" aria-label="读取审计列表" tabIndex={0}><table className="audit-table"><thead><tr>{["时间", "工具", "操作", "内容", "大小", "结果"].map(title => <th key={title} scope="col">{title}</th>)}</tr></thead><tbody>{reads.map(row => {
+    {reads.length > 0 && <div className="group table-wrap"><table className="data-table audit-table stack-table"><thead><tr>{["时间", "AI 工具", "做了什么", "内容"].map(title => <th key={title} scope="col">{title}</th>)}</tr></thead><tbody>{reads.map(row => {
       const results = auditResults(row.result_ids, targets);
       const open = more.has(row.id);
       const visible = auditVisible(results.items, results.unresolved, open);
       const summary = auditSummary(row.args, targets);
-      return <React.Fragment key={row.id}><tr><td><time dateTime={row.at}>{new Date(row.at).toLocaleString("zh-CN", { hour12: false })}</time></td><td>{row.tool}</td><td>{auditAction(row.kind, row.args)}</td><td>{summary && <div>{summary}</div>}<div className="audit-ids">{visible.shown.map(({ id, target }) => target.kind === "record" ? <button className="text-button compact" key={id} onClick={() => onHistory(target.title)}>{target.title}</button> : <a key={id} href={`?${target.kind}=${encodeURIComponent(id)}`} title={id} aria-expanded={selection?.id === id && selection.kind === target.kind && expandedRow === row.id} aria-controls={`audit-row-${row.id}`} onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); toggle(id, target.kind, row.id); }}>{target.title}{target.kind === "project" && !target.item.confirmed && <span className="muted unconfirmed">未确认</span>}</a>)}{visible.unresolved > 0 && <span className="muted">{visible.unresolved} 项已删除或无法识别</span>}{visible.hidden > 0 ? <button className="text-button compact" onClick={() => toggleMore(row.id)}>另 {visible.hidden} 项</button> : open && <button className="text-button compact" onClick={() => toggleMore(row.id)}>收起</button>}</div></td><td>{row.bytes.toLocaleString()} B</td><td className={row.ok ? "" : "error"}>{row.ok ? "成功" : "失败"}</td></tr>{selection && expandedRow === row.id && <tr><td colSpan={6}>{detail}</td></tr>}</React.Fragment>;
-    })}</tbody></table></div>
-    {!reads.length && !busy && !error && <p className="empty">还没有 Agent 读取过<span className="empty-note">Claude Code、Codex 每次读取你的上下文、往 History 写入内容，都会留在这里。</span></p>}
+      return <React.Fragment key={row.id}><tr><td><time dateTime={row.at} title={new Date(row.at).toLocaleString("zh-CN", { hour12: false })}>{auditTime(row.at)}</time></td><td className="end">{toolNames[row.tool] ?? row.tool}</td><td className="full">{auditAction(row.kind, row.args)}{!row.ok && <span className="error">，失败</span>}</td><td className="full">{summary && <div className="audit-summary">{summary}</div>}<div className="audit-ids">{visible.shown.map(({ id, target }) => target.kind === "record" ? <button className="text-button compact" key={id} onClick={() => onHistory(target.title)}>{target.title}</button> : <a key={id} href={`?${target.kind}=${encodeURIComponent(id)}`} aria-expanded={selection?.id === id && selection.kind === target.kind && expandedRow === row.id} aria-controls={`audit-row-${row.id}`} onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); toggle(id, target.kind, row.id); }}>{target.title}{target.kind === "project" && !target.item.confirmed && <span className="unconfirmed">未确认</span>}</a>)}{visible.unresolved > 0 && <span className="muted">{visible.unresolved} 项已删除或认不出</span>}{visible.hidden > 0 ? <button className="text-button compact" onClick={() => toggleMore(row.id)}>还有 {visible.hidden} 项</button> : open && <button className="text-button compact" onClick={() => toggleMore(row.id)}>收起</button>}</div></td></tr>{selection && expandedRow === row.id && <tr><td colSpan={4} className="full audit-detail-cell">{detail}</td></tr>}</React.Fragment>;
+    })}</tbody></table></div>}
+    {!reads.length && !busy && !error && <p className="empty"><strong>AI 工具还没有读取过</strong>Claude Code、Codex 每次读取你的记录、往历史记录里添加内容，都会记在这里。</p>}
     <div className="list-status">{busy ? <span role="status">正在读取…</span> : error ? <><span className="error" role="alert">{error}</span><button onClick={() => void load(cursor, controller.current!.signal)}>重试</button></> : cursor && <button onClick={() => void load(cursor, controller.current!.signal)}>加载更多</button>}</div>
   </section>;
 }

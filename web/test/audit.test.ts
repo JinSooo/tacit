@@ -10,14 +10,15 @@ test("审计筛选和不透明游标正确编码；摘要写成人话，只显�
   expect(auditSummary({ id: "synthetic", level: "detail" })).toBe("");
   const targets = new Map<string, AuditTarget | null>([["synthetic", { kind: "record", title: "合成标题" }]]);
   expect(auditSummary({ id: "synthetic", level: "detail" }, targets)).toBe("合成标题");
-  expect(auditSummary({ q_length: 12 })).toBe("查询 12 字");
-  expect(auditSummary({ from: "2026-01-01T08:30:00+08:00" })).toBe("2026-01-01 08:30 至 不限");
-  expect(auditSummary({ result: "unchanged", redactions: 2 })).toBe("写入：已存在，未重复写入 · 拦下 2 处密钥");
+  expect(auditSummary({ q_length: 12 })).toBe("搜索词 12 个字");
+  expect(auditSummary({ from: "2026-01-01T08:30:00+08:00" })).toBe("2026-01-01 08:30 以后");
+  expect(auditSummary({ from: "2026-01-01T08:30:00+08:00", to: "2026-01-02T09:00:00+08:00" })).toBe("2026-01-01 08:30 至 2026-01-02 09:00");
+  expect(auditSummary({ result: "unchanged", redactions: 2 })).toBe("已经有了，没有重复添加，拦下 2 处密钥");
   expect(auditSummary({})).toBe("");
-  expect(auditAction("get", { level: "evidence" })).toBe("读取证据");
-  expect(auditAction("context", { event: "compact" })).toBe("压缩后重新注入");
-  expect(auditAction("context", {})).toBe("会话开始时注入");
-  expect(auditAction("search", {})).toBe("搜索 History");
+  expect(auditAction("get", { level: "evidence" })).toBe("读取依据");
+  expect(auditAction("context", { event: "compact" })).toBe("压缩上下文后重新带入");
+  expect(auditAction("context", {})).toBe("新会话开始时带入");
+  expect(auditAction("search", {})).toBe("搜索历史记录");
   expect(auditAction("custom", {})).toBe("custom");
 });
 test("结果默认只列前 3 个，其余和认不出的折成另 N 项；展开后全部列出", () => {
