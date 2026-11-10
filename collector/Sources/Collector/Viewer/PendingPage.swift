@@ -58,7 +58,7 @@ struct PendingPage: View {
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Button { Task { loading = true; await store.refreshShared(); resolved = []; loading = false } } label: { Image(systemName: "arrow.clockwise") }
-          .disabled(loading).help("刷新")
+          .disabled(loading).help("刷新").accessibilityLabel("刷新")
       }
     }
     .task { await store.refreshShared() }

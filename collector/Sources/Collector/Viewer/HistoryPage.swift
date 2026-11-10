@@ -393,18 +393,20 @@ struct HistoryPage: View {
     ToolbarItemGroup(placement: .navigation) {
       if !isSearch {
         ControlGroup {
-          Button { shift(-1) } label: { Image(systemName: "chevron.left") }.help("前一天").keyboardShortcut("[", modifiers: .command)
+          Button { shift(-1) } label: { Image(systemName: "chevron.left") }.help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
           Button("今天") { store.historyDay = Calendar.current.startOfDay(for: Date()) }
             .disabled(Calendar.current.isDateInToday(day)).keyboardShortcut("t", modifiers: .command)
-          Button { shift(1) } label: { Image(systemName: "chevron.right") }.help("后一天").keyboardShortcut("]", modifiers: .command)
+          Button { shift(1) } label: { Image(systemName: "chevron.right") }.help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command)
             .disabled(Calendar.current.isDateInToday(day))
         }
         Button { picking = true } label: { Image(systemName: "calendar") }
-          .help("跳到日期")
+          .help("跳到日期").accessibilityLabel("跳到日期")
           .popover(isPresented: $picking, arrowEdge: .bottom) {
             DatePicker("", selection: Binding(get: { day }, set: { store.historyDay = Calendar.current.startOfDay(for: $0); picking = false }),
                        in: ...Date(), displayedComponents: .date)
               .datePickerStyle(.graphical).labelsHidden().padding(12)
+              // 应用没声明中文本地化（会让中文标点变宽），日历的月份、星期在这里单独指定中文。
+              .environment(\.locale, Locale(identifier: "zh_CN")).environment(\.calendar, ViewerCalendar.chinese)
           }
       }
     }
@@ -426,11 +428,12 @@ struct HistoryPage: View {
           }
         } label: {
           Image(systemName: lane == nil && device == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+            .accessibilityLabel("筛选")
         }
-        .help("筛选")
+        .help("筛选").accessibilityLabel("筛选")
       }
       Button { note = true } label: { Image(systemName: "square.and.pencil") }
-        .help("补写 History").keyboardShortcut("n", modifiers: .command)
+        .help("补写 History").accessibilityLabel("补写 History").keyboardShortcut("n", modifiers: .command)
     }
   }
 
@@ -552,5 +555,16 @@ struct RecordRow: View {
     if let url = record.contextText("url").flatMap(URL.init(string:)), ["http", "https"].contains(url.scheme ?? ""), let host = url.host() { return host }
     if let repo = record.contextText("repo") ?? record.contextText("cwd") { return (repo as NSString).abbreviatingWithTildeInPath }
     return nil
+  }
+}
+
+/// 中文的月份和星期名，但一周从哪天开始仍按用户的系统设置（zh_CN 默认周日）。
+enum ViewerCalendar {
+  static var chinese: Calendar {
+    var c = Calendar.current
+    let first = c.firstWeekday
+    c.locale = Locale(identifier: "zh_CN")
+    c.firstWeekday = first
+    return c
   }
 }

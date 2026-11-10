@@ -160,7 +160,7 @@ struct CaptureFooter: View {
       }
       .buttonStyle(.plain)
       .foregroundStyle(store.section == .settings ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-      .help("设置")
+      .help("设置").accessibilityLabel("设置")
     }
     .padding(.horizontal, 12).padding(.vertical, 9)
     .glassPanel(14)

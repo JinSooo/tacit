@@ -144,11 +144,11 @@ struct DayStrata: View {
       HStack(spacing: 2) {
         if canZoomToBrush, let b = brush {
           Button { withAnimation(.smooth(duration: 0.3)) { zoom.show(b) } } label: { Image(systemName: "plus.magnifyingglass") }
-            .help("放大到选区")
+            .help("放大到选区").accessibilityLabel("放大到选区")
         }
         if zoom.window != nil {
           Button { withAnimation(.smooth(duration: 0.3)) { zoom.window = nil } } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-            .help("看整天")
+            .help("看整天").accessibilityLabel("看整天")
         }
       }
       .buttonStyle(.plain)

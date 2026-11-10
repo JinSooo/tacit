@@ -35,7 +35,7 @@ struct NowPage: View {
     .navigationTitle("此刻")
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
-        Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }.help("刷新").keyboardShortcut("r", modifiers: .command)
+        Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }.help("刷新").accessibilityLabel("刷新").keyboardShortcut("r", modifiers: .command)
       }
     }
     .task(id: store.revision) { await load() }
@@ -753,7 +753,7 @@ struct BackButton: ToolbarContent {
     ToolbarItem(placement: .navigation) {
       if !store.path.isEmpty {
         Button { store.path.removeLast() } label: { Image(systemName: "chevron.left") }
-          .help("返回").keyboardShortcut("[", modifiers: .command)
+          .help("返回").accessibilityLabel("返回").keyboardShortcut("[", modifiers: .command)
       }
     }
   }
