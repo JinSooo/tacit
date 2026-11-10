@@ -33,7 +33,7 @@ export class DistillRules {
     // 同一项目里可能同时在做几件事：只有恰好一条活跃线程、且它在这个片段前 2 小时内还在动，才按规则直接归；其余交给模型判断。
     const active = this.store.hub.db.prepare("SELECT id,last_ms FROM threads WHERE project_id=? AND status='active'").all(project.id) as { id: string; last_ms: number | null }[];
     const thread = active.length === 1 && frame.t_start_ms - (active[0]!.last_ms ?? 0) <= 2 * 3_600_000 ? active[0] : undefined;
-    if (!thread) return { status: "unassigned" };
+    if (!thread || this.store.rejectedThreads(frame.id).includes(thread.id)) return { status: "unassigned" };
     this.store.assign(frame.id,thread.id,"rule",1);
     return { status: "assigned",thread_id: thread.id,project_id: project.id };
   }

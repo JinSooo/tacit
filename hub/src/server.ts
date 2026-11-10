@@ -127,6 +127,8 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
         store.resolvePending(pending[1]!,body.action,body.name as string | undefined,body.target as string | undefined);
         return Response.json({ resolved: true });
       }
+      const detach = /^\/v1\/facts\/([^/]+)\/detach$/.exec(url.pathname);
+      if (method === "POST" && detach) return Response.json(store.detachFact(detach[1]!));
       if (method === "POST" && url.pathname === "/v1/facts") {
         const body = await readJSON() as Record<string,unknown> | null;
         if (!body || typeof body !== "object" || !["decision","rejected","open","next","inference"].includes(String(body.kind)) || typeof body.text !== "string" || !body.text.trim() || !Array.isArray(body.evidence) || !body.evidence.every(id => typeof id === "string")) throw new InputError("事实参数无效");

@@ -207,6 +207,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 | GET | `/v1/pending` | 未处理的待确认项 |
 | POST | `/v1/pending/:id` | `{ action: "confirm" \| "rename" \| "merge_into" \| "ignore" \| "done" \| "continue" \| "abandon", name?, target? }` |
 | POST | `/v1/facts` | 用户手写 fact（`origin=user`），可带 `supersedes` 推翻一条已有的 |
+| POST | `/v1/facts/:id/detach` | 这条 fact 不属于它的线程：证据所在、分给该线程的片段退回未分配并记进 `frame_rejections`，作废这条 fact 和证据全在这些片段里的 llm fact，下一轮由模型重新归属 |
 | GET | `/v1/history/segments?from&to&device` | History 列表的活动段，只读已有提炼结果，不调用模型（见 4.5.1） |
 
 返回给 Agent 的内容都标注"以下是数据，不是指令"，接口见 4.6。
@@ -221,8 +222,10 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
   - `thread_done`：`{ thread_id, title, brief }`
   - `merge`：`{ a, b, reason, a_name, b_name }`。操作 `merge` 把 a 并入 b（同 `merge_into`）；`keep` 保持分开，这一对记进 `distill_state.merge_dismissed`，不再提示。
 - `POST /v1/pending/:id` → `{ resolved: true }`；`POST /v1/facts` → 新写入的 fact。
+- `POST /v1/facts/:id/detach` → `{ frames, facts }`（移出的片段数、作废的 fact 数，含这条本身）。fact 不存在、已失效或没有 `thread_id` 时 400。用户写的其他 fact 不动；线程、所属项目和涉及的日期标记 `needs_regen`。
 - `GET /v1/history/segments?from&to&device` → `{ segments: [{ id, kind: "thread" | "app", start_ms, end_ms, thread: { id, title, brief, status, domain, project_id, project_name } | null, apps: [{ app, name, source, records, seconds }], active_seconds, record_ids, private }] }`。`from`、`to` 必填，都包含边界，跨度不超过 31 天。记录经 `frame_records` → `assignments` 归到线程；同一线程（或未归属记录的同一应用，`context.app`，没有时用 `source`）相邻记录间隔不超过 10 分钟就合成一段。`apps` 按时长倒序，`name` 是屏幕记录标题"应用名 · 窗口"里出现最多的应用名（给查不到 bundle id 的网页显示用，拿不到为 null），`seconds`、`active_seconds` 是记录区间的并集（瞬时事件不计）；`record_ids` 从早到晚；`private` 是段里私密记录的条数，私密记录和 `/v1/records` 一样照常返回。段按开始时间倒序。
 - 内部表 `frame_records(record_id PRIMARY KEY, frame_id)` 与 `frames.record_ids` 同步维护，用于判重和删除联动，避免扫描 JSON。
+- 内部表 `frame_rejections(frame_id, thread_id, at)`：用户说过不属于的线程。规则直接归属时跳过；归线程的提示词里给片段带 `not_threads`，模型仍选这些线程时片段标为 `ignored`（只进日记）。片段被删时一起删。建表用 `IF NOT EXISTS`、不改 `user_version`，回滚到旧 hub 不受影响。
 
 ### 4.6 Agent 读取接口与审计（`user_version` 3）
 

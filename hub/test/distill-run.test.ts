@@ -307,3 +307,26 @@ test("移走最后一条生活线程后清空旧项目摘要，防止旧生活�
   expect(store.project("p")!.brief).toBeNull(); expect(store.project("p")!.detail).toBeNull();
   expect(await contextText()).not.toContain("合成生活旧");
 });
+
+// 回归：用户把事实标为"不属于这条线程"后，片段要由模型重新归属，不能再被分回原线程（2026-11-10 用户报告；
+// 真机上只在提示里写"不能选"时，模型仍被片段里的字样带回原线程）。
+test("拒绝过的线程：单独成批且不出现在候选里，片段带被拒标题；模型硬填它的 id 时不归回去", async () => {
+  store.upsertThread({ id: "wrong", status: "active", title: "合成原线程", last_ms: base, needs_regen: 0 });
+  store.upsertThread({ id: "other", status: "active", title: "合成另一线程", last_ms: base, needs_regen: 0 });
+  const a = session(0, 20, "合成片段一"), b = session(40, 20, "合成片段二"), c = session(80, 20, "合成片段三");
+  ctx.db.ingest([a, b, c]);
+  for (const [id, r, start] of [["fa", a, 0], ["fb", b, 40], ["fc", c, 80]] as const) {
+    store.createFrame({ id, key: `repo:${repo}`, record_ids: [r.id], t_start_ms: base + start * MIN, t_end_ms: base + (start + 20) * MIN, chars: 10, private: 0, status: "new" });
+  }
+  ctx.db.db.prepare("INSERT INTO frame_rejections(frame_id,thread_id,at) VALUES('fa','wrong',?),('fb','wrong',?)").run(iso(base), iso(base));
+  const fake = fakeLLM({ assign: frames => frames.map(f => ({ frame_id: f.id, thread_id: f.id === "fa" ? "wrong" : f.id === "fb" ? "other" : "wrong", new_thread_title: null, ignore: false, confidence: 0.9 })) });
+  await assignStep({ db: ctx.db, llm: fake.llm }, store, base + 120 * MIN);
+  const prompts = fake.calls.filter(c => c.kind === "assign").map(c => c.req.prompt);
+  expect(prompts).toHaveLength(2);
+  const rejectedBatch = prompts.find(p => framesIn(p).some(f => f.id === "fa"))!;
+  expect(framesIn(rejectedBatch).map(f => [f.id, (f as { not_threads?: string[] }).not_threads])).toEqual([["fa", ["合成原线程"]], ["fb", ["合成原线程"]]]);
+  expect(rejectedBatch.split("<data>")[0]).not.toContain('"wrong"');
+  expect(prompts.find(p => framesIn(p).some(f => f.id === "fc"))!.split("<data>")[0]).toContain('"wrong"');
+  expect(ctx.db.db.prepare("SELECT frame_id,thread_id FROM assignments ORDER BY frame_id").all()).toEqual([{ frame_id: "fb", thread_id: "other" }, { frame_id: "fc", thread_id: "wrong" }]);
+  expect(ctx.db.db.prepare("SELECT status FROM frames WHERE id='fa'").get()).toEqual({ status: "ignored" });
+});

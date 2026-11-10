@@ -2,6 +2,10 @@ export const frameRecordsSchema = `
 CREATE TABLE IF NOT EXISTS frame_records(record_id TEXT PRIMARY KEY, frame_id TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS frame_records_frame ON frame_records(frame_id);
 `;
+/** 用户说过"不属于这条线程"的片段。整理时不再把片段归回这些线程。不改 user_version：旧版 hub 忽略这张表，回滚不受影响。 */
+export const frameRejectionsSchema = `
+CREATE TABLE IF NOT EXISTS frame_rejections(frame_id TEXT NOT NULL, thread_id TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(frame_id, thread_id));
+`;
 export const distillSchema = `
 CREATE TABLE frames(id TEXT PRIMARY KEY,t_start_ms INTEGER,t_end_ms INTEGER,key TEXT NOT NULL,record_ids TEXT NOT NULL,chars INTEGER,private INTEGER,status TEXT NOT NULL);
 CREATE TABLE assignments(frame_id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,method TEXT NOT NULL,confidence REAL);

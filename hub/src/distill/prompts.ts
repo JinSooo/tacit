@@ -19,6 +19,8 @@ export interface FrameView {
   key: string;            // repo:/path | host:x | chat:app:name | app:bundle
   private: boolean;
   records: { id: string; source: string; title: string; excerpt: string }[];
+  /** 用户说过这个片段不属于的线程标题。 */
+  not_threads?: string[];
 }
 
 export interface ThreadView { id: string; title: string; brief: string; project: string | null; status: string; last: string }
@@ -35,8 +37,8 @@ export function excerpt(text: string, maxChars: number): string {
 
 function frameBlock(frames: FrameView[]): string {
   const view = frames.map(f => f.private
-    ? { id: f.id, time: `${f.start}–${f.end}`, key: f.key, private: true, note: "私密内容，正文未提供" }
-    : { id: f.id, time: `${f.start}–${f.end}`, key: f.key, records: f.records });
+    ? { id: f.id, time: `${f.start}–${f.end}`, key: f.key, private: true, note: "私密内容，正文未提供", ...(f.not_threads?.length ? { not_threads: f.not_threads } : {}) }
+    : { id: f.id, time: `${f.start}–${f.end}`, key: f.key, records: f.records, ...(f.not_threads?.length ? { not_threads: f.not_threads } : {}) });
   return `<data>\n${json(view)}\n</data>`;
 }
 
@@ -49,7 +51,8 @@ export const ASSIGN_SYSTEM = `${DATA_RULES}
 - 同一个仓库、同一个话题的片段优先归到同一条已有线程。
 - 刷视频、随手查资料、系统设置这类零碎活动 ignore=true，它们只进日记。
 - 新线程标题 8–20 字，说清在做什么，不要写应用名。
-- 已有线程里 status 为 candidate 的是还没正式建立的候选线程（之前出现过、但还不够多），同一件事同样归进去，填它的 id。`;
+- 已有线程里 status 为 candidate 的是还没正式建立的候选线程（之前出现过、但还不够多），同一件事同样归进去，填它的 id。
+- 片段带 not_threads 时，用户已经确认它不属于这些线程（列的是标题），不要提议和它们同名或说同一件事的新线程。`;
 
 export function assignPrompt(frames: FrameView[], threads: ThreadView[]): string {
   return `已有线程：\n${json(threads)}\n\n待归属的片段：\n${frameBlock(frames)}`;

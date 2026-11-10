@@ -169,6 +169,9 @@ final class HubAPI: @unchecked Sendable {
     try await send("POST", "/v1/pending/\(id)", body)
   }
 
+  /// 这条事实不属于它的线程：证据所在片段退回未分配，下一轮由模型重新归属（见 contracts.md）。
+  func detachFact(_ id: String) async throws { try await send("POST", "/v1/facts/\(id)/detach") }
+
   func correct(_ fact: Fact, text: String) async throws {
     var body: [String: Any] = ["kind": fact.kind, "text": text, "evidence": fact.evidence, "supersedes": fact.id]
     if let t = fact.threadId { body["thread_id"] = t }

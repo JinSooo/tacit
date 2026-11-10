@@ -131,9 +131,21 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
   let assigned = 0, created = 0, ignored = 0, calls = 0, failed = 0;
   let candidates = (store.getState<Candidate[]>("candidates") ?? []).filter(c => now - c.last_ms < LIMITS.candidateTTL);
   const pending = loadFrames(store, "WHERE status='new' ORDER BY t_start_ms,id");
-  const views = pending.map(f => ({ f, v: frameView(store, f, { maxRecords: LIMITS.assignRecords, excerpt: () => LIMITS.assignExcerpt }) }));
-  for (const batch of batches(views, x => JSON.stringify(x.v).length, LIMITS.assignChars, LIMITS.assignBatch)) {
-    const threads = store.hub.db.prepare("SELECT * FROM threads WHERE status IN ('active','paused') ORDER BY last_ms DESC LIMIT ?").all(LIMITS.assignThreads) as (Thread & { project_id: string | null })[];
+  // 用户说过"不属于"某些线程的片段按拒绝的线程分组单独成批：候选里直接去掉这些线程（只在提示里写不能选，
+  // 模型仍会被片段里的字样带回原线程，2026-11-10 实测），片段带上被拒线程的标题，避免另起同名线程。
+  const groups = new Map<string, { rejected: string[]; views: { f: Frame; v: P.FrameView }[] }>();
+  for (const f of pending) {
+    const v = frameView(store, f, { maxRecords: LIMITS.assignRecords, excerpt: () => LIMITS.assignExcerpt });
+    const rejected = store.rejectedThreads(f.id).sort();
+    const titles = rejected.map(id => store.thread(id)?.title).filter((t): t is string => !!t);
+    const key = rejected.join(",");
+    if (!groups.has(key)) groups.set(key, { rejected, views: [] });
+    groups.get(key)!.views.push({ f, v: titles.length ? { ...v, not_threads: titles } : v });
+  }
+  outer: for (const group of groups.values()) for (const batch of batches(group.views, x => JSON.stringify(x.v).length, LIMITS.assignChars, LIMITS.assignBatch)) {
+    const excluded = new Set(group.rejected);
+    const threads = (store.hub.db.prepare("SELECT * FROM threads WHERE status IN ('active','paused') ORDER BY last_ms DESC LIMIT ?").all(LIMITS.assignThreads + excluded.size) as (Thread & { project_id: string | null })[])
+      .filter(t => !excluded.has(t.id)).slice(0, LIMITS.assignThreads);
     const names = new Map(store.projects().map(p => [p.id, p.name]));
     const choices: P.ThreadView[] = [
       ...threads.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: t.project_id ? names.get(t.project_id) ?? null : null, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" })),
@@ -141,7 +153,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
     ];
     calls++;
     const r = await d.llm.complete<P.AssignOutput>({ tier: "minute", system: P.ASSIGN_SYSTEM, prompt: P.assignPrompt(batch.map(x => x.v), choices), schema: P.ASSIGN_SCHEMA });
-    if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length })); break; }
+    if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length })); break outer; }
     const byFrame = new Map(r.data.items.map(i => [i.frame_id, i]));
     const real = new Set(threads.map(t => t.id));
     // 同一批里多个片段提议同一个新标题，或者提议的标题就是已有线程：归到同一条，不重复建。
@@ -152,6 +164,11 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
         if (!item) continue; // 模型漏掉的片段保持 new，下一轮再给
         const ignore = () => { store.hub.db.prepare("UPDATE frames SET status='ignored' WHERE id=?").run(f.id); ignored++; };
         if (item.ignore) { ignore(); continue; }
+        // 被拒线程不在候选里；模型仍填了它的 id 或提议同名新线程时，不归回去，只进日记。
+        const rejectedTitles = new Set(group.rejected.map(id => store.thread(id)?.title));
+        if (item.thread_id && excluded.has(item.thread_id) || rejectedTitles.has(item.new_thread_title?.trim())) {
+          log(JSON.stringify({ step: "assign", rejected_choice: true, frame: f.id })); ignore(); continue;
+        }
         if (item.thread_id && real.has(item.thread_id)) {
           store.assign(f.id, item.thread_id, "llm", item.confidence); touchThread(store, item.thread_id, f); assigned++; continue;
         }

@@ -1,7 +1,7 @@
 import { AudioStore } from "../audio.ts";
-import { frameRecordsSchema } from "./schema.ts";
+import { frameRecordsSchema, frameRejectionsSchema } from "./schema.ts";
 import { HubDB, InputError } from "../db.ts";
-import { ulid } from "../../../packages/record/index.ts";
+import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 
 export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" }
 export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[] }
@@ -28,6 +28,7 @@ export class DistillStore {
     this.sql.transaction(() => {
       const exists = this.sql.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='frame_records'").get();
       this.sql.exec(frameRecordsSchema);
+      this.sql.exec(frameRejectionsSchema);
       if (!exists) {
         const insert = this.sql.prepare("INSERT INTO frame_records(record_id,frame_id) VALUES(?,?)");
         for (const frame of this.frames()) for (const id of frame.record_ids) insert.run(id,frame.id);
@@ -74,6 +75,43 @@ export class DistillStore {
       if (fact.thread_id && !this.thread(fact.thread_id) || fact.project_id && !this.project(fact.project_id)) throw new InputError("事实归属不存在");
       this.sql.prepare(`INSERT INTO facts(id,thread_id,project_id,kind,text,reason,evidence,confidence,origin,valid_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(fact.id,fact.thread_id ?? null,fact.project_id ?? null,fact.kind,fact.text,fact.reason ?? null,JSON.stringify(fact.evidence),fact.confidence ?? null,fact.origin,fact.valid_at,fact.created_at);
       if (supersedes) this.invalidateFact(supersedes, fact.id, fact.origin, fact.valid_at);
+    })();
+  }
+  /** 用户说过不属于的线程，整理时不能再把这个片段归进去。 */
+  rejectedThreads(frameId: string): string[] {
+    return (this.sql.prepare("SELECT thread_id FROM frame_rejections WHERE frame_id=?").all(frameId) as Row[]).map(r => r.thread_id);
+  }
+  /**
+   * 用户说这条事实不属于它所在的线程（而不是文案写错）：证据所在、分给这条线程的片段退回未分配，
+   * 记下不能再分回来，下一轮由模型重新归属；作废这条事实，以及证据全落在这些片段上的自动推断。
+   * 用户自己写的其他事实不动。线程、所属项目和涉及的日期标记重新整理。
+   */
+  detachFact(id: string, at = new Date().toISOString()): { frames: number; facts: number } {
+    return this.sql.transaction(() => {
+      const fact = this.sql.prepare("SELECT * FROM facts WHERE id=? AND invalid_at IS NULL").get(id) as Row | undefined;
+      if (!fact) throw new InputError("事实不存在或已失效");
+      const threadId = fact.thread_id as string | null;
+      if (!threadId) throw new InputError("这条事实没有挂在线程上");
+      const evidence = JSON.parse(fact.evidence) as string[];
+      const frames = this.sql.prepare(`SELECT DISTINCT f.* FROM frame_records r JOIN frames f ON f.id=r.frame_id JOIN assignments a ON a.frame_id=f.id
+        WHERE a.thread_id=? AND r.record_id IN (${evidence.map(() => "?").join(",")})`).all(threadId, ...evidence).map(r => decode<Frame>(r as Row));
+      const moved = new Set(frames.flatMap(f => f.record_ids));
+      for (const f of frames) {
+        this.sql.prepare("DELETE FROM assignments WHERE frame_id=?").run(f.id);
+        this.sql.prepare("UPDATE frames SET status='new' WHERE id=?").run(f.id);
+        this.sql.prepare("INSERT OR IGNORE INTO frame_rejections(frame_id,thread_id,at) VALUES(?,?,?)").run(f.id, threadId, at);
+        this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=?").run(toLocalIso(f.t_start_ms).slice(0,10));
+      }
+      const invalidate = this.sql.prepare("UPDATE facts SET invalid_at=? WHERE id=? AND invalid_at IS NULL");
+      invalidate.run(at, id);
+      let count = 1;
+      for (const other of this.facts("thread_id", threadId)) {
+        if (other.origin === "llm" && other.evidence.length && other.evidence.every(e => moved.has(e))) { invalidate.run(at, other.id); count++; }
+      }
+      this.sql.prepare("UPDATE threads SET needs_regen=1 WHERE id=?").run(threadId);
+      this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=(SELECT project_id FROM threads WHERE id=?)").run(threadId);
+      if (fact.project_id) this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(fact.project_id);
+      return { frames: frames.length, facts: count };
     })();
   }
   invalidateFact(id: string, replacement: string, origin: "llm" | "user", at = new Date().toISOString()) {
@@ -218,6 +256,7 @@ export class DistillStore {
       const ids = (JSON.parse(row.record_ids) as string[]).filter(r => r !== id);
       if (!ids.length) {
         this.sql.prepare("DELETE FROM assignments WHERE frame_id=?").run(row.id);
+        this.sql.prepare("DELETE FROM frame_rejections WHERE frame_id=?").run(row.id);
         this.sql.prepare("DELETE FROM frames WHERE id=?").run(row.id);
       } else {
         const records = ids.map(r => this.hub.get(r)!);

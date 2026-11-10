@@ -429,7 +429,7 @@ struct FactsView: View {
       ForEach(SourceInfo.factLabels, id: \.kind) { g in
         let rows = live.filter { $0.kind == g.kind }
         if !rows.isEmpty {
-          FactGroup(kind: g.kind, label: g.label, symbol: g.symbol, rows: rows, evidence: evidence, loadEvidence: loadEvidence) { correcting = $0 }
+          FactGroup(kind: g.kind, label: g.label, symbol: g.symbol, rows: rows, evidence: evidence, loadEvidence: loadEvidence, onChanged: onChanged) { correcting = $0 }
         }
       }
     }
@@ -445,6 +445,7 @@ struct FactGroup: View {
   let rows: [Fact]
   let evidence: Loader<[Evidence]>
   let loadEvidence: () async throws -> [Evidence]
+  let onChanged: () -> Void
   let onCorrect: (Fact) -> Void
   @State private var expanded = false
   private let limit = 5
@@ -460,7 +461,7 @@ struct FactGroup: View {
       }
       VStack(alignment: .leading, spacing: 0) {
         ForEach(Array(shown.enumerated()), id: \.element.id) { i, f in
-          FactRow(fact: f, evidence: evidence, loadEvidence: loadEvidence) { onCorrect(f) }
+          FactRow(fact: f, evidence: evidence, loadEvidence: loadEvidence, onCorrect: { onCorrect(f) }, onChanged: onChanged)
           if i < shown.count - 1 { Divider().padding(.leading, 14) }
         }
       }
@@ -478,9 +479,17 @@ struct FactRow: View {
   let evidence: Loader<[Evidence]>
   let loadEvidence: () async throws -> [Evidence]
   let onCorrect: () -> Void
+  let onChanged: () -> Void
   @Environment(ViewerStore.self) private var store
   @State private var hovering = false
   @State private var showEvidence = false
+  @State private var confirmDetach = false
+  @State private var detaching = false
+  @State private var detachError: String?
+
+  /// 文案写错用"这条不对"改文案；内容根本不是这件事的，用"不属于这里"让证据重新归属。
+  var canCorrect: Bool { fact.kind == "decision" || fact.kind == "inference" }
+  var canDetach: Bool { fact.threadId != nil }
 
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
@@ -496,17 +505,40 @@ struct FactRow: View {
           Button("证据 \(fact.evidence.count)") { showEvidence = true }
             .buttonStyle(.link).font(.system(size: 11))
             .popover(isPresented: $showEvidence, arrowEdge: .bottom) { evidencePopover }
-          if fact.kind == "decision" || fact.kind == "inference" {
-            Button("这条不对", action: onCorrect).buttonStyle(.link).font(.system(size: 11))
-              .opacity(hovering ? 1 : 0)
+          Group {
+            if canCorrect { Button("这条不对", action: onCorrect) }
+            if canDetach { Button(detaching ? "移出中…" : "不属于这里") { confirmDetach = true }.disabled(detaching) }
           }
+          .buttonStyle(.link).font(.system(size: 11))
+          .opacity(hovering || confirmDetach || detaching ? 1 : 0)
+          if let detachError { Text(detachError).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2) }
         }
         .padding(.top, 2)
       }
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 14).padding(.vertical, 12)
+    .contentShape(Rectangle())
     .onHover { hovering = $0 }
+    .contextMenu {
+      if canCorrect { Button("这条不对，改写内容…", action: onCorrect) }
+      if canDetach { Button("不属于这条线程…") { confirmDetach = true } }
+    }
+    .confirmationDialog("这条内容不属于这条线程？", isPresented: $confirmDetach) {
+      Button("移出并重新整理") { detach() }
+      Button("取消", role: .cancel) {}
+    } message: {
+      Text("它和 \(fact.evidence.count) 条证据所在的活动会从这条线程移走，不再分回来；下一轮整理时自动归到合适的线程或项目，这条线程也会重新整理。")
+    }
+  }
+
+  func detach() {
+    detaching = true; detachError = nil
+    Task {
+      defer { detaching = false }
+      do { try await store.api.detachFact(fact.id); store.revision += 1; onChanged() }
+      catch { detachError = error.localizedDescription }
+    }
   }
 
   var evidencePopover: some View {
