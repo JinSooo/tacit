@@ -19,6 +19,9 @@ export const LIMITS = {
   assignBatch: 20, assignChars: 24_000, assignExcerpt: 240, assignRecords: 10, assignThreads: 40,
   digestChars: 45_000, sessionExcerpt: 3_000, otherExcerpt: 800, digestRecords: 40, threadsPerRound: 12,
   candidateTTL: DAY, newSession: 30 * MIN, pauseAfter: 2 * HOUR,
+  // 最近确认完成的线程也给模型选：结束后又聊到它的零星跟进归回去，不再只进日记（2026-11-10 实测：九院线程已完成，后续对话无处可归）。
+  // 自动归档（archived）的不放：用户没确认，按规则不再参与。
+  assignDoneThreads: 10, assignDoneWindow: 14 * DAY,
   // 门槛（AGENTS.md）：累计 15 分钟或跨两段活动才建线程，不够的只进日记。
   threadMinutes: 15, threadFrames: 2,
 };
@@ -144,8 +147,11 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
   }
   outer: for (const group of groups.values()) for (const batch of batches(group.views, x => JSON.stringify(x.v).length, LIMITS.assignChars, LIMITS.assignBatch)) {
     const excluded = new Set(group.rejected);
-    const threads = (store.hub.db.prepare("SELECT * FROM threads WHERE status IN ('active','paused') ORDER BY last_ms DESC LIMIT ?").all(LIMITS.assignThreads + excluded.size) as (Thread & { project_id: string | null })[])
+    const open = (store.hub.db.prepare("SELECT * FROM threads WHERE status IN ('active','paused') ORDER BY last_ms DESC LIMIT ?").all(LIMITS.assignThreads + excluded.size) as (Thread & { project_id: string | null })[])
       .filter(t => !excluded.has(t.id)).slice(0, LIMITS.assignThreads);
+    const ended = (store.hub.db.prepare("SELECT * FROM threads WHERE status='done' AND last_ms>? ORDER BY last_ms DESC LIMIT ?").all(now - LIMITS.assignDoneWindow, LIMITS.assignDoneThreads + excluded.size) as (Thread & { project_id: string | null })[])
+      .filter(t => !excluded.has(t.id)).slice(0, LIMITS.assignDoneThreads);
+    const threads = [...open, ...ended];
     const names = new Map(store.projects().map(p => [p.id, p.name]));
     const choices: P.ThreadView[] = [
       ...threads.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: t.project_id ? names.get(t.project_id) ?? null : null, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" })),

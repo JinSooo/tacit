@@ -52,6 +52,7 @@ export const ASSIGN_SYSTEM = `${DATA_RULES}
 - 刷视频、随手查资料、系统设置这类零碎活动 ignore=true，它们只进日记。
 - 新线程标题 8–20 字，说清在做什么，不要写应用名。
 - 已有线程里 status 为 candidate 的是还没正式建立的候选线程（之前出现过、但还不够多），同一件事同样归进去，填它的 id。
+- status 为 done 的线程已经结束：只有明显是同一件事的后续（例如结束后又聊到它）才归进去，新的工作另起线程。
 - 片段带 not_threads 时，用户已经确认它不属于这些线程（列的是标题），不要提议和它们同名或说同一件事的新线程。`;
 
 export function assignPrompt(frames: FrameView[], threads: ThreadView[]): string {

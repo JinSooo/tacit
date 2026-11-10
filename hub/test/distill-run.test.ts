@@ -330,3 +330,21 @@ test("拒绝过的线程：单独成批且不出现在候选里，片段带被�
   expect(ctx.db.db.prepare("SELECT frame_id,thread_id FROM assignments ORDER BY frame_id").all()).toEqual([{ frame_id: "fb", thread_id: "other" }, { frame_id: "fc", thread_id: "wrong" }]);
   expect(ctx.db.db.prepare("SELECT status FROM frames WHERE id='fa'").get()).toEqual({ status: "ignored" });
 });
+
+// 回归：九院线程已完成，结束后的跟进对话不在候选里，只能进日记（2026-11-10 实测）。
+test("最近结束的线程进候选，归进去不改变状态；太久以前结束的不进", async () => {
+  const now = base + 120 * MIN;
+  store.upsertThread({ id: "recent-done", status: "done", title: "合成已完成线程", last_ms: now - 3 * 24 * 60 * MIN, needs_regen: 0 });
+  store.upsertThread({ id: "old-done", status: "done", title: "合成很早完成的线程", last_ms: now - 30 * 24 * 60 * MIN, needs_regen: 0 });
+  const a = session(0, 20, "合成跟进");
+  ctx.db.ingest([a]);
+  store.createFrame({ id: "follow", key: `repo:${repo}`, record_ids: [a.id], t_start_ms: base, t_end_ms: base + 20 * MIN, chars: 10, private: 0, status: "new" });
+  const fake = fakeLLM({ assign: frames => frames.map(f => ({ frame_id: f.id, thread_id: "recent-done", new_thread_title: null, ignore: false, confidence: 0.9 })) });
+  await assignStep({ db: ctx.db, llm: fake.llm }, store, now);
+  const choices = fake.calls.find(c => c.kind === "assign")!.req.prompt.split("<data>")[0]!;
+  expect(choices).toContain('"recent-done"');
+  expect(choices).not.toContain('"old-done"');
+  expect(ctx.db.db.prepare("SELECT thread_id FROM assignments WHERE frame_id='follow'").get()).toEqual({ thread_id: "recent-done" });
+  expect(store.thread("recent-done")?.status).toBe("done");
+  expect(store.thread("recent-done")?.needs_regen).toBe(1);
+});
