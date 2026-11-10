@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import CollectorCore
 
-/// 设计语言：系统材质做骨架，衬线体讲"发生了什么"，等宽数字标时间；每个来源一种固定颜色。
+/// 设计语言见 docs/ui.md：一个强调色（铜绿），暖灰，状态正常不上色，出问题才用胭脂。
 enum Palette {
   static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
     Color(nsColor: NSColor(name: nil) { a in
@@ -11,44 +11,43 @@ enum Palette {
     })
   }
 
-  static func source(_ s: String) -> Color {
-    switch s {
-    case "mac.screen", "mac.app": return dynamic(0x5B63E8, 0x8E95FF)
-    case "mac.browser": return dynamic(0x0C93A0, 0x3FCAD6)
-    case "claude_code.session": return dynamic(0xD06A48, 0xEE9170)
-    case "codex.session": return dynamic(0x8250E8, 0xAE8CFF)
-    case "mac.shell": return dynamic(0x2B9460, 0x52CC8C)
-    case "mac.git": return dynamic(0xDE6A0A, 0xFF9E45)
-    case "mac.clipboard": return dynamic(0xBF8F00, 0xE9C64A)
-    case "mac.file": return dynamic(0x3478C0, 0x70ADEB)
-    case "mac.calendar": return dynamic(0xD83C62, 0xFF7593)
-    case "mac.wechat": return dynamic(0x1E9E4F, 0x4CD282)
-    case "mac.audio": return dynamic(0xCC3F9E, 0xF074C9)
-    case "manual.note", "manual.correction": return dynamic(0xA87420, 0xDDAA4E)
-    default: return dynamic(0x7A7F8C, 0x9DA3B0)
-    }
-  }
-
-  /// 项目没有固定颜色时按名字取一个，同名永远同色。
-  static func tag(_ key: String) -> Color {
-    let hues: [(UInt32, UInt32)] = [(0x5B63E8, 0x8E95FF), (0x0C93A0, 0x3FCAD6), (0xD06A48, 0xEE9170), (0x8250E8, 0xAE8CFF),
-                                     (0x2B9460, 0x52CC8C), (0xDE6A0A, 0xFF9E45), (0xD83C62, 0xFF7593), (0x3478C0, 0x70ADEB)]
-    let h = key.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }
-    let pick = hues[Int(h % UInt32(hues.count))]
-    return dynamic(pick.0, pick.1)
-  }
-
+  static let accent = dynamic(0x3B7468, 0x7DB8A9)
+  static let onAccent = dynamic(0xFFFFFF, 0x181716)
+  /// 错误、缺权限、录音中：只染文字和小图标，不铺大面积底色。
+  static let attention = dynamic(0x9D2933, 0xE58A8F)
   static let ink = dynamic(0x1C1B1A, 0xF2EFEA)
-  static let paper = dynamic(0xFBFAF7, 0x161618)
-  static let paperRaised = dynamic(0xFFFFFF, 0x1F1F22)
-  static let hairline = dynamic(0xE7E3DC, 0x2E2E33)
-  static let recording = dynamic(0xE5484D, 0xFF6369)
-  static let accent = dynamic(0x5B63E8, 0x8E95FF)
+  /// 次要文字，对比度 ≥ 4.5。
+  static let muted = dynamic(0x6E6860, 0xA8A197)
+  /// 只用于图形和分隔，不用于文字。
+  static let faint = dynamic(0xA39D94, 0x5E5953)
+  static let paper = dynamic(0xFBFAF7, 0x181716)
+  static let paperRaised = dynamic(0xFFFFFF, 0x211F1D)
+  static let hairline = dynamic(0xE7E3DC, 0x2F2C29)
+  /// 时间轴轨道、输入框、悬停。
+  static let fill = dynamic(0xF1EEE8, 0x262422)
+  static let recording = attention
 
-  static let factColors: [String: Color] = [
-    "decision": dynamic(0x2B9460, 0x52CC8C), "rejected": dynamic(0xC93C3C, 0xFF6B6B), "open": dynamic(0xDE8A0A, 0xFFB24A),
-    "next": dynamic(0x3478C0, 0x70ADEB), "inference": dynamic(0x8250E8, 0xAE8CFF),
-  ]
+  /// 来源不再各配一种颜色：时间轴每行写了来源名，列表有应用图标。
+  static func source(_ s: String) -> Color { muted }
+  static func tag(_ key: String) -> Color { muted }
+  /// 事实类型靠分组标题和图标区分，不靠颜色。
+  static let factColors: [String: Color] = ["decision": muted, "rejected": muted, "open": muted, "next": muted, "inference": muted]
+}
+
+/// 字号只有这 5 级，一页最多用 4 级（docs/ui.md 第 3 节）。
+enum TextSize {
+  static let caption: CGFloat = 11
+  static let body: CGFloat = 13
+  static let title: CGFloat = 17
+  static let heading: CGFloat = 22
+  static let display: CGFloat = 26
+}
+
+/// 圆角三级，嵌套时内层 = 外层 − 间距。
+enum Radius {
+  static let control: CGFloat = 6
+  static let group: CGFloat = 10
+  static let floating: CGFloat = 14
 }
 
 enum SourceInfo {
@@ -163,12 +162,12 @@ extension View {
   }
 
   /// 内容区卡片：纸面底色 + 发丝线，悬停时轻微抬起。
-  func card(_ radius: CGFloat = 14, hover: Bool = false) -> some View {
+  func card(_ radius: CGFloat = Radius.group, hover: Bool = false) -> some View {
     modifier(CardModifier(radius: radius, hover: hover))
   }
 
   func sectionTitle() -> some View {
-    font(.system(size: 11, weight: .semibold)).tracking(0.8).textCase(.uppercase).foregroundStyle(.secondary)
+    font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(Palette.muted)
   }
 }
 
@@ -176,13 +175,12 @@ struct CardModifier: ViewModifier {
   let radius: CGFloat
   let hover: Bool
   @State private var hovering = false
+  /// 页面是平的：分组只有底色和发丝线，悬停只换底色，不抬起、不放大。
   func body(content: Content) -> some View {
     content
-      .background(Palette.paperRaised, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .background(hover && hovering ? Palette.fill : Palette.paperRaised, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
       .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
-      .shadow(color: .black.opacity(hover && hovering ? 0.10 : 0.03), radius: hover && hovering ? 14 : 3, y: hover && hovering ? 6 : 1)
-      .scaleEffect(hover && hovering ? 1.006 : 1)
-      .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hovering)
+      .animation(.easeOut(duration: 0.15), value: hovering)
       .onHover { if hover { hovering = $0 } }
   }
 }
@@ -192,13 +190,13 @@ struct ProjectTag: View {
   let name: String
   var unconfirmed = false
   var body: some View {
-    HStack(spacing: 5) {
-      Circle().fill(Palette.tag(name)).frame(width: 6, height: 6)
+    HStack(spacing: 4) {
+      PhIcon("folder", size: TextSize.caption)
       Text(name).lineLimit(1)
-      if unconfirmed { Text("未确认").foregroundStyle(.tertiary) }
+      if unconfirmed { Text("（未确认）") }
     }
-    .font(.system(size: 11, weight: .medium))
-    .foregroundStyle(.secondary)
+    .font(.system(size: TextSize.caption, weight: .medium))
+    .foregroundStyle(Palette.muted)
   }
 }
 
@@ -212,12 +210,12 @@ struct Placeholder: View {
       case .loading:
         ProgressView().controlSize(.small)
       case .error(let message, let retry):
-        PhIcon("warning", size: 25).foregroundStyle(.orange)
-        Text(message).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled)
+        PhIcon("warning", size: 24).foregroundStyle(Palette.attention)
+        Text(message).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).multilineTextAlignment(.center).textSelection(.enabled)
         Button("重试", action: retry).controlSize(.small)
       case .empty(let symbol, let text):
-        PhIcon(symbol, size: 38).foregroundStyle(.tertiary)
-        Text(text).font(.serif(15)).foregroundStyle(.secondary)
+        PhIcon(symbol, size: 32).foregroundStyle(Palette.faint)
+        Text(text).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)

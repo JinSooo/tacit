@@ -20,6 +20,10 @@ struct MenuBarPanel: View {
   @State private var recent = Loader<[HistoryRecord]>()
 
   var body: some View {
+    panel.tint(Palette.accent)
+  }
+
+  var panel: some View {
     VStack(alignment: .leading, spacing: 0) {
       status.padding(.horizontal, 16).padding(.vertical, 14)
       Divider()

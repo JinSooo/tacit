@@ -23,6 +23,7 @@ struct RootView: View {
       }
     }
     .background(BehindWindowMaterial().ignoresSafeArea())
+    .tint(Palette.accent)
     .task {
       while !Task.isCancelled {
         store.refreshCapture()

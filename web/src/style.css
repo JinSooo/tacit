@@ -1,11 +1,10 @@
-/* 与 Mac 客户端同一套设计：纸色底、墨色字、发丝线；叙述用宋体，时间用等宽数字；每个来源一种固定颜色。 */
+/* 设计规范见 docs/ui.md：一个强调色（铜绿），暖灰，出问题才用胭脂；字号只有 5 级，一页最多 4 级。 */
 :root {
   color-scheme: light dark;
-  --paper: #fbfaf7; --raised: #ffffff; --ink: #1c1b1a; --muted: #6f6b64; --faint: #a39e95; --line: #e7e3dc; --hover: rgb(28 27 26 / .045);
-  --accent: #5b63e8; --on-accent: #ffffff; --accent-soft: rgb(91 99 232 / .12); --danger: #c93c3c; --recording: #e5484d;
-  --src-screen: #5b63e8; --src-browser: #0c93a0; --src-claude: #d06a48; --src-codex: #8250e8; --src-shell: #2b9460; --src-git: #de6a0a;
-  --src-clipboard: #bf8f00; --src-file: #3478c0; --src-calendar: #d83c62; --src-audio: #cc3f9e; --src-manual: #a87420; --src-other: #7a7f8c;
-  --fact-decision: #2b9460; --fact-rejected: #c93c3c; --fact-open: #de8a0a; --fact-next: #3478c0; --fact-inference: #8250e8;
+  --paper: #fbfaf7; --raised: #ffffff; --ink: #1c1b1a; --muted: #6e6860; --faint: #a39d94; --line: #e7e3dc; --fill: #f1eee8; --hover: rgb(28 27 26 / .045);
+  --accent: #3b7468; --on-accent: #ffffff; --accent-soft: rgb(59 116 104 / .12); --attention: #9d2933; --danger: var(--attention); --recording: var(--attention);
+  --text-caption: 12px; --text-body: 14px; --text-title: 18px; --text-heading: 24px; --text-display: 28px;
+  --radius-control: 6px; --radius-group: 10px; --radius-floating: 14px;
   --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", sans-serif;
   --serif: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -13,11 +12,8 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #161618; --raised: #1f1f22; --ink: #f2efea; --muted: #a09c95; --faint: #6d6a65; --line: #2e2e33; --hover: rgb(242 239 234 / .05);
-    --accent: #8e95ff; --on-accent: #14152b; --accent-soft: rgb(142 149 255 / .14); --danger: #ff6b6b; --recording: #ff6369;
-    --src-screen: #8e95ff; --src-browser: #3fcad6; --src-claude: #ee9170; --src-codex: #ae8cff; --src-shell: #52cc8c; --src-git: #ff9e45;
-    --src-clipboard: #e9c64a; --src-file: #70adeb; --src-calendar: #ff7593; --src-audio: #f074c9; --src-manual: #ddaa4e; --src-other: #9da3b0;
-    --fact-decision: #52cc8c; --fact-rejected: #ff6b6b; --fact-open: #ffb24a; --fact-next: #70adeb; --fact-inference: #ae8cff;
+    --paper: #181716; --raised: #211f1d; --ink: #f2efea; --muted: #a8a197; --faint: #5e5953; --line: #2f2c29; --fill: #262422; --hover: rgb(242 239 234 / .05);
+    --accent: #7db8a9; --on-accent: #181716; --accent-soft: rgb(125 184 169 / .14); --attention: #e58a8f;
   }
 }
 * { box-sizing: border-box; }
