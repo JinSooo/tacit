@@ -300,3 +300,42 @@ public enum Waveform {
     return top > 0 ? out.map { $0 / top } : out
   }
 }
+
+/// “其实是…”菜单的内容。发言人是一段一段攒出来的：每次“填名字…”都会新建一条，所以同一个人会有好几条记录；
+/// 还没确认的里绝大多数只出现过一两次、总共两三秒，是识别误差，不该挤进菜单。
+public enum SpeakerMenu {
+  public struct Entry: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let conversations: Int
+    public let seconds: Double
+  }
+
+  /// 已确认的人：同名只留一条（取出现次数最多、时长最长的那条作为合并目标）。
+  public static func known(_ speakers: [Speaker], excluding id: String?) -> [Entry] {
+    var best: [String: Entry] = [:]
+    for s in speakers where s.confirmed.value && s.id != id {
+      let name = s.display.trimmingCharacters(in: .whitespaces)
+      let e = Entry(id: s.id, name: name, conversations: s.conversations, seconds: s.seconds)
+      if let old = best[name], (old.conversations, old.seconds) >= (e.conversations, e.seconds) { continue }
+      best[name] = e
+    }
+    return best.values.sorted { ($0.conversations, $0.seconds) > ($1.conversations, $1.seconds) }
+  }
+
+  /// 还没确认的声音：只列出现过 2 段对话或累计 30 秒以上的，按活跃程度排，最多 limit 条。
+  public static func unknown(_ speakers: [Speaker], excluding id: String?, limit: Int = 12) -> [Entry] {
+    speakers.filter { !$0.confirmed.value && $0.id != id && ($0.conversations >= 2 || $0.seconds >= 30) }
+      .sorted { ($0.conversations, $0.seconds) > ($1.conversations, $1.seconds) }
+      .prefix(limit)
+      .map { Entry(id: $0.id, name: $0.display, conversations: $0.conversations, seconds: $0.seconds) }
+  }
+
+  /// “填名字…”时如果这个名字已经有人用了，就直接并到他身上，不再新建一条同名的。
+  public static func match(_ name: String, in speakers: [Speaker]) -> Speaker? {
+    let key = name.trimmingCharacters(in: .whitespaces)
+    guard !key.isEmpty else { return nil }
+    return speakers.filter { $0.confirmed.value && $0.display.trimmingCharacters(in: .whitespaces) == key }
+      .max { ($0.conversations, $0.seconds) < ($1.conversations, $1.seconds) }
+  }
+}

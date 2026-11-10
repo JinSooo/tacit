@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createApi } from "../src/api.ts";
-import { createAudioApi, retentionDays, samplePlayback, speakerNames, type Speaker } from "../src/audio.ts";
+import { createAudioApi, knownSpeakers, retentionDays, samplePlayback, sameNamedSpeaker, speakerNames, unknownSpeakers, type Speaker } from "../src/audio.ts";
 import { AudioSettings, VoiceSamples } from "../src/audio-views.tsx";
 import { VoicePendingRow } from "../src/distillation-views.tsx";
 import { createDistillationApi, type Api } from "../src/distillation.ts";
@@ -84,4 +84,14 @@ test("新声音显示标签、统计、待取状态和四个操作；设置有�
   expect(samples.match(/aria-expanded="false"/g)).toHaveLength(2);
   const settings = renderToStaticMarkup(<AudioSettings api={audio} />);
   for (const text of ['min="1"', 'max="365"', 'step="1"', "只删原始音频", "转写出的文字会保留", "还没转写的对话会丢失", "删除全部音频？", "取消"]) expect(settings).toContain(text);
+});
+
+test("同名的人只列一次；只出现一两次的片段不列进“其实是”；填的名字已有主时并过去", () => {
+  const mk = (id: string, name: string | null, confirmed: boolean, conversations: number, seconds: number) => ({ id, label: `说话人 ${id.toUpperCase()}`, name, is_me: 0, confirmed: confirmed ? 1 : 0, conversations, seconds }) as Speaker;
+  const all = [mk("a", "刘朝刚", true, 20, 889), mk("b", "刘朝刚", true, 4, 95), mk("me", "我", true, 11, 65),
+    mk("noise", null, false, 1, 2), mk("busy", null, false, 9, 155), mk("long", null, false, 1, 120)];
+  expect(knownSpeakers(all).map(s => s.name)).toEqual(["刘朝刚", "我"]);
+  expect(unknownSpeakers(all).map(s => s.id)).toEqual(["busy", "long"]);
+  expect(sameNamedSpeaker(all, " 刘朝刚 ")?.id).toBe("a");
+  expect(sameNamedSpeaker(all, "新的人")).toBeUndefined();
 });

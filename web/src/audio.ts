@@ -8,6 +8,36 @@ export function speakerNames(people: string[] = [], speakers: Speaker[] = []): s
   const names = new Map(speakers.map(speaker => [speaker.id, speaker.name || speaker.label]));
   return people.map(id => names.get(id) ?? id);
 }
+/** 和 Mac 端 SpeakerMenu 同一套规则：同名的已确认的人只留一条（取最活跃的作为合并目标）。 */
+export function knownSpeakers(speakers: Speaker[], excludeId?: string): { id: string; name: string; conversations: number }[] {
+  const best = new Map<string, Speaker>();
+  for (const s of speakers) {
+    if (!s.confirmed || s.id === excludeId) continue;
+    const name = (s.name || s.label).trim();
+    const old = best.get(name);
+    if (old && (old.conversations > s.conversations || old.conversations === s.conversations && old.seconds >= s.seconds)) continue;
+    best.set(name, s);
+  }
+  return [...best.entries()]
+    .map(([name, s]) => ({ id: s.id, name, conversations: s.conversations, seconds: s.seconds }))
+    .sort((a, b) => b.conversations - a.conversations || b.seconds - a.seconds);
+}
+/** 还没确认的声音：只列出现过 2 段对话或累计 30 秒以上的，最多 limit 条。 */
+export function unknownSpeakers(speakers: Speaker[], excludeId?: string, limit = 12) {
+  return speakers
+    .filter(s => !s.confirmed && s.id !== excludeId && (s.conversations >= 2 || s.seconds >= 30))
+    .sort((a, b) => b.conversations - a.conversations || b.seconds - a.seconds)
+    .slice(0, limit)
+    .map(s => ({ id: s.id, name: s.name || s.label, conversations: s.conversations }));
+}
+/** 填的名字已经有人用了就返回那个人，改为并过去，不再新建同名的。 */
+export function sameNamedSpeaker(speakers: Speaker[], name: string): Speaker | undefined {
+  const key = name.trim();
+  if (!key) return undefined;
+  return speakers
+    .filter(s => s.confirmed && (s.name || s.label).trim() === key)
+    .sort((a, b) => b.conversations - a.conversations || b.seconds - a.seconds)[0];
+}
 export function retentionDays(value: string | number): number {
   const days = typeof value === "string" && !value.trim() ? NaN : Number(value);
   if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("录音保留天数须为 1–365 的整数");

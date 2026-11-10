@@ -61,3 +61,27 @@ private let builtin = MicrophoneDevice(uid: "builtin-uid", name: "MacBook Pro Mi
   #expect(MicrophoneChoices.statusLines(["麦克风：MacBook Pro Microphone · 已断开，暂用自带麦克风"]) == ["麦克风已断开，暂用自带麦克风"])
   #expect(MicrophoneChoices.statusLines(["麦克风未录音"]) == ["麦克风未录音"])
 }
+
+@Test func speakerMenuDropsDuplicateNamesAndNoise() {
+  func s(_ id: String, _ name: String?, confirmed: Bool, conversations: Int, seconds: Double, label: String = "说话人 A") -> Speaker {
+    Speaker(id: id, label: label, name: name, isMe: FlexBool(false), confirmed: FlexBool(confirmed), conversations: conversations, seconds: seconds)
+  }
+  let speakers = [
+    s("a", "刘朝刚", confirmed: true, conversations: 20, seconds: 889),
+    s("b", "刘朝刚", confirmed: true, conversations: 4, seconds: 95),
+    s("c", "我", confirmed: true, conversations: 11, seconds: 65, label: "说话人 W"),
+    s("d", nil, confirmed: false, conversations: 1, seconds: 2),
+    s("e", nil, confirmed: false, conversations: 9, seconds: 155),
+    s("f", nil, confirmed: false, conversations: 1, seconds: 120),
+    s("g", "金洋", confirmed: true, conversations: 11, seconds: 82),
+  ]
+  // 同名只留最活跃的一条；排除当前这条。
+  // 排序按对话数、再按时长；排除最活跃的那条刘朝刚后，还剩另一条同名的刘朝刚可选。
+  #expect(SpeakerMenu.known(speakers, excluding: nil).map(\.name) == ["刘朝刚", "金洋", "我"])
+  #expect(SpeakerMenu.known(speakers, excluding: "a").map(\.name) == ["金洋", "我", "刘朝刚"])
+  // 只出现一次、两三秒的识别误差不列；只出现一次但说了两分钟的仍要列。
+  #expect(SpeakerMenu.unknown(speakers, excluding: nil).map(\.id) == ["e", "f"])
+  // 填的名字已经有主时并过去，而不是新建一条同名的。
+  #expect(SpeakerMenu.match(" 刘朝刚 ", in: speakers)?.id == "a")
+  #expect(SpeakerMenu.match("新的人", in: speakers) == nil)
+}

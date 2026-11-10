@@ -3,7 +3,7 @@ import { groupFacts, pendingSummary, pendingTitle, recentPaused, recentPausedMs,
 import { createUndoQueue, type UndoEntry, type UndoQueue } from "./undo.ts";
 import { speechText } from "./history.ts";
 
-import { type AudioApi } from "./audio.ts";
+import { knownSpeakers, sameNamedSpeaker, unknownSpeakers, type AudioApi } from "./audio.ts";
 import { VoiceSamples } from "./audio-views.tsx";
 
 export type View = "history" | "now" | "pending";
@@ -118,12 +118,17 @@ export function VoicePendingRow({ item, audio, onDecide, error }: { item: Pendin
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
   const speakers = useResource(signal => audio.speakers(signal), [audio]);
+  const all = speakers.data?.speakers ?? [];
+  const known = knownSpeakers(all, item.payload.speaker_id);
+  const unknown = unknownSpeakers(all, item.payload.speaker_id);
+  // 填的名字已经有人用了就并过去，免得再出现一条同名的。
+  const submit = () => sameNamedSpeaker(all, name) ? onDecide({ action: "merge_into", target: sameNamedSpeaker(all, name)!.id }) : onDecide({ action: "rename", name: name.trim() });
   return <article className="pending-row group"><h3>{pendingTitle(item)}</h3><p className="muted">{item.payload.conversations ?? 0} 段对话，说话共 {speechText(item.payload.seconds ?? 0)}</p>
     <VoiceSamples samples={item.payload.samples ?? []} api={audio} />
     {item.payload.samples_pending && <p className="muted">还有样本在等设备上传</p>}
     <div className="actions"><button className="primary" onClick={() => onDecide({ action: "me" })}>是我</button><button aria-expanded={mode === "rename"} onClick={() => setMode("rename")}>填名字</button><button aria-expanded={mode === "merge_into"} onClick={() => setMode("merge_into")}>是已有的人</button><button onClick={() => onDecide({ action: "ignore" })}>忽略</button></div>
-    {mode && <form className="pending-form" onSubmit={event => { event.preventDefault(); if (mode === "rename" ? !name.trim() : !target) return; onDecide(mode === "rename" ? { action: "rename", name: name.trim() } : { action: "merge_into", target }); }}>
-      {mode === "rename" ? <label>名字<input autoFocus required value={name} onChange={event => setName(event.target.value)} /></label> : <><label>是谁<select autoFocus required value={target} onChange={event => setTarget(event.target.value)}><option value="">选择</option>{speakers.data?.speakers.filter(speaker => speaker.id !== item.payload.speaker_id).map(speaker => <option key={speaker.id} value={speaker.id}>{speaker.name || speaker.label}</option>)}</select></label>{!speakers.data && <Status error={speakers.error} retry={speakers.retry} />}</>}
+    {mode && <form className="pending-form" onSubmit={event => { event.preventDefault(); if (mode === "rename" ? !name.trim() : !target) return; mode === "rename" ? submit() : onDecide({ action: "merge_into", target }); }}>
+      {mode === "rename" ? <label>名字<input autoFocus required value={name} onChange={event => setName(event.target.value)} /></label> : <><label>是谁<select autoFocus required value={target} onChange={event => setTarget(event.target.value)}><option value="">选择</option>{known.map(speaker => <option key={speaker.id} value={speaker.id}>{speaker.name}</option>)}{unknown.length > 0 && <optgroup label="还没确认的声音">{unknown.map(speaker => <option key={speaker.id} value={speaker.id}>{speaker.name}，{speaker.conversations} 段对话</option>)}</optgroup>}</select></label>{!speakers.data && <Status error={speakers.error} retry={speakers.retry} />}</>}
       <div className="actions"><button className="primary" type="submit" disabled={mode === "rename" ? !name.trim() : !target}>确定</button><button type="button" onClick={() => setMode(undefined)}>取消</button></div>
     </form>}{error && <p className="error" role="alert">{error}</p>}
   </article>;

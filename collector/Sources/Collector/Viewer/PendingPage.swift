@@ -110,7 +110,12 @@ struct PendingCard: View {
     let n = name.trimmingCharacters(in: .whitespaces)
     guard !n.isEmpty else { return }
     renaming = false
-    resolve("rename", name: n)
+    // 这个名字已经有人用了就并过去，免得再出现一条同名的（用户报告的“其实是…”里一列重复）。
+    if item.kind == "voice", let same = SpeakerMenu.match(n, in: store.speakers), same.id != item.payload.speakerId {
+      resolve("merge_into", target: same.id)
+    } else {
+      resolve("rename", name: n)
+    }
   }
 
   @ViewBuilder var content: some View {
@@ -189,15 +194,18 @@ struct PendingCard: View {
       case "voice":
         Button("是我") { resolve("me") }.buttonStyle(.accent)
         Button("填名字…") { name = ""; renaming = true }.help("这是别人，填上他的名字")
-        let others = store.speakers.filter { $0.id != p.speakerId }
-        let known = others.filter { $0.confirmed.value }
-        let unknown = others.filter { !$0.confirmed.value }
-        if !others.isEmpty {
-          // 把这个声音并到一个已有的人身上（hub merge_into）。
+        // 同名的人只列一次；还没确认的只列像样的几个（见 SpeakerMenu）。
+        let known = SpeakerMenu.known(store.speakers, excluding: p.speakerId)
+        let unknown = SpeakerMenu.unknown(store.speakers, excluding: p.speakerId)
+        if !known.isEmpty || !unknown.isEmpty {
           Menu("其实是…") {
-            ForEach(known) { s in Button(s.display) { resolve("merge_into", target: s.id) } }
+            ForEach(known) { s in Button(s.name) { resolve("merge_into", target: s.id) } }
             if !unknown.isEmpty {
-              Section("还没确认的声音") { ForEach(unknown) { s in Button(s.display) { resolve("merge_into", target: s.id) } } }
+              Section("还没确认的声音") {
+                ForEach(unknown) { s in
+                  Button("\(s.name)，\(s.conversations) 段对话") { resolve("merge_into", target: s.id) }
+                }
+              }
             }
           }
           .fixedSize()
