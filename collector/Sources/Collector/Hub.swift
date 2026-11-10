@@ -153,12 +153,11 @@ final class PluginScheduler {
     p.waitUntilExit(); timer.cancel()
     let summary = String(data: data, encoding: .utf8)?.split(separator: "\n").last.map(String.init) ?? ""
     let ok = p.terminationStatus == 0
-    var text = ok ? "成功" : "失败（\(p.terminationStatus)）"
-    var accepted = 0
+    var accepted: Int?
     if let d = summary.data(using: .utf8), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-       let a = j["accepted"] as? Int { accepted = a; text += " · 新增 \(a)" }
-    text += " · \(Int(Date().timeIntervalSince(started)))s"
-    return set(name, Outcome(ok: ok, accepted: accepted, text: text, at: Date()))
+       let a = j["accepted"] as? Int { accepted = a }
+    let text = PluginImport.outcomeText(ok: ok, exitStatus: p.terminationStatus, accepted: accepted, elapsed: Date().timeIntervalSince(started))
+    return set(name, Outcome(ok: ok, accepted: accepted ?? 0, text: text, at: Date()))
   }
 
   private func set(_ name: String, _ v: Outcome) -> Outcome { lock.lock(); last[name] = v; lock.unlock(); return v }

@@ -6,6 +6,7 @@ import struct CollectorCore.PendingItem
 import struct CollectorCore.Speaker
 import struct CollectorCore.DataSourceStatus
 import enum CollectorCore.MaintenanceTask
+import struct CollectorCore.MicrophoneChoice
 
 /// 采集端自己的运行状态，由 AppDelegate 提供给窗口显示。只含计数和开关，不含内容。
 struct CaptureSnapshot: Equatable {
@@ -18,6 +19,9 @@ struct CaptureSnapshot: Equatable {
   /// 按注册表顺序的全部数据源。
   var sources: [DataSourceStatus] = []
   var audio: [String] = []
+  /// 麦克风选项（与菜单栏子菜单一致）和当前设置值。
+  var microphones: [MicrophoneChoice] = []
+  var microphone = "builtin"
   var pluginsAvailable = false
   /// 采集端执行的维护任务（同步、导入）的状态。整理历史由 hub 的请求队列跟踪。
   var jobs: [MaintenanceTask: Job] = [:]
@@ -36,6 +40,7 @@ enum CaptureAction {
   case pauseHour, pauseTomorrow, resume, requestAX
   case setSource(String, Bool), requestPermission(String), runSource(String)
   case maintenance(MaintenanceTask)
+  case selectMicrophone(String)
 }
 
 protocol CaptureControlling: AnyObject {

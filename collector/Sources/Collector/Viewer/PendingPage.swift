@@ -12,11 +12,8 @@ struct PendingPage: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 34) {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("待确认").font(.serif(30, .semibold))
-          Text("系统先自己判断、先往下处理；这里攒着需要你拍板的事，不处理也不会卡住。")
-            .font(.serif(15)).foregroundStyle(.secondary)
-        }
+        Text("系统先自己判断、先往下处理；这里攒着需要你拍板的事，不处理也不会卡住。")
+          .font(.serif(15)).foregroundStyle(.secondary)
         if items.isEmpty, let error = store.sharedError {
           Placeholder(kind: .error(error) { Task { await store.refreshShared() } })
             .transition(.opacity)
@@ -142,8 +139,12 @@ struct PendingCard: View {
     case "thread_done":
       Text(p.title ?? "").font(.serif(18, .semibold)).fixedSize(horizontal: false, vertical: true)
       if let b = p.brief { Text(b).font(.system(size: 12.5)).foregroundStyle(.secondary).lineSpacing(2).fixedSize(horizontal: false, vertical: true) }
-      if let t = p.threadId {
-        Button("查看线程") { store.path.append(.thread(t)) }.buttonStyle(.link).font(.caption)
+      HStack(spacing: 10) {
+        if let t = p.threadId {
+          Button("查看线程") { store.path.append(.thread(t)) }.buttonStyle(.link).font(.caption)
+        }
+        Spacer()
+        if let n = PendingArchive.notice(createdAt: item.createdAt) { Text(n).font(.caption).foregroundStyle(.tertiary) }
       }
     default:
       HStack(spacing: 10) {
@@ -197,7 +198,7 @@ struct PendingCard: View {
         Button("完成了") { resolve("done") }.buttonStyle(.borderedProminent)
         Button("还在做") { resolve("continue") }
         Spacer()
-        Button("放弃") { resolve("abandon") }.buttonStyle(.borderless).foregroundStyle(.secondary)
+        Button("不做了") { resolve("abandon") }.buttonStyle(.borderless).foregroundStyle(.secondary)
       default:
         Button("合并") { resolve("merge") }.buttonStyle(.borderedProminent)
         Spacer()

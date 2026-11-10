@@ -29,10 +29,21 @@ struct SettingsPage: View {
       }
       maintenance(c)
       Section("录音") {
-        ForEach(c.audio, id: \.self) { Text($0).foregroundStyle(.secondary) }
+        Picker("麦克风", selection: Binding(get: { c.microphone }, set: { v in
+          store.perform(.selectMicrophone(v))
+          // 采集端在音频队列上写入设置，下一次快照才读得到；先按选中的显示。
+          store.capture.microphone = v
+        })) {
+          ForEach(c.microphones.filter { $0.group == .mode }, id: \.self) { Text($0.title).tag($0.value) }
+          Divider()
+          ForEach(c.microphones.filter { $0.group != .mode }, id: \.self) { Text($0.title).tag($0.value).selectionDisabled(!$0.selectable) }
+        }
+        // 第一行（今天几段对话）已在数据源列表的录音一行里。
+        ForEach(MicrophoneChoices.statusLines(Array(c.audio.dropFirst())), id: \.self) { Text($0).foregroundStyle(.secondary) }
         LabeledContent("原始音频保留") {
           HStack(spacing: 8) {
-            Stepper(value: $days, in: 1...365) { Text("\(days) 天").monospacedDigit() }
+            Text("\(days) 天").monospacedDigit()
+            Stepper("原始音频保留", value: $days, in: 1...365).labelsHidden()
             if savedDays != nil, days != savedDays { Button("保存") { Task { await save() } }.controlSize(.small) }
           }
         }

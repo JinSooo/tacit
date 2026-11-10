@@ -235,7 +235,7 @@ launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.collector.plist"
 step "完成"
 cat <<MSG
 - 菜单栏出现 Record Anything 图标；第一次运行会请求辅助功能权限。
-- 打开 History：菜单里点"打开 History"，或运行 bun "$REPO/hub/src/cli.ts" open
+- 打开 History：菜单里点"打开 Record Anything"，或运行 bun "$REPO/hub/src/cli.ts" open
 - 记录终端命令：在 ~/.zshrc 里加一行
     source "$REPO/plugins/shell/hook.zsh"
 - 语音模型：$DATA/models/；加密音频：$DATA/audio/（卸载保留）
