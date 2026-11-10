@@ -19,12 +19,24 @@
 | `mac.screen` | Mac 采集端（AX / OCR） |
 | `mac.app` | 保留，v1 不用：应用使用记录并入 `mac.screen` 时段（读不到正文时也照样记应用、窗口标题和时长） |
 | `mac.clipboard`、`mac.file`、`mac.calendar` | Mac 采集端 |
+| `mac.wechat` | Mac 采集端"微信对话"数据源（默认关闭）：读微信窗口聊天区，一条消息一条记录，格式见下 |
 | `mac.shell` | plugins/shell |
 | `mac.git` | plugins/git |
 | `mac.browser` | plugins/browser |
 | `claude_code.session`、`codex.session` | plugins/agent-sessions |
 | `manual.note`、`manual.correction` | 网页手动补写 / 修正 |
 | `manual.agent` | 用户让 Agent 代存的内容（MCP `history_append`，见 4.6）；`context.app` 是写入的 Agent，内容变化时的修正仍用 `manual.correction` |
+
+### 1.1 微信消息记录（2026-11-10）
+
+读窗口（`mac.wechat`，`capture.method = "ocr"`）和以后的第三方插件（例如解密本地库，`capture.method = "db"`，source 用插件自己的名字）都按这个形状产出，按会话归到同一个片段（中枢按 `context.chat` 切片）：
+
+- `kind = "event"`；`t_start` 是消息时间。读窗口只能看到界面上的时间分隔（"15:33""昨天 15:33""11/03 09:57"），能换算的用它，换算不了的用看到的时间。
+- `context.app = "com.tencent.xinWeChat"`，`context.chat` = 会话名（群名去掉"（人数）"）。
+- `context.extra`：`sender`（昵称；自己发的是"我"）、`from_me`（0/1）、`group`（0/1）、`shown_time`（读窗口时界面上的时间分隔原文）。
+- `title = "微信 · 会话名 · 发送人"`，`body` = 消息文字；图片、语音只有占位时不记。
+- `source_ref`：读窗口用 `fp:` + sha256(会话、发送人或"我"、内容、时间分隔) 前 12 字节的十六进制。来回切换会话、上下滚动看到的同一条消息是同一个 `source_ref`，中枢去重。第一个时间分隔之上的消息不记，等能看到它的时间分隔时再记。
+- 读窗口和插件的同一条消息暂不跨来源去重（时间精度不同），以后按会话、发送人、内容、时间就近匹配，以数据库那份为代表（design.md 3.2）。
 
 ## 2. 插件协议
 

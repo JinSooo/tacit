@@ -220,7 +220,7 @@ public enum Lane: Int, CaseIterable, Sendable {
     case "mac.browser": return .browser
     case "claude_code.session", "codex.session": return .agent
     case "mac.shell", "mac.git": return .terminal
-    case "mac.audio", "mac.calendar": return .voice
+    case "mac.audio", "mac.calendar", "mac.wechat": return .voice
     default: return .other
     }
   }

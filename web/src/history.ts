@@ -63,7 +63,7 @@ export function safeUrl(value: string): string | undefined {
   try { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) ? url.href : undefined; } catch { return undefined; }
 }
 export const sourceNames: Record<string, string> = {
-  "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板", "mac.file": "文件", "mac.calendar": "日历",
+  "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板", "mac.file": "文件", "mac.calendar": "日历", "mac.wechat": "微信",
   "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
   "manual.note": "补写", "manual.correction": "修正",
 };
@@ -87,7 +87,7 @@ export function laneOf(source: string): LaneKey {
   if (source === "mac.browser") return "browser";
   if (source === "claude_code.session" || source === "codex.session") return "agent";
   if (source === "mac.shell" || source === "mac.git") return "terminal";
-  if (source === "mac.audio" || source === "mac.calendar") return "voice";
+  if (source === "mac.audio" || source === "mac.calendar" || source === "mac.wechat") return "voice";
   return "other";
 }
 /** 本地日历某天的起止（毫秒），以及给 /v1/records 用的 from/to（to 是闭区间）。 */

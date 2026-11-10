@@ -4,7 +4,7 @@ import Testing
 
 @Test func catalogRegistersAllSourcesWithLegacyKeys() {
   let ids = DataSourceCatalog.all.map(\.id)
-  #expect(ids == ["screen", "ocr", "clipboard", "audio", "files", "calendar", "agent-sessions", "browser", "shell", "git"])
+  #expect(ids == ["screen", "ocr", "clipboard", "audio", "files", "calendar", "wechat", "agent-sessions", "browser", "shell", "git"])
   #expect(Set(ids).count == ids.count)
   #expect(DataSourceCatalog.plugins.map(\.id) == ["agent-sessions", "browser", "shell", "git"])
   // 升级后沿用原来的开关键，用户之前关掉的 OCR / 录音不会被打开。
@@ -18,6 +18,7 @@ import Testing
   let toggles = SourceToggles(store: store)
   #expect(toggles.isEnabled("screen"))
   #expect(!toggles.isEnabled("ocr"))  // 默认关
+  #expect(!toggles.isEnabled("wechat"))  // 微信对话默认关（AGENTS.md）
   #expect(!toggles.isEnabled("audio"))  // 旧键里的选择
   toggles.setEnabled("browser", false)
   toggles.setEnabled("ocr", true)

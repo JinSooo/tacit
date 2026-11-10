@@ -22,6 +22,7 @@ enum Palette {
     case "mac.clipboard": return dynamic(0xBF8F00, 0xE9C64A)
     case "mac.file": return dynamic(0x3478C0, 0x70ADEB)
     case "mac.calendar": return dynamic(0xD83C62, 0xFF7593)
+    case "mac.wechat": return dynamic(0x1E9E4F, 0x4CD282)
     case "mac.audio": return dynamic(0xCC3F9E, 0xF074C9)
     case "manual.note", "manual.correction": return dynamic(0xA87420, 0xDDAA4E)
     default: return dynamic(0x7A7F8C, 0x9DA3B0)
@@ -52,12 +53,12 @@ enum Palette {
 
 enum SourceInfo {
   static let names: [String: String] = [
-    "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板", "mac.file": "文件", "mac.calendar": "日历",
+    "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板", "mac.file": "文件", "mac.calendar": "日历", "mac.wechat": "微信",
     "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
     "manual.note": "补写", "manual.correction": "修正",
   ]
   static let order = ["mac.screen", "mac.browser", "claude_code.session", "codex.session", "mac.shell", "mac.git", "mac.audio",
-                      "mac.calendar", "mac.clipboard", "mac.file", "manual.note"]
+                      "mac.calendar", "mac.wechat", "mac.clipboard", "mac.file", "manual.note"]
   static func name(_ s: String) -> String { names[s] ?? s }
   /// Phosphor 图标名（见 PhosphorGlyphs）。
   static func symbol(_ s: String) -> String {
@@ -71,6 +72,7 @@ enum SourceInfo {
     case "mac.clipboard": return "clipboard-text"
     case "mac.file": return "file-arrow-down"
     case "mac.calendar": return "calendar-blank"
+    case "mac.wechat": return "chat-circle"
     case "mac.audio": return "waveform"
     case "manual.note": return "pencil-simple-line"
     case "manual.correction": return "note-pencil"

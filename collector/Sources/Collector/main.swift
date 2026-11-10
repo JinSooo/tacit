@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ViewerWindow(store: ViewerStore(api: api, device: config.device, controls: self))
   }
   lazy var segmenter = Segmenter(device: config.device)
+  lazy var wechat = WeChatCollector(device: config.device, ocr: ocr, send: { [weak self] in self?.hub.enqueue($0) })
   let ax = AXReader()
   let ocr = OCRReader()
   let captureQueue = DispatchQueue(label: "record-anything.capture", qos: .utility)
@@ -130,6 +131,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
           : (files.recoveredFromDrop ? "曾丢失事件，已恢复" : "监听 \(FileDirectories(store: UserDefaults.standard).list.count) 个目录", true)
       }
     })
+    let wechat = wechat
+    sources.register(BlockSource("wechat") { s in
+      s.permissionName = "录屏"
+      s.permissionCheck = { ocr.granted ? .granted : .denied }
+      s.request = { ocr.requestAccess(); if !ocr.granted { SystemPermissions.openPrivacyPane("Privacy_ScreenCapture") } }
+      s.onEnable = { _ in if !ocr.granted { ocr.requestAccess() } }
+      s.last = { wechat.last }
+      s.describe = { (wechat.lastSummary, true) }
+    })
     sources.register(BlockSource("calendar") { s in
       s.permissionName = "日历"
       s.permissionCheck = SystemPermissions.calendar
@@ -166,6 +176,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func tick() {
+    // 微信对话不依赖屏幕文字和辅助功能：只要开着、微信在前台就截图拆消息。
+    if !paused, enabled("wechat"), !IsSecureEventInputEnabled(),
+       let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier == WeChatCollector.bundleID,
+       !CapturePolicy.shouldSkip(bundleID: WeChatCollector.bundleID, window: "") {
+      wechat.poll(pid: front.processIdentifier, frame: nil)
+    }
     guard !paused, enabled("screen"), AXIsProcessTrusted() else { closeSegment(); updateIcon(); return }
     let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: UInt32.max)!)
     if idle > segmenter.config.idleLimit { closeSegment(); return }
@@ -181,6 +197,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let now = Date()
     lastScreen = now
     let ocrOn = enabled("ocr")
+    // 开了微信对话就由它读微信，通用 OCR 不再重复读；没开时通用 OCR 也去掉左侧会话列表，
+    // 别的群的消息预览会把内容带偏（2026-11-10：九院的对话被归进交开投的线程）。
+    let isWeChat = bundle == WeChatCollector.bundleID
+    let wechatOn = enabled("wechat")
 
     captureQueue.async { [self] in
       let snap = ax.snapshot(pid: pid)
@@ -201,10 +221,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
       // 辅助功能几乎读不到正文时用 OCR 兜底，同一段至少隔 15 秒才再识别一次。
       let key = o.key
-      if ocrOn, (snap?.chars ?? 0) < 80, now.timeIntervalSince(lastOCR[key] ?? .distantPast) > 15, ocr.granted {
+      if ocrOn, !(isWeChat && wechatOn), (snap?.chars ?? 0) < 80, now.timeIntervalSince(lastOCR[key] ?? .distantPast) > 15, ocr.granted {
         lastOCR[key] = now
         if lastOCR.count > 500 { lastOCR = lastOCR.filter { now.timeIntervalSince($0.value) < 600 } }
-        ocr.recognize(pid: pid, frame: snap?.frame) { [self] lines, ms in
+        ocr.recognizeLines(pid: pid, frame: snap?.frame) { [self] found, size, ms in
+          let lines = (isWeChat ? WeChatLayout.chatAreaLines(found, width: size.width) : found).map(\.text)
           DispatchQueue.main.async { [self] in lastOCRRun = Date() }
           captureQueue.async { [self] in
             stats["ocrRuns", default: 0] += 1

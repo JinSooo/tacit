@@ -32,6 +32,8 @@ public enum DataSourceCatalog {
     .init(id: "audio", title: "录音", defaultsKey: "recordingEnabled"),
     .init(id: "files", title: "文件"),
     .init(id: "calendar", title: "日历"),
+    // 读微信窗口的聊天区拆成消息，默认关闭（AGENTS.md 2026-11-10）。
+    .init(id: "wechat", title: "微信对话", defaultEnabled: false),
     .init(id: "agent-sessions", title: "AI 会话", kind: .plugin),
     .init(id: "browser", title: "浏览器", kind: .plugin),
     .init(id: "shell", title: "终端命令", kind: .plugin),

@@ -24,10 +24,12 @@ public struct RecordContext: Codable, Equatable {
   public var app: String?
   public var window: String?
   public var url: String?
+  /// 会话名（微信等聊天）。中枢按它把记录切成按会话的片段。
+  public var chat: String?
   public var extra: [String: ContextValue]?
-  public init(app: String? = nil, window: String? = nil, url: String? = nil,
+  public init(app: String? = nil, window: String? = nil, url: String? = nil, chat: String? = nil,
               extra: [String: ContextValue]? = nil) {
-    self.app = app; self.window = window; self.url = url
+    self.app = app; self.window = window; self.url = url; self.chat = chat
     self.extra = extra
   }
 }
