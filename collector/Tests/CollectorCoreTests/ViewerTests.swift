@@ -213,3 +213,11 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(AppNames.systemLanguageName(app, preferences: ["en-US"]) == "Find My")
   #expect(AppNames.systemLanguageName(app, preferences: ["zh-Hans-CN"]) == "查找")
 }
+
+@Test func phosphorTableHasUniqueNamesInPrivateUseArea() {
+  let names = PhosphorGlyphs.table.map(\.name)
+  #expect(Set(names).count == names.count)
+  for g in PhosphorGlyphs.table { #expect((0xE000...0xF8FF).contains(g.code), "\(g.name)") }
+  #expect(PhosphorGlyphs.character("check").unicodeScalars.first?.value == 0xE182)
+  #expect(PhosphorGlyphs.character("no-such-icon").isEmpty)
+}

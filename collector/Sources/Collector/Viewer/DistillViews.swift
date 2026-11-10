@@ -35,7 +35,7 @@ struct NowPage: View {
     .navigationTitle("此刻")
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
-        Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }.help("刷新").accessibilityLabel("刷新").keyboardShortcut("r", modifiers: .command)
+        Button { Task { await load() } } label: { PhIcon("arrow-clockwise", size: PhIcon.toolbar) }.help("刷新").accessibilityLabel("刷新").keyboardShortcut("r", modifiers: .command)
       }
     }
     .task(id: store.revision) { await load() }
@@ -112,7 +112,7 @@ struct NowPage: View {
         }
         Spacer()
         Button { store.historyDay = Calendar.current.startOfDay(for: Date()); store.historySearch = ""; store.section = .history } label: {
-          HStack(spacing: 3) { Text("打开 History"); Image(systemName: "arrow.right") }
+          HStack(spacing: 3) { Text("打开 History"); PhIcon("arrow-right", size: 12) }
         }
         .buttonStyle(.link).font(.caption)
       }
@@ -210,7 +210,7 @@ struct ThreadCard: View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 8) {
         if let project { ProjectTag(name: project.name, unconfirmed: !project.confirmed.value) }
-        else if thread.domain == "life" { Label("生活", systemImage: "leaf").font(.system(size: 11, weight: .medium)).foregroundStyle(.tertiary) }
+        else if thread.domain == "life" { Label { Text("生活") } icon: { PhIcon("leaf", size: 14) }.font(.system(size: 11, weight: .medium)).foregroundStyle(.tertiary) }
         Spacer()
         Text(ViewerFormat.relative(thread.last)).font(.system(size: 11)).foregroundStyle(.tertiary)
       }
@@ -250,7 +250,7 @@ struct ThreadLine: View {
         Text(s.0).font(.system(size: 10.5, weight: .medium)).foregroundStyle(s.1)
       }
       Text(ViewerFormat.relative(thread.last)).font(.system(size: 11)).foregroundStyle(.tertiary).frame(minWidth: 60, alignment: .trailing)
-      Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.quaternary)
+      PhIcon("caret-right", size: 12.5).foregroundStyle(.quaternary)
     }
     .padding(.horizontal, 16).padding(.vertical, 11)
     .background(hovering ? Color.primary.opacity(0.03) : .clear)
@@ -363,8 +363,8 @@ struct DetailBody: View {
       paragraph(progressLabel, progress)
       if let people = detail.detail?.people, !people.isEmpty { paragraph("相关的人", people.joined(separator: "、")) }
       if let artifacts = detail.detail?.artifacts {
-        let groups: [(String, String, [String])] = [("链接", "link", artifacts["urls"]?.strings ?? []), ("文件", "doc", artifacts["files"]?.strings ?? []),
-                                                    ("命令", "terminal", artifacts["commands"]?.strings ?? [])].filter { !$0.2.isEmpty }
+        let groups: [(String, String, [String])] = [("链接", "link", artifacts["urls"]?.strings ?? []), ("文件", "file", artifacts["files"]?.strings ?? []),
+                                                    ("命令", "terminal-window", artifacts["commands"]?.strings ?? [])].filter { !$0.2.isEmpty }
         if !groups.isEmpty {
           VStack(alignment: .leading, spacing: 8) {
             Text("相关").sectionTitle()
@@ -403,7 +403,7 @@ struct ArtifactChip: View {
       }
     } label: {
       HStack(spacing: 5) {
-        Image(systemName: symbol).font(.system(size: 9.5)).foregroundStyle(.secondary)
+        PhIcon(symbol, size: 12).foregroundStyle(.secondary)
         Text(text.hasPrefix("/") ? (text as NSString).abbreviatingWithTildeInPath : text).font(.mono(11)).lineLimit(1).truncationMode(.middle)
       }
       .padding(.horizontal, 8).padding(.vertical, 4)
@@ -411,7 +411,7 @@ struct ArtifactChip: View {
       .frame(maxWidth: 360, alignment: .leading)
     }
     .buttonStyle(.plain)
-    .help(symbol == "terminal" ? "复制命令" : "打开")
+    .help(symbol == "terminal-window" ? "复制命令" : "打开")
   }
 }
 
@@ -454,7 +454,7 @@ struct FactGroup: View {
     let shown = expanded ? newest : Array(newest.prefix(limit))
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 6) {
-        Image(systemName: symbol).foregroundStyle(Palette.factColors[kind] ?? .secondary)
+        PhIcon(symbol, fill: true, size: 15).foregroundStyle(Palette.factColors[kind] ?? .secondary)
         Text(label).font(.system(size: 12, weight: .semibold))
         Text("\(rows.count)").font(.system(size: 11)).foregroundStyle(.tertiary)
       }
@@ -492,7 +492,7 @@ struct FactRow: View {
         }
         HStack(spacing: 14) {
           if fact.kind == "inference" { ConfidenceDots(value: fact.confidence) }
-          if fact.origin == "user" { Label("你写的", systemImage: "person.fill").font(.system(size: 10.5)).foregroundStyle(.secondary) }
+          if fact.origin == "user" { Label { Text("你写的") } icon: { PhIcon("user", fill: true, size: 11.5) }.font(.system(size: 10.5)).foregroundStyle(.secondary) }
           Button("证据 \(fact.evidence.count)") { showEvidence = true }
             .buttonStyle(.link).font(.system(size: 11))
             .popover(isPresented: $showEvidence, arrowEdge: .bottom) { evidencePopover }
@@ -556,7 +556,7 @@ struct EvidenceRow: View {
           }
         }
         Spacer()
-        Image(systemName: "arrow.up.right").font(.system(size: 10)).foregroundStyle(.tertiary).opacity(hovering ? 1 : 0)
+        PhIcon("arrow-up-right", size: 13).foregroundStyle(.tertiary).opacity(hovering ? 1 : 0)
       }
       .padding(.horizontal, 8).padding(.vertical, 6)
       .background(hovering ? Color.primary.opacity(0.05) : .clear, in: RoundedRectangle(cornerRadius: 7))
@@ -573,7 +573,7 @@ struct EvidenceList: View {
   @Environment(ViewerStore.self) private var store
   var body: some View {
     if let rows = loader.value {
-      if rows.isEmpty { Placeholder(kind: .empty("doc.text.magnifyingglass", "暂无证据")).frame(height: 200) }
+      if rows.isEmpty { Placeholder(kind: .empty("file-magnifying-glass", "暂无证据")).frame(height: 200) }
       else {
         VStack(alignment: .leading, spacing: 10) {
           Text("\(rows.count) 条原始记录").sectionTitle()
@@ -752,7 +752,7 @@ struct BackButton: ToolbarContent {
   var body: some ToolbarContent {
     ToolbarItem(placement: .navigation) {
       if !store.path.isEmpty {
-        Button { store.path.removeLast() } label: { Image(systemName: "chevron.left") }
+        Button { store.path.removeLast() } label: { PhIcon("caret-left", size: PhIcon.toolbar) }
           .help("返回").accessibilityLabel("返回").keyboardShortcut("[", modifiers: .command)
       }
     }

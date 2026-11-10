@@ -174,9 +174,9 @@ struct HistoryPage: View {
         } else if let error, records.isEmpty {
           Placeholder(kind: .error(error) { store.revision += 1 }).frame(height: 240)
         } else if records.isEmpty {
-          Placeholder(kind: .empty("moon.zzz", "这一天没有记录")).frame(height: 260)
+          Placeholder(kind: .empty("moon-stars", "这一天没有记录")).frame(height: 260)
         } else if blocks.isEmpty {
-          Placeholder(kind: .empty("line.3.horizontal.decrease", "筛选后没有记录")).frame(height: 200)
+          Placeholder(kind: .empty("funnel-simple", "筛选后没有记录")).frame(height: 200)
         } else {
           // 修饰符加在 ForEach 上会分发给每一行，留白用独立的占位视图。
           Color.clear.frame(height: 6)
@@ -272,7 +272,7 @@ struct HistoryPage: View {
       if brush != nil || lane != nil {
         HStack(spacing: 8) {
           if let b = brush { chip("\(ViewerFormat.clock(b.lowerBound))–\(ViewerFormat.clock(b.upperBound))", "clock") { brush = nil } }
-          if let l = lane { chip(l.title, "line.3.horizontal.decrease") { lane = nil } }
+          if let l = lane { chip(l.title, "funnel-simple") { lane = nil } }
           Text("\(visible.count) 条").font(.caption).foregroundStyle(.secondary)
         }
         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -290,9 +290,9 @@ struct HistoryPage: View {
   func chip(_ text: String, _ symbol: String, clear: @escaping () -> Void) -> some View {
     Button(action: clear) {
       HStack(spacing: 5) {
-        Image(systemName: symbol)
+        PhIcon(symbol, size: 13.5)
         Text(text).monospacedDigit()
-        Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).opacity(0.6)
+        PhIcon("x", size: 10).opacity(0.6)
       }
       .font(.system(size: 11, weight: .medium))
       .padding(.horizontal, 9).padding(.vertical, 4)
@@ -365,7 +365,7 @@ struct HistoryPage: View {
       if results.isEmpty {
         if searching { Placeholder(kind: .loading).frame(height: 300) }
         else if let error { Placeholder(kind: .error(error) { Task { await search(reset: true) } }).frame(height: 300) }
-        else { Placeholder(kind: .empty("magnifyingglass", "没有找到「\(store.historySearch)」")).frame(height: 300) }
+        else { Placeholder(kind: .empty("magnifying-glass", "没有找到「\(store.historySearch)」")).frame(height: 300) }
       } else {
         let groups = Dictionary(grouping: results) { Calendar.current.startOfDay(for: $0.start) }.sorted { $0.key > $1.key }
         ForEach(groups, id: \.key) { day, rows in
@@ -393,13 +393,13 @@ struct HistoryPage: View {
     ToolbarItemGroup(placement: .navigation) {
       if !isSearch {
         ControlGroup {
-          Button { shift(-1) } label: { Image(systemName: "chevron.left") }.help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
+          Button { shift(-1) } label: { PhIcon("caret-left", size: PhIcon.toolbar) }.help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
           Button("今天") { store.historyDay = Calendar.current.startOfDay(for: Date()) }
             .disabled(Calendar.current.isDateInToday(day)).keyboardShortcut("t", modifiers: .command)
-          Button { shift(1) } label: { Image(systemName: "chevron.right") }.help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command)
+          Button { shift(1) } label: { PhIcon("caret-right", size: PhIcon.toolbar) }.help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command)
             .disabled(Calendar.current.isDateInToday(day))
         }
-        Button { picking = true } label: { Image(systemName: "calendar") }
+        Button { picking = true } label: { PhIcon("calendar-blank", size: PhIcon.toolbar) }
           .help("跳到日期").accessibilityLabel("跳到日期")
           .popover(isPresented: $picking, arrowEdge: .bottom) {
             DatePicker("", selection: Binding(get: { day }, set: { store.historyDay = Calendar.current.startOfDay(for: $0); picking = false }),
@@ -427,12 +427,11 @@ struct HistoryPage: View {
             .pickerStyle(.inline)
           }
         } label: {
-          Image(systemName: lane == nil && device == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
-            .accessibilityLabel("筛选")
+          PhIcon("funnel-simple", fill: lane != nil || device != nil, size: PhIcon.toolbar)
         }
         .help("筛选").accessibilityLabel("筛选")
       }
-      Button { note = true } label: { Image(systemName: "square.and.pencil") }
+      Button { note = true } label: { PhIcon("note-pencil", size: PhIcon.toolbar) }
         .help("补写 History").accessibilityLabel("补写 History").keyboardShortcut("n", modifiers: .command)
     }
   }
@@ -499,7 +498,7 @@ struct RecordRow: View {
           HStack(spacing: 3) {
             Text("×\(run.records.count)").monospacedDigit()
             if !nested {
-              Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
+              PhIcon("caret-right", size: 10.5).rotationEffect(.degrees(expanded ? 90 : 0))
             }
           }
           .font(.system(size: 10.5, weight: .semibold))
@@ -529,7 +528,7 @@ struct RecordRow: View {
   @ViewBuilder var badges: some View {
     if record.capture?.method == "ocr" { badge("OCR") }
     if record.sensitivity == "redacted" || (record.redactions ?? 0) > 0 { badge("已脱敏", tint: .orange) }
-    if record.sensitivity == "private" { Image(systemName: "lock.fill").font(.system(size: 9)).foregroundStyle(.secondary) }
+    if record.sensitivity == "private" { PhIcon("lock", fill: true, size: 10).foregroundStyle(.secondary) }
   }
   func badge(_ text: String, tint: Color = .secondary) -> some View {
     Text(text).font(.system(size: 9, weight: .semibold)).foregroundStyle(tint)

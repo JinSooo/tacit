@@ -63,10 +63,10 @@ struct Sidebar: View {
     @Bindable var store = store
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
       Section {
-        SidebarLabel(title: "此刻", icon: "sun.horizon").tag(Page.now)
-        SidebarLabel(title: "History", icon: "clock.arrow.circlepath").tag(Page.history)
+        SidebarLabel(title: "此刻", icon: "sun-horizon").tag(Page.now)
+        SidebarLabel(title: "History", icon: "clock-counter-clockwise").tag(Page.history)
         // badge 必须在 tag 之前：放在 tag 之后，这一行在 macOS 侧栏里选不中。
-        SidebarLabel(title: "待确认", icon: "tray.full")
+        SidebarLabel(title: "待确认", icon: "tray")
           .badge(store.pending.count)
           .tag(Page.pending)
         SidebarLabel(title: "读取记录", icon: "eye").tag(Page.audit)
@@ -78,7 +78,7 @@ struct Sidebar: View {
               Circle().fill(Palette.tag(p.name)).frame(width: 8, height: 8).padding(.leading, 4)
               Text(p.name).lineLimit(1)
               Spacer(minLength: 4)
-              if !p.confirmed.value { Image(systemName: "questionmark.circle").foregroundStyle(.tertiary).font(.caption) }
+              if !p.confirmed.value { PhIcon("question", size: 12).foregroundStyle(.tertiary) }
             }
             .tag(Page.project(p.id))
           }
@@ -112,7 +112,7 @@ struct SidebarLabel: View {
     Label {
       Text(title)
     } icon: {
-      Image(systemName: icon).font(.system(size: 12, weight: .regular)).frame(width: 16)
+      PhIcon(icon, size: 16).frame(width: 16)
     }
   }
 }
@@ -156,7 +156,7 @@ struct CaptureFooter: View {
       .menuIndicator(.hidden)
 
       Button { store.section = .settings } label: {
-        Image(systemName: "gearshape").font(.system(size: 13)).frame(width: 26, height: 26)
+        PhIcon("gear-six", size: 16).frame(width: 26, height: 26)
       }
       .buttonStyle(.plain)
       .foregroundStyle(store.section == .settings ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))

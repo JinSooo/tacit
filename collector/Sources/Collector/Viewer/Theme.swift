@@ -59,26 +59,27 @@ enum SourceInfo {
   static let order = ["mac.screen", "mac.browser", "claude_code.session", "codex.session", "mac.shell", "mac.git", "mac.audio",
                       "mac.calendar", "mac.clipboard", "mac.file", "manual.note"]
   static func name(_ s: String) -> String { names[s] ?? s }
+  /// Phosphor 图标名（见 PhosphorGlyphs）。
   static func symbol(_ s: String) -> String {
     switch s {
-    case "mac.screen", "mac.app": return "macwindow"
+    case "mac.screen", "mac.app": return "browser"
     case "mac.browser": return "globe"
     case "claude_code.session": return "asterisk"
-    case "codex.session": return "chevron.left.forwardslash.chevron.right"
-    case "mac.shell": return "terminal"
-    case "mac.git": return "arrow.triangle.branch"
-    case "mac.clipboard": return "doc.on.clipboard"
-    case "mac.file": return "arrow.down.doc"
-    case "mac.calendar": return "calendar"
+    case "codex.session": return "code"
+    case "mac.shell": return "terminal-window"
+    case "mac.git": return "git-branch"
+    case "mac.clipboard": return "clipboard-text"
+    case "mac.file": return "file-arrow-down"
+    case "mac.calendar": return "calendar-blank"
     case "mac.audio": return "waveform"
-    case "manual.note": return "pencil.line"
-    case "manual.correction": return "pencil.and.outline"
-    default: return "circle.dashed"
+    case "manual.note": return "pencil-simple-line"
+    case "manual.correction": return "note-pencil"
+    default: return "circle-dashed"
     }
   }
   static let factLabels: [(kind: String, label: String, symbol: String)] = [
-    ("next", "下一步", "arrow.right.circle.fill"), ("open", "未决", "questionmark.circle.fill"), ("decision", "已定", "checkmark.seal.fill"),
-    ("inference", "推测", "sparkle"), ("rejected", "否决", "xmark.circle.fill"),
+    ("next", "下一步", "arrow-circle-right"), ("open", "未决", "question"), ("decision", "已定", "seal-check"),
+    ("inference", "推测", "sparkle"), ("rejected", "否决", "x-circle"),
   ]
 }
 
@@ -116,7 +117,7 @@ struct SourceGlyph: View {
       RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
         .fill(tint.gradient.opacity(0.16))
         .overlay(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).strokeBorder(tint.opacity(0.28), lineWidth: 0.5))
-        .overlay(Image(systemName: SourceInfo.symbol(source)).font(.system(size: size * 0.48, weight: .semibold)).foregroundStyle(tint))
+        .overlay(PhIcon(SourceInfo.symbol(source), size: size * 0.62).foregroundStyle(tint))
         .frame(width: size, height: size)
     }
   }
@@ -195,11 +196,11 @@ struct Placeholder: View {
       case .loading:
         ProgressView().controlSize(.small)
       case .error(let message, let retry):
-        Image(systemName: "exclamationmark.triangle").font(.system(size: 22, weight: .light)).foregroundStyle(.orange)
+        PhIcon("warning", size: 25).foregroundStyle(.orange)
         Text(message).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled)
         Button("重试", action: retry).controlSize(.small)
       case .empty(let symbol, let text):
-        Image(systemName: symbol).font(.system(size: 30, weight: .ultraLight)).foregroundStyle(.tertiary)
+        PhIcon(symbol, size: 38).foregroundStyle(.tertiary)
         Text(text).font(.serif(15)).foregroundStyle(.secondary)
       }
     }
