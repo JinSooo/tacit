@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   let toggles = SourceToggles(store: UserDefaults.standard)
   lazy var sources = DataSourceRegistry(toggles: toggles)
   lazy var hub = HubClient(config: config)
-  lazy var api = HubAPI(base: config.hubURL, token: { [config] in config.token })
+  lazy var api = HubAPI(base: { [config] in config.hubURL }, token: { [config] in config.token })
   lazy var files = FileCollector(device: config.device, isPaused: { [weak self] in self.map { $0.paused || !$0.enabled("files") } ?? true },
                                 send: { [weak self] in self?.hub.enqueue($0) })
   lazy var calendar = CalendarCollector(device: config.device, isPaused: { [weak self] in self.map { $0.paused || !$0.enabled("calendar") } ?? true },

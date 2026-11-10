@@ -4,7 +4,10 @@ import CollectorCore
 struct Config {
   var dataDir: URL
   var device = "mac"
-  var hubURL: URL
+  /// 命令行或 collector.json 指定的端口；没指定时每次都现读中枢的 hub.json，
+  /// 设置页改端口后中枢重启到新端口，采集端不用重启（重启会丢掉内存里还没发出的记录）。
+  var fixedPort: String?
+  var hubURL: URL { URL(string: "http://127.0.0.1:\(fixedPort ?? Config.hubPort(dataDir) ?? "47823")")! }
   var repo: String?
   var bun: String
   var pluginInterval: TimeInterval = 300
@@ -21,19 +24,19 @@ struct Config {
     var file: [String: Any] = [:]
     if let d = try? Data(contentsOf: dataDir.appendingPathComponent("collector.json")),
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { file = j }
-    func hubPort() -> String? {
-      guard let d = try? Data(contentsOf: dataDir.appendingPathComponent("hub.json")),
-            let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-            let p = j["port"] as? Int, (1024...65535).contains(p) else { return nil }
-      return String(p)
-    }
-    let port = arg("--port") ?? (file["port"] as? Int).map(String.init) ?? hubPort() ?? "47823"
-    var c = Config(dataDir: dataDir, hubURL: URL(string: "http://127.0.0.1:\(port)")!,
+    var c = Config(dataDir: dataDir, fixedPort: arg("--port") ?? (file["port"] as? Int).map(String.init),
                    repo: arg("--repo") ?? file["repo"] as? String,
                    bun: arg("--bun") ?? file["bun"] as? String ?? home.appendingPathComponent(".bun/bin/bun").path)
     if let d = arg("--device") ?? file["device"] as? String { c.device = d }
     if let i = arg("--plugin-interval").flatMap(Double.init) { c.pluginInterval = i }
     return c
+  }
+
+  static func hubPort(_ dataDir: URL) -> String? {
+    guard let d = try? Data(contentsOf: dataDir.appendingPathComponent("hub.json")),
+          let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+          let p = j["port"] as? Int, (1024...65535).contains(p) else { return nil }
+    return String(p)
   }
 
   var token: String? {

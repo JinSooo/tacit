@@ -9,12 +9,13 @@ struct HubError: LocalizedError {
 }
 
 final class HubAPI: @unchecked Sendable {
-  let base: URL
+  private let baseURL: () -> URL
+  var base: URL { baseURL() }
   private let tokenProvider: () -> String?
   private let session: URLSession
 
-  init(base: URL, token: @escaping () -> String?) {
-    self.base = base
+  init(base: @escaping () -> URL, token: @escaping () -> String?) {
+    self.baseURL = base
     self.tokenProvider = token
     let c = URLSessionConfiguration.ephemeral
     c.timeoutIntervalForRequest = 20
