@@ -8,15 +8,14 @@ APP="build/Record Anything.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"
 cp "$BIN/Collector" "$APP/Contents/MacOS/Collector"
 VERSION="$(git -C .. rev-parse --short HEAD 2>/dev/null || echo dev)"
+# 不声明 CFBundleLocalizations=zh-Hans：声明后中文正文按全宽标点排版，"、""，"后多出半个字的空隙
+# （宋体正是为避免这个才选的），应用名也会被系统换成中文、和记录标题对不上。系统菜单和对话框的中文在代码里补。
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>dev.record-anything.collector</string>
   <key>CFBundleName</key><string>Record Anything</string>
-  <!-- 界面文字全是中文；不声明的话系统提供的菜单项和对话框按钮（Undo、Cancel、Close All）会显示英文。 -->
-  <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
-  <key>CFBundleLocalizations</key><array><string>zh-Hans</string></array>
   <key>CFBundleExecutable</key><string>Collector</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>

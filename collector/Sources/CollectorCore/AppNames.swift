@@ -1,8 +1,8 @@
 import Foundation
 
 /// 应用的显示名。和采集端写进记录标题的 NSRunningApplication.localizedName 取同一个名字：
-/// 按用户的系统语言，不按本应用的界面语言。本应用声明了 zh-Hans 界面，
-/// FileManager.displayName 会跟着变成"微信"，和记录标题里的 WeChat、搜索词对不上。
+/// 按用户的系统语言，不按本应用的语言。FileManager.displayName 跟随调用方的应用语言，
+/// 应用语言一变（例如声明 zh-Hans）就会把 WeChat 显示成"微信"，和记录标题、搜索词对不上。
 public enum AppNames {
   public static func systemLanguageName(_ url: URL, preferences: [String] = Locale.preferredLanguages) -> String {
     let fallback = url.deletingPathExtension().lastPathComponent

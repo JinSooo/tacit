@@ -3,7 +3,7 @@ import SwiftUI
 import CollectorCore
 
 /// 主窗口。采集端平时只在菜单栏；打开窗口时临时出现在 Dock 和 ⌘Tab 里，关掉窗口后退回菜单栏。
-@MainActor final class ViewerWindow: NSObject, NSWindowDelegate {
+@MainActor final class ViewerWindow: NSObject, NSWindowDelegate, NSMenuItemValidation {
   let store: ViewerStore
   private var window: NSWindow?
 
@@ -68,7 +68,8 @@ import CollectorCore
       item("关闭窗口（继续在后台记录）", #selector(closeWindow), "q", target: self),
     ])
     submenu("编辑", [
-      item("撤销", Selector(("undo:")), "z"), item("重做", Selector(("redo:")), "z", [.command, .shift]), .separator(),
+      // 不走系统的 undo:/redo:：AppKit 会按应用语言把标题改回 "Undo"/"Redo"（本应用不声明 zh-Hans，见 build.sh）。
+      item("撤销", #selector(undoInFocus(_:)), "z", target: self), item("重做", #selector(redoInFocus(_:)), "z", [.command, .shift], target: self), .separator(),
       item("剪切", #selector(NSText.cut(_:)), "x"), item("复制", #selector(NSText.copy(_:)), "c"),
       item("粘贴", #selector(NSText.paste(_:)), "v"), item("全选", #selector(NSText.selectAll(_:)), "a"),
     ])
@@ -87,6 +88,18 @@ import CollectorCore
     store.section = [Page.now, .history, .pending, .audit, .now, .settings][sender.tag]
   }
   @objc func closeWindow() { window?.performClose(nil) }
+
+  /// 撤销、重做交给当前焦点所在控件的撤销管理器（包括补写、修正这些弹出窗口里的输入框）。
+  private var focusedUndoManager: UndoManager? { NSApp.keyWindow?.firstResponder?.undoManager }
+  func validateMenuItem(_ item: NSMenuItem) -> Bool {
+    switch item.action {
+    case #selector(undoInFocus(_:)): return focusedUndoManager?.canUndo ?? false
+    case #selector(redoInFocus(_:)): return focusedUndoManager?.canRedo ?? false
+    default: return true
+    }
+  }
+  @objc func undoInFocus(_ sender: NSMenuItem) { focusedUndoManager?.undo() }
+  @objc func redoInFocus(_ sender: NSMenuItem) { focusedUndoManager?.redo() }
 }
 
 /// 应用图标：一块深色玻璃上几道彩色地层，对应条带图的泳道。运行时画给 Dock，构建时导出成 icns。

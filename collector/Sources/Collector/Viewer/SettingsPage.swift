@@ -80,11 +80,13 @@ struct SettingsPage: View {
     }
     .confirmationDialog("清理全部音频？", isPresented: $confirmPurge) {
       Button("清理", role: .destructive) { Task { await purge() } }
+      Button("取消", role: .cancel) {}
     } message: {
       Text("转写过的文字不受影响，还没转写的对话会丢失。清理在设备下次同步时执行，正在录制的对话不受影响。")
     }
     .confirmationDialog("导入全部历史？", isPresented: $confirmImportAll) {
       Button("导入") { store.perform(.maintenance(.importAll)) }
+      Button("取消", role: .cancel) {}
     } message: {
       Text("各插件从能读到的最早记录开始重新读取，已入库的自动去重。可能要几分钟。导入的内容可以搜索和被 Agent 查询，但不会自动提炼。")
     }

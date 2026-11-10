@@ -213,6 +213,7 @@ struct RecordInspector: View {
     .controlSize(.small)
     .confirmationDialog("删除这条记录？", isPresented: $confirmDelete) {
       Button("删除", role: .destructive) { Task { await delete(d) } }
+      Button("取消", role: .cancel) {}
     } message: {
       Text("删除后不能恢复，已经发给云端模型的内容收不回来。")
     }
