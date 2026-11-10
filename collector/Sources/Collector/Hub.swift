@@ -9,7 +9,7 @@ struct Config {
   var bun: String
   var pluginInterval: TimeInterval = 300
 
-  /// 命令行参数优先，其次是数据目录下的 collector.json。
+  /// 命令行参数优先，其次是数据目录下的 collector.json；端口再其次读中枢的 hub.json（设置页改端口写在这里），都没有用 47823。
   static func load() -> Config {
     let args = CommandLine.arguments
     func arg(_ name: String) -> String? {
@@ -21,7 +21,13 @@ struct Config {
     var file: [String: Any] = [:]
     if let d = try? Data(contentsOf: dataDir.appendingPathComponent("collector.json")),
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { file = j }
-    let port = arg("--port") ?? (file["port"] as? Int).map(String.init) ?? "47823"
+    func hubPort() -> String? {
+      guard let d = try? Data(contentsOf: dataDir.appendingPathComponent("hub.json")),
+            let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+            let p = j["port"] as? Int, (1024...65535).contains(p) else { return nil }
+      return String(p)
+    }
+    let port = arg("--port") ?? (file["port"] as? Int).map(String.init) ?? hubPort() ?? "47823"
     var c = Config(dataDir: dataDir, hubURL: URL(string: "http://127.0.0.1:\(port)")!,
                    repo: arg("--repo") ?? file["repo"] as? String,
                    bun: arg("--bun") ?? file["bun"] as? String ?? home.appendingPathComponent(".bun/bin/bun").path)

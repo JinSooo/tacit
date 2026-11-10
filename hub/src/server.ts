@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 import { HubDB, InputError } from "./db.ts";
 import { historySegments } from "./history.ts";
 import { hubStatus } from "./status.ts";
+import { DEFAULT_PORT, dataDirOf } from "./hub-json.ts";
+import { createSettings, type SettingsDeps } from "./settings.ts";
 
 const defaultWebDir = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'";
@@ -56,14 +58,16 @@ function authorized(request: Request, token: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-export function createHandler(options: { db: HubDB; token: string; port?: number; webDir?: string }) {
+/** settings 不传时用默认数据目录和系统钥匙串，不会重启进程。 */
+export function createHandler(options: { db: HubDB; token: string; port?: number; webDir?: string; settings?: SettingsDeps }) {
   if (!options.token) throw new Error("本地 token 不能为空");
   const { db, token } = options;
+  const settings = createSettings(options.settings ?? { dataDir: dataDirOf() });
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const method = request.method;
     const host = request.headers.get("host");
-    const port = options.port ?? 47823;
+    const port = options.port ?? DEFAULT_PORT;
     // 被拒的请求不写审计：未鉴权的来源（例如 DNS 重绑定的网页）不能往库里写东西。
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return new Response("Host 不被允许", { status: 421 });
     if (method === "GET" && url.pathname === "/v1/health") return Response.json({ ok: true });
@@ -76,6 +80,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
       if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port }));
+      if (url.pathname.startsWith("/v1/settings/")) { const r = await settings(request, url, { db, port, readJSON }); if (r) return r; }
       if (method === "GET" && url.pathname === "/v1/audit") return Response.json(new AgentReads(db).audit(url.searchParams));
       const audio = new AudioStore(db);
       if (method === "GET" && url.pathname === "/v1/audio/sync") return Response.json(audio.sync(url.searchParams.get("device")));
@@ -170,10 +175,12 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
   };
 }
 
-export function startServer(options: { db: HubDB; token: string; port?: number }) {
+export function startServer(options: { db: HubDB; token: string; port?: number; settings?: SettingsDeps }) {
   let handler: ReturnType<typeof createHandler>;
-  return Bun.serve({ hostname: "127.0.0.1", port: options.port ?? 47823, fetch(request, server) {
+  return Bun.serve({ hostname: "127.0.0.1", port: options.port ?? DEFAULT_PORT, fetch(request, server) {
     handler ??= createHandler({ ...options, port: server.port });
+    // 测试连接最长等 60 秒，超过 Bun 默认的 10 秒空闲超时。
+    if (new URL(request.url).pathname === "/v1/settings/models/test") server.timeout(request, 75);
     return handler(request);
   } });
 }
