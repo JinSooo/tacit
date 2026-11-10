@@ -152,4 +152,8 @@ private final class Probe {
   let moved = ShellHook.adding(to: "source \"/old/plugins/shell/hook.zsh\"\n", repo: repo)
   #expect(moved.components(separatedBy: "hook.zsh").count == 2 && moved.contains(repo))
   #expect(ShellHook.adding(to: "", repo: repo) == "# record-anything：记录终端命令\n" + ShellHook.line(repo: repo) + "\n")
+  // 回归：旧版说明写进去的是带存在判断的一行，设置页曾误报"还没有记录钩子"，关掉时也删不掉。
+  let legacy = original + "# record-anything：记录终端命令（卸载时删掉这两行）\n[ -f \"/old/plugins/shell/hook.zsh\" ] && source \"/old/plugins/shell/hook.zsh\"\n"
+  #expect(ShellHook.installed(in: legacy))
+  #expect(ShellHook.removing(from: legacy) == original)
 }

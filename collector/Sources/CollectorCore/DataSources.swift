@@ -137,14 +137,15 @@ public enum PluginImport {
   /// 常规增量 3 分钟；导入可能要读很多年的日志，放宽到 30 分钟。
   public static func timeout(since: Date?) -> TimeInterval { since == nil ? 180 : 1800 }
 
-  /// 一次运行的状态文字，例如"成功 · 新增 3 · 2 秒"。不到 1 秒不写耗时。
+  /// 一次运行的状态文字，例如"新增 3 条，用时 2 秒"。不到 1 秒不写耗时。
   public static func outcomeText(ok: Bool, exitStatus: Int32, accepted: Int?, elapsed: TimeInterval) -> String {
-    var parts = [ok ? "成功" : "失败（\(exitStatus)）"]
-    if let accepted { parts.append("新增 \(accepted)") }
+    let head: String
+    if !ok { head = "失败（退出码 \(exitStatus)）" }
+    else if let accepted { head = accepted == 0 ? "没有新记录" : "新增 \(accepted.formatted()) 条" }
+    else { head = "完成" }
     let s = Int(elapsed)
-    if s >= 60 { parts.append(s % 60 == 0 ? "\(s / 60) 分钟" : "\(s / 60) 分 \(s % 60) 秒") }
-    else if s >= 1 { parts.append("\(s) 秒") }
-    return parts.joined(separator: " · ")
+    let took = s >= 60 ? (s % 60 == 0 ? "\(s / 60) 分钟" : "\(s / 60) 分 \(s % 60) 秒") : s >= 1 ? "\(s) 秒" : nil
+    return took.map { "\(head)，用时 \($0)" } ?? head
   }
 }
 

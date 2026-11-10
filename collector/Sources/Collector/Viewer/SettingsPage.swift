@@ -185,7 +185,7 @@ struct HubSettingsView: View {
         if info?.locked == true { SettingsMessage(text: "端口由环境变量 RA_PORT 固定，这里不能改。", warning: false) }
         if let message { SettingsMessage(text: message, warning: false) }
         if let error { SettingsMessage(text: error) }
-        LabeledContent("运行状态") {
+        LabeledContent("详细状态") {
           Button("在浏览器中打开…") {
             if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务还没启动过，重新运行一次 install.sh。" }
           }

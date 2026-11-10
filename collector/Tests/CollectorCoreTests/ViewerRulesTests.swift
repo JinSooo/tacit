@@ -35,10 +35,10 @@ private func read(_ id: String, tool: String = "claude-code", kind: String = "co
 
 // 用户报告：数据源状态"成功 · 新增 0 · 0s"里的 0s 没有意义。
 @Test func pluginOutcomeOmitsSubSecondDurationAndUsesChineseUnits() {
-  #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: 0, elapsed: 0.4) == "成功 · 新增 0")
-  #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: 3, elapsed: 2.7) == "成功 · 新增 3 · 2 秒")
-  #expect(PluginImport.outcomeText(ok: false, exitStatus: 1, accepted: nil, elapsed: 125) == "失败（1） · 2 分 5 秒")
-  #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: nil, elapsed: 180) == "成功 · 3 分钟")
+  #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: 0, elapsed: 0.4) == "没有新记录")
+  #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: 3, elapsed: 2.7) == "新增 3 条，用时 2 秒")
+  #expect(PluginImport.outcomeText(ok: false, exitStatus: 1, accepted: nil, elapsed: 125) == "失败（退出码 1），用时 2 分 5 秒")
+  #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: nil, elapsed: 180) == "完成，用时 3 分钟")
 }
 
 private let builtin = MicrophoneDevice(uid: "builtin-uid", name: "MacBook Pro Microphone", isBuiltIn: true)

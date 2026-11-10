@@ -10,11 +10,12 @@ public enum ShellHook {
     "source \"\(repo.replacingOccurrences(of: "\"", with: "\\\""))/\(script)\""
   }
 
-  /// 没被注释掉、source 任意位置 hook.zsh 的行（仓库挪过位置也算）。
+  /// 没被注释掉、source 任意位置 hook.zsh 的行（仓库挪过位置也算），
+  /// 包括旧版说明里带存在判断的写法 `[ -f "…/hook.zsh" ] && source "…/hook.zsh"`。
   static func isHookLine(_ raw: Substring) -> Bool {
     let t = raw.trimmingCharacters(in: .whitespaces)
-    guard !t.hasPrefix("#"), t.hasPrefix("source ") || t.hasPrefix(". ") else { return false }
-    return t.contains(script)
+    guard !t.hasPrefix("#"), t.contains(script) else { return false }
+    return t.hasPrefix("source ") || t.hasPrefix(". ") || t.contains("&& source ") || t.contains("&& . ")
   }
 
   public static func installed(in text: String) -> Bool {
@@ -37,7 +38,7 @@ public enum ShellHook {
     for l in lines {
       if isHookLine(l) {
         // 一并去掉我们写在它上面的注释，以及因此多出来的空行。
-        if out.last.map({ $0.trimmingCharacters(in: .whitespaces) == marker }) == true { out.removeLast() }
+        if out.last.map({ $0.trimmingCharacters(in: .whitespaces).hasPrefix(marker) }) == true { out.removeLast() }
         if out.last?.trimmingCharacters(in: .whitespaces).isEmpty == true, out.count > 0 { out.removeLast() }
         continue
       }
