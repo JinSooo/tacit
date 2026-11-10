@@ -10,19 +10,20 @@ import { claudeCLI } from "./claude-cli.ts";
 import { codexCLI } from "./codex-cli.ts";
 import { httpComplete } from "./http.ts";
 import { safeError } from "./process.ts";
-import type { BackendContext, LLMRequest, LLMResult, ReadKey, Spawn, UsageRow } from "./types.ts";
-export type { Tier, LLMRequest, LLMResult, UsageRow, ReadKey, Spawn } from "./types.ts";
+import type { BackendContext, LLMRequest, LLMResult, ModelConfig, ReadKey, Spawn, Tier, UsageRow } from "./types.ts";
+export type { Tier, LLMRequest, LLMResult, UsageRow, ReadKey, Spawn, ModelConfig } from "./types.ts";
 
 // 跨实例共用队列，失败不会堵塞后续调用。
 let queue: Promise<unknown> = Promise.resolve();
-export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRow) => void | Promise<void>; readKey?: ReadKey; spawn?: Spawn }) {
+/** configs：不传时每次调用都重新读 models.json（改完下一次调用即生效）；设置页"测试连接"用它传入未保存的配置。 */
+export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRow) => void | Promise<void>; readKey?: ReadKey; spawn?: Spawn; configs?: () => Promise<Record<Tier, ModelConfig>> }) {
   async function execute<T>(req: LLMRequest): Promise<LLMResult<T>> {
     const start = performance.now();
     const row: UsageRow = { id: ulid(), at: toLocalIso(Date.now()), tier: req.tier, provider: "", model: "", input_chars: Array.from(req.system).length + Array.from(req.prompt).length, output_chars: 0, input_tokens: null, output_tokens: null, ms: 0, ok: 0, error: null };
     const metrics = { outputChars: 0, inputTokens: null as number | null, outputTokens: null as number | null };
     let data: unknown;
     try {
-      const configs = await loadConfig(options.dataDir);
+      const configs = await (options.configs ?? (() => loadConfig(options.dataDir)))();
       const config = configs[req.tier];
       if (!config) throw new Error("不支持的模型档位");
       row.provider = config.provider; row.model = config.model;

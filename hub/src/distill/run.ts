@@ -9,6 +9,7 @@ import { persistFrames } from "./frames.ts";
 import { DistillRules } from "./rules.ts";
 import { DistillRequests, localDayStart } from "./requests.ts";
 import * as P from "./prompts.ts";
+import { readGeneral } from "../general-settings.ts";
 
 export interface LLM { complete<T>(req: LLMRequest): Promise<LLMResult<T>> }
 export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: string) => void }
@@ -17,7 +18,7 @@ const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 export const LIMITS = {
   assignBatch: 20, assignChars: 24_000, assignExcerpt: 240, assignRecords: 10, assignThreads: 40,
   digestChars: 45_000, sessionExcerpt: 3_000, otherExcerpt: 800, digestRecords: 40, threadsPerRound: 12,
-  candidateTTL: DAY, newSession: 30 * MIN, pauseAfter: 2 * HOUR, askDoneAfter: 3 * DAY, archiveAfter: 7 * DAY,
+  candidateTTL: DAY, newSession: 30 * MIN, pauseAfter: 2 * HOUR,
   // 门槛（AGENTS.md）：累计 15 分钟或跨两段活动才建线程，不够的只进日记。
   threadMinutes: 15, threadFrames: 2,
 };
@@ -365,19 +366,22 @@ export function nowStep(store: DistillStore, now: number) {
 
 // ---------------- 6. 线程生命周期 ----------------
 
+/** 多久问"做完了吗"、问后多久归档由通用设置决定（默认 3 天、7 天），每轮现读。 */
 export function lifecycleStep(store: DistillStore, now: number) {
+  const settings = readGeneral(store.hub);
+  const askDoneAfter = settings.ask_done_days * DAY, archiveAfter = settings.archive_days * DAY;
   return store.hub.db.transaction(() => {
     let archived = 0;
     const expired = (store.hub.db.prepare("SELECT id,payload,created_at FROM pending WHERE kind='thread_done' AND resolved_at IS NULL").all() as { id: string; payload: string; created_at: string }[])
       // RFC 3339 可以带不同时区，比较时间戳而非字符串。
-      .filter(p => Date.parse(p.created_at) < now - LIMITS.archiveAfter);
+      .filter(p => Date.parse(p.created_at) < now - archiveAfter);
     for (const p of expired) {
       const payload = JSON.parse(p.payload) as { thread_id?: string };
       archived += store.hub.db.prepare("UPDATE threads SET status='archived' WHERE id=? AND status IN ('active','paused')").run(payload.thread_id ?? null).changes;
       store.hub.db.prepare("UPDATE pending SET resolved_at=?,resolution='expired' WHERE id=?").run(new Date(now).toISOString(), p.id);
     }
     const paused = store.hub.db.prepare("UPDATE threads SET status='paused' WHERE status='active' AND last_ms<?").run(now - LIMITS.pauseAfter).changes;
-    const stale = store.hub.db.prepare("SELECT id FROM threads WHERE status IN ('active','paused') AND last_ms<?").all(now - LIMITS.askDoneAfter) as { id: string }[];
+    const stale = store.hub.db.prepare("SELECT id FROM threads WHERE status IN ('active','paused') AND last_ms<?").all(now - askDoneAfter) as { id: string }[];
     for (const t of stale) askDone(store, t.id, now);
     return { paused, asked: stale.length, archived };
   })();

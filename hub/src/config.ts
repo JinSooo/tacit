@@ -1,15 +1,14 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { dataDirOf, resolvePort } from "./hub-json.ts";
 
 export interface HubConfig { dataDir: string; dbKey: string; token: string; port: number }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): HubConfig {
-  const dataDir = env.RA_DATA_DIR ?? join(homedir(), "Library/Application Support/record-anything");
-  const port = Number(env.RA_PORT ?? 47823);
-  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("RA_PORT 必须是 0–65535 的整数");
+  const dataDir = dataDirOf(env);
+  const { port } = resolvePort(env, dataDir);
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   let dbKey = env.RA_DB_KEY;
   if (dbKey === undefined) {

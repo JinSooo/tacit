@@ -7,7 +7,7 @@ bun hub/src/cli.ts serve
 bun hub/src/cli.ts run-plugin browser -- bun plugins/browser/src/cli.ts
 ```
 
-- 服务固定绑定 `127.0.0.1`，默认端口 `47823`，`RA_PORT` 可覆盖（`0` 为系统分配端口）。
+- 服务固定绑定 `127.0.0.1`。端口优先级：`RA_PORT`（`0` 为系统分配端口）> 数据目录 `hub.json` 的 `port` > `47823`，设置页可改（见 `docs/contracts.md` 3.1）。
 - 数据目录默认 `~/Library/Application Support/record-anything/`，`RA_DATA_DIR` 可覆盖。目录内有 `history.db`、权限 `0600` 的 `token` 和 `plugins/<name>/state.json`。
 - `RA_DB_KEY` 优先；未设置时使用 macOS 钥匙串的 `record-anything` / `db-key`。仅明确返回“条目不存在”时生成 32 字节随机密钥并保存，其他钥匙串错误直接失败。不要丢失已有数据库的密钥。
 - 除 `GET /v1/health` 外，接口需要 `Authorization: Bearer <token 文件内容>`。启动日志不输出 token、密钥或记录正文。

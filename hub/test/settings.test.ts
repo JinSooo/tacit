@@ -1,0 +1,270 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { spawn as nodeSpawn } from "node:child_process";
+import { chmodSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
+import { join } from "node:path";
+import { createHandler } from "../src/server.ts";
+import { resolvePort, writeHubPort } from "../src/hub-json.ts";
+import { readGeneral } from "../src/general-settings.ts";
+import { lifecycleStep } from "../src/distill/run.ts";
+import { DistillStore } from "../src/distill/store.ts";
+import { AgentReads } from "../src/agent.ts";
+import { securityKeychain, type Keychain } from "../src/llm/keychain.ts";
+import type { SettingsDeps } from "../src/settings.ts";
+import type { Spawn } from "../src/llm/index.ts";
+import { networkDenied, setup } from "./helpers.ts";
+
+const host = "127.0.0.1:47823";
+const SECRET = "sk-synthetic-SECRET-0123456789abcdef";
+let ctx: ReturnType<typeof setup>, keys: Map<string, string>, restarts: number;
+beforeEach(() => { ctx = setup(); keys = new Map(); restarts = 0; });
+afterEach(() => ctx.cleanup());
+
+const fakeKeychain = (): Keychain => ({
+  async has(p) { return keys.has(p); },
+  async set(p, k) { keys.set(p, k); },
+  async remove(p) { return keys.delete(p); },
+});
+function handler(deps: Partial<SettingsDeps> = {}) {
+  return createHandler({ db: ctx.db, token: ctx.config.token, port: 47823, settings: { dataDir: ctx.dir, env: {}, keychain: fakeKeychain(), probePort: async () => {}, restart: () => { restarts++; }, ...deps } });
+}
+async function call(h: ReturnType<typeof handler>, method: string, path: string, body?: unknown, auth = true) {
+  const response = await h(new Request(`http://${host}${path}`, {
+    method, headers: { host, "content-type": "application/json", ...(auth ? { authorization: `Bearer ${ctx.config.token}` } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }));
+  const text = await response.text();
+  expect(text).not.toContain(SECRET);
+  return { status: response.status, body: text ? JSON.parse(text) : null };
+}
+const tier = (provider: string, model = "synthetic-model", extra = {}) => ({ provider, model, ...extra });
+
+test("端口优先级：RA_PORT > hub.json > 47823；hub.json 无效时报错，写入保留其他字段", () => {
+  expect(resolvePort({}, ctx.dir)).toEqual({ port: 47823, source: "default" });
+  writeFileSync(join(ctx.dir, "hub.json"), JSON.stringify({ port: 50001, note: "保留" }));
+  expect(resolvePort({}, ctx.dir)).toEqual({ port: 50001, source: "file" });
+  expect(resolvePort({ RA_PORT: "50002" }, ctx.dir)).toEqual({ port: 50002, source: "env" });
+  expect(resolvePort({ RA_PORT: "0" }, ctx.dir)).toEqual({ port: 0, source: "env" });
+  expect(() => resolvePort({ RA_PORT: "" }, ctx.dir)).toThrow("RA_PORT");
+  writeHubPort(ctx.dir, 50003);
+  expect(JSON.parse(readFileSync(join(ctx.dir, "hub.json"), "utf8"))).toEqual({ port: 50003, note: "保留" });
+  expect(() => writeHubPort(ctx.dir, 80)).toThrow("1024–65535");
+  for (const bad of ['{"port":80}', '{"port":"50001"}', '{"port":1.5}', "[]", "{"]) {
+    writeFileSync(join(ctx.dir, "hub.json"), bad);
+    expect(() => resolvePort({}, ctx.dir)).toThrow("hub.json");
+  }
+  writeFileSync(join(ctx.dir, "hub.json"), "{}");
+  expect(resolvePort({}, ctx.dir).source).toBe("default");
+  expect(readdirSync(ctx.dir).filter(f => f.endsWith(".tmp"))).toEqual([]);
+});
+
+test("GET/PUT /v1/settings/hub：校验、写 hub.json 后重启；RA_PORT 锁定；需要鉴权", async () => {
+  const h = handler();
+  expect(await call(h, "GET", "/v1/settings/hub")).toEqual({ status: 200, body: { port: 47823, listen: "127.0.0.1", lan: false, locked: false } });
+  expect((await call(h, "GET", "/v1/settings/hub", undefined, false)).status).toBe(401);
+  expect((await call(h, "PUT", "/v1/settings/hub", { port: 50010 }, false)).status).toBe(401);
+  for (const bad of [{ port: 1023 }, { port: 65536 }, { port: "50010" }, { port: 50010.5 }, {}, { port: 50010, lan: true }]) {
+    expect((await call(h, "PUT", "/v1/settings/hub", bad)).status).toBe(400);
+  }
+  expect(existsSync(join(ctx.dir, "hub.json"))).toBe(false);
+  expect(await call(h, "PUT", "/v1/settings/hub", { port: 47823 })).toEqual({ status: 200, body: { port: 47823, restarting: false } });
+  expect(await call(h, "PUT", "/v1/settings/hub", { port: 50010 })).toEqual({ status: 200, body: { port: 50010, restarting: true } });
+  expect(JSON.parse(readFileSync(join(ctx.dir, "hub.json"), "utf8"))).toEqual({ port: 50010 });
+  expect(restarts).toBe(0);
+  await Bun.sleep(400);
+  expect(restarts).toBe(1);
+
+  const locked = handler({ env: { RA_PORT: "47823" } });
+  expect((await call(locked, "GET", "/v1/settings/hub")).body.locked).toBe(true);
+  const refused = await call(locked, "PUT", "/v1/settings/hub", { port: 50020 });
+  expect(refused.status).toBe(409); expect(refused.body.error).toContain("环境变量 RA_PORT");
+  expect(JSON.parse(readFileSync(join(ctx.dir, "hub.json"), "utf8"))).toEqual({ port: 50010 });
+});
+
+test("PUT /v1/settings/hub 新端口被占用时 409，不写 hub.json、不重启", async () => {
+  if (await networkDenied()) return;
+  const busy: Server = createServer();
+  await new Promise<void>(resolve => busy.listen(0, "127.0.0.1", resolve));
+  const port = (busy.address() as { port: number }).port;
+  try {
+    // 用真实的试绑定，不注入 probePort。
+    const h = handler({ probePort: undefined });
+    const result = await call(h, "PUT", "/v1/settings/hub", { port });
+    expect(result.status).toBe(409); expect(result.body.error).toBe(`端口 ${port} 已被占用，请换一个`);
+    expect(existsSync(join(ctx.dir, "hub.json"))).toBe(false);
+  } finally { await new Promise(resolve => busy.close(resolve)); }
+  await Bun.sleep(400);
+  expect(restarts).toBe(0);
+});
+test("models：GET 给默认值、说明和 key 状态；PUT 严格校验后原子写回，坏文件报 config_error", async () => {
+  const h = handler();
+  const initial = (await call(h, "GET", "/v1/settings/models")).body;
+  expect(initial.tiers).toEqual({ minute: tier("claude-cli", "haiku"), hour: tier("claude-cli", "sonnet"), day: tier("claude-cli", "sonnet") });
+  expect(initial.config_error).toBeNull();
+  expect(initial.keys).toEqual({ anthropic: false, "openai-compatible": false });
+  expect(initial.providers.map((p: { id: string }) => p.id)).toEqual(["claude-cli", "codex-cli", "anthropic", "openai-compatible"]);
+  expect(Object.keys(initial.tier_info)).toEqual(["minute", "hour", "day"]);
+  for (const t of ["minute", "hour", "day"]) expect(initial.tier_info[t].description.length).toBeGreaterThan(10);
+
+  const good = { minute: tier("codex-cli", "gpt-mini"), hour: tier("anthropic", "claude-x", { base_url: "https://relay.invalid/v1" }), day: tier("openai-compatible", "gpt-x") };
+  const saved = await call(h, "PUT", "/v1/settings/models", { tiers: good });
+  expect(saved.status).toBe(200); expect(saved.body.tiers).toEqual(good);
+  expect(JSON.parse(readFileSync(join(ctx.dir, "models.json"), "utf8"))).toEqual({ tiers: good });
+  const before = readFileSync(join(ctx.dir, "models.json"), "utf8");
+  for (const [body, error] of [
+    [{ tiers: { minute: good.minute, hour: good.hour } }, "tiers.day"],
+    [{ tiers: { ...good, week: good.day } }, "未知档位"],
+    [{ tiers: { ...good, minute: tier("unknown") } }, "provider"],
+    [{ tiers: { ...good, minute: tier("anthropic", " ") } }, "model"],
+    [{ tiers: { ...good, minute: tier("anthropic", "m", { api_key: SECRET }) } }, "未知字段"],
+    [{ tiers: { ...good, minute: tier("codex-cli", "m", { base_url: "https://x.invalid" }) } }, "只适用于 HTTP"],
+    [{ tiers: { ...good, minute: tier("anthropic", "m", { base_url: "https://user:pw@x.invalid" }) } }, "base_url"],
+    [{ tiers: { ...good, minute: tier("anthropic", "m", { base_url: "ftp://x.invalid" }) } }, "base_url"],
+    [{ tiers: good, extra: 1 }, "只接受 tiers"],
+    [[], "对象"],
+  ] as const) {
+    const r = await call(h, "PUT", "/v1/settings/models", body);
+    expect(r.status).toBe(400); expect(r.body.error).toContain(error);
+  }
+  expect(readFileSync(join(ctx.dir, "models.json"), "utf8")).toBe(before);
+  expect(readdirSync(ctx.dir).filter(f => f.endsWith(".tmp"))).toEqual([]);
+
+  writeFileSync(join(ctx.dir, "models.json"), "{");
+  const broken = (await call(h, "GET", "/v1/settings/models")).body;
+  expect(broken.config_error).toContain("不是合法 JSON"); expect(broken.tiers.minute).toEqual(tier("claude-cli", "haiku"));
+});
+
+test("keys：PUT/DELETE 只接受两种 provider，key 从不出现在响应、错误和 models.json 里", async () => {
+  const h = handler();
+  expect(await call(h, "PUT", "/v1/settings/keys/anthropic", { key: `  ${SECRET}\n` })).toEqual({ status: 200, body: { provider: "anthropic", set: true } });
+  expect(keys.get("anthropic")).toBe(SECRET);
+  expect((await call(h, "GET", "/v1/settings/models")).body.keys).toEqual({ anthropic: true, "openai-compatible": false });
+  for (const [path, body] of [
+    ["/v1/settings/keys/claude-cli", { key: SECRET }], ["/v1/settings/keys/unknown", { key: SECRET }],
+    ["/v1/settings/keys/openai-compatible", { key: "short" }], ["/v1/settings/keys/openai-compatible", { key: `${SECRET} tail` }],
+    ["/v1/settings/keys/openai-compatible", { key: `${SECRET}"` }], ["/v1/settings/keys/openai-compatible", { key: `${SECRET}\\` }],
+    ["/v1/settings/keys/openai-compatible", { key: SECRET, provider: "x" }], ["/v1/settings/keys/openai-compatible", { key: 123 }],
+  ] as const) expect((await call(h, "PUT", path, body)).status).toBe(400);
+  expect(keys.has("openai-compatible")).toBe(false);
+  expect(await call(h, "DELETE", "/v1/settings/keys/anthropic")).toEqual({ status: 200, body: { provider: "anthropic", deleted: true } });
+  expect(await call(h, "DELETE", "/v1/settings/keys/anthropic")).toEqual({ status: 200, body: { provider: "anthropic", deleted: false } });
+  expect((await call(h, "DELETE", "/v1/settings/keys/codex-cli")).status).toBe(400);
+  expect((await call(h, "PUT", "/v1/settings/keys/anthropic", { key: SECRET }, false)).status).toBe(401);
+
+  // 钥匙串失败：500 + 固定文字，不带 key 和底层错误。
+  const failing = handler({ keychain: { has: async () => { throw new Error(SECRET); }, set: async () => { throw new Error(SECRET); }, remove: async () => { throw new Error(SECRET); } } });
+  expect(await call(failing, "PUT", "/v1/settings/keys/anthropic", { key: SECRET })).toEqual({ status: 500, body: { error: "写入钥匙串失败" } });
+  expect(await call(failing, "DELETE", "/v1/settings/keys/anthropic")).toEqual({ status: 500, body: { error: "删除钥匙串条目失败" } });
+  expect((await call(failing, "GET", "/v1/settings/models")).body.keys).toEqual({ anthropic: null, "openai-compatible": null });
+  for (const file of readdirSync(ctx.dir)) if (!file.startsWith("history.db")) expect(readFileSync(join(ctx.dir, file), "utf8")).not.toContain(SECRET);
+});
+
+test("models/test：用未保存的配置调一次，不写 llm_usage；错误已脱敏；参数非法 400", async () => {
+  const script = join(ctx.dir, "fake-claude");
+  writeFileSync(script, `#!${process.execPath}
+const input = await Bun.stdin.text();
+if (process.env.TEST_MODE === "fail") { console.error("synthetic failure token=${SECRET}"); process.exit(3); }
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, structured_output: { ok: true }, usage: {} }));
+`);
+  chmodSync(script, 0o700);
+  const calls: string[][] = [];
+  const spawnWith = (mode: string): Spawn => (_cmd, args, options) => { calls.push(args); return nodeSpawn(script, args, { ...options, env: { ...options.env, TEST_MODE: mode } }); };
+  const usage = () => (ctx.db.db.prepare("SELECT count(*) n FROM llm_usage").get() as { n: number }).n;
+
+  const ok = await call(handler({ llm: { spawn: spawnWith("ok") } }), "POST", "/v1/settings/models/test", { tier: "hour", config: tier("claude-cli", "unsaved-model") });
+  expect(ok.status).toBe(200);
+  expect(ok.body).toMatchObject({ ok: true, provider: "claude-cli", model: "unsaved-model", error: null });
+  expect(typeof ok.body.ms).toBe("number");
+  expect(calls[0]).toContain("unsaved-model");
+  expect(existsSync(join(ctx.dir, "models.json"))).toBe(false);
+
+  const failed = await call(handler({ llm: { spawn: spawnWith("fail") } }), "POST", "/v1/settings/models/test", { tier: "minute" });
+  expect(failed.status).toBe(200);
+  expect(failed.body.ok).toBe(false); expect(failed.body.model).toBe("haiku");
+  expect(failed.body.error).toContain("退出失败"); expect(failed.body.error.length).toBeLessThanOrEqual(300);
+  expect(usage()).toBe(0);
+
+  const h = handler();
+  for (const body of [{}, { tier: "week" }, { tier: "minute", config: tier("unknown") }, { tier: "minute", extra: 1 }]) expect((await call(h, "POST", "/v1/settings/models/test", body)).status).toBe(400);
+  writeFileSync(join(ctx.dir, "models.json"), "{");
+  expect((await call(h, "POST", "/v1/settings/models/test", { tier: "minute" })).body.error).toContain("不是合法 JSON");
+});
+
+test("general：默认值、范围、只改给出的字段；注入上限和提炼生命周期现读", async () => {
+  const h = handler();
+  const initial = (await call(h, "GET", "/v1/settings/general")).body;
+  expect(initial).toEqual({ inject_tokens: 800, ask_done_days: 3, archive_days: 7, defaults: { inject_tokens: 800, ask_done_days: 3, archive_days: 7 }, ranges: { inject_tokens: [200, 4000], ask_done_days: [1, 30], archive_days: [1, 90] } });
+  for (const body of [{}, [], { inject_tokens: 199 }, { inject_tokens: 4001 }, { ask_done_days: 0 }, { ask_done_days: 31 }, { archive_days: 91 }, { archive_days: 1.5 }, { archive_days: "7" }, { other: 1 }, { inject_tokens: 900, other: 1 }]) {
+    expect((await call(h, "PUT", "/v1/settings/general", body)).status).toBe(400);
+  }
+  expect(readGeneral(ctx.db)).toEqual({ inject_tokens: 800, ask_done_days: 3, archive_days: 7 });
+  const saved = await call(h, "PUT", "/v1/settings/general", { inject_tokens: 200, archive_days: 2 });
+  expect(saved.status).toBe(200); expect(saved.body).toMatchObject({ inject_tokens: 200, ask_done_days: 3, archive_days: 2 });
+  expect(await call(h, "PUT", "/v1/settings/general", { ask_done_days: 1 })).toMatchObject({ body: { inject_tokens: 200, ask_done_days: 1, archive_days: 2 } });
+  // 库里存的值坏了（例如手改）时回落到默认值。
+  ctx.db.db.prepare("UPDATE distill_state SET v=? WHERE k='general_settings'").run(JSON.stringify({ inject_tokens: 99999, ask_done_days: 2 }));
+  expect(readGeneral(ctx.db)).toEqual({ inject_tokens: 800, ask_done_days: 2, archive_days: 7 });
+
+  // 注入上限现读：同样的内容，800 时放得下两条线程，200 时只剩项目。
+  const store = new DistillStore(ctx.db);
+  store.upsertProject({ id: "p", name: "合成项目", confirmed: 1, keys: { repos: ["/synthetic/foo"], hosts: [], chats: [] }, brief: "合成项目摘要", last_ms: 1000 });
+  for (const [id, ms] of [["new", 2000], ["old", 1000]] as const) store.upsertThread({ id, project_id: "p", title: `合成线程${id}`, brief: "简".repeat(150), status: "active", last_ms: ms });
+  const inject = async () => ((await new AgentReads(ctx.db).handle("context", new URLSearchParams({ tool: "codex", cwd: "/synthetic/foo", event: "startup" }))).json()) as Promise<{ text: string; tokens_est: number }>;
+  await call(h, "PUT", "/v1/settings/general", { inject_tokens: 800 });
+  expect((await inject()).text).toContain("合成线程old");
+  await call(h, "PUT", "/v1/settings/general", { inject_tokens: 200 });
+  const small = await inject();
+  expect(small.text).not.toContain("合成线程new"); expect(small.tokens_est).toBeLessThanOrEqual(200);
+
+  // 生命周期现读：问"做完了吗"和归档的天数。
+  const now = Date.parse("2026-11-08T12:00:00+08:00"), DAY = 86_400_000;
+  for (const id of ["new", "old"]) store.upsertThread({ ...store.thread(id)!, status: "done" });
+  store.upsertThread({ id: "quiet", project_id: "p", title: "合成安静线程", brief: "合成", status: "paused", last_ms: now - 2 * DAY });
+  await call(h, "PUT", "/v1/settings/general", { ask_done_days: 3 });
+  expect(lifecycleStep(store, now).asked).toBe(0);
+  await call(h, "PUT", "/v1/settings/general", { ask_done_days: 1, archive_days: 1 });
+  expect(lifecycleStep(store, now).asked).toBe(1);
+  expect(lifecycleStep(store, now + DAY - 1).archived).toBe(0);
+  expect(lifecycleStep(store, now + DAY + 1).archived).toBe(1);
+  expect(store.thread("quiet")?.status).toBe("archived");
+});
+
+test("设置路由：未知路径和方法 404，Host 校验照旧", async () => {
+  const h = handler();
+  expect((await call(h, "GET", "/v1/settings/unknown")).status).toBe(404);
+  expect((await call(h, "DELETE", "/v1/settings/general")).status).toBe(404);
+  expect((await call(h, "GET", "/v1/settings/keys/anthropic")).status).toBe(404);
+  const wrongHost = await h(new Request(`http://${host}/v1/settings/hub`, { headers: { host: "evil.invalid", authorization: `Bearer ${ctx.config.token}` } }));
+  expect(wrongHost.status).toBe(421);
+});
+
+test("钥匙串封装：key 经 stdin 交给 security -i，不进进程参数；退出码 44 视为不存在", async () => {
+  const log = join(ctx.dir, "security.jsonl"), fake = join(ctx.dir, "fake-security");
+  // 假的 security：记录 argv 和 stdin，按 FAKE_CODE 退出；不碰真实钥匙串。
+  writeFileSync(fake, `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args: process.argv.slice(2), stdin: await Bun.stdin.text() }) + "\\n");
+process.exit(Number(process.env.FAKE_CODE ?? 0));
+`);
+  chmodSync(fake, 0o700);
+  const chain = securityKeychain(fake);
+  await chain.set("openai-compatible", SECRET);
+  expect(await chain.has("anthropic")).toBe(true);
+  expect(await chain.remove("anthropic")).toBe(true);
+  const calls = readFileSync(log, "utf8").trim().split("\n").map(l => JSON.parse(l) as { args: string[]; stdin: string });
+  expect(calls[0]!.args).toEqual(["-i"]);
+  expect(calls[0]!.stdin).toBe(`add-generic-password -U -s record-anything -a provider:openai-compatible -w "${SECRET}"\n`);
+  expect(calls[1]!.args).toEqual(["find-generic-password", "-s", "record-anything", "-a", "provider:anthropic"]);
+  expect(calls[2]!.args).toEqual(["delete-generic-password", "-s", "record-anything", "-a", "provider:anthropic"]);
+  for (const c of calls) expect(c.args.join(" ")).not.toContain(SECRET);
+  await expect(chain.set("anthropic", 'bad"quote-0123456789')).rejects.toThrow("格式无效");
+  expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(3);
+
+  process.env.FAKE_CODE = "44";
+  try {
+    expect(await chain.has("anthropic")).toBe(false);
+    expect(await chain.remove("anthropic")).toBe(false);
+    await expect(chain.set("anthropic", SECRET)).rejects.toThrow("写入钥匙串失败");
+  } finally { delete process.env.FAKE_CODE; }
+  await expect(securityKeychain(join(ctx.dir, "missing")).has("anthropic")).rejects.toThrow("无法查询钥匙串");
+});

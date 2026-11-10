@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { DistillStore, type Thread } from "../src/distill/store.ts";
-import { lifecycleStep, LIMITS } from "../src/distill/run.ts";
+import { lifecycleStep } from "../src/distill/run.ts";
 import { createHandler } from "../src/server.ts";
 import { setup } from "./helpers.ts";
 
@@ -26,10 +26,10 @@ async function read(path: string) {
 }
 
 test("超过 7 天的完成确认自动归档，6 天及恰好 7 天不动；重复运行不再提问", async () => {
-  pending("old-active", "active", LIMITS.archiveAfter + 1);
-  pending("old-paused", "paused", LIMITS.archiveAfter + 1);
+  pending("old-active", "active", 7 * DAY + 1);
+  pending("old-paused", "paused", 7 * DAY + 1);
   pending("six-days", "paused", 6 * DAY);
-  pending("boundary", "paused", LIMITS.archiveAfter);
+  pending("boundary", "paused", 7 * DAY);
   // 不同时区的时间也按实际时刻比较，不能用 RFC 3339 字符串排序。
   pending("offset", "paused", 0, "2026-11-01T12:59:59+09:00");
   store.createPending({ id: "unrelated", kind: "project", payload: { project_id: "p" }, created_at: new Date(now - 20 * DAY).toISOString() });

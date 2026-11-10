@@ -219,11 +219,15 @@ cat > "$AGENTS/dev.record-anything.collector.plist" <<PLIST
 </dict></plist>
 PLIST
 launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.hub.plist"
+# 端口和中枢同一来源：数据目录的 hub.json（设置页可改），没有或无效时 47823。
+PORT="$(plutil -extract port raw -o - "$DATA/hub.json" 2>/dev/null || true)"
+case "$PORT" in ''|*[!0-9]*) PORT=47823 ;; esac
+if [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then PORT=47823; fi
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  curl -fsS http://127.0.0.1:47823/v1/health >/dev/null 2>&1 && break
+  curl -fsS "http://127.0.0.1:$PORT/v1/health" >/dev/null 2>&1 && break
   sleep 1
 done
-curl -fsS http://127.0.0.1:47823/v1/health >/dev/null 2>&1 || { echo "hub 没有启动，看日志：$DATA/logs/hub.log"; exit 1; }
+curl -fsS "http://127.0.0.1:$PORT/v1/health" >/dev/null 2>&1 || { echo "hub 没有启动，看日志：$DATA/logs/hub.log"; exit 1; }
 if [ "${RA_NO_DISTILL:-0}" != 1 ]; then
   write_distill_plist
   launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.distill.plist"

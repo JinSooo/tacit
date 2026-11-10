@@ -64,9 +64,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "open") {
-    const port = Number(process.env.RA_PORT ?? 47823);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("RA_PORT 必须是 1–65535 的整数");
-    const dataDir = process.env.RA_DATA_DIR ?? join(homedir(), "Library/Application Support/record-anything");
+    const { dataDirOf, resolvePort } = await import("./hub-json.ts");
+    const dataDir = dataDirOf();
+    const { port } = resolvePort(process.env, dataDir);
+    if (port < 1) throw new Error("RA_PORT 必须是 1–65535 的整数");
     const token = readFileSync(join(dataDir, "token"), "utf8").trim();
     if (!token) throw new Error("本地 token 文件为空");
     const url = `http://127.0.0.1:${port}/#token=${encodeURIComponent(token)}`;
@@ -134,9 +135,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const db = openDatabase(join(config.dataDir, "history.db"), config.dbKey, config.token);
   if (command === "serve") {
     try {
-      const server = startServer({ db, token: config.token, port: config.port });
+      let stopping = false;
+      const stop = async () => { if (stopping) return; stopping = true; await server.stop(true); db.close(); process.exit(0); };
+      // 改端口后退出，launchd 的 KeepAlive 用 hub.json 里的新端口重新拉起。
+      const restart = () => { console.log("端口已改，中枢退出以便用新端口重启"); void stop(); };
+      const server = startServer({ db, token: config.token, port: config.port, settings: { dataDir: config.dataDir, restart } });
       console.log(`Hub 已启动：http://127.0.0.1:${server.port}`);
-      const stop = async () => { await server.stop(true); db.close(); process.exit(0); };
       process.once("SIGINT", stop);
       process.once("SIGTERM", stop);
     } catch (e) { db.close(); throw e; }

@@ -47,7 +47,7 @@
 
 ## 3. Hub 接口
 
-只监听 `127.0.0.1`，默认端口 `47823`，所有请求带 `Authorization: Bearer <token>`。
+只监听 `127.0.0.1`，默认端口 `47823`（可改，见 3.1），所有请求带 `Authorization: Bearer <token>`。
 
 ### 写入
 
@@ -84,6 +84,30 @@
 - hub 在 `/` 下提供 `web/dist` 的静态文件（不需要 token），未知的非 `/v1/` 路径回退到 `index.html`。
 - 网页调用 API 时带 Bearer token。token 通过 URL 片段交给网页：`bun hub/src/cli.ts open` 打开 `http://127.0.0.1:<端口>/#token=<token>`，网页读取后存进 `sessionStorage`，并立刻从地址栏清掉片段。片段不会发给服务器，也不会进浏览器历史里的请求日志。
 - **所有请求都校验 `Host` 头**，只接受 `127.0.0.1:<端口>` 和 `localhost:<端口>`，其他一律 421，防止 DNS 重绑定。
+
+### 3.1 设置（网页和 Mac 设置页用，`hub/src/settings.ts`）
+
+端口来源（`hub/src/hub-json.ts` 的 `resolvePort`，中枢、`cli.ts open`、MCP 客户端共用）：环境变量 `RA_PORT` > `<数据目录>/hub.json` 的 `port`（1024–65535）> `47823`。采集端 `Config.load` 的顺序是 `--port` > `collector.json` 的 `port` > `hub.json` 的 `port` > `47823`；`install.sh` 的健康检查也读 `hub.json`。
+
+错误一律 `{ "error": "<中文说明>" }`：参数不合法 400，状态冲突 409，写文件或钥匙串失败 500（不带细节）。请求体只接受列出的字段，多余字段 400。
+
+| 方法 | 路径 | 请求 | 响应 |
+|---|---|---|---|
+| GET | `/v1/settings/hub` | — | `{ port, listen: "127.0.0.1", lan: false, locked }`；`port` 是正在监听的端口，`locked` 为 true 表示设了 `RA_PORT` |
+| PUT | `/v1/settings/hub` | `{ port }`，1024–65535 的整数 | `{ port, restarting }`。先在 127.0.0.1 试绑定新端口，再原子写 `hub.json`（保留其他字段），响应发出约 300ms 后中枢退出，launchd KeepAlive 用新端口拉起。和当前端口相同时只写文件，`restarting: false`。被占用 409「端口 N 已被占用，请换一个」；设了 `RA_PORT` 时 409「端口由环境变量 RA_PORT 固定…」 |
+| GET | `/v1/settings/models` | — | `{ tiers, config_error, keys, providers, tier_info }`，见下 |
+| PUT | `/v1/settings/models` | `{ tiers: { minute, hour, day } }`，每档 `{ provider, model, base_url? }` | 同 GET。三档都要给，规则和读取 `models.json` 相同（`validateTiers`）；原子写回，下一次模型调用生效 |
+| POST | `/v1/settings/models/test` | `{ tier, config? }`；`config` 是一档未保存的配置，不给就用已保存的 | `{ ok, ms, provider, model, error }`。最小提示调用一次，超时 60 秒，`error` 已脱敏、≤300 字；不写 `llm_usage`。同一时间只跑一个，否则 409 |
+| PUT | `/v1/settings/keys/:provider` | `{ key }`，8–1024 个可见 ASCII，不含空格、`"`、`\` | `{ provider, set: true }`；写钥匙串 service `record-anything`、account `provider:<provider>`（已有则覆盖） |
+| DELETE | `/v1/settings/keys/:provider` | — | `{ provider, deleted }`；`deleted` 为删除前是否存在 |
+| GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, defaults, ranges }` |
+| PUT | `/v1/settings/general` | 三项中任意几项 | 同 GET。`inject_tokens` 200–4000（默认 800）、`ask_done_days` 1–30（默认 3）、`archive_days` 1–90（默认 7），都是整数 |
+
+- `:provider` 只能是 `anthropic`、`openai-compatible`。key 只进钥匙串：不出现在响应、错误信息、日志、文件和 `security` 的进程参数里（经 `security -i` 的 stdin 传入）。
+- models 的 GET 字段：`tiers` 当前三档（`models.json` 不存在时是代码默认值；文件无效时 `tiers` 是默认值、`config_error` 是原因，此时提炼会失败，应提示用户保存一份新的）；`keys` 形如 `{ "anthropic": true, "openai-compatible": false }`，查询钥匙串失败时为 `null`；`providers` 是 `[{ id, label, needs_key, base_url }]`，`base_url` 为 true 表示该后端可填 `base_url`；`tier_info` 是 `{ minute: { label, description }, … }`。
+- 账号登录类后端（`claude-cli`、`codex-cli`）只调用本机已登录的命令，不需要 key，不接受 `base_url`。
+- general 存在 `distill_state` 表的 `general_settings` 键里。中枢生成自动注入时、提炼进程每轮线程生命周期步骤时现读，改完不需要重启。
+- 只监听 127.0.0.1；没有开放局域网的接口，配对和应用层 HPKE 加密之后才开放（v3），`lan` 目前恒为 false。
 
 ## 4. 提炼层（v1）
 

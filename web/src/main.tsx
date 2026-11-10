@@ -11,6 +11,8 @@ import { DistillationWorkspace } from "./distillation-views.tsx";
 import { createApi } from "./api.ts";
 import { createAudioApi, speakerNames, type Speaker } from "./audio.ts";
 import { AudioSettings } from "./audio-views.tsx";
+import { createSettingsApi } from "./settings.ts";
+import { GeneralSettings, HubSettingsBlock, ModelSettings } from "./settings-views.tsx";
 import { StatusView } from "./status-view.tsx";
 import { initialPage, pageHash, parseHash, type Page } from "./route.ts";
 import "./style.css";
@@ -163,6 +165,7 @@ function App() {
     setToken("");
   }), [token]);
   const audioApi = useMemo(() => createAudioApi(api), [api]);
+  const settingsApi = useMemo(() => createSettingsApi(api), [api]);
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [speakerError, setSpeakerError] = useState("");
   useEffect(() => {
@@ -243,7 +246,7 @@ function App() {
     </div>}</header>
     <div id="content" tabIndex={-1}>
     <DistillationWorkspace view={view === "audit" || view === "settings" || view === "status" ? "history" : view} audio={audioApi} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); navigate("history"); setRevision(value => value + 1); }} />
-    {view === "settings" && <AudioSettings api={audioApi} />}
+    {view === "settings" && <section className="distillation-view settings-view"><h2 className="day-heading">设置</h2><ModelSettings api={settingsApi} /><GeneralSettings api={settingsApi} /><AudioSettings api={audioApi} /><HubSettingsBlock api={settingsApi} token={token} /></section>}
     {view === "status" && <StatusView api={api} />}
     {view === "audit" && <AuditView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); navigate("history"); setRevision(value => value + 1); }} />}
     {view === "history" && !q.trim() && <DayOverview api={api} day={date || dayKey(new Date())} revision={overviewRevision} selected={expanded} onPick={pick} />}

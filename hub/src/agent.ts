@@ -5,6 +5,7 @@ import { HubDB, InputError } from "./db.ts";
 import { redactString } from "./redact.ts";
 import { DistillStore, type Thread } from "./distill/store.ts";
 import { projectForPath, resolveRepoRoot } from "./distill/repos.ts";
+import { readGeneral } from "./general-settings.ts";
 
 // 暂停线程只自动注入最近 3 天有活动的；进行中的线程不受时间限制。
 const PAUSED_CONTEXT_MS = 3 * 24 * 60 * 60 * 1000;
@@ -79,8 +80,9 @@ export class AgentReads {
     }
     if (!entries.length) return { value: { text: "", project_id: project?.id ?? null, tokens_est: 0 }, ids: [] as string[] };
     const render = () => [intro,...entries.map(e => e.text),hint].join("\n");
-    // 项目在前、线程按新到旧排列，因此从末尾删除恰好先舍弃最旧线程。
-    while (entries.length && estimateTokens(render()) > 800) entries.pop();
+    // 项目在前、线程按新到旧排列，因此从末尾删除恰好先舍弃最旧线程。上限在设置页可改（默认 800）。
+    const limit = readGeneral(this.hub).inject_tokens;
+    while (entries.length && estimateTokens(render()) > limit) entries.pop();
     const text = render();
     return { value: { text, project_id: project?.id ?? null, tokens_est: estimateTokens(text) }, ids: entries.map(e => e.id) };
   }
