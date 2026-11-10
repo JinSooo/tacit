@@ -3,13 +3,16 @@ import SwiftUI
 import CollectorCore
 
 /// 主窗口。采集端平时只在菜单栏；打开窗口时临时出现在 Dock 和 ⌘Tab 里，关掉窗口后退回菜单栏。
-@MainActor final class ViewerWindow: NSObject, NSWindowDelegate, NSMenuItemValidation {
+@MainActor final class ViewerWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, NSMenuDelegate {
   let store: ViewerStore
   private var window: NSWindow?
 
   init(store: ViewerStore) {
     self.store = store
     super.init()
+    // "开始听写"的标题每次校验都会被 AppKit 按"开始/停止"重写成英文，改不住；不在编辑菜单里列出，
+    // 听写仍可用系统快捷键启动。
+    UserDefaults.standard.register(defaults: ["NSDisabledDictationMenuItem": true])
   }
 
   func show(_ page: Page? = nil) {
@@ -18,6 +21,7 @@ import CollectorCore
     NSApp.setActivationPolicy(.regular)
     NSApp.applicationIconImage = AppIconArt.image(size: 512)
     NSApp.mainMenu = makeMenu()
+    DispatchQueue.main.async { if let m = NSApp.mainMenu { Self.localizeSystemItems(m) } }
     window?.makeKeyAndOrderFront(nil)
     NSApp.activate()
   }
@@ -50,6 +54,7 @@ import CollectorCore
     let main = NSMenu()
     func submenu(_ title: String, _ items: [NSMenuItem]) {
       let m = NSMenu(title: title)
+      m.delegate = self
       items.forEach(m.addItem)
       let host = NSMenuItem(title: title, action: nil, keyEquivalent: ""); host.submenu = m
       main.addItem(host)
@@ -88,6 +93,25 @@ import CollectorCore
     store.section = [Page.now, .history, .pending, .audit, .now, .settings][sender.tag]
   }
   @objc func closeWindow() { window?.performClose(nil) }
+
+  /// AppKit 自己往编辑、窗口菜单里插的项按应用语言（英文）命名，打开菜单前改成中文。
+  static let systemItemTitles: [String: String] = [
+    "startDictation:": "开始听写…", "orderFrontCharacterPalette:": "表情与符号", "closeAll:": "全部关闭",
+    "_handleInsertFromContactsCommand:": "联系人…", "_handleInsertFromPasswordsCommand:": "密码…",
+    "_handleInsertFromCreditCardsCommand:": "信用卡…",
+  ]
+  nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
+    MainActor.assumeIsolated { Self.localizeSystemItems(menu) }
+  }
+  static func localizeSystemItems(_ menu: NSMenu) {
+    for item in menu.items {
+      // 有的项（听写）动作名和标识不同，两个都查。
+      let keys = [item.action.map(NSStringFromSelector), item.identifier?.rawValue].compactMap { $0 }
+      if let title = keys.lazy.compactMap({ systemItemTitles[$0] }).first { item.title = title }
+      if item.identifier?.rawValue == "_NSMenuItemAutoFillIdentifier" { item.title = "自动填充" }
+      if let sub = item.submenu, sub.delegate == nil { localizeSystemItems(sub) }
+    }
+  }
 
   /// 撤销、重做交给当前焦点所在控件的撤销管理器（包括补写、修正这些弹出窗口里的输入框）。
   private var focusedUndoManager: UndoManager? { NSApp.keyWindow?.firstResponder?.undoManager }
