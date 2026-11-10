@@ -68,6 +68,8 @@ struct ModelSettingsView: View {
             Menu("本机模型") { ForEach(models, id: \.self) { m in Button(m) { config.wrappedValue.model = m } } }
               .fixedSize()
           }
+          Button(tests[tier] == .running ? "测试中…" : "测试连接") { Task { await test(tier) } }
+            .disabled(tests[tier] == .running || c.model.isEmpty)
         }
       }
       if provider?.baseUrl == true {
@@ -82,21 +84,16 @@ struct ModelSettingsView: View {
           SettingsMessage(text: "连不上 \(c.baseUrl ?? "")，本机模型服务是否已经启动？")
         }
       }
-      LabeledContent {
-        Button(tests[tier] == .running ? "测试中…" : "测试连接") { Task { await test(tier) } }
-          .disabled(tests[tier] == .running || c.model.isEmpty)
-      } label: {
-        switch tests[tier] {
-        case .ok(let ms): Text(ms.map { String(format: "连接正常（%.1f 秒）", $0 / 1000) } ?? "连接正常").foregroundStyle(.green)
-        case .failed(let e): Text(e).foregroundStyle(.orange)
-        case .running: Text("最长等 60 秒").foregroundStyle(.secondary)
-        case nil: EmptyView()
-        }
+      switch tests[tier] {
+      case .ok(let ms): Text(ms.map { String(format: "连接正常（%.1f 秒）", $0 / 1000) } ?? "连接正常").foregroundStyle(.green)
+      case .failed(let e): SettingsMessage(text: e)
+      case .running: Text("正在调用模型，最长等 60 秒").foregroundStyle(.secondary)
+      case nil: EmptyView()
       }
     } header: {
       Text(info.tierInfo[tier]?.label ?? tier)
     } footer: {
-      if let d = info.tierInfo[tier]?.description { Text(d) }
+      if let d = info.tierInfo[tier]?.description { Note(d) }
     }
     .task(id: c.baseUrl) { if local, let url = c.baseUrl { localModels[url] = await HubAPI.localModels(baseURL: url) ?? [] } }
   }
@@ -122,7 +119,7 @@ struct ModelSettingsView: View {
     } header: {
       Text("API key")
     } footer: {
-      Text("key 存在本机钥匙串里，这里不会再显示出来。同一类提供方的各档共用一个 key；本机模型服务不需要 key。")
+      Note("key 存在本机钥匙串里，这里不会再显示出来。同一类提供方的各档共用一个 key；本机模型服务不需要 key。")
     }
   }
 

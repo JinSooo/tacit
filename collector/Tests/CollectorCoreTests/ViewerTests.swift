@@ -221,3 +221,22 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(PhosphorGlyphs.character("check").unicodeScalars.first?.value == 0xE182)
   #expect(PhosphorGlyphs.character("no-such-icon").isEmpty)
 }
+
+// 回归：launchd 拉起采集端的同时又从访达打开，出现两个采集端同时录音（2026-11-10 实测发现）。
+@Test func secondCollectorInstanceSeesLockHeld() throws {
+  let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ra-lock-\(UUID().uuidString)")
+  try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+  defer { try? FileManager.default.removeItem(at: dir) }
+  let path = dir.appendingPathComponent("collector.lock").path
+  var first: InstanceLock?
+  if case .acquired(let l) = InstanceLock.acquire(path: path) { first = l }
+  #expect(first != nil)
+  if case .held = InstanceLock.acquire(path: path) {} else { Issue.record("第二次获取应当返回 held") }
+  first = nil
+  if case .acquired = InstanceLock.acquire(path: path) {} else { Issue.record("释放后应当能再次获取") }
+  #expect(InstanceLockUnavailableCheck.ok(dir.appendingPathComponent("missing/collector.lock").path))
+}
+
+private enum InstanceLockUnavailableCheck {
+  static func ok(_ path: String) -> Bool { if case .unavailable = InstanceLock.acquire(path: path) { return true }; return false }
+}

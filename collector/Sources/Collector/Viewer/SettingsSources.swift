@@ -19,6 +19,7 @@ struct SourcesSettingsView: View {
           .tag(s.id)
         }
       }
+      .listStyle(.sidebar)
       .scrollContentBackground(.hidden)
       .frame(width: 190)
       Divider()
@@ -144,7 +145,7 @@ private struct AudioSourceSettings: View {
       if let status { SettingsMessage(text: status, warning: false) }
       if let error { SettingsMessage(text: error) }
     } footer: {
-      Text("只删原始音频，转写出来的文字不受影响。")
+      Note("只删原始音频，转写出来的文字不受影响。")
     }
     .task { await load() }
     .confirmationDialog("清理全部音频？", isPresented: $confirmPurge) {
@@ -195,7 +196,7 @@ private struct FileDirectorySettings: View {
     } header: {
       Text("监听的目录")
     } footer: {
-      Text("子目录一起监听。隐藏目录、密码管理器的目录不记录。")
+      Note("子目录一起监听。隐藏目录、密码管理器的目录不记录。")
     }
   }
 

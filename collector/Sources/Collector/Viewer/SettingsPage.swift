@@ -71,6 +71,15 @@ struct SettingsForm<Content: View>: View {
   }
 }
 
+/// 分组下方的说明。macOS 的分组表单默认把它靠右放，这里统一靠左。
+struct Note: View {
+  let text: String
+  init(_ text: String) { self.text = text }
+  var body: some View {
+    Text(text).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
+  }
+}
+
 /// 加载失败、保存失败时的一行提示。
 struct SettingsMessage: View {
   let text: String
@@ -94,13 +103,13 @@ struct GeneralSettingsView: View {
         Section {
           row("自动注入上限", value: d.injectTokens, key: "inject_tokens", step: 100, unit: "token")
         } footer: {
-          Text("新开 Claude Code、Codex 会话时，自动放进去的当前项目背景最多这么长。更早、更细的内容由 Agent 自己查。")
+          Note("新开 Claude Code、Codex 会话时，自动放进去的当前项目背景最多这么长。更早、更细的内容由 Agent 自己查。")
         }
         Section {
           row("问“做完了吗”", value: d.askDoneDays, key: "ask_done_days", step: 1, unit: "天没动静后")
           row("自动归档", value: d.archiveDays, key: "archive_days", step: 1, unit: "天没人回答后")
         } footer: {
-          Text("线程一段时间没有新活动，会放进待确认列表问你做完了没有；一直没回答就自动归档，不再注入，仍然可以查。")
+          Note("线程一段时间没有新活动，会放进待确认列表问你做完了没有；一直没回答就自动归档，不再注入，仍然可以查。")
         }
         if draft != saved {
           HStack {
@@ -161,8 +170,8 @@ struct HubSettingsView: View {
         }
         LabeledContent("端口") {
           HStack(spacing: 8) {
-            TextField("端口", text: $port).labelsHidden().frame(width: 90).multilineTextAlignment(.trailing)
-              .disabled(info?.locked != false || busy)
+            TextField("端口", text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
+              .multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
             if let p = Int(port), p != info?.port, info?.locked == false {
               Button(busy ? "正在重启…" : "应用") { Task { await apply(p) } }.disabled(busy || !(1024...65535).contains(p))
             }
@@ -175,10 +184,16 @@ struct HubSettingsView: View {
           if let url = store.api.statusPageURL() { openURL(url) } else { error = "找不到 hub 的 token，hub 是否启动过？" }
         }
       } footer: {
-        Text("中枢目前只接受本机连接。手机等其他设备要等配对和加密做好之后才能接入。")
+        Note("中枢目前只接受本机连接。手机等其他设备要等配对和加密做好之后才能接入。")
       }
     }
-    .task { await load() }
+    .task {
+      // 端口可能在中枢网页上改过：定时刷新，但不覆盖正在输入的内容。
+      while !Task.isCancelled {
+        if !busy, info == nil || port == String(info!.port) { await load() }
+        try? await Task.sleep(for: .seconds(5))
+      }
+    }
   }
 
   func load() async {
@@ -230,11 +245,11 @@ struct PrivacySettingsView: View {
         }
       }
       Section {
-        ForEach(blockedApps, id: \.self) { Text($0) }
+        Text(blockedApps.joined(separator: "、")).frame(maxWidth: .infinity, alignment: .leading)
       } header: {
         Text("不记录的应用")
       } footer: {
-        Text("这些应用在前台时什么都不读。")
+        Note("这些应用在前台时什么都不读。")
       }
       Section("其他不记录的内容") {
         LabeledContent("浏览器隐私窗口", value: "按窗口标题识别")
@@ -250,11 +265,18 @@ struct PrivacySettingsView: View {
     }
   }
 
-  /// 黑名单里的应用：装了的显示本机名字，没装的显示 bundle ID。
+  /// 黑名单里的应用：装了的显示本机名字（跟系统语言），没装的用常见名字。
+  static let knownNames: [String: String] = [
+    "com.1password.1password": "1Password", "com.agilebits.onepassword7": "1Password 7",
+    "com.bitwarden.desktop": "Bitwarden", "com.lastpass.LastPass": "LastPass",
+    "com.dashlane.dashlanephonefinal": "Dashlane", "me.proton.pass.electron": "Proton Pass",
+    "com.apple.keychainaccess": "钥匙串访问", "com.apple.Passwords": "密码",
+  ]
   var blockedApps: [String] {
-    CapturePolicy.blockedBundles.sorted().map { id in
-      NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { AppNames.systemLanguageName($0) } ?? id
+    let names = CapturePolicy.blockedBundles.map { id in
+      NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { AppNames.systemLanguageName($0) } ?? Self.knownNames[id] ?? id
     }
+    return Array(Set(names)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
   }
 }
 
@@ -342,6 +364,9 @@ struct MaintenanceSettingsView: View {
       Text(what)
       Text("读取：\(sources)　去重：\(dedupe)　提炼：\(distill)").foregroundStyle(.tertiary)
     }
+    .multilineTextAlignment(.leading)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.horizontal, 12)
   }
 
   func latest(_ kind: String) -> DistillRequestInfo? { requests.first { $0.kind == kind } }

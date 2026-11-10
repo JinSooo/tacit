@@ -193,6 +193,10 @@ cat > "$AGENTS/dev.record-anything.hub.plist" <<PLIST
     <string>$(xml "$BUN")</string><string>$(xml "$REPO/hub/src/cli.ts")</string><string>serve</string>
   </array>
   <key>WorkingDirectory</key><string>$(xml "$REPO")</string>
+  <key>EnvironmentVariables</key><dict>
+    <!-- 设置页的"测试连接"由中枢直接调用模型，要和提炼进程一样能找到 codex、claude。 -->
+    <key>PATH</key><string>$(xml "${DISTILL_PATH:-$(dirname "$BUN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}")</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>

@@ -5,6 +5,8 @@ import CollectorCore
 
 /// 菜单栏采集端。所有读取都在这里做，hub 只接收数据。
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+  /// 第二个实例启动时发这个通知，请已在运行的采集端打开窗口。
+  static let showWindowNotification = "dev.record-anything.collector.show-window"
   let config = Config.load()
   let toggles = SourceToggles(store: UserDefaults.standard)
   lazy var sources = DataSourceRegistry(toggles: toggles)
@@ -72,6 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     DistributedNotificationCenter.default().addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
       self?.closeSegment()
+    }
+    DistributedNotificationCenter.default().addObserver(forName: .init(Self.showWindowNotification), object: nil, queue: .main) { [weak self] _ in
+      self?.openHistory()
     }
   }
 
@@ -434,6 +439,16 @@ if CommandLine.arguments.contains("--probe-front") { runProbe(); exit(0) }
 if let i = CommandLine.arguments.firstIndex(of: "--render-icon"), i + 1 < CommandLine.arguments.count {
   do { try AppIconArt.writeIconset(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])); exit(0) }
   catch { FileHandle.standardError.write(Data("\(error)\n".utf8)); exit(1) }
+}
+
+// 已经有一个采集端在跑（例如 launchd 刚拉起，用户又从访达打开）：请它打开窗口，自己退出。
+// launchd 拉起的那份不弹窗口：launchd 会给它的任务设 XPC_SERVICE_NAME。
+let instanceLock = InstanceLock.acquire(path: Config.load().dataDir.appendingPathComponent("collector.lock").path)
+if case .held = instanceLock {
+  if ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"]?.hasPrefix("dev.record-anything.") != true {
+    DistributedNotificationCenter.default().postNotificationName(.init(AppDelegate.showWindowNotification), object: nil, deliverImmediately: true)
+  }
+  exit(0)
 }
 
 Phosphor.register()
