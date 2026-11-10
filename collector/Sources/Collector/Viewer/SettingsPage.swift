@@ -85,7 +85,9 @@ struct SettingsMessage: View {
   let text: String
   var warning = true
   var body: some View {
+    // 错误原文可能较长（例如 key 的格式要求），要能换行显示全，不能截成"…"。
     Text(text).font(.callout).foregroundStyle(warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+      .fixedSize(horizontal: false, vertical: true)
   }
 }
 

@@ -220,6 +220,15 @@ private func event() -> CalendarEventSnapshot {
   #expect(FileSourcePolicy.relative(syntheticHome + "/Documents/1Password", home: syntheticHome) == nil)
 }
 
+// 回归：选了已被监听目录覆盖的子目录时，保存会悄悄丢掉它，界面没有任何反馈（2026-11-10 真机核对发现）。
+@Test func fileDirectoryAlreadyCoveredIsReported() {
+  let dirs = ["Documents", "Downloads"]
+  #expect(FileDirectories.covering("Documents/notes", in: dirs) == "Documents")
+  #expect(FileDirectories.covering("Documents", in: dirs) == "Documents")
+  #expect(FileDirectories.covering("Documents-old", in: dirs) == nil)
+  #expect(FileDirectories.covering("Projects", in: dirs) == nil)
+}
+
 @Test func fileDirectoriesDefaultDedupeAndDropNested() {
   let store = MemorySettings()
   let dirs = FileDirectories(store: store)

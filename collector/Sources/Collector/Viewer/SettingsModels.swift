@@ -219,6 +219,8 @@ private struct KeyEntrySheet: View {
       }
     }
     .padding(20)
+    .frame(width: 400)
+    .fixedSize(horizontal: false, vertical: true)
   }
 
   func save() async {

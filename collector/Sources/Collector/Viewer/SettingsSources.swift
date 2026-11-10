@@ -211,10 +211,17 @@ private struct FileDirectorySettings: View {
     panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
     panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
     panel.prompt = "监听"
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-    guard let rel = FileSourcePolicy.relative(url.path, home: FileManager.default.homeDirectoryForCurrentUser.path) else {
-      error = "只能选主目录下的目录（不含主目录本身、资源库和隐藏目录）。"; return
+    // 不用 runModal：模态循环期间采集端的定时器（屏幕、剪贴板、发送）全部停摆，选择框开多久就漏采多久。
+    let handle: (NSApplication.ModalResponse) -> Void = { response in
+      guard response == .OK, let url = panel.url else { return }
+      guard let rel = FileSourcePolicy.relative(url.path, home: FileManager.default.homeDirectoryForCurrentUser.path) else {
+        error = "只能选主目录下的目录（不含主目录本身、资源库和隐藏目录）。"; return
+      }
+      if let parent = FileDirectories.covering(rel, in: dirs) {
+        error = parent == rel ? "~/\(rel) 已经在监听了。" : "~/\(rel) 已经包含在 ~/\(parent) 里，子目录本来就会一起监听。"; return
+      }
+      set(dirs + [rel])
     }
-    set(dirs + [rel])
+    if let window = NSApp.keyWindow { panel.beginSheetModal(for: window, completionHandler: handle) } else { panel.begin(completionHandler: handle) }
   }
 }

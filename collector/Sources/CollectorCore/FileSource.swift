@@ -154,4 +154,8 @@ public struct FileDirectories {
     let unique = dirs.filter { seen.insert($0).inserted }
     return unique.filter { d in !unique.contains { $0 != d && d.hasPrefix($0 + "/") } }
   }
+  /// 新加的目录已经被监听（同一个目录或它的上级）时返回那个目录；normalized 会把它悄悄去掉，界面要先提示。
+  public static func covering(_ dir: String, in dirs: [String]) -> String? {
+    dirs.first { dir == $0 || dir.hasPrefix($0 + "/") }
+  }
 }
