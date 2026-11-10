@@ -56,7 +56,10 @@ test("状态只读、只给计数，按来源和设备统计，今天用量按�
   expect(status.distill.enabled_at).toBe(toLocalIso(now - 86_400_000));
   expect(status.distill.heartbeat_at).toBeNull();
   expect(status.distill.pending_open).toEqual({ thread_done: 1 });
-  expect(status.distill.last_error).toMatchObject({ tier: "minute", error: "超时" });
+  // 失败之后还有一次成功：错误已恢复。
+  expect(status.distill.last_error).toMatchObject({ tier: "minute", error: "超时", recovered: true });
+  // 最近按写入顺序（ULID）取，与 at 的写法无关。
+  expect(status.distill.last_ok_at).toBe(toLocalIso(now - 86_400_000));
   expect(status.llm_today.total).toEqual({ calls: 3, ok: 2, failed: 1, input_tokens: 107, output_tokens: 23, ms: 3500 });
   expect(status.llm_today.by_tier).toEqual([
     { tier: "minute", models: ["m1", "m2"], calls: 2, ok: 1, failed: 1, input_tokens: 100, output_tokens: 20, ms: 1500 },
@@ -76,6 +79,7 @@ test("GET /v1/status 需要 token；空库也能返回", async () => {
   expect(body.records).toEqual({ total: 0, tombstones: 0, by_source: [], by_device: [] });
   expect(body.distill.last_round_at).toBeNull();
   expect(body.distill.last_error).toBeNull();
+  expect(body.distill.last_ok_at).toBeNull();
   expect(body.llm_today.total.calls).toBe(0);
   expect(body.distill.requests).toEqual({ total: 0, by_status: {} });
 });
@@ -105,4 +109,17 @@ test("来源计数缓存：新增时增量累加，删除后重算", () => {
   expect(phone.last_received).toBe((ctx.db.db.prepare("SELECT MAX(t_received) AS t FROM records WHERE device='phone'").get() as { t: string }).t);
   expect(ctx.db.delete(a.id)).toBe(true);
   expect(pick()).toEqual({ total: 2, tombstones: 1, sources: [["mac.screen", 1], ["mac.shell", 1]], devices: [["mac", 1], ["phone", 1]] });
+});
+
+test("最近一次调用失败时最近错误未恢复；之后成功一次即恢复", () => {
+  const usage = ctx.db.db.prepare("INSERT INTO llm_usage(id,at,tier,provider,model,input_chars,output_chars,ms,ok,error) VALUES(?,?,?,?,?,?,?,?,?,?)");
+  usage.run(ulid(), toLocalIso(now - 7_200_000), "minute", "codex-cli", "m1", 1, 1, 10, 1, null);
+  usage.run(ulid(), toLocalIso(now - 3_600_000), "minute", "codex-cli", "m1", 1, 0, 10, 0, "失败一");
+  let status = hubStatus(ctx.db, { port: 1, now });
+  expect(status.distill.last_error).toMatchObject({ error: "失败一", recovered: false });
+  expect(status.distill.last_ok_at).toBe(toLocalIso(now - 7_200_000));
+  usage.run(ulid(), toLocalIso(now - 60_000), "hour", "codex-cli", "m1", 1, 1, 10, 1, null);
+  status = hubStatus(ctx.db, { port: 1, now });
+  expect(status.distill.last_error).toMatchObject({ error: "失败一", recovered: true });
+  expect(status.distill.last_ok_at).toBe(toLocalIso(now - 60_000));
 });

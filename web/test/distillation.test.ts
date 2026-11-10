@@ -1,5 +1,31 @@
 import { expect, test } from "bun:test";
-import { createDistillationApi, groupFacts, pendingSummary, relativeTime, type Api, type Fact } from "../src/distillation.ts";
+import { createDistillationApi, groupFacts, pendingSummary, pendingTitle, recentPaused, relativeTime, type Api, type Fact } from "../src/distillation.ts";
+
+test("最近暂停只留 3 天内有活动的暂停线程，最近的在前；翻页到更早的就停", async () => {
+  const now = Date.parse("2026-11-10T12:00:00+08:00");
+  const day = 86_400_000;
+  const thread = (id: string, last_ms: number | null, status: "paused" | "active" = "paused") => ({ id, project_id: null, title: id, brief: null, last_ms, status });
+  expect(recentPaused([thread("old", now - 4 * day), thread("a", now - day), thread("b", now - 60_000), thread("none", null), thread("act", now, "active")], now).map(t => t.id)).toEqual(["b", "a"]);
+  const paths: string[] = [];
+  const client = createDistillationApi(async <T,>(path: string) => {
+    paths.push(path);
+    const page = new URL(path, "http://x").searchParams.get("cursor");
+    return (page ? { threads: [thread("b", now - 2 * day), thread("c", now - 5 * day)], next_cursor: "never" } : { threads: [thread("a", now - day)], next_cursor: "p2" }) as T;
+  });
+  expect((await client.pausedSince(now - 3 * day)).map(t => t.id)).toEqual(["a", "b"]);
+  expect(paths).toEqual(["/v1/threads?status=paused&limit=100", "/v1/threads?status=paused&limit=100&cursor=p2"]);
+});
+test("待确认标题；离开网页时的提交带 keepalive", async () => {
+  expect(pendingTitle({ id: "1", kind: "merge", payload: { a_name: "甲", b_name: "乙" } })).toBe("甲 和 乙");
+  expect(pendingTitle({ id: "2", kind: "thread_done", payload: { title: "合成线程" } })).toBe("合成线程");
+  expect(pendingTitle({ id: "3", kind: "voice", payload: {} })).toBe("新声音");
+  const inits: (RequestInit | undefined)[] = [];
+  const client = createDistillationApi(async <T,>(_path: string, init?: RequestInit) => { inits.push(init); return {} as T; });
+  await client.resolve("p", { action: "done" });
+  await client.resolve("p", { action: "done" }, true);
+  expect(inits[0]!.keepalive).toBeUndefined();
+  expect(inits[1]!.keepalive).toBe(true);
+});
 
 const fact: Fact = { id: "fact-synthetic", thread_id: "thread-synthetic", project_id: "project-synthetic", kind: "decision", text: "使用本地缓存", evidence: ["record-synthetic"] };
 test("facts 按语义分组，推测独立，排除失效与已替代条目且不修改输入", () => {

@@ -21,8 +21,9 @@ function windows(segment: Segment, rows: HistoryRow[] | undefined): string {
   return out.join("、");
 }
 
-export function SegmentList({ api, day, device, focus, revision, renderDetail, onEarlier }: {
-  api: Api; day: string; device: string; focus: string | null; revision: number;
+/** collapse 每变一次（History 里按 Esc）就收起所有展开的段和记录。 */
+export function SegmentList({ api, day, device, focus, revision, collapse, renderDetail, onEarlier }: {
+  api: Api; day: string; device: string; focus: string | null; revision: number; collapse: number;
   renderDetail: (id: string, onDelete: (ids: string[]) => void) => ReactNode; onEarlier: () => void;
 }) {
   const [segments, setSegments] = useState<Segment[] | null>(null);
@@ -40,6 +41,11 @@ export function SegmentList({ api, day, device, focus, revision, renderDetail, o
       .catch(e => { if (!controller.signal.aborted) setError(message(e)); });
     return () => controller.abort();
   }, [api, day, device, revision, retry]);
+
+  useEffect(() => {
+    if (!collapse) return;
+    setOpen(new Set()); setSelected(null);
+  }, [collapse]);
 
   const items = useMemo(() => foldSegments(segments ?? []), [segments]);
 
@@ -92,7 +98,6 @@ export function SegmentList({ api, day, device, focus, revision, renderDetail, o
   if (error) return <div className="list-status" role="alert"><span className="error">{error}</span><button onClick={() => setRetry(v => v + 1)}>重试</button></div>;
   if (!segments) return <div className="list-status" role="status">正在读取…</div>;
   return <section aria-label={dateTitle(day)}>
-    <h2 className="day-heading">{dateTitle(day)}</h2>
     {!segments.length && <p className="empty">这一天没有记录</p>}
     <div className="day-records segments">{items.map(item => item.kind === "single" ? segmentRow(item.segment) : <div key={item.id} className="segment-group">
       <button className="segment-row minor" aria-expanded={open.has(item.id)} onClick={() => toggle(item.id)}>

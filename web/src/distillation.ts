@@ -50,6 +50,20 @@ export function pendingSummary(payload: Pending["payload"]): string[] {
     ...(payload.threads ?? []).map(thread => `线程：${thread.title}`),
   ];
 }
+/** 待确认卡片的标题，撤销提示里也用它。 */
+export function pendingTitle(item: Pending): string {
+  const p = item.payload;
+  if (item.kind === "voice") return p.label ?? "新声音";
+  if (item.kind === "project") return p.name ?? "未命名项目";
+  if (item.kind === "merge") return `${p.a_name ?? "?"} 和 ${p.b_name ?? "?"}`;
+  return p.title ?? "";
+}
+/** "此刻"页的最近暂停：3 天内有活动的暂停线程，最近的在前（与 Mac 客户端一致）。 */
+export const recentPausedMs = 3 * 86_400_000;
+export function recentPaused(threads: Thread[], now = Date.now()): Thread[] {
+  return threads.filter(thread => thread.status === "paused" && thread.last_ms !== null && thread.last_ms > now - recentPausedMs)
+    .sort((a, b) => (b.last_ms ?? 0) - (a.last_ms ?? 0));
+}
 export function createDistillationApi(api: Api) {
   return {
     now: (signal?: AbortSignal) => api<{ now: { brief: string; detail: unknown; updated_at: string } | null }>("/v1/now", { signal }),
@@ -70,9 +84,23 @@ export function createDistillationApi(api: Api) {
       } while (cursor);
       return [...new Map(rows.map(row => [row.id, row])).values()];
     },
+    /** 某个时间之后有活动的暂停线程。列表按最近活动倒序，翻到更早的就停。 */
+    pausedSince: async (since: number, signal?: AbortSignal): Promise<Thread[]> => {
+      const rows: Thread[] = [];
+      let cursor: string | null = null;
+      do {
+        const params = new URLSearchParams({ status: "paused", limit: "100" });
+        if (cursor) params.set("cursor", cursor);
+        const page: { threads: Thread[]; next_cursor: string | null } = await api(`/v1/threads?${params}`, { signal });
+        rows.push(...page.threads);
+        cursor = page.threads.some(thread => (thread.last_ms ?? 0) <= since) ? null : page.next_cursor;
+      } while (cursor);
+      return rows.filter(thread => (thread.last_ms ?? 0) > since);
+    },
     thread: (id: string, level: "detail" | "evidence", signal?: AbortSignal) => api<ThreadDetail>(`/v1/threads/${encodeURIComponent(id)}?level=${level}`, { signal }),
     project: (id: string, level: "detail" | "evidence", signal?: AbortSignal) => api<ProjectDetail>(`/v1/projects/${encodeURIComponent(id)}?level=${level}`, { signal }),
-    resolve: (id: string, resolution: Resolution) => api(`/v1/pending/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(resolution) }),
+    // 离开网页时提交的待确认要用 keepalive，页面关掉后请求仍会发出。
+    resolve: (id: string, resolution: Resolution, keepalive = false) => api(`/v1/pending/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(resolution), ...(keepalive ? { keepalive } : {}) }),
     correct: (fact: Fact, text: string) => {
       if (!text.trim()) throw new Error("请填写修正内容");
       return api("/v1/facts", { method: "POST", body: JSON.stringify({ kind: fact.kind, text: text.trim(), thread_id: fact.thread_id, project_id: fact.project_id, evidence: fact.evidence, supersedes: fact.id }) });

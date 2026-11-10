@@ -14,7 +14,9 @@ export interface HubStatus {
     frames: Counts; threads: Counts; needs_regen: { threads: number; projects: number; days: number }; pending_open: Counts;
     /** 提炼请求队列表还不存在时为 null。 */
     requests: { total: number; by_status: Counts | null } | null;
-    last_error: { at: string; tier: string; error: string } | null;
+    /** recovered：这次失败之后又成功调用过。 */
+    last_error: { at: string; tier: string; error: string; recovered?: boolean } | null;
+    last_ok_at?: string | null;
   };
   llm_today: { date: string; total: Omit<TierUsage, "tier" | "models">; by_tier: TierUsage[] };
   agent_reads_today: number;
@@ -26,7 +28,8 @@ export const fetchStatus = (api: Api, signal?: AbortSignal) => api<HubStatus>("/
 export const tierNames: Record<string, string> = { minute: "分钟档", hour: "小时档", day: "每日档" };
 export const frameNames: Record<string, string> = { new: "待归属", assigned: "已归属", ignored: "已忽略" };
 export const threadNames: Record<string, string> = { active: "进行中", paused: "暂停", done: "完成", archived: "归档", abandoned: "放弃" };
-export const pendingNames: Record<string, string> = { project: "新项目", merge: "合并建议", thread_done: "完成确认", voice: "新声音" };
+export const pendingNames: Record<string, string> = { project: "新项目", merge: "合并建议", thread_done: "做完了吗", voice: "新声音" };
+export const requestNames: Record<string, string> = { queued: "排队", running: "进行中", done: "完成", failed: "失败" };
 export const speakerNames: Record<string, string> = { new: "新出现", asked: "待确认", confirmed: "已确认", ignored: "已忽略", merged: "已合并" };
 
 const number = new Intl.NumberFormat("zh-CN");

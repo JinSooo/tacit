@@ -28,16 +28,21 @@ function longDate(key: string) {
   return { date: `${d.getFullYear() !== new Date().getFullYear() ? `${d.getFullYear()} 年 ` : ""}${d.getMonth() + 1} 月 ${d.getDate()} 日`, weekday: `星期${"日一二三四五六"[d.getDay()]}` };
 }
 
-/** History 顶部：这一天的日期、统计、日记和条带图。点条带图里的一段，列表从那条记录开始显示。 */
-export function DayOverview({ api, day, selected, onPick }: { api: Api; day: string; selected: string | null; onPick: (record: HistoryRow) => void }) {
+/**
+ * History 顶部：这一天的日期、统计、日记和条带图。点条带图里的一段，列表从那条记录开始显示。
+ * revision 变了（删除、补写、修正之后）就重新读取，读取期间保留旧数据；换日期才清空。
+ */
+export function DayOverview({ api, day, revision, selected, onPick }: { api: Api; day: string; revision: number; selected: string | null; onPick: (record: HistoryRow) => void }) {
   const [rows, setRows] = useState<HistoryRow[]>();
   const [diary, setDiary] = useState<Diary | null>(null);
   const [error, setError] = useState("");
-  const [revision, setRevision] = useState(0);
+  const [retry, setRetry] = useState(0);
+  const shownDay = useRef(day);
   const [expanded, setExpanded] = useState(() => { try { return localStorage.getItem(diaryKey) === "1"; } catch { return false; } });
   useEffect(() => {
     const controller = new AbortController();
-    setRows(undefined); setDiary(null); setError("");
+    if (shownDay.current !== day) { shownDay.current = day; setRows(undefined); setDiary(null); }
+    setError("");
     const { from, to } = dayRange(day);
     (async () => {
       const all: HistoryRow[] = [];
@@ -55,7 +60,7 @@ export function DayOverview({ api, day, selected, onPick }: { api: Api; day: str
       if (!controller.signal.aborted) { setRows(all); setDiary(diary); }
     })().catch(error => { if (!controller.signal.aborted) setError(message(error)); });
     return () => controller.abort();
-  }, [api, day, revision]);
+  }, [api, day, revision, retry]);
   function toggleDiary() {
     setExpanded(value => { try { localStorage.setItem(diaryKey, value ? "0" : "1"); } catch { /* 存储不可用时只在本页记住。 */ } return !value; });
   }
@@ -68,7 +73,7 @@ export function DayOverview({ api, day, selected, onPick }: { api: Api; day: str
       {!!rows?.length && <dl className="day-stats"><div><dt>条记录</dt><dd>{rows.length}</dd></div><div><dt>活跃</dt><dd>{compact(activeSeconds(rows))}</dd></div>{first !== null && <div><dt>开始</dt><dd>{clock(first)}</dd></div>}</dl>}
     </div>
     {summary && <div className="diary"><p className={expanded ? "" : "clamped"}>{summary}</p><button className="text-button compact" onClick={toggleDiary}>{expanded ? "收起日记" : "展开日记"}</button></div>}
-    {error ? <p className="error" role="alert">{error} <button onClick={() => setRevision(v => v + 1)}>重试</button></p>
+    {error ? <p className="error" role="alert">{error} <button onClick={() => setRetry(v => v + 1)}>重试</button></p>
       : !rows ? <div className="strata-placeholder" role="status">正在读取…</div>
       : rows.length > 0 && <Strata rows={rows} day={day} chapters={chapterSpans(day, diary?.detail?.timeline)} selected={selected} onPick={onPick} />}
   </section>;
