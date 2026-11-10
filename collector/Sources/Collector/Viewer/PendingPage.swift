@@ -121,7 +121,7 @@ struct PendingCard: View {
       HStack(alignment: .firstTextBaseline) {
         Text(p.label ?? "新的声音").font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
         Spacer()
-        Text("\(p.conversations ?? 0) 段对话里说了 \(Fmt.duration(p.seconds ?? 0))")
+        Text("\(p.conversations ?? 0) 段对话里说了 \(Fmt.speech(p.seconds ?? 0))")
           .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
       }
       VStack(spacing: 4) {

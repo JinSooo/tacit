@@ -11,6 +11,12 @@ enum Fmt {
     return m % 60 == 0 ? "\(m / 60) 小时" : "\(m / 60) 小时 \(m % 60) 分"
   }
 
+  /// 说话时长：声音样本常常只有几十秒，不足 1 分钟写到秒，例如"38 秒"。
+  static func speech(_ seconds: TimeInterval) -> String {
+    let s = Int(max(0, seconds.rounded()))
+    return s < 60 ? "\(max(1, s)) 秒" : duration(seconds)
+  }
+
   private static let grouped: NumberFormatter = {
     let f = NumberFormatter()
     f.numberStyle = .decimal

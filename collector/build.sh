@@ -18,6 +18,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Record Anything</string>
   <key>CFBundleExecutable</key><string>Collector</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>NSAccentColorName</key><string>AccentColor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
@@ -38,6 +39,9 @@ for lib in "$LIB"/*.dylib; do cp -L "$lib" "$APP/Contents/Frameworks/"; done
 mkdir -p "$APP/Contents/Resources"
 # 查看窗口和菜单栏的图标字体（Phosphor，MIT），启动时注册到进程。
 cp -R Resources/Phosphor "$APP/Contents/Resources/Phosphor"
+# 侧栏选中底色和侧栏图标跟随应用的 AccentColor，SwiftUI 的 .tint 管不到；不编进来就是系统蓝。
+xcrun actool Resources/Assets.xcassets --compile "$APP/Contents/Resources" --platform macosx \
+  --minimum-deployment-target 14.0 --output-partial-info-plist build/assets-info.plist >/dev/null
 rm -rf build/AppIcon.iconset
 "$APP/Contents/MacOS/Collector" --render-icon build/AppIcon.iconset
 iconutil -c icns build/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
