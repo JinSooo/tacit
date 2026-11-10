@@ -34,9 +34,6 @@ struct MenuBarPanel: View {
       footer.padding(.horizontal, 10).padding(.vertical, 8)
     }
     .frame(width: Self.width)
-    .background(Palette.paper)
-    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
     .fixedSize(horizontal: false, vertical: true)
     .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
     .task {
@@ -384,7 +381,7 @@ struct PanelButtonStyle: ButtonStyle {
       self?.open(page)
     }, onSize: { [weak self] size in self?.resize(to: size) })
     let host = NSHostingView(rootView: AnyView(content.environment(store)))
-    p.contentView = host
+    p.contentView = Self.backdrop(around: host)
     top = anchor.minY - 6
     centerX = anchor.midX
     resize(to: host.fittingSize)
@@ -403,6 +400,29 @@ struct PanelButtonStyle: ButtonStyle {
     if let o = spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(o); spaceObserver = nil }
   }
 
+  static let cornerRadius: CGFloat = 14
+
+  /// 面板底子透出后面的内容：macOS 26 起是液态玻璃，更早的系统是菜单同款的模糊材质。
+  private static func backdrop(around content: NSView) -> NSView {
+    if #available(macOS 26.0, *) {
+      let glass = NSGlassEffectView()
+      glass.cornerRadius = cornerRadius
+      glass.contentView = content
+      return glass
+    }
+    let blur = NSVisualEffectView()
+    blur.material = .popover
+    blur.blendingMode = .behindWindow
+    blur.state = .active
+    blur.wantsLayer = true
+    blur.layer?.cornerRadius = cornerRadius
+    blur.layer?.masksToBounds = true
+    content.frame = blur.bounds
+    content.autoresizingMask = [.width, .height]
+    blur.addSubview(content)
+    return blur
+  }
+
   private func makePanel() -> Panel {
     let p = Panel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
     p.isFloatingPanel = true
@@ -410,7 +430,8 @@ struct PanelButtonStyle: ButtonStyle {
     p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
     p.backgroundColor = .clear
     p.isOpaque = false
-    p.hasShadow = true
+    // 窗口阴影按矩形算，和玻璃的圆角对不上，会在四角多出一圈深色边；玻璃自带边缘和投影。
+    p.hasShadow = false
     p.hidesOnDeactivate = false
     p.isReleasedWhenClosed = false
     p.animationBehavior = .utilityWindow
@@ -426,7 +447,6 @@ struct PanelButtonStyle: ButtonStyle {
       frame.origin.x = min(max(frame.minX, bounds.minX), bounds.maxX - frame.width)
     }
     p.setFrame(frame, display: true)
-    p.invalidateShadow()
   }
 
   private func installMonitors() {

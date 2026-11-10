@@ -129,6 +129,20 @@ extension Font {
   static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .system(size: size, weight: weight, design: .monospaced) }
 }
 
+/// 透出窗口后面内容的系统材质（和以前系统侧栏一样）。铺在主窗口最底层：各页面自带不透明底色，
+/// 只有侧栏下面会透出来；macOS 26 的玻璃侧栏只折射窗口自己的内容，没有这一层就看不到后面的 App。
+struct BehindWindowMaterial: NSViewRepresentable {
+  var material: NSVisualEffectView.Material = .sidebar
+  func makeNSView(context: Context) -> NSVisualEffectView {
+    let v = NSVisualEffectView()
+    v.material = material
+    v.blendingMode = .behindWindow
+    v.state = .followsWindowActiveState
+    return v
+  }
+  func updateNSView(_ v: NSVisualEffectView, context: Context) { v.material = material }
+}
+
 extension View {
   /// macOS 26 起用 Liquid Glass，更早的系统退回半透明材质。
   @ViewBuilder func glassCapsule(interactive: Bool = false) -> some View {

@@ -22,6 +22,7 @@ struct RootView: View {
           }
       }
     }
+    .background(BehindWindowMaterial().ignoresSafeArea())
     .task {
       while !Task.isCancelled {
         store.refreshCapture()
