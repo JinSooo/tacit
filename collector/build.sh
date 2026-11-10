@@ -53,6 +53,11 @@ cat > build/audio.entitlements <<'PLIST'
 PLIST
 # Hardened Runtime 下缺这项时，日历授权请求会被直接拒绝，不弹窗。
 sed 's#</dict>#  <key>com.apple.security.personal-information.calendars</key><true/>\n</dict>#' build/audio.entitlements > build/app.entitlements
+# 回归检查：构建 SDK 被记成部署目标时，系统让 SwiftUI 按 macOS 14 的兼容行为运行（工具栏图标偏上），见 swift.sh。
+for bin in "$APP/Contents/MacOS/"*; do
+  sdk="$(otool -l "$bin" | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "sdk" { print $2; exit }')"
+  [ "$sdk" != "14.0" ] || { echo "$bin 的构建 SDK 被记成 14.0（应为 $(xcrun --sdk macosx --show-sdk-version)）" >&2; exit 1; }
+done
 ../scripts/dev-cert.sh
 KC="$HOME/Library/Keychains/ra-dev.keychain-db"
 for lib in "$APP/Contents/Frameworks/"*.dylib; do

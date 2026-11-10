@@ -22,23 +22,33 @@ enum Phosphor {
       }
     }
   }
+}
 
-  /// 菜单栏用的模板图，size × size。字形墨迹在 em 方框里水平居中，垂直比中心高 0.06em，画的时候压下去。
-  static func image(_ name: String, fill: Bool = false, size: CGFloat) -> NSImage? {
-    guard let font = NSFont(name: fill ? Phosphor.fill : Phosphor.regular, size: size) else { return nil }
-    let text = NSAttributedString(string: PhosphorGlyphs.character(name), attributes: [.font: font, .foregroundColor: NSColor.black])
+extension Phosphor {
+  private static var cache: [String: NSImage] = [:]
+
+  /// size × size 的模板图，墨迹在方框里居中。按名字、字重、尺寸缓存；只在主线程调用。
+  static func image(_ name: String, fill: Bool = false, size: CGFloat) -> NSImage {
+    let key = "\(name)|\(fill)|\(size)"
+    if let hit = cache[key] { return hit }
+    let font = CTFontCreateWithName((fill ? Phosphor.fill : Phosphor.regular) as CFString, size, nil)
+    let path = PhosphorGlyphs.path(name, font: font)
     let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
-      text.draw(at: NSPoint(x: 0, y: -size * 0.06))
+      guard let path, let cg = NSGraphicsContext.current?.cgContext else { return true }
+      cg.addPath(path); cg.setFillColor(.black); cg.fillPath()
       return true
     }
     image.isTemplate = true
+    cache[key] = image
     return image
   }
 }
 
 /// 单个 Phosphor 图标。用 `.foregroundStyle` 上色，尺寸只认 `size`（外层 `.font` 不影响它）。
-/// 字形墨迹比行框中心高 0.06em，下移这一点和旁边文字的视觉中心对齐。私有区字符对辅助功能隐藏，
-/// 名字由外层按钮的 `.accessibilityLabel` 或 Label 的文字提供。
+/// 画成墨迹居中的模板图，在任何容器里都按方框居中，不依赖字体行高。和文字按基线对齐时，
+/// 基线取方框顶下 0.9375em，和原来用 Text 画时一致。
+/// 工具栏按钮里图标偏上（2026-11-10 用户报告）的根因不在这里，而是构建记错了 SDK 版本，见 swift.sh。
+/// 图标对辅助功能隐藏，名字由外层按钮的 `.accessibilityLabel` 或 Label 的文字提供。
 struct PhIcon: View {
   let name: String
   var fill = false
@@ -51,9 +61,11 @@ struct PhIcon: View {
   }
 
   var body: some View {
-    Text(PhosphorGlyphs.character(name))
-      .font(.custom(fill ? Phosphor.fill : Phosphor.regular, fixedSize: size))
-      .offset(y: size * 0.06)
+    Image(nsImage: Phosphor.image(name, fill: fill, size: size))
+      .renderingMode(.template)
+      .frame(width: size, height: size)
+      .alignmentGuide(.firstTextBaseline) { $0.height * 0.9375 }
+      .alignmentGuide(.lastTextBaseline) { $0.height * 0.9375 }
       .accessibilityHidden(true)
   }
 }

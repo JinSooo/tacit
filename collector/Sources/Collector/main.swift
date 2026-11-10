@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
+import SwiftUI
 import CollectorCore
 
 /// 菜单栏采集端。所有读取都在这里做，hub 只接收数据。
@@ -27,6 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   let captureQueue = DispatchQueue(label: "record-anything.capture", qos: .utility)
 
   var statusItem: NSStatusItem!
+  let statusMenu = NSMenu()
+  lazy var panel: StatusPanel = MainActor.assumeIsolated {
+    StatusPanel(store: viewer.store) { [weak self] page in self?.viewer.show(page) }
+  }
   var timers: [Timer] = []
   var pausedUntil: Date?
   var lastOCR: [String: Date] = [:]
@@ -47,8 +52,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func applicationDidFinishLaunching(_ n: Notification) {
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    let menu = NSMenu(); menu.delegate = self
-    statusItem.menu = menu
+    // 左键弹面板，右键（或按住 control 点）弹菜单。菜单不常驻在 statusItem 上，否则左键也会弹菜单。
+    statusMenu.delegate = self
+    statusItem.button?.target = self
+    statusItem.button?.action = #selector(statusClicked(_:))
+    statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
     registerSources()
     // 上次开启录音时崩溃：先关掉录音开关，再启动各数据源。
     if audio.initiallyBlocked { toggles.setEnabled("audio", false) }
@@ -254,10 +262,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func updateIcon() {
     guard let statusItem else { return }
-    let symbol = paused ? "pause-circle" : (missingAX ? "warning-circle" : "record")
-    let image = Phosphor.image(symbol, size: 18)
-    image?.accessibilityDescription = "record-anything"
+    let image = StatusIconArt.image(paused ? .paused : (missingAX ? .warning : .recording))
+    image.accessibilityDescription = "Record Anything"
     statusItem.button?.image = image
+  }
+
+  @objc func statusClicked(_ sender: NSStatusBarButton) {
+    let event = NSApp.currentEvent
+    MainActor.assumeIsolated {
+      if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+        panel.close()
+        statusItem.menu = statusMenu
+        sender.performClick(nil)
+        statusItem.menu = nil
+      } else {
+        panel.toggle(from: sender)
+      }
+    }
   }
 
   func menuNeedsUpdate(_ menu: NSMenu) {

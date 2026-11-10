@@ -85,6 +85,13 @@ struct HistoryPage: View {
     .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { selection = nil } })) {
       inspector
         .inspectorColumnWidth(min: 300, ideal: 360, max: 520)
+        // 检查器打开后要有地方关掉它（以前只能按 Esc，2026-11-10 用户报告）。放在检查器自己的工具栏里。
+        .toolbar {
+          ToolbarItem(placement: .primaryAction) {
+            Button { selection = nil } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar).scaleEffect(x: -1) }
+              .help("隐藏详情").accessibilityLabel("隐藏详情").keyboardShortcut("i", modifiers: [.command, .option])
+          }
+        }
     }
     .sheet(isPresented: $note) { NoteSheet { store.revision += 1 } }
     .task(id: LoadKey(day: day, revision: store.revision)) { await loadDay() }
@@ -237,7 +244,7 @@ struct HistoryPage: View {
   }
 
   var stats: some View {
-    let active = activeSeconds(records)
+    let active = ActiveTime.seconds(records)
     return HStack(spacing: 18) {
       stat(String(allBlocks.count), "段活动")
       stat(ViewerFormat.compact(active), "活跃")
@@ -251,18 +258,6 @@ struct HistoryPage: View {
     }
     .lineLimit(1)
     .fixedSize()
-  }
-
-  /// 并集时长：重叠的时段只算一次。
-  func activeSeconds(_ rows: [HistoryRecord]) -> TimeInterval {
-    let spans = rows.compactMap { r in r.end.map { (r.start, $0) } }.filter { $0.1 > $0.0 }.sorted { $0.0 < $1.0 }
-    var total: TimeInterval = 0, cur: (Date, Date)?
-    for s in spans {
-      if let c = cur, s.0 <= c.1 { cur = (c.0, max(c.1, s.1)) }
-      else { if let c = cur { total += c.1.timeIntervalSince(c.0) }; cur = s }
-    }
-    if let c = cur { total += c.1.timeIntervalSince(c.0) }
-    return total
   }
 
   var strataHeader: some View {

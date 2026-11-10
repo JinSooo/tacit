@@ -1,4 +1,5 @@
 import Foundation
+import CoreText
 import Testing
 @testable import CollectorCore
 
@@ -220,6 +221,22 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   for g in PhosphorGlyphs.table { #expect((0xE000...0xF8FF).contains(g.code), "\(g.name)") }
   #expect(PhosphorGlyphs.character("check").unicodeScalars.first?.value == 0xE182)
   #expect(PhosphorGlyphs.character("no-such-icon").isEmpty)
+}
+
+// 回归：图标不居中（2026-11-10 用户报告）。PhIcon 曾把字形下移 0.06em；图标现在画成 size × size 的图片，
+// 路径来自 PhosphorGlyphs.path，正圆的 record 墨迹必须正好在方框中心。
+// 工具栏里整体偏上的另一半原因是构建记错 SDK 版本，由 build.sh 的检查兜住。
+@Test func phosphorGlyphPathIsCenteredInItsBox() throws {
+  let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Resources/Phosphor").standardized
+  for file in ["Phosphor.ttf", "Phosphor-Fill.ttf"] {
+    let data = try Data(contentsOf: dir.appendingPathComponent(file))
+    let descriptor = try #require(CTFontManagerCreateFontDescriptorFromData(data as CFData))
+    let font = CTFontCreateWithFontDescriptor(descriptor, 100, nil)
+    let ink = try #require(PhosphorGlyphs.path("record", font: font)).boundingBoxOfPath
+    #expect(abs(ink.midY - 50) < 0.5, "\(file)：墨迹中心 y=\(ink.midY)")
+    #expect(abs(ink.midX - 50) < 0.5, "\(file)：墨迹中心 x=\(ink.midX)")
+    #expect(PhosphorGlyphs.path("no-such-icon", font: font) == nil)
+  }
 }
 
 // 回归：launchd 拉起采集端的同时又从访达打开，出现两个采集端同时录音（2026-11-10 实测发现）。

@@ -1,3 +1,6 @@
+import CoreText
+import Foundation
+
 /// Phosphor 图标字体（Resources/Phosphor）的码位，只收录查看窗口和菜单栏实际用到的。
 /// 码位取自官方包的 Fonts/regular/style.css，Regular 和 Fill 两套字体码位相同。
 public enum PhosphorGlyphs {
@@ -59,6 +62,7 @@ public enum PhosphorGlyphs {
     ("record", 0xE3EE),
     ("seal-check", 0xE606),
     ("shield-check", 0xE40C),
+    ("sidebar-simple", 0xEC24),
     ("sliders-horizontal", 0xE434),
     ("sparkle", 0xE6A2),
     ("sun-horizon", 0xE5B6),
@@ -80,5 +84,15 @@ public enum PhosphorGlyphs {
   public static func character(_ name: String) -> String {
     guard let code = codes[name], let scalar = Unicode.Scalar(code) else { return "" }
     return String(Character(scalar))
+  }
+
+  /// 图标在 size × size 方框里的路径（y 轴向上）。Phosphor 的设计方框是一个 em：基线下 0.0625em 到基线上 0.9375em，
+  /// 把基线抬到方框底边上方 descent 处，设计方框就正好填满整个方框，墨迹居中。
+  public static func path(_ name: String, font: CTFont) -> CGPath? {
+    guard let code = codes[name], code <= 0xFFFF else { return nil }
+    var char = UniChar(code), glyph = CGGlyph(0)
+    guard CTFontGetGlyphsForCharacters(font, &char, &glyph, 1) else { return nil }
+    var shift = CGAffineTransform(translationX: 0, y: CTFontGetDescent(font))
+    return CTFontCreatePathForGlyph(font, glyph, &shift)
   }
 }
