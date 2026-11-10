@@ -265,3 +265,10 @@ textarea { width: 100%; resize: vertical; line-height: 1.75; }
 .source-dot { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--source-color); }
 .status-lines { grid-template-columns: 64px minmax(0, 1fr); font-size: 12.5px; margin-top: 14px; }
 .status-table th, .status-table td { white-space: nowrap; }
+
+/* 操作结果提示：屏幕底部居中，几秒后消失；待确认的可以撤销。 */
+.toasts { position: fixed; left: 50%; bottom: 24px; z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 32px); transform: translateX(-50%); }
+.toast { display: flex; align-items: center; gap: 14px; max-width: 100%; padding: 9px 16px; border-radius: 10px; background: var(--ink); color: var(--paper); box-shadow: 0 8px 24px rgb(0 0 0 / .18); }
+.toast > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast .text-button { color: var(--paper); font-weight: 600; text-decoration: underline; }
+.empty-note { display: block; margin-top: 8px; font-family: var(--sans); font-size: 13px; }

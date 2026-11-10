@@ -1,15 +1,30 @@
 import { expect, test } from "bun:test";
-import { auditPath, auditResults, auditSummary, auditTargets, type AuditTargetCache } from "../src/audit.ts";
+import { auditAction, auditPath, auditResults, auditSummary, auditTargets, auditVisible, type AuditTarget, type AuditTargetCache } from "../src/audit.ts";
 import type { Api } from "../src/distillation.ts";
-test("审计筛选和不透明游标正确编码；摘要只显示已有参数", () => {
+test("审计筛选和不透明游标正确编码；摘要写成人话，只显示已有参数", () => {
   const url = new URL(auditPath("claude-code", "opaque+/="), "http://localhost");
   expect(url.searchParams.get("tool")).toBe("claude-code");
   expect(url.searchParams.get("cursor")).toBe("opaque+/=");
   expect(auditSummary({ cwd: "/synthetic/repo" })).toBe("/synthetic/repo");
-  expect(auditSummary({ id: "synthetic", level: "detail" })).toBe("synthetic / detail");
-  expect(auditSummary({ q_length: 0 })).toBe("q_length=0");
-  expect(auditSummary({ from: "2026-01-01" })).toBe("2026-01-01 至 不限");
-  expect(auditSummary({})).toBe("无");
+  expect(auditSummary({ cwd: "/Users/someone/repo" })).toBe("~/repo");
+  expect(auditSummary({ id: "synthetic", level: "detail" })).toBe("");
+  const targets = new Map<string, AuditTarget | null>([["synthetic", { kind: "record", title: "合成标题" }]]);
+  expect(auditSummary({ id: "synthetic", level: "detail" }, targets)).toBe("合成标题");
+  expect(auditSummary({ q_length: 12 })).toBe("查询 12 字");
+  expect(auditSummary({ from: "2026-01-01T08:30:00+08:00" })).toBe("2026-01-01 08:30 至 不限");
+  expect(auditSummary({ result: "unchanged", redactions: 2 })).toBe("写入：已存在，未重复写入 · 拦下 2 处密钥");
+  expect(auditSummary({})).toBe("");
+  expect(auditAction("get", { level: "evidence" })).toBe("读取证据");
+  expect(auditAction("context", { event: "compact" })).toBe("压缩后重新注入");
+  expect(auditAction("context", {})).toBe("会话开始时注入");
+  expect(auditAction("search", {})).toBe("搜索 History");
+  expect(auditAction("custom", {})).toBe("custom");
+});
+test("结果默认只列前 3 个，其余和认不出的折成另 N 项；展开后全部列出", () => {
+  const items = ["a", "b", "c", "d", "e"];
+  expect(auditVisible(items, 2, false)).toEqual({ shown: ["a", "b", "c"], hidden: 4, unresolved: 0 });
+  expect(auditVisible(items, 2, true)).toEqual({ shown: items, hidden: 0, unresolved: 2 });
+  expect(auditVisible(["a"], 0, false)).toEqual({ shown: ["a"], hidden: 0, unresolved: 0 });
 });
 const missing = () => Object.assign(new Error("合成内容不存在"), { status: 404 });
 test("解析线程、未确认项目和记录标题，记录只保留标题，未知项合并计数", async () => {

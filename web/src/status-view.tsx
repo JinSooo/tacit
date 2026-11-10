@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { relativeTime, type Api } from "./distillation.ts";
 import { sourceColor, sourceNames } from "./history.ts";
-import { countList, fetchStatus, formatBytes, formatMs, formatNumber, formatUptime, frameNames, pendingNames, speakerNames, STATUS_REFRESH_MS, threadNames, tierNames, type HubStatus } from "./status.ts";
+import { countList, fetchStatus, formatBytes, formatMs, formatNumber, formatUptime, frameNames, pendingNames, requestNames, speakerNames, STATUS_REFRESH_MS, threadNames, tierNames, type HubStatus } from "./status.ts";
 const message = (error: unknown) => error instanceof Error ? error.message : "请求失败，请重试";
 
 function Since({ at }: { at: string | null }) {
@@ -79,10 +79,10 @@ export function StatusView({ api }: { api: Api }) {
       <dt>片段</dt><dd><Counts items={countList(distill.frames, frameNames)} /></dd>
       <dt>线程</dt><dd><Counts items={countList(distill.threads, threadNames)} /></dd>
       <dt>待重写</dt><dd>线程 {distill.needs_regen.threads} · 项目 {distill.needs_regen.projects} · 日记 {distill.needs_regen.days}</dd>
-      {distill.requests && <><dt>请求</dt><dd>{distill.requests.by_status ? <Counts items={countList(distill.requests.by_status, {})} /> : `${formatNumber(distill.requests.total)} 条`}</dd></>}
+      {distill.requests && <><dt>请求</dt><dd>{distill.requests.by_status ? <Counts items={countList(distill.requests.by_status, requestNames)} /> : `${formatNumber(distill.requests.total)} 条`}</dd></>}
       {pendingTotal > 0 && <><dt>待确认</dt><dd><Counts items={countList(distill.pending_open, pendingNames)} /></dd></>}
       <dt>启用于</dt><dd>{distill.enabled_at ? <time dateTime={distill.enabled_at}>{distill.enabled_at.slice(0, 16).replace("T", " ")}</time> : "尚未启用"}{distill.enabled_at && !distill.backfill_done && "，历史批量整理未完成"}</dd>
-      {distill.last_error && <><dt>最近错误</dt><dd><span className="error">{distill.last_error.error}</span> <span className="muted">（{tierNames[distill.last_error.tier] ?? distill.last_error.tier}，<Since at={distill.last_error.at} />）</span></dd></>}
+      {distill.last_error && <><dt>最近错误</dt><dd><span className={distill.last_error.recovered ? "muted" : "error"}>{distill.last_error.error}</span> <span className="muted">（{tierNames[distill.last_error.tier] ?? distill.last_error.tier}，<Since at={distill.last_error.at} />{distill.last_error.recovered && "，已恢复"}）</span></dd></>}
     </dl>
 
     <h2 className="day-heading">今日模型用量</h2>

@@ -95,7 +95,9 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number }) {
     { calls: 0, ok: 0, failed: 0, input_tokens: null as number | null, output_tokens: null as number | null, ms: 0 });
 
   // 模型错误在写入 llm_usage 前已由 safeError 去掉提示词内容；这里再截短。at 有两种时间写法，按 ULID 取最新。
-  const lastError = sql.prepare("SELECT at,tier,error FROM llm_usage WHERE ok=0 ORDER BY id DESC LIMIT 1").get() as { at: string; tier: string; error: string | null } | undefined;
+  const lastError = sql.prepare("SELECT id,at,tier,error FROM llm_usage WHERE ok=0 ORDER BY id DESC LIMIT 1").get() as { id: string; at: string; tier: string; error: string | null } | undefined;
+  // 最近一次成功：网页据此判断最近错误之后是否已恢复。
+  const lastOk = sql.prepare("SELECT id,at FROM llm_usage WHERE ok=1 ORDER BY id DESC LIMIT 1").get() as { id: string; at: string } | undefined;
   const nowState = state("now") as { updated_at?: unknown } | null;
   const deletes = (sql.prepare("SELECT v FROM audio_settings WHERE k GLOB 'delete:*'").all() as { v: string }[])
     .reduce((n, r) => { try { const v = JSON.parse(r.v); return n + (Array.isArray(v) ? v.length : 0); } catch { return n; } }, 0);
@@ -139,7 +141,8 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number }) {
       },
       pending_open: counts("SELECT kind AS k,COUNT(*) AS n FROM pending WHERE resolved_at IS NULL GROUP BY kind"),
       requests,
-      last_error: lastError ? { at: lastError.at, tier: lastError.tier, error: (lastError.error ?? "").slice(0, 300) } : null,
+      last_error: lastError ? { at: lastError.at, tier: lastError.tier, error: (lastError.error ?? "").slice(0, 300), recovered: !!lastOk && lastOk.id > lastError.id } : null,
+      last_ok_at: lastOk?.at ?? null,
     },
     llm_today: { date: today, total, by_tier: byTier },
     agent_reads_today: (sql.prepare("SELECT at FROM agent_reads WHERE at>=?").all(localDate(dayStart - 86_400_000)) as { at: string }[]).filter(r => Date.parse(r.at) >= dayStart).length,
