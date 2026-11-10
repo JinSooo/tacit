@@ -1,6 +1,6 @@
 import Foundation
 
-/// 客户端展示用的纯逻辑：时间解析与格式、连续片段合并、泳道归类、热度衰减。
+/// 客户端展示用的纯逻辑：时间解析与格式、连续片段合并、泳道归类、日记章节排布。
 
 public enum ViewerTime {
   private static let plain: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f }()
@@ -53,12 +53,12 @@ public enum ViewerFormat {
     return m % 60 == 0 ? "\(m / 60) 小时" : "\(m / 60) 小时 \(m % 60) 分"
   }
 
-  /// 紧凑写法：9h 25m、42m、30s。
+  /// 紧凑写法：9 小时 25 分、42 分、30 秒。
   public static func compact(_ seconds: TimeInterval) -> String {
     let s = Int(max(0, seconds))
-    if s < 60 { return "\(s)s" }
+    if s < 60 { return "\(s) 秒" }
     let m = s / 60
-    return m < 60 ? "\(m)m" : (m % 60 == 0 ? "\(m / 60)h" : "\(m / 60)h \(m % 60)m")
+    return m < 60 ? "\(m) 分" : (m % 60 == 0 ? "\(m / 60) 小时" : "\(m / 60) 小时 \(m % 60) 分")
   }
 
   public static func minutes(_ m: Int) -> String {
@@ -236,11 +236,29 @@ public enum Lane: Int, CaseIterable, Sendable {
   }
 }
 
-public enum Warmth {
-  /// 按最近活动时间衰减，半衰期 6 小时；用于线程卡片的热度条。
-  public static func of(_ last: Date?, now: Date = Date(), halfLife: TimeInterval = 6 * 3600) -> Double {
-    guard let last else { return 0 }
-    return exp(-log(2) * max(0, now.timeIntervalSince(last)) / halfLife)
+/// 日记章节在条带上的横向排布。模型给的章节时间常有交叉（10:07–10:49 和 10:25–11:22），
+/// 直接按各自时间画，色块和文字会叠在一起。这里按开始时间排，每段只占到下一段开始为止。
+public enum ChapterStrip {
+  public struct Slot: Equatable, Sendable {
+    public let index: Int     // 在输入里的位置
+    public let lo: Double
+    public let hi: Double
+    public let label: Double? // 留给文字的宽度；放不下就是 nil，只画色块
+  }
+
+  /// spans 是各章节在屏幕上的 [起点, 终点]（已裁到可见范围）。比 minWidth 还窄的章节不画。
+  public static func layout(_ spans: [(lo: Double, hi: Double)], minWidth: Double = 1, padding: Double = 6, minLabel: Double = 28) -> [Slot] {
+    let order = spans.indices.sorted { (spans[$0].lo, spans[$0].hi, $0) < (spans[$1].lo, spans[$1].hi, $1) }
+    var out: [Slot] = []
+    for (k, i) in order.enumerated() {
+      let lo = spans[i].lo
+      var hi = spans[i].hi
+      if k + 1 < order.count { hi = min(hi, spans[order[k + 1]].lo) }
+      guard hi - lo >= minWidth else { continue }
+      let text = hi - lo - 2 * padding
+      out.append(Slot(index: i, lo: lo, hi: hi, label: text >= minLabel ? text : nil))
+    }
+    return out
   }
 }
 

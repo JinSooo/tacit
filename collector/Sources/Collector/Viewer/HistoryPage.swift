@@ -100,8 +100,7 @@ struct HistoryPage: View {
     switch selection {
     case .segment(let id)?:
       if let block = allBlocks.first(where: { $0.id == id }) {
-        SegmentInspector(block: block) { selection = .record($0) }
-          .id(id)
+        SegmentInspector(block: block).id(id)
       }
     case .record(let id)?:
       // 从段里点进来的记录可以回到那一段。
@@ -546,7 +545,7 @@ struct RecordRow: View {
 
   var durationText: String? {
     let s = run?.seconds ?? record.seconds
-    return s >= 1 ? ViewerFormat.duration(s) : nil
+    return s >= 1 ? ViewerFormat.compact(s) : nil
   }
 
   var subtitle: String? {

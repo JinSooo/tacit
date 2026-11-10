@@ -111,10 +111,16 @@ struct DayStrata: View {
     return best?.0
   }
 
+  /// 章节在当前缩放下的位置。章节时间常有交叉，每段只占到下一段开始为止，色块和文字都不叠。
+  func chapterSlots(plot: CGRect, domain d: ClosedRange<Date>) -> [(chapter: Chapter, slot: ChapterStrip.Slot)] {
+    let shown = chapters.filter { $0.end > d.lowerBound && $0.start < d.upperBound }
+    let spans = shown.map { c in (lo: Double(x(max(c.start, d.lowerBound), plot, d)), hi: Double(x(min(c.end, d.upperBound), plot, d))) }
+    return ChapterStrip.layout(spans).map { (shown[$0.index], $0) }
+  }
+
   func chapter(at p: CGPoint, plot: CGRect, domain d: ClosedRange<Date>) -> Chapter? {
     guard !chapters.isEmpty, p.y >= chapterTop, p.y <= chapterTop + Self.chapterHeight else { return nil }
-    let t = time(p.x, plot, d)
-    return chapters.first { $0.start <= t && t <= $0.end }
+    return chapterSlots(plot: plot, domain: d).first { $0.slot.lo <= Double(p.x) && Double(p.x) <= $0.slot.hi }?.chapter
   }
 
   func click(_ p: CGPoint, plot: CGRect, domain d: ClosedRange<Date>) {
@@ -206,12 +212,11 @@ struct DayStrata: View {
     }
 
     // 日记章节
-    for (i, c) in chapters.enumerated() {
-      let a = x(max(c.start, d.lowerBound), plot, d), b = x(min(c.end, d.upperBound), plot, d)
-      guard b - a > 1 else { continue }
-      let full = CGRect(x: a + 0.5, y: chapterTop, width: b - a - 1, height: Self.chapterHeight)
+    for (i, (c, slot)) in chapterSlots(plot: plot, domain: d).enumerated() {
+      let w = CGFloat(slot.hi - slot.lo)
+      let full = CGRect(x: CGFloat(slot.lo) + (w > 2 ? 0.5 : 0), y: chapterTop, width: w > 2 ? w - 1 : w, height: Self.chapterHeight)
       let active = brush == c.start...c.end
-      let label = full.width > 40 ? fitted(c.text, width: full.width - 12, ctx: ctx) : nil
+      let label = slot.label.flatMap { fitted(c.text, width: CGFloat($0), ctx: ctx) }
       let rect = label == nil ? CGRect(x: full.minX, y: full.midY - 3, width: full.width, height: 6) : full
       ctx.fill(Path(roundedRect: rect, cornerRadius: min(6, rect.height / 2)),
                with: .color(Palette.accent.opacity(active ? 0.45 : (label == nil ? 0.3 : (i % 2 == 0 ? 0.13 : 0.08)))))
@@ -310,8 +315,14 @@ struct DayStrata: View {
           .font(.system(size: 10.5, weight: .medium))
           Text(r.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
         } else if let c {
-          Text("\(ViewerFormat.clock(c.start))–\(ViewerFormat.clock(c.end))").font(.mono(10)).foregroundStyle(.secondary)
-          Text(c.text).font(.serif(12.5)).lineLimit(4)
+          // 章节条上的字可能被截断，或被后一段盖住，悬停时把这一刻所在的章节都写全。
+          let t = self.time(h.x, plot, d)
+          let all = [c] + chapters.filter { $0 != c && $0.start <= t && t <= $0.end }.prefix(2)
+          ForEach(all) { c in
+            Text("\(ViewerFormat.clock(c.start))–\(ViewerFormat.clock(c.end))").font(.mono(10)).foregroundStyle(.secondary)
+              .padding(.top, c == all[0] ? 0 : 4)
+            Text(c.text).font(.serif(12.5))
+          }
         } else {
           Text(time).font(.mono(10.5, .medium))
         }

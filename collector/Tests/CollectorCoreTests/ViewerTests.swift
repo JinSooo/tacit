@@ -78,10 +78,24 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(Lane.of("mac.clipboard") == .other)
 }
 
-@Test func warmthHalvesEverySixHours() {
-  let now = Date()
-  #expect(abs(Warmth.of(now.addingTimeInterval(-6 * 3600), now: now) - 0.5) < 1e-9)
-  #expect(Warmth.of(nil, now: now) == 0)
+/// 回归：日记章节时间有交叉（真实数据 10:07–10:49、10:25–11:22、11:01–12:01），条带上的章节文字叠在一起。
+/// 每段只能占到下一段开始为止；太窄的只画色块不写字，比 1pt 还窄的不画。
+@Test func chapterStripNeverOverlaps() {
+  // 一像素一分钟，从 10:00 起算。
+  let spans: [(lo: Double, hi: Double)] = [(25, 82), (7, 49), (61, 121), (120, 121), (121, 122), (200, 260), (200, 230)]
+  let slots = ChapterStrip.layout(spans)
+  for (a, b) in zip(slots, slots.dropFirst()) { #expect(a.hi <= b.lo) }
+  #expect(slots.map(\.index) == [1, 0, 2, 3, 4, 5])
+  #expect(slots[0] == ChapterStrip.Slot(index: 1, lo: 7, hi: 25, label: nil))  // 被后一段截到 10:25，放不下字
+  #expect(slots[2] == ChapterStrip.Slot(index: 2, lo: 61, hi: 120, label: 47))
+  // 相邻的一分钟章节只剩色块。
+  #expect(slots[3].label == nil && slots[4].label == nil && slots[4].lo == 121)
+  // 同一时刻开始的两段，短的让位给长的。
+  #expect(slots[5] == ChapterStrip.Slot(index: 5, lo: 200, hi: 260, label: 48))
+  // 一天 10 段、每段 6pt 宽：都画得出色块，没有一段写字。
+  let tight = (0..<10).map { i in (lo: Double(i * 6), hi: Double(i * 6 + 6)) }
+  #expect(ChapterStrip.layout(tight).count == 10)
+  #expect(ChapterStrip.layout(tight).allSatisfy { $0.label == nil })
 }
 
 @Test func waveformPeaksFromWav() {
@@ -99,7 +113,10 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
 }
 
 @Test func formatsDurations() {
-  #expect(ViewerFormat.compact(5 * 3600 + 28 * 60) == "5h 28m")
+  #expect(ViewerFormat.compact(5 * 3600 + 28 * 60) == "5 小时 28 分")
+  #expect(ViewerFormat.compact(2 * 3600) == "2 小时")
+  #expect(ViewerFormat.compact(42 * 60 + 5) == "42 分")
+  #expect(ViewerFormat.compact(30) == "30 秒")
   #expect(ViewerFormat.duration(59) == "59 秒")
   #expect(ViewerFormat.duration(3600) == "1 小时")
 }

@@ -155,9 +155,14 @@ struct NowPage: View {
         if rows.isEmpty {
           Text("没有进行中的线程").font(.serif(14)).foregroundStyle(.secondary).padding(.vertical, 20)
         } else {
+          // 头部大标题常和某个线程的简述是同一句话，那张卡片就只留标题。
+          let hero = now.value??.brief?.trimmingCharacters(in: .whitespacesAndNewlines)
           LazyVGrid(columns: [GridItem(.adaptive(minimum: 290, maximum: 520), spacing: 14)], spacing: 14) {
             ForEach(rows) { t in
-              Button { store.path.append(.thread(t.id)) } label: { ThreadCard(thread: t, project: store.project(t.projectId)) }
+              Button { store.path.append(.thread(t.id)) } label: {
+                ThreadCard(thread: t, project: store.project(t.projectId),
+                           showBrief: hero == nil || t.brief?.trimmingCharacters(in: .whitespacesAndNewlines) != hero)
+              }
                 .buttonStyle(.plain)
             }
           }
@@ -199,28 +204,27 @@ struct NowPage: View {
 struct ThreadCard: View {
   let thread: HubThread
   let project: Project?
+  var showBrief = true
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 8) {
         if let project { ProjectTag(name: project.name, unconfirmed: !project.confirmed.value) }
-        else { Label(thread.domain == "life" ? "生活" : "未归属", systemImage: thread.domain == "life" ? "leaf" : "circle.dashed").font(.system(size: 11, weight: .medium)).foregroundStyle(.tertiary) }
+        else if thread.domain == "life" { Label("生活", systemImage: "leaf").font(.system(size: 11, weight: .medium)).foregroundStyle(.tertiary) }
         Spacer()
         Text(ViewerFormat.relative(thread.last)).font(.system(size: 11)).foregroundStyle(.tertiary)
       }
       Text(thread.title).font(.serif(17, .semibold)).foregroundStyle(Palette.ink).lineLimit(2).multilineTextAlignment(.leading)
         .fixedSize(horizontal: false, vertical: true)
-      if let brief = thread.brief {
+      if showBrief, let brief = thread.brief {
         Text(brief).font(.system(size: 12.5)).lineSpacing(2.5).foregroundStyle(.secondary).lineLimit(3)
           .fixedSize(horizontal: false, vertical: true)
       }
       Spacer(minLength: 0)
-      HStack(spacing: 10) {
-        WarmthBar(value: Warmth.of(thread.last), tint: project.map { Palette.tag($0.name) } ?? Palette.accent)
-        if let m = thread.activeMinutes {
-          Text("\(ViewerFormat.minutes(m))\(thread.sessions.map { " · \($0) 次" } ?? "")")
-            .font(.system(size: 10.5)).monospacedDigit().foregroundStyle(.tertiary).fixedSize()
-        }
+      if let m = thread.activeMinutes {
+        Text("\(ViewerFormat.minutes(m))\(thread.sessions.map { " · \($0) 次" } ?? "")")
+          .font(.system(size: 10.5)).monospacedDigit().foregroundStyle(.tertiary).fixedSize()
+          .frame(maxWidth: .infinity, alignment: .trailing)
       }
     }
     .padding(16)
@@ -278,22 +282,6 @@ struct ProjectCard: View {
     .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
     .card(12, hover: true)
     .contentShape(Rectangle())
-  }
-}
-
-struct WarmthBar: View {
-  let value: Double
-  let tint: Color
-  var body: some View {
-    GeometryReader { g in
-      ZStack(alignment: .leading) {
-        Capsule().fill(.primary.opacity(0.07))
-        Capsule().fill(LinearGradient(colors: [tint.opacity(0.35), tint], startPoint: .leading, endPoint: .trailing))
-          .frame(width: max(4, g.size.width * value))
-      }
-    }
-    .frame(height: 4)
-    .accessibilityHidden(true)
   }
 }
 
@@ -657,7 +645,7 @@ struct ProjectPage: View {
         else if let e = detail.error { Placeholder(kind: .error(e) { Task { await load() } }).frame(height: 400) }
         else { Placeholder(kind: .loading).frame(height: 400) }
       }
-      .frame(maxWidth: 960, alignment: .leading)
+      .frame(maxWidth: 860, alignment: .leading)
       .padding(.horizontal, 40).padding(.vertical, 32)
       .frame(maxWidth: .infinity)
     }

@@ -84,7 +84,7 @@ struct SegmentRow: View {
         Spacer(minLength: 8)
         HStack(spacing: 10) {
           if segment.activeSeconds >= 60 {
-            Text(ViewerFormat.duration(segment.activeSeconds)).font(.system(size: 11)).monospacedDigit().foregroundStyle(.tertiary)
+            Text(ViewerFormat.compact(segment.activeSeconds)).font(.system(size: 11)).monospacedDigit().foregroundStyle(.tertiary)
           }
           HStack(spacing: 3) {
             Text("\(block.records.count)").monospacedDigit()
@@ -131,20 +131,11 @@ struct SegmentRow: View {
   }
 }
 
-/// 右侧检查器：这段在做什么（线程的简略和详细版），原始记录折叠在下面。
+/// 右侧检查器：这段的概要（时间、应用、在做什么）。原始记录只在左侧列表里展开看，这里不再列一遍。
 struct SegmentInspector: View {
   let block: SegmentBlock
-  let onOpenRecord: (String) -> Void
   @Environment(ViewerStore.self) private var store
   @State private var detail = Loader<EntityDetail>()
-  @State private var showRecords: Bool
-
-  init(block: SegmentBlock, onOpenRecord: @escaping (String) -> Void) {
-    self.block = block
-    self.onOpenRecord = onOpenRecord
-    // 没提炼的段没有别的可看，原始记录直接展开。
-    _showRecords = State(initialValue: block.segment.thread == nil)
-  }
 
   var segment: HistorySegment { block.segment }
 
@@ -153,9 +144,8 @@ struct SegmentInspector: View {
       VStack(alignment: .leading, spacing: 22) {
         header
         if let t = segment.thread { doing(t) }
-        else { Text("还没提炼").font(.callout).foregroundStyle(.tertiary) }
-        if segment.apps.count > 1 { appList }
-        raw
+        else { undistilled }
+        if !segment.apps.isEmpty { appList }
       }
       .padding(20)
     }
@@ -221,6 +211,16 @@ struct SegmentInspector: View {
     }
   }
 
+  /// 没提炼的段没有摘要，用窗口标题说明在看什么。
+  var undistilled: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      if let w = SegmentText.windows(block, limit: 6) {
+        Text(w).font(.system(size: 12.5)).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+      }
+      Text("还没提炼").font(.caption).foregroundStyle(.tertiary)
+    }
+  }
+
   var appList: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("应用").sectionTitle()
@@ -234,46 +234,6 @@ struct SegmentInspector: View {
               .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
           }
         }
-      }
-    }
-  }
-
-  var raw: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Button { withAnimation(.smooth(duration: 0.2)) { showRecords.toggle() } } label: {
-        HStack(spacing: 6) {
-          Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).rotationEffect(.degrees(showRecords ? 90 : 0))
-            .foregroundStyle(.secondary)
-          Text("原始记录").sectionTitle()
-          Text("\(block.records.count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(.tertiary)
-          Spacer()
-        }
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      if showRecords {
-        let runs = RecordRuns.collapse(block.records)
-        VStack(alignment: .leading, spacing: 0) {
-          ForEach(Array(runs.enumerated()), id: \.element.id) { i, run in
-            Button { onOpenRecord(run.newest.id) } label: {
-              HStack(spacing: 8) {
-                Text(ViewerFormat.clock(run.start)).font(.mono(10.5)).foregroundStyle(.secondary)
-                SourceGlyph(source: run.newest.source, app: run.newest.contextText("app"), size: 14)
-                Text(run.newest.title.isEmpty ? SourceInfo.name(run.newest.source) : run.newest.title)
-                  .font(.system(size: 12)).lineLimit(1)
-                if run.newest.sensitivity == "private" { Image(systemName: "lock.fill").font(.system(size: 8)).foregroundStyle(.secondary) }
-                Spacer(minLength: 4)
-                if run.records.count > 1 { Text("×\(run.records.count)").font(.system(size: 10.5)).monospacedDigit().foregroundStyle(.tertiary) }
-              }
-              .padding(.horizontal, 10).padding(.vertical, 6)
-              .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if i < runs.count - 1 { Divider().padding(.leading, 10) }
-          }
-        }
-        .card(10)
-        .transition(.opacity)
       }
     }
   }
