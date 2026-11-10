@@ -46,38 +46,37 @@ struct RecordInspector: View {
         if let back {
           Button(action: back.action) {
             HStack(spacing: 4) {
-              PhIcon("caret-left", size: 11)
+              PhIcon("caret-left", size: 12)
               Text(back.title).lineLimit(1)
             }
           }
-          .buttonStyle(.link).font(.caption)
+          .buttonStyle(.link).font(.system(size: TextSize.body))
           .padding(.bottom, -8)
         }
         header(d)
         if cur.id != r.id {
-          HStack(spacing: 6) {
-            PhIcon("note-pencil", size: 13)
-            Text("已修正 · \(ViewerFormat.relative(cur.start))")
+          // cur.start 是修正记录写入的时间。
+          HStack(spacing: 8) {
+            PhIcon("note-pencil", size: 14)
+            Text(ViewerFormat.relative(cur.start) == "刚刚" ? "刚刚修正过" : "\(ViewerFormat.relative(cur.start))修正过")
             Spacer()
-            Button(showOriginal ? "收起原文" : "查看原文") { withAnimation(.smooth) { showOriginal.toggle() } }.buttonStyle(.link)
+            Button(showOriginal ? "收起原文" : "查看原文") { withAnimation(.easeOut(duration: 0.2)) { showOriginal.toggle() } }.buttonStyle(.link)
           }
-          .font(.caption)
-          .foregroundStyle(Palette.source("manual.correction"))
-          .padding(10)
-          .background(Palette.source("manual.correction").opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+          .font(.system(size: TextSize.body))
+          .foregroundStyle(Palette.muted)
         }
         if r.source == "mac.audio", let people = r.people, !people.isEmpty {
-          HStack(spacing: 6) {
-            PhIcon("users", size: 16)
+          HStack(spacing: 8) {
+            PhIcon("users", size: 14)
             Text(store.speakerNames(people).joined(separator: "、"))
           }
-          .font(.callout).foregroundStyle(.secondary)
+          .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
         }
         bodyText(cur.body ?? "")
         if showOriginal, cur.id != r.id {
-          VStack(alignment: .leading, spacing: 6) {
+          VStack(alignment: .leading, spacing: 8) {
             Text("原文").sectionTitle()
-            bodyText(r.body ?? "").opacity(0.7)
+            bodyText(r.body ?? "")
           }
         }
         contextGrid(r)
@@ -90,24 +89,24 @@ struct RecordInspector: View {
   func header(_ d: RecordDetail) -> some View {
     let r = d.record
     return VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 10) {
-        SourceGlyph(source: r.source, app: r.contextText("app"), size: 34)
+      HStack(spacing: 12) {
+        SourceGlyph(source: r.source, app: r.contextText("app"), size: 32)
         VStack(alignment: .leading, spacing: 2) {
-          Text(SourceInfo.name(r.source)).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.source(r.source))
-          Text(timeLine(r)).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+          Text(SourceInfo.name(r.source)).font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.muted)
+          Text(timeLine(r)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
         }
       }
-      Text(r.title).font(.serif(19, .semibold)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+      Text(RecordText.title(r, appShown: false)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
+        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
       actions(d)
     }
   }
 
   func timeLine(_ r: HistoryRecord) -> String {
-    let c = Calendar.current.dateComponents([.month, .day], from: r.start)
-    var s = "\(c.month!) 月 \(c.day!) 日 \(ViewerFormat.clock(r.start))"
+    var s = "\(Fmt.date(r.start)) \(ViewerFormat.clock(r.start))"
     if let e = r.end, r.isSpan {
       if ViewerFormat.clock(e) != ViewerFormat.clock(r.start) { s += "–\(ViewerFormat.clock(e))" }
-      if r.seconds >= 1 { s += " · \(ViewerFormat.duration(r.seconds))" }
+      if r.seconds >= 1 { s += "，共 \(Fmt.duration(r.seconds))" }
     }
     return s
   }
@@ -115,18 +114,19 @@ struct RecordInspector: View {
   @ViewBuilder func bodyText(_ text: String) -> some View {
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      Text("没有正文").font(.callout).foregroundStyle(.tertiary)
+      Text("这条没有正文").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
     } else {
       VStack(alignment: .leading, spacing: 8) {
         Text(showAll || lines.count <= 60 ? text : lines.prefix(60).joined(separator: "\n"))
-          .font(.system(size: 12.5))
-          .lineSpacing(3.5)
+          .font(.system(size: TextSize.body))
+          .foregroundStyle(Palette.ink)
+          .lineSpacing(TextSize.lineSpacing(TextSize.body))
           .textSelection(.enabled)
           .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(14)
-          .card(10)
+          .padding(16)
+          .card()
         if lines.count > 60 {
-          Button(showAll ? "收起" : "展开全部 \(lines.count) 行") { showAll.toggle() }.buttonStyle(.link).font(.caption)
+          Button(showAll ? "收起" : "展开全部 \(Fmt.count(lines.count)) 行") { showAll.toggle() }.buttonStyle(.link).font(.system(size: TextSize.body))
         }
       }
     }
@@ -136,20 +136,20 @@ struct RecordInspector: View {
     let rows = contextRows(r)
     if !rows.isEmpty {
       VStack(alignment: .leading, spacing: 8) {
-        Text("上下文").sectionTitle()
-        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 7) {
+        Text("记录时的情况").sectionTitle()
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
           ForEach(rows, id: \.0) { label, value in
             GridRow {
-              Text(label).font(.system(size: 11.5)).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
-              if label == "URL", let url = URL(string: value), ["http", "https"].contains(url.scheme ?? "") {
-                Link(value, destination: url).font(.system(size: 11.5)).lineLimit(3)
+              Text(label).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).gridColumnAlignment(.trailing)
+              if label == "网址", let url = URL(string: value), ["http", "https"].contains(url.scheme ?? "") {
+                Link(value, destination: url).font(.system(size: TextSize.caption)).lineLimit(3)
               } else if ["仓库", "目录", "路径"].contains(label) {
                 Button { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: (value as NSString).expandingTildeInPath) } label: {
-                  Text(value).font(.mono(11)).multilineTextAlignment(.leading)
+                  Text(value).font(.mono(TextSize.caption)).foregroundStyle(Palette.ink).multilineTextAlignment(.leading)
                 }
-                .buttonStyle(.plain).help("在 Finder 中显示")
+                .buttonStyle(.plain).help("在访达中显示")
               } else {
-                Text(value).font(.system(size: 11.5)).textSelection(.enabled).lineLimit(4)
+                Text(value).font(.system(size: TextSize.caption)).foregroundStyle(Palette.ink).textSelection(.enabled).lineLimit(4)
               }
             }
           }
@@ -162,7 +162,7 @@ struct RecordInspector: View {
     var rows: [(String, String)] = []
     let app = r.contextText("app")
     if let name = AppIcons.name(app) { rows.append(("应用", name)) }
-    for (key, label) in [("window", "窗口"), ("url", "URL"), ("repo", "仓库"), ("cwd", "目录"), ("chat", "会话"), ("place", "地点")] {
+    for (key, label) in [("window", "窗口"), ("url", "网址"), ("repo", "仓库"), ("cwd", "目录"), ("chat", "会话"), ("place", "地点")] {
       if let v = r.contextText(key) {
         let shown = key == "repo" || key == "cwd" ? (v as NSString).abbreviatingWithTildeInPath : v
         if key == "cwd", rows.contains(where: { $0.1 == shown }) { continue }
@@ -177,23 +177,24 @@ struct RecordInspector: View {
         guard let label = names[k], var text = v.text else { continue }
         if k == "hash" { text = String(text.prefix(10)) }
         if k == "size", let n = Int(text) { if n == 0 { continue }; text = ViewerFormat.bytes(n) }
-        if k == "duration_ms", let n = Double(text) { text = ViewerFormat.duration(n / 1000) }
+        if k == "duration_ms", let n = Double(text) { text = Fmt.duration(n / 1000) }
         rows.append((label, text))
       }
     }
     var capture = r.capture?.method ?? ""
-    capture = ["ax": "辅助功能", "ocr": "OCR", "db": "数据库", "api": "系统接口", "file": "文件", "hook": "Shell 钩子", "asr": "语音转写", "manual": "手动"][capture] ?? capture
-    if let c = r.capture?.confidence { capture += " · 置信度 \(Int(c * 100))%" }
-    if !capture.isEmpty { rows.append(("采集", capture)) }
+    capture = ["ax": "读取窗口文字", "ocr": "截图识字", "db": "读取数据库", "api": "系统接口", "file": "读取文件", "hook": "终端钩子", "asr": "语音转文字", "manual": "手动补写"][capture] ?? capture
+    // confidence 是采集端给的识别置信度（OCR、转写），0–1。
+    if let c = r.capture?.confidence { capture += "，识别把握 \(Int((c * 100).rounded()))%" }
+    if !capture.isEmpty { rows.append(("怎么记的", capture)) }
     rows.append(("设备", r.device))
-    if (r.redactions ?? 0) > 0 { rows.append(("脱敏", "\(r.redactions!) 处")) }
+    if (r.redactions ?? 0) > 0 { rows.append(("隐去的密钥", "\(r.redactions!) 处")) }
     return rows
   }
 
   func actions(_ d: RecordDetail) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
-        Button { correcting = true } label: { Label { Text("修正") } icon: { PhIcon("pencil-simple", size: 13) } }
+        Button { correcting = true } label: { Label { Text("修正") } icon: { PhIcon("pencil-simple", size: 14) } }
         Button {
           NSPasteboard.general.clearContents()
           NSPasteboard.general.setString(d.current.body ?? d.record.title, forType: .string)
@@ -203,19 +204,20 @@ struct RecordInspector: View {
             try? await Task.sleep(for: .seconds(1.5))
             if !Task.isCancelled { copied = false }
           }
-        } label: { Label { Text(copied ? "已复制" : "复制") } icon: { PhIcon(copied ? "check" : "copy", size: 13) } }
+        } label: { Label { Text(copied ? "已复制" : "复制") } icon: { PhIcon(copied ? "check" : "copy", size: 14) } }
         Spacer()
-        Button(role: .destructive) { confirmDelete = true } label: { Label { Text("删除") } icon: { PhIcon("trash", size: 13) } }
+        Button { confirmDelete = true } label: { Label { Text("删除") } icon: { PhIcon("trash", size: 14) } }
+          .buttonStyle(.borderless).foregroundStyle(Palette.attention)
           .disabled(busy)
       }
-      if let deleteError { Text(deleteError).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+      if let deleteError { Text(deleteError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention).textSelection(.enabled) }
     }
     .controlSize(.small)
     .confirmationDialog("删除这条记录？", isPresented: $confirmDelete) {
       Button("删除", role: .destructive) { Task { await delete(d) } }
       Button("取消", role: .cancel) {}
     } message: {
-      Text("删除后不能恢复，已经发给云端模型的内容收不回来。")
+      Text("删除后不能恢复。已经交给云端 AI 的内容收不回来。")
     }
   }
 
@@ -242,24 +244,25 @@ struct CorrectionSheet: View {
   @State private var error: String?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      Text("修正正文").font(.serif(20, .semibold))
-      Text("原文保留，显示和提炼以修正为准。").font(.callout).foregroundStyle(.secondary)
+    VStack(alignment: .leading, spacing: 12) {
+      Text("修正这条记录").font(.system(size: TextSize.title, weight: .semibold))
+      Text("原文会保留，以后显示和整理都用你改的版本。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
       TextEditor(text: $text)
-        .font(.system(size: 13))
+        .font(.system(size: TextSize.body))
         .scrollContentBackground(.hidden)
         .padding(8)
-        .card(8)
+        .card(Radius.control)
         .frame(minHeight: 260)
-      if let error { Text(error).font(.callout).foregroundStyle(.red) }
+      if let error { Text(error).font(.system(size: TextSize.body)).foregroundStyle(Palette.attention) }
       HStack {
         Spacer()
         Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-        Button(busy ? "提交中…" : "提交修正") { Task { await save() } }
-          .keyboardShortcut(.defaultAction).disabled(busy || text.count > 200_000)
+        Button(busy ? "正在修正…" : "修正") { Task { await save() } }
+          .buttonStyle(.accent)
+          .keyboardShortcut(.defaultAction).disabled(busy || text.count > 200_000 || text == (original.body ?? ""))
       }
     }
-    .padding(22)
+    .padding(24)
     .frame(width: 560)
     .onAppear { text = original.body ?? "" }
   }
@@ -293,33 +296,37 @@ struct NoteSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("补写 History").font(.serif(22, .semibold))
+      Text("补写一条记录").font(.system(size: TextSize.title, weight: .semibold))
       Form {
         DatePicker("开始", selection: $start, in: ...Date())
-        Toggle("是一段时间", isOn: $hasEnd.animation())
+        Toggle("持续了一段时间", isOn: $hasEnd.animation(.easeOut(duration: 0.2)))
         if hasEnd { DatePicker("结束", selection: $end, in: start...) }
-        TextField("标题", text: $title, prompt: Text("这段时间做了什么"))
+        TextField("标题", text: $title, prompt: Text("做了什么"))
       }
       .formStyle(.columns)
       TextEditor(text: $text)
-        .font(.system(size: 13))
+        .font(.system(size: TextSize.body))
         .scrollContentBackground(.hidden)
         .padding(8)
-        .card(8)
+        .card(Radius.control)
         .frame(minHeight: 180)
         .overlay(alignment: .topLeading) {
-          if text.isEmpty { Text("详细内容（可空）").foregroundStyle(.tertiary).padding(.horizontal, 14).padding(.vertical, 9).allowsHitTesting(false) }
+          if text.isEmpty {
+            Text("想多写点可以写在这里").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+              .padding(.horizontal, 13).padding(.vertical, 8).allowsHitTesting(false)
+          }
         }
-      if let error { Text(error).font(.callout).foregroundStyle(.red) }
+      if let error { Text(error).font(.system(size: TextSize.body)).foregroundStyle(Palette.attention) }
       HStack {
         Spacer()
         Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-        Button(busy ? "提交中…" : "补写") { Task { await save() } }
+        Button(busy ? "正在保存…" : "保存") { Task { await save() } }
+          .buttonStyle(.accent)
           .keyboardShortcut(.defaultAction)
           .disabled(busy || trimmed.isEmpty || trimmed.count > 200 || (hasEnd && end < start))
       }
     }
-    .padding(22)
+    .padding(24)
     .frame(width: 520)
   }
 

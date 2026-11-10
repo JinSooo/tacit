@@ -33,12 +33,6 @@ struct CaptureSnapshot: Equatable {
 
   func source(_ id: String) -> DataSourceStatus? { sources.first { $0.id == id } }
   var recordingEnabled: Bool { source("audio")?.enabled ?? false }
-  /// 侧栏底部的一行：正在采集的数据源。
-  var summary: String {
-    let builtin = sources.filter { $0.enabled && $0.kind == .builtin }.map(\.title)
-    let plugins = sources.filter { $0.enabled && $0.kind == .plugin }.count
-    return (builtin + (plugins > 0 ? ["插件 \(plugins)"] : [])).joined(separator: " · ")
-  }
 }
 
 enum CaptureAction {
@@ -77,7 +71,7 @@ enum Route: Hashable {
   var sharedError: String?
   var capture = CaptureSnapshot()
 
-  /// History 当前看的那一天，以及要选中的记录（从证据、读取记录跳过来时用）。
+  /// 历史记录当前看的那一天，以及要选中的记录（从证据、读取记录跳过来时用）。
   var historyDay = Calendar.current.startOfDay(for: Date())
   var historyFocus: String?
   var historySearch = ""

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import CollectorCore
 
-/// 一天的 History：列表按活动段聚合（线程或应用），展开才是原始记录；搜索时按记录显示命中。
+/// 一天的历史记录：列表按活动段聚合（事项或应用），展开才是原始记录；搜索时按记录显示命中。
 struct HistoryPage: View {
   enum Selection: Hashable { case segment(String), record(String) }
 
@@ -74,13 +74,13 @@ struct HistoryPage: View {
       .background(Palette.paper)
       .onChange(of: scrollTarget) { _, id in
         guard let id else { return }
-        withAnimation(.smooth) { proxy.scrollTo(id, anchor: .center) }
+        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
         scrollTarget = nil
       }
     }
     .navigationTitle(isSearch ? "搜索" : ViewerFormat.dayTitle(day))
     .navigationSubtitle(isSearch ? "" : ViewerFormat.weekday(day))
-    .searchable(text: $store.historySearch, placement: .toolbar, prompt: "搜索 History")
+    .searchable(text: $store.historySearch, placement: .toolbar, prompt: "搜索历史记录")
     .toolbar { toolbar }
     .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { selection = nil } })) {
       inspector
@@ -174,7 +174,7 @@ struct HistoryPage: View {
     let blocks = self.blocks
     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
       dayHeader
-        .padding(.horizontal, 32).padding(.top, 26).padding(.bottom, 18)
+        .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 16)
       Section {
         if loading && records.isEmpty {
           Placeholder(kind: .loading).frame(height: 240)
@@ -183,10 +183,10 @@ struct HistoryPage: View {
         } else if records.isEmpty {
           Placeholder(kind: .empty("moon-stars", "这一天没有记录")).frame(height: 260)
         } else if blocks.isEmpty {
-          Placeholder(kind: .empty("funnel-simple", "筛选后没有记录")).frame(height: 200)
+          Placeholder(kind: .empty("funnel-simple", "没有符合筛选的记录")).frame(height: 200)
         } else {
           // 修饰符加在 ForEach 上会分发给每一行，留白用独立的占位视图。
-          Color.clear.frame(height: 6)
+          Color.clear.frame(height: 8)
           segmentRows(blocks)
           Color.clear.frame(height: 40)
         }
@@ -197,14 +197,14 @@ struct HistoryPage: View {
   }
 
   var dayHeader: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    VStack(alignment: .leading, spacing: 12) {
       ViewThatFits(in: .horizontal) {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
           dateTitle
           Spacer(minLength: 16)
           if !records.isEmpty { stats }
         }
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
           dateTitle
           if !records.isEmpty { stats }
         }
@@ -212,26 +212,24 @@ struct HistoryPage: View {
       if let summary = diary?.detail?.summary ?? diary?.brief, !summary.isEmpty {
         VStack(alignment: .leading, spacing: 8) {
           Text(summary)
-            .font(.serif(15.5))
-            .lineSpacing(5)
-            .foregroundStyle(Palette.ink.opacity(0.88))
+            .font(.serif(TextSize.title))
+            .lineSpacing(TextSize.serifLineSpacing(TextSize.title))
+            .foregroundStyle(Palette.ink)
             .lineLimit(showDiary ? nil : 2)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-          Button(showDiary ? "收起日记" : "展开日记") { withAnimation(.smooth) { showDiary.toggle() } }
-            .buttonStyle(.link).font(.caption)
+          Button(showDiary ? "收起日记" : "展开日记") { withAnimation(.easeOut(duration: 0.2)) { showDiary.toggle() } }
+            .buttonStyle(.link).font(.system(size: TextSize.body))
         }
         .frame(maxWidth: 760, alignment: .leading)
-        .padding(.leading, 14)
-        .overlay(alignment: .leading) { Capsule().fill(Palette.accent.opacity(0.5)).frame(width: 2.5) }
       }
     }
   }
 
   var dateTitle: some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(longDate).font(.serif(30, .semibold)).foregroundStyle(Palette.ink)
-      Text(ViewerFormat.weekday(day)).font(.serif(17)).foregroundStyle(.secondary)
+      Text(longDate).font(.serif(TextSize.heading, .semibold)).foregroundStyle(Palette.ink)
+      Text(ViewerFormat.weekday(day)).font(.serif(TextSize.heading)).foregroundStyle(Palette.muted)
     }
     .lineLimit(1)
     .fixedSize()
@@ -243,21 +241,13 @@ struct HistoryPage: View {
     return "\(year)\(c.month!) 月 \(c.day!) 日"
   }
 
+  /// 段数是列表里的活动段（包括折起来的零碎段）；活跃时长是当天所有记录时段的并集，重叠只算一次。
   var stats: some View {
     let active = ActiveTime.seconds(records)
-    return HStack(spacing: 18) {
-      stat(String(allBlocks.count), "段活动")
-      stat(ViewerFormat.compact(active), "活跃")
-      if let first = records.map(\.start).min() { stat(ViewerFormat.clock(first), "开始") }
-    }
-  }
-  func stat(_ value: String, _ label: String) -> some View {
-    VStack(alignment: .trailing, spacing: 1) {
-      Text(value).font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit()
-      Text(label).font(.system(size: 10.5)).foregroundStyle(.secondary)
-    }
-    .lineLimit(1)
-    .fixedSize()
+    return Text("\(Fmt.count(allBlocks.count)) 段活动，活跃 \(Fmt.duration(active))")
+      .font(.system(size: TextSize.body)).monospacedDigit().foregroundStyle(Palette.muted)
+      .lineLimit(1).fixedSize()
+      .help("活跃时长按记录覆盖的时段算，几个来源同时在记录只算一次")
   }
 
   var strataHeader: some View {
@@ -267,34 +257,35 @@ struct HistoryPage: View {
       if brush != nil || lane != nil {
         HStack(spacing: 8) {
           if let b = brush { chip("\(ViewerFormat.clock(b.lowerBound))–\(ViewerFormat.clock(b.upperBound))", "clock") { brush = nil } }
-          if let l = lane { chip(l.title, "funnel-simple") { lane = nil } }
-          Text("\(visible.count) 条").font(.caption).foregroundStyle(.secondary)
+          if let l = lane { chip(l.name, "funnel-simple") { lane = nil } }
+          Text("\(Fmt.count(visible.count)) 条记录").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
         }
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        .transition(.opacity)
       }
     }
-    .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 12)
+    .padding(.horizontal, 20).padding(.vertical, 12)
     .background {
-      Rectangle().fill(.bar)
+      Rectangle().fill(Palette.paper)
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.hairline).frame(height: 1) }
     }
     .zIndex(2)
-    .animation(.smooth(duration: 0.2), value: brush != nil || lane != nil)
+    .animation(.easeOut(duration: 0.2), value: brush != nil || lane != nil)
   }
 
   func chip(_ text: String, _ symbol: String, clear: @escaping () -> Void) -> some View {
     Button(action: clear) {
-      HStack(spacing: 5) {
-        PhIcon(symbol, size: 13.5)
+      HStack(spacing: 4) {
+        PhIcon(symbol, size: 12)
         Text(text).monospacedDigit()
-        PhIcon("x", size: 10).opacity(0.6)
+        PhIcon("x", size: 10)
       }
-      .font(.system(size: 11, weight: .medium))
-      .padding(.horizontal, 9).padding(.vertical, 4)
+      .font(.system(size: TextSize.caption, weight: .medium))
+      .padding(.horizontal, 8).padding(.vertical, 4)
       .foregroundStyle(Palette.accent)
-      .background(Palette.accent.opacity(0.12), in: Capsule())
+      .background(Palette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
     }
     .buttonStyle(.plain)
+    .help("清除这个筛选")
   }
 
   // MARK: 行
@@ -306,14 +297,14 @@ struct HistoryPage: View {
     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
       let hour = cal.component(.hour, from: item.start)
       if i == 0 || cal.component(.hour, from: items[i - 1].start) != hour {
-        HourMark(hour: hour).padding(.top, i == 0 ? 4 : 14).padding(.horizontal, 20)
+        HourMark(hour: hour).padding(.top, i == 0 ? 4 : 12).padding(.horizontal, 20)
       }
       switch item {
       case .single(let block):
         segmentRow(block)
       case .minor(let group):
         MinorSegmentsRow(blocks: group, expanded: expanded.contains(item.id)) {
-          withAnimation(.smooth(duration: 0.25)) { if expanded.contains(item.id) { expanded.remove(item.id) } else { expanded.insert(item.id) } }
+          withAnimation(.easeOut(duration: 0.2)) { if expanded.contains(item.id) { expanded.remove(item.id) } else { expanded.insert(item.id) } }
         }
         .padding(.horizontal, 20)
         .id(item.id)
@@ -326,7 +317,7 @@ struct HistoryPage: View {
 
   @ViewBuilder func segmentRow(_ block: SegmentBlock) -> some View {
     SegmentRow(block: block, selected: selection == .segment(block.id), expanded: expanded.contains(block.id)) {
-      withAnimation(.smooth(duration: 0.25)) { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
+      withAnimation(.easeOut(duration: 0.2)) { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
       selection = .segment(block.id)
     }
     .padding(.horizontal, 20)
@@ -340,7 +331,7 @@ struct HistoryPage: View {
         .id(run.id)
         .transition(.opacity)
       }
-      Color.clear.frame(height: 6)
+      Color.clear.frame(height: 8)
     }
   }
 
@@ -365,12 +356,12 @@ struct HistoryPage: View {
         let groups = Dictionary(grouping: results) { Calendar.current.startOfDay(for: $0.start) }.sorted { $0.key > $1.key }
         ForEach(groups, id: \.key) { day, rows in
           HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(ViewerFormat.dayTitle(day)).font(.serif(19, .semibold))
-            Text(ViewerFormat.weekday(day)).font(.serif(13)).foregroundStyle(.secondary)
+            Text(ViewerFormat.dayTitle(day)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
+            Text(ViewerFormat.weekday(day)).font(.serif(TextSize.title)).foregroundStyle(Palette.muted)
             Spacer()
-            Button("看这一天") { store.historySearch = ""; store.historyDay = day }.buttonStyle(.link).font(.caption)
+            Button("打开这一天") { store.historySearch = ""; store.historyDay = day }.buttonStyle(.link).font(.system(size: TextSize.body))
           }
-          .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 6)
+          .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 8)
           searchRows(rows.sorted { $0.start > $1.start })
         }
         if cursor != nil {
@@ -410,7 +401,7 @@ struct HistoryPage: View {
         Menu {
           Picker("来源", selection: $lane) {
             Text("全部来源").tag(Lane?.none)
-            ForEach(Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } }, id: \.self) { Text($0.title).tag(Lane?.some($0)) }
+            ForEach(Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } }, id: \.self) { Text($0.name).tag(Lane?.some($0)) }
           }
           .pickerStyle(.inline)
           let devices = Set(records.map(\.device)).sorted()
@@ -427,7 +418,7 @@ struct HistoryPage: View {
         .help("筛选").accessibilityLabel("筛选")
       }
       Button { note = true } label: { PhIcon("note-pencil", size: PhIcon.toolbar) }
-        .help("补写 History").accessibilityLabel("补写 History").keyboardShortcut("n", modifiers: .command)
+        .help("补写一条记录").accessibilityLabel("补写一条记录").keyboardShortcut("n", modifiers: .command)
     }
   }
 
@@ -441,11 +432,11 @@ struct HourMark: View {
   let hour: Int
   var body: some View {
     HStack(spacing: 10) {
-      Text(String(format: "%02d:00", hour)).font(.mono(10.5, .medium)).foregroundStyle(.tertiary)
+      Text(String(format: "%02d:00", hour)).font(.system(size: TextSize.caption, weight: .medium)).monospacedDigit().foregroundStyle(Palette.muted)
         .frame(width: RecordRow.timeWidth, alignment: .trailing)
       Rectangle().fill(Palette.hairline).frame(height: 1)
     }
-    .padding(.vertical, 6)
+    .padding(.vertical, 4)
   }
 }
 
@@ -464,55 +455,48 @@ struct RecordRow: View {
     Button(action: action) {
       HStack(alignment: .center, spacing: 12) {
         Text(timeText)
-          .font(.mono(11))
-          .foregroundStyle(.secondary)
+          .font(.system(size: TextSize.caption)).monospacedDigit()
+          .foregroundStyle(Palette.muted)
           .frame(width: Self.timeWidth, alignment: .trailing)
           .lineLimit(1)
         Group {
-          if nested { Circle().fill(Palette.source(record.source)).frame(width: 5, height: 5) }
+          if nested { Circle().fill(Palette.faint).frame(width: 5, height: 5) }
           else { SourceGlyph(source: record.source, app: record.contextText("app"), size: 22) }
         }
         .frame(width: 26)
         VStack(alignment: .leading, spacing: 2) {
-          HStack(spacing: 6) {
-            Text(record.title.isEmpty ? SourceInfo.name(record.source) : record.title)
-              .font(.system(size: nested ? 12 : 13, weight: nested ? .regular : .medium))
-              .foregroundStyle(nested ? .secondary : .primary)
+          HStack(spacing: 8) {
+            Text(RecordText.title(record, appShown: !nested))
+              .font(.system(size: TextSize.body, weight: nested ? .regular : .medium))
+              .foregroundStyle(nested ? Palette.muted : Palette.ink)
               .lineLimit(1)
             badges
           }
           if let snippet {
             (Text(snippet.before) + Text(snippet.match).foregroundStyle(Palette.accent).bold() + Text(snippet.after))
-              .font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+              .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).lineLimit(1)
           } else if !nested, let sub = subtitle {
-            Text(sub).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+            Text(sub).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).lineLimit(1)
           }
         }
         Spacer(minLength: 8)
+        // 相邻、同标题的几条记录合成了一行（记录本身没合并）。
         if let run, run.records.count > 1 {
-          HStack(spacing: 3) {
-            Text("×\(run.records.count)").monospacedDigit()
-            if !nested {
-              PhIcon("caret-right", size: 10.5).rotationEffect(.degrees(expanded ? 90 : 0))
-            }
-          }
-          .font(.system(size: 10.5, weight: .semibold))
-          .foregroundStyle(.secondary)
-          .padding(.horizontal, 6).padding(.vertical, 2)
-          .background(.primary.opacity(0.06), in: Capsule())
+          Text("\(run.records.count) 条").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+            .help("连续 \(run.records.count) 条同样的记录合成一行")
         }
         if let d = durationText {
-          Text(d).font(.system(size: 11)).monospacedDigit().foregroundStyle(.tertiary).frame(minWidth: 44, alignment: .trailing)
+          Text(d).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).frame(minWidth: 52, alignment: .trailing)
         }
       }
-      .padding(.vertical, nested ? 3 : 6)
+      .padding(.vertical, nested ? 4 : 8)
       .padding(.horizontal, 8)
       .background(alignment: .leading) {
         Rectangle().fill(Palette.hairline).frame(width: 1).padding(.leading, 8 + Self.timeWidth + 12 + 12.5)
       }
       .background {
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
-          .fill(selected ? Palette.accent.opacity(0.13) : (hovering ? Color.primary.opacity(0.04) : .clear))
+        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+          .fill(selected ? Palette.accent.opacity(0.13) : (hovering ? Palette.fill : .clear))
       }
       .contentShape(Rectangle())
     }
@@ -521,14 +505,12 @@ struct RecordRow: View {
   }
 
   @ViewBuilder var badges: some View {
-    if record.capture?.method == "ocr" { badge("OCR") }
-    if record.sensitivity == "redacted" || (record.redactions ?? 0) > 0 { badge("已脱敏", tint: .orange) }
-    if record.sensitivity == "private" { PhIcon("lock", fill: true, size: 10).foregroundStyle(.secondary) }
+    if record.capture?.method == "ocr" { badge("截图识字") }
+    if record.sensitivity == "redacted" || (record.redactions ?? 0) > 0 { badge("已隐去密钥") }
+    if record.sensitivity == "private" { PhIcon("lock", size: 12).foregroundStyle(Palette.muted).help("私密：不交给 AI 整理") }
   }
-  func badge(_ text: String, tint: Color = .secondary) -> some View {
-    Text(text).font(.system(size: 9, weight: .semibold)).foregroundStyle(tint)
-      .padding(.horizontal, 4).padding(.vertical, 1)
-      .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(tint.opacity(0.4), lineWidth: 0.5))
+  func badge(_ text: String) -> some View {
+    Text(text).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
   }
 
   var timeText: String {
@@ -542,7 +524,7 @@ struct RecordRow: View {
 
   var durationText: String? {
     let s = run?.seconds ?? record.seconds
-    return s >= 1 ? ViewerFormat.compact(s) : nil
+    return s >= 60 ? Fmt.duration(s) : nil
   }
 
   var subtitle: String? {

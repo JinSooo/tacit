@@ -79,8 +79,8 @@ import CollectorCore
       item("粘贴", #selector(NSText.paste(_:)), "v"), item("全选", #selector(NSText.selectAll(_:)), "a"),
     ])
     submenu("前往", [
-      item("此刻", #selector(go(_:)), "1", target: self, tag: 0), item("History", #selector(go(_:)), "2", target: self, tag: 1),
-      item("待确认", #selector(go(_:)), "3", target: self, tag: 2), item("读取记录", #selector(go(_:)), "4", target: self, tag: 3),
+      item("此刻", #selector(go(_:)), "1", target: self, tag: 0), item("历史记录", #selector(go(_:)), "2", target: self, tag: 1),
+      item("待确认", #selector(go(_:)), "3", target: self, tag: 2), item("AI 读取记录", #selector(go(_:)), "4", target: self, tag: 3),
     ])
     submenu("窗口", [
       item("最小化", #selector(NSWindow.performMiniaturize(_:)), "m"), item("缩放", #selector(NSWindow.performZoom(_:))),

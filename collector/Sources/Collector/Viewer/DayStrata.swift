@@ -19,7 +19,7 @@ struct DayStrata: View {
   @State private var zoom = StrataZoom()
   @Environment(\.colorScheme) private var scheme
 
-  static let labelWidth: CGFloat = 48
+  static let labelWidth: CGFloat = 60
   static let axisHeight: CGFloat = 18
   static let chapterHeight: CGFloat = 22
   static let laneHeight: CGFloat = 16
@@ -141,21 +141,21 @@ struct DayStrata: View {
       zoom.window.map { b.upperBound.timeIntervalSince(b.lowerBound) < $0.upperBound.timeIntervalSince($0.lowerBound) * 0.9 } ?? true
     } ?? false
     if canZoomToBrush || zoom.window != nil {
-      HStack(spacing: 2) {
+      HStack(spacing: 4) {
         if canZoomToBrush, let b = brush {
-          Button { withAnimation(.smooth(duration: 0.3)) { zoom.show(b) } } label: { PhIcon("magnifying-glass-plus", size: 13) }
+          Button { withAnimation(.easeOut(duration: 0.2)) { zoom.show(b) } } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
             .help("放大到选区").accessibilityLabel("放大到选区")
         }
         if zoom.window != nil {
-          Button { withAnimation(.smooth(duration: 0.3)) { zoom.window = nil } } label: { PhIcon("arrows-out", size: 14) }
+          Button { withAnimation(.easeOut(duration: 0.2)) { zoom.window = nil } } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
             .help("看整天").accessibilityLabel("看整天")
         }
       }
       .buttonStyle(.plain)
-      .font(.system(size: 11, weight: .medium))
-      .foregroundStyle(.secondary)
-      .padding(.horizontal, 7).padding(.vertical, 4)
-      .glassPanel(8)
+      .foregroundStyle(Palette.muted)
+      .padding(.horizontal, 4).padding(.vertical, 2)
+      .background(Palette.paperRaised, in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: Radius.control, style: .continuous).strokeBorder(Palette.hairline))
       .offset(y: -4)
       .transition(.opacity)
     }
@@ -174,9 +174,10 @@ struct DayStrata: View {
   var laneLabels: some View {
     VStack(alignment: .leading, spacing: Self.laneGap) {
       ForEach(lanes, id: \.self) { l in
-        Text(l.title)
-          .font(.system(size: 10, weight: lane == l ? .bold : .medium))
-          .foregroundStyle(lane == nil || lane == l ? AnyShapeStyle(.secondary) : AnyShapeStyle(.quaternary))
+        Text(l.name)
+          .font(.system(size: TextSize.caption, weight: lane == l ? .semibold : .regular))
+          .foregroundStyle(lane == nil || lane == l ? Palette.muted : Palette.faint)
+          .lineLimit(1).fixedSize()
           .frame(width: Self.labelWidth - 8, height: Self.laneHeight, alignment: .leading)
       }
     }
@@ -203,10 +204,10 @@ struct DayStrata: View {
       let offset = t.timeIntervalSince(dayStart)
       let isMajor = abs(offset.remainder(dividingBy: major)) < 1
       var line = Path(); line.move(to: CGPoint(x: px, y: Self.axisHeight)); line.addLine(to: CGPoint(x: px, y: bottom))
-      ctx.stroke(line, with: .color(.primary.opacity(isMajor ? 0.08 : 0.035)), lineWidth: 1)
+      ctx.stroke(line, with: .color(Palette.ink.opacity(isMajor ? 0.08 : 0.035)), lineWidth: 1)
       if isMajor {
         let label = major >= 3600 ? String(format: "%02d", cal.component(.hour, from: t)) : ViewerFormat.clock(t)
-        labels.draw(Text(label).font(.mono(9.5, .medium)).foregroundStyle(.tertiary), at: CGPoint(x: px, y: 8), anchor: .center)
+        labels.draw(Text(label).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted), at: CGPoint(x: px, y: 8), anchor: .center)
       }
       t = t.addingTimeInterval(step)
     }
@@ -218,8 +219,9 @@ struct DayStrata: View {
       let active = brush == c.start...c.end
       let label = slot.label.flatMap { fitted(c.text, width: CGFloat($0), ctx: ctx) }
       let rect = label == nil ? CGRect(x: full.minX, y: full.midY - 3, width: full.width, height: 6) : full
-      ctx.fill(Path(roundedRect: rect, cornerRadius: min(6, rect.height / 2)),
-               with: .color(Palette.accent.opacity(active ? 0.45 : (label == nil ? 0.3 : (i % 2 == 0 ? 0.13 : 0.08)))))
+      // 日记章节用暖灰底，选中（框选成这一段）时才用强调色。
+      ctx.fill(Path(roundedRect: rect, cornerRadius: min(Radius.control, rect.height / 2)),
+               with: active ? .color(Palette.accent.opacity(0.25)) : .color(Palette.ink.opacity(label == nil ? 0.16 : (i % 2 == 0 ? 0.08 : 0.05))))
       if let label { ctx.draw(label, at: CGPoint(x: rect.minX + 6, y: rect.midY), anchor: .leading) }
     }
 
@@ -227,8 +229,8 @@ struct DayStrata: View {
     for (i, l) in lanes.enumerated() {
       let y = lanesTop + CGFloat(i) * (Self.laneHeight + Self.laneGap)
       let dim = lane != nil && lane != l
-      ctx.fill(Path(roundedRect: CGRect(x: plot.minX, y: y, width: plot.width, height: Self.laneHeight), cornerRadius: 4),
-               with: .color(.primary.opacity(dim ? 0.015 : 0.035)))
+      ctx.fill(Path(roundedRect: CGRect(x: plot.minX, y: y, width: plot.width, height: Self.laneHeight), cornerRadius: Radius.control),
+               with: .color(Palette.ink.opacity(dim ? 0.02 : 0.05)))
     }
 
     // 活动
@@ -237,16 +239,17 @@ struct DayStrata: View {
       guard let i = lanes.firstIndex(of: Lane.of(r.source)) else { continue }
       let y = lanesTop + CGFloat(i) * (Self.laneHeight + Self.laneGap)
       let a = x(r.start, plot, d)
-      let color = Palette.source(r.source)
+      // 来源不分颜色（每行左边写了来源名），选中的那条用强调色。
+      let color = r.id == selected ? Palette.accent : Palette.muted
       let dim = (lane != nil && lane != Lane.of(r.source)) || (brush.map { !overlaps(r, $0) } ?? false)
-      let alpha = dim ? 0.18 : 0.9
+      let alpha = dim ? 0.25 : 0.9
       if r.isSpan, let e = r.end, x(e, plot, d) - a >= 2 {
         let rect = CGRect(x: a, y: y + 2, width: x(e, plot, d) - a, height: Self.laneHeight - 4)
-        ctx.fill(Path(roundedRect: rect, cornerRadius: min(3, rect.height / 2)), with: .color(color.opacity(alpha)))
+        ctx.fill(Path(roundedRect: rect, cornerRadius: min(Radius.control, rect.height / 2, rect.width / 2)), with: .color(color.opacity(alpha)))
         if r.id == selected { selectedRect = rect }
       } else {
         let rect = CGRect(x: a - 1, y: y + 3, width: 2, height: Self.laneHeight - 6)
-        ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(color.opacity(alpha)))
+        ctx.fill(Path(roundedRect: rect, cornerRadius: rect.width / 2), with: .color(color.opacity(alpha)))
         if r.id == selected { selectedRect = rect }
       }
     }
@@ -255,35 +258,35 @@ struct DayStrata: View {
     if let b = brush {
       let a = x(max(b.lowerBound, d.lowerBound), plot, d), e = x(min(b.upperBound, d.upperBound), plot, d)
       let rect = CGRect(x: a, y: Self.axisHeight, width: max(2, e - a), height: bottom - Self.axisHeight)
-      ctx.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(Palette.accent.opacity(0.08)))
-      ctx.stroke(Path(roundedRect: rect, cornerRadius: 5), with: .color(Palette.accent.opacity(0.55)), lineWidth: 1)
+      ctx.fill(Path(roundedRect: rect, cornerRadius: Radius.control), with: .color(Palette.accent.opacity(0.08)))
+      ctx.stroke(Path(roundedRect: rect, cornerRadius: Radius.control), with: .color(Palette.accent.opacity(0.55)), lineWidth: 1)
     }
 
     // 选中
     if let s = selectedRect {
       let ring = s.insetBy(dx: -3, dy: -3)
-      ctx.stroke(Path(roundedRect: ring, cornerRadius: 5), with: .color(.primary.opacity(0.85)), lineWidth: 1.5)
+      ctx.stroke(Path(roundedRect: ring, cornerRadius: Radius.control), with: .color(Palette.accent), lineWidth: 1.5)
     }
 
-    // 此刻
+    // 此刻（当前位置用强调色）
     if cal.isDateInToday(day) {
       let px = x(Date(), plot, d)
       var line = Path(); line.move(to: CGPoint(x: px, y: Self.axisHeight - 2)); line.addLine(to: CGPoint(x: px, y: bottom))
-      ctx.stroke(line, with: .color(Palette.recording.opacity(0.8)), lineWidth: 1.2)
-      ctx.fill(Path(ellipseIn: CGRect(x: px - 3, y: Self.axisHeight - 5, width: 6, height: 6)), with: .color(Palette.recording))
+      ctx.stroke(line, with: .color(Palette.accent), lineWidth: 1.2)
+      ctx.fill(Path(ellipseIn: CGRect(x: px - 3, y: Self.axisHeight - 5, width: 6, height: 6)), with: .color(Palette.accent))
     }
 
     // 悬停指示线
     if let h = hover, h.x >= plot.minX, h.x <= plot.maxX {
       var line = Path(); line.move(to: CGPoint(x: h.x, y: Self.axisHeight)); line.addLine(to: CGPoint(x: h.x, y: bottom))
-      ctx.stroke(line, with: .color(.primary.opacity(0.25)), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+      ctx.stroke(line, with: .color(Palette.ink.opacity(0.25)), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
     }
   }
 
   /// 章节标题按宽度截断，末尾加省略号；连两个字都放不下就不画。
   func fitted(_ text: String, width: CGFloat, ctx: GraphicsContext) -> GraphicsContext.ResolvedText? {
     func resolve(_ s: String) -> GraphicsContext.ResolvedText {
-      ctx.resolve(Text(s).font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.accent))
+      ctx.resolve(Text(s).font(.system(size: TextSize.caption)).foregroundStyle(Palette.ink))
     }
     let full = resolve(text)
     if full.measure(in: CGSize(width: 10_000, height: 20)).width <= width { return full }
@@ -305,32 +308,34 @@ struct DayStrata: View {
       let r = hit(h, plot: plot, domain: d)
       let c = r == nil ? chapter(at: h, plot: plot, domain: d) : nil
       let time = ViewerFormat.clock(self.time(h.x, plot, d))
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 4) {
         if let r {
-          HStack(spacing: 6) {
-            Circle().fill(Palette.source(r.source)).frame(width: 6, height: 6)
-            Text(SourceInfo.name(r.source)).foregroundStyle(.secondary)
-            Text(range(r)).font(.mono(10)).foregroundStyle(.tertiary)
+          HStack(spacing: 8) {
+            Text(SourceInfo.name(r.source))
+            Text(range(r)).monospacedDigit()
           }
-          .font(.system(size: 10.5, weight: .medium))
-          Text(r.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
+          .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+          Text(RecordText.title(r, appShown: false)).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(2)
         } else if let c {
           // 章节条上的字可能被截断，或被后一段盖住，悬停时把这一刻所在的章节都写全。
           let t = self.time(h.x, plot, d)
           let all = [c] + chapters.filter { $0 != c && $0.start <= t && t <= $0.end }.prefix(2)
           ForEach(all) { c in
-            Text("\(ViewerFormat.clock(c.start))–\(ViewerFormat.clock(c.end))").font(.mono(10)).foregroundStyle(.secondary)
+            Text("\(ViewerFormat.clock(c.start))–\(ViewerFormat.clock(c.end))").font(.system(size: TextSize.caption)).monospacedDigit()
+              .foregroundStyle(Palette.muted)
               .padding(.top, c == all[0] ? 0 : 4)
-            Text(c.text).font(.serif(12.5))
+            Text(c.text).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink)
           }
         } else {
-          Text(time).font(.mono(10.5, .medium))
+          Text(time).font(.system(size: TextSize.caption, weight: .medium)).monospacedDigit().foregroundStyle(Palette.ink)
         }
       }
       .fixedSize(horizontal: false, vertical: true)
       .frame(maxWidth: r == nil && c == nil ? nil : 300, alignment: .leading)
-      .padding(.horizontal, 10).padding(.vertical, 7)
-      .glassPanel(10)
+      .padding(.horizontal, 12).padding(.vertical, 8)
+      .background(Palette.paperRaised, in: RoundedRectangle(cornerRadius: Radius.group, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: Radius.group, style: .continuous).strokeBorder(Palette.hairline))
+      .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
       .offset(x: min(max(0, h.x - 24), width - (r == nil && c == nil ? 60 : 300)), y: height + 6)
       .allowsHitTesting(false)
       .transition(.opacity)
