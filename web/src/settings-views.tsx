@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { fallbackRanges, generalKeys, generalLabels, hubPort, integerIn, keyProviders, providerNames, tierConfig, tierDescriptions, tierPayload, tiers, type GeneralKey, type KeyProvider, type ModelSettingsData, type Provider, type SettingsApi, type TestResult, type Tier } from "./settings.ts";
-import { tierNames } from "./status.ts";
+import { fallbackRanges, generalKeys, generalLabels, hubPort, integerIn, keyProviders, tierConfig, tierPayload, tiers, type GeneralKey, type KeyProvider, type ModelSettingsData, type Provider, type SettingsApi, type TestResult, type Tier } from "./settings.ts";
 const message = (error: unknown) => error instanceof Error ? error.message : "请求失败，请重试";
 type TierForm = Record<Tier, { provider: Provider; model: string; base_url: string }>;
 const formOf = (data: ModelSettingsData): TierForm => Object.fromEntries(tiers.map(t => [t, { provider: data.tiers[t].provider, model: data.tiers[t].model, base_url: data.tiers[t].base_url ?? "" }])) as TierForm;
@@ -36,7 +35,7 @@ export function ModelSettings({ api }: { api: SettingsApi }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const loaded = useLoad(api.models, value => { setData(value); setForm(formOf(value)); });
   const providers = data?.providers ?? [];
-  const providerName = (id: string) => providerNames[id as Provider] ?? providers.find(p => p.id === id)?.label ?? id;
+  const providerName = (id: string) => providers.find(p => p.id === id)?.label ?? id;
   const update = (tier: Tier, patch: Partial<TierForm[Tier]>) => { setForm(f => f && { ...f, [tier]: { ...f[tier], ...patch } }); setStatus(""); };
   const valid = form && tiers.every(t => form[t].model.trim());
 
@@ -81,7 +80,7 @@ export function ModelSettings({ api }: { api: SettingsApi }) {
       {tiers.map(tier => {
         const info = providers.find(p => p.id === form[tier].provider);
         return <fieldset key={tier} className="tier-row group" disabled={busy}>
-          <legend>{tierNames[tier] ?? data.tier_info[tier].label}</legend><p>{tierDescriptions[tier]}</p>
+          <legend>{data.tier_info[tier].label}</legend><p>{data.tier_info[tier].description}</p>
           <div className="tier-fields">
             <label>提供商<select value={form[tier].provider} onChange={e => update(tier, { provider: e.target.value as Provider })}>{providers.map(p => <option key={p.id} value={p.id}>{providerName(p.id)}</option>)}</select></label>
             <label>模型<input required maxLength={200} spellCheck={false} value={form[tier].model} onChange={e => update(tier, { model: e.target.value })} /></label>

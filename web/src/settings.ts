@@ -27,14 +27,6 @@ export const generalLabels: Record<GeneralKey, { label: string; unit: string; hi
   ask_done_days: { label: "事项多少天没动静就问“做完了吗”", unit: "天", hint: "" },
   archive_days: { label: "问了多少天没回答就归档", unit: "天", hint: "归档的事项不再自动带入，也不再问，仍然搜得到。" },
 };
-/** 界面上的提供商名称（用词见 docs/ui.md）；后台服务给的 label 只在这里没有时使用。 */
-export const providerNames: Record<Provider, string> = { "claude-cli": "Claude Code 账号", "codex-cli": "Codex 账号", anthropic: "Anthropic API", "openai-compatible": "OpenAI 兼容 API" };
-/** 每档做什么。频率和输入与 hub/src/distill/run.ts 一致。 */
-export const tierDescriptions: Record<Tier, string> = {
-  minute: "每 15 分钟一次，把新的活动归到事项里，判断是工作还是生活、属于哪个项目。调用最频繁。",
-  hour: "每小时一次，把新活动写进事项详情，并汇总各项目的进展。每次读的内容最多。",
-  day: "写每天的日记，当天每 3 小时更新一次，往日有变化时重写。整理启用前的历史也用它。",
-};
 export const fallbackRanges: Record<GeneralKey, [number, number]> = { inject_tokens: [200, 4000], ask_done_days: [1, 30], archive_days: [1, 90] };
 
 /** 和中枢同一套范围；空串、小数、越界都拒绝。 */
