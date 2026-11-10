@@ -109,6 +109,6 @@ export class DistillRequests {
 
   /** 上一个提炼进程执行到一半退出时留下的 running 请求标为失败，用户可以重新提交。 */
   recoverInterrupted(now = Date.now()): number {
-    return this.sql.prepare("UPDATE distill_requests SET status='failed',finished_at=?,error='提炼进程中断' WHERE status='running'").run(new Date(now).toISOString()).changes;
+    return this.sql.prepare("UPDATE distill_requests SET status='failed',finished_at=?,error='整理进程中断了' WHERE status='running'").run(new Date(now).toISOString()).changes;
   }
 }

@@ -27,6 +27,9 @@ struct CaptureSnapshot: Equatable {
   var jobs: [MaintenanceTask: Job] = [:]
   /// 文件数据源监听的目录（相对主目录）。
   var fileDirectories: [String] = []
+  /// ~/.zshrc 里有没有终端命令的记录钩子，以及上次修改失败的原因。
+  var shellHook = false
+  var shellHookError: String?
 
   func source(_ id: String) -> DataSourceStatus? { sources.first { $0.id == id } }
   var recordingEnabled: Bool { source("audio")?.enabled ?? false }
@@ -40,7 +43,7 @@ struct CaptureSnapshot: Equatable {
 
 enum CaptureAction {
   case pauseHour, pauseTomorrow, resume, requestAX
-  case setSource(String, Bool), requestPermission(String), runSource(String)
+  case setSource(String, Bool), requestPermission(String), runSource(String), installShellHook
   case maintenance(MaintenanceTask)
   case selectMicrophone(String)
   case setFileDirectories([String])

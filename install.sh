@@ -41,7 +41,7 @@ def directories(path, name):
 paths = []
 for name, found in (("codex", codex), ("claude", claude)):
     if not found:
-        print(f"未找到 {name}，跳过其 PATH 目录；使用该 CLI 前请安装、登录并重新运行安装脚本。", file=sys.stderr)
+        print(f"没找到 {name}，先跳过。以后装好并登录 {name}，再运行一次 ./install.sh。", file=sys.stderr)
         continue
     dirs = directories(found, name)
     if dirs is None:
@@ -143,9 +143,9 @@ install_audio_resources() (
 # 音频资源辅助函数结束。
 
 BUN="$(command -v bun || true)"
-[ -n "$BUN" ] || { echo "需要 bun：https://bun.sh"; exit 1; }
+[ -n "$BUN" ] || { echo "需要先安装 bun：curl -fsSL https://bun.sh/install | bash，装好后重新打开终端再运行 ./install.sh"; exit 1; }
 if [ "${RA_NO_DISTILL:-0}" != 1 ]; then DISTILL_PATH="$(distill_path)"; fi
-xcode-select -p >/dev/null 2>&1 || { echo "需要 Xcode 命令行工具：xcode-select --install"; exit 1; }
+xcode-select -p >/dev/null 2>&1 || { echo "需要先安装 Xcode 命令行工具：运行 xcode-select --install，装好后再运行 ./install.sh"; exit 1; }
 cd "$REPO"
 
 step "安装依赖"
@@ -231,7 +231,7 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   curl -fsS "http://127.0.0.1:$PORT/v1/health" >/dev/null 2>&1 && break
   sleep 1
 done
-curl -fsS "http://127.0.0.1:$PORT/v1/health" >/dev/null 2>&1 || { echo "hub 没有启动，看日志：$DATA/logs/hub.log"; exit 1; }
+curl -fsS "http://127.0.0.1:$PORT/v1/health" >/dev/null 2>&1 || { echo "后台服务没能启动，原因写在 $DATA/logs/hub.log"; exit 1; }
 if [ "${RA_NO_DISTILL:-0}" != 1 ]; then
   write_distill_plist
   launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.distill.plist"
@@ -240,15 +240,16 @@ else
 fi
 launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.collector.plist"
 
-step "完成"
+step "装好了"
 cat <<MSG
-- 菜单栏出现 Record Anything 图标；第一次运行会请求辅助功能权限。
-- 打开 History：菜单里点"打开 Record Anything"，或运行 bun "$REPO/hub/src/cli.ts" open
-- 记录终端命令：在 ~/.zshrc 里加一行
-    source "$REPO/plugins/shell/hook.zsh"
-- 语音模型：$DATA/models/；加密音频：$DATA/audio/（卸载保留）
-- 日志：$DATA/logs/
-- 提炼日志：$DATA/logs/distill.log；模型配置：$DATA/models.json
-- 备份密钥：密钥只在钥匙串里，丢了数据就打不开。运行 bun "$REPO/hub/src/cli.ts" keys export，把输出存进密码管理器。
+1. 屏幕右上角的菜单栏里出现了 Record Anything 图标。第一次运行时，macOS 会请你在“辅助功能”里允许它，打开后才能记录屏幕上的文字。
+2. 点这个图标，从面板里打开主窗口。“此刻”页会列出还差的几步：打开系统权限、确认 AI 能整理记录、接入 Claude Code 或 Codex，跟着点就行。
+3. 建议备份密钥：设置 → 维护 → 密钥备份。记录都加了密，密钥丢了就打不开。
+
+数据存在 $DATA
+以后更新：git pull && ./install.sh　卸载：./uninstall.sh
 MSG
-if [ ! -f "$DATA/models.json" ]; then echo "- models.json 不存在，提炼默认使用本机已登录的 claude CLI。"; fi
+if ! command -v claude >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1; then
+  echo
+  echo "没找到 Claude Code 或 Codex。整理记录默认用本机已登录的 Claude Code，也可以在设置 → AI 模型里改用 API。"
+fi

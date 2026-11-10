@@ -57,7 +57,7 @@ final class HubAPI: @unchecked Sendable {
     return URL(string: "\(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/#token=\(encoded)&status")
   }
 
-  private func get<T: Decodable>(_ type: T.Type, _ path: String, _ query: [String: String?] = [:]) async throws -> T {
+  func get<T: Decodable>(_ type: T.Type, _ path: String, _ query: [String: String?] = [:]) async throws -> T {
     let data = try await request(path, query: query)
     do { return try HubJSON.decoder().decode(T.self, from: data) }
     catch { throw HubError(message: "hub 返回的数据无法解析：\(error)", status: 0) }
@@ -255,7 +255,7 @@ struct GeneralSettingsInfo: Decodable, Equatable {
 struct ModelTestResult: Decodable { let ok: Bool; let ms: Double?; let error: String? }
 
 extension HubAPI {
-  private func call<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, _ json: Any?, timeout: TimeInterval? = nil) async throws -> T {
+  func call<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, _ json: Any?, timeout: TimeInterval? = nil) async throws -> T {
     let body = try json.map { try JSONSerialization.data(withJSONObject: $0) }
     let data = try await request(path, method: method, body: body, timeout: timeout)
     do { return try HubJSON.decoder().decode(T.self, from: data) }

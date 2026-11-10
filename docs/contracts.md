@@ -114,6 +114,8 @@
 | DELETE | `/v1/settings/keys/:provider` | — | `{ provider, deleted }`；`deleted` 为删除前是否存在 |
 | GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, defaults, ranges }` |
 | PUT | `/v1/settings/general` | 三项中任意几项 | 同 GET。`inject_tokens` 200–4000（默认 800）、`ask_done_days` 1–30（默认 3）、`archive_days` 1–90（默认 7），都是整数 |
+| GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial }] }`，`id` 为 `claude-code`、`codex`。只读配置文件判断：会话开始钩子（`~/.claude/settings.json`、`~/.codex/hooks.json`）和 MCP 登记（`~/.claude.json` 的 `mcpServers`、`~/.codex/config.toml` 的 `mcp_servers`）都在才算 `connected`，只有一个算 `partial` |
+| PUT | `/v1/settings/agents/:id` | `{ connected }` | `{ tools, note }`。等同 `cli.ts agents install|uninstall --tool <id> --yes`；本机找不到该工具时连接返回 409；执行失败 500，带原因。`note` 是连接 Codex 后要告诉用户的话（第一次要在 Codex 里批准钩子），其他情况为 null |
 
 - `:provider` 只能是 `anthropic`、`openai-compatible`。key 只进钥匙串：不出现在响应、错误信息、日志、文件和 `security` 的进程参数里（经 `security -i` 的 stdin 传入）。
 - models 的 GET 字段：`tiers` 当前三档（`models.json` 不存在时是代码默认值；文件无效时 `tiers` 是默认值、`config_error` 是原因，此时提炼会失败，应提示用户保存一份新的）；`keys` 形如 `{ "anthropic": true, "openai-compatible": false }`，查询钥匙串失败时为 `null`；`providers` 是 `[{ id, label, needs_key, base_url }]`，`base_url` 为 true 表示该后端可填 `base_url`；`tier_info` 是 `{ minute: { label, description }, … }`。

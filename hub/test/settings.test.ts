@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawn as nodeSpawn } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { createHandler } from "../src/server.ts";
@@ -267,4 +267,40 @@ process.exit(Number(process.env.FAKE_CODE ?? 0));
     await expect(chain.set("anthropic", SECRET)).rejects.toThrow("写入钥匙串失败");
   } finally { delete process.env.FAKE_CODE; }
   await expect(securityKeychain(join(ctx.dir, "missing")).has("anthropic")).rejects.toThrow("无法查询钥匙串");
+});
+
+test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；找不到工具时不写入", async () => {
+  const home = join(ctx.dir, "home");
+  mkdirSync(home);
+  const calls: string[][] = [];
+  const agents = {
+    home, repo: "/tmp/合成仓库", bun: "/tmp/bun",
+    which: (command: string) => command === "claude" ? "/fake/claude" : null,
+    print: () => {},
+    run: (command: string, args: string[]) => {
+      calls.push([command, ...args]);
+      // 合成的 claude：mcp add 写 ~/.claude.json，mcp get 按是否写过返回。
+      const file = join(home, ".claude.json");
+      if (args[1] === "add") writeFileSync(file, JSON.stringify({ mcpServers: { "record-anything": { command: "bun" } } }));
+      if (args[1] === "remove") writeFileSync(file, "{}");
+      const registered = existsSync(file) && readFileSync(file, "utf8").includes("record-anything");
+      return args[1] === "get" ? { status: registered ? 0 : 1, stdout: "", stderr: registered ? "" : "No MCP server found" } : { status: 0, stdout: "", stderr: "" };
+    },
+  };
+  const h = handler({ agents });
+  const before = await call(h, "GET", "/v1/settings/agents");
+  expect(before.body.tools.map((t: any) => [t.id, t.installed, t.connected])).toEqual([["claude-code", true, false], ["codex", false, false]]);
+
+  const connected = await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: true });
+  expect(connected.status).toBe(200);
+  expect(connected.body.tools[0]).toMatchObject({ id: "claude-code", connected: true, partial: false });
+  expect(readFileSync(join(home, ".claude/settings.json"), "utf8")).toContain("hook session-start --tool claude-code");
+
+  const missing = await call(h, "PUT", "/v1/settings/agents/codex", { connected: true });
+  expect(missing.status).toBe(409);
+  expect(existsSync(join(home, ".codex"))).toBe(false);
+
+  const disconnected = await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: false });
+  expect(disconnected.body.tools[0]).toMatchObject({ connected: false, partial: false });
+  expect((await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: "yes" })).status).toBe(400);
 });

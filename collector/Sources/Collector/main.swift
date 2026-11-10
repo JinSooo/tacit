@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var lastClipboard: Date?
   /// 维护任务（同步、导入）的进行状态，只在主线程读写。
   var jobs: [MaintenanceTask: CaptureSnapshot.Job] = [:]
+  var shellHookError: String?
 
   // 只计数，不含任何内容；写到 collector-status.json 便于排查和验收。
   var stats: [String: Int] = ["ticks": 0, "scanMsTotal": 0, "scanMsMax": 0, "truncated": 0,
@@ -106,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s.request = { ocr.requestAccess(); if !ocr.granted { SystemPermissions.openPrivacyPane("Privacy_ScreenCapture") } }
       s.onEnable = { _ in if !ocr.granted { ocr.requestAccess() } }
       s.last = { [weak self] in self?.lastOCRRun }
-      s.describe = { [weak self] in self?.enabled("screen") == false ? ("屏幕文字停用时不运行", false) : ("", true) }
+      s.describe = { [weak self] in self?.enabled("screen") == false ? ("要先打开“屏幕文字”", false) : ("", true) }
     })
     sources.register(BlockSource("clipboard") { s in
       s.last = { [weak self] in self?.lastClipboard }
@@ -127,8 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s.onApply = { active in if active { files.start() } else { files.stop() } }
       s.last = { files.last }
       s.describe = {
-        files.unavailable ? ("监听异常", false)
-          : (files.recoveredFromDrop ? "曾丢失事件，已恢复" : "监听 \(FileDirectories(store: UserDefaults.standard).list.count) 个目录", true)
+        files.unavailable ? ("读不到文件夹的变化，重新打开这个数据源试试", false)
+          : (files.recoveredFromDrop ? "中间漏过一些变化，已经补上" : "正在记录 \(FileDirectories(store: UserDefaults.standard).list.count) 个文件夹", true)
       }
     })
     let wechat = wechat
@@ -312,9 +313,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     else { state = "正在记录" }
     menu.addItem(disabled(state))
     let pending = hub.queue.count
-    if let e = hub.lastError { menu.addItem(disabled("\(e) · 待发送 \(pending)")) }
-    else if pending > 0 { menu.addItem(disabled("待发送 \(pending)")) }
-    if hub.queue.dropped > 0 { menu.addItem(disabled("队列溢出丢弃 \(hub.queue.dropped) 条")) }
+    if let e = hub.lastError { menu.addItem(disabled("\(e)，\(pending) 条等着发送")) }
+    else if pending > 0 { menu.addItem(disabled("\(pending) 条等着发送")) }
+    if hub.queue.dropped > 0 { menu.addItem(disabled("等太久丢掉了 \(hub.queue.dropped) 条")) }
     menu.addItem(.separator())
 
     if paused { menu.addItem(item("继续记录", #selector(resume))) }
@@ -330,9 +331,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func sourceItems(_ s: DataSourceStatus, into target: NSMenu) {
       var title = s.title
       if s.enabled {
-        if s.running { title += " · 运行中" }
-        else if !s.ok, !s.detail.isEmpty { title += " · " + s.detail }
-        else if let last = s.lastRun { title += " · 最近 " + f.string(from: last) }
+        if s.running { title += "（正在运行）" }
+        else if !s.ok, !s.detail.isEmpty { title += "：" + s.detail }
+        else if let last = s.lastRun { title += "（\(f.string(from: last)) 运行过）" }
       }
       let toggle = item(title, #selector(toggleSource(_:)))
       toggle.representedObject = s.id; toggle.state = s.enabled ? .on : .off
@@ -351,10 +352,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
     }
     let sub = NSMenu()
-    if !plugins.available { sub.addItem(disabled("未配置 bun 或仓库路径")) }
+    if !plugins.available { sub.addItem(disabled("找不到 bun 或安装目录")) }
     for s in statuses where s.kind == .plugin { sourceItems(s, into: sub) }
     sub.addItem(.separator())
-    let runAll = item("立即运行", #selector(runPlugins)); runAll.isEnabled = plugins.available
+    let runAll = item("全部运行一次", #selector(runPlugins)); runAll.isEnabled = plugins.available
     sub.addItem(runAll)
     let pi = NSMenuItem(title: "插件", action: nil, keyEquivalent: ""); pi.submenu = sub
     menu.addItem(pi)
@@ -402,7 +403,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     guard let id = sender.representedObject as? String else { return }
     setSource(id, !enabled(id))
   }
-  func setSource(_ id: String, _ on: Bool) { sources.setEnabled(id, on, paused: paused); updateIcon() }
+  func setSource(_ id: String, _ on: Bool) {
+    sources.setEnabled(id, on, paused: paused); updateIcon()
+    // 终端命令的开关同时管 ~/.zshrc 里那一行（AGENTS.md 2026-11-10）。
+    if id == "shell" { setShellHook(on) }
+  }
+  func setShellHook(_ on: Bool) {
+    do { try ShellHookFile.set(on, repo: config.repo); shellHookError = nil }
+    catch { shellHookError = "没能修改 ~/.zshrc：\(error.localizedDescription)" }
+  }
   @objc func requestSourcePermission(_ sender: NSMenuItem) {
     guard let id = sender.representedObject as? String else { return }
     sources.source(id)?.requestPermission()
@@ -420,24 +429,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   /// 立即同步全部、重新导入最近 7 天、导入全部历史。整理启用前的历史由窗口直接向 hub 提交请求。
   func runMaintenance(_ task: MaintenanceTask) {
     guard task != .backfill, jobs[task]?.running != true else { return }
-    guard plugins.available else { jobs[task] = .init(running: false, text: "未配置 bun 或仓库路径，插件无法运行"); return }
+    guard plugins.available else { jobs[task] = .init(running: false, text: "找不到 bun 或安装目录，插件不能运行"); return }
     let names = plugins.plugins.filter(enabled)
-    jobs[task] = .init(running: true, text: task == .syncAll ? "同步中…" : "导入中…")
+    jobs[task] = .init(running: true, text: task == .syncAll ? "正在同步…" : "正在导入…")
     if task == .syncAll { hub.flush(); files.flush(); calendar.poll() }
     let api = api
     plugins.run(names, since: PluginImport.since(task)) { [weak self] results in
       let accepted = results.values.reduce(0) { $0 + $1.accepted }
       let failed = results.filter { !$0.value.ok }.keys.sorted().map { DataSourceCatalog.descriptor($0)?.title ?? $0 }
-      let summary = "新增 \(accepted) 条" + (failed.isEmpty ? "" : " · 失败：\(failed.joined(separator: "、"))")
+      let summary = "新增 \(accepted.formatted()) 条" + (failed.isEmpty ? "" : "，\(failed.joined(separator: "、"))没有成功")
       Task {
         var text = summary
         // 同步全部之后请常驻的提炼进程立即跑一轮；采集端不自己启动提炼。
         if task == .syncAll {
-          do { try await api.requestDistill(kind: "round"); text += " · 已请求提炼" }
-          catch { text += " · 提炼请求失败：\(error.localizedDescription)" }
+          do { try await api.requestDistill(kind: "round"); text += "，正在整理" }
+          catch { text += "，整理没能开始：\(error.localizedDescription)" }
         }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
-        let done = "\(f.string(from: Date())) 完成 · " + text
+        let done = "\(f.string(from: Date())) 完成，" + text
         DispatchQueue.main.async { self?.jobs[task] = .init(running: false, text: done) }
       }
     }
@@ -516,6 +525,8 @@ extension AppDelegate: CaptureControlling {
     c.pluginsAvailable = plugins.available
     c.jobs = jobs
     c.fileDirectories = FileDirectories(store: UserDefaults.standard).list
+    c.shellHook = ShellHookFile.installed
+    c.shellHookError = shellHookError
     return c
   }
 
@@ -528,6 +539,7 @@ extension AppDelegate: CaptureControlling {
     case .setSource(let id, let on): setSource(id, on)
     case .requestPermission(let id): sources.source(id)?.requestPermission()
     case .runSource(let id): sources.source(id)?.runNow()
+    case .installShellHook: setShellHook(true)
     case .maintenance(let task): runMaintenance(task)
     case .selectMicrophone(let setting): audio.selectMicrophone(setting)
     case .setFileDirectories(let dirs):

@@ -103,7 +103,7 @@ test("round 请求立即跑一轮；执行出错置 failed；进程中断留下�
   const { request: stuck } = requests.create({ kind: "round" }, now);
   requests.claim(now);
   expect(requests.recoverInterrupted(now)).toBe(1);
-  expect(requests.get(stuck.id)).toMatchObject({ status: "failed", error: "提炼进程中断" });
+  expect(requests.get(stuck.id)).toMatchObject({ status: "failed", error: "整理进程中断了" });
   // 失败后同类可以重新入队。
   expect(requests.create({ kind: "round" }, now).created).toBe(true);
 });

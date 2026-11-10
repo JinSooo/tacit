@@ -27,7 +27,7 @@ public enum DataSourceCatalog {
   /// 注册顺序即菜单和设置页的显示顺序。
   public static let all: [DataSourceDescriptor] = [
     .init(id: "screen", title: "屏幕文字"),
-    .init(id: "ocr", title: "OCR 兜底", defaultsKey: "ocrEnabled", defaultEnabled: false),
+    .init(id: "ocr", title: "截图识字", defaultsKey: "ocrEnabled", defaultEnabled: false),
     .init(id: "clipboard", title: "剪贴板"),
     .init(id: "audio", title: "录音", defaultsKey: "recordingEnabled"),
     .init(id: "files", title: "文件"),
@@ -100,7 +100,7 @@ public enum MaintenanceTask: String, CaseIterable, Sendable {
   case syncAll, reimportRecent, importAll, backfill
   public var title: String {
     switch self {
-    case .syncAll: return "立即同步全部"
+    case .syncAll: return "同步全部"
     case .reimportRecent: return "重新导入最近 7 天"
     case .importAll: return "导入全部历史"
     case .backfill: return "整理启用前的历史"
@@ -188,16 +188,16 @@ public struct DistillRequestInfo: Decodable, Equatable, Identifiable, Sendable {
   /// 界面上的一行状态。常驻提炼进程没在跑时请求会一直排队，如实显示。
   public var statusText: String {
     let range = from.flatMap { f in to.map { "\(f) 至 \($0)" } }
-    let prefix = range.map { "\($0) · " } ?? ""
+    let prefix = range.map { "\($0)：" } ?? ""
     switch status {
-    case "queued": return prefix + "排队中，等待提炼进程领取"
+    case "queued": return prefix + "排队中，等后台整理进程处理"
     case "running":
-      if let p = progress, p.total > 0, p.done < p.total { return prefix + "切片中 \(p.done)/\(p.total) 天" }
-      return prefix + (kind == "backfill" ? "整理中（归线程、写日记）" : "提炼中")
+      if let p = progress, p.total > 0, p.done < p.total { return prefix + "正在准备，已完成 \(p.done) 天，共 \(p.total) 天" }
+      return prefix + (kind == "backfill" ? "正在整理事项和日记" : "正在整理")
     case "done":
-      if kind == "backfill", let p = progress { return prefix + (p.total == 0 ? "完成，范围内没有需要整理的记录" : "完成，整理了 \(p.total) 天") }
+      if kind == "backfill", let p = progress { return prefix + (p.total == 0 ? "完成，这段日期里没有要整理的记录" : "完成，整理了 \(p.total) 天") }
       return prefix + "完成"
-    case "failed": return prefix + "失败：\(error ?? "未知原因")"
+    case "failed": return prefix + "没有成功：\(error ?? "原因不明")"
     default: return prefix + status
     }
   }

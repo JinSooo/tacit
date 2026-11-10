@@ -124,15 +124,32 @@ private final class Probe {
   {"requests":[
     {"id":"A","kind":"backfill","from":"2026-10-11","to":"2026-11-09","status":"running","created_at":"2026-11-09T03:00:00.000Z","started_at":"2026-11-09T03:00:01.000Z","progress":{"done":3,"total":10}},
     {"id":"B","kind":"round","status":"queued","created_at":"2026-11-09T02:00:00.000Z"},
-    {"id":"C","kind":"backfill","from":"2026-11-01","to":"2026-11-02","status":"failed","created_at":"2026-11-08T02:00:00.000Z","error":"提炼进程中断"},
+    {"id":"C","kind":"backfill","from":"2026-11-01","to":"2026-11-02","status":"failed","created_at":"2026-11-08T02:00:00.000Z","error":"整理进程中断了"},
     {"id":"D","kind":"backfill","from":"2026-11-01","to":"2026-11-02","status":"done","created_at":"2026-11-07T02:00:00.000Z","progress":{"done":0,"total":0}}
   ]}
   """#
   struct R: Decodable { let requests: [DistillRequestInfo] }
   let r = try HubJSON.decoder().decode(R.self, from: Data(json.utf8)).requests
-  #expect(r[0].statusText == "2026-10-11 至 2026-11-09 · 切片中 3/10 天")
+  #expect(r[0].statusText == "2026-10-11 至 2026-11-09：正在准备，已完成 3 天，共 10 天")
   #expect(!r[0].finished)
-  #expect(r[1].statusText == "排队中，等待提炼进程领取")
-  #expect(r[2].statusText.hasSuffix("失败：提炼进程中断") && r[2].finished)
-  #expect(r[3].statusText.hasSuffix("完成，范围内没有需要整理的记录"))
+  #expect(r[1].statusText == "排队中，等后台整理进程处理")
+  #expect(r[2].statusText.hasSuffix("没有成功：整理进程中断了") && r[2].finished)
+  #expect(r[3].statusText.hasSuffix("完成，这段日期里没有要整理的记录"))
+}
+
+@Test func shellHookAddsAndRemovesOnlyItsOwnLine() {
+  let repo = "/Users/合成/record anything"
+  let original = "export PATH=$HOME/bin:$PATH\n# 用户自己的注释\nalias ll='ls -l'\n"
+  let added = ShellHook.adding(to: original, repo: repo)
+  #expect(ShellHook.installed(in: added))
+  #expect(added.hasPrefix(original))
+  #expect(added.contains("source \"/Users/合成/record anything/plugins/shell/hook.zsh\""))
+  // 重复开启不重复加；关闭后和原文一字不差。
+  #expect(ShellHook.adding(to: added, repo: repo) == added)
+  #expect(ShellHook.removing(from: added) == original)
+  // 注释掉的不算已加；仓库挪了位置时换成新路径，只留一行。
+  #expect(!ShellHook.installed(in: "# source \"/old/plugins/shell/hook.zsh\"\n"))
+  let moved = ShellHook.adding(to: "source \"/old/plugins/shell/hook.zsh\"\n", repo: repo)
+  #expect(moved.components(separatedBy: "hook.zsh").count == 2 && moved.contains(repo))
+  #expect(ShellHook.adding(to: "", repo: repo) == "# record-anything：记录终端命令\n" + ShellHook.line(repo: repo) + "\n")
 }

@@ -177,3 +177,51 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}) {
   if (yes) for (const plan of plans) if (plan.before !== plan.after) save(plan);
   if (action === "install" && tools.includes("codex")) print("Codex 新 hook 需要在 Codex 里批准一次（trusted_hash）才会生效。");
 }
+
+export interface AgentState {
+  id: AgentTool;
+  label: string;
+  /** 本机找得到这个命令行工具。 */
+  installed: boolean;
+  /** 会话开始的钩子和查询服务（MCP）都已登记。 */
+  connected: boolean;
+  /** 只登记了一半（例如手动删过其中一个），需要重新连接。 */
+  partial: boolean;
+}
+
+const LABELS: Record<AgentTool, string> = { "claude-code": "Claude Code", codex: "Codex" };
+
+/** 只读配置文件判断是否已接入，不调用外部命令：设置页每次打开都会查，不能卡住中枢。 */
+export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
+  const home = resolve(env.home ?? homedir()), repo = resolve(env.repo ?? fileURLToPath(new URL("../../", import.meta.url)));
+  const bun = resolve(env.bun ?? process.execPath), cli = resolve(repo, "hub/src/cli.ts");
+  const which = env.which ?? (command => Bun.which(command));
+  const read = (file: string) => { try { return readFileSync(file, "utf8"); } catch { return null; } };
+  return (["claude-code", "codex"] as AgentTool[]).map(id => {
+    let hook = false;
+    try {
+      const file = resolve(home, id === "codex" ? ".codex/hooks.json" : ".claude/settings.json");
+      const plan = hookFile(file, false, cli, bun, id);
+      hook = plan.before !== plan.after;
+    } catch {}
+    let mcp = false;
+    try {
+      if (id === "claude-code") {
+        const text = read(resolve(home, ".claude.json"));
+        mcp = !!text && object(JSON.parse(text)?.mcpServers?.["record-anything"]);
+      } else {
+        const text = read(resolve(home, ".codex/config.toml"));
+        mcp = !!text && object((Bun.TOML.parse(text) as Json).mcp_servers?.["record-anything"]);
+      }
+    } catch {}
+    return { id, label: LABELS[id], installed: !!which(id === "codex" ? "codex" : "claude"), connected: hook && mcp, partial: hook !== mcp };
+  });
+}
+
+/** 设置页的"连接 / 断开"：等同 `agents install|uninstall --tool <id> --yes`，返回执行后的状态。 */
+export function connectAgent(id: AgentTool, connect: boolean, env: InstallEnvironment = {}): { states: AgentState[]; note: string | null } {
+  const output: string[] = [];
+  runAgents([connect ? "install" : "uninstall", "--tool", id, "--yes"], { ...env, print: line => output.push(line) });
+  const note = connect && id === "codex" ? "第一次在 Codex 里开新会话时，它会请你批准一次，批准后才会自动带入。" : null;
+  return { states: agentStatus(env), note };
+}

@@ -25,7 +25,7 @@ struct ModelSettingsView: View {
   var body: some View {
     SettingsForm {
       if let info {
-        if let e = info.configError { SettingsMessage(text: "models.json 有问题，提炼会失败，保存一次即可修复：\(e)") }
+        if let e = info.configError { SettingsMessage(text: "模型配置文件有问题，整理会失败，保存一次就能修好：\(e)") }
         ForEach(Self.tiers, id: \.self) { tier in tierSection(tier, info: info) }
         keysSection(info)
         if draft != saved {
@@ -56,7 +56,7 @@ struct ModelSettingsView: View {
     let provider = info.providers.first { $0.id == c.provider }
     let local = Self.isLoopback(c.baseUrl)
     Section {
-      Picker("提供方", selection: Binding(get: { choice(c) }, set: { apply($0, to: config, info: info) })) {
+      Picker("提供商", selection: Binding(get: { choice(c) }, set: { apply($0, to: config, info: info) })) {
         ForEach(info.providers, id: \.id) { Text($0.label).tag($0.id) }
         Divider()
         ForEach(Self.presets, id: \.id) { Text($0.label).tag($0.id) }
@@ -68,7 +68,7 @@ struct ModelSettingsView: View {
             Menu("本机模型") { ForEach(models, id: \.self) { m in Button(m) { config.wrappedValue.model = m } } }
               .fixedSize()
           }
-          Button(tests[tier] == .running ? "测试中…" : "测试连接") { Task { await test(tier) } }
+          Button(tests[tier] == .running ? "正在测试…" : "测试连接") { Task { await test(tier) } }
             .disabled(tests[tier] == .running || c.model.isEmpty)
         }
       }
@@ -78,16 +78,16 @@ struct ModelSettingsView: View {
                     prompt: Text(c.provider == "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).labelsHidden()
         }
         if let url = c.baseUrl, !url.isEmpty, !local {
-          SettingsMessage(text: "这个地址能看到发过去的全部内容，相当于把 History 交给它。")
+          SettingsMessage(text: "整理时，记录会发到这个地址。")
         }
         if local, localModels[c.baseUrl ?? ""] == [] {
-          SettingsMessage(text: "连不上 \(c.baseUrl ?? "")，本机模型服务是否已经启动？")
+          SettingsMessage(text: "连不上 \(c.baseUrl ?? "")，先打开本机的模型服务再试。")
         }
       }
       switch tests[tier] {
-      case .ok(let ms): Text(ms.map { String(format: "连接正常（%.1f 秒）", $0 / 1000) } ?? "连接正常").foregroundStyle(.green)
+      case .ok(let ms): Text(ms.map { String(format: "连接正常，用时 %.1f 秒", $0 / 1000) } ?? "连接正常").foregroundStyle(Palette.muted)
       case .failed(let e): SettingsMessage(text: e)
-      case .running: Text("正在调用模型，最长等 60 秒").foregroundStyle(.secondary)
+      case .running: Text("正在连接，最长等 60 秒").foregroundStyle(Palette.muted)
       case nil: EmptyView()
       }
     } header: {
@@ -107,9 +107,9 @@ struct ModelSettingsView: View {
         LabeledContent(p.label) {
           HStack(spacing: 8) {
             switch info.keys[p.id] ?? nil {
-            case true?: Text("已设置").foregroundStyle(.secondary)
-            case false?: Text("未设置").foregroundStyle(.secondary)
-            case nil: Text("读不到钥匙串").foregroundStyle(.orange)
+            case true?: Text("已设置").foregroundStyle(Palette.muted)
+            case false?: Text("未设置").foregroundStyle(Palette.muted)
+            case nil: Text("读不到钥匙串").foregroundStyle(Palette.attention)
             }
             Button("设置…") { editingKey = p.id }
             if (info.keys[p.id] ?? nil) == true { Button("清除") { Task { await removeKey(p.id) } } }
@@ -119,7 +119,7 @@ struct ModelSettingsView: View {
     } header: {
       Text("API key")
     } footer: {
-      Note("key 存在本机钥匙串里，这里不会再显示出来。同一类提供方的各档共用一个 key；本机模型服务不需要 key。")
+      Note("key 存在这台 Mac 的钥匙串里，设置后不再显示。同一个提供商共用一个 key。")
     }
   }
 
@@ -207,9 +207,9 @@ private struct KeyEntrySheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text("设置 \(label) 的 API key").font(.headline)
+      Text("设置 \(label) 的 API key").font(.system(size: TextSize.body, weight: .semibold))
       SecureField("API key", text: $key).frame(width: 360)
-      Text("保存到本机钥匙串，之后不会再显示。").font(.callout).foregroundStyle(.secondary)
+      Text("存在这台 Mac 的钥匙串里，设置后不再显示。").foregroundStyle(Palette.muted)
       if let error { SettingsMessage(text: error) }
       HStack {
         Spacer()

@@ -1,4 +1,6 @@
-# 安装与提炼自启
+# 安装与整理进程自启
+
+新用户先看根目录的 [README](../README.md)。这里写安装脚本做了什么，方便排查。
 
 运行 `./install.sh` 会构建并注册当前用户的 LaunchAgent：hub、采集端和
 `dev.record-anything.distill`。安装时先启动 hub，通过健康检查后才启动提炼。
