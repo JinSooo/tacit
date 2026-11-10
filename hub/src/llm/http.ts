@@ -1,6 +1,12 @@
 import { parseJSON, tokens } from "./process.ts";
 import type { BackendContext, ReadKey } from "./types.ts";
 
+/** 本机模型服务（Ollama、LM Studio 等）：不需要 API key，也不把钥匙串里的 key 发过去。 */
+export function isLoopback(baseURL: string | undefined): boolean {
+  if (!baseURL) return false;
+  try { const host = new URL(baseURL).hostname; return host === "localhost" || host === "[::1]" || /^127\./.test(host); } catch { return false; }
+}
+
 export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promise<unknown> {
   const anthropic = ctx.config.provider === "anthropic";
   const controller = new AbortController();
@@ -10,13 +16,14 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
   });
   try {
     return await Promise.race([deadline, (async () => {
-      const key = await readKey(ctx.config.provider);
+      const local = isLoopback(ctx.config.base_url);
+      const key = local ? "" : await readKey(ctx.config.provider);
       if (controller.signal.aborted) throw new Error(`模型 HTTP 调用超时（${ctx.timeoutMs}ms）`);
-      if (!key.trim()) throw new Error("API key 为空");
+      if (!local && !key.trim()) throw new Error("API key 为空");
       const base = ctx.config.base_url ?? (anthropic ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1");
       const response = await fetch(`${base.replace(/\/$/, "")}/${anthropic ? "messages" : "chat/completions"}`, {
         method: "POST", signal: controller.signal, redirect: "error",
-        headers: { "content-type": "application/json", ...(anthropic ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : { authorization: `Bearer ${key}` }) },
+        headers: { "content-type": "application/json", ...(anthropic ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : local ? {} : { authorization: `Bearer ${key}` }) },
         body: JSON.stringify(anthropic ? {
           model: ctx.config.model, max_tokens: 8192, system: ctx.req.system, messages: [{ role: "user", content: ctx.req.prompt }],
           tools: [{ name: "emit_result", description: "返回符合 schema 的结果", input_schema: ctx.req.schema }], tool_choice: { type: "tool", name: "emit_result" },

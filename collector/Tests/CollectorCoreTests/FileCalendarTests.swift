@@ -202,3 +202,30 @@ private func event() -> CalendarEventSnapshot {
   #expect(CalendarMeetingPolicy.meetingApps(["us.zoom.xos"], events: [declined, e], start: e.start, end: e.end,
                                            authorized: true) == ["com.apple.iCal", "us.zoom.xos"])
 }
+
+@Test func fileRootsAreConfigurableAndPreferDeepestMatch() {
+  let roots = ["Projects", "Projects/notes"]
+  #expect(FileSourcePolicy.directory(path: syntheticHome + "/Projects/notes/a.md", home: syntheticHome, isRegularFile: true, roots: roots) == "Projects/notes")
+  #expect(FileSourcePolicy.directory(path: syntheticHome + "/Projects/b.md", home: syntheticHome, isRegularFile: true, roots: roots) == "Projects")
+  // 不在监听列表里的默认目录不再记录。
+  #expect(FileSourcePolicy.directory(path: syntheticHome + "/Downloads/c.pdf", home: syntheticHome, isRegularFile: true, roots: roots) == nil)
+}
+
+@Test func fileRootMustBeInsideHomeAndNotHiddenOrLibrary() {
+  #expect(FileSourcePolicy.relative(syntheticHome + "/Projects/notes/", home: syntheticHome) == "Projects/notes")
+  #expect(FileSourcePolicy.relative(syntheticHome, home: syntheticHome) == nil)
+  #expect(FileSourcePolicy.relative("/Volumes/Data", home: syntheticHome) == nil)
+  #expect(FileSourcePolicy.relative(syntheticHome + "/.ssh", home: syntheticHome) == nil)
+  #expect(FileSourcePolicy.relative(syntheticHome + "/Library/Mail", home: syntheticHome) == nil)
+  #expect(FileSourcePolicy.relative(syntheticHome + "/Documents/1Password", home: syntheticHome) == nil)
+}
+
+@Test func fileDirectoriesDefaultDedupeAndDropNested() {
+  let store = MemorySettings()
+  let dirs = FileDirectories(store: store)
+  #expect(dirs.list == FileSourcePolicy.directories)
+  dirs.save(["Projects", "Projects/notes", "Downloads", "Projects"])
+  #expect(dirs.list == ["Projects", "Downloads"])
+  dirs.save([])
+  #expect(dirs.list.isEmpty)
+}

@@ -33,6 +33,7 @@ public struct FileAppearance {
 }
 
 public enum FileSourcePolicy {
+  /// 默认监听的目录（相对用户主目录）。用户可在设置页增删，见 FileDirectories。
   public static let directories = ["Downloads", "Desktop", "Documents"]
   public static func acceptsChange(created: Bool, moved: Bool, removed: Bool) -> Bool {
     (created || moved) && !removed
@@ -42,19 +43,20 @@ public enum FileSourcePolicy {
   private static let blockedNames: Set<String> = ["keychain access", "passwords", "钥匙串访问", "密码",
     "proton pass", "1password", "bitwarden", "lastpass", "dashlane"]
 
-  public static func directory(path: String, home: String, isRegularFile: Bool) -> String? {
+  public static func directory(path: String, home: String, isRegularFile: Bool, roots: [String] = directories) -> String? {
     guard isRegularFile else { return nil }
-    return classify(path: path, home: home, isDirectory: false)
+    return classify(path: path, home: home, isDirectory: false, roots: roots)
   }
 
-  public static func shouldDescend(path: String, home: String) -> Bool {
-    classify(path: path, home: home, isDirectory: true) != nil
+  public static func shouldDescend(path: String, home: String, roots: [String] = directories) -> Bool {
+    classify(path: path, home: home, isDirectory: true, roots: roots) != nil
   }
 
-  private static func classify(path: String, home: String, isDirectory: Bool) -> String? {
+  /// 返回命中的监听目录（相对主目录）；目录有嵌套时取最深的那个。
+  private static func classify(path: String, home: String, isDirectory: Bool, roots: [String]) -> String? {
     let path = URL(fileURLWithPath: path).standardized.path
     let home = URL(fileURLWithPath: home).standardized.path
-    guard let root = directories.first(where: {
+    guard let root = roots.sorted(by: { $0.count > $1.count }).first(where: {
       path.hasPrefix(home + "/" + $0 + "/") || (isDirectory && path == home + "/" + $0)
     }) else { return nil }
     let components = path.dropFirst(home.count + 1).split(separator: "/").map(String.init)
@@ -66,6 +68,18 @@ public enum FileSourcePolicy {
       if CapturePolicy.blockedBundles.contains(where: { name == $0.lowercased() || name.hasPrefix($0.lowercased() + ".") }) { return nil }
     }
     return root
+  }
+
+  /// 用户选的目录换成相对主目录的路径。只接受主目录下的目录（主目录本身太大，不接受）；
+  /// 隐藏目录、黑名单应用的目录同样不接受。
+  public static func relative(_ path: String, home: String) -> String? {
+    let path = URL(fileURLWithPath: path).standardized.path
+    let home = URL(fileURLWithPath: home).standardized.path
+    guard path.hasPrefix(home + "/") else { return nil }
+    let rel = String(path.dropFirst(home.count + 1)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    guard !rel.isEmpty, rel != "Library", !rel.hasPrefix("Library/"),
+          classify(path: path, home: home, isDirectory: true, roots: [rel]) != nil else { return nil }
+    return rel
   }
 
   public static func cleanURL(_ value: String) -> String? {
@@ -122,4 +136,22 @@ public struct FileAppearanceBuffer {
   }
 
   public mutating func discardPending() { windows.removeAll() }
+}
+
+/// 监听目录的设置：存相对主目录的路径列表，没设过用默认三个。
+public struct FileDirectories {
+  public static let key = "files.directories"
+  public let store: SettingsStore
+  public init(store: SettingsStore) { self.store = store }
+  public var list: [String] {
+    guard let saved = store.object(forKey: Self.key) as? [String] else { return FileSourcePolicy.directories }
+    return saved
+  }
+  /// 去重、去掉被别的目录包含的子目录（父目录已经监听到）。
+  public func save(_ dirs: [String]) { store.set(Self.normalized(dirs), forKey: Self.key) }
+  public static func normalized(_ dirs: [String]) -> [String] {
+    var seen = Set<String>()
+    let unique = dirs.filter { seen.insert($0).inserted }
+    return unique.filter { d in !unique.contains { $0 != d && d.hasPrefix($0 + "/") } }
+  }
 }

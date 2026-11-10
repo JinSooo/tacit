@@ -114,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s.last = { files.last }
       s.describe = {
         files.unavailable ? ("监听异常", false)
-          : (files.recoveredFromDrop ? "曾丢失事件，已恢复" : "监听 \(FileSourcePolicy.directories.count) 个目录", true)
+          : (files.recoveredFromDrop ? "曾丢失事件，已恢复" : "监听 \(FileDirectories(store: UserDefaults.standard).list.count) 个目录", true)
       }
     })
     sources.register(BlockSource("calendar") { s in
@@ -458,6 +458,7 @@ extension AppDelegate: CaptureControlling {
     c.microphones = microphoneChoices(setting: c.microphone)
     c.pluginsAvailable = plugins.available
     c.jobs = jobs
+    c.fileDirectories = FileDirectories(store: UserDefaults.standard).list
     return c
   }
 
@@ -472,6 +473,11 @@ extension AppDelegate: CaptureControlling {
     case .runSource(let id): sources.source(id)?.runNow()
     case .maintenance(let task): runMaintenance(task)
     case .selectMicrophone(let setting): audio.selectMicrophone(setting)
+    case .setFileDirectories(let dirs):
+      FileDirectories(store: UserDefaults.standard).save(dirs)
+      // 重建监听流；停用或暂停时 start() 自己不会启动。
+      files.flush(force: true); files.stop()
+      if !paused && enabled("files") { files.start() }
     }
   }
 }

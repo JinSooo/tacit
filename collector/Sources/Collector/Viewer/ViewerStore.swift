@@ -25,6 +25,8 @@ struct CaptureSnapshot: Equatable {
   var pluginsAvailable = false
   /// 采集端执行的维护任务（同步、导入）的状态。整理历史由 hub 的请求队列跟踪。
   var jobs: [MaintenanceTask: Job] = [:]
+  /// 文件数据源监听的目录（相对主目录）。
+  var fileDirectories: [String] = []
 
   func source(_ id: String) -> DataSourceStatus? { sources.first { $0.id == id } }
   var recordingEnabled: Bool { source("audio")?.enabled ?? false }
@@ -41,6 +43,7 @@ enum CaptureAction {
   case setSource(String, Bool), requestPermission(String), runSource(String)
   case maintenance(MaintenanceTask)
   case selectMicrophone(String)
+  case setFileDirectories([String])
 }
 
 protocol CaptureControlling: AnyObject {

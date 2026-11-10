@@ -1,17 +1,268 @@
+import AppKit
 import SwiftUI
 import CollectorCore
 
+/// 设置页按分组导航（AGENTS.md 2026-11-10）：左边是分组，右边是该组的内容。
+enum SettingsGroup: String, CaseIterable, Identifiable {
+  case general, sources, models, hub, privacy, maintenance
+  var id: String { rawValue }
+  var title: String {
+    switch self {
+    case .general: return "通用"
+    case .sources: return "数据源"
+    case .models: return "AI 模型"
+    case .hub: return "中枢与连接"
+    case .privacy: return "隐私"
+    case .maintenance: return "维护"
+    }
+  }
+  var icon: String {
+    switch self {
+    case .general: return "sliders-horizontal"
+    case .sources: return "database"
+    case .models: return "cpu"
+    case .hub: return "plugs-connected"
+    case .privacy: return "shield-check"
+    case .maintenance: return "wrench"
+    }
+  }
+}
+
 struct SettingsPage: View {
+  @AppStorage("settings.group") private var group: SettingsGroup = .general
+
+  var body: some View {
+    HStack(spacing: 0) {
+      List(selection: Binding(get: { group }, set: { if let g = $0 { group = g } })) {
+        ForEach(SettingsGroup.allCases) { g in
+          Label { Text(g.title) } icon: { PhIcon(g.icon, size: 16).frame(width: 18) }.tag(g)
+        }
+      }
+      .listStyle(.sidebar)
+      .scrollContentBackground(.hidden)
+      .frame(width: 180)
+      Divider()
+      Group {
+        switch group {
+        case .general: GeneralSettingsView()
+        case .sources: SourcesSettingsView()
+        case .models: ModelSettingsView()
+        case .hub: HubSettingsView()
+        case .privacy: PrivacySettingsView()
+        case .maintenance: MaintenanceSettingsView()
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    .background(Palette.paper)
+    .navigationTitle("设置")
+  }
+}
+
+/// 设置页里统一的表单外观。
+struct SettingsForm<Content: View>: View {
+  @ViewBuilder var content: Content
+  var body: some View {
+    Form { content }
+      .formStyle(.grouped)
+      .scrollContentBackground(.hidden)
+      .frame(maxWidth: 760)
+      .frame(maxWidth: .infinity)
+  }
+}
+
+/// 加载失败、保存失败时的一行提示。
+struct SettingsMessage: View {
+  let text: String
+  var warning = true
+  var body: some View {
+    Text(text).font(.callout).foregroundStyle(warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+  }
+}
+
+// MARK: 通用
+
+struct GeneralSettingsView: View {
   @Environment(ViewerStore.self) private var store
-  @State private var days = 7
-  @State private var savedDays: Int?
+  @State private var saved: GeneralSettingsInfo?
+  @State private var draft: GeneralSettingsInfo?
   @State private var error: String?
-  @State private var status: String?
-  @State private var confirmPurge = false
-  @State private var hubLinkError: String?
+
+  var body: some View {
+    SettingsForm {
+      if let d = Binding($draft) {
+        Section {
+          row("自动注入上限", value: d.injectTokens, key: "inject_tokens", step: 100, unit: "token")
+        } footer: {
+          Text("新开 Claude Code、Codex 会话时，自动放进去的当前项目背景最多这么长。更早、更细的内容由 Agent 自己查。")
+        }
+        Section {
+          row("问“做完了吗”", value: d.askDoneDays, key: "ask_done_days", step: 1, unit: "天没动静后")
+          row("自动归档", value: d.archiveDays, key: "archive_days", step: 1, unit: "天没人回答后")
+        } footer: {
+          Text("线程一段时间没有新活动，会放进待确认列表问你做完了没有；一直没回答就自动归档，不再注入，仍然可以查。")
+        }
+        if draft != saved {
+          HStack {
+            Spacer()
+            Button("还原") { draft = saved }
+            Button("保存") { Task { await save() } }.keyboardShortcut(.defaultAction)
+          }
+        }
+      } else if error == nil {
+        ProgressView().frame(maxWidth: .infinity)
+      }
+      if let error { SettingsMessage(text: error) }
+    }
+    .task { await load() }
+  }
+
+  func row(_ title: String, value: Binding<Int>, key: String, step: Int, unit: String) -> some View {
+    let range = draft?.ranges[key].flatMap { $0.count == 2 ? $0[0]...$0[1] : nil } ?? 1...10_000
+    return LabeledContent(title) {
+      HStack(spacing: 8) {
+        Text("\(value.wrappedValue) \(unit)").monospacedDigit()
+        Stepper(title, value: value, in: range, step: step).labelsHidden()
+      }
+    }
+  }
+
+  func load() async {
+    do { let g = try await store.api.generalSettings(); saved = g; draft = g; error = nil }
+    catch is CancellationError {}
+    catch { self.error = error.localizedDescription }
+  }
+  func save() async {
+    guard let draft else { return }
+    do { let g = try await store.api.saveGeneral(draft); saved = g; self.draft = g; error = nil }
+    catch { self.error = error.localizedDescription }
+  }
+}
+
+// MARK: 中枢与连接
+
+struct HubSettingsView: View {
+  @Environment(ViewerStore.self) private var store
   @Environment(\.openURL) private var openURL
+  @State private var info: HubPortSettings?
+  @State private var port = ""
+  @State private var busy = false
+  @State private var message: String?
+  @State private var error: String?
+
+  var body: some View {
+    let c = store.capture
+    SettingsForm {
+      Section {
+        LabeledContent("地址") { Text(store.api.base.absoluteString).font(.mono(12)).textSelection(.enabled) }
+        LabeledContent("状态") {
+          let problem = store.sharedError ?? c.hubError
+          Text(problem ?? "已连接").foregroundStyle(problem == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+        }
+        LabeledContent("端口") {
+          HStack(spacing: 8) {
+            TextField("端口", text: $port).labelsHidden().frame(width: 90).multilineTextAlignment(.trailing)
+              .disabled(info?.locked != false || busy)
+            if let p = Int(port), p != info?.port, info?.locked == false {
+              Button(busy ? "正在重启…" : "应用") { Task { await apply(p) } }.disabled(busy || !(1024...65535).contains(p))
+            }
+          }
+        }
+        if info?.locked == true { SettingsMessage(text: "端口由环境变量 RA_PORT 固定，这里不能改。", warning: false) }
+        if let message { SettingsMessage(text: message, warning: false) }
+        if let error { SettingsMessage(text: error) }
+        Button("打开中枢状态页…") {
+          if let url = store.api.statusPageURL() { openURL(url) } else { error = "找不到 hub 的 token，hub 是否启动过？" }
+        }
+      } footer: {
+        Text("中枢目前只接受本机连接。手机等其他设备要等配对和加密做好之后才能接入。")
+      }
+    }
+    .task { await load() }
+  }
+
+  func load() async {
+    do { let h = try await store.api.hubSettings(); info = h; port = String(h.port); error = nil }
+    catch is CancellationError {}
+    catch { self.error = error.localizedDescription }
+  }
+
+  /// 中枢写入 hub.json 后退出，launchd 用新端口拉起；采集端每次请求都现读 hub.json，跟着换过去。
+  func apply(_ p: Int) async {
+    busy = true; message = nil; error = nil
+    defer { busy = false }
+    do {
+      let restarting = try await store.api.setHubPort(p)
+      guard restarting else { await load(); return }
+      message = "中枢正在用端口 \(p) 重启…"
+      for _ in 0..<30 {
+        try? await Task.sleep(for: .seconds(1))
+        if let h = try? await store.api.hubSettings(), h.port == p {
+          info = h; port = String(p); message = "已切换到端口 \(p)。"
+          await store.refreshShared()
+          return
+        }
+      }
+      error = "30 秒内没连上端口 \(p) 上的中枢，看一下中枢日志（数据目录 logs/hub.log）。"
+    } catch { self.error = error.localizedDescription }
+  }
+}
+
+// MARK: 隐私（只读展示）
+
+struct PrivacySettingsView: View {
+  @Environment(ViewerStore.self) private var store
+
+  var body: some View {
+    let c = store.capture
+    SettingsForm {
+      Section("暂停记录") {
+        switch c.state {
+        case .paused(let until):
+          LabeledContent("已暂停到 \(ViewerFormat.clock(until))") { Button("继续记录") { store.perform(.resume) } }
+        default:
+          LabeledContent("正在记录") {
+            HStack {
+              Button("暂停 1 小时") { store.perform(.pauseHour) }
+              Button("暂停到明天") { store.perform(.pauseTomorrow) }
+            }
+          }
+        }
+      }
+      Section {
+        ForEach(blockedApps, id: \.self) { Text($0) }
+      } header: {
+        Text("不记录的应用")
+      } footer: {
+        Text("这些应用在前台时什么都不读。")
+      }
+      Section("其他不记录的内容") {
+        LabeledContent("浏览器隐私窗口", value: "按窗口标题识别")
+        LabeledContent("剪贴板", value: "密码管理器标记过的内容")
+        LabeledContent("文件", value: "隐藏目录、密码管理器的目录")
+      }
+      Section {
+        LabeledContent("密钥", value: "写入前替换成 [已脱敏]，原文不落盘")
+        LabeledContent("标为 private 的内容", value: "不交给模型提炼，不自动注入")
+      } header: {
+        Text("写入时")
+      }
+    }
+  }
+
+  /// 黑名单里的应用：装了的显示本机名字，没装的显示 bundle ID。
+  var blockedApps: [String] {
+    CapturePolicy.blockedBundles.sorted().map { id in
+      NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { AppNames.systemLanguageName($0) } ?? id
+    }
+  }
+}
+
+// MARK: 维护
+
+struct MaintenanceSettingsView: View {
+  @Environment(ViewerStore.self) private var store
   @State private var confirmImportAll = false
-  // 整理启用前的历史：默认最近 30 天，可改范围。
   @State private var backfillFrom = Calendar.current.date(byAdding: .day, value: -(DistillDateRange.defaultDays - 1), to: Date())!
   @State private var backfillTo = Date()
   @State private var requests: [DistillRequestInfo] = []
@@ -19,58 +270,43 @@ struct SettingsPage: View {
 
   var body: some View {
     let c = store.capture
-    Form {
-      Section {
-        ForEach(c.sources) { SourceRow(source: $0) }
-      } header: {
-        Text("数据源")
-      } footer: {
-        if !c.pluginsAvailable { Text("插件需要 bun 和仓库路径（collector.json 的 bun、repo）").foregroundStyle(.secondary) }
+    SettingsForm {
+      if !c.pluginsAvailable {
+        SettingsMessage(text: "未配置 bun 或仓库路径（collector.json 的 bun、repo），插件类数据源无法运行，下面前三项只对内置数据源生效。")
       }
-      maintenance(c)
-      Section("录音") {
-        Picker("麦克风", selection: Binding(get: { c.microphone }, set: { v in
-          store.perform(.selectMicrophone(v))
-          // 采集端在音频队列上写入设置，下一次快照才读得到；先按选中的显示。
-          store.capture.microphone = v
-        })) {
-          ForEach(c.microphones.filter { $0.group == .mode }, id: \.self) { Text($0.title).tag($0.value) }
-          Divider()
-          ForEach(c.microphones.filter { $0.group != .mode }, id: \.self) { Text($0.title).tag($0.value).selectionDisabled(!$0.selectable) }
-        }
-        // 第一行（今天几段对话）已在数据源列表的录音一行里。
-        ForEach(MicrophoneChoices.statusLines(Array(c.audio.dropFirst())), id: \.self) { Text($0).foregroundStyle(.secondary) }
-        LabeledContent("原始音频保留") {
-          HStack(spacing: 8) {
-            Text("\(days) 天").monospacedDigit()
-            Stepper("原始音频保留", value: $days, in: 1...365).labelsHidden()
-            if savedDays != nil, days != savedDays { Button("保存") { Task { await save() } }.controlSize(.small) }
+      operation(.syncAll, job: c.jobs[.syncAll], extra: latest("round")?.statusText,
+                what: "把还没发出的记录发给中枢，并让文件、日历和各插件马上读一次新内容，然后请提炼马上跑一轮。",
+                sources: "全部已启用的数据源", dedupe: "已入库的不会重复", distill: "立即提炼新内容") {
+        store.perform(.maintenance(.syncAll))
+      }
+      operation(.reimportRecent, job: c.jobs[.reimportRecent],
+                what: "让插件从 7 天前开始重新读一遍，补上漏采的记录。",
+                sources: "AI 会话、浏览器、Git 提交（终端命令没有历史可读）", dedupe: "已入库的不会重复", distill: "按平常节奏提炼") {
+        store.perform(.maintenance(.reimportRecent))
+      }
+      operation(.importAll, job: c.jobs[.importAll],
+                what: "让插件从能读到的最早记录开始导入，可能要几分钟。导入的内容可以搜索，也能被 Agent 查到。",
+                sources: "AI 会话、浏览器、Git 提交", dedupe: "已入库的不会重复", distill: "不自动提炼，要提炼用下面的“整理启用前的历史”") {
+        confirmImportAll = true
+      }
+      Section {
+        LabeledContent("日期范围") {
+          HStack {
+            DatePicker("从", selection: $backfillFrom, in: ...backfillTo, displayedComponents: .date).labelsHidden()
+            Text("至").foregroundStyle(.secondary)
+            DatePicker("至", selection: $backfillTo, in: backfillFrom...Date(), displayedComponents: .date).labelsHidden()
+            Button("整理") { Task { await requestBackfill() } }.disabled(latest("backfill").map { !$0.finished } ?? false)
           }
         }
-        LabeledContent {
-          Button("清理全部音频…", role: .destructive) { confirmPurge = true }
-        } label: {
-          Text("只删原始音频，转写过的文字不受影响").foregroundStyle(.secondary)
-        }
-        if let status { Text(status).foregroundStyle(.secondary) }
-        if let error { Text(error).foregroundStyle(.red) }
-      }
-      Section("中枢") {
-        LabeledContent("地址") { Text(store.api.base.absoluteString).font(.mono(12)).textSelection(.enabled) }
-        LabeledContent("状态") {
-          Text(store.sharedError ?? c.hubError ?? "已连接").foregroundStyle(store.sharedError == nil && c.hubError == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
-        }
-        Button("中枢状态…") {
-          if let url = store.api.statusPageURL() { hubLinkError = nil; openURL(url) } else { hubLinkError = "找不到 hub 的 token，hub 是否启动过？" }
-        }
-        if let hubLinkError { Text(hubLinkError).foregroundStyle(.orange) }
+        if let r = latest("backfill") { SettingsMessage(text: r.statusText, warning: r.status == "failed") }
+        if let requestError { SettingsMessage(text: requestError) }
+      } header: {
+        Text(MaintenanceTask.backfill.title)
+      } footer: {
+        facts(what: "把选定日期里已经入库、但启用提炼之前的记录交给模型，整理出线程、项目和日记。", sources: "中枢里已有的记录（不重新采集）",
+              dedupe: "已经整理进线程的记录不会重复整理", distill: "会调用模型，可以对同一范围重复执行")
       }
     }
-    .formStyle(.grouped)
-    .scrollContentBackground(.hidden)
-    .background(Palette.paper)
-    .navigationTitle("设置")
-    .task { await load() }
     .task {
       // 有排队或执行中的请求时 3 秒刷新一次，否则 30 秒。
       while !Task.isCancelled {
@@ -78,46 +314,37 @@ struct SettingsPage: View {
         try? await Task.sleep(for: .seconds(requests.contains { !$0.finished } ? 3 : 30))
       }
     }
-    .confirmationDialog("清理全部音频？", isPresented: $confirmPurge) {
-      Button("清理", role: .destructive) { Task { await purge() } }
-      Button("取消", role: .cancel) {}
-    } message: {
-      Text("转写过的文字不受影响，还没转写的对话会丢失。清理在设备下次同步时执行，正在录制的对话不受影响。")
-    }
     .confirmationDialog("导入全部历史？", isPresented: $confirmImportAll) {
       Button("导入") { store.perform(.maintenance(.importAll)) }
       Button("取消", role: .cancel) {}
     } message: {
-      Text("各插件从能读到的最早记录开始重新读取，已入库的自动去重。可能要几分钟。导入的内容可以搜索和被 Agent 查询，但不会自动提炼。")
+      Text("各插件从能读到的最早记录开始重新读取，已入库的自动去重。可能要几分钟。导入的内容不会自动提炼。")
     }
   }
 
-  @ViewBuilder func maintenance(_ c: CaptureSnapshot) -> some View {
-    Section("维护") {
-      MaintenanceRow(title: MaintenanceTask.syncAll.title, status: c.jobs[.syncAll]?.text, extra: latest("round")?.statusText,
-                     running: c.jobs[.syncAll]?.running == true) { store.perform(.maintenance(.syncAll)) }
-      MaintenanceRow(title: MaintenanceTask.reimportRecent.title, status: c.jobs[.reimportRecent]?.text,
-                     running: c.jobs[.reimportRecent]?.running == true) { store.perform(.maintenance(.reimportRecent)) }
-      MaintenanceRow(title: MaintenanceTask.importAll.title, status: c.jobs[.importAll]?.text,
-                     running: c.jobs[.importAll]?.running == true) { confirmImportAll = true }
-      VStack(alignment: .leading, spacing: 6) {
-        HStack {
-          Text(MaintenanceTask.backfill.title)
-          Spacer()
-          DatePicker("从", selection: $backfillFrom, in: ...backfillTo, displayedComponents: .date).labelsHidden()
-          Text("至").foregroundStyle(.secondary)
-          DatePicker("至", selection: $backfillTo, in: backfillFrom...Date(), displayedComponents: .date).labelsHidden()
-          Button("整理") { Task { await requestBackfill() } }
-            .controlSize(.small).disabled(latest("backfill").map { !$0.finished } ?? false)
-        }
-        if let r = latest("backfill") { Text(r.statusText).font(.caption).foregroundStyle(r.status == "failed" ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary)) }
-        if let requestError { Text(requestError).font(.caption).foregroundStyle(.orange) }
+  func operation(_ task: MaintenanceTask, job: CaptureSnapshot.Job?, extra: String? = nil,
+                 what: String, sources: String, dedupe: String, distill: String, action: @escaping () -> Void) -> some View {
+    Section {
+      LabeledContent {
+        Button(job?.running == true ? "进行中…" : "开始", action: action).disabled(job?.running == true)
+      } label: {
+        Text(task.title)
+        if let text = job?.text, !text.isEmpty { Text(text) }
+        if let extra { Text("提炼：\(extra)") }
       }
+    } footer: {
+      facts(what: what, sources: sources, dedupe: dedupe, distill: distill)
+    }
+  }
+
+  func facts(what: String, sources: String, dedupe: String, distill: String) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(what)
+      Text("读取：\(sources)　去重：\(dedupe)　提炼：\(distill)").foregroundStyle(.tertiary)
     }
   }
 
   func latest(_ kind: String) -> DistillRequestInfo? { requests.first { $0.kind == kind } }
-
   func loadRequests() async {
     do { requests = try await store.api.distillRequests(); requestError = nil }
     catch is CancellationError {}
@@ -128,84 +355,5 @@ struct SettingsPage: View {
       try await store.api.requestDistill(kind: "backfill", range: DistillDateRange(start: backfillFrom, end: backfillTo))
       await loadRequests()
     } catch { requestError = error.localizedDescription }
-  }
-
-  func load() async {
-    do { let d = try await store.api.retentionDays(); days = d; savedDays = d; error = nil }
-    catch is CancellationError {}
-    catch { self.error = error.localizedDescription }
-  }
-  func save() async {
-    do { try await store.api.setRetentionDays(days); savedDays = days; status = "已保存"; error = nil }
-    catch { self.error = error.localizedDescription }
-  }
-  func purge() async {
-    do { try await store.api.purgeAudio(); status = "已请求清理，设备下次同步时执行"; error = nil }
-    catch { self.error = error.localizedDescription }
-  }
-}
-
-/// 数据源一行：开关、权限状态和授权、上次运行、立即运行。
-private struct SourceRow: View {
-  @Environment(ViewerStore.self) private var store
-  let source: DataSourceStatus
-
-  var body: some View {
-    let s = source
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(s.title).foregroundStyle(s.enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-        let line = subtitle
-        if !line.isEmpty {
-          Text(line).font(.caption).foregroundStyle(s.ok && !s.needsPermission ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange)).lineLimit(2)
-        }
-      }
-      Spacer()
-      if s.needsPermission, let name = s.permissionName {
-        Button("授权\(name)…") { store.perform(.requestPermission(s.id)) }.controlSize(.small)
-      }
-      if s.canRunNow {
-        Button(s.running ? "运行中…" : "立即运行") { store.perform(.runSource(s.id)) }.controlSize(.small).disabled(s.running)
-      }
-      Toggle(s.title, isOn: Binding(get: { s.enabled }, set: { store.perform(.setSource(s.id, $0)) }))
-        .labelsHidden().toggleStyle(.switch).controlSize(.small)
-    }
-  }
-
-  var subtitle: String {
-    let s = source
-    guard s.enabled else { return "" }
-    var parts: [String] = []
-    if let name = s.permissionName {
-      switch s.permission {
-      case .granted: parts.append("\(name)已授权")
-      case .notDetermined: parts.append("\(name)未授权")
-      case .denied: parts.append("缺少\(name)权限")
-      case .notNeeded: break
-      }
-    }
-    if !s.detail.isEmpty { parts.append(s.detail) }
-    if !s.running, let last = s.lastRun { parts.append("最近 \(ViewerFormat.clock(last))") }
-    return parts.joined(separator: " · ")
-  }
-}
-
-private struct MaintenanceRow: View {
-  let title: String
-  var status: String?
-  var extra: String?
-  var running: Bool
-  let action: () -> Void
-
-  var body: some View {
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title)
-        if let status { Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-        if let extra { Text("提炼：\(extra)").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-      }
-      Spacer()
-      Button(running ? "进行中…" : "开始", action: action).controlSize(.small).disabled(running)
-    }
   }
 }

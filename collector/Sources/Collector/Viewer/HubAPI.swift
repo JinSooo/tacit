@@ -23,7 +23,7 @@ final class HubAPI: @unchecked Sendable {
     session = URLSession(configuration: c)
   }
 
-  private func request(_ path: String, query: [String: String?] = [:], method: String = "GET", body: Data? = nil) async throws -> Data {
+  private func request(_ path: String, query: [String: String?] = [:], method: String = "GET", body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Data {
     guard let token = tokenProvider() else { throw HubError(message: "找不到 hub 的 token，hub 是否启动过？", status: 0) }
     var c = URLComponents(url: base, resolvingAgainstBaseURL: false)!
     c.path = path
@@ -35,6 +35,7 @@ final class HubAPI: @unchecked Sendable {
     }
     var r = URLRequest(url: c.url!)
     r.httpMethod = method
+    if let timeout { r.timeoutInterval = timeout }
     r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     if let body { r.httpBody = body; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     let data: Data, response: URLResponse
@@ -222,5 +223,74 @@ final class HubAPI: @unchecked Sendable {
   }
   private func existing<T>(_ load: () async throws -> T) async throws -> T? {
     do { return try await load() } catch let e as HubError where e.status == 404 || e.status == 400 { return nil }
+  }
+}
+
+// MARK: 设置（契约见 docs/contracts.md 3.1）
+
+struct HubPortSettings: Decodable, Equatable { let port: Int; let listen: String; let lan: Bool; let locked: Bool }
+struct ModelTierConfig: Codable, Equatable {
+  var provider: String
+  var model: String
+  var baseUrl: String?
+}
+struct ModelSettingsInfo: Decodable {
+  struct ProviderInfo: Decodable, Hashable { let id: String; let label: String; let needsKey: Bool; let baseUrl: Bool }
+  struct TierInfo: Decodable { let label: String; let description: String }
+  let tiers: [String: ModelTierConfig]
+  let configError: String?
+  let keys: [String: Bool?]
+  let providers: [ProviderInfo]
+  let tierInfo: [String: TierInfo]
+}
+struct GeneralSettingsInfo: Decodable, Equatable {
+  var injectTokens: Int
+  var askDoneDays: Int
+  var archiveDays: Int
+  let ranges: [String: [Int]]
+}
+struct ModelTestResult: Decodable { let ok: Bool; let ms: Double?; let error: String? }
+
+extension HubAPI {
+  private func call<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, _ json: Any?, timeout: TimeInterval? = nil) async throws -> T {
+    let body = try json.map { try JSONSerialization.data(withJSONObject: $0) }
+    let data = try await request(path, method: method, body: body, timeout: timeout)
+    do { return try HubJSON.decoder().decode(T.self, from: data) }
+    catch { throw HubError(message: "hub 返回的数据无法解析：\(error)", status: 0) }
+  }
+  static func tierJSON(_ t: ModelTierConfig) -> [String: Any] {
+    var d: [String: Any] = ["provider": t.provider, "model": t.model]
+    if let b = t.baseUrl, !b.isEmpty { d["base_url"] = b }
+    return d
+  }
+
+  func hubSettings() async throws -> HubPortSettings { try await get(HubPortSettings.self, "/v1/settings/hub") }
+  func setHubPort(_ port: Int) async throws -> Bool {
+    struct R: Decodable { let restarting: Bool }
+    return try await call(R.self, "PUT", "/v1/settings/hub", ["port": port]).restarting
+  }
+  func modelSettings() async throws -> ModelSettingsInfo { try await get(ModelSettingsInfo.self, "/v1/settings/models") }
+  func saveModels(_ tiers: [String: ModelTierConfig]) async throws -> ModelSettingsInfo {
+    try await call(ModelSettingsInfo.self, "PUT", "/v1/settings/models", ["tiers": tiers.mapValues(Self.tierJSON)])
+  }
+  func testModel(tier: String, config: ModelTierConfig) async throws -> ModelTestResult {
+    try await call(ModelTestResult.self, "POST", "/v1/settings/models/test", ["tier": tier, "config": Self.tierJSON(config)], timeout: 75)
+  }
+  func setKey(provider: String, key: String) async throws { try await send("PUT", "/v1/settings/keys/\(provider)", ["key": key]) }
+  func deleteKey(provider: String) async throws { try await send("DELETE", "/v1/settings/keys/\(provider)") }
+  func generalSettings() async throws -> GeneralSettingsInfo { try await get(GeneralSettingsInfo.self, "/v1/settings/general") }
+  func saveGeneral(_ g: GeneralSettingsInfo) async throws -> GeneralSettingsInfo {
+    try await call(GeneralSettingsInfo.self, "PUT", "/v1/settings/general",
+                   ["inject_tokens": g.injectTokens, "ask_done_days": g.askDoneDays, "archive_days": g.archiveDays])
+  }
+
+  /// 本机模型服务（Ollama、LM Studio）上已有的模型，走 OpenAI 兼容的 GET /models。
+  static func localModels(baseURL: String) async -> [String]? {
+    guard let url = URL(string: baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/models") else { return nil }
+    var r = URLRequest(url: url); r.timeoutInterval = 3
+    struct R: Decodable { struct M: Decodable { let id: String }; let data: [M] }
+    guard let (data, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
+          let m = try? JSONDecoder().decode(R.self, from: data) else { return nil }
+    return m.data.map(\.id).sorted()
   }
 }

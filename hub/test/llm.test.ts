@@ -220,6 +220,20 @@ for (const provider of ["anthropic", "openai-compatible"]) {
   });
 }
 
+// 本机模型（Ollama、LM Studio）不需要 key；钥匙串里给中转站的 key 也不能发给本机服务。
+test("OpenAI 兼容后端指向本机地址时不读也不发 API key", async () => {
+  const dir = await directory(); await configure(dir, "openai-compatible", { base_url: "http://127.0.0.1:11434/v1" });
+  const reads: string[] = []; let auth: string | undefined = "unset";
+  globalThis.fetch = (async (url: any, options: any) => {
+    expect(String(url)).toBe("http://127.0.0.1:11434/v1/chat/completions");
+    auth = options.headers.authorization;
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: '{"text":"hello"}' } }] });
+  }) as typeof fetch;
+  const llm = createLLM({ dataDir: dir, readKey: p => { reads.push(p); return "relay-key"; }, recordUsage: () => {} });
+  expect((await llm.complete(request)).ok).toBe(true);
+  expect(reads).toEqual([]); expect(auth).toBeUndefined();
+});
+
 // 回归：CLI 后端曾继承调用方的 ANTHROPIC_BASE_URL 等变量，手动运行时走了中转站（2026-11-08 实测发现）。
 test("CLI 后端只继承白名单环境变量", async () => {
   const { cliEnv } = await import("../src/llm/process.ts");

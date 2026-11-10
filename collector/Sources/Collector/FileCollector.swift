@@ -9,6 +9,8 @@ final class FileCollector {
   private let send: ([Record]) -> Void
   private let isPaused: () -> Bool
   private let home = FileManager.default.homeDirectoryForCurrentUser.path
+  /// 监听的目录（相对主目录），设置页改了以后调用 restart()。
+  private var roots: [String] { FileDirectories(store: UserDefaults.standard).list }
   private var stream: FSEventStreamRef?
   private var buffer = FileAppearanceBuffer()
   private var recovery = FileStreamRecovery()
@@ -26,7 +28,8 @@ final class FileCollector {
           recovery.shouldStart(now: ProcessInfo.processInfo.systemUptime,
             paused: isPaused(), hasStream: stream != nil) else { return }
     if stream != nil { stop() }
-    let paths = FileSourcePolicy.directories.map { home + "/" + $0 }
+    let paths = roots.map { home + "/" + $0 }
+    guard !paths.isEmpty else { return }
     var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                        retain: nil, release: nil, copyDescription: nil)
     let callback: FSEventStreamCallback = { _, info, count, rawPaths, flags, _ in
@@ -103,8 +106,8 @@ final class FileCollector {
   }
 
   private func captureMovedDirectory(path: String) {
-    guard FileSourcePolicy.shouldDescend(path: path, home: home),
-          FileSourcePolicy.shouldDescend(path: URL(fileURLWithPath: path).resolvingSymlinksInPath().path, home: home),
+    guard FileSourcePolicy.shouldDescend(path: path, home: home, roots: roots),
+          FileSourcePolicy.shouldDescend(path: URL(fileURLWithPath: path).resolvingSymlinksInPath().path, home: home, roots: roots),
           let attributes = try? FileManager.default.attributesOfItem(atPath: path),
           attributes[.type] as? FileAttributeType == .typeDirectory,
           let entries = FileManager.default.enumerator(at: URL(fileURLWithPath: path),
@@ -115,19 +118,20 @@ final class FileCollector {
       guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { continue }
       if values.isSymbolicLink == true { entries.skipDescendants(); continue }
       if values.isDirectory == true {
-        if !FileSourcePolicy.shouldDescend(path: url.path, home: home) { entries.skipDescendants() }
+        if !FileSourcePolicy.shouldDescend(path: url.path, home: home, roots: roots) { entries.skipDescendants() }
       } else { capture(path: url.path) }
     }
   }
 
   private func capture(path: String) {
-    guard FileSourcePolicy.directory(path: path, home: home, isRegularFile: true) != nil,
+    let roots = roots
+    guard FileSourcePolicy.directory(path: path, home: home, isRegularFile: true, roots: roots) != nil,
           let attributes = try? FileManager.default.attributesOfItem(atPath: path),
           let directory = FileSourcePolicy.directory(path: path, home: home,
-            isRegularFile: attributes[.type] as? FileAttributeType == .typeRegular),
+            isRegularFile: attributes[.type] as? FileAttributeType == .typeRegular, roots: roots),
           // 同样过滤链接目标，防止目录链接绕过黑名单或访问范围。
           FileSourcePolicy.directory(path: URL(fileURLWithPath: path).resolvingSymlinksInPath().path,
-            home: home, isRegularFile: true) != nil,
+            home: home, isRegularFile: true, roots: roots) != nil,
           let inode = attributes[.systemFileNumber] as? NSNumber,
           let created = attributes[.creationDate] as? Date,
           let size = attributes[.size] as? NSNumber else { return }
