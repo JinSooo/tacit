@@ -46,7 +46,7 @@ struct RecordInspector: View {
         if let back {
           Button(action: back.action) {
             HStack(spacing: 4) {
-              Image(systemName: "chevron.left").font(.system(size: 9, weight: .semibold))
+              PhIcon("caret-left", size: 11)
               Text(back.title).lineLimit(1)
             }
           }
@@ -56,7 +56,7 @@ struct RecordInspector: View {
         header(d)
         if cur.id != r.id {
           HStack(spacing: 6) {
-            Image(systemName: "pencil.and.outline")
+            PhIcon("note-pencil", size: 13)
             Text("已修正 · \(ViewerFormat.relative(cur.start))")
             Spacer()
             Button(showOriginal ? "收起原文" : "查看原文") { withAnimation(.smooth) { showOriginal.toggle() } }.buttonStyle(.link)
@@ -68,7 +68,7 @@ struct RecordInspector: View {
         }
         if r.source == "mac.audio", let people = r.people, !people.isEmpty {
           HStack(spacing: 6) {
-            Image(systemName: "person.2.wave.2")
+            PhIcon("users", size: 16)
             Text(store.speakerNames(people).joined(separator: "、"))
           }
           .font(.callout).foregroundStyle(.secondary)
@@ -193,7 +193,7 @@ struct RecordInspector: View {
   func actions(_ d: RecordDetail) -> some View {
     VStack(alignment: .leading, spacing: 6) {
       HStack(spacing: 8) {
-        Button { correcting = true } label: { Label("修正", systemImage: "pencil") }
+        Button { correcting = true } label: { Label { Text("修正") } icon: { PhIcon("pencil-simple", size: 13) } }
         Button {
           NSPasteboard.general.clearContents()
           NSPasteboard.general.setString(d.current.body ?? d.record.title, forType: .string)
@@ -203,9 +203,9 @@ struct RecordInspector: View {
             try? await Task.sleep(for: .seconds(1.5))
             if !Task.isCancelled { copied = false }
           }
-        } label: { Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc") }
+        } label: { Label { Text(copied ? "已复制" : "复制") } icon: { PhIcon(copied ? "check" : "copy", size: 13) } }
         Spacer()
-        Button(role: .destructive) { confirmDelete = true } label: { Label("删除", systemImage: "trash") }
+        Button(role: .destructive) { confirmDelete = true } label: { Label { Text("删除") } icon: { PhIcon("trash", size: 13) } }
           .disabled(busy)
       }
       if let deleteError { Text(deleteError).font(.caption).foregroundStyle(.red).textSelection(.enabled) }

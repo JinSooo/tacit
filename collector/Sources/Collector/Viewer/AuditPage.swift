@@ -20,7 +20,7 @@ struct AuditPage: View {
         if reads.isEmpty {
           if loading { Placeholder(kind: .loading).frame(height: 240) }
           else if let error { Placeholder(kind: .error(error) { Task { await load(reset: true) } }).frame(height: 240) }
-          else { Placeholder(kind: .empty("eye.slash", "还没有 Agent 读取过")).frame(height: 240) }
+          else { Placeholder(kind: .empty("eye-slash", "还没有 Agent 读取过")).frame(height: 240) }
         }
         let days = Dictionary(grouping: reads) { Calendar.current.startOfDay(for: $0.date ?? .distantPast) }.sorted { $0.key > $1.key }
         ForEach(days, id: \.key) { day, rows in
@@ -124,7 +124,7 @@ struct AuditRow: View {
           Spacer()
           Text(count > 1 ? "×\(count)" : "\(read.resultIds.count) 项 · \(ViewerFormat.bytes(read.bytes))").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
           Text(read.date.map { ViewerFormat.clock($0) } ?? "").font(.mono(11)).foregroundStyle(.tertiary).frame(width: 42, alignment: .trailing)
-          Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(.quaternary)
+          PhIcon("caret-right", size: 11.5).foregroundStyle(.quaternary)
             .rotationEffect(.degrees(expanded ? 90 : 0))
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
@@ -159,8 +159,8 @@ struct AuditRow: View {
         }
       } label: {
         HStack(spacing: 8) {
-          Image(systemName: t.kind == "thread" ? "text.line.first.and.arrowtriangle.forward" : t.kind == "project" ? "folder" : "doc.text")
-            .font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 16)
+          PhIcon(t.kind == "thread" ? "list-bullets" : t.kind == "project" ? "folder" : "file-text", size: 14)
+            .foregroundStyle(.secondary).frame(width: 16)
           Text(t.title).font(.system(size: 12.5)).lineLimit(1)
           Text(["thread": "线程", "project": "项目", "record": "记录"][t.kind] ?? "").font(.system(size: 10.5)).foregroundStyle(.tertiary)
           Spacer()

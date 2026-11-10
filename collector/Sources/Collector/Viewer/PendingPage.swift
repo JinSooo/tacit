@@ -20,14 +20,14 @@ struct PendingPage: View {
         } else if let error = store.sharedError {
           // 刷新失败时下面是上一次读到的列表，可能已经过时。
           HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            PhIcon("warning", fill: true, size: 14).foregroundStyle(.orange)
             Text("连不上中枢，下面是上次读到的内容：\(error)").lineLimit(2).textSelection(.enabled)
             Button("重试") { Task { await store.refreshShared() } }.buttonStyle(.link)
           }
           .font(.callout).foregroundStyle(.secondary)
         } else if items.isEmpty {
           VStack(spacing: 14) {
-            Image(systemName: "checkmark.circle").font(.system(size: 44, weight: .ultraLight)).foregroundStyle(Palette.factColors["decision"]!)
+            PhIcon("check-circle", size: 50).foregroundStyle(Palette.factColors["decision"]!)
             Text("都处理完了").font(.serif(18)).foregroundStyle(.secondary)
           }
           .frame(maxWidth: .infinity).padding(.vertical, 80)
@@ -36,7 +36,7 @@ struct PendingPage: View {
         ForEach(groups, id: \.kind) { g in
           VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
-              Image(systemName: g.symbol).foregroundStyle(.secondary)
+              PhIcon(g.symbol, size: 15).foregroundStyle(.secondary)
               Text(g.title).sectionTitle()
               Text("\(g.items.count)").font(.caption).foregroundStyle(.tertiary)
             }
@@ -57,7 +57,7 @@ struct PendingPage: View {
     .navigationTitle("待确认")
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
-        Button { Task { loading = true; await store.refreshShared(); resolved = []; loading = false } } label: { Image(systemName: "arrow.clockwise") }
+        Button { Task { loading = true; await store.refreshShared(); resolved = []; loading = false } } label: { PhIcon("arrow-clockwise", size: PhIcon.toolbar) }
           .disabled(loading).help("刷新").accessibilityLabel("刷新")
       }
     }
@@ -65,8 +65,8 @@ struct PendingPage: View {
   }
 
   var groups: [(kind: String, title: String, symbol: String, items: [PendingItem])] {
-    [("voice", "新声音", "waveform"), ("project", "新项目", "folder.badge.questionmark"), ("thread_done", "做完了吗", "flag.checkered"),
-     ("merge", "合并建议", "arrow.triangle.merge")]
+    [("voice", "新声音", "waveform"), ("project", "新项目", "folder-dashed"), ("thread_done", "做完了吗", "flag-checkered"),
+     ("merge", "合并建议", "git-merge")]
       .map { g in (g.0, g.1, g.2, items.filter { $0.kind == g.0 }) }
       .filter { !$0.3.isEmpty }
   }
@@ -122,7 +122,7 @@ struct PendingCard: View {
       VStack(spacing: 8) {
         ForEach(Array((p.samples ?? []).enumerated()), id: \.element.id) { i, s in SamplePlayer(sample: s, index: i + 1) }
         if p.samplesPending == true || (p.samples ?? []).isEmpty {
-          Label("样本待取：录到它的设备上线后会送来", systemImage: "hourglass").font(.caption).foregroundStyle(.secondary)
+          Label { Text("样本待取：录到它的设备上线后会送来") } icon: { PhIcon("hourglass", size: 11) }.font(.caption).foregroundStyle(.secondary)
         }
       }
     case "project":
@@ -132,7 +132,7 @@ struct PendingCard: View {
       }
       VStack(alignment: .leading, spacing: 5) {
         ForEach(basis, id: \.1) { symbol, text in
-          Label { Text(text).lineLimit(1).truncationMode(.middle) } icon: { Image(systemName: symbol).foregroundStyle(.tertiary) }
+          Label { Text(text).lineLimit(1).truncationMode(.middle) } icon: { PhIcon(symbol, size: 15).foregroundStyle(.tertiary) }
             .font(.system(size: 12)).foregroundStyle(.secondary)
         }
       }
@@ -149,7 +149,7 @@ struct PendingCard: View {
     default:
       HStack(spacing: 10) {
         projectName(p.aName)
-        Image(systemName: "arrow.left.and.right").foregroundStyle(.tertiary)
+        PhIcon("arrows-left-right", size: 17).foregroundStyle(.tertiary)
         projectName(p.bName)
       }
       if let r = p.reason { Text(r).font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
@@ -168,8 +168,8 @@ struct PendingCard: View {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     return (p.keys?.repos ?? []).prefix(4).map { ("folder", $0.replacingOccurrences(of: home, with: "~")) }
       + (p.keys?.hosts ?? []).prefix(4).map { ("globe", $0) }
-      + (p.keys?.chats ?? []).prefix(3).map { ("bubble.left", $0) }
-      + (p.threads ?? []).prefix(4).map { ("text.line.first.and.arrowtriangle.forward", $0.title) }
+      + (p.keys?.chats ?? []).prefix(3).map { ("chat-circle", $0) }
+      + (p.threads ?? []).prefix(4).map { ("list-bullets", $0.title) }
   }
 
   @ViewBuilder var actions: some View {
@@ -233,8 +233,7 @@ struct SamplePlayer: View {
   var body: some View {
     HStack(spacing: 10) {
       Button { Task { await toggle() } } label: {
-        Image(systemName: playing ? "pause.fill" : "play.fill")
-          .font(.system(size: 11, weight: .bold))
+        PhIcon(playing ? "pause" : "play", fill: true, size: 12)
           .frame(width: 28, height: 28)
           .foregroundStyle(.white)
           .background(Palette.source("mac.audio").gradient, in: Circle())

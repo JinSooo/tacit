@@ -36,6 +36,8 @@ LIB="vendor/sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib/lib"
 for lib in "$LIB"/*.dylib; do cp -L "$lib" "$APP/Contents/Frameworks/"; done
 # 应用图标由采集端自己画（AppIconArt），这里导出成 icns。
 mkdir -p "$APP/Contents/Resources"
+# 查看窗口和菜单栏的图标字体（Phosphor，MIT），启动时注册到进程。
+cp -R Resources/Phosphor "$APP/Contents/Resources/Phosphor"
 rm -rf build/AppIcon.iconset
 "$APP/Contents/MacOS/Collector" --render-icon build/AppIcon.iconset
 iconutil -c icns build/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"

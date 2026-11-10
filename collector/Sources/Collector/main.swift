@@ -249,9 +249,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func updateIcon() {
     guard let statusItem else { return }
-    let symbol = paused ? "pause.circle" : (missingAX ? "exclamationmark.circle" : "record.circle")
-    statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "record-anything")
-    statusItem.button?.image?.isTemplate = true
+    let symbol = paused ? "pause-circle" : (missingAX ? "warning-circle" : "record")
+    let image = Phosphor.image(symbol, size: 18)
+    image?.accessibilityDescription = "record-anything"
+    statusItem.button?.image = image
   }
 
   func menuNeedsUpdate(_ menu: NSMenu) {
@@ -435,6 +436,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-icon"), i + 1 < Comman
   catch { FileHandle.standardError.write(Data("\(error)\n".utf8)); exit(1) }
 }
 
+Phosphor.register()
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

@@ -72,7 +72,7 @@ struct SegmentRow: View {
               .fixedSize(horizontal: false, vertical: true)
               .layoutPriority(1)
             if let p = segment.thread?.projectName { ProjectTag(name: p) }
-            if segment.privateCount > 0 { Image(systemName: "lock.fill").font(.system(size: 9)).foregroundStyle(.secondary) }
+            if segment.privateCount > 0 { PhIcon("lock", fill: true, size: 10).foregroundStyle(.secondary) }
           }
           if let brief = segment.thread?.brief, !brief.isEmpty {
             Text(brief).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
@@ -88,7 +88,7 @@ struct SegmentRow: View {
           }
           HStack(spacing: 3) {
             Text("\(block.records.count)").monospacedDigit()
-            Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
+            PhIcon("caret-right", size: 10.5).rotationEffect(.degrees(expanded ? 90 : 0))
           }
           .font(.system(size: 10.5, weight: .semibold))
           .foregroundStyle(.secondary)
@@ -206,7 +206,7 @@ struct SegmentInspector: View {
       } else if let e = detail.error {
         Text(e).font(.caption).foregroundStyle(.secondary)
       }
-      Button { store.path.append(.thread(t.id)) } label: { Label("打开线程", systemImage: "arrow.up.right") }
+      Button { store.path.append(.thread(t.id)) } label: { Label { Text("打开线程") } icon: { PhIcon("arrow-up-right", size: 14) } }
         .buttonStyle(.link).font(.callout)
     }
   }
@@ -281,7 +281,7 @@ struct MinorSegmentsRow: View {
         Spacer(minLength: 8)
         HStack(spacing: 3) {
           Text("\(blocks.count) 段").monospacedDigit()
-          Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(expanded ? 90 : 0))
+          PhIcon("caret-right", size: 10.5).rotationEffect(.degrees(expanded ? 90 : 0))
         }
         .font(.system(size: 10.5, weight: .semibold))
         .foregroundStyle(.tertiary)

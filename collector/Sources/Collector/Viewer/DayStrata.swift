@@ -143,11 +143,11 @@ struct DayStrata: View {
     if canZoomToBrush || zoom.window != nil {
       HStack(spacing: 2) {
         if canZoomToBrush, let b = brush {
-          Button { withAnimation(.smooth(duration: 0.3)) { zoom.show(b) } } label: { Image(systemName: "plus.magnifyingglass") }
+          Button { withAnimation(.smooth(duration: 0.3)) { zoom.show(b) } } label: { PhIcon("magnifying-glass-plus", size: 13) }
             .help("放大到选区").accessibilityLabel("放大到选区")
         }
         if zoom.window != nil {
-          Button { withAnimation(.smooth(duration: 0.3)) { zoom.window = nil } } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
+          Button { withAnimation(.smooth(duration: 0.3)) { zoom.window = nil } } label: { PhIcon("arrows-out", size: 14) }
             .help("看整天").accessibilityLabel("看整天")
         }
       }
