@@ -44,3 +44,40 @@ public enum MicrophoneSelection: Equatable, Sendable {
     }
   }
 }
+
+/// 菜单栏麦克风子菜单和设置页选择器共用的选项，保证两处一致。
+public struct MicrophoneChoice: Hashable, Sendable {
+  public enum Group: Sendable { case mode, device, notice }
+  public let title: String
+  /// 写入 micDevice 的值；提示行（已断开、读不到设备）不可选。
+  public let value: String
+  public let selectable: Bool
+  public let group: Group
+}
+
+public enum MicrophoneChoices {
+  /// devices 为 nil 表示读不到输入设备。
+  public static func list(devices: [MicrophoneDevice]?, setting: String) -> [MicrophoneChoice] {
+    var choices = [
+      MicrophoneChoice(title: "自带麦克风（默认）", value: "builtin", selectable: true, group: .mode),
+      MicrophoneChoice(title: "跟随系统默认", value: "system", selectable: true, group: .mode),
+    ]
+    guard let devices else {
+      return choices + [MicrophoneChoice(title: "无法读取输入设备", value: "", selectable: false, group: .notice)]
+    }
+    choices += devices.map { MicrophoneChoice(title: $0.name, value: $0.uid, selectable: true, group: .device) }
+    if !choices.contains(where: { $0.value == setting }) {
+      choices.append(MicrophoneChoice(title: "所选设备已断开", value: setting, selectable: false, group: .notice))
+    }
+    return choices
+  }
+
+  /// 录音的附加状态行：去掉"麦克风：设备名"（菜单栏子菜单和设置页选择器已经标出选的是哪个），只留断开回落等提示。
+  public static func statusLines(_ lines: [String]) -> [String] {
+    lines.compactMap { line in
+      guard line.hasPrefix("麦克风：") else { return line }
+      guard let r = line.range(of: " · ") else { return nil }
+      return "麦克风" + line[r.upperBound...]
+    }
+  }
+}

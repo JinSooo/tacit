@@ -134,6 +134,16 @@ public enum PluginImport {
 
   /// 常规增量 3 分钟；导入可能要读很多年的日志，放宽到 30 分钟。
   public static func timeout(since: Date?) -> TimeInterval { since == nil ? 180 : 1800 }
+
+  /// 一次运行的状态文字，例如"成功 · 新增 3 · 2 秒"。不到 1 秒不写耗时。
+  public static func outcomeText(ok: Bool, exitStatus: Int32, accepted: Int?, elapsed: TimeInterval) -> String {
+    var parts = [ok ? "成功" : "失败（\(exitStatus)）"]
+    if let accepted { parts.append("新增 \(accepted)") }
+    let s = Int(elapsed)
+    if s >= 60 { parts.append(s % 60 == 0 ? "\(s / 60) 分钟" : "\(s / 60) 分 \(s % 60) 秒") }
+    else if s >= 1 { parts.append("\(s) 秒") }
+    return parts.joined(separator: " · ")
+  }
 }
 
 /// 提炼的本地日期闭区间（YYYY-MM-DD）。

@@ -9,17 +9,14 @@ struct AuditPage: View {
   @State private var cursor: String?
   @State private var error: String?
   @State private var loading = false
-  @State private var expanded: String?
+  @State private var expanded: Set<String> = []
   @State private var targets: [String: (kind: String, title: String)?] = [:]
 
   var body: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("读取记录").font(.serif(30, .semibold))
-          Text("Claude Code、Codex 每次读取你的上下文、往 History 写入内容，都会留在这里。").font(.serif(15)).foregroundStyle(.secondary)
-        }
-        .padding(.bottom, 24)
+        Text("Claude Code、Codex 每次读取你的上下文、往 History 写入内容，都会留在这里。").font(.serif(15)).foregroundStyle(.secondary)
+          .padding(.bottom, 24)
         if reads.isEmpty {
           if loading { Placeholder(kind: .loading).frame(height: 240) }
           else if let error { Placeholder(kind: .error(error) { Task { await load(reset: true) } }).frame(height: 240) }
@@ -28,13 +25,21 @@ struct AuditPage: View {
         let days = Dictionary(grouping: reads) { Calendar.current.startOfDay(for: $0.date ?? .distantPast) }.sorted { $0.key > $1.key }
         ForEach(days, id: \.key) { day, rows in
           Text(ViewerFormat.dayTitle(day)).font(.serif(17, .semibold)).padding(.top, 18).padding(.bottom, 8)
+          let groups = AuditGrouping.group(rows)
           VStack(spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.element.id) { i, r in
-              AuditRow(read: r, expanded: expanded == r.id, targets: targets) {
-                withAnimation(.smooth(duration: 0.25)) { expanded = expanded == r.id ? nil : r.id }
-                if expanded == r.id { Task { await resolve(r.resultIds) } }
+            ForEach(Array(groups.enumerated()), id: \.element.id) { i, g in
+              if g.reads.count == 1 {
+                row(g.latest)
+              } else {
+                // 相邻、完全相同的读取合成一行，展开后逐次列出。
+                let key = "group:" + g.id
+                AuditRow(read: g.latest, count: g.reads.count, expanded: expanded.contains(key), targets: targets) { toggle(key) }
+                if expanded.contains(key) {
+                  VStack(spacing: 0) { ForEach(g.reads) { r in row(r, nested: true) } }
+                    .padding(.leading, 38).transition(.opacity)
+                }
               }
-              if i < rows.count - 1 { Divider().padding(.leading, 52) }
+              if i < groups.count - 1 { Divider().padding(.leading, 52) }
             }
           }
           .card(14)
@@ -44,7 +49,7 @@ struct AuditPage: View {
             .onAppear { Task { await load(reset: false) } }
         }
       }
-      .frame(maxWidth: 920, alignment: .leading)
+      .frame(maxWidth: 1080, alignment: .leading)
       .padding(.horizontal, 40).padding(.vertical, 32)
       .frame(maxWidth: .infinity)
     }
@@ -61,6 +66,17 @@ struct AuditPage: View {
     .task(id: tool) { await load(reset: true) }
   }
 
+  func row(_ r: AuditRead, nested: Bool = false) -> some View {
+    AuditRow(read: r, nested: nested, expanded: expanded.contains(r.id), targets: targets) {
+      toggle(r.id)
+      if expanded.contains(r.id) { Task { await resolve(r.resultIds) } }
+    }
+  }
+
+  func toggle(_ key: String) {
+    withAnimation(.smooth(duration: 0.25)) { if expanded.remove(key) == nil { expanded.insert(key) } }
+  }
+
   func load(reset: Bool) async {
     if loading && !reset { return }
     loading = true; defer { loading = false }
@@ -68,6 +84,9 @@ struct AuditPage: View {
       let page = try await store.api.audit(tool: tool.isEmpty ? nil : tool, cursor: reset ? nil : cursor)
       reads = reset ? page.reads : reads + page.reads.filter { r in !reads.contains { $0.id == r.id } }
       cursor = page.next; error = nil
+      // 副标题要显示读的是哪个线程或项目。
+      let ids = page.reads.compactMap { $0.args["id"]?.text }
+      Task { await resolve(ids) }
     } catch is CancellationError {
     } catch { self.error = error.localizedDescription; if reset { reads = [] } }
   }
@@ -81,6 +100,9 @@ struct AuditPage: View {
 
 struct AuditRow: View {
   let read: AuditRead
+  /// 合并行的次数；大于 1 时右侧显示"×N"，点开逐次列出。
+  var count = 1
+  var nested = false
   let expanded: Bool
   let targets: [String: (kind: String, title: String)?]
   let toggle: () -> Void
@@ -91,7 +113,7 @@ struct AuditRow: View {
     VStack(alignment: .leading, spacing: 0) {
       Button(action: toggle) {
         HStack(spacing: 12) {
-          SourceGlyph(source: read.tool == "codex" ? "codex.session" : "claude_code.session", size: 26)
+          if !nested { SourceGlyph(source: read.tool == "codex" ? "codex.session" : "claude_code.session", size: 26) }
           VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
               Text(action).font(.system(size: 13, weight: .medium))
@@ -100,7 +122,7 @@ struct AuditRow: View {
             if let s = summary { Text(s).font(.mono(10.5)).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle) }
           }
           Spacer()
-          Text("\(read.resultIds.count) 项 · \(ViewerFormat.bytes(read.bytes))").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+          Text(count > 1 ? "×\(count)" : "\(read.resultIds.count) 项 · \(ViewerFormat.bytes(read.bytes))").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
           Text(read.date.map { ViewerFormat.clock($0) } ?? "").font(.mono(11)).foregroundStyle(.tertiary).frame(width: 42, alignment: .trailing)
           Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(.quaternary)
             .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -111,7 +133,7 @@ struct AuditRow: View {
       }
       .buttonStyle(.plain)
       .onHover { hovering = $0 }
-      if expanded {
+      if expanded && count == 1 {
         VStack(alignment: .leading, spacing: 2) {
           if read.resultIds.isEmpty { Text("没有返回内容").font(.caption).foregroundStyle(.secondary).padding(8) }
           ForEach(Array(Set(read.resultIds)).sorted(), id: \.self) { id in target(id) }
@@ -165,7 +187,10 @@ struct AuditRow: View {
   var summary: String? {
     var parts: [String] = []
     if let cwd = read.args["cwd"]?.text { parts.append((cwd as NSString).abbreviatingWithTildeInPath) }
-    if let id = read.args["id"]?.text, let t = targets[id], let title = t?.title { parts.append(title) }
+    if let id = read.args["id"]?.text {
+      // 线程、项目显示标题；按天读取的 id 就是日期；认不出来时显示 id。
+      if let t = targets[id], let title = t?.title { parts.append(title) } else { parts.append(id) }
+    }
     if let n = read.args["q_length"]?.text { parts.append("查询 \(n) 字") }
     if let r = read.args["result"]?.text { parts.append(["created": "新增", "unchanged": "已存在，未重复写入", "corrected": "内容有变，已挂修正", "deleted": "已被删除过，未写入"][r] ?? r) }
     if let n = read.args["redactions"]?.text { parts.append("拦下 \(n) 处密钥") }

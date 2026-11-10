@@ -112,7 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     sources.register(BlockSource("files") { s in
       s.onApply = { active in if active { files.start() } else { files.stop() } }
       s.last = { files.last }
-      s.describe = { files.unavailable ? ("监听异常", false) : (files.recoveredFromDrop ? "曾丢失事件，已恢复" : "", true) }
+      s.describe = {
+        files.unavailable ? ("监听异常", false)
+          : (files.recoveredFromDrop ? "曾丢失事件，已恢复" : "监听 \(FileSourcePolicy.directories.count) 个目录", true)
+      }
     })
     sources.register(BlockSource("calendar") { s in
       s.permissionName = "日历"
@@ -296,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       sourceItems(s, into: menu)
       if s.id == "audio" {
         menu.addItem(microphoneMenu())
-        if s.enabled { for line in audio.status().dropFirst() { menu.addItem(disabled("    " + line)) } }
+        if s.enabled { for line in MicrophoneChoices.statusLines(Array(audio.status().dropFirst())) { menu.addItem(disabled("    " + line)) } }
       }
     }
     let sub = NSMenu()
@@ -313,25 +316,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func microphoneMenu() -> NSMenuItem {
     let microphones = NSMenu()
-    let micSetting = UserDefaults.standard.string(forKey: "micDevice") ?? "builtin"
-    func addMicrophone(_ name: String, _ value: String) {
-      let choice = item(name, #selector(selectMicrophone(_:)))
-      choice.representedObject = value; choice.state = micSetting == value ? .on : .off
-      microphones.addItem(choice)
+    let setting = microphoneSetting
+    for choice in microphoneChoices(setting: setting) {
+      if choice.group != .mode, microphones.items.count == 2 { microphones.addItem(.separator()) }
+      let entry = choice.selectable ? item(choice.title, #selector(selectMicrophone(_:))) : disabled(choice.title)
+      entry.representedObject = choice.value
+      entry.state = choice.value == setting ? .on : .off
+      microphones.addItem(entry)
     }
-    addMicrophone("自带麦克风（默认）", "builtin")
-    addMicrophone("跟随系统默认", "system")
-    microphones.addItem(.separator())
-    do {
-      let devices = try MicrophoneDevices.inputs()
-      for device in devices { addMicrophone(device.name, device.uid) }
-      if micSetting != "builtin", micSetting != "system", !devices.contains(where: { $0.uid == micSetting }) {
-        let missing = disabled("所选设备已断开"); missing.state = .on; microphones.addItem(missing)
-      }
-    } catch { microphones.addItem(disabled("无法读取输入设备")) }
     let microphoneMenu = NSMenuItem(title: "    麦克风", action: nil, keyEquivalent: "")
     microphoneMenu.submenu = microphones
     return microphoneMenu
+  }
+
+  var microphoneSetting: String { UserDefaults.standard.string(forKey: "micDevice") ?? "builtin" }
+  /// 菜单栏子菜单和设置页选择器共用。
+  func microphoneChoices(setting: String) -> [MicrophoneChoice] {
+    MicrophoneChoices.list(devices: try? MicrophoneDevices.inputs().map(\.descriptor), setting: setting)
   }
 
   func item(_ title: String, _ sel: Selector) -> NSMenuItem {
@@ -451,6 +452,8 @@ extension AppDelegate: CaptureControlling {
     c.hubError = hub.lastError
     c.sources = sources.statuses()
     c.audio = enabled("audio") ? audio.status() : []
+    c.microphone = microphoneSetting
+    c.microphones = microphoneChoices(setting: c.microphone)
     c.pluginsAvailable = plugins.available
     c.jobs = jobs
     return c
@@ -466,6 +469,7 @@ extension AppDelegate: CaptureControlling {
     case .requestPermission(let id): sources.source(id)?.requestPermission()
     case .runSource(let id): sources.source(id)?.runNow()
     case .maintenance(let task): runMaintenance(task)
+    case .selectMicrophone(let setting): audio.selectMicrophone(setting)
     }
   }
 }
