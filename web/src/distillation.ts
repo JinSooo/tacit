@@ -21,7 +21,7 @@ export interface ProjectDetail extends Project {
 }
 export interface Pending {
   id: string; kind: "project" | "thread_done" | "merge" | "voice";
-  payload: { speaker_id?: string; label?: string; conversations?: number; seconds?: number; samples?: { id: string; mime: string }[]; samples_pending?: boolean; project_id?: string; name?: string; keys?: { repos?: string[]; hosts?: string[]; chats?: string[] }; threads?: { id: string; title: string; brief?: string | null }[]; thread_id?: string; title?: string; brief?: string | null; a?: string; b?: string; a_name?: string; b_name?: string; reason?: string };
+  payload: { speaker_id?: string; label?: string; conversations?: number; seconds?: number; samples?: { id: string; mime: string; at?: string; said?: string }[]; samples_pending?: boolean; project_id?: string; name?: string; keys?: { repos?: string[]; hosts?: string[]; chats?: string[] }; threads?: { id: string; title: string; brief?: string | null }[]; thread_id?: string; title?: string; brief?: string | null; a?: string; b?: string; a_name?: string; b_name?: string; reason?: string };
 }
 export type Resolution = { action: "me" | "confirm" | "rename" | "merge_into" | "ignore" | "done" | "continue" | "abandon" | "merge" | "keep"; name?: string; target?: string };
 export const factGroups: { kind: FactKind; label: string }[] = [

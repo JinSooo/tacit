@@ -2,6 +2,18 @@ import Foundation
 
 /// 客户端展示用的纯逻辑：时间解析与格式、连续片段合并、泳道归类、日记章节排布。
 
+/// 试听片段下面的说明。一段模糊的录音很难凭音色认出是谁，所以带上时间和他当时说的话。
+public enum SampleNote {
+  public static func line(stamp: String?, said: String?) -> String {
+    let quote = said?.trimmingCharacters(in: .whitespaces)
+    switch (stamp, quote?.isEmpty == false ? quote : nil) {
+    case let (.some(stamp), .some(quote)): return "\(stamp)，当时说：\(quote)"
+    case let (.some(stamp), nil): return "\(stamp) 录到的"
+    case (nil, _): return ""
+    }
+  }
+}
+
 public enum ViewerTime {
   private static let plain: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f }()
   private static let fractional: ISO8601DateFormatter = {

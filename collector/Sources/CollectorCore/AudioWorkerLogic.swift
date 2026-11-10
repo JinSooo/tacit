@@ -66,6 +66,52 @@ public enum WorkerLogic {
     speakers.append(LocalSpeaker(local: local, track: track, seconds: seconds, centroid: v, weightedSum: v.map { Double($0) * seconds }))
     return local
   }
+  /// 同一段里首尾相接的窗口合成一个整段，供试听片段挑选。
+  public static func runs(_ windows: [VoiceWindow]) -> [Range<Int>] {
+    var ranges: [Range<Int>] = []
+    for w in windows.sorted(by: { $0.offset < $1.offset }) {
+      if let last = ranges.last, last.upperBound == w.offset { ranges[ranges.count - 1] = last.lowerBound..<(w.offset + w.count) }
+      else { ranges.append(w.offset..<(w.offset + w.count)) }
+    }
+    return ranges
+  }
+
+  /// 均方根响度（dBFS）。用户报告：远处、隔墙的细微声音反而被选成试听片段。
+  public static func dbfs(_ samples: ArraySlice<Float>) -> Double {
+    guard !samples.isEmpty else { return -.infinity }
+    let power = samples.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(samples.count)
+    return power > 0 ? 10 * log10(power) : -.infinity
+  }
+
+  /// 在连续片段里挑最响的一段，每段最多 `limit` 个采样。很长的一段先滑窗找最响的位置，
+  /// 避免整段前一半是静音时把静音当成片段开头。响度相近（差不到 1 dB）时留更长的。
+  public static func loudest(_ ranges: [Range<Int>], in samples: [Float], limit: Int) -> (range: Range<Int>, dbfs: Double)? {
+    var best: (range: Range<Int>, dbfs: Double)?
+    for r in ranges.sorted(by: { $0.count > $1.count }) {
+      let lo = max(0, r.lowerBound), hi = min(samples.count, r.upperBound)
+      guard hi > lo else { continue }
+      let width = min(limit, hi - lo), hop = max(1, width / 2)
+      var start = lo
+      while start < hi {
+        let end = min(hi, start + width)
+        let level = dbfs(samples[start..<end])
+        if best == nil || level > best!.dbfs + 1 { best = (start..<end, level) }
+        if end == hi { break }
+        start += hop
+      }
+    }
+    return best
+  }
+
+  /// 试听片段把峰值提到能听清的音量：最多放大 16 倍（约 24 dB），已经够响的不动，避免爆音。
+  public static func normalize(_ samples: [Float], target: Float = 0.7, maxGain: Float = 16) -> [Float] {
+    let peak = samples.reduce(0 as Float) { Swift.max($0, abs($1)) }
+    guard peak.isFinite, peak > 0 else { return samples }
+    let gain = Swift.min(maxGain, target / peak)
+    guard gain > 1 else { return samples }
+    return samples.map { Swift.max(-1, Swift.min(1, $0 * gain)) }
+  }
+
   public static func majority(_ windows: [VoiceWindow]) -> String {
     let counts = Dictionary(grouping: windows, by: \.local).mapValues(\.count)
     return counts.keys.sorted().max { counts[$0]! == counts[$1]! ? $0 > $1 : counts[$0]! < counts[$1]! } ?? ""

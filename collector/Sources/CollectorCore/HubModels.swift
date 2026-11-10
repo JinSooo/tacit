@@ -174,7 +174,7 @@ public struct EntityDetail: Decodable, Sendable {
 }
 
 public struct PendingItem: Decodable, Identifiable, Hashable, Sendable {
-  public struct Sample: Decodable, Hashable, Sendable { public let id: String; public let mime: String }
+  public struct Sample: Decodable, Hashable, Sendable { public let id: String; public let mime: String; public let at: String?; public let said: String? }
   public struct ThreadRef: Decodable, Hashable, Sendable { public let id: String; public let title: String; public let brief: String? }
   public struct Keys: Decodable, Hashable, Sendable { public let repos: [String]?; public let hosts: [String]?; public let chats: [String]? }
   public struct Payload: Decodable, Hashable, Sendable {

@@ -199,9 +199,21 @@ export class AudioStore {
   pendingPayload(id: string): Record<string, unknown> | null {
     const s = this.speaker(id);
     if (!s || s.status !== "asked") return null;
+    const rows = this.sql.prepare("SELECT id,mime,request_id FROM voice_samples WHERE speaker_id=? ORDER BY created_at,id").all(id) as { id: string; mime: string; request_id: string }[];
     return { speaker_id: id, label: s.label, conversations: s.conversations, seconds: s.seconds,
-      samples: this.sql.prepare("SELECT id,mime FROM voice_samples WHERE speaker_id=? ORDER BY created_at,id").all(id),
+      samples: rows.map(r => ({ id: r.id, mime: r.mime, ...this.sampleContext(s, r.request_id) })),
       samples_pending: Boolean(this.sql.prepare("SELECT 1 FROM sample_requests WHERE speaker_id=? AND fulfilled_at IS NULL LIMIT 1").get(id)) };
+  }
+  /** 试听片段来自哪段对话、这个人当时说了什么。用户报告：光听一段模糊的录音认不出是谁。 */
+  private sampleContext(s: Speaker, requestId: string): { at?: string; said?: string } {
+    const request = this.sql.prepare("SELECT conversation_ref FROM sample_requests WHERE id=?").get(requestId) as { conversation_ref: string } | undefined;
+    const record = request && this.sql.prepare("SELECT t_start,body FROM records WHERE source='mac.audio' AND source_ref=?").get(request.conversation_ref) as { t_start: string; body: string } | undefined;
+    if (!record) return {};
+    // 记录里的说话人写法是转写当时的名字，未确认时是本地标签；两个都试。
+    const names = new Set([s.name, s.label].map(n => (n ?? "").trim()).filter(Boolean));
+    const lines = record.body.split("\n").map(l => /^\[[^\]]*\]\s*([^：]+)：(.*)$/.exec(l)).filter(m => m && names.has(m[1]!.trim())).map(m => m![2]!.trim()).filter(Boolean);
+    const said = lines.sort((a, b) => b.length - a.length)[0];
+    return { at: record.t_start, ...(said ? { said: said.length > 60 ? `${said.slice(0, 60)}…` : said } : {}) };
   }
   resolve(id: string, action: string, name?: string, target?: string) {
     const s = this.speaker(id);

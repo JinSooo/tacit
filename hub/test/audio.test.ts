@@ -137,6 +137,22 @@ test("多个我按秒数合并下发，已处理 pending 不可重用，非法�
   expect(() => new DistillStore(ctx.db).resolvePending(p.id,"ignore")).toThrow();
 });
 
+test("样本带上录到的时间和这个人当时说的话", async () => {
+  // 用户报告：只有一段模糊录音时认不出是谁，需要时间和当时说的话来对照。
+  const s = upload("context-ref",120);
+  ctx.db.ingest([fixture({ source: "mac.audio", source_ref: "context-ref", t_start: "2026-11-09T01:00:00Z",
+    title: "对话 · 10:00–10:03 · 说话人 A、我",
+    body: "[10:00:02] 我：先过一下进度\n[10:00:09] 说话人 A：这个方案下周再定，我先把数据补齐" })]);
+  const request = (audio.sync("mac").sample_requests as { id: string }[])[0]!;
+  audio.uploadSamples({ request_id: request.id, clips: [{ mime: "audio/wav", data: Buffer.from("x").toString("base64") }] });
+  const sample = (pending()[0]!.payload.samples as { at?: string; said?: string }[])[0]!;
+  expect(sample.at).toBe("2026-11-09T01:00:00Z");
+  expect(sample.said).toBe("这个方案下周再定，我先把数据补齐");
+  // 对话记录里的说话人写法是转写当时的标签，填了名字后也认得出来。
+  audio.resolve(s.speaker_id, "rename", "刘朝刚");
+  expect(pending()).toHaveLength(0);
+});
+
 test("样本上传、下载、重传和处理后删除，迟到上传不能恢复样本", async () => {
   upload("samples",120);
   const request = (audio.sync("mac").sample_requests as { id: string }[])[0]!;

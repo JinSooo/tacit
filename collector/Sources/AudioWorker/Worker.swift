@@ -155,23 +155,24 @@ final class Worker {
         meta.segments.sort { AudioPolicy.date($0.t_start)! == AudioPolicy.date($1.t_start)! ? $0.file < $1.file : AudioPolicy.date($0.t_start)! < AudioPolicy.date($1.t_start)! }
         let cache = try clustered(meta)
         guard cache.hub.contains(where: { $0.local == request.local && $0.speaker_id == request.speaker_id }) else { continue }
-        // hub 每个说话人最多存 3 段、每段对话发一次请求：每次只发该说话人最长的一段连续窗口，
-        // 3 段样本分别来自 3 段对话。只截连续窗口，避免多数票段里混入其他人的试听。
-        var best: (segment: Int, range: Range<Int>)?
-        for i in meta.segments.indices {
-          let selected = cache.windows.filter { $0.segment == i && $0.local == request.local }.sorted { $0.offset < $1.offset }
-          var ranges: [Range<Int>] = []
-          for w in selected {
-            if let last = ranges.last, last.upperBound == w.offset { ranges[ranges.count - 1] = last.lowerBound..<(w.offset + w.count) }
-            else { ranges.append(w.offset..<(w.offset + w.count)) }
-          }
-          for range in ranges where range.count > (best?.range.count ?? 0) { best = (i, range) }
+        // hub 每个说话人最多存 3 段、每段对话发一次请求：每次只发该说话人在段对话里最响的一段，
+        // 3 段样本分别来自 3 段对话。只截连续窗口，避免混入其他人的试听。
+        // 用户报告：按"最长"选会把远处、隔墙的细微声音当成样本，听不出是谁。
+        let candidates = meta.segments.indices.filter { i in cache.windows.contains { $0.segment == i && $0.local == request.local } }
+          .sorted { meta.segments[$0].dbfs > meta.segments[$1].dbfs }
+        var best: (segment: Int, range: Range<Int>, dbfs: Double)?
+        // 先按整段响度排，最多解码前 3 段找最响的连续窗口。
+        for i in candidates.prefix(3) {
+          let samples = try audio(meta.segments[i], meta)
+          let runs = WorkerLogic.runs(cache.windows.filter { $0.segment == i && $0.local == request.local })
+          guard let loudest = WorkerLogic.loudest(runs, in: samples, limit: 96000), loudest.dbfs.isFinite else { continue }
+          if best == nil || loudest.dbfs > best!.dbfs { best = (i, loudest.range, loudest.dbfs) }
         }
         if let best {
           let samples = try audio(meta.segments[best.segment], meta)
           let end = min(best.range.upperBound, best.range.lowerBound + 160000)
           guard end <= samples.count else { throw WorkerError.cache }
-          let clip = ["mime": "audio/wav", "data": WorkerLogic.wav(Array(samples[best.range.lowerBound..<end])).base64EncodedString()]
+          let clip = ["mime": "audio/wav", "data": WorkerLogic.wav(WorkerLogic.normalize(Array(samples[best.range.lowerBound..<end]))).base64EncodedString()]
           _ = try await post("/v1/audio/samples", ["request_id": request.id, "clips": [clip]])
         }
       } catch { failures += 1; fputs("\(meta.id) sample_failed\n", stderr) }

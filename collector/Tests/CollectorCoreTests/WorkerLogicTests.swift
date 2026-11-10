@@ -8,6 +8,52 @@ import Foundation
   #expect(WorkerLogic.windows(count: 71999, segment: 2).map(\.count) == [48000])
   #expect(WorkerLogic.trimPadding([Float](repeating: 0, count: 2112) + [1, 2, 3]) == [1, 2, 3])
 }
+// 用户报告：试听片段经常是远处、隔墙的细微声音，听不出是谁。
+@Test func sampleClipPrefersLoudRunAndNormalizesVolume() {
+  // 两段同样长：前一段轻声（0.01），后一段正常（0.3）。按最长选会选到前一段，按响度要选后一段。
+  var samples = [Float](repeating: 0, count: 96000)
+  for i in 0..<24000 { samples[i] = 0.01 }
+  for i in 48000..<72000 { samples[i] = 0.3 }
+  let runs = [0..<24000, 48000..<72000]
+  let best = WorkerLogic.loudest(runs, in: samples, limit: 96000)
+  #expect(best?.range == 48000..<72000)
+  #expect((best?.dbfs ?? -100) > -20)
+
+  // 响度相近时留更长的：1 dB 以内的差别不该让人声更短。
+  var close = [Float](repeating: 0, count: 72000)
+  for i in 0..<24000 { close[i] = 0.1 }
+  for i in 48000..<72000 { close[i] = 0.105 }
+  #expect(WorkerLogic.loudest([48_000..<72_000, 0..<24_000], in: close, limit: 96000)?.range == 48_000..<72_000)
+
+  // 一段里前一半是静音时，滑窗要能找到后面有声的位置。
+  var late = [Float](repeating: 0, count: 96000)
+  for i in 64000..<80000 { late[i] = 0.2 }
+  let found = WorkerLogic.loudest([0..<96000], in: late, limit: 32000)!.range
+  #expect(found.lowerBound >= 48000 && found.upperBound >= 80000)
+
+  #expect(WorkerLogic.runs([VoiceWindow(segment: 0, offset: 0, count: 48000), VoiceWindow(segment: 0, offset: 48000, count: 24000), VoiceWindow(segment: 0, offset: 96000, count: 24000)]) == [0..<72000, 96000..<120000])
+  #expect(WorkerLogic.loudest([], in: samples, limit: 96000) == nil)
+}
+
+@Test func sampleClipNormalizationBoostsQuietSpeechWithoutClipping() {
+  let quiet = WorkerLogic.normalize([0.02, -0.02, 0.01])
+  // 峰值 0.02 要提到 0.7 需要 35 倍，超过 16 倍上限：放到 0.32 就停。
+  #expect(abs(quiet[0] - 0.32) < 0.0001)
+  #expect(quiet.allSatisfy { abs($0) <= 1 })
+  // 最多放大 16 倍：极轻的声音不会被放大到爆音；已经够响的不动。
+  let faint = WorkerLogic.normalize([0.001, -0.001])
+  #expect(abs(faint[0] - 0.016) < 0.0001)
+  #expect(WorkerLogic.normalize([0.8, -0.8]) == [0.8, -0.8])
+  #expect(WorkerLogic.normalize([0, 0]) == [0, 0])
+}
+
+@Test func sampleNoteShowsWhenAndWhatWasSaid() {
+  #expect(SampleNote.line(stamp: nil, said: "你好") == "")
+  #expect(SampleNote.line(stamp: "11 月 9 日 02:00", said: nil) == "11 月 9 日 02:00 录到的")
+  #expect(SampleNote.line(stamp: "11 月 9 日 02:00", said: "  这个方案下周再定 ") == "11 月 9 日 02:00，当时说：这个方案下周再定")
+  #expect(SampleNote.line(stamp: "11 月 9 日 02:00", said: "   ") == "11 月 9 日 02:00 录到的")
+}
+
 @Test func clusteringAndMajorityAreStable() {
   var speakers: [LocalSpeaker] = []
   #expect(WorkerLogic.assign(vector: [2, 0], track: .mic, seconds: 3, speakers: &speakers) == "S1")

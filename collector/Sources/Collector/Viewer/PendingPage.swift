@@ -130,7 +130,14 @@ struct PendingCard: View {
           .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
       }
       VStack(spacing: 4) {
-        ForEach(p.samples ?? [], id: \.id) { s in SamplePlayer(sample: s) }
+        ForEach(p.samples ?? [], id: \.id) { s in
+          VStack(alignment: .leading, spacing: 2) {
+            SamplePlayer(sample: s)
+            // 一段模糊的录音很难凭音色认人，配上时间和他当时说的话（用户报告）。
+            Text(SampleNote.line(at: s.at, said: s.said)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+              .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
         if p.samplesPending == true || (p.samples ?? []).isEmpty {
           Text("试听片段还在路上，录到它的设备连上后就能听。").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
             .frame(maxWidth: .infinity, alignment: .leading)

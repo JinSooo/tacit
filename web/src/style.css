@@ -200,6 +200,7 @@ dialog h2 { font-size: var(--text-title); font-weight: 600; margin: 0 0 16px; }
 .pending-form { max-width: 480px; margin-top: 16px; }
 .pending-form label { margin-bottom: 8px; }
 .voice-samples > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.voice-samples .sample-note { flex-basis: 100%; margin: 0; font-size: var(--text-caption); }
 .voice-samples audio { max-width: 100%; height: 36px; }
 
 /* 设置 */

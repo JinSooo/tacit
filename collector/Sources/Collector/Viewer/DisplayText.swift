@@ -44,6 +44,17 @@ enum Fmt {
     guard let b, ViewerFormat.clock(b) != ViewerFormat.clock(a) else { return ViewerFormat.clock(a) }
     return "\(ViewerFormat.clock(a))–\(ViewerFormat.clock(b))"
   }
+
+  /// 试听片段来自哪段对话："11 月 9 日 10:23"。取不到时间时不显示。
+  static func stamp(_ iso: String?) -> String? {
+    guard let iso, let d = ViewerTime.parse(iso) else { return nil }
+    return "\(date(d)) \(ViewerFormat.clock(d))"
+  }
+}
+
+/// 试听片段下面的说明。一段模糊的录音很难凭音色认出是谁，所以带上时间和他当时说的话。
+enum SampleNote {
+  static func line(at: String?, said: String?) -> String { CollectorCore.SampleNote.line(stamp: Fmt.stamp(at), said: said) }
 }
 
 /// 记录标题的显示写法。采集端存的标题是"应用 · 窗口""复制 · 文字""对话 · 时间 · 人"，

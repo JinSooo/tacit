@@ -13,11 +13,14 @@ function SampleAudio({ id, api }: { id: string; api: AudioApi }) {
   }, [id, api]);
   return error ? <p className="error" role="alert">{error}</p> : url ? <audio controls autoPlay src={url} aria-label="试听样本" /> : <span className="muted" role="status">正在读取…</span>;
 }
-export function VoiceSamples({ samples, api }: { samples: { id: string; mime: string }[]; api: AudioApi }) {
+export function VoiceSamples({ samples, api }: { samples: { id: string; mime: string; at?: string; said?: string }[]; api: AudioApi }) {
   const [opened, setOpened] = useState<string[]>([]);
   return <div className="voice-samples">{samples.map((sample, index) => {
     const open = opened.includes(sample.id);
-    return <div key={sample.id}><button className="text-button" aria-expanded={open} onClick={() => setOpened(ids => open ? ids.filter(id => id !== sample.id) : [...ids, sample.id])}>{open ? "收起" : "播放"}样本 {index + 1}</button>{open && <SampleAudio key={sample.id} id={sample.id} api={api} />}</div>;
+    // 一段模糊的录音很难凭音色认人，配上时间和他当时说的话。
+    const stamp = sample.at ? new Date(sample.at).toLocaleString("zh-CN", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+    const note = stamp ? (sample.said ? `${stamp}，当时说：${sample.said}` : `${stamp} 录到的`) : "";
+    return <div key={sample.id}><button className="text-button" aria-expanded={open} onClick={() => setOpened(ids => open ? ids.filter(id => id !== sample.id) : [...ids, sample.id])}>{open ? "收起" : "播放"}样本 {index + 1}</button>{note && <p className="muted sample-note">{note}</p>}{open && <SampleAudio key={sample.id} id={sample.id} api={api} />}</div>;
   })}</div>;
 }
 export function AudioSettings({ api }: { api: AudioApi }) {
