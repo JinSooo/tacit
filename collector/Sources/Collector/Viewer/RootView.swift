@@ -24,6 +24,7 @@ struct RootView: View {
     }
     .background(BehindWindowMaterial().ignoresSafeArea())
     .tint(Palette.accent)
+    .accentColor(Palette.accent)
     .task {
       while !Task.isCancelled {
         store.refreshCapture()
@@ -66,23 +67,20 @@ struct Sidebar: View {
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
       Section {
         SidebarLabel(title: "此刻", icon: "sun-horizon").tag(Page.now)
-        SidebarLabel(title: "History", icon: "clock-counter-clockwise").tag(Page.history)
+        SidebarLabel(title: "历史记录", icon: "clock-counter-clockwise").tag(Page.history)
         // badge 必须在 tag 之前：放在 tag 之后，这一行在 macOS 侧栏里选不中。
         SidebarLabel(title: "待确认", icon: "tray")
           .badge(store.pending.count)
           .tag(Page.pending)
-        SidebarLabel(title: "读取记录", icon: "eye").tag(Page.audit)
+        SidebarLabel(title: "AI 读取记录", icon: "eye").tag(Page.audit)
       }
       if !store.projects.isEmpty {
         Section("项目") {
+          // 还没确认的项目用虚线文件夹，和待确认里"新项目"同一个图标。
           ForEach(store.projects) { p in
-            HStack(spacing: 8) {
-              Circle().fill(Palette.tag(p.name)).frame(width: 8, height: 8).padding(.leading, 4)
-              Text(p.name).lineLimit(1)
-              Spacer(minLength: 4)
-              if !p.confirmed.value { PhIcon("question", size: 12).foregroundStyle(.tertiary) }
-            }
-            .tag(Page.project(p.id))
+            SidebarLabel(title: p.name, icon: p.confirmed.value ? "folder" : "folder-dashed")
+              .help(p.confirmed.value ? p.name : "\(p.name)，还没确认")
+              .tag(Page.project(p.id))
           }
         }
       }
@@ -112,83 +110,81 @@ struct SidebarLabel: View {
   let icon: String
   var body: some View {
     Label {
-      Text(title)
+      Text(title).lineLimit(1)
     } icon: {
       PhIcon(icon, size: 16).frame(width: 16)
     }
   }
 }
 
-/// 侧边栏底部：采集状态。点开是和菜单栏一样的暂停/继续。
+/// 侧边栏底部：采集状态，右边是暂停 / 继续和设置。
 struct CaptureFooter: View {
   @Environment(ViewerStore.self) private var store
-  @State private var pulse = false
 
   var body: some View {
     let c = store.capture
-    HStack(spacing: 10) {
-      Menu {
-        switch c.state {
-        case .recording:
-          Button("暂停 1 小时") { store.perform(.pauseHour) }
-          Button("暂停到明天") { store.perform(.pauseTomorrow) }
-        case .paused:
-          Button("继续记录") { store.perform(.resume) }
-        case .noPermission:
-          Button("授权辅助功能…") { store.perform(.requestAX) }
+    HStack(spacing: 8) {
+      Circle().fill(dot).frame(width: 8, height: 8).padding(.leading, 4)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title).font(.system(size: TextSize.body, weight: .semibold))
+          .foregroundStyle(c.state == .noPermission ? Palette.attention : Palette.ink)
+          .lineLimit(1)
+        if let subtitle {
+          Text(subtitle).font(.system(size: TextSize.caption))
+            .foregroundStyle(c.hubError != nil ? Palette.attention : Palette.muted)
+            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
         }
-      } label: {
-        HStack(spacing: 8) {
-          ZStack {
-            Circle().fill(dot.opacity(0.25)).frame(width: 14, height: 14).scaleEffect(pulse && c.state == .recording ? 1.5 : 0.8)
-              .opacity(pulse && c.state == .recording ? 0 : 1)
-            Circle().fill(dot).frame(width: 7, height: 7)
-          }
-          .frame(width: 14, height: 14)
-          VStack(alignment: .leading, spacing: 1) {
-            Text(title).font(.system(size: 12, weight: .semibold))
-            Text(subtitle).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
-          }
-          Spacer(minLength: 0)
-        }
-        .contentShape(Rectangle())
       }
-      .menuStyle(.button)
-      .buttonStyle(.plain)
-      .menuIndicator(.hidden)
-
-      Button { store.section = .settings } label: {
-        PhIcon("gear-six", size: 16).frame(width: 26, height: 26)
-      }
-      .buttonStyle(.plain)
-      .foregroundStyle(store.section == .settings ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-      .help("设置").accessibilityLabel("设置")
+      Spacer(minLength: 0)
+      control
+      Button { store.section = .settings } label: { PhIcon("gear-six", size: 16).frame(width: 28, height: 28).contentShape(Rectangle()) }
+        .buttonStyle(.plain)
+        .foregroundStyle(store.section == .settings ? Palette.accent : Palette.muted)
+        .help("设置").accessibilityLabel("设置")
     }
-    .padding(.horizontal, 12).padding(.vertical, 9)
-    .glassPanel(14)
-    .padding(10)
-    .onAppear { withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { pulse = true } }
+    .padding(.horizontal, 8).padding(.vertical, 12)
+    .overlay(alignment: .top) { Rectangle().fill(Palette.hairline).frame(height: 1) }
+    .padding(.horizontal, 8)
+  }
+
+  @ViewBuilder var control: some View {
+    switch store.capture.state {
+    case .recording:
+      Menu {
+        Button("暂停 1 小时") { store.perform(.pauseHour) }
+        Button("暂停到明天") { store.perform(.pauseTomorrow) }
+      } label: { PhIcon("pause-circle", size: 18).frame(width: 28, height: 28).contentShape(Rectangle()) }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .foregroundStyle(Palette.muted)
+        .help("暂停记录").accessibilityLabel("暂停记录")
+    case .paused:
+      Button { store.perform(.resume) } label: { PhIcon("play", size: 16).frame(width: 28, height: 28).contentShape(Rectangle()) }
+        .buttonStyle(.plain).foregroundStyle(Palette.accent)
+        .help("继续记录").accessibilityLabel("继续记录")
+    case .noPermission:
+      Button("去授权…") { store.perform(.requestAX) }.buttonStyle(.link)
+    }
   }
 
   var dot: Color {
     switch store.capture.state {
-    case .recording: return Palette.recording
-    case .paused: return .secondary
-    case .noPermission: return .orange
+    case .recording, .noPermission: return Palette.attention
+    case .paused: return Palette.faint
     }
   }
   var title: String {
     switch store.capture.state {
     case .recording: return "正在记录"
     case .paused(let until): return "已暂停到 \(ViewerFormat.clock(until))"
-    case .noPermission: return "缺少辅助功能权限"
+    case .noPermission: return "需要辅助功能权限"
     }
   }
-  var subtitle: String {
+  var subtitle: String? {
     let c = store.capture
-    if let e = c.hubError { return e }
-    if c.queue > 0 { return "待发送 \(c.queue) 条" }
-    return c.summary.isEmpty ? "全部数据源已停用" : c.summary
+    if c.hubError != nil { return "连不上后台服务" }
+    if c.queue > 0 { return "\(Fmt.count(c.queue)) 条记录等待保存" }
+    guard c.state == .recording else { return nil }
+    let n = c.sources.filter(\.enabled).count
+    return n == 0 ? "所有数据源都已关闭" : "\(n) 个数据源"
   }
 }
-

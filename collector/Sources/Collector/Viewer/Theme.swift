@@ -25,13 +25,7 @@ enum Palette {
   static let hairline = dynamic(0xE7E3DC, 0x2F2C29)
   /// 时间轴轨道、输入框、悬停。
   static let fill = dynamic(0xF1EEE8, 0x262422)
-  static let recording = attention
-
-  /// 来源不再各配一种颜色：时间轴每行写了来源名，列表有应用图标。
-  static func source(_ s: String) -> Color { muted }
-  static func tag(_ key: String) -> Color { muted }
-  /// 事实类型靠分组标题和图标区分，不靠颜色。
-  static let factColors: [String: Color] = ["decision": muted, "rejected": muted, "open": muted, "next": muted, "inference": muted]
+  // 来源、项目、事实类型不再各配一种颜色：时间轴每行写了来源名，项目和事实类型有文字和图标。
 }
 
 /// 字号只有这 5 级，一页最多用 4 级（docs/ui.md 第 3 节）。
@@ -41,6 +35,10 @@ enum TextSize {
   static let title: CGFloat = 17
   static let heading: CGFloat = 22
   static let display: CGFloat = 26
+
+  /// 行距：正文行高约 1.5，宋体摘要约 1.6（系统默认行高之外再加的部分）。
+  static func lineSpacing(_ size: CGFloat) -> CGFloat { (size * 0.3).rounded() }
+  static func serifLineSpacing(_ size: CGFloat) -> CGFloat { (size * 0.35).rounded() }
 }
 
 /// 圆角三级，嵌套时内层 = 外层 − 间距。
@@ -113,13 +111,14 @@ struct SourceGlyph: View {
   var body: some View {
     if let image = AppIcons.icon(app) {
       Image(nsImage: image).resizable().interpolation(.high).frame(width: size + 4, height: size + 4).padding(-2)
-    } else {
-      let tint = Palette.source(source)
-      RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-        .fill(tint.gradient.opacity(0.16))
-        .overlay(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous).strokeBorder(tint.opacity(0.28), lineWidth: 0.5))
-        .overlay(PhIcon(SourceInfo.symbol(source), size: size * 0.62).foregroundStyle(tint))
+    } else if size >= 20 {
+      // 没有应用图标时画来源符号：底色只用暖灰，和真实应用图标一样大。
+      RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+        .fill(Palette.fill)
+        .overlay(PhIcon(SourceInfo.symbol(source), size: (size * 0.62).rounded()).foregroundStyle(Palette.muted))
         .frame(width: size, height: size)
+    } else {
+      PhIcon(SourceInfo.symbol(source), size: size).foregroundStyle(Palette.muted)
     }
   }
 }
@@ -145,23 +144,7 @@ struct BehindWindowMaterial: NSViewRepresentable {
 }
 
 extension View {
-  /// macOS 26 起用 Liquid Glass，更早的系统退回半透明材质。
-  @ViewBuilder func glassCapsule(interactive: Bool = false) -> some View {
-    if #available(macOS 26.0, *) {
-      self.glassEffect(interactive ? .regular.interactive() : .regular, in: .capsule)
-    } else {
-      self.background(.regularMaterial, in: Capsule()).overlay(Capsule().strokeBorder(.white.opacity(0.08)))
-    }
-  }
-  @ViewBuilder func glassPanel(_ radius: CGFloat = 16) -> some View {
-    if #available(macOS 26.0, *) {
-      self.glassEffect(.regular, in: .rect(cornerRadius: radius))
-    } else {
-      self.background(.regularMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-    }
-  }
-
-  /// 内容区卡片：纸面底色 + 发丝线，悬停时轻微抬起。
+  /// 内容区分组：纸面底色 + 发丝线，悬停只换底色。
   func card(_ radius: CGFloat = Radius.group, hover: Bool = false) -> some View {
     modifier(CardModifier(radius: radius, hover: hover))
   }
@@ -185,19 +168,36 @@ struct CardModifier: ViewModifier {
   }
 }
 
-/// 项目小标签：彩色圆点 + 名字。
+/// 项目小标签：文件夹图标 + 名字。还没确认的项目用虚线文件夹（和待确认里"新项目"同一个图标）。
 struct ProjectTag: View {
   let name: String
   var unconfirmed = false
   var body: some View {
     HStack(spacing: 4) {
-      PhIcon("folder", size: TextSize.caption)
+      PhIcon(unconfirmed ? "folder-dashed" : "folder", size: 12)
       Text(name).lineLimit(1)
-      if unconfirmed { Text("（未确认）") }
     }
     .font(.system(size: TextSize.caption, weight: .medium))
     .foregroundStyle(Palette.muted)
+    .help(unconfirmed ? "项目 \(name)，还没确认" : "项目 \(name)")
   }
+}
+
+/// 主按钮：铜绿底、白字。系统的 borderedProminent 在这里不跟随 .tint，仍是系统强调色。
+struct AccentButtonStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var enabled
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(.system(size: TextSize.body, weight: .medium))
+      .foregroundStyle(Palette.onAccent)
+      .padding(.horizontal, 12).frame(minHeight: 24)
+      .background(Palette.accent.opacity(configuration.isPressed ? 0.8 : 1), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+      .opacity(enabled ? 1 : 0.5)
+      .contentShape(Rectangle())
+  }
+}
+extension ButtonStyle where Self == AccentButtonStyle {
+  static var accent: AccentButtonStyle { AccentButtonStyle() }
 }
 
 /// 加载中 / 出错 / 空，三种状态统一的占位。
@@ -205,7 +205,7 @@ struct Placeholder: View {
   enum Kind { case loading, error(String, () -> Void), empty(String, String) }
   let kind: Kind
   var body: some View {
-    VStack(spacing: 10) {
+    VStack(spacing: 12) {
       switch kind {
       case .loading:
         ProgressView().controlSize(.small)

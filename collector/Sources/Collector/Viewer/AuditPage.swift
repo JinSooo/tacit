@@ -15,16 +15,16 @@ struct AuditPage: View {
   var body: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
-        Text("Claude Code、Codex 每次读取你的上下文、往 History 写入内容，都会留在这里。").font(.serif(15)).foregroundStyle(.secondary)
+        Text("Claude Code、Codex 每次读取或写入你的历史记录，都会记在这里。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
           .padding(.bottom, 24)
         if reads.isEmpty {
           if loading { Placeholder(kind: .loading).frame(height: 240) }
           else if let error { Placeholder(kind: .error(error) { Task { await load(reset: true) } }).frame(height: 240) }
-          else { Placeholder(kind: .empty("eye-slash", "还没有 Agent 读取过")).frame(height: 240) }
+          else { Placeholder(kind: .empty("eye-slash", "AI 工具还没有读取过")).frame(height: 240) }
         }
         let days = Dictionary(grouping: reads) { Calendar.current.startOfDay(for: $0.date ?? .distantPast) }.sorted { $0.key > $1.key }
         ForEach(days, id: \.key) { day, rows in
-          Text(ViewerFormat.dayTitle(day)).font(.serif(17, .semibold)).padding(.top, 18).padding(.bottom, 8)
+          Text(ViewerFormat.dayTitle(day)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink).padding(.top, 16).padding(.bottom, 8)
           let groups = AuditGrouping.group(rows)
           VStack(spacing: 0) {
             ForEach(Array(groups.enumerated()), id: \.element.id) { i, g in
@@ -36,13 +36,13 @@ struct AuditPage: View {
                 AuditRow(read: g.latest, count: g.reads.count, expanded: expanded.contains(key), targets: targets) { toggle(key) }
                 if expanded.contains(key) {
                   VStack(spacing: 0) { ForEach(g.reads) { r in row(r, nested: true) } }
-                    .padding(.leading, 38).transition(.opacity)
+                    .padding(.leading, 40).transition(.opacity)
                 }
               }
               if i < groups.count - 1 { Divider().padding(.leading, 52) }
             }
           }
-          .card(14)
+          .card()
         }
         if cursor != nil {
           ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(24)
@@ -54,7 +54,7 @@ struct AuditPage: View {
       .frame(maxWidth: .infinity)
     }
     .background(Palette.paper)
-    .navigationTitle("读取记录")
+    .navigationTitle("AI 读取记录")
     .toolbar {
       ToolbarItem(placement: .principal) {
         Picker("工具", selection: $tool) {
@@ -74,7 +74,7 @@ struct AuditPage: View {
   }
 
   func toggle(_ key: String) {
-    withAnimation(.smooth(duration: 0.25)) { if expanded.remove(key) == nil { expanded.insert(key) } }
+    withAnimation(.easeOut(duration: 0.2)) { if expanded.remove(key) == nil { expanded.insert(key) } }
   }
 
   func load(reset: Bool) async {
@@ -100,7 +100,7 @@ struct AuditPage: View {
 
 struct AuditRow: View {
   let read: AuditRead
-  /// 合并行的次数；大于 1 时右侧显示"×N"，点开逐次列出。
+  /// 合并行的次数；大于 1 时右侧显示"N 次"，点开逐次列出。
   var count = 1
   var nested = false
   let expanded: Bool
@@ -113,32 +113,45 @@ struct AuditRow: View {
     VStack(alignment: .leading, spacing: 0) {
       Button(action: toggle) {
         HStack(spacing: 12) {
-          if !nested { SourceGlyph(source: read.tool == "codex" ? "codex.session" : "claude_code.session", size: 26) }
+          if !nested { SourceGlyph(source: read.tool == "codex" ? "codex.session" : "claude_code.session", size: 28) }
           VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-              Text(action).font(.system(size: 13, weight: .medium))
-              if !read.ok.value { Text("失败").font(.system(size: 10, weight: .semibold)).foregroundStyle(.red) }
+            HStack(spacing: 8) {
+              Text(action).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink)
+              if !read.ok.value { Text("没成功").font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.attention) }
             }
-            if let s = summary { Text(s).font(.mono(10.5)).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle) }
+            if path != nil || summary != nil {
+              HStack(spacing: 8) {
+                if let path { Text(path).font(.mono(TextSize.caption)).lineLimit(1).truncationMode(.middle) }
+                if let summary { Text(summary).font(.system(size: TextSize.caption)).lineLimit(1).truncationMode(.tail) }
+              }
+              .foregroundStyle(Palette.muted)
+            }
           }
-          Spacer()
-          Text(count > 1 ? "×\(count)" : "\(read.resultIds.count) 项 · \(ViewerFormat.bytes(read.bytes))").font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
-          Text(read.date.map { ViewerFormat.clock($0) } ?? "").font(.mono(11)).foregroundStyle(.tertiary).frame(width: 42, alignment: .trailing)
-          PhIcon("caret-right", size: 11.5).foregroundStyle(.quaternary)
+          Spacer(minLength: 16)
+          // count：连续几次一模一样的读取被合成这一行；resultIds：这次读到 / 带入的项目、事项、事实和记录的条数。
+          Group {
+            if count > 1 { Text("\(count) 次").help("连续 \(count) 次相同的读取，点开逐次查看") }
+            else if !read.resultIds.isEmpty { Text("\(Fmt.count(Set(read.resultIds).count)) 项").help(read.kind == "context" ? "带入了几个项目和事项" : "读到了几个项目、事项、事实或记录") }
+          }
+          .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+          Text(read.date.map { ViewerFormat.clock($0) } ?? "").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).frame(width: 40, alignment: .trailing)
+          PhIcon("caret-right", size: 12).foregroundStyle(Palette.faint)
             .rotationEffect(.degrees(expanded ? 90 : 0))
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(hovering ? Color.primary.opacity(0.03) : .clear)
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(hovering ? Palette.fill : .clear)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .onHover { hovering = $0 }
       if expanded && count == 1 {
-        VStack(alignment: .leading, spacing: 2) {
-          if read.resultIds.isEmpty { Text("没有返回内容").font(.caption).foregroundStyle(.secondary).padding(8) }
+        VStack(alignment: .leading, spacing: 4) {
+          if read.resultIds.isEmpty { Text("这次没有读到内容").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4) }
           ForEach(Array(Set(read.resultIds)).sorted(), id: \.self) { id in target(id) }
+          // bytes：返回给 AI 工具的 JSON 大小。
+          Text("共返回 \(ViewerFormat.bytes(read.bytes))").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).padding(.top, 4)
         }
-        .padding(.leading, 52).padding(.trailing, 14).padding(.bottom, 12)
+        .padding(.leading, 56).padding(.trailing, 16).padding(.bottom, 12)
         .transition(.opacity)
       }
     }
@@ -147,9 +160,9 @@ struct AuditRow: View {
   @ViewBuilder func target(_ id: String) -> some View {
     switch targets[id] {
     case .none:
-      HStack(spacing: 6) { ProgressView().controlSize(.mini); Text(id).font(.mono(10.5)).foregroundStyle(.tertiary) }.padding(6)
+      HStack(spacing: 8) { ProgressView().controlSize(.mini); Text("正在读取…").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted) }.padding(.vertical, 4)
     case .some(.none):
-      Text("已删除或无法识别 · \(id)").font(.system(size: 11.5)).foregroundStyle(.tertiary).padding(6)
+      Text("这一项已经删除").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4).help(id)
     case .some(.some(let t)):
       Button {
         switch t.kind {
@@ -160,12 +173,12 @@ struct AuditRow: View {
       } label: {
         HStack(spacing: 8) {
           PhIcon(t.kind == "thread" ? "list-bullets" : t.kind == "project" ? "folder" : "file-text", size: 14)
-            .foregroundStyle(.secondary).frame(width: 16)
-          Text(t.title).font(.system(size: 12.5)).lineLimit(1)
-          Text(["thread": "线程", "project": "项目", "record": "记录"][t.kind] ?? "").font(.system(size: 10.5)).foregroundStyle(.tertiary)
+            .foregroundStyle(Palette.muted).frame(width: 16)
+            .help(["thread": "事项", "project": "项目", "record": "记录"][t.kind] ?? "")
+          Text(t.title).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink).lineLimit(1)
           Spacer()
         }
-        .padding(.horizontal, 6).padding(.vertical, 5)
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -174,27 +187,29 @@ struct AuditRow: View {
 
   var action: String {
     switch read.kind {
-    case "context": return read.args["event"]?.text == "compact" ? "压缩后重新注入" : "会话开始时注入"
-    case "now": return "读取当前状态"
-    case "get": return "读取\(["brief": "简略版", "detail": "详细版", "evidence": "证据"][read.args["level"]?.text ?? ""] ?? "内容")"
-    case "search": return "搜索 History"
-    case "timeline": return "读取时间线"
-    case "append": return "写入 History"
+    case "context": return read.args["event"]?.text == "compact" ? "对话压缩后重新带入" : "新会话开始时带入"
+    case "now": return "查看此刻"
+    case "get": return "读取\(["brief": "简介", "detail": "详情", "evidence": "依据"][read.args["level"]?.text ?? "brief"] ?? "内容")"
+    case "search": return "搜索历史记录"
+    case "timeline": return "查看时间线"
+    case "append": return "写入历史记录"
     default: return read.kind
     }
   }
 
+  /// 会话所在目录，等宽显示。
+  var path: String? { read.args["cwd"]?.text.map { ($0 as NSString).abbreviatingWithTildeInPath } }
+
   var summary: String? {
     var parts: [String] = []
-    if let cwd = read.args["cwd"]?.text { parts.append((cwd as NSString).abbreviatingWithTildeInPath) }
     if let id = read.args["id"]?.text {
       // 线程、项目显示标题；按天读取的 id 就是日期；认不出来时显示 id。
       if let t = targets[id], let title = t?.title { parts.append(title) } else { parts.append(id) }
     }
-    if let n = read.args["q_length"]?.text { parts.append("查询 \(n) 字") }
-    if let r = read.args["result"]?.text { parts.append(["created": "新增", "unchanged": "已存在，未重复写入", "corrected": "内容有变，已挂修正", "deleted": "已被删除过，未写入"][r] ?? r) }
-    if let n = read.args["redactions"]?.text { parts.append("拦下 \(n) 处密钥") }
+    if let n = read.args["q_length"]?.text { parts.append("搜了 \(n) 个字") }
+    if let r = read.args["result"]?.text { parts.append(["created": "新写入一条", "unchanged": "已经有了，没有重复写", "corrected": "内容变了，记成一条修正", "deleted": "以前删过，没有写入"][r] ?? r) }
+    if let n = read.args["redactions"]?.text { parts.append("隐去了 \(n) 处密钥") }
     if let from = read.args["from"]?.text ?? read.args["to"]?.text { parts.append(from) }
-    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    return parts.isEmpty ? nil : parts.joined(separator: "，")
   }
 }

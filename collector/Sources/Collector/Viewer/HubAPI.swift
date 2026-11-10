@@ -24,7 +24,7 @@ final class HubAPI: @unchecked Sendable {
   }
 
   private func request(_ path: String, query: [String: String?] = [:], method: String = "GET", body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Data {
-    guard let token = tokenProvider() else { throw HubError(message: "找不到 hub 的 token，hub 是否启动过？", status: 0) }
+    guard let token = tokenProvider() else { throw HubError(message: "找不到后台服务的访问令牌，后台服务可能还没启动过", status: 0) }
     var c = URLComponents(url: base, resolvingAgainstBaseURL: false)!
     c.path = path
     let items = query.compactMap { k, v in v.map { URLQueryItem(name: k, value: $0) } }
@@ -41,7 +41,7 @@ final class HubAPI: @unchecked Sendable {
     let data: Data, response: URLResponse
     do { (data, response) = try await session.data(for: r) }
     catch let e as URLError where e.code == .cancelled { throw CancellationError() }
-    catch { throw HubError(message: "hub 连不上：\(error.localizedDescription)", status: 0) }
+    catch { throw HubError(message: "连不上后台服务：\(error.localizedDescription)", status: 0) }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     guard (200..<300).contains(status) else {
       let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
@@ -60,7 +60,7 @@ final class HubAPI: @unchecked Sendable {
   private func get<T: Decodable>(_ type: T.Type, _ path: String, _ query: [String: String?] = [:]) async throws -> T {
     let data = try await request(path, query: query)
     do { return try HubJSON.decoder().decode(T.self, from: data) }
-    catch { throw HubError(message: "hub 返回的数据无法解析：\(error)", status: 0) }
+    catch { throw HubError(message: "后台服务返回的数据读不出来：\(error)", status: 0) }
   }
 
   private func send(_ method: String, _ path: String, _ json: Any? = nil) async throws {
@@ -187,7 +187,7 @@ final class HubAPI: @unchecked Sendable {
     if let range { body["from"] = range.from; body["to"] = range.to }
     let data = try await request("/v1/distill/requests", method: "POST", body: try JSONSerialization.data(withJSONObject: body))
     do { return try HubJSON.decoder().decode(DistillRequestInfo.self, from: data) }
-    catch { throw HubError(message: "hub 返回的数据无法解析：\(error)", status: 0) }
+    catch { throw HubError(message: "后台服务返回的数据读不出来：\(error)", status: 0) }
   }
 
   func distillRequests() async throws -> [DistillRequestInfo] {
@@ -259,7 +259,7 @@ extension HubAPI {
     let body = try json.map { try JSONSerialization.data(withJSONObject: $0) }
     let data = try await request(path, method: method, body: body, timeout: timeout)
     do { return try HubJSON.decoder().decode(T.self, from: data) }
-    catch { throw HubError(message: "hub 返回的数据无法解析：\(error)", status: 0) }
+    catch { throw HubError(message: "后台服务返回的数据读不出来：\(error)", status: 0) }
   }
   static func tierJSON(_ t: ModelTierConfig) -> [String: Any] {
     var d: [String: Any] = ["provider": t.provider, "model": t.model]

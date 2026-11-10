@@ -78,13 +78,13 @@ struct MenuBarPanel: View {
   var status: some View {
     let c = store.capture
     return HStack(spacing: 10) {
-      Circle().fill(dot).frame(width: 9, height: 9)
-        .overlay { if c.state == .recording { Circle().stroke(dot.opacity(0.3), lineWidth: 4) } }
+      Circle().fill(dot).frame(width: 8, height: 8)
       VStack(alignment: .leading, spacing: 2) {
-        Text(title).font(.system(size: 13, weight: .semibold))
+        Text(title).font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(Palette.ink)
         if let subtitle {
-          Text(subtitle).font(.system(size: 11)).foregroundStyle(c.hubError == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
-            .lineLimit(1).truncationMode(.middle)
+          Text(subtitle).font(.system(size: TextSize.caption)).foregroundStyle(c.hubError == nil ? Palette.muted : Palette.attention)
+            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            .help(c.hubError ?? "")
         }
       }
       Spacer(minLength: 8)
@@ -100,50 +100,57 @@ struct MenuBarPanel: View {
       case .paused:
         Button("继续记录") { store.perform(.resume) }.controlSize(.small)
       case .noPermission:
-        Button("授权…") { store.perform(.requestAX) }.controlSize(.small)
+        Button("去授权…") { store.perform(.requestAX) }.controlSize(.small)
       }
     }
   }
 
   var dot: Color {
     switch store.capture.state {
-    case .recording: return Palette.recording
-    case .paused: return .secondary
-    case .noPermission: return .orange
+    case .recording: return Palette.attention
+    case .paused: return Palette.faint
+    case .noPermission: return Palette.attention
     }
   }
   var title: String {
     switch store.capture.state {
     case .recording: return "正在记录"
     case .paused(let until): return "已暂停到 \(ViewerFormat.clock(until))"
-    case .noPermission: return "缺少辅助功能权限"
+    case .noPermission: return "需要辅助功能权限"
     }
   }
   /// 只说发送异常和录音状态。
   var subtitle: String? {
     let c = store.capture
-    if let e = c.hubError { return e }
-    if c.queue > 0 { return "待发送 \(c.queue) 条" }
-    return c.recordingEnabled ? c.audio.first : nil
+    if c.hubError != nil { return "连不上后台服务，记录暂存在内存里" }
+    if c.queue > 0 { return "\(Fmt.count(c.queue)) 条记录等待保存" }
+    // 录音状态行由 AudioCoordinator 生成，写法是"今天 N 段对话 · 待转写 M 段"，这里把中间点换成逗号。
+    return c.recordingEnabled ? c.audio.first?.replacingOccurrences(of: " · ", with: "，") : nil
   }
 
   // MARK: 此刻
 
   @ViewBuilder var nowText: some View {
     Button { open(.now) } label: {
-      VStack(alignment: .leading, spacing: 5) {
+      VStack(alignment: .leading, spacing: 4) {
         if let state = now.value {
-          Text(state?.brief?.isEmpty == false ? state!.brief! : "还没有当前摘要")
-            .font(.serif(15)).lineSpacing(3).foregroundStyle(Palette.ink)
-            .lineLimit(4).multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
-          if let at = state?.updatedAt.flatMap(ViewerTime.parse) {
-            Text("提炼于 \(ViewerFormat.relative(at))").font(.system(size: 10.5)).foregroundStyle(.tertiary)
+          if let brief = state?.brief, !brief.isEmpty {
+            Text(brief)
+              .font(.serif(TextSize.title)).lineSpacing(TextSize.serifLineSpacing(TextSize.title)).foregroundStyle(Palette.ink)
+              .lineLimit(4).multilineTextAlignment(.leading)
+              .fixedSize(horizontal: false, vertical: true)
+          } else {
+            Text("记录一段时间后，这里会写出你正在做什么。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+              .fixedSize(horizontal: false, vertical: true)
           }
-        } else if let e = now.error {
-          Text(e).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(3)
+          if let at = state?.updatedAt.flatMap(ViewerTime.parse) {
+            Text(Fmt.updated(at)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+          }
+        } else if now.error != nil {
+          Text("连不上后台服务，暂时看不到此刻在做什么。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+            .fixedSize(horizontal: false, vertical: true)
         } else {
-          RoundedRectangle(cornerRadius: 4).fill(.primary.opacity(0.06)).frame(height: 40)
+          RoundedRectangle(cornerRadius: Radius.control).fill(Palette.fill).frame(height: 40)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -160,11 +167,13 @@ struct MenuBarPanel: View {
       let rows = hour.value ?? []
       VStack(alignment: .leading, spacing: 6) {
         HStack(alignment: .firstTextBaseline) {
-          Text("近 1 小时").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+          Text("近 1 小时").font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.muted)
           Spacer()
           if hour.value != nil {
-            Text(rows.isEmpty ? "没有记录" : "\(rows.count) 条 · 活跃 \(ViewerFormat.compact(ActiveTime.seconds(rows, within: range)))")
-              .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+            // rows：结束（没有结束时间的按开始）落在这一小时里的记录条数。
+            // 活跃：这些记录时段的并集落在这一小时内的长度，重叠只算一次。
+            Text(rows.isEmpty ? "没有记录" : "\(Fmt.count(rows.count)) 条记录，活跃 \(Fmt.duration(ActiveTime.seconds(rows, within: range)))")
+              .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
           }
         }
         HourBar(records: rows, range: range)
@@ -177,7 +186,7 @@ struct MenuBarPanel: View {
   @ViewBuilder var recentList: some View {
     if let rows = recent.value {
       if rows.isEmpty {
-        Text("还没有记录").font(.system(size: 12)).foregroundStyle(.secondary)
+        Text("还没有记录").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
           .frame(maxWidth: .infinity, minHeight: 60)
       } else {
         VStack(spacing: 0) {
@@ -191,7 +200,7 @@ struct MenuBarPanel: View {
         .padding(.horizontal, 6)
       }
     } else if let e = recent.error {
-      Text(e).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(3).padding(.horizontal, 16).padding(.vertical, 12)
+      Text("读不到最近的记录").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).help(e).padding(.horizontal, 16).padding(.vertical, 12)
     } else {
       // 占住大致高度，读完后面板不会突然变高一大截。
       Color.clear.frame(height: 5 * RecentRow.height)
@@ -204,25 +213,21 @@ struct MenuBarPanel: View {
     HStack(spacing: 2) {
       if !store.pending.isEmpty {
         Button { open(.pending) } label: {
-          HStack(spacing: 5) {
+          HStack(spacing: 4) {
             PhIcon("tray", size: 14)
-            Text("待确认 \(store.pending.count)")
+            Text("待确认 \(store.pending.count) 项").monospacedDigit()
           }
         }
         .buttonStyle(PanelButtonStyle())
       }
       Spacer()
-      Button { open(.settings) } label: { PhIcon("gear-six", size: 15) }
+      Button { open(.settings) } label: { PhIcon("gear-six", size: 16) }
         .buttonStyle(PanelButtonStyle()).help("设置").accessibilityLabel("设置")
-      Button { open(.now) } label: {
-        HStack(spacing: 5) {
-          PhIcon("arrow-up-right", size: 13)
-          Text("打开")
-        }
-      }
-      .buttonStyle(PanelButtonStyle()).help("打开 Record Anything").keyboardShortcut("o")
+      Button { open(.now) } label: { Text("打开 Record Anything") }
+        .buttonStyle(PanelButtonStyle()).keyboardShortcut("o")
     }
-    .font(.system(size: 12))
+    .font(.system(size: TextSize.body))
+    .foregroundStyle(Palette.ink)
   }
 }
 
@@ -237,25 +242,36 @@ struct RecentRow: View {
   var body: some View {
     Button(action: action) {
       HStack(alignment: .top, spacing: 10) {
-        SourceGlyph(source: record.source, app: record.contextText("app"), size: 18).padding(.top, 1)
+        SourceGlyph(source: record.source, app: record.contextText("app"), size: 20).padding(.top, 1)
         VStack(alignment: .leading, spacing: 2) {
-          HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(record.title.isEmpty ? SourceInfo.name(record.source) : record.title)
-              .font(.system(size: 12.5, weight: .medium)).lineLimit(1)
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+              .font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(1)
             Spacer(minLength: 4)
-            Text(ViewerFormat.clock(record.start)).font(.mono(10.5)).foregroundStyle(.tertiary)
+            Text(ViewerFormat.clock(record.start)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
           }
-          if let line = snippet {
-            Text(line).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+          if let line = snippet, line != title {
+            Text(line).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).lineLimit(1)
           }
         }
       }
       .padding(.horizontal, 10).padding(.vertical, 6)
-      .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.primary.opacity(hovering ? 0.06 : 0)))
+      // 面板圆角 14，行在 6 的内边距里：悬停底色圆角 14 − 6 = 8。
+      .background(RoundedRectangle(cornerRadius: StatusPanel.cornerRadius - 6, style: .continuous).fill(hovering ? Palette.fill : .clear))
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
+  }
+
+  /// 图标已经说明是哪个应用，标题不再重复应用名。剪贴板记录的标题是复制内容的开头，
+  /// 和下面一行重复，所以改说从哪个应用复制。
+  var title: String {
+    if record.source == "mac.clipboard", record.body?.isEmpty == false {
+      if let app = AppIcons.name(record.contextText("app")) { return "从 \(app) 复制" }
+      return "复制了一段文字"
+    }
+    return RecordText.title(record)
   }
 
   /// 正文压成一行；没有正文时用网址的域名或所在目录。
@@ -268,7 +284,7 @@ struct RecentRow: View {
   }
 }
 
-/// 近 1 小时的活动带：每条记录按来源上色，右端是现在。
+/// 近 1 小时的活动带：有记录的时段涂深，右端是现在。
 struct HourBar: View {
   let records: [HistoryRecord]
   let range: ClosedRange<Date>
@@ -280,14 +296,14 @@ struct HourBar: View {
         let w = geo.size.width
         let x = { (d: Date) in CGFloat(min(max(d.timeIntervalSince(range.lowerBound) / span, 0), 1)) * w }
         ZStack(alignment: .leading) {
-          RoundedRectangle(cornerRadius: 3).fill(.primary.opacity(0.06))
+          Rectangle().fill(Palette.fill)
           ForEach(records) { r in
             let a = x(r.start), b = x(r.end ?? r.start)
-            Rectangle().fill(Palette.source(r.source).opacity(0.85))
+            Rectangle().fill(Palette.muted.opacity(0.7))
               .frame(width: max(1.5, b - a)).offset(x: a)
           }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 3))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.control))
       }
       .frame(height: 12)
       HStack {
@@ -297,7 +313,7 @@ struct HourBar: View {
         Spacer()
         Text("现在")
       }
-      .font(.mono(9)).foregroundStyle(.tertiary)
+      .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
     }
   }
 }
@@ -330,9 +346,9 @@ struct PanelButtonStyle: ButtonStyle {
     @State private var hovering = false
     var body: some View {
       configuration.label
-        .padding(.horizontal, 8).frame(minWidth: 28, minHeight: 26)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-          .fill(Color.primary.opacity(configuration.isPressed ? 0.12 : hovering ? 0.07 : 0)))
+        .padding(.horizontal, 8).frame(minWidth: 28, minHeight: 28)
+        .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+          .fill(configuration.isPressed || hovering ? Palette.fill : .clear))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
     }
@@ -404,7 +420,7 @@ struct PanelButtonStyle: ButtonStyle {
     if let o = spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(o); spaceObserver = nil }
   }
 
-  static let cornerRadius: CGFloat = 14
+  static let cornerRadius: CGFloat = Radius.floating
 
   /// 面板底子透出后面的内容：macOS 26 起是液态玻璃，更早的系统是菜单同款的模糊材质。
   private static func backdrop(around content: NSView) -> NSView {

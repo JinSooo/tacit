@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import CollectorCore
 
-/// 活动段的显示文字：线程名，没提炼的用应用名。
+/// 活动段的显示文字：事项名，还没整理的用应用名。
 @MainActor enum SegmentText {
   static func appName(_ a: HistorySegment.App) -> String {
     if let name = AppIcons.name(a.app) { return name }
@@ -40,7 +40,7 @@ import CollectorCore
   }
 }
 
-/// 列表里的一段活动：线程名作标题，下面是在做什么和涉及的应用。
+/// 列表里的一段活动：事项名作标题，下面是在做什么和涉及的应用。
 struct SegmentRow: View {
   let block: SegmentBlock
   let selected: Bool
@@ -54,11 +54,11 @@ struct SegmentRow: View {
     Button(action: action) {
       HStack(alignment: .top, spacing: 12) {
         Text(SegmentText.time(segment))
-          .font(.mono(11))
-          .foregroundStyle(.secondary)
+          .font(.system(size: TextSize.caption)).monospacedDigit()
+          .foregroundStyle(Palette.muted)
           .frame(width: RecordRow.timeWidth, alignment: .trailing)
           .lineLimit(1)
-          .padding(.top, 4)
+          .padding(.top, 2)
         Group {
           if let lead = segment.apps.first { SourceGlyph(source: lead.source, app: lead.app, size: 22) }
           else { SourceGlyph(source: block.records.first?.source ?? "", size: 22) }
@@ -67,37 +67,37 @@ struct SegmentRow: View {
         VStack(alignment: .leading, spacing: 4) {
           HStack(spacing: 8) {
             Text(SegmentText.title(block))
-              .font(.system(size: 13.5, weight: .semibold))
+              .font(.system(size: TextSize.body, weight: .semibold))
+              .foregroundStyle(Palette.ink)
               .lineLimit(segment.thread == nil ? 1 : 2)
               .fixedSize(horizontal: false, vertical: true)
               .layoutPriority(1)
             if let p = segment.thread?.projectName { ProjectTag(name: p) }
-            if segment.privateCount > 0 { PhIcon("lock", fill: true, size: 10).foregroundStyle(.secondary) }
+            if segment.privateCount > 0 { PhIcon("lock", size: 12).foregroundStyle(Palette.muted).help("含私密记录") }
           }
           if let brief = segment.thread?.brief, !brief.isEmpty {
-            Text(brief).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Text(brief).font(.system(size: TextSize.body)).lineSpacing(3).foregroundStyle(Palette.muted).lineLimit(2).fixedSize(horizontal: false, vertical: true)
           } else if segment.thread == nil, let w = SegmentText.windows(block) {
-            Text(w).font(.system(size: 11.5)).foregroundStyle(.tertiary).lineLimit(1)
+            Text(w).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).lineLimit(1)
           }
           if segment.thread != nil || segment.apps.count > 1 { apps }
         }
         Spacer(minLength: 8)
-        HStack(spacing: 10) {
+        // 右边：这段活跃了多久（记录时段的并集），有几条原始记录（点开就是这些）。
+        HStack(spacing: 12) {
           if segment.activeSeconds >= 60 {
-            Text(ViewerFormat.compact(segment.activeSeconds)).font(.system(size: 11)).monospacedDigit().foregroundStyle(.tertiary)
+            Text(Fmt.duration(segment.activeSeconds)).monospacedDigit()
           }
-          HStack(spacing: 3) {
-            Text("\(block.records.count)").monospacedDigit()
-            PhIcon("caret-right", size: 10.5).rotationEffect(.degrees(expanded ? 90 : 0))
+          HStack(spacing: 4) {
+            Text("\(Fmt.count(block.records.count)) 条").monospacedDigit()
+            PhIcon("caret-right", size: 10).rotationEffect(.degrees(expanded ? 90 : 0))
           }
-          .font(.system(size: 10.5, weight: .semibold))
-          .foregroundStyle(.secondary)
-          .padding(.horizontal, 6).padding(.vertical, 2)
-          .background(.primary.opacity(0.06), in: Capsule())
-          .help("\(block.records.count) 条原始记录")
+          .help(expanded ? "收起原始记录" : "展开 \(block.records.count) 条原始记录")
         }
+        .font(.system(size: TextSize.caption))
+        .foregroundStyle(Palette.muted)
         .fixedSize()
-        .padding(.top, 3)
+        .padding(.top, 2)
       }
       .padding(.vertical, 8)
       .padding(.horizontal, 8)
@@ -105,8 +105,8 @@ struct SegmentRow: View {
         Rectangle().fill(Palette.hairline).frame(width: 1).padding(.leading, 8 + RecordRow.timeWidth + 12 + 12.5)
       }
       .background {
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
-          .fill(selected ? Palette.accent.opacity(0.13) : (hovering ? Color.primary.opacity(0.04) : .clear))
+        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+          .fill(selected ? Palette.accent.opacity(0.13) : (hovering ? Palette.fill : .clear))
       }
       .contentShape(Rectangle())
     }
@@ -121,13 +121,13 @@ struct SegmentRow: View {
         HStack(spacing: 4) {
           SourceGlyph(source: a.source, app: a.app, size: 12)
           Text(SegmentText.appName(a)).lineLimit(1)
-          if a.seconds >= 60 { Text(ViewerFormat.compact(a.seconds)).monospacedDigit().foregroundStyle(.tertiary) }
+          if a.seconds >= 60 { Text(Fmt.duration(a.seconds)).monospacedDigit() }
         }
       }
-      if segment.apps.count > 4 { Text("+\(segment.apps.count - 4)").foregroundStyle(.tertiary) }
+      if segment.apps.count > 4 { Text("等 \(segment.apps.count) 个应用") }
     }
-    .font(.system(size: 11))
-    .foregroundStyle(.secondary)
+    .font(.system(size: TextSize.caption))
+    .foregroundStyle(Palette.muted)
   }
 }
 
@@ -141,7 +141,7 @@ struct SegmentInspector: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 22) {
+      VStack(alignment: .leading, spacing: 24) {
         header
         if let t = segment.thread { doing(t) }
         else { undistilled }
@@ -173,65 +173,67 @@ struct SegmentInspector: View {
               } else { ProjectTag(name: p) }
             }
             if let s = threadStatus[segment.thread?.status ?? ""], segment.thread?.status != "active" {
-              Text(s.0).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(s.1)
+              Text(s).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
             }
           }
-          Text(timeLine).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+          Text(timeLine).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
         }
       }
-      Text(SegmentText.title(block)).font(.serif(19, .semibold)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+      Text(SegmentText.title(block)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
+        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
     }
   }
 
   var timeLine: String {
     let c = Calendar.current.dateComponents([.month, .day], from: segment.start)
     var s = "\(c.month!) 月 \(c.day!) 日 \(SegmentText.time(segment))"
-    if segment.activeSeconds >= 60 { s += " · 活跃 \(ViewerFormat.duration(segment.activeSeconds))" }
+    if segment.activeSeconds >= 60 { s += "，活跃 \(Fmt.duration(segment.activeSeconds))" }
     return s
   }
 
   @ViewBuilder func doing(_ t: HistorySegment.ThreadRef) -> some View {
-    VStack(alignment: .leading, spacing: 20) {
+    VStack(alignment: .leading, spacing: 24) {
       if let brief = detail.value?.brief ?? t.brief, !brief.isEmpty {
         Text(brief)
-          .font(.serif(15.5)).lineSpacing(5).foregroundStyle(Palette.ink.opacity(0.9))
+          .font(.system(size: TextSize.body)).lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
           .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-          .padding(.leading, 12)
-          .overlay(alignment: .leading) { Capsule().fill(Palette.accent.opacity(0.5)).frame(width: 2.5) }
       }
       if let d = detail.value {
         DetailBody(detail: d, progressLabel: "进展", progress: d.detail?.progress)
       } else if detail.loading {
         ProgressView().controlSize(.small)
       } else if let e = detail.error {
-        Text(e).font(.caption).foregroundStyle(.secondary)
+        Text(e).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
       }
-      Button { store.path.append(.thread(t.id)) } label: { Label { Text("打开线程") } icon: { PhIcon("arrow-up-right", size: 14) } }
-        .buttonStyle(.link).font(.callout)
+      Button { store.path.append(.thread(t.id)) } label: {
+        HStack(spacing: 4) { Text("打开这件事项"); PhIcon("arrow-right", size: 12) }
+      }
+        .buttonStyle(.link).font(.system(size: TextSize.body))
     }
   }
 
   /// 没提炼的段没有摘要，用窗口标题说明在看什么。
   var undistilled: some View {
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 8) {
       if let w = SegmentText.windows(block, limit: 6) {
-        Text(w).font(.system(size: 12.5)).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+        Text(w).font(.system(size: TextSize.body)).lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
+          .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
       }
-      Text("还没提炼").font(.caption).foregroundStyle(.tertiary)
+      Text("这段还没整理，整理后会写出在做什么。").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
     }
   }
 
   var appList: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("应用").sectionTitle()
-      VStack(alignment: .leading, spacing: 7) {
+      VStack(alignment: .leading, spacing: 8) {
         ForEach(segment.apps, id: \.self) { a in
           HStack(spacing: 8) {
             SourceGlyph(source: a.source, app: a.app, size: 16)
-            Text(SegmentText.appName(a)).font(.system(size: 12))
+            Text(SegmentText.appName(a)).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink)
             Spacer()
-            Text(a.seconds >= 60 ? ViewerFormat.duration(a.seconds) : "\(a.records) 条")
-              .font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+            Text(a.seconds >= 60 ? Fmt.duration(a.seconds) : "\(a.records) 条记录")
+              .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
           }
         }
       }
@@ -263,8 +265,8 @@ struct MinorSegmentsRow: View {
     Button(action: action) {
       HStack(alignment: .center, spacing: 12) {
         Text(span)
-          .font(.mono(11))
-          .foregroundStyle(.tertiary)
+          .font(.system(size: TextSize.caption)).monospacedDigit()
+          .foregroundStyle(Palette.muted)
           .frame(width: RecordRow.timeWidth, alignment: .trailing)
           .lineLimit(1)
         // 最多叠 3 个 14pt 图标，总宽正好 26pt，和其他行的图标列对齐。
@@ -275,28 +277,28 @@ struct MinorSegmentsRow: View {
         }
         .frame(width: 26, alignment: .leading)
         Text(apps.prefix(4).map(SegmentText.appName).joined(separator: "、") + (apps.count > 4 ? " 等" : ""))
-          .font(.system(size: 12))
-          .foregroundStyle(.secondary)
+          .font(.system(size: TextSize.body))
+          .foregroundStyle(Palette.muted)
           .lineLimit(1)
         Spacer(minLength: 8)
-        HStack(spacing: 3) {
-          Text("\(blocks.count) 段").monospacedDigit()
-          PhIcon("caret-right", size: 10.5).rotationEffect(.degrees(expanded ? 90 : 0))
+        HStack(spacing: 4) {
+          Text("\(blocks.count) 段零碎活动").monospacedDigit()
+          PhIcon("caret-right", size: 10).rotationEffect(.degrees(expanded ? 90 : 0))
         }
-        .font(.system(size: 10.5, weight: .semibold))
-        .foregroundStyle(.tertiary)
+        .font(.system(size: TextSize.caption))
+        .foregroundStyle(Palette.muted)
         .fixedSize()
       }
-      .padding(.vertical, 6)
+      .padding(.vertical, 8)
       .padding(.horizontal, 8)
       .background {
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
-          .fill(hovering ? Color.primary.opacity(0.04) : .clear)
+        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+          .fill(hovering ? Palette.fill : .clear)
       }
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
-    .help("\(blocks.count) 段零碎活动")
+    .help("每段不到 2 分钟、还没整理的活动，折在一起")
   }
 }
