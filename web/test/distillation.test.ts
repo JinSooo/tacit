@@ -54,7 +54,7 @@ test("相对时间处理零值、边界、未来和缺失时间", () => {
   expect(relativeTime(0, 60000)).toBe("1分钟前");
 });
 test("待确认依据包含分类 keys 和样例线程标题，不泄露未要求的正文", () => {
-  expect(pendingSummary({ keys: { repos: ["/synthetic/project"], hosts: ["example.invalid"], chats: ["合成讨论"] }, threads: [{ id: "t", title: "缓存写入", brief: "此正文不作为依据" }] })).toEqual(["仓库：/synthetic/project", "网站：example.invalid", "会话：合成讨论", "线程：缓存写入"]);
+  expect(pendingSummary({ keys: { repos: ["/synthetic/project"], hosts: ["example.invalid"], chats: ["合成讨论"] }, threads: [{ id: "t", title: "缓存写入", brief: "此正文不作为依据" }] })).toEqual(["仓库：/synthetic/project", "网站：example.invalid", "会话：合成讨论", "事项：缓存写入"]);
   expect(pendingSummary({})).toEqual([]);
 });
 test("mock 接口覆盖当前摘要、列表分页、项目线程及 detail/evidence 请求", async () => {

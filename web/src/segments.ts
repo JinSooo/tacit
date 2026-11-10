@@ -1,4 +1,4 @@
-// History 按活动段显示（与 Mac 客户端一致，契约见 docs/contracts.md 4.5.1）。
+// 历史记录按活动段显示（与 Mac 客户端一致，契约见 docs/contracts.md 4.5.1）。
 import type { Api } from "./distillation.ts";
 import { dayRange, sourceNames, type HistoryRow } from "./history.ts";
 
@@ -63,9 +63,4 @@ export const clockMs = (ms: number) => { const d = new Date(ms); return `${pad(d
 export function spanText(startMs: number, endMs: number): string {
   const a = clockMs(startMs), b = clockMs(endMs);
   return a === b ? a : `${a}–${b}`;
-}
-export function minutesText(seconds: number): string {
-  if (seconds < 60) return "";
-  const m = Math.round(seconds / 60);
-  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ""}`;
 }

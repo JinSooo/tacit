@@ -9,17 +9,19 @@ export function auditPath(tool: string, cursor: string | null) {
   if (cursor) params.set("cursor", cursor);
   return `/v1/audit?${params}`;
 }
-const appendResults: Record<string, string> = { created: "新增", unchanged: "已存在，未重复写入", corrected: "内容有变，已挂修正", deleted: "已被删除过，未写入" };
-const levels: Record<string, string> = { brief: "简略版", detail: "详细版", evidence: "证据" };
-/** 这次读取做了什么，写法与 Mac 客户端的读取记录一致。 */
+const appendResults: Record<string, string> = { created: "已添加", unchanged: "已经有了，没有重复添加", corrected: "内容有变化，已添加修正", deleted: "之前删除过，没有添加" };
+const levels: Record<string, string> = { brief: "简略版", detail: "详细版", evidence: "依据" };
+/** AI 工具的显示名；没列出的原样显示。 */
+export const toolNames: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex" };
+/** 这次读取做了什么。 */
 export function auditAction(kind: string, args: AuditRead["args"]): string {
   switch (kind) {
-    case "context": return args.event === "compact" ? "压缩后重新注入" : "会话开始时注入";
+    case "context": return args.event === "compact" ? "压缩上下文后重新带入" : "新会话开始时带入";
     case "now": return "读取当前状态";
     case "get": return `读取${levels[String(args.level)] ?? "内容"}`;
-    case "search": return "搜索 History";
+    case "search": return "搜索历史记录";
     case "timeline": return "读取时间线";
-    case "append": return "写入 History";
+    case "append": return "添加到历史记录";
     default: return kind;
   }
 }
@@ -30,11 +32,11 @@ export function auditSummary(args: AuditRead["args"], targets?: ReadonlyMap<stri
   return [
     args.cwd !== undefined && String(args.cwd).replace(/^\/Users\/[^/]+(?=\/|$)/, "~"),
     title,
-    args.q_length !== undefined && `查询 ${args.q_length} 字`,
-    (args.from || args.to) && `${args.from ? shortTime(args.from) : "不限"} 至 ${args.to ? shortTime(args.to) : "不限"}`,
-    args.result !== undefined && `写入：${appendResults[args.result] ?? args.result}`,
+    args.q_length !== undefined && `搜索词 ${args.q_length} 个字`,
+    (args.from || args.to) && (args.from && args.to ? `${shortTime(args.from)} 至 ${shortTime(args.to)}` : args.from ? `${shortTime(args.from)} 以后` : `${shortTime(args.to!)} 以前`),
+    args.result !== undefined && (appendResults[args.result] ?? String(args.result)),
     args.redactions !== undefined && `拦下 ${args.redactions} 处密钥`,
-  ].filter(value => value !== undefined && value !== false && value !== "").join(" · ");
+  ].filter(value => value !== undefined && value !== false && value !== "").join("，");
 }
 // 只把 404 当作不存在，权限、网络和存储故障必须交给页面报错。
 async function resolveTarget(api: Api, id: string, signal?: AbortSignal): Promise<AuditTarget | null> {
@@ -85,7 +87,7 @@ export function auditResults(ids: string[], targets: ReadonlyMap<string, AuditTa
   }
   return { items, unresolved };
 }
-/** 一行默认只列前几个结果，其余（含已删除或认不出的）折成"另 N 项"。 */
+/** 一行默认只列前几个结果，其余（含已删除或认不出的）折成"还有 N 项"。 */
 export function auditVisible<T>(items: T[], unresolved: number, expanded: boolean, limit = 3) {
   const shown = expanded ? items : items.slice(0, limit);
   return { shown, hidden: expanded ? 0 : items.length - shown.length + unresolved, unresolved: expanded ? unresolved : 0 };

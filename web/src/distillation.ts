@@ -25,7 +25,7 @@ export interface Pending {
 }
 export type Resolution = { action: "me" | "confirm" | "rename" | "merge_into" | "ignore" | "done" | "continue" | "abandon" | "merge" | "keep"; name?: string; target?: string };
 export const factGroups: { kind: FactKind; label: string }[] = [
-  { kind: "decision", label: "已定（决定）" }, { kind: "rejected", label: "否决" },
+  { kind: "decision", label: "已定" }, { kind: "rejected", label: "否决" },
   { kind: "open", label: "未决" }, { kind: "next", label: "下一步" }, { kind: "inference", label: "推测" },
 ];
 export function groupFacts(facts: Fact[]) {
@@ -47,7 +47,7 @@ export function pendingSummary(payload: Pending["payload"]): string[] {
     ...(keys?.repos ?? []).map(value => `仓库：${value}`),
     ...(keys?.hosts ?? []).map(value => `网站：${value}`),
     ...(keys?.chats ?? []).map(value => `会话：${value}`),
-    ...(payload.threads ?? []).map(thread => `线程：${thread.title}`),
+    ...(payload.threads ?? []).map(thread => `事项：${thread.title}`),
   ];
 }
 /** 待确认卡片的标题，撤销提示里也用它。 */
@@ -58,7 +58,7 @@ export function pendingTitle(item: Pending): string {
   if (item.kind === "merge") return `${p.a_name ?? "?"} 和 ${p.b_name ?? "?"}`;
   return p.title ?? "";
 }
-/** "此刻"页的最近暂停：3 天内有活动的暂停线程，最近的在前（与 Mac 客户端一致）。 */
+/** "此刻"页的最近暂停：3 天内有活动的暂停事项，最近的在前（与 Mac 客户端一致）。 */
 export const recentPausedMs = 3 * 86_400_000;
 export function recentPaused(threads: Thread[], now = Date.now()): Thread[] {
   return threads.filter(thread => thread.status === "paused" && thread.last_ms !== null && thread.last_ms > now - recentPausedMs)
@@ -79,7 +79,7 @@ export function createDistillationApi(api: Api) {
         const page = await api<{ threads: Thread[]; next_cursor: string | null }>(`/v1/threads?${params}`, { signal });
         rows.push(...page.threads);
         cursor = page.next_cursor;
-        if (cursor && seen.has(cursor)) throw new Error("线程分页游标重复，请重试");
+        if (cursor && seen.has(cursor)) throw new Error("事项列表读取出错，请重试");
         if (cursor) seen.add(cursor);
       } while (cursor);
       return [...new Map(rows.map(row => [row.id, row])).values()];

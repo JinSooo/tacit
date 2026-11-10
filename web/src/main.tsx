@@ -3,7 +3,7 @@ import { SegmentList } from "./segment-list.tsx";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { RecordV1 } from "../../packages/record/index.ts";
-import { buildCorrection, buildNote, dateTitle, dayKey, duration, groupRecords, latestCorrection, safeUrl, sourceColor, sourceNames, timeRange, type Detail, type HistoryRow } from "./history.ts";
+import { buildCorrection, buildNote, captureNames, dateTitle, dayKey, duration, groupRecords, latestCorrection, safeUrl, sourceNames, timeRange, type Detail, type HistoryRow } from "./history.ts";
 import { DayOverview } from "./day-overview.tsx";
 import { toLocalIso } from "./record-helpers.ts";
 import { createDistillationApi } from "./distillation.ts";
@@ -36,7 +36,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : "�
 function Body({ text }: { text: string }) {
   const [full, setFull] = useState(false);
   const lines = text.split("\n");
-  return <><pre className="body-text">{full ? text : lines.slice(0, 40).join("\n")}</pre>{lines.length > 40 && <button className="text-button" onClick={() => setFull(!full)}>{full ? "收起正文" : `展开全部 ${lines.length} 行`}</button>}</>;
+  return <><pre className="body-text">{full ? text : lines.slice(0, 40).join("\n")}</pre>{lines.length > 40 && <button className="text-button" onClick={() => setFull(!full)}>{full ? "收起" : `显示全部 ${lines.length.toLocaleString("zh-CN")} 行`}</button>}</>;
 }
 function RecordDetail({ id, api, onDelete, onCorrected, speakers }: { id: string; api: Api; speakers: Speaker[]; onDelete: (ids: string[]) => void; onCorrected: () => void }) {
   const [detail, setDetail] = useState<Detail>();
@@ -71,15 +71,17 @@ function RecordDetail({ id, api, onDelete, onCorrected, speakers }: { id: string
   }
   return <div className="record-detail" id={`detail-${id}`}>
     {error && <p role="alert" className="error">{error}</p>}
-    {!detail && !error && <p role="status">正在读取…</p>}
+    {!detail && !error && <p className="muted" role="status">正在读取…</p>}
     {detail && current && <>
-      {detail.source === "mac.audio" && !!detail.people?.length && <p>{speakerNames(detail.people, speakers).join("、")}</p>}
+      {detail.source === "mac.audio" && !!detail.people?.length && <p className="muted">说话人：{speakerNames(detail.people, speakers).join("、")}</p>}
       <Body key={current.id} text={current.body} />
-      {current !== detail && <details className="original"><summary>原文</summary><Body text={detail.body} /></details>}
-      {detail.context && <dl className="context">{Object.entries({ URL: detail.context.url, 仓库: detail.context.repo, 目录: detail.context.cwd, 窗口: detail.context.window }).filter(([, value]) => value).map(([label, value]) => <React.Fragment key={label}><dt>{label}</dt><dd>{label === "URL" && safeUrl(value!) ? <a href={safeUrl(value!)} target="_blank" rel="noreferrer">{value}</a> : value}</dd></React.Fragment>)}</dl>}
-      <p className="capture">采集方式：{detail.capture.method}</p>
-      {editing ? <form onSubmit={correct} className="correction-form"><label htmlFor={`correction-${id}`}>修正正文</label><textarea id={`correction-${id}`} autoFocus rows={10} value={text} maxLength={200000} onChange={event => setText(event.target.value)} /><div className="actions"><button type="submit" disabled={busy}>{busy ? "提交中…" : "提交修正"}</button><button type="button" onClick={() => setEditing(false)}>取消</button></div></form> : <div className="actions"><button onClick={() => { setText(current.body); setEditing(true); }}>修正</button><button className="danger text-button" onClick={() => deletion.current?.showModal()}>删除</button></div>}
-      <dialog ref={deletion} aria-labelledby={`delete-${id}`}><h2 id={`delete-${id}`}>删除这条记录？</h2><p>删除后不能恢复，已经发给云端模型的内容收不回来。</p><div className="actions"><button className="danger" disabled={busy} onClick={remove}>{busy ? "删除中…" : "确认删除"}</button><button disabled={busy} onClick={() => deletion.current?.close()}>取消</button></div></dialog>
+      {current !== detail && <details className="original"><summary>修正前的原文</summary><Body text={detail.body} /></details>}
+      <dl className="context">
+        {Object.entries({ 网址: detail.context?.url, 仓库: detail.context?.repo, 目录: detail.context?.cwd, 窗口: detail.context?.window }).filter(([, value]) => value).map(([label, value]) => <React.Fragment key={label}><dt>{label}</dt><dd>{label === "网址" && safeUrl(value!) ? <a href={safeUrl(value!)} target="_blank" rel="noreferrer">{value}</a> : label === "仓库" || label === "目录" ? <span className="path">{value}</span> : value}</dd></React.Fragment>)}
+        <dt>来源</dt><dd>{sourceNames[detail.source] ?? detail.source}，{captureNames[detail.capture.method] ?? detail.capture.method}</dd>
+      </dl>
+      {editing ? <form onSubmit={correct} className="correction-form"><label htmlFor={`correction-${id}`}>改成正确的内容，原文会保留</label><textarea id={`correction-${id}`} autoFocus rows={10} value={text} maxLength={200000} onChange={event => setText(event.target.value)} /><div className="actions"><button className="primary" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存修正"}</button><button type="button" onClick={() => setEditing(false)}>取消</button></div></form> : <div className="actions"><button onClick={() => { setText(current.body); setEditing(true); }}>修正</button><button className="danger" onClick={() => deletion.current?.showModal()}>删除</button></div>}
+      <dialog ref={deletion} aria-labelledby={`delete-${id}`}><h2 id={`delete-${id}`}>删除这条记录？</h2><p>删除后不能恢复。已经发给云端模型的内容收不回来。</p><div className="actions"><button className="danger" disabled={busy} onClick={remove}>{busy ? "正在删除…" : "删除"}</button><button disabled={busy} onClick={() => deletion.current?.close()}>取消</button></div></dialog>
     </>}
   </div>;
 }
@@ -103,12 +105,12 @@ function NoteDialog({ api, onSaved, onClose }: { api: Api; onSaved: () => void; 
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   }
   return <dialog ref={dialog} onCancel={event => { event.preventDefault(); onClose(); }} aria-labelledby="note-heading"><form onSubmit={submit}>
-    <h2 id="note-heading">补写 History</h2>
-    <div className="time-fields"><label>开始时间<input autoFocus required type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label><label>结束时间（可空）<input type="datetime-local" min={start} value={end} onChange={event => setEnd(event.target.value)} /></label></div>
+    <h2 id="note-heading">补写一条记录</h2>
+    <div className="time-fields"><label>开始时间<input autoFocus required type="datetime-local" value={start} onChange={event => setStart(event.target.value)} /></label><label>结束时间<input type="datetime-local" min={start} value={end} onChange={event => setEnd(event.target.value)} /><span className="hint">不填就记成一个时间点</span></label></div>
     <label>标题<input required maxLength={200} value={title} onChange={event => setTitle(event.target.value)} /></label>
     <label>正文<textarea rows={10} maxLength={200000} value={body} onChange={event => setBody(event.target.value)} /></label>
     {error && <p role="alert" className="error">{error}</p>}
-    <div className="actions"><button type="submit" disabled={busy}>{busy ? "提交中…" : "补写"}</button><button type="button" onClick={onClose}>取消</button></div>
+    <div className="actions"><button className="primary" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存"}</button><button type="button" onClick={onClose}>取消</button></div>
   </form></dialog>;
 }
 function App() {
@@ -235,34 +237,34 @@ function App() {
     document.addEventListener("keydown", keyboard);
     return () => document.removeEventListener("keydown", keyboard);
   }, []);
-  if (!token) return <p className="token-prompt">在终端运行 <code>bun hub/src/cli.ts open</code></p>;
+  if (!token) return <div className="token-prompt"><strong>请重新打开网页版</strong><p className="muted">网页版要从 Mac 客户端或终端打开，在仓库目录运行 <code>bun hub/src/cli.ts open</code>。</p></div>;
   return <><a className="skip" href="#content" onClick={event => { event.preventDefault(); document.getElementById("content")?.focus(); }}>跳到内容</a><main>
-    <header><div className="heading-row"><h1>Record Anything</h1><nav aria-label="视图切换">{([["history", "History"], ["now", "此刻"], ["pending", "待确认"], ["audit", "读取记录"], ["status", "状态"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => navigate(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count">{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
-      <input ref={search} type="search" aria-label="搜索 History" placeholder="搜索 History" value={q} onChange={event => setQ(event.target.value)} />
-      <select aria-label="来源筛选" value={source} onChange={event => setSource(event.target.value)}><option value="">所有来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
-      <input className="device" list="devices" aria-label="设备筛选" placeholder="所有设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
+    <header><div className="heading-row"><h1>Record Anything</h1><nav aria-label="页面">{([["history", "历史记录"], ["now", "此刻"], ["pending", "待确认"], ["audit", "读取记录"], ["status", "状态"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => navigate(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count" aria-label={`${pendingCount} 项`}>{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
+      <input ref={search} type="search" aria-label="搜索历史记录" placeholder="搜索历史记录" value={q} onChange={event => setQ(event.target.value)} />
+      <select aria-label="来源" value={source} onChange={event => setSource(event.target.value)}><option value="">所有来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
+      <input className="device" list="devices" aria-label="设备" placeholder="所有设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
       <input className="date" type="date" aria-label="跳到日期" value={date} onChange={event => setDate(event.target.value)} />
       <button onClick={() => setNote(true)}>补写</button>
     </div>}</header>
     <div id="content" tabIndex={-1}>
     <DistillationWorkspace view={view === "audit" || view === "settings" || view === "status" ? "history" : view} audio={audioApi} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); navigate("history"); setRevision(value => value + 1); }} />
-    {view === "settings" && <section className="distillation-view settings-view"><h2 className="day-heading">设置</h2><ModelSettings api={settingsApi} /><GeneralSettings api={settingsApi} /><AudioSettings api={audioApi} /><HubSettingsBlock api={settingsApi} token={token} /></section>}
+    {view === "settings" && <section className="distillation-view settings-view" aria-label="设置"><ModelSettings api={settingsApi} /><GeneralSettings api={settingsApi} /><AudioSettings api={audioApi} /><HubSettingsBlock api={settingsApi} token={token} /></section>}
     {view === "status" && <StatusView api={api} />}
     {view === "audit" && <AuditView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); navigate("history"); setRevision(value => value + 1); }} />}
     {view === "history" && !q.trim() && <DayOverview api={api} day={date || dayKey(new Date())} revision={overviewRevision} selected={expanded} onPick={pick} />}
-    {view === "history" && anchor && <p className="anchor-note">从 {timeRange({ ...records.find(r => r.id === anchor.id) ?? { kind: "event", t_start: anchor.t_start } } as HistoryRow)} 起显示 <button className="text-button compact" onClick={() => setAnchor(null)}>回到最新</button></p>}
+    {view === "history" && anchor && <p className="anchor-note">正在显示 {timeRange({ ...records.find(r => r.id === anchor.id) ?? { kind: "event", t_start: anchor.t_start } } as HistoryRow)} 及更早的记录 <button className="text-button compact" onClick={() => setAnchor(null)}>回到最新</button></p>}
     {view === "history" && segmentMode && <div id="segments" tabIndex={-1}><SegmentList api={api} day={shownDay} device={device} focus={expanded} revision={revision} collapse={collapse}
       renderDetail={(id, onDelete) => <RecordDetail id={id} api={api} speakers={speakers} onDelete={ids => { onDelete(ids); changed("已删除"); }} onCorrected={() => changed("已修正")} />}
       onEarlier={() => { const d = new Date(`${shownDay}T12:00:00`); d.setDate(d.getDate() - 1); setDate(dayKey(d)); window.scrollTo({ top: 0 }); }} /></div>}
     <div id="timeline" hidden={view !== "history" || segmentMode} tabIndex={-1} aria-busy={busy}>
-      {speakerError && records.some(record => record.source === "mac.audio") && <p className="error" role="alert">说话人名字读取失败：{speakerError} <button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
+      {speakerError && records.some(record => record.source === "mac.audio") && <p className="error" role="alert">没能读取说话人名字：{speakerError} <button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
       {groupRecords(records).map(group => <section key={group.day} aria-label={dateTitle(group.day)}><h2 className="day-heading">{dateTitle(group.day)}</h2><div className="day-records">{group.records.map(record => <article key={record.id} id={`row-${record.id}`} className={expanded === record.id ? "record expanded" : "record"}>
-        <button className="record-row" style={{ "--source-color": sourceColor(record.source) } as React.CSSProperties} aria-expanded={expanded === record.id} aria-controls={`detail-${record.id}`} onClick={() => setExpanded(expanded === record.id ? null : record.id)}>
+        <button className="record-row" aria-expanded={expanded === record.id} aria-controls={`detail-${record.id}`} onClick={() => setExpanded(expanded === record.id ? null : record.id)}>
           <span className="record-time">{timeRange(record)}</span><span className="record-title">{record.title}{record.context?.url && safeUrl(record.context.url) && <span className="record-host">{new URL(record.context.url).host}</span>}</span><span className="record-meta">{sourceNames[record.source] ?? record.source}{duration(record) && <span>{duration(record)}</span>}</span>
         </button>
         {expanded === record.id && <RecordDetail id={record.id} api={api} speakers={speakers} onDelete={ids => { setRecords(previous => previous.filter(record => !ids.includes(record.id))); setExpanded(null); changed("已删除"); }} onCorrected={() => changed("已修正")} />}
       </article>)}</div></section>)}
-      {!records.length && !busy && !error && <p className="empty">没有记录</p>}
+      {!records.length && !busy && !error && <p className="empty"><strong>没有找到记录</strong>{(source || device || date) && "换个关键词，或去掉来源、设备、日期筛选再试。"}</p>}
       {error && <div className="list-status" role="alert"><span className="error">{error}</span><button onClick={() => void load(cursor, generation.current)}>重试</button></div>}
       <div ref={sentinel} className="list-status" role="status">{busy ? "正在读取…" : ""}</div>
     </div>

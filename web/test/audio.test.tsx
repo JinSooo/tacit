@@ -67,7 +67,7 @@ test("新声音动作严格按待确认契约发送；列表和音频设置不�
   expect(retentionDays("1")).toBe(1); expect(retentionDays(365)).toBe(365);
 });
 
-test("History 显示对话和说话人最新名字，未命名用标签，未知 id 保留且不修改记录", () => {
+test("历史记录显示对话和说话人最新名字，未命名用标签，未知 id 保留且不修改记录", () => {
   const people = ["me", "unnamed", "unknown"];
   const speakers = [{ id: "me", name: "合成名字", label: "说话人 A" }, { id: "unnamed", name: null, label: "说话人 B" }] as Speaker[];
   expect(speakerNames(people, speakers)).toEqual(["合成名字", "说话人 B", "unknown"]);
@@ -79,9 +79,9 @@ test("新声音显示标签、统计、待取状态和四个操作；设置有�
   const fake: Api = async <T,>() => ({} as T);
   const audio = createAudioApi(fake);
   const html = renderToStaticMarkup(<VoicePendingRow item={{ id: "voice", kind: "voice", payload: { speaker_id: "synthetic", label: "说话人 A", conversations: 3, seconds: 125, samples: [{ id: "sample", mime: "audio/wav" }], samples_pending: true } }} audio={audio} onDecide={() => {}} />);
-  for (const text of ["说话人 A", "3 段", "125 秒", "样本待取", "就是我", "填名字", "同一人", "忽略", "播放样本 1"]) expect(html).toContain(text);
+  for (const text of ["说话人 A", "3 段对话", "说话共 2 分钟", "还有样本在等设备上传", "是我", "填名字", "是已有的人", "忽略", "播放样本 1"]) expect(html).toContain(text);
   const samples = renderToStaticMarkup(<VoiceSamples samples={[{ id: "s1", mime: "audio/wav" }, { id: "s2", mime: "audio/mp4" }]} api={audio} />);
   expect(samples.match(/aria-expanded="false"/g)).toHaveLength(2);
   const settings = renderToStaticMarkup(<AudioSettings api={audio} />);
-  for (const text of ['min="1"', 'max="365"', 'step="1"', "只删原始音频", "转写过的文字不受影响", "还没转写的对话会丢失", "确认清理", "取消"]) expect(settings).toContain(text);
+  for (const text of ['min="1"', 'max="365"', 'step="1"', "只删原始音频", "转写出的文字会保留", "还没转写的对话会丢失", "删除全部音频？", "取消"]) expect(settings).toContain(text);
 });
