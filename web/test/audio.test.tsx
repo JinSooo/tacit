@@ -79,7 +79,7 @@ test("新声音显示标签、统计、待取状态和四个操作；设置有�
   const fake: Api = async <T,>() => ({} as T);
   const audio = createAudioApi(fake);
   const html = renderToStaticMarkup(<VoicePendingRow item={{ id: "voice", kind: "voice", payload: { speaker_id: "synthetic", label: "说话人 A", conversations: 3, seconds: 125, samples: [{ id: "sample", mime: "audio/wav" }], samples_pending: true } }} audio={audio} onDecide={() => {}} />);
-  for (const text of ["说话人 A", "3 段对话", "说话共 2 分钟", "还有样本在等设备上传", "是我", "填名字", "是已有的人", "忽略", "播放样本 1"]) expect(html).toContain(text);
+  for (const text of ["说话人 A", "3 段对话", "说话共 2 分钟", "试听片段还在路上", "是我", "填名字", "是已有的人", "忽略", "播放样本 1"]) expect(html).toContain(text);
   const samples = renderToStaticMarkup(<VoiceSamples samples={[{ id: "s1", mime: "audio/wav" }, { id: "s2", mime: "audio/mp4" }]} api={audio} />);
   expect(samples.match(/aria-expanded="false"/g)).toHaveLength(2);
   const settings = renderToStaticMarkup(<AudioSettings api={audio} />);
