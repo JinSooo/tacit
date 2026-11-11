@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { groupFacts, pendingSummary, pendingTitle, recentPaused, recentPausedMs, relativeTime, type DistillationApi, type Evidence, type Fact, type Pending, type Project, type Resolution, type Thread } from "./distillation.ts";
 import { createUndoQueue, type UndoEntry, type UndoQueue } from "./undo.ts";
-import { speechText } from "./history.ts";
+import { recordTitle, speechText } from "./history.ts";
 
 import { knownSpeakers, sameNamedSpeaker, unknownSpeakers, type AudioApi } from "./audio.ts";
 import { VoiceSamples } from "./audio-views.tsx";
@@ -42,7 +42,7 @@ function EvidenceList({ fact, load, onHistory }: { fact: Fact; load: () => Promi
   }, [open, revision]);
   return <div className="fact-evidence"><button className="text-button compact" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "收起依据" : "依据"}</button>{open && <div>
     {error ? <div role="alert" className="error">{error} <button onClick={() => setRevision(value => value + 1)}>重试</button></div> : !records ? <span role="status">正在读取…</span> : <>
-      {records.filter(record => fact.evidence.includes(record.id)).map(record => <button className="evidence-link text-button" key={record.id} onClick={() => onHistory(record.title)}><span>{record.title}</span><time dateTime={record.t_start}>{new Date(record.t_start).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}</time></button>)}
+      {records.filter(record => fact.evidence.includes(record.id)).map(record => <button className="evidence-link text-button" key={record.id} onClick={() => onHistory(record.title)}><span>{recordTitle(record)}</span><time dateTime={record.t_start}>{new Date(record.t_start).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}</time></button>)}
       {!records.some(record => fact.evidence.includes(record.id)) && <p className="muted">依据的记录已删除</p>}
     </>}
   </div>}</div>;

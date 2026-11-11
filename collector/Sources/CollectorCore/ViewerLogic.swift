@@ -2,6 +2,31 @@ import Foundation
 
 /// 客户端展示用的纯逻辑：时间解析与格式、连续片段合并、泳道归类、日记章节排布。
 
+/// 记录标题的显示写法。采集端存的标题是"应用 · 窗口""复制 · 文字""对话 · 时间 · 人""微信 · 会话 · 发言人"，
+/// 界面上不用中间点拼接：旁边已经有应用图标时去掉应用名，其余前缀改成冒号。空标题返回 nil，由调用方用来源名代替。
+public enum RecordTitles {
+  public static func display(_ raw: String, source: String, appShown: Bool = false) -> String? {
+    let t = raw.trimmingCharacters(in: .whitespaces)
+    if t.isEmpty { return nil }
+    // 对话标题里是转写当时的说话人编号（"说话人 OK"），对人没有意义；有总结时由调用方换成总结标题。
+    if source == "mac.audio" { return "对话" }
+    let parts = t.components(separatedBy: " · ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    guard parts.count > 1 else { return parts.first ?? t }
+    let head = parts[0], rest = parts.dropFirst().joined(separator: "，")
+    switch source {
+    case "mac.screen", "mac.app":
+      let window = parts.dropFirst().filter { $0 != head && $0 != "无标题" && $0 != "（无标题）" }.joined(separator: "，")
+      if window.isEmpty { return head }
+      return appShown ? window : "\(head)：\(window)"
+    case "mac.wechat":
+      // 微信 · 会话 · 发言人：会话名在前，发言人跟在冒号后。
+      return parts.count >= 3 ? "\(parts[1])：\(parts.dropFirst(2).joined(separator: "，"))" : (appShown ? rest : "微信：\(rest)")
+    default:
+      return "\(head)：\(rest)"
+    }
+  }
+}
+
 /// 试听片段下面的说明。一段模糊的录音很难凭音色认出是谁，所以带上时间和他当时说的话。
 public enum SampleNote {
   public static func line(stamp: String?, said: String?) -> String {

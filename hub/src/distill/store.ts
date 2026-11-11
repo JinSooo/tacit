@@ -97,12 +97,7 @@ export class DistillStore {
       const frames = this.sql.prepare(`SELECT DISTINCT f.* FROM frame_records r JOIN frames f ON f.id=r.frame_id JOIN assignments a ON a.frame_id=f.id
         WHERE a.thread_id=? AND r.record_id IN (${evidence.map(() => "?").join(",")})`).all(threadId, ...evidence).map(r => decode<Frame>(r as Row));
       const moved = new Set(frames.flatMap(f => f.record_ids));
-      for (const f of frames) {
-        this.sql.prepare("DELETE FROM assignments WHERE frame_id=?").run(f.id);
-        this.sql.prepare("UPDATE frames SET status='new' WHERE id=?").run(f.id);
-        this.sql.prepare("INSERT OR IGNORE INTO frame_rejections(frame_id,thread_id,at) VALUES(?,?,?)").run(f.id, threadId, at);
-        this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=?").run(toLocalIso(f.t_start_ms).slice(0,10));
-      }
+      for (const f of frames) this.unassign(f, threadId, at);
       const invalidate = this.sql.prepare("UPDATE facts SET invalid_at=? WHERE id=? AND invalid_at IS NULL");
       invalidate.run(at, id);
       let count = 1;
@@ -113,6 +108,33 @@ export class DistillStore {
       this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=(SELECT project_id FROM threads WHERE id=?)").run(threadId);
       if (fact.project_id) this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(fact.project_id);
       return { frames: frames.length, facts: count };
+    })();
+  }
+  /** 片段退回未分配，记下不能再分回这条线程，下一轮由模型重新归属。调用方负责事务和线程重新整理。 */
+  private unassign(f: Frame, threadId: string, at: string) {
+    this.sql.prepare("DELETE FROM assignments WHERE frame_id=?").run(f.id);
+    this.sql.prepare("UPDATE frames SET status='new' WHERE id=?").run(f.id);
+    this.sql.prepare("INSERT OR IGNORE INTO frame_rejections(frame_id,thread_id,at) VALUES(?,?,?)").run(f.id, threadId, at);
+    this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=?").run(toLocalIso(f.t_start_ms).slice(0,10));
+  }
+  /**
+   * 一条记录所在的片段不属于它现在的线程（没有事实可以挂"不属于这里"时用）：同 detachFact 的移出规则，
+   * 证据全在这个片段上的自动推断一并作废。
+   */
+  detachRecord(recordId: string, at = new Date().toISOString()): { frames: number; facts: number; thread: string | null } {
+    return this.sql.transaction(() => {
+      const row = this.sql.prepare("SELECT f.*,a.thread_id FROM frame_records r JOIN frames f ON f.id=r.frame_id JOIN assignments a ON a.frame_id=f.id WHERE r.record_id=?").get(recordId) as Row | undefined;
+      if (!row) return { frames: 0, facts: 0, thread: null };
+      const threadId = row.thread_id as string, f = decode<Frame>(row);
+      this.unassign(f, threadId, at);
+      const moved = new Set(f.record_ids);
+      let count = 0;
+      for (const other of this.facts("thread_id", threadId)) {
+        if (other.origin === "llm" && other.evidence.length && other.evidence.every(e => moved.has(e))) { this.sql.prepare("UPDATE facts SET invalid_at=? WHERE id=? AND invalid_at IS NULL").run(at, other.id); count++; }
+      }
+      this.sql.prepare("UPDATE threads SET needs_regen=1 WHERE id=?").run(threadId);
+      this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=(SELECT project_id FROM threads WHERE id=?)").run(threadId);
+      return { frames: 1, facts: count, thread: threadId };
     })();
   }
   invalidateFact(id: string, replacement: string, origin: "llm" | "user", at = new Date().toISOString()) {

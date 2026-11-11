@@ -124,8 +124,8 @@ struct MenuBarPanel: View {
     let c = store.capture
     if c.hubError != nil { return "连不上后台服务，记录暂存在内存里" }
     if c.queue > 0 { return "\(Fmt.count(c.queue)) 条记录等待保存" }
-    // 录音状态行由 AudioCoordinator 生成，写法是"今天 N 段对话 · 待转写 M 段"，这里把中间点换成逗号。
-    return c.recordingEnabled ? c.audio.first?.replacingOccurrences(of: " · ", with: "，") : nil
+    // 录音状态行由 AudioCoordinator 生成，写法是"今天 N 段对话，待转写 M 段"。
+    return c.recordingEnabled ? c.audio.first : nil
   }
 
   // MARK: 此刻

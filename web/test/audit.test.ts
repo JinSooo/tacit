@@ -8,7 +8,7 @@ test("审计筛选和不透明游标正确编码；摘要写成人话，只显�
   expect(auditSummary({ cwd: "/synthetic/repo" })).toBe("/synthetic/repo");
   expect(auditSummary({ cwd: "/Users/someone/repo" })).toBe("~/repo");
   expect(auditSummary({ id: "synthetic", level: "detail" })).toBe("");
-  const targets = new Map<string, AuditTarget | null>([["synthetic", { kind: "record", title: "合成标题" }]]);
+  const targets = new Map<string, AuditTarget | null>([["synthetic", { kind: "record", title: "合成标题", search: "合成标题" }]]);
   expect(auditSummary({ id: "synthetic", level: "detail" }, targets)).toBe("合成标题");
   expect(auditSummary({ q_length: 12 })).toBe("搜索词 12 个字");
   expect(auditSummary({ from: "2026-01-01T08:30:00+08:00" })).toBe("2026-01-01 08:30 以后");
@@ -34,14 +34,15 @@ test("解析线程、未确认项目和记录标题，记录只保留标题，�
     calls.push(path);
     if (path === "/v1/threads/thread-one?level=brief") return { id: "thread-one", title: "修复合成线程" } as T;
     if (path === "/v1/projects/project-one?level=brief") return { id: "project-one", name: "合成项目", confirmed: 0 } as T;
-    if (path === "/v1/records/record-one") return { id: "record-one", title: "合成活动标题", body: "合成正文不应保留" } as T;
+    if (path === "/v1/records/record-one") return { id: "record-one", source: "mac.screen", title: "Zen · 合成活动标题", body: "合成正文不应保留" } as T;
     throw missing();
   };
   const ids = ["thread-one", "project-one", "record-one", "fact-one", "removed-one", "invalid/id"];
   const result = await auditTargets(api, ids);
   expect(result.get("thread-one")).toMatchObject({ kind: "thread", title: "修复合成线程" });
   expect(result.get("project-one")).toMatchObject({ kind: "project", title: "合成项目", item: { confirmed: 0 } });
-  expect(result.get("record-one")).toEqual({ kind: "record", title: "合成活动标题" });
+  // 显示用冒号写法，点了按原标题搜索。
+  expect(result.get("record-one")).toEqual({ kind: "record", title: "Zen：合成活动标题", search: "Zen · 合成活动标题" });
   expect(result.get("removed-one")).toBeNull();
   expect(auditResults(ids, result)).toEqual({ items: ids.slice(0, 3).map(id => ({ id, target: result.get(id)! })), unresolved: 3 });
   expect(calls).toHaveLength(12);

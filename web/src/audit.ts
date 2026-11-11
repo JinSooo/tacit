@@ -1,7 +1,8 @@
 import type { Api, Project, Thread } from "./distillation.ts";
+import { recordTitle } from "./history.ts";
 export interface AuditRead { id: string; at: string; tool: string; kind: string; args: Record<string, string | number>; result_ids: string[]; bytes: number; ok: number | boolean }
 export interface AuditPage { reads: AuditRead[]; next_cursor: string | null }
-export type AuditTarget = { kind: "thread"; title: string; item: Thread } | { kind: "project"; title: string; item: Project } | { kind: "record"; title: string };
+export type AuditTarget = { kind: "thread"; title: string; item: Thread } | { kind: "project"; title: string; item: Project } | { kind: "record"; title: string; search: string };
 export type AuditTargetCache = Map<string, Promise<AuditTarget | null>>;
 export function auditPath(tool: string, cursor: string | null) {
   const params = new URLSearchParams({ limit: "50" });
@@ -46,7 +47,7 @@ async function resolveTarget(api: Api, id: string, signal?: AbortSignal): Promis
     try {
       const item = await api<Thread & Project>(`/v1/${kind}s/${encodeURIComponent(id)}${kind === "record" ? "" : "?level=brief"}`, { signal });
       signal?.throwIfAborted();
-      if (kind === "record") return { kind, title: item.title };
+      if (kind === "record") return { kind, title: recordTitle(item as unknown as { source?: string; title: string }), search: item.title };
       return { kind, title: kind === "thread" ? item.title : item.name, item };
     } catch (error) {
       signal?.throwIfAborted();

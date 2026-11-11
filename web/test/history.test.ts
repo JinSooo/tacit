@@ -92,5 +92,16 @@ test("条带图：泳道归类、整天范围和日记章节", () => {
 // 用户报告：对话标题里一串"说话人 OK、说话人 OJ"看不懂。
 test("对话记录在列表和时间轴上只写“对话”", () => {
   expect(recordTitle({ source: "mac.audio", title: "对话 · 16:46–17:17 · 未知说话人、我、说话人 OK" })).toBe("对话");
-  expect(recordTitle({ source: "mac.screen", title: "Zen · Google" })).toBe("Zen · Google");
+});
+
+// 用户报告：网页版标题用"·"连接，例如"Zen · Google Search"。
+test("记录标题不用中间点：应用加冒号，微信写会话和发言人，旁边有应用名时去掉应用名", () => {
+  expect(recordTitle({ source: "mac.screen", title: "Zen · Google Search" })).toBe("Zen：Google Search");
+  expect(recordTitle({ source: "mac.screen", title: "Zen · Google Search" }, true)).toBe("Google Search");
+  expect(recordTitle({ source: "mac.screen", title: "Claude · Claude" })).toBe("Claude");
+  expect(recordTitle({ source: "mac.screen", title: "Typora · 无标题" })).toBe("Typora");
+  expect(recordTitle({ source: "mac.wechat", title: "微信 · C童文科 · 我" })).toBe("C童文科：我");
+  expect(recordTitle({ source: "mac.clipboard", title: "复制 · 部门定位与规划" })).toBe("复制：部门定位与规划");
+  expect(recordTitle({ source: "mac.browser", title: "中铁二十三局集团有限公司-招聘主页-国聘" })).toBe("中铁二十三局集团有限公司-招聘主页-国聘");
+  expect(recordTitle({ source: "mac.screen", title: "  " })).toBe("屏幕");
 });

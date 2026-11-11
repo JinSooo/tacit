@@ -109,6 +109,12 @@ export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: num
     if (!r) return [];
     // private 记录的标题和正文都不发给模型；同一片段里的其他记录照常发送。
     if (r.sensitivity === "private") { hidden++; return []; }
+    // 对话的转写开头常是寒暄和识别噪声，有总结时先给总结（2026-11-11 实测：只看开头 240 字，和李家辰的面试复盘被归进了开发线程）。
+    if (r.source === "mac.audio") {
+      const g = conversationsIn(store.hub, Date.parse(r.t_start), Date.parse(r.t_start)).find(g => g.record_ids.includes(r.id));
+      const s = g && storedSummary(store.hub, g);
+      if (s) return [{ id: r.id, source: r.source, title: `对话：${s.title}`, excerpt: P.excerpt(`${s.summary}${s.points.length ? `\n要点：${s.points.join("；")}` : ""}\n原文：${r.body}`, opts.excerpt(r.source)) }];
+    }
     return [{ id: r.id, source: r.source, title: r.title, excerpt: P.excerpt(r.body, opts.excerpt(r.source)) }];
   });
   if (hidden) records.push({ id: "", source: "note", title: `（另有 ${hidden} 条私密记录，内容未提供）`, excerpt: "" });
@@ -507,9 +513,10 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
   const store = new DistillStore(d.db);
   const out: Record<string, unknown> = { at: toLocalIso(now) };
   out.slice = sliceStep(d.db, opts.backfill ?? false, now, opts.enabledDefault ?? now);
+  // 先写对话总结，归线程时给模型看总结而不是转写开头。
+  out.conversations = await conversationStep(d, now);
   out.assign = await assignStep(d, store, now);
   out.classify = await classifyStep(d, store);
-  out.conversations = await conversationStep(d, now);
   if (opts.slow) {
     out.digest = await digestStep(d, store, now);
     out.projects = await projectStep(d, store, now);

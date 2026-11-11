@@ -89,6 +89,17 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(runs[0].start == rows[3].start && runs[0].end == rows[0].end)
 }
 
+// 用户报告：标题用"·"连接（"Zen · Google Search""C童文科 · C童文科"），对话标题里一串说话人编号。
+@Test func recordTitlesUseColonsInsteadOfMiddleDots() {
+  #expect(RecordTitles.display("Zen · Google Search", source: "mac.screen") == "Zen：Google Search")
+  #expect(RecordTitles.display("Zen · Google Search", source: "mac.screen", appShown: true) == "Google Search")
+  #expect(RecordTitles.display("Claude · Claude", source: "mac.screen") == "Claude")
+  #expect(RecordTitles.display("微信 · C童文科 · 我", source: "mac.wechat") == "C童文科：我")
+  #expect(RecordTitles.display("复制 · 部门定位与规划", source: "mac.clipboard") == "复制：部门定位与规划")
+  #expect(RecordTitles.display("对话 · 16:46–17:17 · 未知说话人、说话人 OK", source: "mac.audio") == "对话")
+  #expect(RecordTitles.display("   ", source: "mac.screen") == nil)
+}
+
 @Test func lanesGroupSources() {
   #expect(Lane.of("codex.session") == .agent)
   #expect(Lane.of("mac.git") == .terminal)

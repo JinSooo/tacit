@@ -73,24 +73,7 @@ enum ConversationText {
   }
 
   static func title(_ raw: String, source: String, app: String? = nil, appShown: Bool = false) -> String {
-    let t = raw.trimmingCharacters(in: .whitespaces)
-    if t.isEmpty { return SourceInfo.name(source) }
-    let parts = t.components(separatedBy: " · ")
-    guard parts.count > 1 else { return t }
-    let head = parts[0], rest = parts.dropFirst().joined(separator: " · ").trimmingCharacters(in: .whitespaces)
-    switch source {
-    case "mac.screen", "mac.app":
-      if rest.isEmpty || rest == head || rest == "无标题" || rest == "（无标题）" { return head }
-      return appShown ? rest : "\(head)：\(rest)"
-    case "mac.audio":
-      // 对话 · 10:00–10:30 · 说话人 OK、我：时间在旁边已经有了；人名是转写当时的编号，对人没有意义（用户报告），只写"对话"。
-      // 有总结时，列表和详情用总结里的标题（ConversationText）。
-      return "对话"
-    case "mac.wechat":
-      return parts.count >= 3 ? "\(parts[1])：\(parts.dropFirst(2).joined(separator: " "))" : "微信：\(rest)"
-    default:
-      return "\(head)：\(rest)"
-    }
+    RecordTitles.display(raw, source: source, appShown: appShown) ?? SourceInfo.name(source)
   }
 }
 

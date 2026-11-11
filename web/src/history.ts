@@ -76,9 +76,25 @@ export const sourceNames: Record<string, string> = {
   "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
   "manual.note": "补写", "manual.correction": "修正",
 };
-/** 列表和时间轴上的记录标题。对话记录的标题里是转写当时的说话人编号（"说话人 OK"），对人没有意义，只写"对话"。 */
-export function recordTitle(r: { source: string; title: string }): string {
-  return r.source === "mac.audio" ? "对话" : r.title;
+/**
+ * 列表、时间轴、依据和读取记录里显示的记录标题，规则和 Mac 端 RecordTitles 一致：
+ * 采集端存的"应用 · 窗口""微信 · 会话 · 发言人"不用中间点拼接，改成冒号；对话标题里是转写当时的说话人编号，只写"对话"。
+ * appShown：旁边已经写了应用名（活动段副标题）时去掉应用名。
+ */
+export function recordTitle(r: { source?: string; title: string }, appShown = false): string {
+  const source = r.source ?? "";
+  const t = r.title.trim();
+  if (!t) return sourceNames[source] ?? source;
+  if (source === "mac.audio") return "对话";
+  const parts = t.split(" · ").map(p => p.trim()).filter(Boolean);
+  if (parts.length < 2) return parts[0] ?? t;
+  const [head, ...others] = parts as [string, ...string[]];
+  if (source === "mac.screen" || source === "mac.app") {
+    const window = others.filter(p => p !== head && p !== "无标题" && p !== "（无标题）").join("，");
+    return !window ? head : appShown ? window : `${head}：${window}`;
+  }
+  if (source === "mac.wechat") return parts.length >= 3 ? `${parts[1]}：${parts.slice(2).join("，")}` : appShown ? others.join("，") : `微信：${others.join("，")}`;
+  return `${head}：${others.join("，")}`;
 }
 /** 记录详情里的"采集方式"，对应 schema 的 capture.method。 */
 export const captureNames: Record<string, string> = {

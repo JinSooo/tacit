@@ -120,3 +120,30 @@ test("原文超出预算时留头尾", () => {
   expect(text).toContain("第0句"); expect(text).toContain("第99句"); expect(text).toContain("（中间省略）");
   expect(Array.from(text).length).toBeLessThan(620);
 });
+
+// 2026-11-11 实测：和李家辰的面试复盘先被移出面试事项，下一轮又被归进开发线程，因为模型只看到转写开头的噪声。
+test("归线程时对话片段给的是总结；没有事实可挂时也能把一条对话移出线程，且不能再分回去", async () => {
+  const { DistillStore } = await import("../src/distill/store.ts");
+  const { frameView, loadFrames, sliceStep } = await import("../src/distill/run.ts");
+  ctx.db.ingest([talk("10:00:00", "10:20:00", `[10:00:01] 未知说话人：Yeah.\n${long("我", "10:00:05")}`)]);
+  const now = Date.parse(at("15:00:00"));
+  const store = new DistillStore(ctx.db);
+  store.setState("enabled_ms", Date.parse(at("00:00:00")));
+  sliceStep(ctx.db, false, now, Date.parse(at("00:00:00")));
+  const frame = store.hub.db.prepare("SELECT frame_id FROM frame_records").get() as { frame_id: string };
+  const load = () => loadFrames(store, "WHERE id=?", frame.frame_id)[0]!;
+  const opts = { maxRecords: 10, excerpt: () => 240 };
+  expect(frameView(store, load(), opts).records[0]!.title).toBe("对话 · 10:00");
+  await conversationStep({ db: ctx.db, llm: fakeLLM().llm }, now);
+  const view = frameView(store, load(), opts).records[0]!;
+  expect(view.title).toBe("对话：线上面试复盘");
+  expect(view.excerpt.startsWith("我和同事复盘了刚结束的面试。")).toBe(true);
+
+  store.upsertThread({ id: "t-dev", status: "active", title: "开发对话功能" });
+  store.assign(frame.frame_id, "t-dev", "llm", 0.8);
+  const record = (ctx.db.db.prepare("SELECT id FROM records").get() as { id: string }).id;
+  expect(store.detachRecord(record)).toEqual({ frames: 1, facts: 0, thread: "t-dev" });
+  expect(ctx.db.db.prepare("SELECT COUNT(*) n FROM assignments").get()).toEqual({ n: 0 });
+  expect(store.rejectedThreads(frame.frame_id)).toEqual(["t-dev"]);
+  expect(store.detachRecord(record)).toEqual({ frames: 0, facts: 0, thread: null });
+});

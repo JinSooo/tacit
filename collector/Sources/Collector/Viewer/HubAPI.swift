@@ -224,7 +224,7 @@ final class HubAPI: @unchecked Sendable {
   func resolveTarget(_ id: String) async throws -> (kind: String, title: String)? {
     if let t = try await existing({ try await self.thread(id, level: "brief") }) { return ("thread", t.title ?? id) }
     if let p = try await existing({ try await self.project(id, level: "brief") }) { return ("project", p.name ?? id) }
-    if let r = try await existing({ try await self.record(id) }) { return ("record", r.record.title) }
+    if let r = try await existing({ try await self.record(id) }) { return ("record", RecordTitles.display(r.record.title, source: r.record.source) ?? id) }
     return nil
   }
   private func existing<T>(_ load: () async throws -> T) async throws -> T? {

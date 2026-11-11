@@ -1,7 +1,7 @@
 // 历史记录的活动段列表：每段一行（线程名或应用名、摘要、涉及的应用和时长），点开再列原始记录。
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Api } from "./distillation.ts";
-import { dateTitle, duration, durationText, sourceNames, timeRange, type HistoryRow } from "./history.ts";
+import { dateTitle, duration, durationText, recordTitle, sourceNames, timeRange, type HistoryRow } from "./history.ts";
 import { appName, collapseConversations, conversationTitle, dayRecords, daySegments, foldSegments, segmentTitle, spanText, withoutRecords, type Conversation, type RecordItem, type Segment } from "./segments.ts";
 
 const message = (error: unknown) => error instanceof Error ? error.message : "读取失败";
@@ -17,9 +17,9 @@ function windows(segment: Segment, items: RecordItem[] | undefined): string {
       if (out.length === 3) break;
       continue;
     }
-    const r = item.record, i = r.title.indexOf(" · ");
-    if (i > 0) seen.add(r.title.slice(0, i).trim());
-    const t = (i > 0 ? r.title.slice(i + 3) : r.title).trim();
+    const r = item.record;
+    if (r.source === "mac.audio") continue;
+    const t = recordTitle(r, true);
     if (!t || seen.has(t)) continue;
     seen.add(t); out.push(t);
     if (out.length === 3) break;
@@ -102,7 +102,7 @@ export function SegmentList({ api, day, device, focus, revision, collapse, rende
       {expanded && <div className="segment-records">{!list ? <p className="muted segment-loading">正在读取…</p> : list.map(item => <div key={item.id} id={`row-${item.id}`} className={selected === item.id ? "record expanded" : "record"}>
         <button className="record-row" aria-expanded={selected === item.id} onClick={() => setSelected(selected === item.id ? null : item.id)}>
           {item.kind === "record"
-            ? <><span className="record-time">{timeRange(item.record)}</span><span className="record-title">{item.record.title}</span><span className="record-meta">{sourceNames[item.record.source] ?? item.record.source}{duration(item.record) && <span>{duration(item.record)}</span>}</span></>
+            ? <><span className="record-time">{timeRange(item.record)}</span><span className="record-title">{recordTitle(item.record)}</span><span className="record-meta">{sourceNames[item.record.source] ?? item.record.source}{duration(item.record) && <span>{duration(item.record)}</span>}</span></>
             : <><span className="record-time">{spanText(item.conversation.start_ms, item.conversation.end_ms)}</span><span className="record-title">{conversationTitle(item.conversation)}</span>{item.conversation.title && <span className="record-meta">{durationText(Math.floor((item.conversation.end_ms - item.conversation.start_ms) / 1000))}</span>}</>}
         </button>
         {selected === item.id && renderDetail(item.id, removeRecords)}
