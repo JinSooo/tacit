@@ -173,3 +173,16 @@ import Foundation
   let kept = WorkerLogic.removeEcho([line(.mic, 0, 6, "走过了冬就到家"), line(.sys, 0, 3, "走过了冬天"), line(.sys, 3, 3, "就到家了"), line(.mic, 0, 1, "是")])
   #expect(kept.filter { $0.segment.track == .mic }.map(\.text) == ["是"])
 }
+
+// 2026-11-11 实测：放歌那段 78 句只去掉了 47 句，漏掉的都归在同一个说话人名下。
+@Test func speakerMostlyFromLoudspeakerIsDroppedWhole() {
+  let t = Date(timeIntervalSince1970: 1794000000)
+  let segments = (0..<10).map { AudioSegment(file: "mic-\($0).enc", track: .mic, start: t.addingTimeInterval(Double($0) * 10), end: t.addingTimeInterval(Double($0) * 10 + 3), dbfs: -20) }
+  // 0–5 是放歌的声音 S2，6–9 是我 S1。
+  let windows = segments.indices.map { VoiceWindow(segment: $0, offset: 0, count: 48000, local: $0 < 6 ? "S2" : "S1") }
+  #expect(WorkerLogic.expandBleed([0, 1, 2, 3], windows: windows, segments: segments) == Set(0...5))
+  // 我的段里偶尔有一两句被误判，不会把我整个去掉。
+  #expect(WorkerLogic.expandBleed([0, 1, 2, 3, 7], windows: windows, segments: segments) == Set(0...5).union([7]))
+  // 只有两句命中，不够判断。
+  #expect(WorkerLogic.expandBleed([0, 1], windows: windows, segments: segments) == [0, 1])
+}

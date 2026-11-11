@@ -279,7 +279,9 @@ final class AudioCoordinator {
     if samplesRequested { return true }
     // 本函数每秒被调用，扫描全部 meta.json 会拖慢音频队列导致丢帧停录；磁盘扫描最多每分钟一次，其间沿用上次结论。
     return pendingScan.check(at: now) {
-      ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
+      // 旧对话还没按当前规则重认完（转写进程做完会留下标记文件）时也要启动。
+      if let root = store?.root, !FileManager.default.fileExists(atPath: root.appendingPathComponent(WorkerLogic.relabelMarker).path) { return true }
+      return ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
     }
   }
   private var pendingScan = PendingWorkScan()

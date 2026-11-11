@@ -100,6 +100,27 @@ public enum WorkerLogic {
     return map
   }
 
+  /// 一段对话里，某个 mic 说话人的段多半是扬声器声音时，它就是扬声器那个声音（放的歌、视频），其余段也一并去掉。
+  /// 有些段当时没有对应的系统声音、或短得比不出来，单段判断会漏（2026-11-11 实测：放歌 78 句只去掉 47 句，
+  /// 漏掉的几乎都归在同一个说话人名下，它 65% 的段是扬声器声音；正常对话和开会里没有说话人超过 15%）。
+  public static func expandBleed(_ bleed: Set<Int>, windows: [VoiceWindow], segments: [AudioSegment], share: Double = 0.5, minimum: Int = 3) -> Set<Int> {
+    var bySpeaker: [String: [Int]] = [:]
+    for i in segments.indices where segments[i].track == .mic {
+      let local = majority(windows.filter { $0.segment == i })
+      if !local.isEmpty { bySpeaker[local, default: []].append(i) }
+    }
+    var out = bleed
+    for (_, segs) in bySpeaker {
+      let hit = segs.filter(bleed.contains).count
+      if hit >= minimum, Double(hit) / Double(segs.count) >= share { out.formUnion(segs) }
+    }
+    return out
+  }
+
+  /// 旧对话按当前规则都重认完以后，转写进程在录音目录里留这个文件；采集端看不到它就再启动一次转写进程接着做。
+  /// 规则升级时改文件名里的版本号。
+  public static let relabelMarker = "relabel-v3"
+
   /// 0.5 秒以下的段多是咳嗽、碰撞，不认人。
   public static let shortSegmentSamples = 8000
   /// 短段认人：同一路里最像的说话人，相似度不到 0.3 时不认（显示成"其他人"）。

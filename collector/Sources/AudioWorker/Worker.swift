@@ -44,9 +44,9 @@ struct SpeakerCache: Codable {
   let windows: [VoiceWindow]
   let speakers: [LocalSpeaker]
   var hub: [HubSpeaker]
-  /// 2：说话人按整段对话归并过、短段也认了人（2026-11-11）。旧缓存没有这一项，已写进历史的对话要按新规则重新认一遍人。
+  /// 2：说话人按整段对话归并过、短段也认了人；3：多半是扬声器声音的说话人整个去掉（2026-11-11）。旧缓存没有这一项，已写进历史的对话要按新规则重新认一遍人。
   var version: Int? = nil
-  static let current = 2
+  static let current = 3
 }
 final class Worker {
   let store: AudioStore; let hub: any HubTransport; let device: String
@@ -108,7 +108,7 @@ final class Worker {
     return SpeakerCache(segments: meta.segments, windows: windows, speakers: speakers, hub: [], version: SpeakerCache.current)
   }
   /// 麦克风那路里其实是扬声器声音的段（和同时播放的系统声音是同一个声音）。
-  func bleedSegments(_ meta: AudioMetadata) throws -> Set<Int> {
+  func bleedSegments(_ meta: AudioMetadata, windows: [VoiceWindow]) throws -> Set<Int> {
     var sysVoice: [Int: [Float]] = [:], out = Set<Int>()
     func voice(_ i: Int) throws -> [Float]? {
       if let v = sysVoice[i] { return v }
@@ -125,7 +125,7 @@ final class Worker {
       guard a.count >= WorkerLogic.shortSegmentSamples else { continue }
       if WorkerLogic.isBleed(mic: try inference().embedding(a), sys: try overlapping.compactMap(voice)) { out.insert(i) }
     }
-    return out
+    return WorkerLogic.expandBleed(out, windows: windows, segments: meta.segments)
   }
   /// 已经写进历史的对话按新规则重新认人：记录不改，每句是谁、哪句是扬声器声音另存在 hub（AGENTS.md：归属关系另存一张表）。
   func relabel(_ meta: AudioMetadata) async throws {
@@ -137,7 +137,7 @@ final class Worker {
         "t_end": meta.t_end!, "speakers": uploaded.map { ["local": $0.local, "track": $0.track.rawValue, "seconds": $0.seconds, "centroid": $0.centroid] as [String: Any] }])
       cache.hub = try JSONDecoder().decode(EmbeddingsResponse.self, from: response).speakers
     }
-    let bleed = try bleedSegments(meta)
+    let bleed = try bleedSegments(meta, windows: cache.windows)
     let ids = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.speaker_id) })
     let lines: [[String: Any]] = meta.segments.enumerated().compactMap { i, segment in
       if !meeting && segment.track == .sys { return nil }
@@ -177,7 +177,7 @@ final class Worker {
         if next == .skipped { _ = try await post("/v1/audio/conversations/\(meta.id)/skipped", [:]) }
         if next == .done {
           var lines: [TranscriptLine] = []
-          let bleed = try bleedSegments(meta)
+          let bleed = try bleedSegments(meta, windows: cache.windows)
           for (i, segment) in meta.segments.enumerated() {
             // 不开会时系统声音只用来去掉麦克风录到的回声：只转写和麦克风段重叠的部分，结果不写进记录。
             if !meeting && segment.track == .sys && !WorkerLogic.overlapsMic(segment, meta.segments) { continue }
@@ -209,14 +209,18 @@ final class Worker {
     }
     // 旧版写进历史的对话按新规则重认，每次最多花 5 分钟，剩下的下次接着做。
     let relabelUntil = Date().addingTimeInterval(300)
-    for meta in all.reversed() where meta.status == .done && Date() < relabelUntil {
+    var relabelLeft = false
+    for meta in all.reversed() where meta.status == .done {
+      guard Date() < relabelUntil else { relabelLeft = true; break }
       if sync.delete_conversations.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: Date(), retentionDays: sync.retention_days, purgeBefore: AudioPolicy.date(sync.purge_before)) { continue }
       let current = (try? cacheURL(meta)).flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(SpeakerCache.self, from: $0) }
       if current?.version == SpeakerCache.current { continue }
       var sorted = meta
       sorted.segments.sort { AudioPolicy.date($0.t_start)! == AudioPolicy.date($1.t_start)! ? $0.file < $1.file : AudioPolicy.date($0.t_start)! < AudioPolicy.date($1.t_start)! }
-      do { try await relabel(sorted) } catch { failures += 1; fputs("\(meta.id) relabel_failed\n", stderr) }
+      do { try await relabel(sorted) } catch { relabelLeft = true; failures += 1; fputs("\(meta.id) relabel_failed\n", stderr) }
     }
+    let marker = store.root.appendingPathComponent(WorkerLogic.relabelMarker)
+    if !relabelLeft, !FileManager.default.fileExists(atPath: marker.path) { FileManager.default.createFile(atPath: marker.path, contents: Data(), attributes: [.posixPermissions: 0o600]) }
     for request in sync.sample_requests {
       guard var meta = all.first(where: { $0.id == request.conversation_ref }), meta.status != .open,
         !sync.delete_conversations.contains(meta.id), !AudioPolicy.shouldDelete(meta, now: Date(), retentionDays: sync.retention_days, purgeBefore: AudioPolicy.date(sync.purge_before)) else { continue }

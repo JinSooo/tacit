@@ -321,5 +321,7 @@ func clusterProbe() throws {
   #expect(hub.paths.filter { $0 == "/v1/audio/lines" }.count == 1)
   #expect(try await worker.run() == 0)
   #expect(hub.paths.filter { $0 == "/v1/audio/lines" }.count == 1)
+  // 都重认完了，留下标记，采集端不再为此启动转写进程。
+  #expect(FileManager.default.fileExists(atPath: store.root.appendingPathComponent(WorkerLogic.relabelMarker).path))
   _ = meta
 }
