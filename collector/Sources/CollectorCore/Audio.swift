@@ -142,3 +142,18 @@ public struct MicrophoneHealth {
   }
   public mutating func reset() { quietSince = nil; warning = false }
 }
+
+/// 有没有录完、等着转写的对话。扫描全部 meta.json 很慢，最多每分钟扫一次；
+/// 两次扫描之间沿用上次的结论，而不是当作"没有"——同一秒里会问两次（先决定要不要同步，同步回来再决定要不要启动转写），
+/// 第二次问到时扫描还在冷却中，以前会答"没有"，转写进程就再也起不来。
+public struct PendingWorkScan {
+  public private(set) var lastScan = Date.distantPast
+  public private(set) var found = false
+  public init() {}
+  public mutating func check(at now: Date, interval: TimeInterval = 60, scan: () -> Bool) -> Bool {
+    if now.timeIntervalSince(lastScan) >= interval { lastScan = now; found = scan() }
+    return found
+  }
+  /// 转写进程跑完以后，要重新扫一次才知道还有没有剩下的。
+  public mutating func invalidate() { lastScan = .distantPast; found = false }
+}

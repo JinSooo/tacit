@@ -277,12 +277,12 @@ final class AudioCoordinator {
     guard now.timeIntervalSince(lastWorker) >= 600 else { return false }
     // hub 要试听样本时也要跑一次，否则新声音要等下一段对话录完才有样本。
     if samplesRequested { return true }
-    // 本函数每秒被调用，扫描全部 meta.json 会拖慢音频队列导致丢帧停录；磁盘扫描最多每分钟一次。
-    guard now.timeIntervalSince(lastPendingScan) >= 60 else { return false }
-    lastPendingScan = now
-    return ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
+    // 本函数每秒被调用，扫描全部 meta.json 会拖慢音频队列导致丢帧停录；磁盘扫描最多每分钟一次，其间沿用上次结论。
+    return pendingScan.check(at: now) {
+      ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
+    }
   }
-  private var lastPendingScan = Date.distantPast
+  private var pendingScan = PendingWorkScan()
   private static let workerLaunchFailure = "转写进程启动失败"
   private var workerURL: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ra-audio-worker") }
   private func request(path: String, body: [String: Any]? = nil, completion: @escaping (Data?) -> Void) {
@@ -336,7 +336,7 @@ final class AudioCoordinator {
     var env = ProcessInfo.processInfo.environment; env["RA_DATA_DIR"] = config.dataDir.path; process.environment = env
     process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.standardError
     process.terminationHandler = { [weak self] _ in
-      self?.queue.async { [weak self] in self?.worker = nil; self?.lastSync = .distantPast }
+      self?.queue.async { [weak self] in self?.worker = nil; self?.lastSync = .distantPast; self?.pendingScan.invalidate() }
     }
     do {
       try process.run(); worker = process; lastWorker = Date(); voiceChanged = false

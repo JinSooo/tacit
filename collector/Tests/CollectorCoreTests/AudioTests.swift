@@ -45,3 +45,18 @@ import Testing
   health.observe(dbfs: -70, start: t0, end: t0, enabled: true); #expect(!health.warning)
   health.observe(dbfs: -100, start: t0, end: t0.addingTimeInterval(600), enabled: false); #expect(!health.warning)
 }
+
+// 用户报告：录音收进来了，历史记录里却没有。两次连着问时第二次落在扫描冷却里答"没有"，转写进程一直没启动。
+@Test func pendingWorkScanKeepsAnswerBetweenScans() {
+  var scan = PendingWorkScan()
+  var scans = 0
+  let t = Date(timeIntervalSince1970: 1_000)
+  #expect(scan.check(at: t) { scans += 1; return true })
+  #expect(scan.check(at: t) { scans += 1; return false })
+  #expect(scan.check(at: t.addingTimeInterval(59)) { scans += 1; return false })
+  #expect(scans == 1)
+  #expect(!scan.check(at: t.addingTimeInterval(60)) { scans += 1; return false })
+  scan.invalidate()
+  #expect(scan.check(at: t.addingTimeInterval(61)) { scans += 1; return true })
+  #expect(scans == 3)
+}
