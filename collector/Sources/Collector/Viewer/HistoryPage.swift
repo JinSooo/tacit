@@ -9,6 +9,7 @@ struct HistoryPage: View {
   @Environment(ViewerStore.self) private var store
   @State private var records: [HistoryRecord] = []
   @State private var segments: [HistorySegment] = []
+  @State private var conversations: [ConversationRef] = []
   @State private var diary: DayDiary?
   @State private var loading = false
   @State private var error: String?
@@ -147,11 +148,11 @@ struct HistoryPage: View {
       async let s = store.api.segments(day)
       async let d = store.api.diary(day)
       let (rows, segs, diary) = try await (r, s, d)
-      segments = segs
+      segments = segs.segments; conversations = segs.conversations
       records = rows.sorted { ($0.start, $0.id) > ($1.start, $1.id) }
       self.diary = diary
     } catch is CancellationError {
-    } catch { self.error = error.localizedDescription; records = []; segments = []; diary = nil }
+    } catch { self.error = error.localizedDescription; records = []; segments = []; conversations = []; diary = nil }
   }
 
   func search(reset: Bool) async {
@@ -323,7 +324,7 @@ struct HistoryPage: View {
     .padding(.horizontal, 20)
     .id(block.id)
     if expanded.contains(block.id) {
-      ForEach(RecordRuns.collapse(block.records)) { run in
+      ForEach(RecordRuns.collapse(block.records, conversations: conversations)) { run in
         RecordRow(record: run.newest, run: run, selected: run.records.contains { $0.id == selectedRecord }, expanded: false, nested: true) {
           selection = .record(run.newest.id)
         }
@@ -466,7 +467,7 @@ struct RecordRow: View {
         .frame(width: 26)
         VStack(alignment: .leading, spacing: 2) {
           HStack(spacing: 8) {
-            Text(RecordText.title(record, appShown: !nested))
+            Text(run?.conversation.map(ConversationText.title) ?? RecordText.title(record, appShown: !nested))
               .font(.system(size: TextSize.body, weight: nested ? .regular : .medium))
               .foregroundStyle(nested ? Palette.muted : Palette.ink)
               .lineLimit(1)
@@ -481,7 +482,7 @@ struct RecordRow: View {
         }
         Spacer(minLength: 8)
         // 相邻、同标题的几条记录合成了一行（记录本身没合并）。
-        if let run, run.records.count > 1 {
+        if let run, run.records.count > 1, run.conversation == nil {
           Text("\(run.records.count) 条").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
             .help("连续 \(run.records.count) 条同样的记录合成一行")
         }

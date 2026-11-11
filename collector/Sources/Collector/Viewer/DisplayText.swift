@@ -57,6 +57,14 @@ enum SampleNote {
   static func line(at: String?, said: String?) -> String { CollectorCore.SampleNote.line(stamp: Fmt.stamp(at), said: said) }
 }
 
+/// 一场对话在列表里的标题：有总结时用总结里的标题，否则只写"对话"（时长在行尾）。不再列"说话人 OK"这类编号。
+enum ConversationText {
+  static func title(_ c: ConversationRef) -> String {
+    guard let t = c.title?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { return "对话" }
+    return "对话：\(t)"
+  }
+}
+
 /// 记录标题的显示写法。采集端存的标题是"应用 · 窗口""复制 · 文字""对话 · 时间 · 人"，
 /// 界面上不用中间点拼接：旁边已经有应用图标时去掉应用名，其余前缀改成冒号。
 @MainActor enum RecordText {

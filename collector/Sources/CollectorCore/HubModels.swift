@@ -248,6 +248,39 @@ public enum HubJSON {
   }
 }
 
+/// 一场对话（hub 的 /v1/history/segments 里的 conversations）：被静音切开的几条 mac.audio 记录合成一场。
+public struct ConversationRef: Decodable, Hashable, Sendable {
+  public let id: String
+  public let recordIds: [String]
+  public let startMs: Double
+  public let endMs: Double
+  public let app: String?
+  /// 总结里的标题；还没总结时为 nil。
+  public let title: String?
+  public init(id: String, recordIds: [String], startMs: Double, endMs: Double, app: String? = nil, title: String? = nil) {
+    self.id = id; self.recordIds = recordIds; self.startMs = startMs; self.endMs = endMs; self.app = app; self.title = title
+  }
+}
+
+/// 一场对话的整理结果（hub 的 /v1/conversations/:id）：整理过的原文和总结。
+public struct ConversationDetail: Decodable, Sendable {
+  public struct Turn: Decodable, Hashable, Sendable { public let at: String; public let speaker: String; public let text: String }
+  public let id: String
+  public let recordIds: [String]
+  public let start: String
+  public let end: String
+  public let app: String?
+  /// ready：有总结；waiting：稍后生成；short：太短不总结；private：私密不总结。
+  public let state: String
+  public let title: String?
+  public let summary: String?
+  public let points: [String]
+  public let turns: [Turn]
+  /// 每条记录现在的正文（有修正时用修正）。
+  public struct Raw: Decodable, Hashable, Sendable { public let id: String; public let tStart: String; public let body: String }
+  public let records: [Raw]?
+}
+
 /// History 列表的一段活动（hub 的 /v1/history/segments）：同一线程接得上的记录合成一段，未提炼的按应用临时分组。
 public struct HistorySegment: Decodable, Identifiable, Hashable, Sendable {
   public struct App: Decodable, Hashable, Sendable {

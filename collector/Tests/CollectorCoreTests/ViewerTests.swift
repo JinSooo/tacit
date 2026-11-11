@@ -73,6 +73,22 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(runs[0].start == rows[1].start)
 }
 
+// 用户报告：一场面试被静音切成五条"对话：未知说话人、我、说话人 OK…"，中间还夹着别的记录。
+@Test func conversationRecordsCollapseIntoOneRowEvenWhenInterleaved() throws {
+  let rows = try [
+    record("a3", "mac.audio", "对话 · 11:22–11:44 · 说话人 MY、我", "2026-11-11T11:22:00+09:00", "2026-11-11T11:44:00+09:00"),
+    record("s2", "mac.screen", "ChatGPT", "2026-11-11T11:18:00+09:00", "2026-11-11T11:20:00+09:00"),
+    record("a2", "mac.audio", "对话 · 10:41–11:10 · 我", "2026-11-11T10:41:00+09:00", "2026-11-11T11:10:00+09:00"),
+    record("a1", "mac.audio", "对话 · 10:26–10:34 · 我", "2026-11-11T10:26:00+09:00", "2026-11-11T10:34:00+09:00"),
+    record("x1", "mac.audio", "对话 · 09:00–09:05 · 我", "2026-11-11T09:00:00+09:00", "2026-11-11T09:05:00+09:00"),
+  ]
+  let c = ConversationRef(id: "a1", recordIds: ["a1", "a2", "a3"], startMs: 0, endMs: 0, title: "中铁二十三局三公司线上面试")
+  let runs = RecordRuns.collapse(rows, conversations: [c])
+  #expect(runs.map { $0.records.map(\.id) } == [["a3", "a2", "a1"], ["s2"], ["x1"]])
+  #expect(runs[0].conversation == c && runs[1].conversation == nil)
+  #expect(runs[0].start == rows[3].start && runs[0].end == rows[0].end)
+}
+
 @Test func lanesGroupSources() {
   #expect(Lane.of("codex.session") == .agent)
   #expect(Lane.of("mac.git") == .terminal)

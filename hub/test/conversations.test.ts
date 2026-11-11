@@ -90,6 +90,7 @@ test("对话结束 10 分钟后才写总结；太短、私密的不写；写完�
   const detail = conversationDetail(ctx.db, first.id, now);
   expect(detail).toMatchObject({ id: first.id, state: "ready", title: "线上面试复盘", points: ["等对方反馈"] });
   expect(detail.record_ids).toHaveLength(2);
+  expect(detail.records.map(r => r.body.slice(0, 12))).toEqual([long("我", "10:00:05").slice(0, 12), long("我", "10:25:05").slice(0, 12)]);
   const short = ctx.db.db.prepare("SELECT id FROM records WHERE t_start=?").get(at("12:00:00")) as { id: string };
   expect(conversationDetail(ctx.db, short.id, now).state).toBe("short");
   const priv = ctx.db.db.prepare("SELECT id FROM records WHERE t_start=?").get(at("13:00:00")) as { id: string };

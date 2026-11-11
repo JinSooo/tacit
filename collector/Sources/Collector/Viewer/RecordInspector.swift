@@ -11,6 +11,8 @@ struct RecordInspector: View {
   let onDelete: ([String]) -> Void
   @Environment(ViewerStore.self) private var store
   @State private var detail: RecordDetail?
+  /// 对话记录所在的整场对话：整理过的原文和总结。
+  @State private var conversation: ConversationDetail?
   @State private var error: String?
   @State private var showAll = false
   @State private var showOriginal = false
@@ -34,7 +36,12 @@ struct RecordInspector: View {
   }
 
   func load() async {
-    do { detail = try await store.api.record(id); error = nil }
+    do {
+      let d = try await store.api.record(id)
+      // 读不到整场对话时退回显示这条记录的原文，不报错。
+      conversation = d.record.source == "mac.audio" ? try? await store.api.conversation(id) : nil
+      detail = d; error = nil
+    }
     catch is CancellationError {}
     catch { self.error = error.localizedDescription }
   }
@@ -65,14 +72,8 @@ struct RecordInspector: View {
           .font(.system(size: TextSize.body))
           .foregroundStyle(Palette.muted)
         }
-        if r.source == "mac.audio", let people = r.people, !people.isEmpty {
-          HStack(spacing: 8) {
-            PhIcon("users", size: 14)
-            Text(store.speakerNames(people).joined(separator: "、"))
-          }
-          .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
-        }
-        bodyText(cur.body ?? "")
+        if let c = conversation { ConversationBody(conversation: c) }
+        else { bodyText(cur.body ?? "") }
         if showOriginal, cur.id != r.id {
           VStack(alignment: .leading, spacing: 8) {
             Text("原文").sectionTitle()
@@ -93,10 +94,10 @@ struct RecordInspector: View {
         SourceGlyph(source: r.source, app: r.contextText("app"), size: 32)
         VStack(alignment: .leading, spacing: 2) {
           Text(SourceInfo.name(r.source)).font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.muted)
-          Text(timeLine(r)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+          Text(conversation.map(conversationTime) ?? timeLine(r)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
         }
       }
-      Text(RecordText.title(r, appShown: false)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
+      Text(conversation.map { $0.title ?? "对话" } ?? RecordText.title(r, appShown: false)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
       actions(d)
     }
@@ -108,6 +109,14 @@ struct RecordInspector: View {
       if ViewerFormat.clock(e) != ViewerFormat.clock(r.start) { s += "–\(ViewerFormat.clock(e))" }
       if r.seconds >= 1 { s += "，共 \(Fmt.duration(r.seconds))" }
     }
+    return s
+  }
+
+  /// 整场对话的起止，"11 月 11 日 16:03–16:45，共 42 分钟"。
+  func conversationTime(_ c: ConversationDetail) -> String {
+    guard let a = ViewerTime.parse(c.start), let b = ViewerTime.parse(c.end) else { return "" }
+    var s = "\(Fmt.date(a)) \(Fmt.range(a, b))"
+    if b.timeIntervalSince(a) >= 60 { s += "，共 \(Fmt.duration(b.timeIntervalSince(a)))" }
     return s
   }
 
@@ -197,7 +206,7 @@ struct RecordInspector: View {
         Button { correcting = true } label: { Label { Text("修正") } icon: { PhIcon("pencil-simple", size: 14) } }
         Button {
           NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(d.current.body ?? d.record.title, forType: .string)
+          NSPasteboard.general.setString(conversation.map(ConversationBody.plain) ?? d.current.body ?? d.record.title, forType: .string)
           copied = true
           copyReset?.cancel()
           copyReset = Task {
@@ -339,5 +348,82 @@ struct NoteSheet: View {
     if hasEnd { record["t_end"] = LocalTime.iso(end) }
     do { try await store.api.saveManual(record); onSaved(); dismiss() }
     catch { self.error = error.localizedDescription }
+  }
+}
+
+// MARK: 对话
+
+/// 一场对话：先是总结，再是整理过的原文（同一个人接着说的合在一起，去掉了语气词和识别噪声），最后可以看转写原文。
+struct ConversationBody: View {
+  let conversation: ConversationDetail
+  @State private var showRaw = false
+  @State private var showAll = false
+
+  var body: some View {
+    let c = conversation
+    VStack(alignment: .leading, spacing: 20) {
+      summary(c)
+      if c.turns.isEmpty {
+        Text("没有转出能读的内容").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+      } else {
+        VStack(alignment: .leading, spacing: 12) {
+          Text("对话内容").sectionTitle()
+          let shown = showAll ? c.turns : Array(c.turns.prefix(80))
+          ForEach(Array(shown.enumerated()), id: \.offset) { _, t in turn(t) }
+          if c.turns.count > 80 {
+            Button(showAll ? "收起" : "展开全部 \(Fmt.count(c.turns.count)) 段") { showAll.toggle() }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
+          }
+        }
+      }
+      if let raw = c.records, !raw.isEmpty {
+        VStack(alignment: .leading, spacing: 8) {
+          Button(showRaw ? "收起转写原文" : "查看转写原文") { withAnimation(.easeOut(duration: 0.2)) { showRaw.toggle() } }
+            .buttonStyle(.accentLink).font(.system(size: TextSize.body))
+          if showRaw {
+            Text(raw.map(\.body).joined(separator: "\n"))
+              .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+              .lineSpacing(TextSize.lineSpacing(TextSize.caption)).textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
+      }
+    }
+  }
+
+  @ViewBuilder func summary(_ c: ConversationDetail) -> some View {
+    switch c.state {
+    case "ready":
+      VStack(alignment: .leading, spacing: 8) {
+        if let s = c.summary {
+          Text(s).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink)
+            .lineSpacing(TextSize.lineSpacing(TextSize.body)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+        }
+        ForEach(c.points, id: \.self) { p in
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Circle().fill(Palette.faint).frame(width: 4, height: 4).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            Text(p).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+          }
+        }
+      }
+    case "waiting": Text("总结稍后生成").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+    case "private": Text("私密内容不生成总结").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+    default: EmptyView()
+    }
+  }
+
+  func turn(_ t: ConversationDetail.Turn) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(t.speaker).font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(Palette.ink)
+        if let d = ViewerTime.parse(t.at) { Text(ViewerFormat.clock(d)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted) }
+      }
+      Text(t.text).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink)
+        .lineSpacing(TextSize.lineSpacing(TextSize.body)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  /// 复制时给整理过的原文，"16:03 我：……"一行一段。
+  static func plain(_ c: ConversationDetail) -> String {
+    c.turns.map { t in "\(ViewerTime.parse(t.at).map { ViewerFormat.clock($0) } ?? "") \(t.speaker)：\(t.text)" }.joined(separator: "\n")
   }
 }

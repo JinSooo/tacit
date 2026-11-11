@@ -106,7 +106,9 @@ public enum ViewerFormat {
 /// 一条或多条相邻、同来源、同标题的记录，列表里合并成一行显示（记录本身不变）。
 public struct RecordRun: Identifiable, Hashable, Sendable {
   public let records: [HistoryRecord]  // 新的在前
-  public init(records: [HistoryRecord]) { self.records = records }
+  /// 这几条是同一场对话（被静音切开的几段），列表里一场一行。
+  public let conversation: ConversationRef?
+  public init(records: [HistoryRecord], conversation: ConversationRef? = nil) { self.records = records; self.conversation = conversation }
   public var id: String { records[0].id }
   public var newest: HistoryRecord { records[0] }
   public var start: Date { records.last!.start }
@@ -116,17 +118,23 @@ public struct RecordRun: Identifiable, Hashable, Sendable {
 
 public enum RecordRuns {
   /// records 需按开始时间从新到旧排列。相邻两条间隔不超过 gap 秒才合并。
-  public static func collapse(_ records: [HistoryRecord], gap: TimeInterval = 300) -> [RecordRun] {
-    var runs: [[HistoryRecord]] = []
+  /// 属于同一场对话的 mac.audio 记录不管中间夹着什么，都并进这场对话第一次出现的那一行（用户报告：一场面试被切成五条）。
+  public static func collapse(_ records: [HistoryRecord], gap: TimeInterval = 300, conversations: [ConversationRef] = []) -> [RecordRun] {
+    let owner = Dictionary(conversations.flatMap { c in c.recordIds.map { ($0, c) } }, uniquingKeysWith: { a, _ in a })
+    var runs: [[HistoryRecord]] = [], owners: [ConversationRef?] = [], placed: [String: Int] = [:]
     for r in records {
-      if var last = runs.last, let newer = last.last, newer.source == r.source, newer.title == r.title,
+      if r.source == "mac.audio", let c = owner[r.id] {
+        if let i = placed[c.id] { runs[i].append(r) } else { placed[c.id] = runs.count; runs.append([r]); owners.append(c) }
+        continue
+      }
+      if owners.last == .some(nil), var last = runs.last, let newer = last.last, newer.source == r.source, newer.title == r.title,
          newer.start.timeIntervalSince(r.end ?? r.start) <= gap {
         last.append(r); runs[runs.count - 1] = last
       } else {
-        runs.append([r])
+        runs.append([r]); owners.append(nil)
       }
     }
-    return runs.map(RecordRun.init)
+    return zip(runs, owners).map { RecordRun(records: $0, conversation: $1) }
   }
 }
 

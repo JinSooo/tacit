@@ -172,8 +172,13 @@ export function conversationDetail(db: HubDB, recordId: string, now = Date.now()
   const g = conversationsIn(db, r.t_start_ms, r.t_start_ms).find(g => g.record_ids.includes(recordId))!;
   const turns = groupTurns(db, g);
   const summary = storedSummary(db, g);
+  // 原文：每条记录现在的正文（有修正时用修正），给"查看原文"用。
+  const records = g.record_ids.flatMap(id => {
+    const row = db.db.prepare("SELECT id,t_start,t_start_ms,t_end,context,sensitivity,body FROM records WHERE id=?").get(id) as RecordRow | undefined;
+    return row ? [{ id: row.id, t_start: row.t_start, t_end: row.t_end, body: bodyOf(db, row) }] : [];
+  });
   return { id: g.id, record_ids: g.record_ids, start: new Date(g.start_ms).toISOString(), end: new Date(g.end_ms).toISOString(), app: g.app,
-    state: summaryState(g, turns, summary, now), title: summary?.title ?? null, summary: summary?.summary ?? null, points: summary?.points ?? [], turns };
+    state: summaryState(g, turns, summary, now), title: summary?.title ?? null, summary: summary?.summary ?? null, points: summary?.points ?? [], turns, records };
 }
 
 /** 列表用：每场对话的组成和标题（有总结时）。 */
