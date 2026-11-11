@@ -35,7 +35,8 @@ struct MenuBarPanel: View {
       Divider()
       recentList.padding(.vertical, 6)
       Divider()
-      footer.padding(.horizontal, 10).padding(.vertical, 8)
+      // 左右和顶部状态行一样留 16：右边的按钮和暂停按钮对齐，左边的文字和上面的文字对齐。
+      footer.padding(.horizontal, 16).padding(.vertical, 10)
     }
     .frame(width: Self.width)
     .fixedSize(horizontal: false, vertical: true)
@@ -209,25 +210,30 @@ struct MenuBarPanel: View {
 
   // MARK: 底部
 
+  /// 和右上角的暂停按钮一样用小号带框按钮，一眼能看出能点；待确认的数量用角标，和"邮件"的未读数一样。
   var footer: some View {
-    HStack(spacing: 2) {
+    HStack(spacing: 4) {
       if !store.pending.isEmpty {
         Button { open(.pending) } label: {
-          HStack(spacing: 4) {
+          HStack(spacing: 6) {
             PhIcon("tray", size: 14)
-            Text("待确认 \(store.pending.count) 项").monospacedDigit()
+            Text("待确认")
+            Text("\(store.pending.count)").font(.system(size: TextSize.caption, weight: .semibold)).monospacedDigit()
+              .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 16)
+              .background(.quaternary, in: Capsule())
           }
         }
         .buttonStyle(PanelButtonStyle())
+        .padding(.leading, -8)
       }
       Spacer()
       Button { open(.settings) } label: { PhIcon("gear-six", size: 16) }
         .buttonStyle(PanelButtonStyle()).help("设置").accessibilityLabel("设置")
-      Button { open(.now) } label: { Text("打开 Record Anything") }
-        .buttonStyle(PanelButtonStyle()).keyboardShortcut("o")
+      Button("打开 Record Anything") { open(.now) }
+        .buttonStyle(.bordered).controlSize(.small).keyboardShortcut("o")
     }
     .font(.system(size: TextSize.body))
-    .foregroundStyle(.primary)
+    .foregroundStyle(.secondary)
   }
 }
 
