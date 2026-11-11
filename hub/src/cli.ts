@@ -28,6 +28,15 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     catch (error) { console.error(error instanceof Error ? error.message : "Agent 注册失败"); process.exitCode = 1; }
     return;
   }
+  if (command === "audio") {
+    // 一次性整理旧版采集端拆碎的说话人，见 AudioStore.consolidateAll。
+    if (name !== "consolidate" || argv.length !== 2) throw new Error("用法：bun hub/src/cli.ts audio consolidate");
+    const [{ loadConfig }, { HubDB }, { AudioStore }] = await Promise.all([import("./config.ts"), import("./db.ts"), import("./audio.ts")]);
+    const config = loadConfig();
+    const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
+    try { console.log(JSON.stringify(new AudioStore(db).consolidateAll())); } finally { db.close(); }
+    return;
+  }
   if (command === "keys") {
     if (name !== "export" || argv.length !== 2) throw new Error("用法：bun hub/src/cli.ts keys export");
     const { exportKeys } = await import("./keys.ts");
@@ -111,7 +120,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     finally { db.close(); }
     return;
   }
-  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | keys export | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
+  if (command !== "serve" && command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | keys export | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
   if (command === "run-plugin") {
     let hub: string | undefined, tokenFile: string | undefined;

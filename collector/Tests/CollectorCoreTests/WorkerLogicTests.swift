@@ -131,3 +131,45 @@ import Foundation
     #expect(AudioPolicy.fastRFC3339(text) == nil, "\(text)")
   }
 }
+
+// 2026-11-11 实测：31 分钟两人对话被拆成 70 个"说话人"，界面上出现"对方 1""对方 2"……
+@Test func consolidateMergesLongSpeakersAndAttachesShortOnes() {
+  func s(_ local: String, _ v: [Float], _ seconds: Double, _ track: AudioTrack = .mic) -> LocalSpeaker {
+    let u = WorkerLogic.unit(v)
+    return LocalSpeaker(local: local, track: track, seconds: seconds, centroid: u, weightedSum: u.map { Double($0) * seconds })
+  }
+  var speakers = [
+    s("S1", [1, 0, 0], 100), s("S2", [0.9, 0.3, 0], 40),      // 同一个人被拆成两个长的
+    s("S3", [0, 1, 0], 80),                                    // 另一个人
+    s("S4", [0.7, 0.5, 0], 3), s("S5", [0.1, 0.9, 0.3], 2),   // 短窗口，各像一个人
+    s("S6", [0, 0, 1], 2),                                     // 谁都不像
+    s("S7", [1, 0, 0], 50, .sys),                              // 别的一路不和 mic 合并
+  ]
+  let map = WorkerLogic.consolidate(speakers)
+  #expect(map["S2"] == "S1" && map["S4"] == "S1" && map["S5"] == "S3" && map["S6"] == "S6" && map["S7"] == "S7")
+  var windows = [VoiceWindow(segment: 0, offset: 0, count: 48000, local: "S2"), VoiceWindow(segment: 1, offset: 0, count: 48000, local: "S5")]
+  WorkerLogic.apply(map, windows: &windows, speakers: &speakers)
+  #expect(windows.map(\.local) == ["S1", "S3"])
+  #expect(speakers.map(\.local) == ["S1", "S3", "S6", "S7"])
+  #expect(abs(speakers[0].seconds - 143) < 0.001)
+  // 全是短的（例如一段几秒的对话）时不动。
+  #expect(WorkerLogic.consolidate([s("A", [1, 0], 2), s("B", [1, 0], 2)]) == ["A": "A", "B": "B"])
+  #expect(WorkerLogic.nearest([0.2, 1, 0], track: .mic, speakers: speakers) == "S3")
+  #expect(WorkerLogic.nearest([0, 0, -1], track: .mic, speakers: speakers) == nil)
+}
+
+// 2026-11-11 实测：放歌时麦克风录到的歌词进了对话记录。
+@Test func bleedAndTextCoverageCatchSpeakerSound() {
+  #expect(WorkerLogic.isBleed(mic: [1, 0.1], sys: [[0, 1], [1, 0]]))
+  #expect(!WorkerLogic.isBleed(mic: [1, 0], sys: [[0.3, 1]]))
+  #expect(!WorkerLogic.isBleed(mic: [1, 0], sys: []))
+  #expect(WorkerLogic.coverage("走过了冬就到家", in: "走过了冬天，就到家了") == 1)
+  #expect(WorkerLogic.coverage("完全不同的话", in: "走过了冬天") == 0)
+  let start = Date(timeIntervalSince1970: 1794000000)
+  func line(_ track: AudioTrack, _ offset: Double, _ length: Double, _ text: String) -> TranscriptLine {
+    TranscriptLine(segment: AudioSegment(file: "\(track.rawValue)-\(Int(offset)).enc", track: track, start: start.addingTimeInterval(offset), end: start.addingTimeInterval(offset + length), dbfs: -20), local: "S1", text: text)
+  }
+  // 两路切段不同：mic 一句跨了 sys 两段，拼起来比。
+  let kept = WorkerLogic.removeEcho([line(.mic, 0, 6, "走过了冬就到家"), line(.sys, 0, 3, "走过了冬天"), line(.sys, 3, 3, "就到家了"), line(.mic, 0, 1, "是")])
+  #expect(kept.filter { $0.segment.track == .mic }.map(\.text) == ["是"])
+}

@@ -138,8 +138,12 @@ struct PendingCard: View {
               .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
           }
         }
-        if p.samplesPending == true || (p.samples ?? []).isEmpty {
+        if p.samplesPending == true {
           Text("试听片段还在路上，录到它的设备连上后就能听。").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if (p.samples ?? []).isEmpty {
+          // 录音过了保留期已经清掉，不会再有试听片段（以前一直写"还在路上"）。
+          Text("录音已经过了保留期，听不到了。").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
       }

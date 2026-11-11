@@ -44,6 +44,9 @@ struct SpeakerCache: Codable {
   let windows: [VoiceWindow]
   let speakers: [LocalSpeaker]
   var hub: [HubSpeaker]
+  /// 2：说话人按整段对话归并过、短段也认了人（2026-11-11）。旧缓存没有这一项，已写进历史的对话要按新规则重新认一遍人。
+  var version: Int? = nil
+  static let current = 2
 }
 final class Worker {
   let store: AudioStore; let hub: any HubTransport; let device: String
@@ -79,17 +82,70 @@ final class Worker {
       let cache = try JSONDecoder().decode(SpeakerCache.self, from: Data(contentsOf: url))
       guard cache.segments == meta.segments else { throw WorkerError.cache }; return cache
     }
-    var windows: [VoiceWindow] = [], speakers: [LocalSpeaker] = []
+    let cache = try computeClusters(meta)
+    try save(cache, meta); return cache
+  }
+  /// 只算不存：给 clustered 和本机分析用。
+  func computeClusters(_ meta: AudioMetadata) throws -> SpeakerCache {
+    var windows: [VoiceWindow] = [], speakers: [LocalSpeaker] = [], short: [(segment: Int, count: Int, vector: [Float])] = []
     for (index, segment) in meta.segments.enumerated() {
       let samples = try audio(segment, meta)
-      for var window in WorkerLogic.windows(count: samples.count, segment: index) {
+      let ws = WorkerLogic.windows(count: samples.count, segment: index)
+      for var window in ws {
         let vector = try inference().embedding(Array(samples[window.offset..<(window.offset + window.count)]))
         window.local = WorkerLogic.assign(vector: vector, track: segment.track, seconds: Double(window.count) / 16000, speakers: &speakers)
         windows.append(window)
       }
+      // 不到 1.5 秒的段算不出稳定声纹，以前一律记成"未知说话人"；先留着声纹，归并后再认是谁（不参与说话人中心）。
+      if ws.isEmpty, samples.count >= WorkerLogic.shortSegmentSamples { short.append((index, samples.count, try inference().embedding(samples))) }
     }
-    let cache = SpeakerCache(segments: meta.segments, windows: windows, speakers: speakers, hub: [])
-    try save(cache, meta); return cache
+    WorkerLogic.apply(WorkerLogic.consolidate(speakers), windows: &windows, speakers: &speakers)
+    for s in short {
+      if let local = WorkerLogic.nearest(s.vector, track: meta.segments[s.segment].track, speakers: speakers) {
+        windows.append(VoiceWindow(segment: s.segment, offset: 0, count: s.count, local: local))
+      }
+    }
+    return SpeakerCache(segments: meta.segments, windows: windows, speakers: speakers, hub: [], version: SpeakerCache.current)
+  }
+  /// 麦克风那路里其实是扬声器声音的段（和同时播放的系统声音是同一个声音）。
+  func bleedSegments(_ meta: AudioMetadata) throws -> Set<Int> {
+    var sysVoice: [Int: [Float]] = [:], out = Set<Int>()
+    func voice(_ i: Int) throws -> [Float]? {
+      if let v = sysVoice[i] { return v }
+      let a = try audio(meta.segments[i], meta)
+      guard a.count >= WorkerLogic.shortSegmentSamples else { return nil }
+      let v = try inference().embedding(a); sysVoice[i] = v; return v
+    }
+    for (i, segment) in meta.segments.enumerated() where segment.track == .mic {
+      let overlapping = meta.segments.indices.filter { j in
+        meta.segments[j].track == .sys && AudioPolicy.date(segment.t_start)! < AudioPolicy.date(meta.segments[j].t_end)! && AudioPolicy.date(meta.segments[j].t_start)! < AudioPolicy.date(segment.t_end)!
+      }
+      guard !overlapping.isEmpty else { continue }
+      let a = try audio(segment, meta)
+      guard a.count >= WorkerLogic.shortSegmentSamples else { continue }
+      if WorkerLogic.isBleed(mic: try inference().embedding(a), sys: try overlapping.compactMap(voice)) { out.insert(i) }
+    }
+    return out
+  }
+  /// 已经写进历史的对话按新规则重新认人：记录不改，每句是谁、哪句是扬声器声音另存在 hub（AGENTS.md：归属关系另存一张表）。
+  func relabel(_ meta: AudioMetadata) async throws {
+    var cache = try computeClusters(meta)
+    let meeting = !meta.meeting_apps.isEmpty
+    let uploaded = cache.speakers.filter { meeting || $0.track == .mic }
+    if !uploaded.isEmpty {
+      let response = try await post("/v1/audio/embeddings", ["device": device, "conversation_ref": meta.id, "t_start": meta.t_start,
+        "t_end": meta.t_end!, "speakers": uploaded.map { ["local": $0.local, "track": $0.track.rawValue, "seconds": $0.seconds, "centroid": $0.centroid] as [String: Any] }])
+      cache.hub = try JSONDecoder().decode(EmbeddingsResponse.self, from: response).speakers
+    }
+    let bleed = try bleedSegments(meta)
+    let ids = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.speaker_id) })
+    let lines: [[String: Any]] = meta.segments.enumerated().compactMap { i, segment in
+      if !meeting && segment.track == .sys { return nil }
+      let local = WorkerLogic.majority(cache.windows.filter { $0.segment == i })
+      return ["at": WorkerLogic.clock(segment.t_start, seconds: true), "speaker_id": ids[local] as Any? ?? NSNull(), "hidden": bleed.contains(i)]
+    }
+    _ = try await post("/v1/audio/lines", ["device": device, "conversation_ref": meta.id, "lines": lines])
+    try save(cache, meta)
   }
   func run() async throws -> Int {
     let sync = try JSONDecoder().decode(Sync.self, from: await hub.request("/v1/audio/sync?device=\(device)", body: nil))
@@ -121,9 +177,12 @@ final class Worker {
         if next == .skipped { _ = try await post("/v1/audio/conversations/\(meta.id)/skipped", [:]) }
         if next == .done {
           var lines: [TranscriptLine] = []
+          let bleed = try bleedSegments(meta)
           for (i, segment) in meta.segments.enumerated() {
             // 不开会时系统声音只用来去掉麦克风录到的回声：只转写和麦克风段重叠的部分，结果不写进记录。
             if !meeting && segment.track == .sys && !WorkerLogic.overlapsMic(segment, meta.segments) { continue }
+            // 麦克风录到的扬声器声音（放歌、对方的声音）：和同时的系统声音是同一个声音，不当成有人在说话。
+            if bleed.contains(i) { continue }
             let recognition = try inference().transcribe(audio(segment, meta))
             let text = recognition.text
             if !text.isEmpty { lines.append(TranscriptLine(segment: segment, local: WorkerLogic.majority(cache.windows.filter { $0.segment == i }), text: text, confidence: recognition.confidence)) }
@@ -148,6 +207,16 @@ final class Worker {
       var usage = rusage(); getrusage(RUSAGE_SELF, &usage)
       fputs("\(meta.id) \(meta.status.rawValue) segments=\(meta.segments.count) seconds=\(String(format: "%.3f", Date().timeIntervalSince(start))) peak_rss_bytes=\(usage.ru_maxrss)\n", stderr)
     }
+    // 旧版写进历史的对话按新规则重认，每次最多花 5 分钟，剩下的下次接着做。
+    let relabelUntil = Date().addingTimeInterval(300)
+    for meta in all.reversed() where meta.status == .done && Date() < relabelUntil {
+      if sync.delete_conversations.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: Date(), retentionDays: sync.retention_days, purgeBefore: AudioPolicy.date(sync.purge_before)) { continue }
+      let current = (try? cacheURL(meta)).flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(SpeakerCache.self, from: $0) }
+      if current?.version == SpeakerCache.current { continue }
+      var sorted = meta
+      sorted.segments.sort { AudioPolicy.date($0.t_start)! == AudioPolicy.date($1.t_start)! ? $0.file < $1.file : AudioPolicy.date($0.t_start)! < AudioPolicy.date($1.t_start)! }
+      do { try await relabel(sorted) } catch { failures += 1; fputs("\(meta.id) relabel_failed\n", stderr) }
+    }
     for request in sync.sample_requests {
       guard var meta = all.first(where: { $0.id == request.conversation_ref }), meta.status != .open,
         !sync.delete_conversations.contains(meta.id), !AudioPolicy.shouldDelete(meta, now: Date(), retentionDays: sync.retention_days, purgeBefore: AudioPolicy.date(sync.purge_before)) else { continue }
@@ -158,13 +227,13 @@ final class Worker {
         // hub 每个说话人最多存 3 段、每段对话发一次请求：每次只发该说话人在段对话里最响的一段，
         // 3 段样本分别来自 3 段对话。只截连续窗口，避免混入其他人的试听。
         // 用户报告：按"最长"选会把远处、隔墙的细微声音当成样本，听不出是谁。
-        let candidates = meta.segments.indices.filter { i in cache.windows.contains { $0.segment == i && $0.local == request.local } }
+        let candidates = meta.segments.indices.filter { i in cache.windows.contains { $0.segment == i && $0.local == request.local && $0.count >= 24000 } }
           .sorted { meta.segments[$0].dbfs > meta.segments[$1].dbfs }
         var best: (segment: Int, range: Range<Int>, dbfs: Double)?
         // 先按整段响度排，最多解码前 3 段找最响的连续窗口。
         for i in candidates.prefix(3) {
           let samples = try audio(meta.segments[i], meta)
-          let runs = WorkerLogic.runs(cache.windows.filter { $0.segment == i && $0.local == request.local })
+          let runs = WorkerLogic.runs(cache.windows.filter { $0.segment == i && $0.local == request.local && $0.count >= 24000 })
           guard let loudest = WorkerLogic.loudest(runs, in: samples, limit: 96000), loudest.dbfs.isFinite else { continue }
           if best == nil || loudest.dbfs > best!.dbfs { best = (i, loudest.range, loudest.dbfs) }
         }

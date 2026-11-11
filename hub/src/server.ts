@@ -92,6 +92,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
       if (method === "POST" && url.pathname === "/v1/audio/purge") return Response.json(audio.purge());
       if (method === "GET" && url.pathname === "/v1/speakers") return Response.json(audio.speakers());
       if (method === "POST" && url.pathname === "/v1/audio/samples") return Response.json(audio.uploadSamples(await readJSON()));
+      if (method === "POST" && url.pathname === "/v1/audio/lines") return Response.json(audio.lines(await readJSON()));
       const sample = /^\/v1\/audio\/samples\/([^/]+)$/.exec(url.pathname);
       if (method === "GET" && sample) {
         const clip = audio.sample(sample[1]!);

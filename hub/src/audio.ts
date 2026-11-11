@@ -1,5 +1,6 @@
 import { ulid } from "../../packages/record/index.ts";
 import { HubDB, InputError } from "./db.ts";
+import { saveLines } from "./conversations.ts";
 
 export const MATCH_THRESHOLD = 0.5;
 export const DEFAULT_ME_THRESHOLD = 0.49;
@@ -7,6 +8,8 @@ const VECTOR_SIZE = 512;
 // 麦克风那路的说话人门槛低，让"我"尽快进待确认；系统声音只在开会时上传。
 const ASK = { mic: { conversations: 2, seconds: 30 }, sys: { conversations: 3, seconds: 120 } };
 const MAX_CLIPS = 3, MAX_CLIP_BYTES = 2 * 1024 * 1024;
+// 与采集端 WorkerLogic.consolidate 一致；elsewhere 是并走在别的对话也出现过的说话人时要求的整体相似度。
+const CONSOLIDATE = { big: 6, join: 0.5, attach: 0.3, elsewhere: 0.55 };
 
 export const audioSchema = `
 CREATE TABLE speakers(id TEXT PRIMARY KEY,label TEXT NOT NULL,name TEXT,is_me INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,merged_into TEXT,centroid BLOB NOT NULL,conversations INTEGER NOT NULL DEFAULT 0,seconds REAL NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT);
@@ -100,6 +103,7 @@ export class AudioStore {
     return this.sql.transaction(() => {
       // 门槛调整后，已达新门槛但没有新上传的说话人也要进待确认。
       for (const s of this.sql.prepare("SELECT id FROM speakers WHERE status='new'").all() as { id: string }[]) this.ask(s.id);
+      this.expireSampleRequests();
       const me = this.activeSpeakers().filter(s => s.is_me);
       const purge = this.setting<string | null>("purge_before", null);
       const ack = this.setting<string | null>(`purged:${device}`, null);
@@ -176,7 +180,9 @@ export class AudioStore {
         result.push(this.mapping(s.local, speaker.id));
       }
       for (const id of touched) this.ask(id);
-      return { speakers: result };
+      // 再按整段对话把拆碎的并回去，返回并过之后的叫法（采集端用它写转写里的说话人）。
+      this.consolidateConversation(ref);
+      return { speakers: input.map(s => this.mapping(s.local, (this.sql.prepare("SELECT speaker_id FROM voice_embeddings WHERE conversation_ref=? AND local=?").get(ref, s.local) as { speaker_id: string }).speaker_id)) };
     }).immediate();
   }
   private mapping(local: string, id: string) {
@@ -195,6 +201,12 @@ export class AudioStore {
     // 一段对话可能有多个本地标签归到同一个人，只选其中最长的样本。
     const rows = this.sql.prepare(`SELECT * FROM (SELECT *,SUM(seconds) OVER(PARTITION BY conversation_ref) AS conversation_seconds,ROW_NUMBER() OVER(PARTITION BY conversation_ref ORDER BY seconds DESC,local) AS rank FROM voice_embeddings WHERE speaker_id=?) WHERE rank=1 ORDER BY conversation_seconds DESC,conversation_ref LIMIT 3`).all(id) as Embedding[];
     for (const r of rows) this.sql.prepare("INSERT INTO sample_requests(id,speaker_id,device,conversation_ref,local,created_at) VALUES(?,?,?,?,?,?)").run(ulid(),id,r.device,r.conversation_ref,r.local,now);
+  }
+  /** 录音过了保留期已经被设备清掉，或对话已删：请求不会再有回音，删掉，免得待确认里一直写"还在路上"。 */
+  expireSampleRequests(now = Date.now()) {
+    const cutoff = now - this.settings().retention_days * 86_400_000;
+    const open = this.sql.prepare("SELECT r.id,(SELECT MAX(t_end) FROM voice_embeddings e WHERE e.conversation_ref=r.conversation_ref) AS t_end FROM sample_requests r WHERE fulfilled_at IS NULL").all() as { id: string; t_end: string | null }[];
+    for (const r of open) if (!r.t_end || Date.parse(r.t_end) < cutoff) this.sql.prepare("DELETE FROM sample_requests WHERE id=?").run(r.id);
   }
   pendingPayload(id: string): Record<string, unknown> | null {
     const s = this.speaker(id);
@@ -227,16 +239,95 @@ export class AudioStore {
     else if (action === "merge_into") {
       const dest = target ? this.speaker(target) : undefined;
       if (!dest || dest.id === id || dest.status === "merged") throw new InputError("说话人合并目标无效");
-      const overlap = (this.sql.prepare("SELECT COUNT(DISTINCT conversation_ref) AS n FROM voice_embeddings WHERE speaker_id=? AND conversation_ref IN (SELECT conversation_ref FROM voice_embeddings WHERE speaker_id=?)").get(id,dest.id) as { n: number }).n;
-      const center = weighted([dest,s]);
-      if (!Number.isFinite(dest.seconds+s.seconds)) throw new InputError("累计 seconds 超出范围");
-      this.sql.prepare("UPDATE speakers SET centroid=?,seconds=?,conversations=?,is_me=?,name=?,updated_at=? WHERE id=?").run(pack(center.some(n => n !== 0) ? center : unpack(dest.centroid)), dest.seconds+s.seconds, dest.conversations+s.conversations-overlap, Number(Boolean(dest.is_me || s.is_me)), dest.is_me || s.is_me ? "我" : dest.name, now,dest.id);
-      this.sql.prepare("UPDATE voice_embeddings SET speaker_id=? WHERE speaker_id=?").run(dest.id,id);
-      this.sql.prepare("UPDATE speakers SET status='merged',merged_into=?,updated_at=? WHERE id=?").run(dest.id,now,id);
-      this.ask(dest.id);
+      this.mergeInto(s, dest, now);
+      return;
     } else throw new InputError("说话人操作无效");
     this.sql.prepare("DELETE FROM voice_samples WHERE speaker_id=?").run(id);
     this.sql.prepare("DELETE FROM sample_requests WHERE speaker_id=?").run(id);
+  }
+  /** s 并进 dest：声纹按秒数加权、对话数去掉两人同在的对话，逐条声纹改挂 dest；s 的试听样本删掉。 */
+  private mergeInto(s: Speaker, dest: Speaker, now: string) {
+    const overlap = (this.sql.prepare("SELECT COUNT(DISTINCT conversation_ref) AS n FROM voice_embeddings WHERE speaker_id=? AND conversation_ref IN (SELECT conversation_ref FROM voice_embeddings WHERE speaker_id=?)").get(s.id,dest.id) as { n: number }).n;
+    const center = weighted([dest,s]);
+    if (!Number.isFinite(dest.seconds+s.seconds)) throw new InputError("累计 seconds 超出范围");
+    this.sql.prepare("UPDATE speakers SET centroid=?,seconds=?,conversations=?,is_me=?,name=?,updated_at=? WHERE id=?").run(pack(center.some(n => n !== 0) ? center : unpack(dest.centroid)), dest.seconds+s.seconds, dest.conversations+s.conversations-overlap, Number(Boolean(dest.is_me || s.is_me)), dest.is_me || s.is_me ? "我" : dest.name, now,dest.id);
+    this.sql.prepare("UPDATE voice_embeddings SET speaker_id=? WHERE speaker_id=?").run(dest.id,s.id);
+    this.sql.prepare("UPDATE speakers SET status='merged',merged_into=?,updated_at=? WHERE id=?").run(dest.id,now,s.id);
+    this.sql.prepare("DELETE FROM voice_samples WHERE speaker_id=?").run(s.id);
+    this.sql.prepare("DELETE FROM sample_requests WHERE speaker_id=?").run(s.id);
+    this.ask(dest.id);
+  }
+  /**
+   * 一段对话里被拆碎的说话人并回去（2026-11-11 实测：31 分钟两人对话拆出 70 个，大多只有一两个 3 秒窗口）。
+   * 和采集端同一套规则：累计不少于 6 秒的按中心相似度不低于 0.5 合并，短的并进最像的长说话人（不低于 0.3）。
+   * 每组并到组里确认过的人（没有时并到最长的那个）；已确认的人不会被并走；只在这段对话出现过的直接并，
+   * 在别的对话也出现过的，要和目标整体声纹相似度不低于 0.55 才并。返回并掉的个数。
+   */
+  consolidateConversation(ref: string): number {
+    const rows = this.sql.prepare("SELECT * FROM voice_embeddings WHERE conversation_ref=?").all(ref) as Embedding[];
+    type Group = { ids: Embedding[]; sum: number[] };
+    const center = (g: Group) => normalize(g.sum);
+    const groups: Group[] = rows.filter(r => r.seconds >= CONSOLIDATE.big).sort((a,b) => b.seconds-a.seconds).map(r => ({ ids: [r], sum: unpack(r.centroid).map(v => v*r.seconds) }));
+    for (;;) {
+      let best: [number, number, number] | null = null;
+      for (let i = 0; i < groups.length; i++) for (let j = i+1; j < groups.length; j++) {
+        const c = similarity(center(groups[i]!), center(groups[j]!));
+        if (c >= CONSOLIDATE.join && (!best || c > best[2])) best = [i,j,c];
+      }
+      if (!best) break;
+      const [i,j] = best;
+      groups[i]!.ids.push(...groups[j]!.ids); groups[i]!.sum = groups[i]!.sum.map((v,k) => v+groups[j]!.sum[k]!); groups.splice(j,1);
+    }
+    if (!groups.length) return 0;
+    for (const r of rows.filter(r => r.seconds < CONSOLIDATE.big)) {
+      const scored = groups.map(g => similarity(unpack(r.centroid), center(g)));
+      const k = scored.indexOf(Math.max(...scored));
+      if (scored[k]! >= CONSOLIDATE.attach) groups[k]!.ids.push(r);
+    }
+    const now = new Date().toISOString();
+    let merged = 0;
+    for (const g of groups) {
+      const secondsBy = new Map<string, number>();
+      for (const r of g.ids) secondsBy.set(r.speaker_id, (secondsBy.get(r.speaker_id) ?? 0) + r.seconds);
+      const members = [...secondsBy.keys()].map(id => this.speaker(id)!).filter(sp => sp && sp.status !== "merged");
+      const target = members.filter(sp => sp.status === "confirmed").sort((a,b) => secondsBy.get(b.id)!-secondsBy.get(a.id)!)[0]
+        ?? members.sort((a,b) => secondsBy.get(b.id)!-secondsBy.get(a.id)!)[0];
+      if (!target) continue;
+      for (const sp of members) {
+        if (sp.id === target.id || sp.status === "confirmed") continue;
+        const fresh = this.speaker(sp.id)!, dest = this.speaker(target.id)!;
+        if (fresh.status === "merged" || dest.status === "merged") continue;
+        if (fresh.conversations > 1 && similarity(unpack(fresh.centroid), unpack(dest.centroid)) < CONSOLIDATE.elsewhere) continue;
+        this.mergeInto(fresh, dest, now); merged++;
+      }
+    }
+    return merged;
+  }
+  /** 同名的已确认说话人并成一个（"其实是…"里一个名字出现好几次）；"我"按 is_me 算。返回并掉的个数。 */
+  mergeSameNames(): number {
+    const now = new Date().toISOString();
+    const groups = new Map<string, Speaker[]>();
+    for (const sp of this.sql.prepare("SELECT * FROM speakers WHERE status='confirmed'").all() as Speaker[]) {
+      const key = sp.is_me ? "\u0000me" : (sp.name ?? "").trim();
+      if (key) groups.set(key, [...(groups.get(key) ?? []), sp]);
+    }
+    let merged = 0;
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      const [dest, ...rest] = list.sort((a,b) => b.conversations-a.conversations || b.seconds-a.seconds);
+      for (const sp of rest) { this.mergeInto(this.speaker(sp.id)!, this.speaker(dest!.id)!, now); merged++; }
+    }
+    return merged;
+  }
+  /** 整理全部已有的对话（一次性，旧版采集端拆碎的说话人）。 */
+  consolidateAll(): { conversations: number; merged: number; same_name: number } {
+    return this.sql.transaction(() => {
+      const refs = (this.sql.prepare("SELECT conversation_ref FROM voice_embeddings GROUP BY conversation_ref ORDER BY MIN(t_start)").all() as { conversation_ref: string }[]).map(r => r.conversation_ref);
+      const same_name = this.mergeSameNames();
+      let merged = 0;
+      for (const ref of refs) merged += this.consolidateConversation(ref);
+      return { conversations: refs.length, merged, same_name: same_name + this.mergeSameNames() };
+    }).immediate();
   }
   skipped(ref: string) {
     text(ref,"conversation_ref");
@@ -269,7 +360,25 @@ export class AudioStore {
   sample(id: string) { return this.sql.prepare("SELECT mime,data FROM voice_samples WHERE id=?").get(id) as { mime: string; data: Buffer } | undefined; }
   speakers() { return { speakers: this.activeSpeakers().map(s => ({ id: s.id, label: s.label, name: s.name, is_me: Boolean(s.is_me), confirmed: s.status === "confirmed", conversations: s.conversations, seconds: s.seconds })) }; }
   /** 由 removeRecord 的删除事务调用，删除队列和逐条声纹一起提交。 */
+  /** 采集端按新规则重认的每句说话人（见 conversations.saveLines）。只接受这台设备自己的对话。 */
+  lines(value: unknown) {
+    const b = object(value), device = deviceName(b.device), ref = text(b.conversation_ref, "conversation_ref");
+    if (!Array.isArray(b.lines) || b.lines.length > 20000) throw new InputError("lines 必须是数组");
+    const lines = b.lines.map(raw => {
+      const l = object(raw);
+      if (typeof l.at !== "string" || !/^\d\d:\d\d:\d\d$/.test(l.at) || typeof l.hidden !== "boolean") throw new InputError("lines 无效");
+      if (l.speaker_id !== null && (typeof l.speaker_id !== "string" || !this.speaker(l.speaker_id))) throw new InputError("speaker_id 无效");
+      return { at: l.at, speaker_id: l.speaker_id as string | null, hidden: l.hidden };
+    });
+    return this.sql.transaction(() => {
+      const owner = this.sql.prepare("SELECT device FROM voice_embeddings WHERE conversation_ref=? LIMIT 1").get(ref) as { device: string } | undefined;
+      if (owner && owner.device !== device) throw new InputError("对话属于其他设备");
+      if (this.sql.prepare("SELECT 1 FROM tombstones WHERE source='mac.audio' AND source_ref=?").get(ref)) throw new InputError("对话已删除");
+      return { stored: saveLines(this.hub, ref, lines) };
+    }).immediate();
+  }
   removeConversation(ref: string, device: string) {
+    this.sql.prepare("DELETE FROM conversation_lines WHERE conversation_ref=?").run(ref);
     const devices = new Set([device, ...(this.sql.prepare("SELECT DISTINCT device FROM voice_embeddings WHERE conversation_ref=?").all(ref) as { device: string }[]).map(r => r.device)]);
     for (const d of devices) this.set(`delete:${d}`, [...new Set([...this.setting<string[]>(`delete:${d}`,[]),ref])]);
     this.sql.prepare("DELETE FROM voice_embeddings WHERE conversation_ref=?").run(ref);

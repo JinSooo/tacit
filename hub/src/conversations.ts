@@ -10,6 +10,27 @@ export const conversationSchema = `
 CREATE TABLE IF NOT EXISTS conversation_summaries(id TEXT PRIMARY KEY,record_ids TEXT NOT NULL,title TEXT NOT NULL,summary TEXT NOT NULL,points TEXT NOT NULL,created_at TEXT NOT NULL);
 PRAGMA user_version=7;
 `;
+/** 转写里每句是谁、是不是扬声器声音：采集端按新规则重认后另存，记录本身不改（AGENTS.md：归属关系另存一张表）。at 是正文里的 HH:MM:SS。 */
+export const lineSchema = `
+CREATE TABLE IF NOT EXISTS conversation_lines(conversation_ref TEXT NOT NULL,at TEXT NOT NULL,speaker_id TEXT,hidden INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(conversation_ref,at));
+PRAGMA user_version=8;
+`;
+
+/** 采集端重认的结果整段替换。同一秒有两段时，以认出了人、不是扬声器声音的为准。 */
+export function saveLines(db: HubDB, ref: string, lines: { at: string; speaker_id: string | null; hidden: boolean }[]) {
+  db.db.prepare("DELETE FROM conversation_lines WHERE conversation_ref=?").run(ref);
+  const best = new Map<string, { speaker_id: string | null; hidden: boolean }>();
+  for (const l of lines) {
+    const prev = best.get(l.at);
+    const score = (x: { speaker_id: string | null; hidden: boolean }) => (x.hidden ? 0 : 2) + (x.speaker_id ? 1 : 0);
+    if (!prev || score(l) > score(prev)) best.set(l.at, l);
+  }
+  const insert = db.db.prepare("INSERT INTO conversation_lines VALUES(?,?,?,?)");
+  for (const [at, l] of best) insert.run(ref, at, l.speaker_id, Number(l.hidden));
+  // 认人变了，这段对话的总结按新的写法重写。
+  for (const r of db.db.prepare("SELECT id FROM records WHERE source='mac.audio' AND source_ref=?").all(ref) as { id: string }[]) removeSummariesOf(db, r.id);
+  return best.size;
+}
 
 /** 相邻两条对话记录间隔不超过它，且同在一个会议软件里（或都不在会议里），算同一场对话。 */
 export const CONVERSATION_GAP_MS = 10 * 60_000;
@@ -32,7 +53,7 @@ export function groupConversations(rows: AudioRow[]): ConversationGroup[] {
   return out;
 }
 
-export interface Line { at_ms: number; label: string; text: string }
+export interface Line { at_ms: number; label: string; text: string; clock?: string; speaker_id?: string | null }
 
 /** 采集端写的正文每行是"[HH:MM:SS] 说话人：内容"，时间是本地钟点；跨过午夜的行算到第二天。 */
 export function parseTranscript(body: string, t_start: string): Line[] {
@@ -44,7 +65,7 @@ export function parseTranscript(body: string, t_start: string): Line[] {
     if (!line) continue;
     let at = m ? Date.parse(`${m[1]}T${line[1]}${m[3]}`) : start;
     if (Number.isFinite(start) && at < start - 60_000) at += 86_400_000;
-    out.push({ at_ms: Number.isFinite(at) ? at : start, label: line[2]!.trim(), text: line[3]!.trim() });
+    out.push({ at_ms: Number.isFinite(at) ? at : start, label: line[2]!.trim(), text: line[3]!.trim(), clock: line[1]! });
   }
   return out;
 }
@@ -63,14 +84,14 @@ export function isNoise(text: string): boolean {
 export interface Turn { at: string; speaker: string; text: string }
 
 /** 去噪、去掉两路录到的同一句（回声），同一个人一分钟内接着说的合成一段。name 把转写时的标签换成现在的叫法。 */
-export function readableTurns(lines: Line[], name: (label: string) => string): Turn[] {
+export function readableTurns(lines: Line[], name: (label: string, speakerId?: string | null) => string): Turn[] {
   const kept: (Line & { speaker: string })[] = [];
   const norm = (s: string) => s.replace(/[\s\p{P}\p{S}]/gu, "");
   for (const l of lines.slice().sort((a, b) => a.at_ms - b.at_ms)) {
     if (isNoise(l.text)) continue;
     const n = norm(l.text);
     if (kept.some(k => l.at_ms - k.at_ms <= 10_000 && norm(k.text) === n)) continue;
-    kept.push({ ...l, speaker: name(l.label) });
+    kept.push({ ...l, speaker: name(l.label, l.speaker_id) });
   }
   const out: (Turn & { last: number })[] = [];
   for (const k of kept) {
@@ -89,7 +110,7 @@ interface SpeakerRow { id: string; label: string; name: string | null; is_me: nu
  * 转写时写进正文的是当时的叫法：确认过的名字、"我"、还没确认的编号或"未知说话人"。
  * 编号按现在的状态换：已确认的换成名字，被并走的跟到并入的那个人，其余按出场顺序叫"对方 1""对方 2"。
  */
-export function speakerNamer(db: HubDB): () => (label: string) => string {
+export function speakerNamer(db: HubDB): () => (label: string, speakerId?: string | null) => string {
   const rows = db.db.prepare("SELECT id,label,name,is_me,status,merged_into FROM speakers").all() as SpeakerRow[];
   const byLabel = new Map(rows.map(r => [r.label, r])), byId = new Map(rows.map(r => [r.id, r]));
   const resolve = (r: SpeakerRow): SpeakerRow => {
@@ -99,7 +120,14 @@ export function speakerNamer(db: HubDB): () => (label: string) => string {
   return () => {
     const others = new Map<string, string>();
     const other = (key: string) => { if (!others.has(key)) others.set(key, `对方 ${others.size + 1}`); return others.get(key)!; };
-    return (label: string) => {
+    return (label: string, speakerId?: string | null) => {
+      const byIdRow = speakerId ? byId.get(speakerId) : undefined;
+      if (byIdRow) {
+        const r = resolve(byIdRow);
+        if (r.is_me) return "我";
+        if (r.name && r.status === "confirmed") return r.name;
+        return other(r.id);
+      }
       if (label === "我") return "我";
       if (label === "未知说话人") return "其他人";
       const row = byLabel.get(label);
@@ -137,8 +165,15 @@ function bodyOf(db: HubDB, r: RecordRow): string {
 }
 
 export function groupTurns(db: HubDB, g: ConversationGroup, namer = speakerNamer(db)()): Turn[] {
-  const rows = g.record_ids.map(id => db.db.prepare("SELECT id,t_start,t_start_ms,t_end,context,sensitivity,body FROM records WHERE id=?").get(id) as RecordRow | undefined).filter((r): r is RecordRow => !!r);
-  return readableTurns(rows.flatMap(r => parseTranscript(bodyOf(db, r), r.t_start)), namer);
+  const rows = g.record_ids.map(id => db.db.prepare("SELECT id,source_ref,t_start,t_start_ms,t_end,context,sensitivity,body FROM records WHERE id=?").get(id) as (RecordRow & { source_ref: string | null }) | undefined).filter((r): r is RecordRow & { source_ref: string | null } => !!r);
+  return readableTurns(rows.flatMap(r => {
+    const overrides = new Map((db.db.prepare("SELECT at,speaker_id,hidden FROM conversation_lines WHERE conversation_ref=?").all(r.source_ref ?? "") as { at: string; speaker_id: string | null; hidden: number }[]).map(o => [o.at, o]));
+    return parseTranscript(bodyOf(db, r), r.t_start).flatMap(l => {
+      const o = l.clock ? overrides.get(l.clock) : undefined;
+      if (o?.hidden) return [];
+      return [o?.speaker_id ? { ...l, speaker_id: o.speaker_id } : l];
+    });
+  }), namer);
 }
 
 export interface Summary { title: string; summary: string; points: string[] }

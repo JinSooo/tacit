@@ -62,7 +62,7 @@ test("说话人按现在的状态叫：确认的写名字，并走的跟过去�
   audio.resolve(a, "rename", "李家辰");
   audio.resolve(b, "merge_into", undefined, a);
   const name = speakerNamer(ctx.db)();
-  expect([label(a), label(b), label(d), label(c), "我", "未知说话人", "刘朝刚"].map(name)).toEqual(["李家辰", "李家辰", "对方 1", "对方 2", "我", "其他人", "刘朝刚"]);
+  expect([label(a), label(b), label(d), label(c), "我", "未知说话人", "刘朝刚"].map(l => name(l))).toEqual(["李家辰", "李家辰", "对方 1", "对方 2", "我", "其他人", "刘朝刚"]);
   expect(speakerNamer(ctx.db)()(label(c))).toBe("对方 1");
 });
 
@@ -147,3 +147,38 @@ test("归线程时对话片段给的是总结；没有事实可挂时也能把�
   expect(store.rejectedThreads(frame.frame_id)).toEqual(["t-dev"]);
   expect(store.detachRecord(record)).toEqual({ frames: 0, facts: 0, thread: null });
 });
+
+// 2026-11-11：旧记录里短句写成"未知说话人"、放歌的歌词进了正文；采集端重认后另存每句是谁、哪句是扬声器声音。
+test("采集端重认的每句说话人优先于正文里的叫法，扬声器声音不显示，总结重写", async () => {
+  const { AudioStore } = await import("../src/audio.ts");
+  const audio = new AudioStore(ctx.db);
+  const v = (axis: number) => { const a = Array<number>(512).fill(0); a[axis] = 1; return a; };
+  const [li] = audio.embeddings({ device: "mac", conversation_ref: "c-10:00:00", t_start: at("10:00:00"), t_end: at("10:20:00"), speakers: [{ local: "S1", track: "mic", seconds: 200, centroid: v(1) }] }).speakers;
+  ctx.db.ingest([talk("10:00:00", "10:20:00", [long("我", "10:00:05"), "[10:01:00] 未知说话人：好，给我看懵了，几个人啊", "[10:02:00] 说话人 E：在清晨把自己踩进了你"].join("\n"))]);
+  const record = (ctx.db.db.prepare("SELECT id FROM records").get() as { id: string }).id;
+  const now = Date.parse(at("15:00:00"));
+  await conversationStep({ db: ctx.db, llm: fakeLLM().llm }, now);
+  expect(conversationDetail(ctx.db, record, now).state).toBe("ready");
+  await new DistillStoreForTest(ctx.db).resolve(li!.speaker_id, "李家辰");
+  expect(audio.lines({ device: "mac", conversation_ref: "c-10:00:00", lines: [
+    { at: "10:01:00", speaker_id: li!.speaker_id, hidden: false }, { at: "10:02:00", speaker_id: null, hidden: true },
+  ] })).toEqual({ stored: 2 });
+  const d = conversationDetail(ctx.db, record, now);
+  expect(d.turns.map(t => t.speaker)).toEqual(["我", "李家辰"]);
+  expect(d.turns.some(t => t.text.includes("清晨"))).toBe(false);
+  expect(d.state).toBe("waiting");
+  expect(() => audio.lines({ device: "ipad", conversation_ref: "c-10:00:00", lines: [] })).toThrow();
+  expect(() => audio.lines({ device: "mac", conversation_ref: "c-10:00:00", lines: [{ at: "10:01", speaker_id: null, hidden: false }] })).toThrow();
+  expect(() => audio.lines({ device: "mac", conversation_ref: "c-10:00:00", lines: [{ at: "10:01:00", speaker_id: "nobody", hidden: false }] })).toThrow();
+  // 删掉记录时一起删
+  ctx.db.delete(record);
+  expect(ctx.db.db.prepare("SELECT COUNT(*) n FROM conversation_lines").get()).toEqual({ n: 0 });
+});
+
+class DistillStoreForTest {
+  constructor(readonly db: typeof ctx.db) {}
+  resolve(speakerId: string, name: string) {
+    const p = (this.db.db.prepare("SELECT id,payload FROM pending WHERE kind='voice' AND resolved_at IS NULL").all() as { id: string; payload: string }[]).find(p => JSON.parse(p.payload).speaker_id === speakerId)!;
+    return import("../src/distill/store.ts").then(({ DistillStore }) => new DistillStore(this.db).resolvePending(p.id, "rename", name));
+  }
+}

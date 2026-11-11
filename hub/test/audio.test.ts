@@ -34,7 +34,7 @@ test("v4 加密库事务升级 v5，保留旧数据并可重复打开", () => {
   for (let i=0;i<2;i++) {
     const upgraded = new HubDB(ctx.file,ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(7);
+      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(8);
       expect(upgraded.get(record.id)?.body).toBe(record.body);
       expect(new AudioStore(upgraded).settings()).toEqual({ retention_days: 7 });
     } finally { upgraded.close(); }
@@ -297,4 +297,50 @@ test("零秒声纹可归类并标我，下发仍是归一化向量", () => {
   const voiceprint = audio.sync("mac").voiceprint!;
   expect(voiceprint.vector).toEqual(vector());
   expect(Math.hypot(...voiceprint.vector)).toBeCloseTo(1,6);
+});
+
+// 2026-11-11 实测：和李家辰两个人的对话被拆成 70 个"说话人"，界面上出现一串"对方 1""对方 2"。
+test("一段对话里拆碎的说话人并回确认过的人；确认过的不同人不并；在别的对话出现过的要整体像才并", () => {
+  const v = (x: number, y = 0, z = 0) => { const a = Array<number>(512).fill(0); a[0] = x; a[1] = y; a[2] = z; return a; };
+  const conv = (ref: string, speakers: { local: string; seconds: number; centroid: number[] }[]) =>
+    audio.embeddings({ device: "mac", conversation_ref: ref, t_start: "2026-11-11T07:46:00Z", t_end: "2026-11-11T08:17:00Z", speakers: speakers.map(s => ({ ...s, track: "mic" })) }).speakers;
+  // 先有两个确认过的人
+  const [me, li] = conv("seed", [{ local: "S1", seconds: 200, centroid: v(1) }, { local: "S2", seconds: 200, centroid: v(0, 1) }]);
+  for (const [s, name] of [[me!, "我"], [li!, "李家辰"]] as const) {
+    const p = pending().find(p => p.payload.speaker_id === s.speaker_id)!;
+    new DistillStore(ctx.db).resolvePending(p.id, name === "我" ? "me" : "rename", name === "我" ? undefined : name);
+  }
+  // 新的一段：一个长的"我"、一个长的李家辰（中心偏一点，没对上），加几个短窗口
+  const out = conv("talk", [
+    { local: "S1", seconds: 120, centroid: v(1, 0.1) }, { local: "S2", seconds: 90, centroid: v(0.2, 1, 0.9) },
+    { local: "S3", seconds: 3, centroid: v(0.8, 0.5) }, { local: "S4", seconds: 2, centroid: v(0.3, 1, 0.6) }, { local: "S5", seconds: 2, centroid: v(0, 0, -1) },
+  ]);
+  const names = Object.fromEntries(out.map(s => [s.local, s.is_me ? "我" : s.label]));
+  expect(names.S1).toBe("我"); expect(names.S3).toBe("我");
+  // S2 那个长的没对上李家辰（相似度不到 0.5）时自成一个人，短的 S4 跟它走；S5 谁都不像，留着。
+  expect(names.S4).toBe(names.S2);
+  expect(names.S5).not.toBe(names.S2);
+  // 已确认的人不会被并走
+  expect(audio.speaker(li!.speaker_id)!.status).toBe("confirmed");
+  expect(audio.speaker(me!.speaker_id)!.status).toBe("confirmed");
+});
+
+test("同名的已确认说话人并成一个，“我”按 is_me 并", () => {
+  const vec = (axis: number) => { const a = Array<number>(512).fill(0); a[axis] = 1; return a; };
+  const ids = [3, 4, 5, 6].map(axis => audio.embeddings({ device: "mac", conversation_ref: `n${axis}`, t_start: "2026-11-11T01:00:00Z", t_end: "2026-11-11T01:10:00Z", speakers: [{ local: "S1", track: "mic", seconds: 60 * axis, centroid: vec(axis) }] }).speakers[0]!.speaker_id);
+  const decide = (id: string, action: string, name?: string) => new DistillStore(ctx.db).resolvePending(pending().find(p => p.payload.speaker_id === id)!.id, action, name);
+  decide(ids[0]!, "rename", "刘朝刚"); decide(ids[1]!, "rename", " 刘朝刚 "); decide(ids[2]!, "me"); decide(ids[3]!, "me");
+  expect(audio.mergeSameNames()).toBe(2);
+  const active = audio.speakers().speakers.filter(s => s.confirmed);
+  expect(active.map(s => s.name).sort()).toEqual(["刘朝刚", "我"].sort());
+  expect(active.find(s => s.name === "刘朝刚")!.seconds).toBe(60 * 3 + 60 * 4);
+});
+
+test("录音过了保留期的试听请求删掉，不再显示还在路上", () => {
+  upload("old-ref", 120);
+  const before = (audio.sync("mac").sample_requests as unknown[]).length;
+  expect(before).toBe(1);
+  audio.expireSampleRequests(Date.parse("2026-11-09T01:03:00Z") + 8 * 86_400_000);
+  expect(audio.sync("mac").sample_requests).toHaveLength(0);
+  expect(pending()[0]!.payload.samples_pending).toBe(false);
 });

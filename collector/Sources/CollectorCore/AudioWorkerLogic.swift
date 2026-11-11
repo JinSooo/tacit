@@ -66,6 +66,73 @@ public enum WorkerLogic {
     speakers.append(LocalSpeaker(local: local, track: track, seconds: seconds, centroid: v, weightedSum: v.map { Double($0) * seconds }))
     return local
   }
+  /// 一段对话里的说话人重新归并。本地聚类按 3 秒窗口逐个比，短窗口的声纹不稳，一个人常被拆成几十个
+  /// （2026-11-11 实测：31 分钟两人对话拆出 70 个"说话人"）。同一路里先把累计不少于 bigSeconds 的说话人按中心相似度
+  /// 不低于 join 两两合并，再把短的并进最像的长说话人（相似度不低于 attach）；没有长说话人时不动。返回 旧 local → 新 local。
+  public static func consolidate(_ speakers: [LocalSpeaker], bigSeconds: Double = 6, join: Double = 0.5, attach: Double = 0.3) -> [String: String] {
+    var map: [String: String] = [:]
+    for track in Set(speakers.map(\.track)) {
+      let own = speakers.filter { $0.track == track }
+      struct Group { var head: String; var seconds: Double; var sum: [Double] }
+      var groups = own.filter { $0.seconds >= bigSeconds }.sorted { $0.seconds > $1.seconds }
+        .map { s in Group(head: s.local, seconds: s.seconds, sum: unit(s.centroid).map { Double($0) * s.seconds }) }
+      var members: [String: [String]] = Dictionary(uniqueKeysWithValues: groups.map { ($0.head, [$0.head]) })
+      func center(_ g: Group) -> [Float] { unit(g.sum.map(Float.init)) }
+      while true {
+        var best: (Int, Int, Double)?
+        for i in groups.indices { for j in groups.indices where j > i {
+          let c = cosine(center(groups[i]), center(groups[j]))
+          if c >= join, c > (best?.2 ?? -2) { best = (i, j, c) }
+        } }
+        guard let (i, j, _) = best else { break }
+        members[groups[i].head, default: []] += members[groups[j].head] ?? []
+        members[groups[j].head] = nil
+        groups[i].seconds += groups[j].seconds
+        groups[i].sum = zip(groups[i].sum, groups[j].sum).map(+)
+        groups.remove(at: j)
+      }
+      for g in groups { for m in members[g.head] ?? [] { map[m] = g.head } }
+      for s in own where s.seconds < bigSeconds {
+        let scored = groups.map { (cosine(center($0), s.centroid), $0.head) }.max { $0.0 < $1.0 }
+        map[s.local] = scored.map { $0.0 >= attach ? $0.1 : s.local } ?? s.local
+      }
+    }
+    return map
+  }
+
+  /// 0.5 秒以下的段多是咳嗽、碰撞，不认人。
+  public static let shortSegmentSamples = 8000
+  /// 短段认人：同一路里最像的说话人，相似度不到 0.3 时不认（显示成"其他人"）。
+  public static func nearest(_ vector: [Float], track: AudioTrack, speakers: [LocalSpeaker], minimum: Double = 0.3) -> String? {
+    speakers.filter { $0.track == track }.map { ($0.local, cosine($0.centroid, vector)) }.filter { $0.1 >= minimum }.max { $0.1 < $1.1 }?.0
+  }
+
+  /// 按 consolidate 的结果改写窗口和说话人：并进来的说话人秒数和加权中心累加到留下的那个上。
+  public static func apply(_ map: [String: String], windows: inout [VoiceWindow], speakers: inout [LocalSpeaker]) {
+    for i in windows.indices { windows[i].local = map[windows[i].local] ?? windows[i].local }
+    var merged: [String: LocalSpeaker] = [:], order: [String] = []
+    for s in speakers {
+      let head = map[s.local] ?? s.local
+      if var m = merged[head] {
+        m.seconds += s.seconds
+        m.weightedSum = zip(m.weightedSum, s.weightedSum).map(+)
+        m.centroid = unit(m.weightedSum.map(Float.init))
+        merged[head] = m
+      } else {
+        var m = s; m.local = head
+        merged[head] = m; order.append(head)
+      }
+    }
+    speakers = order.map { merged[$0]! }
+  }
+
+  /// 麦克风录到的扬声器声音（放歌、对方从扬声器传出的声音）：这段 mic 的声纹和同时播放的系统声音是同一个声音。
+  /// 2026-11-11 本机实测：放歌时歌词段和同时段系统声音的相似度大多在 0.6 以上，开会时自己说话的段都在 0.5 以下。
+  public static let bleedThreshold = 0.55
+  public static func isBleed(mic: [Float], sys: [[Float]]) -> Bool {
+    sys.contains { cosine(mic, $0) >= bleedThreshold }
+  }
+
   /// 同一段里首尾相接的窗口合成一个整段，供试听片段挑选。
   public static func runs(_ windows: [VoiceWindow]) -> [Range<Int>] {
     var ranges: [Range<Int>] = []
@@ -134,13 +201,35 @@ public enum WorkerLogic {
   public static func overlapsMic(_ segment: AudioSegment, _ all: [AudioSegment]) -> Bool {
     all.contains { $0.track == .mic && AudioPolicy.date($0.t_start)! < AudioPolicy.date(segment.t_end)! && AudioPolicy.date(segment.t_start)! < AudioPolicy.date($0.t_end)! }
   }
+  /// mic 文字有多少按顺序出现在 sys 文字里（不计标点和空格），0–1。
+  public static func coverage(_ mic: String, in sys: String) -> Double {
+    let a = Array(mic.filter { $0.isLetter || $0.isNumber }), b = Array(sys.filter { $0.isLetter || $0.isNumber })
+    guard !a.isEmpty, !b.isEmpty else { return 0 }
+    var row = [Int](repeating: 0, count: b.count + 1)
+    for x in a {
+      var prev = 0
+      for j in 0..<b.count {
+        let keep = row[j + 1]
+        row[j + 1] = x == b[j] ? prev + 1 : max(row[j + 1], row[j])
+        prev = keep
+      }
+    }
+    return Double(row[b.count]) / Double(a.count)
+  }
+  /// 麦克风录到的扬声器声音（视频、音乐、对方的声音）：和它同时播放的系统声音说的是同一段话。
+  /// 两路切段不一样，所以把同时段的系统声音拼起来比，mic 一句的大部分字出现在里面就算回声
+  /// （2026-11-11 实测：放歌时歌词以麦克风那路进了记录，整句相似度够不到 0.6）。短于 4 个字的只按整句相似度算，免得"是""对"被误删。
   public static func removeEcho(_ lines: [TranscriptLine]) -> [TranscriptLine] {
     lines.filter { mic in
       guard mic.segment.track == .mic else { return true }
-      return !lines.contains { sys in
-        sys.segment.track == .sys && AudioPolicy.date(mic.segment.t_start)! < AudioPolicy.date(sys.segment.t_end)! &&
-        AudioPolicy.date(sys.segment.t_start)! < AudioPolicy.date(mic.segment.t_end)! && similarity(mic.text, sys.text) >= 0.6
+      let a = AudioPolicy.date(mic.segment.t_start)!, b = AudioPolicy.date(mic.segment.t_end)!
+      let overlapping = lines.filter { sys in
+        sys.segment.track == .sys && a < AudioPolicy.date(sys.segment.t_end)! && AudioPolicy.date(sys.segment.t_start)! < b
       }
+      guard !overlapping.isEmpty else { return true }
+      if overlapping.contains(where: { similarity(mic.text, $0.text) >= 0.6 }) { return false }
+      let letters = mic.text.filter { $0.isLetter || $0.isNumber }.count
+      return letters < 4 || coverage(mic.text, in: overlapping.map(\.text).joined()) < 0.6
     }.sorted { AudioPolicy.date($0.segment.t_start)! < AudioPolicy.date($1.segment.t_start)! }
   }
   public static func clock(_ text: String, seconds: Bool) -> String {

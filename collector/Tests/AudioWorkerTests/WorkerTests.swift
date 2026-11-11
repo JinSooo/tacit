@@ -230,3 +230,96 @@ func vendorInferenceBenchmark() throws {
   var usage = rusage(); getrusage(RUSAGE_SELF, &usage)
   print("vendor_conversation segments=2 seconds=\(Date().timeIntervalSince(begin)) peak_rss_bytes=\(usage.ru_maxrss)")
 }
+
+// 本机分析用：RA_ECHO_PROBE=对话 id，读这台机器上的录音，比较旧的整句回声规则和新规则各去掉多少 mic 行。不上传、不写库。
+@Test(.enabled(if: ProcessInfo.processInfo.environment["RA_ECHO_PROBE"] != nil, "需指定对话 id"))
+func echoProbe() throws {
+  let env = ProcessInfo.processInfo.environment
+  let root = URL(fileURLWithPath: env["RA_DATA_DIR"] ?? (NSHomeDirectory() + "/Library/Application Support/record-anything"))
+  let store = try AudioStore(dataDirectory: root)
+  let models = try Models(directory: root.appendingPathComponent("models"))
+  guard let meta = try store.conversations().first(where: { $0.id == env["RA_ECHO_PROBE"] }) else { Issue.record("找不到对话"); return }
+  var lines: [TranscriptLine] = []
+  for segment in meta.segments.sorted(by: { $0.t_start < $1.t_start }) {
+    let text = try models.transcribe(WorkerLogic.trimPadding(AudioCodec.decode(store.readSegment(segment.file, meta: meta)))).text
+    if !text.isEmpty { lines.append(TranscriptLine(segment: segment, local: "", text: text)) }
+  }
+  let mic = lines.filter { $0.segment.track == .mic }
+  let old = mic.filter { m in !lines.contains { s in s.segment.track == .sys && m.segment.t_start < s.segment.t_end && s.segment.t_start < m.segment.t_end && WorkerLogic.similarity(m.text, s.text) >= 0.6 } }
+  let new = WorkerLogic.removeEcho(lines).filter { $0.segment.track == .mic }
+  print("echo_probe mic=\(mic.count) sys=\(lines.count - mic.count) old_kept=\(old.count) new_kept=\(new.count)")
+  for l in new.prefix(15) { print("echo_probe kept \(l.segment.t_start.suffix(14)) \(l.text)") }
+}
+
+// 本机分析用：RA_BLEED_PROBE=对话 id，算每段 mic 和同时段 sys 的声纹相似度，看放歌、开会时能不能分开。
+@Test(.enabled(if: ProcessInfo.processInfo.environment["RA_BLEED_PROBE"] != nil, "需指定对话 id"))
+func bleedProbe() throws {
+  let env = ProcessInfo.processInfo.environment
+  let root = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/record-anything")
+  let store = try AudioStore(dataDirectory: root)
+  let models = try Models(directory: root.appendingPathComponent("models"))
+  for id in env["RA_BLEED_PROBE"]!.split(separator: ",").map(String.init) {
+    guard let meta = try store.conversations().first(where: { $0.id == id }) else { continue }
+    let segs = meta.segments.sorted { $0.t_start < $1.t_start }
+    func audio(_ s: AudioSegment) throws -> [Float] { WorkerLogic.trimPadding(try AudioCodec.decode(store.readSegment(s.file, meta: meta))) }
+    var sysVec: [String: [Float]] = [:]
+    for s in segs where s.track == .sys { let a = try audio(s); if a.count >= 8000 { sysVec[s.file] = try models.embedding(a) } }
+    var scores: [(Double, String)] = []
+    for m in segs where m.track == .mic {
+      let a = try audio(m); guard a.count >= 8000 else { continue }
+      let v = try models.embedding(a)
+      let overl = segs.filter { $0.track == .sys && m.t_start < $0.t_end && $0.t_start < m.t_end }
+      guard !overl.isEmpty else { scores.append((-2, "no-sys")); continue }
+      let best = overl.compactMap { sysVec[$0.file] }.map { WorkerLogic.cosine(v, $0) }.max() ?? -1
+      let text = try models.transcribe(a).text
+      scores.append((best, text))
+    }
+    let withSys = scores.filter { $0.0 > -2 }
+    print("bleed_probe \(id.suffix(6)) mic=\(scores.count) overlapping=\(withSys.count)")
+    for t in [0.3, 0.4, 0.5, 0.6] { print("bleed_probe   >=\(t): \(withSys.filter { $0.0 >= t }.count)") }
+    for (s, text) in withSys.sorted(by: { $0.0 > $1.0 }) { print(String(format: "bleed_probe   %.2f %@", s, String(text.prefix(30)))) }
+  }
+}
+
+// 本机分析用：RA_CLUSTER_PROBE=对话 id，用新的归并重新算一遍说话人（只算不存、不上传），和"我"的声纹比。
+@Test(.enabled(if: ProcessInfo.processInfo.environment["RA_CLUSTER_PROBE"] != nil, "需指定对话 id"))
+func clusterProbe() throws {
+  let env = ProcessInfo.processInfo.environment
+  let root = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support/record-anything")
+  let store = try AudioStore(dataDirectory: root)
+  let worker = Worker(store: store, hub: FakeHub(), device: "probe") { try Models(directory: root.appendingPathComponent("models")) }
+  let me = env["RA_ME_VECTOR"].map { $0.split(separator: ",").compactMap { Float($0) } }
+  for id in env["RA_CLUSTER_PROBE"]!.split(separator: ",").map(String.init) {
+    guard var meta = try store.conversations().first(where: { $0.id == id }) else { continue }
+    meta.segments.sort { $0.t_start == $1.t_start ? $0.file < $1.file : $0.t_start < $1.t_start }
+    let c = try worker.computeClusters(meta)
+    let labelled = meta.segments.indices.filter { i in c.windows.contains { $0.segment == i } }.count
+    print("cluster_probe \(id.suffix(6)) speakers=\(c.speakers.count) segments=\(meta.segments.count) labelled=\(labelled)")
+    for s in c.speakers.sorted(by: { $0.seconds > $1.seconds }) {
+      print(String(format: "cluster_probe   %@ %@ %.0fs me=%.2f", s.local, s.track.rawValue, s.seconds, me.map { WorkerLogic.cosine($0, s.centroid) } ?? -9))
+    }
+  }
+}
+
+// 2026-11-11：旧版写进历史的对话按新规则重认一次（另存每句是谁），之后不再重复。
+@Test func workerRelabelsOldConversationsOnce() async throws {
+  let step = 2.0 * Double.pi * 440.0 / 16000.0
+  let synthetic: [Float] = (0..<96000).map { Float(sin(Double($0) * step) * 0.2) }
+  let (root, store, meta) = try fixture([synthetic], encode: { _ in Data([1, 2, 3]) })
+  defer { try? FileManager.default.removeItem(at: root) }
+  let hub = FakeHub()
+  let worker = Worker(store: store, hub: hub, device: "mac-test", decode: { _ in synthetic }) { FakeModels() }
+  #expect(try await worker.run() == 0)
+  #expect(try store.conversations().first?.status == .done)
+  #expect(!hub.paths.contains("/v1/audio/lines"))
+  // 模拟旧版缓存：去掉 version。
+  let url = try store.directory(for: try store.conversations().first!).appendingPathComponent("speakers.json")
+  var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+  json["version"] = nil
+  try JSONSerialization.data(withJSONObject: json).write(to: url)
+  #expect(try await worker.run() == 0)
+  #expect(hub.paths.filter { $0 == "/v1/audio/lines" }.count == 1)
+  #expect(try await worker.run() == 0)
+  #expect(hub.paths.filter { $0 == "/v1/audio/lines" }.count == 1)
+  _ = meta
+}

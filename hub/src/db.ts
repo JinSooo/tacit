@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { audioSchema } from "./audio.ts";
 import { distillSchema } from "./distill/schema.ts";
 import { requestsSchema } from "./distill/requests.ts";
-import { conversationSchema } from "./conversations.ts";
+import { conversationSchema, lineSchema } from "./conversations.ts";
 import { DistillStore } from "./distill/store.ts";
 import { createHash } from "node:crypto";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
@@ -52,7 +52,7 @@ export class HubDB {
       this.db.pragma(`key='${key.replaceAll("'", "''")}'`);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 7) throw new Error("数据库版本比当前 hub 新");
+      if (version > 8) throw new Error("数据库版本比当前 hub 新");
       if (version === 1 && file !== ":memory:") {
         try { copyFileSync(file, join(dirname(file), "history.db.bak-v1"), constants.COPYFILE_EXCL); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
@@ -63,7 +63,7 @@ export class HubDB {
       // 必须先拿写锁再读取版本，等待另一进程迁移完成后才能决定迁移步骤。
       this.db.transaction(() => {
         const version = this.db.pragma("user_version", { simple: true }) as number;
-        if (version > 7) throw new Error("数据库版本比当前 hub 新");
+        if (version > 8) throw new Error("数据库版本比当前 hub 新");
         if (version === 0) {
           this.db.exec(`
             CREATE TABLE records (
@@ -107,6 +107,7 @@ export class HubDB {
         if (version < 5) this.db.exec(audioSchema);
         if (version < 6) this.db.exec(requestsSchema);
         if (version < 7) this.db.exec(conversationSchema);
+        if (version < 8) this.db.exec(lineSchema);
       }).immediate();
     } catch (e) { this.db.close(); throw e; }
   }
