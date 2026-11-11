@@ -20,7 +20,7 @@ struct MenuBarPanel: View {
   @State private var recent = Loader<[HistoryRecord]>()
 
   var body: some View {
-    panel.tint(Palette.accent)
+    panel
   }
 
   var panel: some View {
@@ -80,9 +80,9 @@ struct MenuBarPanel: View {
     return HStack(spacing: 10) {
       Circle().fill(dot).frame(width: 8, height: 8)
       VStack(alignment: .leading, spacing: 2) {
-        Text(title).font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(Palette.ink)
+        Text(title).font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(.primary)
         if let subtitle {
-          Text(subtitle).font(.system(size: TextSize.caption)).foregroundStyle(c.hubError == nil ? Palette.muted : Palette.attention)
+          Text(subtitle).font(.system(size: TextSize.caption)).foregroundStyle(c.hubError == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Palette.attention))
             .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             .help(c.hubError ?? "")
         }
@@ -108,7 +108,7 @@ struct MenuBarPanel: View {
   var dot: Color {
     switch store.capture.state {
     case .recording: return Palette.attention
-    case .paused: return Palette.faint
+    case .paused: return Color(nsColor: .tertiaryLabelColor)
     case .noPermission: return Palette.attention
     }
   }
@@ -136,21 +136,21 @@ struct MenuBarPanel: View {
         if let state = now.value {
           if let brief = state?.brief, !brief.isEmpty {
             Text(brief)
-              .font(.serif(TextSize.title)).lineSpacing(TextSize.serifLineSpacing(TextSize.title)).foregroundStyle(Palette.ink)
+              .font(.serif(TextSize.title)).lineSpacing(TextSize.serifLineSpacing(TextSize.title)).foregroundStyle(.primary)
               .lineLimit(4).multilineTextAlignment(.leading)
               .fixedSize(horizontal: false, vertical: true)
           } else {
-            Text("记录一段时间后，这里会写出你正在做什么。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+            Text("记录一段时间后，这里会写出你正在做什么。").font(.system(size: TextSize.body)).foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           if let at = state?.updatedAt.flatMap(ViewerTime.parse) {
-            Text(Fmt.updated(at)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+            Text(Fmt.updated(at)).font(.system(size: TextSize.caption)).foregroundStyle(.secondary)
           }
         } else if now.error != nil {
-          Text("连不上后台服务，暂时看不到此刻在做什么。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+          Text("连不上后台服务，暂时看不到此刻在做什么。").font(.system(size: TextSize.body)).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         } else {
-          RoundedRectangle(cornerRadius: Radius.control).fill(Palette.fill).frame(height: 40)
+          RoundedRectangle(cornerRadius: Radius.control).fill(.quaternary).frame(height: 40)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -167,13 +167,13 @@ struct MenuBarPanel: View {
       let rows = hour.value ?? []
       VStack(alignment: .leading, spacing: 6) {
         HStack(alignment: .firstTextBaseline) {
-          Text("近 1 小时").font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.muted)
+          Text("近 1 小时").font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(.secondary)
           Spacer()
           if hour.value != nil {
             // rows：结束（没有结束时间的按开始）落在这一小时里的记录条数。
             // 活跃：这些记录时段的并集落在这一小时内的长度，重叠只算一次。
             Text(rows.isEmpty ? "没有记录" : "\(Fmt.count(rows.count)) 条记录，活跃 \(Fmt.duration(ActiveTime.seconds(rows, within: range)))")
-              .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+              .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(.secondary)
           }
         }
         HourBar(records: rows, range: range)
@@ -186,7 +186,7 @@ struct MenuBarPanel: View {
   @ViewBuilder var recentList: some View {
     if let rows = recent.value {
       if rows.isEmpty {
-        Text("还没有记录").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        Text("还没有记录").font(.system(size: TextSize.body)).foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, minHeight: 60)
       } else {
         VStack(spacing: 0) {
@@ -200,7 +200,7 @@ struct MenuBarPanel: View {
         .padding(.horizontal, 6)
       }
     } else if let e = recent.error {
-      Text("读不到最近的记录").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).help(e).padding(.horizontal, 16).padding(.vertical, 12)
+      Text("读不到最近的记录").font(.system(size: TextSize.body)).foregroundStyle(.secondary).help(e).padding(.horizontal, 16).padding(.vertical, 12)
     } else {
       // 占住大致高度，读完后面板不会突然变高一大截。
       Color.clear.frame(height: 5 * RecentRow.height)
@@ -227,7 +227,7 @@ struct MenuBarPanel: View {
         .buttonStyle(PanelButtonStyle()).keyboardShortcut("o")
     }
     .font(.system(size: TextSize.body))
-    .foregroundStyle(Palette.ink)
+    .foregroundStyle(.primary)
   }
 }
 
@@ -246,18 +246,18 @@ struct RecentRow: View {
         VStack(alignment: .leading, spacing: 2) {
           HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(title)
-              .font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(1)
+              .font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
             Spacer(minLength: 4)
-            Text(ViewerFormat.clock(record.start)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+            Text(ViewerFormat.clock(record.start)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(.secondary)
           }
           if let line = snippet, line != title {
-            Text(line).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).lineLimit(1)
+            Text(line).font(.system(size: TextSize.caption)).foregroundStyle(.secondary).lineLimit(1)
           }
         }
       }
       .padding(.horizontal, 10).padding(.vertical, 6)
       // 面板圆角 14，行在 6 的内边距里：悬停底色圆角 14 − 6 = 8。
-      .background(RoundedRectangle(cornerRadius: StatusPanel.cornerRadius - 6, style: .continuous).fill(hovering ? Palette.fill : .clear))
+      .background(RoundedRectangle(cornerRadius: StatusPanel.cornerRadius - 6, style: .continuous).fill(.quaternary.opacity(hovering ? 1 : 0)))
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -296,10 +296,10 @@ struct HourBar: View {
         let w = geo.size.width
         let x = { (d: Date) in CGFloat(min(max(d.timeIntervalSince(range.lowerBound) / span, 0), 1)) * w }
         ZStack(alignment: .leading) {
-          Rectangle().fill(Palette.fill)
+          Rectangle().fill(.quaternary)
           ForEach(records) { r in
             let a = x(r.start), b = x(r.end ?? r.start)
-            Rectangle().fill(Palette.muted.opacity(0.7))
+            Rectangle().fill(.secondary)
               .frame(width: max(1.5, b - a)).offset(x: a)
           }
         }
@@ -313,7 +313,7 @@ struct HourBar: View {
         Spacer()
         Text("现在")
       }
-      .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+      .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(.secondary)
     }
   }
 }
@@ -348,7 +348,7 @@ struct PanelButtonStyle: ButtonStyle {
       configuration.label
         .padding(.horizontal, 8).frame(minWidth: 28, minHeight: 28)
         .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-          .fill(configuration.isPressed || hovering ? Palette.fill : .clear))
+          .fill(.quaternary.opacity(configuration.isPressed || hovering ? 1 : 0)))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
     }
