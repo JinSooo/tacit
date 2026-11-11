@@ -267,6 +267,7 @@ final class AudioCoordinator {
     meta.meeting_apps = calendarMeetings.meetingApps(meta.meeting_apps, start: AudioPolicy.date(meta.t_start)!, end: end)
     meta.t_end = LocalTime.iso(end); try meta.transition(to: .closed, at: Date())
     try store?.writeMetadata(meta); current = nil; boundary.reset()
+    closedScan.invalidate()
   }
   private func tryOperation(_ operation: () throws -> Void) {
     do { try operation() } catch { failure = "音频存储操作失败：\(error)" }
@@ -274,17 +275,23 @@ final class AudioCoordinator {
   private func shouldRunWorker(_ now: Date) -> Bool {
     guard worker == nil, now.timeIntervalSince(workerFailureAt) >= 60, FileManager.default.isExecutableFile(atPath: workerURL.path) else { return false }
     if voiceChanged { return true }
+    // 本函数每秒被调用，扫描全部 meta.json 会拖慢音频队列导致丢帧停录；磁盘扫描最多每分钟一次，其间沿用上次结论。
+    // 对话一结束就转写，不再等上次启动满 10 分钟（2026-11-12：处理半小时对话只要 40 秒，延迟几乎全是这段等待）。
+    // 转写进程异常退出后仍隔 10 分钟，免得卡在同一段对话上反复启动。
+    if now.timeIntervalSince(workerCrashedAt) >= 600,
+       closedScan.check(at: now, scan: { ((try? store?.conversations()) ?? []).contains { $0.status == .closed } }) { return true }
     guard now.timeIntervalSince(lastWorker) >= 600 else { return false }
     // hub 要试听样本时也要跑一次，否则新声音要等下一段对话录完才有样本。
     if samplesRequested { return true }
-    // 本函数每秒被调用，扫描全部 meta.json 会拖慢音频队列导致丢帧停录；磁盘扫描最多每分钟一次，其间沿用上次结论。
     return pendingScan.check(at: now) {
       // 旧对话还没按当前规则重认完（转写进程做完会留下标记文件）时也要启动。
       if let root = store?.root, !FileManager.default.fileExists(atPath: root.appendingPathComponent(WorkerLogic.relabelMarker).path) { return true }
-      return ((try? store?.conversations()) ?? []).contains { $0.status == .closed || ($0.status == .failed && ($0.attempts ?? 0) < 3) }
+      return ((try? store?.conversations()) ?? []).contains { $0.status == .failed && ($0.attempts ?? 0) < 3 }
     }
   }
+  private var closedScan = PendingWorkScan()
   private var pendingScan = PendingWorkScan()
+  private var workerCrashedAt = Date.distantPast
   private static let workerLaunchFailure = "转写进程启动失败"
   private var workerURL: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ra-audio-worker") }
   private func request(path: String, body: [String: Any]? = nil, completion: @escaping (Data?) -> Void) {
@@ -337,8 +344,13 @@ final class AudioCoordinator {
     process.arguments = ["-b", workerURL.path, "--data-dir", config.dataDir.path, "--device", config.device, "--hub", config.hubURL.absoluteString]
     var env = ProcessInfo.processInfo.environment; env["RA_DATA_DIR"] = config.dataDir.path; process.environment = env
     process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.standardError
-    process.terminationHandler = { [weak self] _ in
-      self?.queue.async { [weak self] in self?.worker = nil; self?.lastSync = .distantPast; self?.pendingScan.invalidate() }
+    process.terminationHandler = { [weak self] p in
+      let crashed = p.terminationReason == .uncaughtSignal
+      self?.queue.async { [weak self] in
+        guard let self else { return }
+        self.worker = nil; self.lastSync = .distantPast; self.closedScan.invalidate(); self.pendingScan.invalidate()
+        if crashed { self.workerCrashedAt = Date() }
+      }
     }
     do {
       try process.run(); worker = process; lastWorker = Date(); voiceChanged = false
