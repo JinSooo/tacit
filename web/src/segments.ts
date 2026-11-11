@@ -104,8 +104,9 @@ export function withoutRecords(conversations: Conversation[], ids: string[], row
 }
 export function conversationTitle(c: Conversation): string {
   if (c.title?.trim()) return `对话：${c.title.trim()}`;
-  const length = durationText(Math.floor((c.end_ms - c.start_ms) / 1000));
-  return length ? `对话 ${length}` : "对话";
+  // 不到 1 分钟的不写时长，免得出现"对话 不到 1 分钟"。
+  const seconds = Math.floor((c.end_ms - c.start_ms) / 1000);
+  return seconds >= 60 ? `对话 ${durationText(seconds)}` : "对话";
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");

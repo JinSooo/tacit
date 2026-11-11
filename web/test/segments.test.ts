@@ -47,6 +47,7 @@ test("对话一行的标题：有总结用总结的标题，没有时写时长�
   expect(conversationTitle(talk("a", ["a"]))).toBe("对话 42 分钟");
   expect(conversationTitle(talk("a", ["a"], null, 75))).toBe("对话 1 小时 15 分");
   expect(conversationTitle(talk("a", ["a"], "  ", 0))).toBe("对话");
+  expect(conversationTitle(talk("a", ["a"], null, 0.5))).toBe("对话");
 });
 
 test("删掉对话的第一条记录后，这一行改用剩下的记录打开，旧总结的标题不再显示", () => {
