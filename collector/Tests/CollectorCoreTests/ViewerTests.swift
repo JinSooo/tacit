@@ -284,3 +284,31 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
 private enum InstanceLockUnavailableCheck {
   static func ok(_ path: String) -> Bool { if case .unavailable = InstanceLock.acquire(path: path) { return true }; return false }
 }
+
+// 用户报告（2026-11-12）：菜单栏面板里同一个微信聊天的两条消息和读微信窗口的一条记录分成三行。
+@Test func recentRunsMergeOneChatAndItsWindow() throws {
+  func r(_ id: String, _ source: String, _ title: String, _ start: String, _ end: String? = nil, app: String, chat: String? = nil) throws -> HistoryRecord {
+    let ctx = #"{"app":"\#(app)"\#(chat.map { #","chat":"\#($0)""# } ?? "")}"#
+    let endField = end.map { #","t_end":"\#($0)""# } ?? ""
+    return try decode(HistoryRecord.self, #"{"id":"\#(id)","device":"mac","source":"\#(source)","t_start":"\#(start)"\#(endField),"title":"\#(title)","context":\#(ctx)}"#)
+  }
+  let wx = "com.tencent.xinWeChat"
+  let rows = [
+    try r("a", "mac.wps", "Home", "2026-11-12T01:28:00+09:00", app: "wps"),
+    try r("b", "mac.wechat", "微信 · F吴广雷 · 我", "2026-11-12T01:24:46+09:00", app: wx, chat: "F吴广雷"),
+    try r("c", "mac.wechat", "微信 · F吴广雷 · F吴广雷", "2026-11-12T01:24:46+09:00", app: wx, chat: "F吴广雷"),
+    try r("d", "mac.screen", "WeChat · Weixin", "2026-11-12T01:24:37+09:00", "2026-11-12T01:24:49+09:00", app: wx),
+    try r("e", "mac.wechat", "微信 · 张三 · 张三", "2026-11-12T01:20:00+09:00", app: wx, chat: "张三"),
+    try r("f", "mac.screen", "Ghostty · 任务 A", "2026-11-12T01:10:00+09:00", app: "ghostty"),
+    try r("g", "mac.screen", "Ghostty · 任务 B", "2026-11-12T01:09:00+09:00", app: "ghostty"),
+    try r("h", "mac.screen", "Ghostty · 任务 B", "2026-11-12T01:08:00+09:00", app: "ghostty"),
+  ]
+  let runs = RecentRuns.group(rows)
+  // 换了聊天另起一行；同一应用里标题不同的不合并。
+  #expect(runs.map { $0.map(\.id) } == [["a"], ["b", "c", "d"], ["e"], ["f"], ["g", "h"]])
+  #expect(RecentRuns.chat(runs[1]) == "F吴广雷")
+  #expect(RecentRuns.group(rows, limit: 2).count == 2)
+  // 隔了 5 分钟以上不算同一段。
+  let far = [rows[1], try r("x", "mac.wechat", "微信 · F吴广雷 · 我", "2026-11-12T01:10:00+09:00", app: wx, chat: "F吴广雷")]
+  #expect(RecentRuns.group(far).count == 2)
+}

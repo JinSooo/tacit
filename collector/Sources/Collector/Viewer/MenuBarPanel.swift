@@ -36,7 +36,8 @@ struct MenuBarPanel: View {
       recentList.padding(.vertical, 6)
       Divider()
       // 左右和顶部状态行一样留 16：右边的按钮和暂停按钮对齐，左边的文字和上面的文字对齐。
-      footer.padding(.horizontal, 16).padding(.vertical, 10)
+      // 图标按钮自带 8 的内边距：左右各留 8，图标和文字正好落在 16 的位置，和上面对齐。
+      footer.padding(.horizontal, 8).padding(.vertical, 8)
     }
     .frame(width: Self.width)
     .fixedSize(horizontal: false, vertical: true)
@@ -67,7 +68,8 @@ struct MenuBarPanel: View {
       return try await api.records(q, cursor: nil).records.filter { ($0.end ?? $0.start) >= since }
     }
     async let c: Void = recent.run {
-      var q = HubAPI.RecordQuery(); q.limit = 5; q.body = true
+      // 同一件事的几条合成一行，多取一些才凑得满 5 行。
+      var q = HubAPI.RecordQuery(); q.limit = 40; q.body = true
       return try await api.records(q, cursor: nil).records
     }
     async let d: Void = store.refreshShared()
@@ -191,9 +193,10 @@ struct MenuBarPanel: View {
           .frame(maxWidth: .infinity, minHeight: 60)
       } else {
         VStack(spacing: 0) {
-          ForEach(rows) { r in
-            RecentRow(record: r) {
-              store.showRecord(r.id, at: r.start)
+          ForEach(RecentRuns.group(rows), id: \.first!.id) { run in
+            let row = RecentRow(run: run)
+            RecentRow(run: run) {
+              store.showRecord(row.record.id, at: row.record.start)
               open(.history)
             }
           }
@@ -210,7 +213,7 @@ struct MenuBarPanel: View {
 
   // MARK: 底部
 
-  /// 和右上角的暂停按钮一样用小号带框按钮，一眼能看出能点；待确认的数量用角标，和"邮件"的未读数一样。
+  /// 设置和打开主窗口只放图标（点"此刻"和最近记录也会打开主窗口）；待确认的数量用角标，和"邮件"的未读数一样。
   var footer: some View {
     HStack(spacing: 4) {
       if !store.pending.isEmpty {
@@ -224,25 +227,27 @@ struct MenuBarPanel: View {
           }
         }
         .buttonStyle(PanelButtonStyle())
-        .padding(.leading, -8)
       }
       Spacer()
       Button { open(.settings) } label: { PhIcon("gear-six", size: 16) }
         .buttonStyle(PanelButtonStyle()).help("设置").accessibilityLabel("设置")
-      Button("打开 Record Anything") { open(.now) }
-        .buttonStyle(.bordered).controlSize(.small).keyboardShortcut("o")
+      Button { open(.now) } label: { PhIcon("app-window", size: 16) }
+        .buttonStyle(PanelButtonStyle()).keyboardShortcut("o").help("打开 Record Anything").accessibilityLabel("打开 Record Anything")
     }
     .font(.system(size: TextSize.body))
     .foregroundStyle(.secondary)
   }
 }
 
-/// 一条最近的记录：来源图标、标题、时间，下面一行正文开头。
+/// 最近的一段（见 RecentRuns）：来源图标、标题、最新的时间，下面一行最新的内容。微信按聊天合成一行，标题是聊天名。
 struct RecentRow: View {
   /// 带正文的一行大约的高度，读取前占位用。
   static let height: CGFloat = 46
-  let record: HistoryRecord
-  let action: () -> Void
+  let run: [HistoryRecord]
+  var action: () -> Void = {}
+  /// 代表这一行的记录：微信取最新的一条消息，其他取最新的一条。
+  var record: HistoryRecord { run.first { $0.contextText("chat") != nil } ?? run[0] }
+  var chat: String? { RecentRuns.chat(run) }
   @State private var hovering = false
 
   var body: some View {
@@ -254,7 +259,7 @@ struct RecentRow: View {
             Text(title)
               .font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
             Spacer(minLength: 4)
-            Text(ViewerFormat.clock(record.start)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(.secondary)
+            Text(ViewerFormat.clock(run[0].start)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(.secondary)
           }
           if let line = snippet, line != title {
             Text(line).font(.system(size: TextSize.caption)).foregroundStyle(.secondary).lineLimit(1)
@@ -273,6 +278,7 @@ struct RecentRow: View {
   /// 图标已经说明是哪个应用，标题不再重复应用名。剪贴板记录的标题是复制内容的开头，
   /// 和下面一行重复，所以改说从哪个应用复制。
   var title: String {
+    if let chat { return chat }
     if record.source == "mac.clipboard", record.body?.isEmpty == false {
       if let app = AppIcons.name(record.contextText("app")) { return "从 \(app) 复制" }
       return "复制了一段文字"
@@ -282,6 +288,9 @@ struct RecentRow: View {
 
   /// 正文压成一行；没有正文时用网址的域名或所在目录。
   var snippet: String? {
+    if chat != nil, case .object(let extra)? = record.context?["extra"], let sender = extra["sender"]?.text, let body = record.body?.trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty {
+      return "\(sender)：\(body.split(whereSeparator: \.isNewline).joined(separator: " "))"
+    }
     let text = (record.body ?? "").split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
       .filter { !$0.isEmpty }.joined(separator: " ")
     if !text.isEmpty { return text }

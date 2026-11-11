@@ -5,6 +5,7 @@ import Foundation
 /// 码位取自官方包的 Fonts/regular/style.css，Regular 和 Fill 两套字体码位相同。
 public enum PhosphorGlyphs {
   public static let table: [(name: String, code: UInt32)] = [
+    ("app-window", 0xE5DA),
     ("arrow-circle-right", 0xE02E),
     ("arrow-clockwise", 0xE036),
     ("arrow-right", 0xE06C),

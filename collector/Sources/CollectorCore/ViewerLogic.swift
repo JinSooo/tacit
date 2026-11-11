@@ -163,6 +163,36 @@ public enum RecordRuns {
   }
 }
 
+/// 菜单栏面板的最近记录：相邻的同一件事合成一行（用户报告：同一个微信聊天的几条消息分开列，占满了面板）。
+/// 同一应用里同一个会话（微信按聊天）或同一个标题的记录合并；同一应用里读窗口得来、不带会话的界面记录并进旁边那个会话。
+public enum RecentRuns {
+  /// records 按开始时间从新到旧排列；最多返回 limit 行，每行里新的在前。
+  public static func group(_ records: [HistoryRecord], gap: TimeInterval = 300, limit: Int = 5) -> [[HistoryRecord]] {
+    var out: [[HistoryRecord]] = []
+    for r in records {
+      if let run = out.last, joins(r, run), run.last!.start.timeIntervalSince(r.end ?? r.start) <= gap {
+        out[out.count - 1].append(r)
+      } else {
+        if out.count == limit { break }
+        out.append([r])
+      }
+    }
+    return out
+  }
+
+  public static func chat(_ run: [HistoryRecord]) -> String? { run.lazy.compactMap { $0.contextText("chat") }.first }
+
+  static func joins(_ r: HistoryRecord, _ run: [HistoryRecord]) -> Bool {
+    guard let app = r.contextText("app"), run.allSatisfy({ $0.contextText("app") == app }) else { return false }
+    switch (r.contextText("chat"), chat(run)) {
+    case let (c?, rc?): return c == rc
+    case (_?, nil): return run.allSatisfy { $0.source == "mac.screen" }
+    case (nil, _?): return r.source == "mac.screen"
+    case (nil, nil): return r.source == run[0].source && r.title == run[0].title
+    }
+  }
+}
+
 /// 搜索结果里命中位置附近的一段正文，压成一行。
 public struct SearchSnippet: Equatable, Sendable {
   public let before: String
