@@ -10,6 +10,7 @@ import { DistillRules } from "./rules.ts";
 import { DistillRequests, localDayStart } from "./requests.ts";
 import * as P from "./prompts.ts";
 import { readGeneral } from "../general-settings.ts";
+import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
 
 export interface LLM { complete<T>(req: LLMRequest): Promise<LLMResult<T>> }
 export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: string) => void }
@@ -24,6 +25,8 @@ export const LIMITS = {
   assignDoneThreads: 10, assignDoneWindow: 14 * DAY,
   // 门槛（AGENTS.md）：累计 15 分钟或跨两段活动才建线程，不够的只进日记。
   threadMinutes: 15, threadFrames: 2,
+  // 对话总结：只看录音保留期内的，每轮最多写几场，单场原文太长时留头尾。
+  conversationDays: 7, conversationsPerRound: 4, conversationChars: 24_000,
 };
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -248,6 +251,43 @@ function applyClassification(store: DistillStore, id: string, out: P.Classificat
 }
 
 /** 没有新片段的存量线程走轻量判断；有新片段的留给 digest 一起判断。 */
+// ---------------- 对话总结（minute 档） ----------------
+
+/** 整理过的原文给模型；太长时留开头三分之二、结尾三分之一。 */
+export function conversationTranscript(turns: { at: string; speaker: string; text: string }[], budget = LIMITS.conversationChars): string {
+  const text = turns.map(t => `${hhmm(Date.parse(t.at))} ${t.speaker}：${t.text}`).join("\n");
+  const cps = Array.from(text);
+  if (cps.length <= budget) return text;
+  const head = Math.floor(budget * 2 / 3);
+  return `${cps.slice(0, head).join("")}\n（中间省略）\n${cps.slice(cps.length - (budget - head)).join("")}`;
+}
+
+/** 结束超过 10 分钟（不会再接上新的一段）、还没有总结或组成变了的对话，各写一段总结。私密的不发给模型。 */
+export async function conversationStep(d: Deps, now: number) {
+  const groups = conversationsIn(d.db, now - LIMITS.conversationDays * DAY, now);
+  const namer = speakerNamer(d.db);
+  const todo = groups.filter(g => now - g.end_ms >= CONVERSATION_GAP_MS).flatMap(g => {
+    const turns = groupTurns(d.db, g, namer());
+    return summaryState(g, turns, storedSummary(d.db, g), now) === "waiting" ? [{ g, turns }] : [];
+  });
+  // 新的先写：刚结束的对话最可能马上被打开看。
+  todo.sort((a, b) => b.g.start_ms - a.g.start_ms);
+  let calls = 0, done = 0;
+  for (const { g, turns } of todo.slice(0, LIMITS.conversationsPerRound)) {
+    calls++;
+    const r = await d.llm.complete<P.ConversationOutput>({ tier: "minute", system: P.CONVERSATION_SYSTEM,
+      prompt: P.conversationPrompt({ start: clock(g.start_ms), end: clock(g.end_ms), app: g.app }, conversationTranscript(turns)), schema: P.CONVERSATION_SCHEMA });
+    if (!r.ok) continue;
+    const out = { title: r.data.title.trim(), summary: r.data.summary.trim(), points: r.data.points.map(p => p.trim()).filter(Boolean).slice(0, 5) };
+    if (!out.title || !out.summary) continue;
+    // 调用期间记录可能被删或者接上了新的一段：组成变了就不写，下一轮重来。
+    const current = conversationsIn(d.db, g.start_ms, g.start_ms).find(c => c.id === g.id);
+    if (!current || JSON.stringify(current.record_ids) !== JSON.stringify(g.record_ids)) continue;
+    saveSummary(d.db, g, out); done++;
+  }
+  return { calls, done, pending: todo.length - done };
+}
+
 export async function classifyStep(d: Deps, store: DistillStore) {
   let calls = 0, updated = 0, failed = 0;
   const rows = store.hub.db.prepare("SELECT id FROM threads WHERE domain IS NULL ORDER BY last_ms DESC,id").all() as { id: string }[];
@@ -469,6 +509,7 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
   out.slice = sliceStep(d.db, opts.backfill ?? false, now, opts.enabledDefault ?? now);
   out.assign = await assignStep(d, store, now);
   out.classify = await classifyStep(d, store);
+  out.conversations = await conversationStep(d, now);
   if (opts.slow) {
     out.digest = await digestStep(d, store, now);
     out.projects = await projectStep(d, store, now);

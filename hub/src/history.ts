@@ -1,4 +1,5 @@
 import { HubDB, InputError } from "./db.ts";
+import { conversationList } from "./conversations.ts";
 
 /**
  * History 列表给人看的"活动段"：同一线程时间上接得上的记录合成一段，还没归属线程的按应用临时分组。
@@ -56,7 +57,7 @@ function appOf(context: string | null): string | null {
   catch { return null; }
 }
 
-export function historySegments(hub: HubDB, params: URLSearchParams): { segments: Segment[] } {
+export function historySegments(hub: HubDB, params: URLSearchParams): { segments: Segment[]; conversations: ReturnType<typeof conversationList> } {
   const from = Date.parse(params.get("from") ?? ""), to = Date.parse(params.get("to") ?? "");
   if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) throw new InputError("需要有效的 from 和 to");
   if (to - from > MAX_RANGE_MS) throw new InputError("时间范围不能超过 31 天");
@@ -113,5 +114,6 @@ export function historySegments(hub: HubDB, params: URLSearchParams): { segments
   });
   // 和 /v1/records 一致：新的在前。
   segments.sort((a,b) => b.start_ms-a.start_ms || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
-  return { segments };
+  // 对话按场合并（被静音切开的几条记录是同一场），列表里一场一行，标题用总结里的。
+  return { segments,conversations: conversationList(hub,from,to) };
 }

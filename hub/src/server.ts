@@ -9,6 +9,7 @@ import { resolve, extname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HubDB, InputError } from "./db.ts";
 import { historySegments } from "./history.ts";
+import { conversationDetail } from "./conversations.ts";
 import { hubStatus } from "./status.ts";
 import { DEFAULT_PORT, dataDirOf } from "./hub-json.ts";
 import { createSettings, type SettingsDeps } from "./settings.ts";
@@ -154,6 +155,8 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
       }
       if (method === "GET" && url.pathname === "/v1/records") return Response.json(db.list(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/history/segments") return Response.json(historySegments(db,url.searchParams));
+      const conversation = /^\/v1\/conversations\/([0-9A-HJKMNP-TV-Z]{26})$/.exec(url.pathname);
+      if (method === "GET" && conversation) return Response.json(conversationDetail(db,conversation[1]!));
       if (method === "POST" && url.pathname === "/v1/records") {
         const record = await readJSON();
         if (!record || typeof record !== "object" || typeof (record as { source?: unknown }).source !== "string"

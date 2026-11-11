@@ -34,7 +34,7 @@ test("真实 v1 加密结构升级，备份仍为 v1 且不覆盖，未来版本
   PRAGMA user_version=1;`);
   db.close();
   const upgraded = new HubDB(file,ctx.config.dbKey);
-  expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(6);
+  expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(7);
   expect(upgraded.db.pragma("busy_timeout",{ simple: true })).toBe(5000);
   const r = rec(0); expect(upgraded.ingest([r]).accepted).toBe(1);
   upgraded.close();
@@ -47,7 +47,7 @@ test("真实 v1 加密结构升级，备份仍为 v1 且不覆盖，未来版本
   // 制造迁移失败也不能覆盖已有备份。
   expect(() => new HubDB(file,ctx.config.dbKey)).toThrow();
   expect(readFileSync(backupFile)).toEqual(backup);
-  const future = new Database(file); future.pragma("cipher='sqlcipher'"); future.pragma("legacy=4"); future.pragma(`key='${ctx.config.dbKey}'`); future.pragma("user_version=7"); future.close();
+  const future = new Database(file); future.pragma("cipher='sqlcipher'"); future.pragma("legacy=4"); future.pragma(`key='${ctx.config.dbKey}'`); future.pragma("user_version=8"); future.close();
   expect(() => new HubDB(file,ctx.config.dbKey)).toThrow("版本");
 });
 
@@ -262,7 +262,7 @@ test("旧开发版 v2 打开时补建归属索引，删除与 JSON 归属保持�
   ctx.db.db.exec("DROP TABLE frame_records");
   const reopened = new HubDB(ctx.file,ctx.config.dbKey);
   try {
-    expect(reopened.db.pragma("user_version",{ simple: true })).toBe(6);
+    expect(reopened.db.pragma("user_version",{ simple: true })).toBe(7);
     expect(reopened.db.prepare("SELECT record_id,frame_id FROM frame_records ORDER BY record_id").all()).toEqual([a.id,b.id].sort().map(record_id => ({ record_id,frame_id: f.id })));
     expect(() => new DistillStore(reopened).createFrame(frame([a.id]))).toThrow();
     reopened.delete(a.id);

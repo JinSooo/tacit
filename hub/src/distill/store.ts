@@ -1,4 +1,5 @@
 import { AudioStore } from "../audio.ts";
+import { removeSummariesOf } from "../conversations.ts";
 import { frameRecordsSchema, frameRejectionsSchema } from "./schema.ts";
 import { HubDB, InputError } from "../db.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
@@ -250,6 +251,7 @@ export class DistillStore {
   removeRecord(id: string, time: string) {
     const record = this.hub.get(id);
     if (record?.source === "mac.audio" && record.source_ref) new AudioStore(this.hub).removeConversation(record.source_ref,record.device);
+    removeSummariesOf(this.hub, id);
     const affected = new Set<string>();
     for (const row of this.sql.prepare("SELECT f.*,a.thread_id FROM frame_records r JOIN frames f ON f.id=r.frame_id LEFT JOIN assignments a ON a.frame_id=f.id WHERE r.record_id=?").all(id) as Row[]) {
       if (row.thread_id) affected.add(row.thread_id);
