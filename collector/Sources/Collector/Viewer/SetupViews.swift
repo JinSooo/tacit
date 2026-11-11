@@ -102,60 +102,67 @@ struct AgentSettingsView: View {
 // MARK: 此刻 → 准备清单
 
 /// 三件事都好了就不显示：系统权限、AI 模型能整理、至少接入一个 AI 工具。
+/// 后台服务读不到时不显示，页面其他部分已经会报错。
 struct SetupChecklist: View {
   @Environment(ViewerStore.self) private var store
   @State private var tools: [AgentToolState]?
   @State private var health: DistillHealth?
 
   var body: some View {
-    let missing = store.capture.sources.filter { $0.enabled && $0.needsPermission }
-    let model = health?.state
-    let agentsReady = tools.map { $0.contains { $0.connected } }
-    let ready = missing.isEmpty && model != nil && model != .waiting && !isFailing(model) && agentsReady == true
+    let missing = store.capture.sources.filter(\.needsPermission)
     Group {
-      if !ready, health != nil || tools != nil {
-        VStack(alignment: .leading, spacing: 0) {
-          Text("还差几步").font(.system(size: TextSize.title, weight: .semibold)).padding(.bottom, 12)
-          step(done: missing.isEmpty, title: "打开系统权限",
-               detail: missing.isEmpty ? nil : "还缺：" + missing.compactMap(\.permissionName).joined(separator: "、")) {
-            if let first = missing.first { Button("授权…") { store.perform(.requestPermission(first.id)) } }
+      if let tools, let health {
+        let modelReady = health.state == .working
+        let agentsReady = tools.contains(where: \.connected)
+        if !(missing.isEmpty && modelReady && agentsReady) {
+          VStack(alignment: .leading, spacing: 0) {
+            Text("还差几步").sectionTitle().padding(.bottom, 4)
+            step(done: missing.isEmpty, title: "打开系统权限", detail: permissionDetail(missing)) {
+              if let first = missing.first { Button("授权…") { store.perform(.requestPermission(first.id)) } }
+            }
+            Divider()
+            step(done: modelReady, title: "让 AI 整理你的记录", detail: modelDetail(health.state)) {
+              Button("检查 AI 模型…") { open(.models) }
+            }
+            Divider()
+            step(done: agentsReady, title: "接入 Claude Code 或 Codex", detail: agentsReady ? nil : agentDetail(tools)) {
+              if tools.contains(where: \.installed) { Button("连接…") { open(.agents) } }
+            }
           }
-          Divider()
-          step(done: model == .working, title: "让 AI 整理你的记录", detail: modelDetail(model)) {
-            if isFailing(model) { Button("检查 AI 模型…") { open(.models) } }
-          }
-          Divider()
-          step(done: agentsReady == true, title: "接入 Claude Code 或 Codex",
-               detail: agentsReady == true ? nil : agentDetail) {
-            if agentsReady != true, tools?.contains(where: \.installed) == true { Button("连接…") { open(.agents) } }
-          }
+          .padding(.horizontal, 20).padding(.vertical, 16)
+          .card()
+          .transition(.opacity)
         }
-        .padding(16)
-        .card()
       }
     }
+    .animation(.easeOut(duration: 0.2), value: tools == nil || health == nil)
     .task {
       while !Task.isCancelled {
-        tools = try? await store.api.agentTools()
-        health = try? await store.api.distillHealth()
+        async let t = try? store.api.agentTools()
+        async let h = try? store.api.distillHealth()
+        (tools, health) = await (t, h)
         try? await Task.sleep(for: .seconds(30))
       }
     }
   }
 
-  var agentDetail: String {
-    tools?.contains(where: \.installed) == true
+  func permissionDetail(_ missing: [DataSourceStatus]) -> String? {
+    var names: [String] = []
+    for n in missing.compactMap(\.permissionName) where !names.contains(n) { names.append(n) }
+    return names.isEmpty ? nil : "还缺" + names.joined(separator: "、") + "权限。"
+  }
+
+  func agentDetail(_ tools: [AgentToolState]) -> String {
+    tools.contains(where: \.installed)
       ? "接入后，新开的会话会自动知道你最近在做什么。"
       : "这台 Mac 上没找到 Claude Code 或 Codex，装好并登录后再回来连接。"
   }
 
-  func isFailing(_ s: DistillHealth.State?) -> Bool { if case .failing = s { return true }; return false }
-
-  func modelDetail(_ s: DistillHealth.State?) -> String? {
+  func modelDetail(_ s: DistillHealth.State) -> String? {
     switch s {
-    case .waiting?: return "第一次整理会在 15 分钟内完成。"
-    case .failing?: return "最近一次整理没有成功，多半是模型连不上。"
-    default: return nil
+    case .waiting: return "第一次整理会在 15 分钟内完成。"
+    case .failing: return "最近一次整理没有成功，多半是模型连不上。"
+    case .working: return nil
     }
   }
 
@@ -166,16 +173,19 @@ struct SetupChecklist: View {
 
   func step<Action: View>(done: Bool, title: String, detail: String?, @ViewBuilder action: () -> Action) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
-      PhIcon(done ? "check-circle" : "circle-dashed", fill: done, size: TextSize.title)
+      PhIcon(done ? "check-circle" : "circle-dashed", fill: done, size: 16)
         .foregroundStyle(done ? Palette.accent : Palette.faint)
         .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
       VStack(alignment: .leading, spacing: 2) {
         Text(title).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(done ? Palette.muted : Palette.ink)
-        if let detail { Text(detail).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted) }
+        if !done, let detail {
+          Text(detail).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
       Spacer(minLength: 12)
-      if !done { action() }
+      if !done { action().font(.system(size: TextSize.body)) }
     }
-    .padding(.vertical, 10)
+    .padding(.vertical, 12)
   }
 }

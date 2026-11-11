@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createDistillationApi, groupFacts, pendingSummary, pendingTitle, recentPaused, relativeTime, type Api, type Fact } from "../src/distillation.ts";
+import { canCorrect, canDetach, createDistillationApi, groupFacts, pendingSummary, pendingTitle, recentPaused, relativeTime, type Api, type Fact } from "../src/distillation.ts";
 
 test("最近暂停只留 3 天内有活动的暂停线程，最近的在前；翻页到更早的就停", async () => {
   const now = Date.parse("2026-11-10T12:00:00+08:00");
@@ -103,4 +103,18 @@ test("mock 写入覆盖所有待确认动作与 supersedes 修正，失败向调
   expect(() => client.correct(fact, "  ")).toThrow("请填写修正内容");
   const failing = createDistillationApi(async () => { throw new Error("合成服务故障"); });
   await expect(failing.resolve("p", { action: "confirm" })).rejects.toThrow("合成服务故障");
+});
+test("不属于这里：只给挂在事项上的事实，POST 到编码后的 detach 地址；这条不对只给已定和推测", async () => {
+  expect(canDetach(fact)).toBe(true);
+  expect(canDetach({ ...fact, thread_id: null })).toBe(false);
+  expect(canDetach({ ...fact, thread_id: undefined })).toBe(false);
+  expect(canCorrect(fact)).toBe(true);
+  expect(canCorrect({ ...fact, kind: "inference" })).toBe(true);
+  expect(canCorrect({ ...fact, kind: "next" })).toBe(false);
+  const calls: { path: string; init?: RequestInit }[] = [];
+  const client = createDistillationApi(async <T,>(path: string, init?: RequestInit) => { calls.push({ path, init }); return { frames: 1, facts: 2 } as T; });
+  expect(await client.detach({ ...fact, id: "f/1" })).toEqual({ frames: 1, facts: 2 });
+  expect(calls).toEqual([{ path: "/v1/facts/f%2F1/detach", init: { method: "POST" } }]);
+  const failing = createDistillationApi(async () => { throw new Error("事实不存在或已失效"); });
+  await expect(failing.detach(fact)).rejects.toThrow("事实不存在或已失效");
 });

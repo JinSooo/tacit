@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { groupFacts, pendingSummary, pendingTitle, recentPaused, recentPausedMs, relativeTime, type DistillationApi, type Evidence, type Fact, type Pending, type Project, type Resolution, type Thread } from "./distillation.ts";
+import { canCorrect, canDetach, groupFacts, pendingSummary, pendingTitle, recentPaused, recentPausedMs, relativeTime, type DistillationApi, type Evidence, type Fact, type Pending, type Project, type Resolution, type Thread } from "./distillation.ts";
 import { createUndoQueue, type UndoEntry, type UndoQueue } from "./undo.ts";
 import { recordTitle, speechText } from "./history.ts";
 
@@ -49,14 +49,25 @@ function EvidenceList({ fact, load, onHistory }: { fact: Fact; load: () => Promi
 }
 function CorrectionDialog({ fact, api, onSaved, onClose }: { fact: Fact; api: DistillationApi; onSaved: () => void; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(fact.text);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => { dialog.current?.showModal(); }, []);
+  const trimmed = text.trim();
   return <dialog ref={dialog} aria-labelledby="fact-correction-title" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}><form onSubmit={async event => {
     event.preventDefault(); setBusy(true); setError("");
     try { await api.correct(fact, text); onSaved(); } catch (error) { setError(message(error)); } finally { setBusy(false); }
-  }}><h2 id="fact-correction-title">这条不对，应该是？</h2><p className="quote">{fact.text}</p><label>正确的说法<textarea required autoFocus rows={5} value={text} onChange={event => setText(event.target.value)} /></label>{error && <p className="error" role="alert">{error}</p>}<div className="actions"><button className="primary" disabled={busy || !text.trim()} type="submit">{busy ? "正在保存…" : "保存修正"}</button><button disabled={busy} type="button" onClick={onClose}>取消</button></div></form></dialog>;
+  }}><h2 id="fact-correction-title">这条不对</h2><p className="quote">{fact.text}</p><label>改成<textarea required autoFocus rows={5} value={text} onChange={event => setText(event.target.value)} /></label><p className="muted">依据和归属不变，以后显示你写的这句。</p>{error && <p className="error" role="alert">{error}</p>}<div className="actions"><button className="primary" disabled={busy || !trimmed || trimmed === fact.text} type="submit">{busy ? "正在修正…" : "修正"}</button><button disabled={busy} type="button" onClick={onClose}>取消</button></div></form></dialog>;
+}
+function DetachDialog({ fact, api, onDone, onClose }: { fact: Fact; api: DistillationApi; onDone: () => void; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} aria-labelledby="fact-detach-title" aria-describedby="fact-detach-note" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}><form onSubmit={async event => {
+    event.preventDefault(); setBusy(true); setError("");
+    try { await api.detach(fact); onDone(); } catch (error) { setError(message(error)); } finally { setBusy(false); }
+  }}><h2 id="fact-detach-title">这条内容不属于这件事项？</h2><p className="quote">{fact.text}</p><p id="fact-detach-note">它和 {fact.evidence.length} 条依据所在的活动会从这件事项里移走，以后也不会再分回来。下次整理时会自动归到合适的地方。</p>{error && <p className="error" role="alert">{error}</p>}<div className="actions"><button className="primary" autoFocus disabled={busy} type="submit">{busy ? "正在移出…" : "移出"}</button><button disabled={busy} type="button" onClick={onClose}>取消</button></div></form></dialog>;
 }
 const factIcons: Record<Fact["kind"], string> = { decision: "M3 8.5l3 3 7-7", rejected: "M4 4l8 8M12 4l-8 8", open: "M5.5 6a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5V11M8 13.5v.01", next: "M3 8h10M9 4l4 4-4 4", inference: "M2.5 9.5c1.5-3 3.5-3 5.5-1s4 2 5.5-1" };
 function FactIcon({ kind }: { kind: Fact["kind"] }) {
@@ -68,7 +79,8 @@ function Summary({ goal, progress }: { goal?: string; progress?: string }) {
 }
 function Facts({ facts, api, loadEvidence, onHistory, onChanged }: { facts: Fact[]; api: DistillationApi; loadEvidence: () => Promise<Evidence[]>; onHistory: (title: string) => void; onChanged: () => void }) {
   const [correcting, setCorrecting] = useState<Fact>();
-  return <>{groupFacts(facts).map(group => <section className="fact-group" key={group.kind}><h3><FactIcon kind={group.kind} />{group.label}</h3><ul>{group.facts.map(fact => <li key={fact.id}><p>{fact.text}{group.kind === "inference" && fact.confidence != null && <span className="confidence">把握 {Math.round(fact.confidence * 100)}%</span>}</p>{fact.reason && <p className="fact-reason">{fact.reason}</p>}<div className="fact-tools"><EvidenceList fact={fact} load={loadEvidence} onHistory={onHistory} />{(fact.kind === "decision" || fact.kind === "inference") && <button className="text-button compact" onClick={() => setCorrecting(fact)}>这条不对</button>}</div></li>)}</ul></section>)}{correcting && <CorrectionDialog fact={correcting} api={api} onClose={() => setCorrecting(undefined)} onSaved={() => { setCorrecting(undefined); onChanged(); }} />}</>;
+  const [detaching, setDetaching] = useState<Fact>();
+  return <>{groupFacts(facts).map(group => <section className="fact-group" key={group.kind}><h3><FactIcon kind={group.kind} />{group.label}</h3><ul>{group.facts.map(fact => <li key={fact.id}><p>{fact.text}{group.kind === "inference" && fact.confidence != null && <span className="confidence">把握 {Math.round(fact.confidence * 100)}%</span>}</p>{fact.reason && <p className="fact-reason">{fact.reason}</p>}<div className="fact-tools"><EvidenceList fact={fact} load={loadEvidence} onHistory={onHistory} />{canCorrect(fact) && <button className="text-button compact" onClick={() => setCorrecting(fact)}>这条不对</button>}{canDetach(fact) && <button className="text-button compact" onClick={() => setDetaching(fact)}>不属于这里</button>}</div></li>)}</ul></section>)}{correcting && <CorrectionDialog fact={correcting} api={api} onClose={() => setCorrecting(undefined)} onSaved={() => { setCorrecting(undefined); onChanged(); }} />}{detaching && <DetachDialog fact={detaching} api={api} onClose={() => setDetaching(undefined)} onDone={() => { setDetaching(undefined); onChanged(); }} />}</>;
 }
 export function ThreadContent({ thread, api, onHistory }: { thread: Pick<Thread, "id">; api: DistillationApi; onHistory: (title: string) => void }) {
   const resource = useResource(signal => api.thread(thread.id, "detail", signal), [api, thread.id]);

@@ -21,6 +21,7 @@ struct NowPage: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 32) {
+        SetupChecklist()
         hero
         todayCard
         threadsSection
