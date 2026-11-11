@@ -31,6 +31,9 @@ export const factGroups: { kind: FactKind; label: string }[] = [
 export function groupFacts(facts: Fact[]) {
   return factGroups.map(group => ({ ...group, facts: facts.filter(fact => fact.kind === group.kind && !fact.invalid_at && !fact.superseded_by) })).filter(group => group.facts.length);
 }
+/** 两种纠错（AGENTS.md）：文案写错用"这条不对"改写，只给已定和推测；内容根本不是这件事的用"不属于这里"，只给挂在事项上的。 */
+export const canCorrect = (fact: Fact) => fact.kind === "decision" || fact.kind === "inference";
+export const canDetach = (fact: Fact) => !!fact.thread_id;
 export function relativeTime(value: number | string | null, now = Date.now()): string {
   if (value === null) return "暂无活动";
   const time = typeof value === "number" ? value : Date.parse(value);
@@ -105,6 +108,8 @@ export function createDistillationApi(api: Api) {
       if (!text.trim()) throw new Error("请填写修正内容");
       return api("/v1/facts", { method: "POST", body: JSON.stringify({ kind: fact.kind, text: text.trim(), thread_id: fact.thread_id, project_id: fact.project_id, evidence: fact.evidence, supersedes: fact.id }) });
     },
+    /** 证据所在的活动移出这件事项、不再分回来，下一轮整理重新归属。 */
+    detach: (fact: Fact) => api<{ frames: number; facts: number }>(`/v1/facts/${encodeURIComponent(fact.id)}/detach`, { method: "POST" }),
   };
 }
 export type DistillationApi = ReturnType<typeof createDistillationApi>;
