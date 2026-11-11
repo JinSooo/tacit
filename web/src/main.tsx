@@ -9,7 +9,8 @@ import { toLocalIso } from "./record-helpers.ts";
 import { createDistillationApi } from "./distillation.ts";
 import { DistillationWorkspace } from "./distillation-views.tsx";
 import { createApi } from "./api.ts";
-import { createAudioApi, speakerNames, type Speaker } from "./audio.ts";
+import { createAudioApi } from "./audio.ts";
+import { clockMs, conversationDetail, type ConversationDetail } from "./segments.ts";
 import { AudioSettings } from "./audio-views.tsx";
 import { createSettingsApi } from "./settings.ts";
 import { GeneralSettings, HubSettingsBlock, ModelSettings } from "./settings-views.tsx";
@@ -38,7 +39,32 @@ function Body({ text }: { text: string }) {
   const lines = text.split("\n");
   return <><pre className="body-text">{full ? text : lines.slice(0, 40).join("\n")}</pre>{lines.length > 40 && <button className="text-button" onClick={() => setFull(!full)}>{full ? "收起" : `显示全部 ${lines.length.toLocaleString("zh-CN")} 行`}</button>}</>;
 }
-function RecordDetail({ id, api, onDelete, onCorrected, speakers }: { id: string; api: Api; speakers: Speaker[]; onDelete: (ids: string[]) => void; onCorrected: () => void }) {
+/** 对话记录：先给总结，再给整理过的原文（按人分段）；原始转写折叠在后面。 */
+function ConversationBody({ id, revision, api }: { id: string; revision: string; api: Api }) {
+  const [conversation, setConversation] = useState<ConversationDetail>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    setError("");
+    conversationDetail(api, id, controller.signal).then(setConversation).catch(error => { if (!controller.signal.aborted) setError(message(error)); });
+    return () => controller.abort();
+  }, [id, revision, api]);
+  if (error) return <p role="alert" className="error">{error}</p>;
+  if (!conversation) return <p className="muted" role="status">正在读取…</p>;
+  return <>
+    {conversation.state === "ready" && conversation.summary && <section className="conversation-summary" aria-label="总结">
+      <p>{conversation.summary}</p>
+      {conversation.points.length > 0 && <ul>{conversation.points.map((point, i) => <li key={i}>{point}</li>)}</ul>}
+    </section>}
+    {conversation.state === "waiting" && <p className="muted">总结稍后生成</p>}
+    {conversation.state === "private" && <p className="muted">私密内容不生成总结</p>}
+    {conversation.turns.length > 0 && <ol className="turns">{conversation.turns.map((turn, i) => <li key={i}>
+      <div className="turn-head"><strong>{turn.speaker}</strong><time dateTime={turn.at}>{clockMs(Date.parse(turn.at))}</time></div>
+      <p>{turn.text}</p>
+    </li>)}</ol>}
+  </>;
+}
+function RecordDetail({ id, api, onDelete, onCorrected }: { id: string; api: Api; onDelete: (ids: string[]) => void; onCorrected: () => void }) {
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
@@ -73,9 +99,13 @@ function RecordDetail({ id, api, onDelete, onCorrected, speakers }: { id: string
     {error && <p role="alert" className="error">{error}</p>}
     {!detail && !error && <p className="muted" role="status">正在读取…</p>}
     {detail && current && <>
-      {detail.source === "mac.audio" && !!detail.people?.length && <p className="muted">说话人：{speakerNames(detail.people, speakers).join("、")}</p>}
-      <Body key={current.id} text={current.body} />
-      {current !== detail && <details className="original"><summary>修正前的原文</summary><Body text={detail.body} /></details>}
+      {detail.source === "mac.audio" ? <>
+        <ConversationBody id={id} revision={current.id} api={api} />
+        <details className="original"><summary>查看原文</summary><Body key={current.id} text={current.body} />{current !== detail && <details className="original"><summary>修正前的原文</summary><Body text={detail.body} /></details>}</details>
+      </> : <>
+        <Body key={current.id} text={current.body} />
+        {current !== detail && <details className="original"><summary>修正前的原文</summary><Body text={detail.body} /></details>}
+      </>}
       <dl className="context">
         {Object.entries({ 网址: detail.context?.url, 仓库: detail.context?.repo, 目录: detail.context?.cwd, 窗口: detail.context?.window }).filter(([, value]) => value).map(([label, value]) => <React.Fragment key={label}><dt>{label}</dt><dd>{label === "网址" && safeUrl(value!) ? <a href={safeUrl(value!)} target="_blank" rel="noreferrer">{value}</a> : label === "仓库" || label === "目录" ? <span className="path">{value}</span> : value}</dd></React.Fragment>)}
         <dt>来源</dt><dd>{sourceNames[detail.source] ?? detail.source}，{captureNames[detail.capture.method] ?? detail.capture.method}</dd>
@@ -168,15 +198,6 @@ function App() {
   }), [token]);
   const audioApi = useMemo(() => createAudioApi(api), [api]);
   const settingsApi = useMemo(() => createSettingsApi(api), [api]);
-  const [speakers, setSpeakers] = useState<Speaker[]>([]);
-  const [speakerError, setSpeakerError] = useState("");
-  useEffect(() => {
-    if (!token || view !== "history") return;
-    const controller = new AbortController();
-    setSpeakerError("");
-    audioApi.speakers(controller.signal).then(data => { if (!controller.signal.aborted) setSpeakers(data.speakers); }).catch(error => { if (!controller.signal.aborted) setSpeakerError(message(error)); });
-    return () => controller.abort();
-  }, [audioApi, token, view, revision]);
   const distillationApi = useMemo(() => createDistillationApi(api), [api]);
   const load = useCallback(async (next: string | null, version: number, signal?: AbortSignal) => {
     if (loading.current) return;
@@ -254,15 +275,14 @@ function App() {
     {view === "history" && !q.trim() && <DayOverview api={api} day={date || dayKey(new Date())} revision={overviewRevision} selected={expanded} onPick={pick} />}
     {view === "history" && anchor && <p className="anchor-note">正在显示 {timeRange({ ...records.find(r => r.id === anchor.id) ?? { kind: "event", t_start: anchor.t_start } } as HistoryRow)} 及更早的记录 <button className="text-button compact" onClick={() => setAnchor(null)}>回到最新</button></p>}
     {view === "history" && segmentMode && <div id="segments" tabIndex={-1}><SegmentList api={api} day={shownDay} device={device} focus={expanded} revision={revision} collapse={collapse}
-      renderDetail={(id, onDelete) => <RecordDetail id={id} api={api} speakers={speakers} onDelete={ids => { onDelete(ids); changed("已删除"); }} onCorrected={() => changed("已修正")} />}
+      renderDetail={(id, onDelete) => <RecordDetail id={id} api={api} onDelete={ids => { onDelete(ids); changed("已删除"); }} onCorrected={() => changed("已修正")} />}
       onEarlier={() => { const d = new Date(`${shownDay}T12:00:00`); d.setDate(d.getDate() - 1); setDate(dayKey(d)); window.scrollTo({ top: 0 }); }} /></div>}
     <div id="timeline" hidden={view !== "history" || segmentMode} tabIndex={-1} aria-busy={busy}>
-      {speakerError && records.some(record => record.source === "mac.audio") && <p className="error" role="alert">没能读取说话人名字：{speakerError} <button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
       {groupRecords(records).map(group => <section key={group.day} aria-label={dateTitle(group.day)}><h2 className="day-heading">{dateTitle(group.day)}</h2><div className="day-records">{group.records.map(record => <article key={record.id} id={`row-${record.id}`} className={expanded === record.id ? "record expanded" : "record"}>
         <button className="record-row" aria-expanded={expanded === record.id} aria-controls={`detail-${record.id}`} onClick={() => setExpanded(expanded === record.id ? null : record.id)}>
           <span className="record-time">{timeRange(record)}</span><span className="record-title">{record.title}{record.context?.url && safeUrl(record.context.url) && <span className="record-host">{new URL(record.context.url).host}</span>}</span><span className="record-meta">{sourceNames[record.source] ?? record.source}{duration(record) && <span>{duration(record)}</span>}</span>
         </button>
-        {expanded === record.id && <RecordDetail id={record.id} api={api} speakers={speakers} onDelete={ids => { setRecords(previous => previous.filter(record => !ids.includes(record.id))); setExpanded(null); changed("已删除"); }} onCorrected={() => changed("已修正")} />}
+        {expanded === record.id && <RecordDetail id={record.id} api={api} onDelete={ids => { setRecords(previous => previous.filter(record => !ids.includes(record.id))); setExpanded(null); changed("已删除"); }} onCorrected={() => changed("已修正")} />}
       </article>)}</div></section>)}
       {!records.length && !busy && !error && <p className="empty"><strong>没有找到记录</strong>{(source || device || date) && "换个关键词，或去掉来源、设备、日期筛选再试。"}</p>}
       {error && <div className="list-status" role="alert"><span className="error">{error}</span><button onClick={() => void load(cursor, generation.current)}>重试</button></div>}

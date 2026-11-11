@@ -2,16 +2,22 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Api } from "./distillation.ts";
 import { dateTitle, duration, durationText, sourceNames, timeRange, type HistoryRow } from "./history.ts";
-import { appName, dayRecords, daySegments, foldSegments, segmentTitle, spanText, type Segment } from "./segments.ts";
+import { appName, collapseConversations, conversationTitle, dayRecords, daySegments, foldSegments, segmentTitle, spanText, withoutRecords, type Conversation, type RecordItem, type Segment } from "./segments.ts";
 
 const message = (error: unknown) => error instanceof Error ? error.message : "读取失败";
 
-/** 没提炼的段没有摘要，用记录标题里窗口那一截说明在看什么；"无标题"和与应用名相同的不显示。 */
-function windows(segment: Segment, rows: HistoryRow[] | undefined): string {
-  if (!rows) return "";
+/** 没提炼的段没有摘要，用记录标题里窗口那一截说明在看什么，对话用总结的标题；"无标题"和与应用名相同的不显示。 */
+function windows(segment: Segment, items: RecordItem[] | undefined): string {
+  if (!items) return "";
   const seen = new Set(["无标题", "（无标题）", segmentTitle(segment)]), out: string[] = [];
-  for (const r of rows) {
-    const i = r.title.indexOf(" · ");
+  for (const item of items) {
+    if (item.kind === "conversation") {
+      const t = item.conversation.title?.trim();
+      if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+      if (out.length === 3) break;
+      continue;
+    }
+    const r = item.record, i = r.title.indexOf(" · ");
     if (i > 0) seen.add(r.title.slice(0, i).trim());
     const t = (i > 0 ? r.title.slice(i + 3) : r.title).trim();
     if (!t || seen.has(t)) continue;
@@ -27,6 +33,7 @@ export function SegmentList({ api, day, device, focus, revision, collapse, rende
   renderDetail: (id: string, onDelete: (ids: string[]) => void) => ReactNode; onEarlier: () => void;
 }) {
   const [segments, setSegments] = useState<Segment[] | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [byId, setById] = useState<Map<string, HistoryRow> | null>(null);
@@ -37,7 +44,7 @@ export function SegmentList({ api, day, device, focus, revision, collapse, rende
     const controller = new AbortController();
     setSegments(null); setById(null); setError(""); setOpen(new Set()); setSelected(null);
     Promise.all([daySegments(api, day, device, controller.signal), dayRecords(api, day, device, controller.signal)])
-      .then(([list, records]) => { if (!controller.signal.aborted) { setSegments(list); setById(records); } })
+      .then(([list, records]) => { if (!controller.signal.aborted) { setSegments(list.segments); setConversations(list.conversations); setById(records); } })
       .catch(e => { if (!controller.signal.aborted) setError(message(e)); });
     return () => controller.abort();
   }, [api, day, device, revision, retry]);
@@ -52,7 +59,7 @@ export function SegmentList({ api, day, device, focus, revision, collapse, rende
   function toggle(id: string) {
     setOpen(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   }
-  const rowsOf = (segment: Segment) => byId ? segment.record_ids.flatMap(id => byId.get(id) ?? []).reverse() : undefined;
+  const rowsOf = (segment: Segment) => byId ? collapseConversations(segment.record_ids.flatMap(id => byId.get(id) ?? []).reverse(), conversations) : undefined;
 
   // 从条带图点到某条记录：展开它所在的段（以及折叠组），选中并滚过去。
   useEffect(() => {
@@ -60,13 +67,16 @@ export function SegmentList({ api, day, device, focus, revision, collapse, rende
     const segment = segments.find(s => s.record_ids.includes(focus));
     if (!segment) return;
     const group = items.find(i => i.kind === "minor" && i.segments.some(s => s.id === segment.id));
+    // 对话记录合成了一行，选中那一行（id 是这场对话第一条记录的 id）。
+    const row = conversations.find(c => c.record_ids.includes(focus))?.id ?? focus;
     setOpen(previous => new Set([...previous, segment.id, ...(group ? [group.id] : [])]));
-    setSelected(focus);
-    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(`row-${focus}`)?.scrollIntoView({ block: "center", behavior: "smooth" })));
+    setSelected(row);
+    requestAnimationFrame(() => requestAnimationFrame(() => document.getElementById(`row-${row}`)?.scrollIntoView({ block: "center", behavior: "smooth" })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, segments]);
 
   function removeRecords(ids: string[]) {
+    if (byId) setConversations(previous => withoutRecords(previous, ids, byId));
     setById(previous => { if (!previous) return previous; const next = new Map(previous); for (const id of ids) next.delete(id); return next; });
     setSelected(null);
   }
@@ -89,11 +99,13 @@ export function SegmentList({ api, day, device, focus, revision, collapse, rende
         </span>
         <span className="record-meta">{durationText(segment.active_seconds) && <span title="这段时间里实际活跃的时长">{durationText(segment.active_seconds)}</span>}<span>{count} 条记录</span></span>
       </button>
-      {expanded && <div className="segment-records">{!list ? <p className="muted segment-loading">正在读取…</p> : list.map(record => <div key={record.id} id={`row-${record.id}`} className={selected === record.id ? "record expanded" : "record"}>
-        <button className="record-row" aria-expanded={selected === record.id} onClick={() => setSelected(selected === record.id ? null : record.id)}>
-          <span className="record-time">{timeRange(record)}</span><span className="record-title">{record.title}</span><span className="record-meta">{sourceNames[record.source] ?? record.source}{duration(record) && <span>{duration(record)}</span>}</span>
+      {expanded && <div className="segment-records">{!list ? <p className="muted segment-loading">正在读取…</p> : list.map(item => <div key={item.id} id={`row-${item.id}`} className={selected === item.id ? "record expanded" : "record"}>
+        <button className="record-row" aria-expanded={selected === item.id} onClick={() => setSelected(selected === item.id ? null : item.id)}>
+          {item.kind === "record"
+            ? <><span className="record-time">{timeRange(item.record)}</span><span className="record-title">{item.record.title}</span><span className="record-meta">{sourceNames[item.record.source] ?? item.record.source}{duration(item.record) && <span>{duration(item.record)}</span>}</span></>
+            : <><span className="record-time">{spanText(item.conversation.start_ms, item.conversation.end_ms)}</span><span className="record-title">{conversationTitle(item.conversation)}</span>{item.conversation.title && <span className="record-meta">{durationText(Math.floor((item.conversation.end_ms - item.conversation.start_ms) / 1000))}</span>}</>}
         </button>
-        {selected === record.id && renderDetail(record.id, removeRecords)}
+        {selected === item.id && renderDetail(item.id, removeRecords)}
       </div>)}</div>}
     </article>;
   }
