@@ -32,7 +32,8 @@ test("一场对话按会议软件和间隔合并，开会和不开会的不连�
 });
 
 test("转写去掉语气词、假名碎片和两路录到的同一句，同一个人接着说的合成一段", () => {
-  expect(["Yeah.", "うん。", "嗯嗯。", "あ。", "被から？", "好。", "对对"].every(isNoise)).toBe(true);
+  expect(["Yeah.", "The.", "うん。", "嗯嗯。", "あ。", "被から？", "好。", "对对"].every(isNoise)).toBe(true);
+  expect(isNoise("React 组件")).toBe(false);
   expect(["可以听到我们说话吗？", "目前的月薪是17000"].some(isNoise)).toBe(false);
   const lines = parseTranscript([
     "[16:03:31] 未知说话人：哎，你好。", "[16:03:31] 说话人 NR：哎，你好。", "[16:03:38] 说话人 NR：可以听到我们说话吗",

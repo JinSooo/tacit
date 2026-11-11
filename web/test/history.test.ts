@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { ulid as sharedUlid, toLocalIso as sharedIso, validateRecord } from "../../packages/record/index.ts";
 import { ulid, toLocalIso } from "../src/record-helpers.ts";
-import { buildNote, buildCorrection, chapterSpans, dateTitle, dayKey, dayRange, duration, groupRecords, laneOf, latestCorrection, safeUrl, speechText, timeRange } from "../src/history.ts";
+import { buildNote, buildCorrection, chapterSpans, dateTitle, dayKey, dayRange, duration, groupRecords, laneOf, latestCorrection, recordTitle, safeUrl, speechText, timeRange } from "../src/history.ts";
 
 const note = () => buildNote({ start: "2026-11-06T14:02:00", end: "2026-11-06T14:27:00", title: "合成工作片段", body: "第一行\n第二行" });
 test("浏览器辅助函数与共享包格式一致，包括时区和 ULID 时间前缀", () => {
@@ -87,4 +87,10 @@ test("条带图：泳道归类、整天范围和日记章节", () => {
   expect(spans.map(s => s.text)).toEqual(["跨午夜", "上午"]);
   expect(spans[0]!.end).toBe(day.end);
   expect(spans[1]!.start - day.start).toBe((9 * 60 + 5) * 60000);
+});
+
+// 用户报告：对话标题里一串"说话人 OK、说话人 OJ"看不懂。
+test("对话记录在列表和时间轴上只写“对话”", () => {
+  expect(recordTitle({ source: "mac.audio", title: "对话 · 16:46–17:17 · 未知说话人、我、说话人 OK" })).toBe("对话");
+  expect(recordTitle({ source: "mac.screen", title: "Zen · Google" })).toBe("Zen · Google");
 });

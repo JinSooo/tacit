@@ -55,6 +55,8 @@ export function isNoise(text: string): boolean {
   const t = text.replace(/[\s\p{P}\p{S}]/gu, "");
   if (t.length <= 2) return true;
   if (FILLER.test(t)) return true;
+  // 中文对话里单独冒出的一个短英文词（"The."），多半是背景声被认成了英文。
+  if (/^[A-Za-z]{1,5}$/.test(t)) return true;
   return /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(t) && t.replace(/[\p{Script=Hiragana}\p{Script=Katakana}ー]/gu, "").length <= 3;
 }
 

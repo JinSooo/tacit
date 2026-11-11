@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { chapterSpans, dayRange, durationText, laneOf, lanes, sourceNames, timeRange, type HistoryRow } from "./history.ts";
+import { chapterSpans, dayRange, durationText, laneOf, lanes, recordTitle, sourceNames, timeRange, type HistoryRow } from "./history.ts";
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 interface Diary { brief?: string; detail?: { summary?: string; timeline?: { start: string; end: string; text: string }[] } }
@@ -131,7 +131,7 @@ function Strata({ rows, day, chapters, selected, onPick }: { rows: HistoryRow[];
         const span = r.kind === "span" && b - a >= 2;
         const props = span ? { x: a, y: y + 2, width: b - a, height: laneH - 4, rx: 3 } : { x: a - 1, y: y + 3, width: 2, height: laneH - 6, rx: 1 };
         return <rect key={r.id} {...props} className={r.id === selected ? "seg selected" : "seg"}
-          onMouseMove={() => setHover({ x: a, text: r.title, sub: `${timeRange(r)}，${sourceNames[r.source] ?? r.source}` })}
+          onMouseMove={() => setHover({ x: a, text: recordTitle(r), sub: r.source === "mac.audio" ? timeRange(r) : `${timeRange(r)}，${sourceNames[r.source] ?? r.source}` })}
           onClick={() => onPick(r)} />;
       })}
       {isToday && <g className="now"><line x1={x(now)} x2={x(now)} y1={axis - 2} y2={height} /><circle cx={x(now)} cy={axis - 2} r={3} /></g>}

@@ -43,6 +43,18 @@ struct HistoryPage: View {
     lane == nil && device == nil && brush == nil ? allBlocks : SegmentBlocks.join(segments, records: records, visible: Set(visible.map(\.id)))
   }
   var selectedRecord: String? { if case .record(let id)? = selection { return id }; return nil }
+  /// 选中项在列表里那一行的 id：合并显示的几条记录用这一行第一条的 id。
+  func rowID(for s: Selection?) -> String? {
+    switch s {
+    case .segment(let id)?: return id
+    case .record(let id)?:
+      for block in blocks where expanded.contains(block.id) {
+        if let run = RecordRuns.collapse(block.records, conversations: conversations).first(where: { $0.records.contains { $0.id == id } }) { return run.id }
+      }
+      return id
+    case nil: return nil
+    }
+  }
 
   /// 选中一条记录：展开它所在的段并滚过去。
   func reveal(_ id: String) {
@@ -101,6 +113,11 @@ struct HistoryPage: View {
     .onAppear { consumeFocus() }
     .onChange(of: store.historyFocus) { consumeFocus() }
     .onChange(of: records) { consumeFocus() }
+    // 详情栏打开时列表变窄、行高变了，滚动位置会跳到别处（用户点了 13:37 那段，列表跳到 10:41）。打开后把点的那一行滚回来。
+    .onChange(of: selection == nil) { closed, isClosed in
+      guard closed, !isClosed, let target = rowID(for: selection) else { return }
+      Task { try? await Task.sleep(for: .milliseconds(300)); scrollTarget = target }
+    }
     .onKeyPress(.escape) { if selection != nil { selection = nil; return .handled }; if brush != nil { brush = nil; return .handled }; return .ignored }
   }
 
@@ -254,7 +271,8 @@ struct HistoryPage: View {
   var strataHeader: some View {
     VStack(alignment: .leading, spacing: 8) {
       DayStrata(records: records.filter { device == nil || $0.device == device }, chapters: chapters, day: day, selected: selectedRecord,
-                brush: $brush, lane: $lane) { r in reveal(r.id) }
+                brush: $brush, lane: $lane,
+                conversationTitles: Dictionary(conversations.flatMap { c in c.title.map { t in c.recordIds.map { ($0, t) } } ?? [] }, uniquingKeysWith: { a, _ in a })) { r in reveal(r.id) }
       if brush != nil || lane != nil {
         HStack(spacing: 8) {
           if let b = brush { chip("\(ViewerFormat.clock(b.lowerBound))–\(ViewerFormat.clock(b.upperBound))", "clock") { brush = nil } }
@@ -317,7 +335,7 @@ struct HistoryPage: View {
   }
 
   @ViewBuilder func segmentRow(_ block: SegmentBlock) -> some View {
-    SegmentRow(block: block, selected: selection == .segment(block.id), expanded: expanded.contains(block.id)) {
+    SegmentRow(block: block, conversation: conversationNote(block), selected: selection == .segment(block.id), expanded: expanded.contains(block.id)) {
       withAnimation(.easeOut(duration: 0.2)) { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
       selection = .segment(block.id)
     }
@@ -334,6 +352,13 @@ struct HistoryPage: View {
       }
       Color.clear.frame(height: 8)
     }
+  }
+
+  /// 段里第一场有总结的对话的标题。
+  func conversationNote(_ block: SegmentBlock) -> String? {
+    let ids = Set(block.records.filter { $0.source == "mac.audio" }.map(\.id))
+    guard !ids.isEmpty else { return nil }
+    return conversations.first { c in c.title != nil && c.recordIds.contains(where: ids.contains) }?.title
   }
 
   func searchRows(_ rows: [HistoryRecord]) -> some View {
@@ -515,6 +540,11 @@ struct RecordRow: View {
   }
 
   var timeText: String {
+    // 一场对话按整场的起止，和右侧详情一致（有几段可能落在别的活动段里）。
+    if let c = run?.conversation {
+      let a = Date(timeIntervalSince1970: c.startMs / 1000), b = Date(timeIntervalSince1970: c.endMs / 1000)
+      return ViewerFormat.clock(a) == ViewerFormat.clock(b) ? ViewerFormat.clock(a) : ViewerFormat.clock(a) + "–" + ViewerFormat.clock(b)
+    }
     let start = run?.start ?? record.start
     let end = run?.end ?? record.end
     if let end, ViewerFormat.clock(end) != ViewerFormat.clock(start), !nested || record.isSpan {
@@ -524,6 +554,7 @@ struct RecordRow: View {
   }
 
   var durationText: String? {
+    if let c = run?.conversation { let s = (c.endMs - c.startMs) / 1000; return s >= 60 ? Fmt.duration(s) : nil }
     let s = run?.seconds ?? record.seconds
     return s >= 60 ? Fmt.duration(s) : nil
   }

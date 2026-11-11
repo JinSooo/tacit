@@ -76,6 +76,10 @@ export const sourceNames: Record<string, string> = {
   "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
   "manual.note": "补写", "manual.correction": "修正",
 };
+/** 列表和时间轴上的记录标题。对话记录的标题里是转写当时的说话人编号（"说话人 OK"），对人没有意义，只写"对话"。 */
+export function recordTitle(r: { source: string; title: string }): string {
+  return r.source === "mac.audio" ? "对话" : r.title;
+}
 /** 记录详情里的"采集方式"，对应 schema 的 capture.method。 */
 export const captureNames: Record<string, string> = {
   ax: "读取窗口文字", ocr: "截图识字", asr: "语音转写", db: "读取应用数据", file: "读取文件", hook: "终端记录", api: "应用接口", manual: "手动填写",

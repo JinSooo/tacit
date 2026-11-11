@@ -12,6 +12,8 @@ struct DayStrata: View {
   let selected: String?
   @Binding var brush: ClosedRange<Date>?
   @Binding var lane: Lane?
+  /// 对话记录的总结标题（记录 id → 标题），悬停时代替"对话"二字。
+  var conversationTitles: [String: String] = [:]
   let onSelect: (HistoryRecord) -> Void
 
   @State private var hover: CGPoint?
@@ -315,7 +317,7 @@ struct DayStrata: View {
             Text(range(r)).monospacedDigit()
           }
           .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-          Text(RecordText.title(r, appShown: false)).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(2)
+          Text(conversationTitles[r.id] ?? RecordText.title(r, appShown: false)).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(2)
         } else if let c {
           // 章节条上的字可能被截断，或被后一段盖住，悬停时把这一刻所在的章节都写全。
           let t = self.time(h.x, plot, d)

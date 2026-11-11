@@ -3,7 +3,7 @@ import { SegmentList } from "./segment-list.tsx";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { RecordV1 } from "../../packages/record/index.ts";
-import { buildCorrection, buildNote, captureNames, dateTitle, dayKey, duration, groupRecords, latestCorrection, safeUrl, sourceNames, timeRange, type Detail, type HistoryRow } from "./history.ts";
+import { buildCorrection, buildNote, captureNames, dateTitle, dayKey, duration, groupRecords, latestCorrection, recordTitle, safeUrl, sourceNames, timeRange, type Detail, type HistoryRow } from "./history.ts";
 import { DayOverview } from "./day-overview.tsx";
 import { toLocalIso } from "./record-helpers.ts";
 import { createDistillationApi } from "./distillation.ts";
@@ -280,7 +280,7 @@ function App() {
     <div id="timeline" hidden={view !== "history" || segmentMode} tabIndex={-1} aria-busy={busy}>
       {groupRecords(records).map(group => <section key={group.day} aria-label={dateTitle(group.day)}><h2 className="day-heading">{dateTitle(group.day)}</h2><div className="day-records">{group.records.map(record => <article key={record.id} id={`row-${record.id}`} className={expanded === record.id ? "record expanded" : "record"}>
         <button className="record-row" aria-expanded={expanded === record.id} aria-controls={`detail-${record.id}`} onClick={() => setExpanded(expanded === record.id ? null : record.id)}>
-          <span className="record-time">{timeRange(record)}</span><span className="record-title">{record.title}{record.context?.url && safeUrl(record.context.url) && <span className="record-host">{new URL(record.context.url).host}</span>}</span><span className="record-meta">{sourceNames[record.source] ?? record.source}{duration(record) && <span>{duration(record)}</span>}</span>
+          <span className="record-time">{timeRange(record)}</span><span className="record-title">{recordTitle(record)}{record.context?.url && safeUrl(record.context.url) && <span className="record-host">{new URL(record.context.url).host}</span>}</span><span className="record-meta">{sourceNames[record.source] ?? record.source}{duration(record) && <span>{duration(record)}</span>}</span>
         </button>
         {expanded === record.id && <RecordDetail id={record.id} api={api} onDelete={ids => { setRecords(previous => previous.filter(record => !ids.includes(record.id))); setExpanded(null); changed("已删除"); }} onCorrected={() => changed("已修正")} />}
       </article>)}</div></section>)}

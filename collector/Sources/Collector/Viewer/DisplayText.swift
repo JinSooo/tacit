@@ -83,8 +83,9 @@ enum ConversationText {
       if rest.isEmpty || rest == head || rest == "无标题" || rest == "（无标题）" { return head }
       return appShown ? rest : "\(head)：\(rest)"
     case "mac.audio":
-      // 对话 · 10:00–10:30 · 张三、我：时间在行首已经有了，只留人名。
-      return parts.count >= 3 ? "对话：\(parts.dropFirst(2).joined(separator: "、"))" : "对话"
+      // 对话 · 10:00–10:30 · 说话人 OK、我：时间在旁边已经有了；人名是转写当时的编号，对人没有意义（用户报告），只写"对话"。
+      // 有总结时，列表和详情用总结里的标题（ConversationText）。
+      return "对话"
     case "mac.wechat":
       return parts.count >= 3 ? "\(parts[1])：\(parts.dropFirst(2).joined(separator: " "))" : "微信：\(rest)"
     default:

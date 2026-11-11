@@ -19,7 +19,7 @@ import CollectorCore
   static func windows(_ block: SegmentBlock, limit: Int = 3) -> String? {
     // "无标题"和与应用名相同的窗口名（如"Claude · Claude"）不提供信息，不显示。
     var seen: Set<String> = ["无标题", "（无标题）", title(block)], out: [String] = []
-    for r in block.records {
+    for r in block.records where r.source != "mac.audio" {
       var t = r.title
       if let range = t.range(of: " · ") {
         let app = String(t[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
@@ -43,6 +43,8 @@ import CollectorCore
 /// 列表里的一段活动：事项名作标题，下面是在做什么和涉及的应用。
 struct SegmentRow: View {
   let block: SegmentBlock
+  /// 段里对话的总结标题，没提炼的段用它说明在聊什么。
+  var conversation: String? = nil
   let selected: Bool
   let expanded: Bool
   let action: () -> Void
@@ -77,7 +79,7 @@ struct SegmentRow: View {
           }
           if let brief = segment.thread?.brief, !brief.isEmpty {
             Text(brief).font(.system(size: TextSize.body)).lineSpacing(3).foregroundStyle(Palette.muted).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-          } else if segment.thread == nil, let w = SegmentText.windows(block) {
+          } else if segment.thread == nil, let w = conversation ?? SegmentText.windows(block) {
             Text(w).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).lineLimit(1)
           }
           if segment.thread != nil || segment.apps.count > 1 { apps }
@@ -115,19 +117,27 @@ struct SegmentRow: View {
   }
 
   /// 涉及的应用和各自的时长，最多列 4 个。
+  /// 列表窄的时候少列几个，不截断应用名、不把时长折到第二行（侧栏打开时出现过"Tence…""14 / 分钟"）。
   var apps: some View {
-    HStack(spacing: 12) {
-      ForEach(segment.apps.prefix(4), id: \.self) { a in
-        HStack(spacing: 4) {
-          SourceGlyph(source: a.source, app: a.app, size: 12)
-          Text(SegmentText.appName(a)).lineLimit(1)
-          if a.seconds >= 60 { Text(Fmt.duration(a.seconds)).monospacedDigit() }
-        }
-      }
-      if segment.apps.count > 4 { Text("等 \(segment.apps.count) 个应用") }
+    ViewThatFits(in: .horizontal) {
+      ForEach(Array(stride(from: min(4, segment.apps.count), through: 1, by: -1)), id: \.self) { n in chips(n) }
     }
     .font(.system(size: TextSize.caption))
     .foregroundStyle(Palette.muted)
+  }
+
+  func chips(_ n: Int) -> some View {
+    HStack(spacing: 12) {
+      ForEach(segment.apps.prefix(n), id: \.self) { a in
+        HStack(spacing: 4) {
+          SourceGlyph(source: a.source, app: a.app, size: 12)
+          Text(SegmentText.appName(a))
+          if a.seconds >= 60 { Text(Fmt.duration(a.seconds)).monospacedDigit() }
+        }
+        .fixedSize()
+      }
+      if segment.apps.count > n { Text("等 \(segment.apps.count) 个应用").fixedSize() }
+    }
   }
 }
 
