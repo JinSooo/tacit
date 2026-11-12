@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { DistillStore } from "../src/distill/store.ts";
 import * as P from "../src/distill/prompts.ts";
 import { assignStep, classifyStep, digestStep, touchThread, projectStep, dayStep, LIMITS, distillRound, type LLM } from "../src/distill/run.ts";
-import type { LLMRequest } from "../src/llm/index.ts";
+import { createLLM, type LLMRequest } from "../src/llm/index.ts";
 import { fixture, setup } from "./helpers.ts";
 import { AgentReads } from "../src/agent.ts";
 import { HubDB } from "../src/db.ts";
@@ -41,7 +41,7 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
   const llm: LLM = {
     async complete<T>(req: LLMRequest) {
       const kind = req.system === P.ASSIGN_SYSTEM ? "assign" : req.system === P.THREAD_SYSTEM ? "thread" : req.system === P.BRIEF_SYSTEM ? "brief"
-        : req.system === P.PROJECT_SYSTEM ? "project" : req.system === P.DAY_SYSTEM ? "day" : req.system === P.DEDUP_SYSTEM ? "dedup" : "unknown";
+        : req.system === P.CLASSIFY_SYSTEM ? "classify" : req.system === P.CONVERSATION_SYSTEM ? "conversation" : req.system === P.PROJECT_SYSTEM ? "project" : req.system === P.DAY_SYSTEM ? "day" : req.system === P.DEDUP_SYSTEM ? "dedup" : "unknown";
       calls.push({ kind, req });
       const ok = (data: unknown) => ({ ok: true as const, data: data as T, ms: 1 });
       if (kind === "assign") {
@@ -65,6 +65,8 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
         });
       }
       if (kind === "dedup") return ok({ groups: behave.dedup ? behave.dedup((JSON.parse(req.prompt.slice(req.prompt.indexOf("\n") + 1)) as { id: string }[]).map(t => t.id)) : [] });
+      if (kind === "classify") return ok({ domain: "work", in_project: false });
+      if (kind === "conversation") return ok({ title: "合成对话", summary: "合成总结", points: [] });
       if (kind === "brief") return ok({ brief: "合成简略" });
       if (kind === "project") return ok({ goal: "合成项目目标", status: "合成项目进展", people: [] });
       if (kind === "day") return ok({ summary: "合成日记", timeline: [{ start: "10:00", end: "11:00", text: "合成" }] });
@@ -279,7 +281,7 @@ test("v3 加密库真实升级 v5：旧归属保留并复制成 hint，domain �
   ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=3;");
   const db = new HubDB(ctx.file, ctx.config.dbKey);
   try {
-    expect(db.db.pragma("user_version", { simple: true })).toBe(8);
+    expect(db.db.pragma("user_version", { simple: true })).toBe(9);
     const t = new DistillStore(db).thread("legacy")!;
     expect(t.project_id).toBe("p"); expect(t.project_hint).toBe("p"); expect(t.domain).toBeNull();
   } finally { db.close(); }
@@ -433,7 +435,37 @@ test("日记合并带空白的旧微信片段，显示最新记录原名", async
   const fake = fakeLLM();
   await dayStep({ db: ctx.db, llm: fake.llm }, store, "2026-11-08", base + 3600000);
   const prompt = fake.calls.find(c => c.kind === "day")!.req.prompt;
-  const blocks = framesIn(prompt) as unknown as { label: string }[];
+  const { blocks } = framesIn(prompt) as unknown as { blocks: { label: string }[] };
   expect(blocks).toHaveLength(1);
   expect(blocks[0]!.label).toBe(`${app}:C 童文科`);
+});
+
+
+test("假模型完整一轮经真实适配器写用量，十类任务均正确且不存正文", async () => {
+  ctx.db.ingest([session(0, 20, "合成开发会话"), fixture({ source: "mac.audio", source_ref: "usage-audio", kind: "span",
+    t_start: iso(base + 30 * MIN), t_end: iso(base + 35 * MIN), body: `[10:30:00] 我：${"这是本轮的合成对话内容。".repeat(30)}`, capture: { method: "asr" } })]);
+  for (const id of ["old-a", "old-b"]) store.upsertThread({ id, title: "旧线程", status: "active", brief: "旧简略", detail: {}, last_ms: base, needs_regen: 0 });
+  const fake = fakeLLM(), originalFetch = globalThis.fetch;
+  let request: LLMRequest;
+  const config = { provider: "openai-compatible" as const, model: "fake", base_url: "http://localhost:1/v1" };
+  const adapter = createLLM({ dataDir: ctx.dir, configs: async () => ({ minute: config, hour: config, day: config }),
+    recordUsage: row => store.writeUsage({ ...row, input_tokens: row.input_tokens ?? undefined, output_tokens: row.output_tokens ?? undefined, error: row.error ?? undefined }) });
+  globalThis.fetch = (async () => {
+    const out = await fake.llm.complete(request);
+    if (!out.ok) throw new Error("unexpected fake failure");
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(out.data) } }], usage: { prompt_tokens: 12, completion_tokens: 3 } });
+  }) as unknown as typeof fetch;
+  try {
+    const llm: LLM = { complete<T>(req: LLMRequest) { request = req; return adapter.complete<T>(req); } };
+    await round(llm, base + 4 * 60 * MIN);
+  } finally { globalThis.fetch = originalFetch; }
+  const rows = ctx.db.db.prepare("SELECT * FROM llm_usage ORDER BY rowid").all() as { task: string; tier: string; ok: number }[];
+  expect(rows.every(r => r.ok === 1)).toBe(true);
+  expect([...new Set(rows.map(r => r.task))].sort()).toEqual(["assign", "thread_digest", "thread_brief", "project", "project_brief", "classify", "conversation_summary", "day", "day_brief", "dedupe"].sort());
+  expect(rows.map(r => [r.task, r.tier])).toEqual([
+    ["conversation_summary", "minute"], ["assign", "minute"], ["classify", "minute"], ["classify", "minute"],
+    ["dedupe", "hour"], ["thread_digest", "hour"], ["thread_brief", "minute"],
+    ["project", "hour"], ["project_brief", "minute"], ["day", "day"], ["day_brief", "minute"],
+  ]);
+  expect(JSON.stringify(rows)).not.toContain("合成");
 });

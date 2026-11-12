@@ -116,16 +116,22 @@ export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: num
   const ids = f.record_ids.length <= opts.maxRecords ? f.record_ids
     : Array.from({ length: opts.maxRecords }, (_, i) => f.record_ids[Math.round(i * (f.record_ids.length - 1) / (opts.maxRecords - 1))]!);
   let hidden = 0;
+  const conversations = new Set<string>();
   const records = ids.flatMap(id => {
     const r = store.hub.get(id);
     if (!r) return [];
     // private 记录的标题和正文都不发给模型；同一片段里的其他记录照常发送。
     if (r.sensitivity === "private") { hidden++; return []; }
-    // 对话的转写开头常是寒暄和识别噪声，有总结时先给总结（2026-11-11 实测：只看开头 240 字，和李家辰的面试复盘被归进了开发线程）。
+    // 对话开头常是寒暄和噪声，总结另附一次，不挤占每条原文的截断预算。
     if (r.source === "mac.audio") {
       const g = conversationsIn(store.hub, Date.parse(r.t_start), Date.parse(r.t_start)).find(g => g.record_ids.includes(r.id));
       const s = g && storedSummary(store.hub, g);
-      if (s) return [{ id: r.id, source: r.source, title: `对话：${s.title}`, excerpt: P.excerpt(`${s.summary}${s.points.length ? `\n要点：${s.points.join("；")}` : ""}\n原文：${r.body}`, opts.excerpt(r.source)) }];
+      if (s && g) {
+        const first = !conversations.has(g.id); conversations.add(g.id);
+        return [{ id: r.id, source: r.source, title: `对话：${s.title}`, conversation_id: g.id,
+          ...(first ? { conversation_summary: { summary: s.summary, points: s.points } } : {}),
+          excerpt: P.excerpt(r.body, opts.excerpt(r.source)) }];
+      }
     }
     return [{ id: r.id, source: r.source, title: r.title, excerpt: P.excerpt(r.body, opts.excerpt(r.source)) }];
   });
@@ -179,7 +185,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
       ...candidates.map(c => ({ id: `cand:${c.id}`, title: c.title, brief: "", project: c.project_id ? names.get(c.project_id) ?? null : null, status: "candidate", last: clock(c.last_ms) })),
     ];
     calls++;
-    const r = await d.llm.complete<P.AssignOutput>({ tier: "minute", system: P.ASSIGN_SYSTEM, prompt: P.assignPrompt(batch.map(x => x.v), choices), schema: P.ASSIGN_SCHEMA });
+    const r = await d.llm.complete<P.AssignOutput>({ tier: "minute", task: "assign", system: P.ASSIGN_SYSTEM, prompt: P.assignPrompt(batch.map(x => x.v), choices), schema: P.ASSIGN_SCHEMA });
     if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length })); break outer; }
     const byFrame = new Map(r.data.items.map(i => [i.frame_id, i]));
     const real = new Set(threads.map(t => t.id));
@@ -242,8 +248,8 @@ function threadFrames(store: DistillStore, threadId: string): Frame[] {
   return loadFrames(store, "WHERE id IN (SELECT frame_id FROM assignments WHERE thread_id=?) ORDER BY t_start_ms,id", threadId);
 }
 
-async function makeBrief(d: Deps, title: string, detail: unknown, facts: P.FactView[]): Promise<string | null> {
-  const r = await d.llm.complete<P.BriefOutput>({ tier: "minute", system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail, facts), schema: P.BRIEF_SCHEMA });
+async function makeBrief(d: Deps, task: string, title: string, detail: unknown, facts: P.FactView[]): Promise<string | null> {
+  const r = await d.llm.complete<P.BriefOutput>({ tier: "minute", task, system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail, facts), schema: P.BRIEF_SCHEMA });
   return r.ok ? r.data.brief.trim() : null;
 }
 
@@ -293,7 +299,7 @@ export async function conversationStep(d: Deps, now: number) {
   let calls = 0, done = 0;
   for (const { g, turns } of todo.slice(0, LIMITS.conversationsPerRound)) {
     calls++;
-    const r = await d.llm.complete<P.ConversationOutput>({ tier: "minute", system: P.CONVERSATION_SYSTEM,
+    const r = await d.llm.complete<P.ConversationOutput>({ tier: "minute", task: "conversation_summary", system: P.CONVERSATION_SYSTEM,
       prompt: P.conversationPrompt({ start: clock(g.start_ms), end: clock(g.end_ms), app: g.app }, conversationTranscript(turns)), schema: P.CONVERSATION_SCHEMA });
     if (!r.ok) continue;
     const out = { title: r.data.title.trim(), summary: r.data.summary.trim(), points: r.data.points.map(p => p.trim()).filter(Boolean).slice(0, 5) };
@@ -343,7 +349,7 @@ export async function classifyStep(d: Deps, store: DistillStore) {
     calls++;
     try {
       const t = store.thread(id)!;
-      const r = await d.llm.complete<P.Classification>({ tier: "minute", system: P.CLASSIFY_SYSTEM,
+      const r = await d.llm.complete<P.Classification>({ tier: "minute", task: "classify", system: P.CLASSIFY_SYSTEM,
         prompt: P.classifyPrompt(t, projectHint(store, t)), schema: P.CLASSIFY_SCHEMA });
       if (!r.ok) { failed++; continue; }
       store.hub.db.transaction(() => applyClassification(store, id, r.data))();
@@ -376,7 +382,7 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     const views = fresh.map(f => ({ f, v: frameView(store, f, { maxRecords: LIMITS.digestRecords, excerpt: s => isSession(s) ? LIMITS.sessionExcerpt : LIMITS.otherExcerpt }) }));
     for (const chunk of batches(views, x => JSON.stringify(x.v).length, LIMITS.digestChars, 50)) {
       calls++;
-      const r = await d.llm.complete<P.ThreadOutput>({ tier: "hour", system: P.THREAD_SYSTEM, prompt: P.threadPrompt({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!)), schema: P.THREAD_SCHEMA });
+      const r = await d.llm.complete<P.ThreadOutput>({ tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: P.threadPrompt({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!)), schema: P.THREAD_SCHEMA });
       if (!r.ok) { ok = false; break; }
       const known = new Set(chunk.flatMap(x => x.v.records.map(rec => rec.id)).filter(Boolean));
       const out = r.data;
@@ -410,7 +416,7 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     }
     if (!ok) { failed++; log(JSON.stringify({ step: "digest", ok: false })); continue; }
     calls++;
-    const brief = await makeBrief(d, title, detail, factViews(store, "thread_id", id));
+    const brief = await makeBrief(d, "thread_brief", title, detail, factViews(store, "thread_id", id));
     if (brief === null) { failed++; continue; }
     store.hub.db.transaction(() => {
       store.upsertThread({ ...store.thread(id)!, brief, needs_regen: 0, updated_at: toLocalIso(now) });
@@ -444,7 +450,7 @@ export async function dedupStep(d: Deps, store: DistillStore, now: number) {
   if (rows.length < 2) return { calls: 0, merged: 0, failed: 0 };
   const names = new Map(store.projects().map(p => [p.id, p.name]));
   const views = rows.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: t.project_id ? names.get(t.project_id) ?? null : null, status: t.status, first: t.first_ms ? clock(t.first_ms) : "", last: t.last_ms ? clock(t.last_ms) : "" }));
-  const r = await d.llm.complete<P.DedupOutput>({ tier: "hour", system: P.DEDUP_SYSTEM, prompt: P.dedupPrompt(views), schema: P.DEDUP_SCHEMA });
+  const r = await d.llm.complete<P.DedupOutput>({ tier: "hour", task: "dedupe", system: P.DEDUP_SYSTEM, prompt: P.dedupPrompt(views), schema: P.DEDUP_SCHEMA });
   if (!r.ok) return { calls: 1, merged: 0, failed: 1 };
   const byId = new Map(rows.map(t => [t.id, t]));
   let merged = 0;
@@ -466,21 +472,34 @@ export async function dedupStep(d: Deps, store: DistillStore, now: number) {
 
 export async function projectStep(d: Deps, store: DistillStore, now: number) {
   let updated = 0, failed = 0, calls = 0;
-  for (const p of store.projects().filter(p => p.needs_regen)) {
-    const threads = store.hub.db.prepare("SELECT * FROM threads WHERE project_id=? AND status!='abandoned' ORDER BY last_ms DESC LIMIT 20").all(p.id) as (Thread & { last_ms: number | null; active_minutes: number | null })[];
-    const last = Math.max(0, ...threads.map(t => t.last_ms ?? 0));
-    const salience = threads.reduce((s, t) => s + (t.active_minutes ?? 0) * Math.exp(-(now - (t.last_ms ?? 0)) / (7 * DAY)), 0);
-    const described = threads.filter(t => t.brief);
-    // 没有可用线程时清掉旧摘要，避免已移出的生活内容继续从项目摘要注入。
-    if (!described.length) { store.upsertProject({ ...p, brief: null, detail: null, last_ms: last || p.last_ms, salience, needs_regen: 0, updated_at: toLocalIso(now) }); continue; }
+  for (const p of store.projects().filter(p => p.needs_regen || store.getState<boolean>(`project_brief:${p.id}`))) {
+    // needs_regen 只标记详细版输入失效；简略版失败由独立检查点重试。
+    const pendingKey = `project_brief:${p.id}`;
+    let detail = p.detail;
+    if (p.needs_regen || detail == null) {
+      const threads = store.hub.db.prepare("SELECT * FROM threads WHERE project_id=? AND status!='abandoned' ORDER BY last_ms DESC LIMIT 20").all(p.id) as (Thread & { last_ms: number | null; active_minutes: number | null })[];
+      const last = Math.max(0, ...threads.map(t => t.last_ms ?? 0));
+      const salience = threads.reduce((s, t) => s + (t.active_minutes ?? 0) * Math.exp(-(now - (t.last_ms ?? 0)) / (7 * DAY)), 0);
+      const described = threads.filter(t => t.brief);
+      // 没有可用线程时清掉旧摘要，避免已移出的生活内容继续从项目摘要注入。
+      if (!described.length) { store.setState(pendingKey, null); store.upsertProject({ ...p, brief: null, detail: null, last_ms: last || p.last_ms, salience, needs_regen: 0, updated_at: toLocalIso(now) }); continue; }
+      calls++;
+      const views: P.ThreadView[] = described.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: p.name, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" }));
+      const r = await d.llm.complete<P.ProjectOutput>({ tier: "hour", task: "project", system: P.PROJECT_SYSTEM, prompt: P.projectPrompt(p.name, views, factViews(store, "project_id", p.id)), schema: P.PROJECT_SCHEMA });
+      if (!r.ok) { failed++; continue; }
+      detail = r.data;
+      store.hub.db.transaction(() => {
+        store.upsertProject({ ...store.project(p.id)!, detail, last_ms: last, salience, needs_regen: 0, updated_at: toLocalIso(now) });
+        store.setState(pendingKey, true);
+      })();
+    }
     calls++;
-    const views: P.ThreadView[] = described.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: p.name, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" }));
-    const r = await d.llm.complete<P.ProjectOutput>({ tier: "hour", system: P.PROJECT_SYSTEM, prompt: P.projectPrompt(p.name, views, factViews(store, "project_id", p.id)), schema: P.PROJECT_SCHEMA });
-    if (!r.ok) { failed++; continue; }
-    calls++;
-    const brief = await makeBrief(d, p.name, r.data, factViews(store, "project_id", p.id));
+    const brief = await makeBrief(d, "project_brief", p.name, detail, factViews(store, "project_id", p.id));
     if (brief === null) { failed++; continue; }
-    store.upsertProject({ ...store.project(p.id)!, detail: r.data, brief, last_ms: last, salience, needs_regen: 0, updated_at: toLocalIso(now) });
+    store.hub.db.transaction(() => {
+      store.upsertProject({ ...store.project(p.id)!, brief, updated_at: toLocalIso(now) });
+      store.setState(pendingKey, null);
+    })();
     updated++;
   }
   return { calls, updated, failed };
@@ -526,29 +545,42 @@ export function lifecycleStep(store: DistillStore, now: number) {
 // ---------------- 7. 日记 ----------------
 
 export async function dayStep(d: Deps, store: DistillStore, date: string, now: number) {
-  const start = new Date(`${date}T00:00:00`).getTime(), end = start + DAY;
-  const frames = loadFrames(store, "WHERE t_start_ms>=? AND t_start_ms<? ORDER BY t_start_ms,id", start, end);
-  if (!frames.length) { store.upsertDay({ date, needs_regen: 0, updated_at: toLocalIso(now) }); return { calls: 0, ok: true }; }
-  const owner = new Map((store.hub.db.prepare("SELECT frame_id,thread_id FROM assignments").all() as { frame_id: string; thread_id: string }[]).map(r => [r.frame_id, r.thread_id]));
-  const blocks: P.DayBlock[] = [];
-  let previousKey: string | null = null;
-  for (const f of frames) {
-    const t = owner.get(f.id) ? store.thread(owner.get(f.id)!) : null;
-    const label = t ? t.title : displayFrameKey(store, f).replace(/^(app|host|repo|chat):/, "");
-    const key = !t && f.key.startsWith("chat:") ? chatKey(label) : label;
-    const prev = blocks.at(-1);
-    if (prev && previousKey === key && Date.parse(`${date}T${prev.end}:00`) + 15 * MIN >= f.t_start_ms) {
-      prev.label = label; prev.end = hhmm(f.t_end_ms); prev.minutes += Math.round(minutesOf(f)); continue;
+  const pendingKey = `day_brief:${date}`, day = store.day(date);
+  let detail = day?.detail, calls = 0;
+  if (day?.needs_regen || !store.getState<boolean>(pendingKey) || detail == null) {
+    const start = new Date(`${date}T00:00:00`).getTime(), end = start + DAY;
+    const frames = loadFrames(store, "WHERE t_start_ms>=? AND t_start_ms<? ORDER BY t_start_ms,id", start, end);
+    if (!frames.length) { store.setState(pendingKey, null); store.upsertDay({ date, needs_regen: 0, updated_at: toLocalIso(now) }); return { calls: 0, ok: true }; }
+    const owner = new Map((store.hub.db.prepare("SELECT frame_id,thread_id FROM assignments").all() as { frame_id: string; thread_id: string }[]).map(r => [r.frame_id, r.thread_id]));
+    const blocks: P.DayBlock[] = [];
+    let previousKey: string | null = null;
+    for (const f of frames) {
+      const t = owner.get(f.id) ? store.thread(owner.get(f.id)!) : null;
+      const label = t ? t.title : displayFrameKey(store, f).replace(/^(app|host|repo|chat):/, "");
+      const key = !t && f.key.startsWith("chat:") ? chatKey(label) : label;
+      const prev = blocks.at(-1);
+      if (prev && previousKey === key && Date.parse(`${date}T${prev.end}:00`) + 15 * MIN >= f.t_start_ms) {
+        prev.label = label; prev.end = hhmm(f.t_end_ms); prev.minutes += Math.round(minutesOf(f)); continue;
+      }
+      blocks.push({ start: hhmm(f.t_start_ms), end: hhmm(f.t_end_ms), minutes: Math.round(minutesOf(f)), label, brief: t?.brief ?? null, ...(t ? { thread_id: t.id, kind: "thread" as const } : { kind: "misc" as const }) });
+      previousKey = key;
     }
-    blocks.push({ start: hhmm(f.t_start_ms), end: hhmm(f.t_end_ms), minutes: Math.round(minutesOf(f)), label, brief: t?.brief ?? null, kind: t ? "thread" : "misc" });
-    previousKey = key;
+    const r = await d.llm.complete<P.DayOutput>({ tier: "day", task: "day", system: P.DAY_SYSTEM, prompt: P.dayPrompt(date, blocks.slice(0, 300)), schema: P.DAY_SCHEMA });
+    if (!r.ok) return { calls: 1, ok: false };
+    detail = r.data; calls++;
+    store.hub.db.transaction(() => {
+      store.upsertDay({ date, detail, needs_regen: 0, updated_at: toLocalIso(now) });
+      store.setState(pendingKey, true);
+    })();
   }
-  const r = await d.llm.complete<P.DayOutput>({ tier: "day", system: P.DAY_SYSTEM, prompt: P.dayPrompt(date, blocks.slice(0, 300)), schema: P.DAY_SCHEMA });
-  if (!r.ok) return { calls: 1, ok: false };
-  const brief = await makeBrief(d, date, r.data, []);
-  if (brief === null) return { calls: 2, ok: false };
-  store.upsertDay({ date, brief, detail: r.data, needs_regen: 0, updated_at: toLocalIso(now) });
-  return { calls: 2, ok: true };
+  calls++;
+  const brief = await makeBrief(d, "day_brief", date, detail, []);
+  if (brief === null) return { calls, ok: false };
+  store.hub.db.transaction(() => {
+    store.upsertDay({ date, brief, updated_at: toLocalIso(now) });
+    store.setState(pendingKey, null);
+  })();
+  return { calls, ok: true };
 }
 
 // ---------------- 一轮 ----------------
@@ -599,7 +631,7 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
   out.now = nowStep(store, now);
   if (opts.slow && opts.days !== "none") {
     const today = localDate(now);
-    const days = (d.db.db.prepare("SELECT date FROM days WHERE needs_regen=1 ORDER BY date").all() as { date: string }[])
+    const days = (d.db.db.prepare("SELECT date FROM days WHERE needs_regen=1 OR EXISTS(SELECT 1 FROM distill_state WHERE k='day_brief:'||days.date AND v='true') ORDER BY date").all() as { date: string }[])
       .map(r => r.date).filter(date => opts.days === "all" || date < today);
     let calls = 0, done = 0;
     for (const date of days) { const r = await dayStep(d, store, date, now); calls += r.calls; if (r.ok) done++; }

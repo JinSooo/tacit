@@ -2,11 +2,11 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 
 export type Tier = "minute" | "hour" | "day";
 export type Provider = "claude-cli" | "codex-cli" | "anthropic" | "openai-compatible";
-export interface LLMRequest { tier: Tier; system: string; prompt: string; schema: object; timeoutMs?: number }
+export interface LLMRequest { tier: Tier; task?: string; system: string; prompt: string; schema: object; timeoutMs?: number }
 export type LLMResult<T> = { ok: true; data: T; ms: number } | { ok: false; error: string; ms: number };
 export interface ModelConfig { provider: Provider; model: string; base_url?: string }
 export interface UsageRow {
-  id: string; at: string; tier: Tier; provider: string; model: string;
+  id: string; at: string; tier: Tier; task: string | null; provider: string; model: string;
   input_chars: number; output_chars: number; input_tokens: number | null; output_tokens: number | null;
   ms: number; ok: 0 | 1; error: string | null;
 }

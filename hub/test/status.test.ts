@@ -123,3 +123,16 @@ test("最近一次调用失败时最近错误未恢复；之后成功一次即�
   expect(status.distill.last_error).toMatchObject({ error: "失败一", recovered: true });
   expect(status.distill.last_ok_at).toBe(toLocalIso(now - 60_000));
 });
+
+test("今天用量同时按 task 汇总，NULL 旧行、失败和未知 token 均保留", () => {
+  seed();
+  ctx.db.db.exec("UPDATE llm_usage SET task=CASE WHEN input_tokens=100 THEN 'assign' WHEN ok=0 THEN 'assign' WHEN input_tokens=999 THEN 'yesterday' ELSE NULL END");
+  const status = hubStatus(ctx.db, { port: 1, now });
+  expect(status.llm_today.by_task).toEqual([
+    { task: null, calls: 1, ok: 1, failed: 0, input_tokens: 7, output_tokens: 3, ms: 2000 },
+    { task: "assign", calls: 2, ok: 1, failed: 1, input_tokens: 100, output_tokens: 20, ms: 1500 },
+  ]);
+  expect(status.llm_today.by_tier).toHaveLength(2);
+  ctx.db.db.exec("UPDATE llm_usage SET input_tokens=NULL,output_tokens=NULL WHERE task='assign'");
+  expect(hubStatus(ctx.db, { port: 1, now }).llm_today.by_task[1]).toMatchObject({ input_tokens: null, output_tokens: null });
+});

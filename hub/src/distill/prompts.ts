@@ -18,7 +18,7 @@ export interface FrameView {
   end: string;
   key: string;            // repo:/path | host:x | chat:app:name | app:bundle
   private: boolean;
-  records: { id: string; source: string; title: string; excerpt: string }[];
+  records: { id: string; source: string; title: string; excerpt: string; conversation_id?: string; conversation_summary?: { summary: string; points: string[] } }[];
   /** 用户说过这个片段不属于的线程标题。 */
   not_threads?: string[];
 }
@@ -35,10 +35,17 @@ export function excerpt(text: string, maxChars: number): string {
   return cps.length <= maxChars ? cps.join("") : cps.slice(0, maxChars).join("") + "…";
 }
 
+// 每次请求重新去重；跨片段同场总结只附在第一条记录上，正文和证据 id 不动。
 function frameBlock(frames: FrameView[]): string {
+  const conversations = new Set<string>();
   const view = frames.map(f => f.private
     ? { id: f.id, time: `${f.start}–${f.end}`, key: f.key, private: true, note: "私密内容，正文未提供", ...(f.not_threads?.length ? { not_threads: f.not_threads } : {}) }
-    : { id: f.id, time: `${f.start}–${f.end}`, key: f.key, records: f.records, ...(f.not_threads?.length ? { not_threads: f.not_threads } : {}) });
+    : { id: f.id, time: `${f.start}–${f.end}`, key: f.key, records: f.records.map(r => {
+      const { conversation_summary, ...record } = r;
+      if (!r.conversation_id || !conversation_summary || conversations.has(r.conversation_id)) return record;
+      conversations.add(r.conversation_id);
+      return { ...record, conversation_summary };
+    }), ...(f.not_threads?.length ? { not_threads: f.not_threads } : {}) });
   return `<data>\n${json(view)}\n</data>`;
 }
 
@@ -226,17 +233,28 @@ export interface ProjectOutput { goal: string; status: string; people: string[] 
 
 // ---------- 5. 日记（day 档，输入是时间块：线程标题、简略版、零碎活动的应用或网站，不含原始记录） ----------
 
-export interface DayBlock { start: string; end: string; minutes: number; label: string; brief: string | null; kind: "thread" | "misc" }
+export type DayBlock = { start: string; end: string; minutes: number; label: string; brief: string | null } &
+  ({ kind: "thread"; thread_id: string } | { kind: "misc"; thread_id?: never });
 
 export const DAY_SYSTEM = `${DATA_RULES}
 
 任务：根据一天的活动时间块写日记，给本人回顾用。
+输入：threads 是线程字典（请求内编号、标题、简略版）；blocks 是时间块（起止、时长、类型），thread 引用字典编号，零碎活动用 label。
 - summary：这一天主要做了哪几件事、各花了多少时间（2–4 句）。
 - timeline：按时间顺序合并成 3–12 段，每段一句话；零碎活动可以合并成一段（例如\"刷视频、看资讯约 40 分钟\"）。
 - 时间写成 HH:MM，只用给出的内容。`;
 
 export function dayPrompt(date: string, blocks: DayBlock[]): string {
-  return `日期：${date}\n\n<data>\n${json(blocks)}\n</data>`;
+  const threads: { id: string; title: string; brief: string | null }[] = [];
+  const ids = new Map<string, string>();
+  const timeline = blocks.map(({ start, end, minutes, label, brief, kind, thread_id }) => {
+    if (kind === "misc") return { start, end, minutes, kind, label };
+    const key = thread_id;
+    let id = ids.get(key);
+    if (!id) { id = `t${ids.size + 1}`; ids.set(key, id); threads.push({ id, title: label, brief }); }
+    return { start, end, minutes, kind, thread: id };
+  });
+  return `日期：${date}\n\n<data>\n${json({ threads, blocks: timeline })}\n</data>`;
 }
 
 export const DAY_SCHEMA = {

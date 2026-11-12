@@ -19,7 +19,7 @@ let queue: Promise<unknown> = Promise.resolve();
 export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRow) => void | Promise<void>; readKey?: ReadKey; spawn?: Spawn; configs?: () => Promise<Record<Tier, ModelConfig>> }) {
   async function execute<T>(req: LLMRequest): Promise<LLMResult<T>> {
     const start = performance.now();
-    const row: UsageRow = { id: ulid(), at: toLocalIso(Date.now()), tier: req.tier, provider: "", model: "", input_chars: Array.from(req.system).length + Array.from(req.prompt).length, output_chars: 0, input_tokens: null, output_tokens: null, ms: 0, ok: 0, error: null };
+    const row: UsageRow = { id: ulid(), at: toLocalIso(Date.now()), tier: req.tier, task: req.task ?? null, provider: "", model: "", input_chars: Array.from(req.system).length + Array.from(req.prompt).length, output_chars: 0, input_tokens: null, output_tokens: null, ms: 0, ok: 0, error: null };
     const metrics = { outputChars: 0, inputTokens: null as number | null, outputTokens: null as number | null };
     let data: unknown;
     try {

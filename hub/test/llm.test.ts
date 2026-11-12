@@ -275,3 +275,14 @@ test("Claude 出错原因从 stdout 的 result 取出", async () => {
   expect(r.ok).toBe(false);
   expect(r.ok ? "" : r.error).toContain("5-hour limit");
 });
+
+
+test("task 在成功和失败用量中保留，未提供时为 NULL", async () => {
+  const success = await fixture();
+  await success.llm.complete({ ...request, task: "thread_brief" });
+  await success.llm.complete(request);
+  const failure = await fixture("claude-cli", "schema");
+  await failure.llm.complete({ ...request, task: "project_brief" });
+  expect(success.rows.map(r => [r.task, r.ok])).toEqual([["thread_brief", 1], [null, 1]]);
+  expect(failure.rows.map(r => [r.task, r.ok])).toEqual([["project_brief", 0]]);
+});

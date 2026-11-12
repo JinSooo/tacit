@@ -193,7 +193,7 @@ export class DistillStore {
   }
   getState<T>(key: string): T | null { const row = this.sql.prepare("SELECT v FROM distill_state WHERE k=?").get(key) as Row | undefined; return row ? JSON.parse(row.v) : null; }
   setState(key: string, value: unknown) { this.sql.prepare("INSERT INTO distill_state VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(key,JSON.stringify(value)); }
-  writeUsage(usage: { id?: string; at?: string; tier: string; provider: string; model: string; input_chars?: number; output_chars?: number; input_tokens?: number; output_tokens?: number; ms: number; ok: number; error?: string }) { this.put("llm_usage", "id", { id: ulid(), at: new Date().toISOString(), ...usage }); }
+  writeUsage(usage: { id?: string; at?: string; tier: string; task?: string | null; provider: string; model: string; input_chars?: number; output_chars?: number; input_tokens?: number; output_tokens?: number; ms: number; ok: number; error?: string }) { this.put("llm_usage", "id", { id: ulid(), at: new Date().toISOString(), ...usage }); }
   threads(params: URLSearchParams) {
     const limit = Number(params.get("limit") ?? 50);
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new InputError("limit 必须是 1–500 的整数");

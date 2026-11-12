@@ -137,7 +137,8 @@ test("归线程时对话片段给的是总结；没有事实可挂时也能把�
   await conversationStep({ db: ctx.db, llm: fakeLLM().llm }, now);
   const view = frameView(store, load(), opts).records[0]!;
   expect(view.title).toBe("对话：线上面试复盘");
-  expect(view.excerpt.startsWith("我和同事复盘了刚结束的面试。")).toBe(true);
+  expect(view.conversation_summary?.summary).toBe("我和同事复盘了刚结束的面试。");
+  expect(view.excerpt.startsWith("[10:00:01] 未知说话人：Yeah.")).toBe(true);
 
   store.upsertThread({ id: "t-dev", status: "active", title: "开发对话功能" });
   store.assign(frame.frame_id, "t-dev", "llm", 0.8);

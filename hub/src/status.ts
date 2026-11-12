@@ -7,7 +7,7 @@ import type { HubDB } from "./db.ts";
  * 必须只读：不调用 DistillStore.pending() 这类会顺带改库的方法。
  */
 type Counts = Record<string, number>;
-interface UsageRow { at: string | null; tier: string | null; model: string | null; ok: number | null; input_tokens: number | null; output_tokens: number | null; ms: number | null }
+interface UsageRow { at: string | null; tier: string | null; task: string | null; model: string | null; ok: number | null; input_tokens: number | null; output_tokens: number | null; ms: number | null }
 interface TierUsage { tier: string; models: string[]; calls: number; ok: number; failed: number; input_tokens: number | null; output_tokens: number | null; ms: number }
 
 const tierOrder = ["minute", "hour", "day"];
@@ -77,7 +77,7 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number }) {
   // 用量的 at 有本地时间和 UTC 两种写法：先按日期前缀粗筛，再按时刻精确判断是否属于今天。
   const today = localDate(now);
   const dayStart = new Date(`${today}T00:00:00`).getTime();
-  const usage = (sql.prepare("SELECT at,tier,model,ok,input_tokens,output_tokens,ms FROM llm_usage WHERE at>=?").all(localDate(dayStart - 86_400_000)) as UsageRow[])
+  const usage = (sql.prepare("SELECT at,tier,task,model,ok,input_tokens,output_tokens,ms FROM llm_usage WHERE at>=?").all(localDate(dayStart - 86_400_000)) as UsageRow[])
     .filter(r => r.at !== null && Date.parse(r.at) >= dayStart && Date.parse(r.at) <= now + 60_000);
   const tiers = new Map<string, TierUsage & { modelSet: Set<string> }>();
   const add = (sum: number | null, value: number | null) => value === null ? sum : (sum ?? 0) + value;
@@ -91,6 +91,14 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number }) {
     tiers.set(tier, t);
   }
   const byTier = [...tiers.values()].map(({ modelSet, ...t }) => ({ ...t, models: [...modelSet].sort() })).sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || a.tier.localeCompare(b.tier));
+  const tasks = new Map<string | null, { task: string | null; calls: number; ok: number; failed: number; input_tokens: number | null; output_tokens: number | null; ms: number }>();
+  for (const r of usage) {
+    const t = tasks.get(r.task) ?? { task: r.task, calls: 0, ok: 0, failed: 0, input_tokens: null, output_tokens: null, ms: 0 };
+    t.calls++; if (r.ok) t.ok++; else t.failed++;
+    t.input_tokens = add(t.input_tokens, r.input_tokens); t.output_tokens = add(t.output_tokens, r.output_tokens);
+    t.ms += r.ms ?? 0; tasks.set(r.task, t);
+  }
+  const byTask = [...tasks.values()].sort((a, b) => (a.task ?? "").localeCompare(b.task ?? ""));
   const total = byTier.reduce((s, t) => ({ calls: s.calls + t.calls, ok: s.ok + t.ok, failed: s.failed + t.failed, input_tokens: add(s.input_tokens, t.input_tokens), output_tokens: add(s.output_tokens, t.output_tokens), ms: s.ms + t.ms }),
     { calls: 0, ok: 0, failed: 0, input_tokens: null as number | null, output_tokens: null as number | null, ms: 0 });
 
@@ -136,15 +144,15 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number }) {
       threads: counts("SELECT status AS k,COUNT(*) AS n FROM threads GROUP BY status"),
       needs_regen: {
         threads: scalar<number>("SELECT COUNT(*) FROM threads WHERE needs_regen=1 AND status!='abandoned'"),
-        projects: scalar<number>("SELECT COUNT(*) FROM projects WHERE needs_regen=1"),
-        days: scalar<number>("SELECT COUNT(*) FROM days WHERE needs_regen=1"),
+        projects: scalar<number>("SELECT COUNT(*) FROM projects WHERE needs_regen=1 OR EXISTS(SELECT 1 FROM distill_state WHERE k='project_brief:'||projects.id AND v='true')"),
+        days: scalar<number>("SELECT COUNT(*) FROM days WHERE needs_regen=1 OR EXISTS(SELECT 1 FROM distill_state WHERE k='day_brief:'||days.date AND v='true')"),
       },
       pending_open: counts("SELECT kind AS k,COUNT(*) AS n FROM pending WHERE resolved_at IS NULL GROUP BY kind"),
       requests,
       last_error: lastError ? { at: lastError.at, tier: lastError.tier, error: (lastError.error ?? "").slice(0, 300), recovered: !!lastOk && lastOk.id > lastError.id } : null,
       last_ok_at: lastOk?.at ?? null,
     },
-    llm_today: { date: today, total, by_tier: byTier },
+    llm_today: { date: today, total, by_tier: byTier, by_task: byTask },
     agent_reads_today: (sql.prepare("SELECT at FROM agent_reads WHERE at>=?").all(localDate(dayStart - 86_400_000)) as { at: string }[]).filter(r => Date.parse(r.at) >= dayStart).length,
     // 转写在各设备本地进行，中枢只收文字和声纹，没有转写队列可报。
     audio: {

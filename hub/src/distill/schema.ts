@@ -27,3 +27,6 @@ CREATE INDEX pending_open ON pending(resolved_at,created_at);
 ${frameRecordsSchema}
 PRAGMA user_version=2;
 `;
+
+/** v9：任务名可空，旧用量保持 NULL；由 HubDB 在迁移事务内检查列后执行。 */
+export const usageTaskSchema = `ALTER TABLE llm_usage ADD COLUMN task TEXT;`;

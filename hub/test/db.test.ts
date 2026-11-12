@@ -16,7 +16,7 @@ test("SQLCipher 实际文件加密，错误密钥拒绝，正确密钥重开及�
   const reopened = new HubDB(ctx.file, ctx.config.dbKey);
   try {
     expect(reopened.get(record.id)?.body).toBe(record.body);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(8);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(9);
   } finally { reopened.close(); }
 });
 
@@ -142,8 +142,8 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
       }
       writeFileSync(gate, "go");
       const results = await Promise.all(children.map(async child => ({ code: await child.exited, error: await new Response(child.stderr).text(), output: await new Response(child.stdout).text() })));
-      expect(results).toEqual([{ code: 0, error: "", output: "8\n" }, { code: 0, error: "", output: "8\n" }]);
-      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(8);
+      expect(results).toEqual([{ code: 0, error: "", output: "9\n" }, { code: 0, error: "", output: "9\n" }]);
+      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(9);
       expect(ctx.db.db.pragma("table_info(threads)")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "domain" }), expect.objectContaining({ name: "project_hint" })]));
       expect(ctx.db.db.pragma("table_info(agent_reads)")).toHaveLength(8);
       expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'agent_reads_%'").all()).toHaveLength(2);
@@ -153,3 +153,16 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
     }
   }
 }, 30000);
+
+test("v8 用量升级到 v9：task 列可空，旧行不变，重开幂等", () => {
+  ctx.db.db.exec("ALTER TABLE llm_usage DROP COLUMN task; PRAGMA user_version=8;");
+  ctx.db.db.prepare("INSERT INTO llm_usage(id, tier, input_tokens, ok) VALUES(?,?,?,?)").run("legacy-usage", "hour", 123, 1);
+  for (let i = 0; i < 2; i++) {
+    const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
+    try {
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(9);
+      expect((upgraded.db.pragma("table_info(llm_usage)") as { name: string; type: string }[]).filter(c => c.name === "task")).toMatchObject([{ name: "task", type: "TEXT" }]);
+      expect(upgraded.db.prepare("SELECT id,tier,input_tokens,ok,task FROM llm_usage WHERE id=?").get("legacy-usage")).toEqual({ id: "legacy-usage", tier: "hour", input_tokens: 123, ok: 1, task: null });
+    } finally { upgraded.close(); }
+  }
+});

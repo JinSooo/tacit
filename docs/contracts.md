@@ -169,7 +169,7 @@ pending(id TEXT PRIMARY KEY,
         payload TEXT NOT NULL, created_at TEXT NOT NULL,
         resolved_at TEXT, resolution TEXT)   -- resolution：用户操作名，或 expired（到期自动结项）
 distill_state(k TEXT PRIMARY KEY, v TEXT)   -- cursor_ms、backfill_done、now（当前状态 JSON）等
-llm_usage(id TEXT PRIMARY KEY, at TEXT, tier TEXT, provider TEXT, model TEXT,
+llm_usage(id TEXT PRIMARY KEY, at TEXT, tier TEXT, task TEXT, provider TEXT, model TEXT,
           input_chars INTEGER, output_chars INTEGER, input_tokens INTEGER, output_tokens INTEGER,
           ms INTEGER, ok INTEGER, error TEXT)
 ```
@@ -191,15 +191,20 @@ llm_usage(id TEXT PRIMARY KEY, at TEXT, tier TEXT, provider TEXT, model TEXT,
 
 决定、否决、未决、下一步、推测存在 facts 表里，不放进 detail。`brief` 只能由 detail 和有效 facts 生成（AGENTS.md），一两句。项目的 detail 同理：`{ "goal", "status", "people" }` 加上项目下的 facts。
 
+项目和日记的详细版成功即保存，`needs_regen=0`，同时在 `distill_state` 写 `project_brief:<id>` / `day_brief:<date>` 为 `true`。简略版失败后调度只补简略版；新的变化置 `needs_regen=1` 时先重做详细版。简略版成功后清掉待生成标记。
+
 ### 4.4 模型适配器（`hub/src/llm/`）
 
 ```ts
 type Tier = "minute" | "hour" | "day";
-interface LLMRequest { tier: Tier; system: string; prompt: string; schema: object; timeoutMs?: number }
+interface LLMRequest { tier: Tier; task?: string; system: string; prompt: string; schema: object; timeoutMs?: number }
 type LLMResult<T> = { ok: true; data: T; ms: number } | { ok: false; error: string; ms: number };
 function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用写一行 llm_usage
 ```
 
+- `user_version=9` 在现有 `BEGIN IMMEDIATE` 迁移事务中为 `llm_usage` 添加可空的 `task TEXT`，旧行保持 NULL；检查列是否存在，重复打开不重复添加。
+- `task` 标记 `assign`、`thread_digest`、`thread_brief`、`project`、`project_brief`、`classify`、`conversation_summary`、`day`、`day_brief`、`dedupe`。仅记录任务名及现有用量指标，不记录提示词或输出正文。
+- 状态接口 `GET /v1/status` 的 `llm_today` 保留 `total`、`by_tier`，新增 `by_task`：每项含 `task`、`calls`、`ok`、`failed`、`input_tokens`、`output_tokens`、`ms`。旧调用及未传任务名的调用归入 `task: null`；未知 token 用量仍为 null，统计日期与原档位统计一致。
 - 配置 `<数据目录>/models.json`：`{ "tiers": { "minute": { "provider": "claude-cli", "model": "haiku" }, … } }`。provider 有 `claude-cli`、`codex-cli`、`anthropic`、`openai-compatible`（`base_url`）。API key 存在钥匙串（service `record-anything`，account `provider:<名字>`），不写进文件。
 - 当前配置（2026-11-08 起，避免占用户的 Claude 额度）：三档都用 `codex-cli`，`minute` 用 gpt-6-luna，`hour`、`day` 用 gpt-6.1-sol。没有 `models.json` 时代码里的默认仍是 `claude-cli`（haiku / sonnet）。以后换成单独的 API 通道。
 - **CLI 后端必须做到**：
