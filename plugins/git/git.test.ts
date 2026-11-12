@@ -40,6 +40,78 @@ async function commit(repo: string, email: string, message: string, file?: strin
   return git(repo, ["rev-parse", "HEAD"]);
 }
 
+async function fakeGitLog(dir: string, output: string, exitCode = 0) {
+  const realGit = Bun.which("git")!, bin = path.join(dir, "bin"), fixture = path.join(dir, "log-output");
+  await mkdir(bin); await writeFile(fixture, output);
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const executable = path.join(bin, "git");
+  await writeFile(executable, `#!/bin/sh
+if test "$4" = log; then /bin/cat ${quote(fixture)}; exit ${exitCode}; fi
+exec ${quote(realGit)} "$@"
+`);
+  await chmod(executable, 0o700); process.env.PATH = `${bin}:${originalPath}`;
+}
+
+function logSection(hash: string, fields: string[] = [], numstat = "\n1\t0\t私密文件名.txt\0") {
+  const now = new Date().toISOString();
+  return "\0RA_COMMIT\0" + [hash, "合成作者", "local@example.test", now, now, "私密提交消息", ...fields].join("\0") + "\0" + numstat;
+}
+
+for (const failure of ["字段缺失", "numstat", "未知 hash", "作者日期", "记录校验"]) {
+  test(`单条提交失败隔离：${failure}，正常提交导入且游标前进`, async () => {
+    const dir = await temp(), repo = path.join(dir, "repo"); await init(repo, "local@example.test");
+    const mine = await commit(repo, "local@example.test", "正常提交"), badHash = "a".repeat(40);
+    let bad = logSection(badHash);
+    if (failure === "字段缺失") bad = `\0RA_COMMIT\0${badHash}\0合成作者\0local@example.test\0`;
+    if (failure === "numstat") bad = logSection(badHash, [], "\n不是统计\t私密文件名.txt\0");
+    if (failure === "未知 hash") bad = logSection("私密无效hash");
+    if (failure === "作者日期") bad = bad.replace(/\d{4}-\d{2}-\d{2}T[^\0]+/, "无效日期");
+    if (failure === "记录校验") bad = bad.replace("私密提交消息", "私密提交消息".repeat(40_000));
+    await fakeGitLog(dir, bad + logSection(mine));
+    const previous = { since: new Date(0).toISOString(), seen: [] };
+    const records: RecordV1[] = [], logs: string[] = [];
+    const run = (state: GitState) => collectGit({ device: "mac", roots: [repo], state, emails: ["local@example.test"], emit: (r) => records.push(r), log: (m) => logs.push(m) });
+    const state = await run({ repos: [repo], progress: { [repo]: previous } });
+    expect(records.map((r) => r.context?.extra?.hash)).toEqual([mine]);
+    expect(logs).toHaveLength(1); expect(logs[0]).toContain("1 条提交");
+    expect(logs[0]).toContain(failure === "未知 hash" ? "未知" : badHash.slice(0, 7));
+    expect(logs[0]).toContain(({ 字段缺失: "authored", numstat: "numstat", "未知 hash": "hash", 作者日期: "authored", 记录校验: "/body" })[failure]!);
+    expect(logs[0]).not.toContain("私密");
+    expect(new Date(state.progress[repo]!.since).valueOf()).toBeGreaterThan(new Date(previous.since).valueOf());
+    if (failure !== "未知 hash") {
+      expect(state.progress[repo]!.seen).toContain(badHash);
+      records.length = 0; logs.length = 0;
+      await run(state);
+      expect(records).toEqual([]); expect(logs).toEqual([]);
+    }
+  });
+}
+
+test("跳过摘要只列前三个 hash 并汇总全部失败数", async () => {
+  const dir = await temp(), repo = path.join(dir, "repo"); await init(repo, "local@example.test");
+  await commit(repo, "local@example.test", "正常提交");
+  const hashes = ["a", "b", "c", "d"].map((letter) => letter.repeat(40));
+  await fakeGitLog(dir, hashes.map((hash) => logSection(hash, [], "坏 numstat\0")).join(""));
+  const logs: string[] = [];
+  const state = await collectGit({ device: "mac", roots: [repo], emails: ["local@example.test"], emit: () => { throw new Error("不应输出记录"); }, log: (m) => logs.push(m) });
+  expect(logs).toHaveLength(1); expect(logs[0]).toContain("4 条提交");
+  for (const hash of hashes.slice(0, 3)) expect(logs[0]).toContain(hash.slice(0, 7));
+  expect(logs[0]).not.toContain(hashes[3]!.slice(0, 7));
+  expect(state.progress[repo]!.seen).toEqual(hashes);
+});
+
+for (const failure of ["意外前缀", "没有边界", "命令失败"]) {
+  test(`仓库级失败保留旧游标：${failure}`, async () => {
+    const dir = await temp(), repo = path.join(dir, "repo"); await init(repo, "local@example.test");
+    const mine = await commit(repo, "local@example.test", "正常提交");
+    await fakeGitLog(dir, failure === "没有边界" ? "意外输出" : (failure === "意外前缀" ? "意外输出" : "") + logSection(mine), failure === "命令失败" ? 1 : 0);
+    const previous = { since: new Date(0).toISOString(), seen: [] }, records: RecordV1[] = [], logs: string[] = [];
+    const state = await collectGit({ device: "mac", roots: [repo], state: { repos: [repo], progress: { [repo]: previous } }, emails: ["local@example.test"], emit: (r) => records.push(r), log: (m) => logs.push(m) });
+    expect(records).toEqual([]); expect(state.progress[repo]).toEqual(previous);
+    expect(logs).toHaveLength(1); expect(logs[0]).toContain("跳过仓库");
+  });
+}
+
 test("两个真实仓库按全局和本地邮箱过滤、采集所有分支、同秒增量及 remembered 仓库", async () => {
   const dir = await temp(), repoA = path.join(dir, "仓库甲"), repoB = path.join(dir, "仓库乙");
   await init(repoA, "local-a@example.test"); await init(repoB, "local-b@example.test");

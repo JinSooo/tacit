@@ -45,27 +45,44 @@ async function git(args: string[], deadline: number, cwd?: string, optional = fa
 }
 
 interface Commit { hash: string; author: string; email: string; authored: string; committed: string; message: string; files: string[]; added: number; deleted: number; }
-function parseLog(output: string): Commit[] {
+interface SkippedCommit { hash: string; reason: string; }
+function parseLog(output: string, seen: Set<string>) {
   const commits: Commit[] = [];
+  const skipped: SkippedCommit[] = [], boundaries: { hash: string; committed: number }[] = [];
   // Git 的 -z 保留文件名中的制表符、换行和中文；提交正文不能含 NUL。
   const marker = "\0RA_COMMIT\0";
-  for (const section of output.split(marker).slice(1)) {
+  const [prefix, ...sections] = output.split(marker);
+  if (prefix) throw new Error("无法解析 git log：提交边界前有意外内容");
+  for (const section of sections) {
     const fields = section.split("\0");
     const [hash, author, email, authored, committed, message] = fields;
-    if (!hash || !/^[a-f0-9]{40,64}$/.test(hash) || author === undefined || email === undefined || !authored || !committed || message === undefined) throw new Error("无法解析 git log");
+    const validHash = !!hash && /^[a-f0-9]{40,64}$/.test(hash);
+    if (validHash) {
+      boundaries.push({ hash, committed: new Date(committed ?? "").valueOf() });
+      if (seen.has(hash)) continue;
+    }
+    const invalidField = !validHash ? "hash" : author === undefined ? "author" : email === undefined ? "email"
+      : !authored || Number.isNaN(new Date(authored).valueOf()) ? "authored"
+      : !committed || Number.isNaN(new Date(committed).valueOf()) ? "committed" : message === undefined ? "message" : null;
+    if (invalidField || !hash || author === undefined || email === undefined || authored === undefined || committed === undefined || message === undefined) {
+      skipped.push({ hash: validHash ? hash! : "未知", reason: `字段 ${invalidField} 无效或缺失` });
+      continue;
+    }
     const commit: Commit = { hash, author, email, authored, committed, message, files: [], added: 0, deleted: 0 };
+    let invalidStat = false;
     for (const field of fields.slice(6)) {
       const line = field.replace(/^\n/, "");
       if (!line) continue;
       const stat = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(line);
-      if (!stat) throw new Error("无法解析 git numstat");
+      if (!stat) { invalidStat = true; break; }
       commit.files.push(stat[3]!);
       commit.added += stat[1] === "-" ? 0 : Number(stat[1]);
       commit.deleted += stat[2] === "-" ? 0 : Number(stat[2]);
     }
-    commits.push(commit);
+    if (invalidStat) skipped.push({ hash, reason: "numstat 无效" });
+    else commits.push(commit);
   }
-  return commits;
+  return { commits, skipped, boundaries };
 }
 
 export async function collectGit(options: {
@@ -93,7 +110,7 @@ export async function collectGit(options: {
       const nextSince = new Date(Math.floor(started / 1000) * 1000 - 1000);
       const seen = new Set(options.since ? [] : previous?.seen ?? []);
       const output = await git(["log", "--all", `--since=${since.toISOString()}`, "--format=%x00RA_COMMIT%x00%H%x00%an%x00%ae%x00%aI%x00%cI%x00%B%x00", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-notes", "--no-show-signature", "--no-decorate", "--encoding=UTF-8", "--diff-merges=first-parent"], deadline, repo);
-      const commits = parseLog(output), records: RecordV1[] = [];
+      const { commits, skipped, boundaries } = parseLog(output, seen), records: RecordV1[] = [];
       for (const commit of commits) {
         if (!emails.has(commit.email.toLowerCase()) || seen.has(commit.hash)) continue;
         const record: RecordV1 = {
@@ -105,14 +122,19 @@ export async function collectGit(options: {
           capture: { method: "db" }, sensitivity: "normal",
         };
         const validation = validateRecord(record);
-        if (!validation.ok) throw new Error(`记录不符合契约：${validation.errors.join("；")}`);
+        if (!validation.ok) {
+          skipped.push({ hash: commit.hash, reason: `记录不符合契约：${validation.errors.join("；")}` });
+          continue;
+        }
         records.push(record);
       }
       if (Date.now() > deadline) throw new Error("超过时限");
       for (const record of records) options.emit(record);
       // --since 覆盖到未来时不把游标倒退，否则下一次会意外回溯。
       const boundary = new Date(Math.max(nextSince.valueOf(), since.valueOf()));
-      progress[repo] = { since: boundary.toISOString(), seen: commits.filter((commit) => new Date(commit.committed) >= boundary).map((commit) => commit.hash) };
+      // 坏提交的数据不会改变：照常推进游标，回看窗口内（含日期损坏）的已知 hash 也记入 seen，不再重试。
+      progress[repo] = { since: boundary.toISOString(), seen: boundaries.filter((commit) => Number.isNaN(commit.committed) || commit.committed >= boundary.valueOf()).map((commit) => commit.hash) };
+      if (skipped.length) log(`git：仓库 ${repo} 有 ${skipped.length} 条提交无法解析或校验，已跳过：${skipped.slice(0, 3).map(({ hash, reason }) => `${hash === "未知" ? hash : hash.slice(0, 7)}（${reason}）`).join("、")}${skipped.length > 3 ? "…" : ""}`);
     } catch (error) { log(`git：跳过仓库 ${repo}：${(error as Error).message}`); }
   }
   return { repos, progress };
