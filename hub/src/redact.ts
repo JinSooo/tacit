@@ -37,8 +37,27 @@ export function redactString(input: string): { text: string; count: number } {
   return { text, count };
 }
 
+/** 只用于剪贴板正文整体；普通文本里的标识符不能用这个启发式。 */
+function isClipboardPassword(value: string): boolean {
+  if (value.length < 8 || value.length > 64 || /\s/u.test(value)) return false;
+  if (/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i.test(value)
+    || /^[^@]+@[^@]+\.[^@]+$/.test(value)
+    || /^(?:[a-z]:[\\/]|[\\/]|~[\\/]|\.{1,2}[\\/])/i.test(value)
+    || /^[^\\/:*?"<>|]+(?:[\\/][^\\/:*?"<>|]+)+$/.test(value)
+    || /^(?:\p{L}+|\p{N}+)$/u.test(value)) return false;
+  return [/[A-Z]/, /[a-z]/, /[0-9]/, /[^\p{L}\p{N}]/u].filter(pattern => pattern.test(value)).length >= 3;
+}
+
 export function redactRecord(record: RecordV1): RecordV1 {
   let count = 0;
+  const candidate = record.source === "mac.clipboard" ? record.body.trim() : "";
+  const password = isClipboardPassword(candidate) ? candidate : null;
+  const redactClipboard = (text: string): string => {
+    if (!password) return text;
+    const parts = text.split(password);
+    count += parts.length - 1;
+    return parts.join("[已脱敏:密码]");
+  };
   const visit = (value: unknown): unknown => {
     if (typeof value === "string") {
       const result = redactString(value);
@@ -49,8 +68,8 @@ export function redactRecord(record: RecordV1): RecordV1 {
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, visit(v)]));
     return value;
   };
-  const title = visit(record.title) as string;
-  const body = visit(record.body) as string;
+  const title = redactClipboard(visit(record.title) as string);
+  const body = redactClipboard(visit(record.body) as string);
   const context = record.context === undefined ? undefined : visit(record.context) as RecordV1["context"];
   return {
     ...record, title, body, ...(context === undefined ? {} : { context }),

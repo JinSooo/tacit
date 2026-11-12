@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { redactString, redactRecord } from "../src/redact.ts";
+import { bigram } from "../src/db.ts";
 import { setup, fixture } from "./helpers.ts";
 
 // 全部为人为构造的假密钥，不含任何真实凭据。
@@ -73,4 +74,52 @@ test("赋值型密钥包含标点和 JSON 引号也能拦截", () => {
     expect(redactString(input).count).toBe(1);
     expect(redactString(input).text).not.toContain("aB3!");
   }
+});
+
+test("剪贴板单词型密码在写入 records 和 FTS 前拦截，其他来源不误伤", () => {
+  const ctx = setup();
+  try {
+    const passwords = ["Qw#58kLp2z", "Aa@1234567", "Abc12345", "abc@1234", "Ab1" + "x".repeat(61)];
+    for (const secret of passwords) {
+      for (const source of ["mac.clipboard", "mac.screen", "mac.browser", "codex.session"]) {
+        const record = fixture({ source, source_ref: crypto.randomUUID(), title: `复制 · ${secret}`, body: ` \n${secret}\t`,
+          context: { app: "com.tencent.xinWeChat" }, redactions: 2 });
+        expect(ctx.db.ingest([record]).accepted).toBe(1);
+        const stored = ctx.db.get(record.id)!;
+        if (source === "mac.clipboard") {
+          expect(stored.title).toBe("复制 · [已脱敏:密码]");
+          expect(stored.body).toBe(" \n[已脱敏:密码]\t");
+          expect(stored.title).not.toContain(secret);
+          expect(stored.body).not.toContain(secret);
+          expect(stored.redactions).toBe(4);
+          expect(stored.sensitivity).toBe("redacted");
+        } else {
+          expect(stored.title).toBe(record.title);
+          expect(stored.body).toBe(record.body);
+          expect(stored.redactions).toBe(2);
+          expect(stored.sensitivity).toBe("normal");
+        }
+      }
+    }
+    const rows = ctx.db.db.prepare("SELECT title,body FROM records WHERE source='mac.clipboard'").all();
+    // FTS 使用 bigram 编码，比较已脱敏正文，而不只检查原始密码是否存在。
+    const indexed = ctx.db.db.prepare("SELECT title,body FROM records_fts WHERE rowid IN (SELECT rowid FROM records WHERE source='mac.clipboard')").all();
+    expect(rows).toHaveLength(passwords.length);
+    expect(indexed).toHaveLength(passwords.length);
+    for (const row of indexed) expect(row).toEqual({ title: bigram("复制 · [已脱敏:密码]"), body: bigram(" \n[已脱敏:密码]\t") });
+    for (const secret of passwords) expect(JSON.stringify([...rows, ...indexed])).not.toContain(secret);
+  } finally { ctx.cleanup(); }
+});
+
+test("剪贴板普通文字、地址、路径和边界长度不按密码拦截", () => {
+  const ctx = setup();
+  try {
+    for (const text of ["hello-world", "https://example.com/a?b=1", "https://Example.com/A?b=1", "user@example.com",
+      "User1@example.com", "/Users/a/b.txt", "/Users/A1/b.txt", "C:\\Users\\A1\\b.txt", "./A1/b.txt", "~/A1/b.txt",
+      "18000000000", "Password", "Ab1 short sentence", "Ab1\nnext", "Ab1\tword", "Ab1xxxx", "Ab1" + "x".repeat(62)]) {
+      const record = fixture({ source: "mac.clipboard", title: `复制 · ${text}`, body: text });
+      expect(ctx.db.ingest([record]).accepted).toBe(1);
+      expect(ctx.db.get(record.id)).toMatchObject({ title: record.title, body: text, redactions: 0, sensitivity: "normal" });
+    }
+  } finally { ctx.cleanup(); }
 });

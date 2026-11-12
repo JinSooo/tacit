@@ -80,6 +80,7 @@
 - 幂等：`id` 已存在，或 `(source, source_ref)` 已存在，算 duplicate。
 - 墓碑：被删除过的 `id` 或 `(source, source_ref)` 算 duplicate，不再入库。
 - 写库前做密钥拦截，替换成 `[已脱敏:类型]`，`redactions` 累加，`sensitivity` 若原为 `normal` 且有替换则改为 `redacted`。
+- 仅对 `mac.clipboard`，正文去掉首尾空白后若整体为 8–64 字符、无空白且包含大写、小写、数字、符号中至少三类的单个词（排除 URL、邮箱、文件路径、纯数字和纯字母），按密码拦截，标题和正文中的该词替换为 `[已脱敏:密码]`，数量照常累加；其他来源不使用此规则。
 - hub 填 `t_received`。
 
 ### 读取（网页和后续的 MCP 用）
