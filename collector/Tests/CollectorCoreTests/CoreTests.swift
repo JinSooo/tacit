@@ -146,3 +146,18 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
   #expect(Text.duration(125) == "2 分钟")
   #expect(Text.duration(3720) == "1 小时 2 分钟")
 }
+
+// 回归（2026-11-12）：微信对话开着时屏幕记录仍读微信窗口，输入框草稿每打几个字存一行。
+@Test func wechatScreenTextSkipsDraftsAndDefersToChatSource() {
+  #expect(ScreenTextPolicy.skipsEditable(bundleID: "com.tencent.xinWeChat"))
+  #expect(!ScreenTextPolicy.skipsEditable(bundleID: "abnerworks.Typora"))
+  #expect(!ScreenTextPolicy.keepsText(bundleID: "com.tencent.xinWeChat", wechatOn: true))
+  #expect(ScreenTextPolicy.keepsText(bundleID: "com.tencent.xinWeChat", wechatOn: false))
+  #expect(ScreenTextPolicy.keepsText(bundleID: "abnerworks.Typora", wechatOn: true))
+  // 不带文字时这段仍记下微信的使用时段。
+  let s = Segmenter(device: "mac")
+  _ = s.observe(Observation(time: t0, bundleID: "com.tencent.xinWeChat", appName: "WeChat", window: "Weixin"))
+  _ = s.observe(Observation(time: t0.addingTimeInterval(30), bundleID: "com.tencent.xinWeChat", appName: "WeChat", window: "Weixin"))
+  let out = s.flush()
+  #expect(out.count == 1 && out[0].body == "")
+}

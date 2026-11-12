@@ -219,6 +219,33 @@ export class DistillStore {
     }
     return result;
   }
+  /**
+   * 重复的线程并成一条（design.md 4 节"合并重复线程"）：片段、事实、"不属于这里"的记录都转到 target，
+   * source 未处理的"做完了吗"关掉；状态取最近活动的那条。target 整条重写详细版。
+   * 旧 id 留跳转，AI 工具拿旧 id 也能查到。调用方负责事务。
+   */
+  mergeThreads(source: string, target: string, at = new Date().toISOString()) {
+    const a = this.thread(source), b = this.thread(target);
+    if (!a || !b || source === target) throw new InputError("线程合并目标无效");
+    const later = (a.last_ms ?? 0) > (b.last_ms ?? 0) ? a : b;
+    this.sql.prepare("UPDATE assignments SET thread_id=? WHERE thread_id=?").run(target, source);
+    this.sql.prepare("UPDATE facts SET thread_id=?,project_id=? WHERE thread_id=?").run(target, b.project_id ?? null, source);
+    this.sql.prepare("INSERT OR IGNORE INTO frame_rejections(frame_id,thread_id,at) SELECT frame_id,?,at FROM frame_rejections WHERE thread_id=?").run(target, source);
+    this.sql.prepare("DELETE FROM frame_rejections WHERE thread_id=?").run(source);
+    this.sql.prepare("UPDATE pending SET resolved_at=?,resolution='merged' WHERE kind='thread_done' AND resolved_at IS NULL AND json_extract(payload,'$.thread_id')=?").run(at, source);
+    const firsts = [a.first_ms, b.first_ms].filter((n): n is number => n != null), lasts = [a.last_ms, b.last_ms].filter((n): n is number => n != null);
+    this.upsertThread({ ...b, status: later.status, project_hint: b.project_hint ?? a.project_hint ?? null,
+      first_ms: firsts.length ? Math.min(...firsts) : undefined, last_ms: lasts.length ? Math.max(...lasts) : undefined,
+      active_minutes: (a.active_minutes ?? 0) + (b.active_minutes ?? 0), sessions: (a.sessions ?? 0) + (b.sessions ?? 0), needs_regen: 1 });
+    for (const pid of new Set([a.project_id, b.project_id])) if (pid) this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(pid);
+    this.sql.prepare("DELETE FROM distill_state WHERE k IN (?,?)").run(`digest:${source}`, `digest:${target}`);
+    // 已经并进 source 的旧 id 也改指 target。
+    for (const row of this.sql.prepare("SELECT k FROM distill_state WHERE k LIKE 'thread_redirect:%' AND v=?").all(JSON.stringify(source)) as Row[]) this.setState(row.k, target);
+    this.setState(`thread_redirect:${source}`, target);
+    this.sql.prepare("DELETE FROM threads WHERE id=?").run(source);
+  }
+  /** 并掉的线程的旧 id 指向现在的线程；不是并掉的原样返回。 */
+  threadId(id: string): string { return this.thread(id) ? id : this.getState<string>(`thread_redirect:${id}`) ?? id; }
   private mergeProjects(source: string, target: string) {
     const project = this.project(source), dest = this.project(target);
     if (!project || !dest || source === target) throw new InputError("合并目标无效");

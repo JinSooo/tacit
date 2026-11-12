@@ -330,7 +330,8 @@ test("同名的已确认说话人并成一个，“我”按 is_me 并", () => {
   const ids = [3, 4, 5, 6].map(axis => audio.embeddings({ device: "mac", conversation_ref: `n${axis}`, t_start: "2026-11-11T01:00:00Z", t_end: "2026-11-11T01:10:00Z", speakers: [{ local: "S1", track: "mic", seconds: 60 * axis, centroid: vec(axis) }] }).speakers[0]!.speaker_id);
   const decide = (id: string, action: string, name?: string) => new DistillStore(ctx.db).resolvePending(pending().find(p => p.payload.speaker_id === id)!.id, action, name);
   decide(ids[0]!, "rename", "刘朝刚"); decide(ids[1]!, "rename", " 刘朝刚 "); decide(ids[2]!, "me"); decide(ids[3]!, "me");
-  expect(audio.mergeSameNames()).toBe(2);
+  // 确认时就已并好，再整理一遍没有可并的。
+  expect(audio.mergeSameNames()).toBe(0);
   const active = audio.speakers().speakers.filter(s => s.confirmed);
   expect(active.map(s => s.name).sort()).toEqual(["刘朝刚", "我"].sort());
   expect(active.find(s => s.name === "刘朝刚")!.seconds).toBe(60 * 3 + 60 * 4);
@@ -343,4 +344,27 @@ test("录音过了保留期的试听请求删掉，不再显示还在路上", ()
   audio.expireSampleRequests(Date.parse("2026-11-09T01:03:00Z") + 8 * 86_400_000);
   expect(audio.sync("mac").sample_requests).toHaveLength(0);
   expect(pending()[0]!.payload.samples_pending).toBe(false);
+});
+
+// 回归（2026-11-12）：跳过的对话留下 217 个没有声纹的未确认说话人，一直参与匹配、永远到不了待确认。
+test("没有逐条声纹的未确认碎片和过了保留期的空壳删掉，编号不重用", () => {
+  const tiny = upload("tiny-skip",3,5), kept = upload("kept-skip",20,6);
+  audio.skipped("tiny-skip"); audio.skipped("kept-skip");
+  expect(audio.speaker(tiny.speaker_id)).toBeUndefined();
+  expect(audio.speaker(kept.speaker_id)).toMatchObject({ seconds: 20, status: "new" });
+  // 过了保留期的空壳在同步时清掉。
+  ctx.db.db.prepare("UPDATE speakers SET updated_at='2026-01-01T00:00:00Z' WHERE id=?").run(kept.speaker_id);
+  audio.sync("mac");
+  expect(audio.speaker(kept.speaker_id)).toBeUndefined();
+  const labels = new Set([tiny.label, kept.label]);
+  expect(labels.has(upload("after-prune",40,7).label)).toBe(false);
+});
+
+// 回归（2026-11-12）：用户标了 8 次"我"，之后标的不会并到已有的"我"上，最后剩 3 个。
+test("再标一次我、或起了已有的名字，并到已确认的那个人", () => {
+  const first = resolve("me",0), second = resolve("me",2);
+  expect(audio.speaker(second.speaker_id)).toMatchObject({ status: "merged", merged_into: first.speaker_id });
+  const a = resolve("rename",3,"李家辰"), b = resolve("rename",4,"李家辰");
+  expect([audio.speaker(a.speaker_id)!.status, audio.speaker(b.speaker_id)!.status].sort()).toEqual(["confirmed","merged"]);
+  expect(audio.speakers().speakers.filter(s => s.is_me)).toHaveLength(1);
 });

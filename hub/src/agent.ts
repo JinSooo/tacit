@@ -93,7 +93,8 @@ export class AgentReads {
   }
 
   private get(params: URLSearchParams) {
-    const id = required(params,"id",128), level = params.get("level") ?? "brief";
+    const asked = required(params,"id",128), level = params.get("level") ?? "brief";
+    const id = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? asked : this.store.threadId(asked);
     if (!["brief","detail","evidence"].includes(level)) throw new InputError("level 无效");
     const kind = /^\d{4}-\d{2}-\d{2}$/.test(id) ? "day" : this.store.thread(id) ? "thread" : "project";
     let item: Item | null = kind === "day" ? this.store.day(id) : this.store.view(kind === "thread" ? "threads" : "projects",id,level);

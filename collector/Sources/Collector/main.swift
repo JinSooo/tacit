@@ -204,14 +204,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let wechatOn = enabled("wechat")
 
     captureQueue.async { [self] in
-      let snap = ax.snapshot(pid: pid)
+      let snap = ax.snapshot(pid: pid, skipEditable: ScreenTextPolicy.skipsEditable(bundleID: bundle))
       let window = snap?.window ?? ""
       if CapturePolicy.shouldSkip(bundleID: bundle, window: window) {
         stats["skippedPolicy", default: 0] += 1
         emit(segmenter.flush()); return
       }
+      let keepText = ScreenTextPolicy.keepsText(bundleID: bundle, wechatOn: wechatOn)
       let o = Observation(time: now, bundleID: bundle, appName: name, window: window, url: snap?.url,
-                          lines: snap?.lines ?? [], method: snap == nil ? "none" : "ax")
+                          lines: keepText ? snap?.lines ?? [] : [], method: snap == nil ? "none" : "ax")
       stats["ticks", default: 0] += 1
       if let s = snap {
         stats["scanMsTotal", default: 0] += s.ms
@@ -222,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
       // 辅助功能几乎读不到正文时用 OCR 兜底，同一段至少隔 15 秒才再识别一次。
       let key = o.key
-      if ocrOn, !(isWeChat && wechatOn), (snap?.chars ?? 0) < 80, now.timeIntervalSince(lastOCR[key] ?? .distantPast) > 15, ocr.granted {
+      if ocrOn, keepText, (snap?.chars ?? 0) < 80, now.timeIntervalSince(lastOCR[key] ?? .distantPast) > 15, ocr.granted {
         lastOCR[key] = now
         if lastOCR.count > 500 { lastOCR = lastOCR.filter { now.timeIntervalSince($0.value) < 600 } }
         ocr.recognizeLines(pid: pid, frame: snap?.frame) { [self] found, size, ms in

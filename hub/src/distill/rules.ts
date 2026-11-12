@@ -38,4 +38,15 @@ export class DistillRules {
     return { status: "assigned",thread_id: thread.id,project_id: project.id };
   }
 }
+/**
+ * 没有仓库线索的线程，标题或简略版里写着已有项目的名字时，把这个项目提名为候选；是否真属于它仍由模型判断。
+ * 2026-11-12 实测："修复 record-anything 页面配色与状态文案"在 Codex 桌面版里做，片段不是 repo:，一直没挂项目。
+ * 名字太短（少于 4 个字符）的不按名字找，避免误配。
+ */
+export function projectByName(store: DistillStore, text: string): Project | null {
+  const lower = text.toLowerCase();
+  const hits = store.projects().filter(p => p.name.trim().length >= 4 && lower.includes(p.name.trim().toLowerCase()));
+  // 一个文本里写了两个项目名时不猜。
+  return hits.length === 1 ? hits[0]! : null;
+}
 export function projectForRepo(store: DistillStore, path: string) { return new DistillRules(store).projectForRepo(path); }

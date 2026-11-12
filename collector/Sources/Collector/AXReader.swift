@@ -36,6 +36,8 @@ final class AXReader {
     var truncated = false
     var pieces: [(path: [Int], text: String)] = []
     var url: String?
+    /// 聊天软件的输入框（草稿）不读。
+    var skipEditable = false
   }
 
   struct Node { var el: AXUIElement; var role: String; var kids: [AXUIElement]; var frame: CGRect? }
@@ -47,7 +49,7 @@ final class AXReader {
     manualEnabled.insert(pid)
   }
 
-  func snapshot(pid: pid_t) -> AXSnapshot? {
+  func snapshot(pid: pid_t, skipEditable: Bool = false) -> AXSnapshot? {
     let started = Date()
     prepare(pid: pid)
     let app = AXUIElementCreateApplication(pid)
@@ -56,6 +58,7 @@ final class AXReader {
     let title = string(win, kAXTitleAttribute) ?? ""
     let frame = frameOf(win)
     var w = Walk(deadline: started.addingTimeInterval(budget))
+    w.skipEditable = skipEditable
     w.calls = 4
     if let root = info(win, &w) { visitFast(root, visible: frame, depth: 0, path: [], &w) }
     // 按文档顺序输出并去重。
@@ -122,6 +125,7 @@ final class AXReader {
   // MARK: 文本
 
   private func collectText(_ el: AXUIElement, role: String, path: [Int], _ w: inout Walk) {
+    if w.skipEditable, role == "AXTextArea" || role == "AXTextField" || role == "AXComboBox" { return }
     if textRoles.contains(role) {
       w.calls += 1
       if let s = string(el, kAXValueAttribute), !s.isEmpty { w.pieces.append((path, s)) }

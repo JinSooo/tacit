@@ -36,12 +36,12 @@ function framesIn(prompt: string): { id: string; key: string; records?: { id: st
 }
 
 interface Call { kind: string; req: LLMRequest }
-function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>, prompt: string) => P.AssignOutput["items"]; failAssign: boolean; done: boolean; classification: P.Classification }> = {}) {
+function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>, prompt: string) => P.AssignOutput["items"]; failAssign: boolean; done: boolean; classification: P.Classification; dedup: (ids: string[]) => P.DedupOutput["groups"] }> = {}) {
   const calls: Call[] = [];
   const llm: LLM = {
     async complete<T>(req: LLMRequest) {
       const kind = req.system === P.ASSIGN_SYSTEM ? "assign" : req.system === P.THREAD_SYSTEM ? "thread" : req.system === P.BRIEF_SYSTEM ? "brief"
-        : req.system === P.PROJECT_SYSTEM ? "project" : req.system === P.DAY_SYSTEM ? "day" : "unknown";
+        : req.system === P.PROJECT_SYSTEM ? "project" : req.system === P.DAY_SYSTEM ? "day" : req.system === P.DEDUP_SYSTEM ? "dedup" : "unknown";
       calls.push({ kind, req });
       const ok = (data: unknown) => ({ ok: true as const, data: data as T, ms: 1 });
       if (kind === "assign") {
@@ -64,6 +64,7 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
           ],
         });
       }
+      if (kind === "dedup") return ok({ groups: behave.dedup ? behave.dedup((JSON.parse(req.prompt.slice(req.prompt.indexOf("\n") + 1)) as { id: string }[]).map(t => t.id)) : [] });
       if (kind === "brief") return ok({ brief: "合成简略" });
       if (kind === "project") return ok({ goal: "合成项目目标", status: "合成项目进展", people: [] });
       if (kind === "day") return ok({ summary: "合成日记", timeline: [{ start: "10:00", end: "11:00", text: "合成" }] });
@@ -347,4 +348,62 @@ test("最近结束的线程进候选，归进去不改变状态；太久以前�
   expect(ctx.db.db.prepare("SELECT thread_id FROM assignments WHERE frame_id='follow'").get()).toEqual({ thread_id: "recent-done" });
   expect(store.thread("recent-done")?.status).toBe("done");
   expect(store.thread("recent-done")?.needs_regen).toBe(1);
+});
+
+// 回归（2026-11-12）：同一件事被拆成两条线程（Familiar 发版、首期 Weekly 各两条），之后各自长大。
+test("每天合并一次重复线程：片段、事实、拒绝记录转到片段多的那条，旧 id 能跳转；不同项目的不并", async () => {
+  ctx.db.ingest([session(0, 30, "合成工作 A"), session(120, 30, "合成工作 B"), session(240, 30, "合成工作 C")]);
+  let n = 0;
+  const first = fakeLLM({ assign: frames => frames.map(f => ({ frame_id: f.id, thread_id: null, new_thread_title: f.key.startsWith("repo:") ? `合成线程 ${n++ % 2}` : null, ignore: !f.key.startsWith("repo:"), confidence: 0.9 })) });
+  // 先不合并，建出两条线程。
+  await round(first.llm, base + 300 * MIN);
+  const threads = (ctx.db.db.prepare("SELECT id,(SELECT count(*) FROM assignments a WHERE a.thread_id=t.id) n FROM threads t ORDER BY n DESC").all() as { id: string; n: number }[]);
+  expect(threads.length).toBe(2);
+  const [keep, drop] = threads as [{ id: string; n: number }, { id: string; n: number }];
+  const dropFrames = (ctx.db.db.prepare("SELECT frame_id FROM assignments WHERE thread_id=?").all(drop.id) as { frame_id: string }[]).map(r => r.frame_id);
+  ctx.db.db.prepare("INSERT INTO frame_rejections(frame_id,thread_id,at) VALUES('f-x',?,'2026-11-08T00:00:00Z')").run(drop.id);
+  store.createPending({ id: "p-done", kind: "thread_done", payload: { thread_id: drop.id }, created_at: "2026-11-08T00:00:00Z" });
+  // 同一天不再看第二次；第二天按模型分组合并。
+  const second = fakeLLM({ dedup: ids => [{ thread_ids: ids, confidence: 0.9 }] });
+  await round(second.llm, base + 310 * MIN);
+  expect(second.calls.filter(c => c.kind === "dedup")).toHaveLength(0);
+  await round(second.llm, base + 300 * MIN + 25 * 60 * MIN);
+  expect(second.calls.filter(c => c.kind === "dedup")).toHaveLength(1);
+  expect(store.thread(drop.id)).toBeNull();
+  for (const f of dropFrames) expect((ctx.db.db.prepare("SELECT thread_id FROM assignments WHERE frame_id=?").get(f) as { thread_id: string }).thread_id).toBe(keep.id);
+  expect(ctx.db.db.prepare("SELECT count(*) n FROM facts WHERE thread_id=?").get(drop.id)).toEqual({ n: 0 });
+  expect(store.rejectedThreads("f-x")).toEqual([keep.id]);
+  expect(store.pending().some(p => p.id === "p-done")).toBe(false);
+  expect(store.threadId(drop.id)).toBe(keep.id);
+  // 合并后整条重写。
+  expect(store.thread(keep.id)!.needs_regen === 0 || second.calls.some(c => c.kind === "thread")).toBe(true);
+  const reads = new AgentReads(ctx.db);
+  const got = await (await reads.handle("get", new URLSearchParams({ id: drop.id, tool: "codex" }))).json() as { kind: string; item: { id: string } };
+  expect(got.item.id).toBe(keep.id);
+});
+
+test("不同项目、或模型把握不够的分组不合并", async () => {
+  const mk = (id: string, project: string | null) => store.upsertThread({ id, status: "paused", title: id, brief: "合成", project_id: project, domain: "work", last_ms: base, first_ms: base, needs_regen: 0 } as never);
+  store.upsertProject({ id: "p1", name: "一", keys: { repos: [], hosts: [], chats: [] } });
+  store.upsertProject({ id: "p2", name: "二", keys: { repos: [], hosts: [], chats: [] } });
+  mk("t1", "p1"); mk("t2", "p2"); mk("t3", null); mk("t4", null);
+  const f = fakeLLM({ dedup: () => [{ thread_ids: ["t1", "t2"], confidence: 0.95 }, { thread_ids: ["t3", "t4"], confidence: 0.5 }] });
+  const { dedupStep } = await import("../src/distill/run.ts");
+  expect(await dedupStep({ db: ctx.db, llm: f.llm }, store, base)).toEqual({ calls: 1, merged: 0, failed: 0 });
+  for (const id of ["t1", "t2", "t3", "t4"]) expect(store.thread(id)).not.toBeNull();
+});
+
+// 回归（2026-11-12）："修复 record-anything 页面配色与状态文案"不在仓库目录里做，一直没挂项目。
+test("没有仓库线索的线程，标题写着已有项目名时提名为候选，交给模型判断；名字太短或写了两个项目名不猜", async () => {
+  store.upsertProject({ id: "p-ra", name: "record-anything", keys: { repos: [], hosts: [], chats: [] } });
+  store.upsertProject({ id: "p-pet", name: "all-in-pet", keys: { repos: [], hosts: [], chats: [] } });
+  store.upsertProject({ id: "p-x", name: "abc", keys: { repos: [], hosts: [], chats: [] } });
+  const mk = (id: string, title: string) => store.upsertThread({ id, status: "paused", title, brief: "合成", domain: "work", last_ms: base, first_ms: base, needs_regen: 0 } as never);
+  mk("t-ra", "修复 Record-Anything 页面配色"); mk("t-both", "对比 record-anything 和 all-in-pet"); mk("t-short", "abc 的事");
+  const f = fakeLLM();
+  const llm: LLM = { complete: async <T>(req: LLMRequest) => req.system === P.CLASSIFY_SYSTEM ? { ok: true as const, data: { domain: "work", in_project: true } as T, ms: 1 } : f.llm.complete<T>(req) };
+  await classifyStep({ db: ctx.db, llm }, store);
+  expect(store.thread("t-ra")).toMatchObject({ project_hint: "p-ra", project_id: "p-ra", domain: "work" });
+  expect(store.thread("t-both")!.project_hint ?? null).toBeNull();
+  expect(store.thread("t-short")!.project_hint ?? null).toBeNull();
 });

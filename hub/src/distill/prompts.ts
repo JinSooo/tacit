@@ -53,7 +53,8 @@ export const ASSIGN_SYSTEM = `${DATA_RULES}
 - 新线程标题 8–20 字，说清在做什么，不要写应用名。
 - 已有线程里 status 为 candidate 的是还没正式建立的候选线程（之前出现过、但还不够多），同一件事同样归进去，填它的 id。
 - status 为 done 的线程已经结束：只有明显是同一件事的后续（例如结束后又聊到它）才归进去，新的工作另起线程。
-- 片段带 not_threads 时，用户已经确认它不属于这些线程（列的是标题），不要提议和它们同名或说同一件事的新线程。`;
+- 片段带 not_threads 时，用户已经确认它不属于这些线程（列的是标题），不要提议和它们同名或说同一件事的新线程。
+- 同一批里几个片段说的是同一件新的事时，它们的 new_thread_title 必须一字不差地相同。`;
 
 export function assignPrompt(frames: FrameView[], threads: ThreadView[]): string {
   return `已有线程：\n${json(threads)}\n\n待归属的片段：\n${frameBlock(frames)}`;
@@ -275,3 +276,31 @@ export const CONVERSATION_SCHEMA = {
 } as const;
 
 export interface ConversationOutput { title: string; summary: string; points: string[] }
+
+// ---------- 合并重复线程（每天一次，hour 档） ----------
+
+export const DEDUP_SYSTEM = `${DATA_RULES}
+
+任务：下面是一个人最近的线程（每条是一件连贯的事）。找出其实是同一件事、被拆成了好几条的线程。
+- 只有明显是同一件事（同一个目标、同一个产物，只是标题措辞不同或阶段不同）才算重复。
+- 同一个项目里的不同任务不算重复；相关但目标不同的事不算重复。
+- 每组列出这些线程的 id，至少两个；拿不准的不要列。没有重复时 groups 为空数组。`;
+
+export function dedupPrompt(threads: (ThreadView & { first: string })[]): string {
+  return `线程：\n${json(threads)}`;
+}
+
+export const DEDUP_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["groups"],
+  properties: {
+    groups: {
+      type: "array",
+      items: {
+        type: "object", additionalProperties: false, required: ["thread_ids", "confidence"],
+        properties: { thread_ids: { type: "array", items: { type: "string" } }, confidence: { type: "number", minimum: 0, maximum: 1 } },
+      },
+    },
+  },
+} as const;
+
+export interface DedupOutput { groups: { thread_ids: string[]; confidence: number }[] }

@@ -36,6 +36,7 @@
 - `context.extra`：`sender`（昵称；自己发的是"我"）、`from_me`（0/1）、`group`（0/1）、`shown_time`（读窗口时界面上的时间分隔原文）。
 - `title = "微信 · 会话名 · 发送人"`，`body` = 消息文字；图片、语音只有占位时不记。
 - `source_ref`：读窗口用 `fp:` + sha256(会话、发送人或"我"、内容、时间分隔) 前 12 字节的十六进制。来回切换会话、上下滚动看到的同一条消息是同一个 `source_ref`，中枢去重。第一个时间分隔之上的消息不记，等能看到它的时间分隔时再记。
+- "微信对话"开着时，屏幕记录（`mac.screen`）只留微信的使用时段，不带微信窗口的文字；任何时候都不读微信输入框（草稿）。（2026-11-12：之前每打几个字就多存一行草稿）
 - 读窗口和插件的同一条消息暂不跨来源去重（时间精度不同），以后按会话、发送人、内容、时间就近匹配，以数据库那份为代表（design.md 3.2）。
 
 ## 2. 插件协议
@@ -207,6 +208,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
   - 提示词走 stdin，不出现在进程参数里；
   - 用 JSON Schema 约束输出；
   - 同一时刻只跑一个调用，单次超时 180 秒。
+  - `codex exec` 默认带编程 Agent 的整套说明和工具，固定开销约 1.1 万输入 token（2026-11-12 实测）。适配器用 `model_instructions_file` 换成一句说明，关掉权限、环境、协作模式说明和技能检索，并用 `codex debug models` 拿本机模型目录、去掉 `tool_mode` / `multi_agent_version` 后经 `model_catalog_json` 传回（这两项强制打开代码执行和多 Agent 工具，配置项关不掉）。读不到目录时不覆盖、照常调用。实测固定开销降到约 1800 token。
 - 输出不符合 schema 就当作失败，不重试，等下一轮再处理。
 
 ### 4.5 hub 接口（读给网页和 MCP，写只给网页）
@@ -270,6 +272,8 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 - **v4 新增列**：`threads.domain TEXT`（`work` | `life`，NULL 表示还没判断）、`threads.project_hint TEXT`（cwd 提名的候选项目 id）。迁移时把已有的 `project_id` 复制进 `project_hint`。
 - **归属**：cwd 只写 `project_hint`。每次生成线程详细版时，模型顺带输出 `domain` 和 `in_project`；只有 `domain=work` 且 `in_project=true` 才把 `project_id` 设为候选项目，否则清空。归属变化时同步改这条线程的 facts 的 `project_id`，新旧项目都置 `needs_regen=1`。`domain` 为 NULL 且没有新片段的存量线程，每轮最多做 12 次单独判断（minute 档）。
 - **仓库归一**：用 `git rev-parse --git-common-dir` 找主仓库，worktree 和子目录都归到主仓库的项目，worktree 路径作为别名追加进 `keys.repos`。目录已删除、git 探测失败时，按已登记的 `keys.repos` 做路径边界最长匹配。家目录本身不算仓库。git 探测带 500ms 超时和 60 秒缓存。
+- **合并重复线程**：慢轮次每天最多一次，把最近 60 条有简略版的线程（进行中、暂停、14 天内完成的）交给 hour 档找"其实是同一件事"的分组，模型把握 ≥ 0.8、同一 `domain`、不分属两个项目才并。片段最多的那条留下：片段、事实、"不属于这里"记录都转过去，被并线程未处理的"做完了吗"结项为 `merged`，状态取最近活动的那条，整条重写详细版。被并线程的 id 写进 `distill_state.thread_redirect:<旧 id>`，Agent `get` 用旧 id 也能查到。
+- **按名字提名项目**：`project_hint` 和 `project_id` 都为空的线程，标题或简略版里恰好写了一个已有项目名（不少于 4 个字符，不分大小写）时，把它写进 `project_hint` 并清空 `domain`，下一次判断归属时由模型决定是否挂上。
 - **线程状态**：2 小时没新记录 → `paused`；3 天没动静或有完成信号 → 进 `pending(kind=thread_done)`。这条待确认 **7 天**没人处理：线程改为 `archived`，待确认结项为 `resolution=expired`，同一事务。用户点"完成 / 继续 / 放弃"对应 `done` / `active` / `abandoned`。`archived` 和 `done` 分开，用来区分到期结掉和用户确认。`archived` 线程不再提问、不进注入、不参与归线程候选，`/v1/threads?status=archived`、`get`、`search` 仍能查到。
 
 ### 4.8 提炼请求队列（`user_version` 6）
@@ -343,7 +347,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 | GET | `/v1/audio/sync?device` | 采集端，每 5 分钟和每次启动转写进程前 | `{ retention_days, purge_before: string\|null, voiceprint: { vector: number[512], threshold } \| null, sample_requests: [{ id, speaker_id, conversation_ref, local }], delete_conversations: [conversation_ref] }` |
 | POST | `/v1/audio/sync/ack` | 采集端 | `{ device, purged_at?, deleted?: [conversation_ref] }`，hub 收到后不再下发这些删除和清理 |
 | POST | `/v1/audio/embeddings` | 转写进程 | `{ device, conversation_ref, t_start, t_end, speakers: [{ local: "S1", track, seconds, centroid: number[512] }] }` → `{ speakers: [{ local, speaker_id, label, is_me }] }`。同一 `conversation_ref` 重复上传就覆盖 |
-| POST | `/v1/audio/conversations/:ref/skipped` | 转写进程 | 判定没有"我"：hub 删掉这段对话的逐条声纹行，说话人的聚合中心保留 |
+| POST | `/v1/audio/conversations/:ref/skipped` | 转写进程 | 判定没有"我"：hub 删掉这段对话的逐条声纹行，说话人的聚合中心保留（不到 6 秒的碎片除外，见下面"清理空壳"） |
 | POST | `/v1/audio/samples` | 采集端（转写进程截取） | `{ request_id, clips: [{ mime: "audio/mp4"\|"audio/wav", data: base64 }] }`，每个说话人最多 3 段、每段约 10 秒 |
 | GET | `/v1/audio/samples/:id` | 网页 | 返回音频二进制，`Cache-Control: no-store` |
 | GET / PUT | `/v1/audio/settings` | 网页 | `{ retention_days }`，1–365 的整数，默认 7 |
@@ -377,6 +381,8 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 - **聚类**（规则，不调模型）：上传的每个说话人中心和已有说话人（`status` 不是 `merged`）比余弦，最高的 ≥ `match_threshold`（起始 0.5）就归入并更新中心，否则新建 `new` 说话人。阈值是实验 2-C 的起始值，要用真实录音再调。
 - **进待确认**：`status=new` 的说话人，录到过麦克风这路的累计 ≥ 2 段对话或 ≥ 30 秒、只在系统声音这路的累计 ≥ 3 段对话或 ≥ 120 秒，就建 `pending(kind="voice", payload={ speaker_id })`，改成 `asked`，同时按秒数最长的 3 段对话建样本请求。除了上传 embeddings 时检查，`/v1/audio/sync` 也会重查一遍 `new` 说话人（门槛调整后不必等新上传）。
 - 待确认操作（`POST /v1/pending/:id`）：`me`（就是我：`is_me=1`、`name="我"`）、`rename`（填名字）、`merge_into`（和某人是同一人，`target` 是说话人 id）、`ignore`。处理后删掉这个说话人的试听样本。`GET /v1/pending` 里 voice 项的 payload 补 `{ speaker_id, label, conversations, seconds, samples: [{ id, mime }], samples_pending: bool }`。
+- 标了"我"或起了已有的名字：确认后立即和已确认的同名说话人（"我"按 `is_me`）合并，不留多个"我"。
+- **清理空壳**：`status=new`、没有任何逐条声纹、转写里也没按 id 引用、没有别人并进来的说话人，累计不到 6 秒或超过录音保留期没更新的直接删掉（对话跳过、删除、`/v1/audio/sync` 时检查）。编号只增不减（`audio_settings.label_seq`），删掉的编号不再发出。
 - `voiceprint` 下发 `is_me=1` 的说话人中心（有多个时按秒数加权合并），`threshold` 取 `audio_settings.me_threshold`，默认 0.49。
 - **删除联动**：删掉一条 `source=mac.audio` 的记录时，同一事务里删掉它 `source_ref` 对应的 `voice_embeddings` 行，并把 `source_ref` 加进待下发的 `delete_conversations`，采集端删本机音频后回 ack。
 

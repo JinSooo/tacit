@@ -6,7 +6,7 @@ import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { DistillStore, type Frame, type Thread } from "./store.ts";
 import { persistFrames } from "./frames.ts";
-import { DistillRules } from "./rules.ts";
+import { DistillRules, projectByName } from "./rules.ts";
 import { DistillRequests, localDayStart } from "./requests.ts";
 import * as P from "./prompts.ts";
 import { readGeneral } from "../general-settings.ts";
@@ -27,6 +27,8 @@ export const LIMITS = {
   threadMinutes: 15, threadFrames: 2,
   // 对话总结：只看录音保留期内的，每轮最多写几场，单场原文太长时留头尾。
   conversationDays: 7, conversationsPerRound: 4, conversationChars: 24_000,
+  // 合并重复线程：每天看一次最近的线程，模型把握不低于 0.8 才并。
+  dedupThreads: 60, dedupConfidence: 0.8, dedupEvery: DAY,
 };
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -294,8 +296,23 @@ export async function conversationStep(d: Deps, now: number) {
   return { calls, done, pending: todo.length - done };
 }
 
+/** 没有项目候选的线程按名字找一个候选，交给下一次 classify / digest 判断（见 projectByName）。 */
+export function nominateByName(store: DistillStore): number {
+  const rows = store.hub.db.prepare("SELECT * FROM threads WHERE project_hint IS NULL AND project_id IS NULL AND status IN ('active','paused','done')").all() as Thread[];
+  let n = 0;
+  for (const t of rows) {
+    const p = projectByName(store, `${t.title}\n${t.brief ?? ""}`);
+    if (!p) continue;
+    // domain 清空：已提炼过的线程走一次 classify 重新判断是否属于这个项目。
+    store.hub.db.prepare("UPDATE threads SET project_hint=?,domain=NULL WHERE id=?").run(p.id, t.id);
+    n++;
+  }
+  return n;
+}
+
 export async function classifyStep(d: Deps, store: DistillStore) {
   let calls = 0, updated = 0, failed = 0;
+  nominateByName(store);
   const rows = store.hub.db.prepare("SELECT id FROM threads WHERE domain IS NULL ORDER BY last_ms DESC,id").all() as { id: string }[];
   for (const { id } of rows) {
     const frames = threadFrames(store, id), mark = store.getState<DigestMark>(`digest:${id}`);
@@ -393,6 +410,36 @@ function askDone(store: DistillStore, threadId: string, now: number) {
   const asked = (store.hub.db.prepare("SELECT created_at,resolved_at FROM pending WHERE kind='thread_done' AND json_extract(payload,'$.thread_id')=?").all(threadId) as { created_at: string; resolved_at: string | null }[])
     .some(p => !p.resolved_at || Date.parse(p.created_at) >= (t.last_ms ?? 0));
   if (!asked) store.createPending({ id: ulid(now), kind: "thread_done", payload: { thread_id: threadId }, created_at: new Date(now).toISOString() });
+}
+
+// ---------------- 合并重复线程（每天一次） ----------------
+
+/**
+ * 同一件事被拆成几条线程时并成一条（2026-11-12 实测：整理启用前的历史时，同一批里给 Familiar 发版、首期 Weekly
+ * 各起了两个标题，之后两条各自长大）。只并同一领域、不分属两个项目的；片段最多的那条留下。
+ */
+export async function dedupStep(d: Deps, store: DistillStore, now: number) {
+  const rows = store.hub.db.prepare(`SELECT t.*,(SELECT count(*) FROM assignments a WHERE a.thread_id=t.id) AS frames FROM threads t
+    WHERE brief IS NOT NULL AND (status IN ('active','paused') OR (status='done' AND last_ms>?)) ORDER BY last_ms DESC LIMIT ?`).all(now - LIMITS.assignDoneWindow, LIMITS.dedupThreads) as (Thread & { frames: number })[];
+  if (rows.length < 2) return { calls: 0, merged: 0, failed: 0 };
+  const names = new Map(store.projects().map(p => [p.id, p.name]));
+  const views = rows.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: t.project_id ? names.get(t.project_id) ?? null : null, status: t.status, first: t.first_ms ? clock(t.first_ms) : "", last: t.last_ms ? clock(t.last_ms) : "" }));
+  const r = await d.llm.complete<P.DedupOutput>({ tier: "hour", system: P.DEDUP_SYSTEM, prompt: P.dedupPrompt(views), schema: P.DEDUP_SCHEMA });
+  if (!r.ok) return { calls: 1, merged: 0, failed: 1 };
+  const byId = new Map(rows.map(t => [t.id, t]));
+  let merged = 0;
+  store.hub.db.transaction(() => {
+    for (const g of r.data.groups) {
+      if (g.confidence < LIMITS.dedupConfidence) continue;
+      const members = [...new Set(g.thread_ids)].map(id => byId.get(id)).filter((t): t is Thread & { frames: number } => !!t && !!store.thread(t.id));
+      if (members.length < 2) continue;
+      if (new Set(members.map(t => t.domain).filter(Boolean)).size > 1) continue;
+      if (new Set(members.map(t => t.project_id).filter(Boolean)).size > 1) continue;
+      const [target, ...rest] = members.sort((a, b) => b.frames - a.frames || (b.last_ms ?? 0) - (a.last_ms ?? 0));
+      for (const t of rest) { store.mergeThreads(t.id, target!.id, new Date(now).toISOString()); merged++; }
+    }
+  })();
+  return { calls: 1, merged, failed: 0 };
 }
 
 // ---------------- 4. 项目 ----------------
@@ -518,6 +565,10 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
   out.assign = await assignStep(d, store, now);
   out.classify = await classifyStep(d, store);
   if (opts.slow) {
+    if (now - (store.getState<number>("dedup_ms") ?? 0) >= LIMITS.dedupEvery) {
+      out.dedup = await dedupStep(d, store, now);
+      if (!(out.dedup as { failed: number }).failed) store.setState("dedup_ms", now);
+    }
     out.digest = await digestStep(d, store, now);
     out.projects = await projectStep(d, store, now);
   }

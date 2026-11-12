@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createLLM, type LLMRequest, type Spawn, type UsageRow } from "../src/llm/index.ts";
 import { loadConfig } from "../src/llm/config.ts";
+import { resetCodexCatalog } from "../src/llm/codex-cli.ts";
 
 const dirs: string[] = [];
 const originalFetch = globalThis.fetch;
@@ -26,6 +27,7 @@ async function fixture(provider = "claude-cli", mode = "success") {
 import { appendFileSync, writeFileSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 const args = process.argv.slice(2), mode = process.env.TEST_MODE, log = process.env.TEST_LOG;
+if (args[0] === "debug") { console.log(mode === "nocatalog" ? "not json" : JSON.stringify({models:[{slug:"synthetic-model", tool_mode:"code_mode_only", multi_agent_version:"v1", experimental_supported_tools:["clock"], context_window:1000}]})); process.exit(0); }
 const stdin = await Bun.stdin.text();
 appendFileSync(log, JSON.stringify({event:"start", pid:process.pid, args, stdin, cwd:process.cwd(), mode:statSync(process.cwd()).mode & 0o777, at:Date.now()})+"\\n");
 if (mode === "timeout") await new Promise(() => setInterval(() => {}, 1000));
@@ -35,6 +37,9 @@ if (mode === "exit" || mode === "echo") { console.error(mode === "echo" ? JSON.p
 const data = mode === "schema" ? {text:42} : {text:"hello"};
 if (args[0] === "exec") {
   const schemaFile = args[args.indexOf("--output-schema")+1];
+  const opt = (k) => { const a = args.find(x => x.startsWith(k + "=")); return a && JSON.parse(a.slice(k.length + 1)); };
+  const catalogFile = opt("model_catalog_json");
+  appendFileSync(log, JSON.stringify({event:"files", instructions:readFileSync(opt("model_instructions_file"),"utf8"), catalog: catalogFile ? JSON.parse(readFileSync(catalogFile,"utf8")) : null})+"\\n");
   appendFileSync(log, JSON.stringify({event:"schema", file:schemaFile, schema:JSON.parse(readFileSync(schemaFile,"utf8")), mode:statSync(dirname(schemaFile)).mode & 0o777})+"\\n");
   writeFileSync(args[args.indexOf("-o")+1], mode === "json" ? "not json" : JSON.stringify(data));
   console.log(JSON.stringify({type:"turn.completed", usage:{input_tokens:12, output_tokens:3}}));
@@ -81,9 +86,15 @@ test("Claude：安全参数、stdin、cwd、权限、结构化输出和 usage", 
 });
 
 test("Codex：安全参数、临时 schema 与输出、stdin 和 finally 清理", async () => {
+  resetCodexCatalog();
   const f = await fixture("codex-cli");
   expect((await f.llm.complete(request)).ok).toBe(true);
   const logs = await f.logs(), start = logs[0], schemaLog = logs.find(l => l.event === "schema");
+  // 不带 codex 自己的编程 Agent 说明和工具：换成一句说明，模型目录去掉强制的代码执行模式和多 Agent 工具（2026-11-12 实测：每次调用固定开销 1.1 万 token）。
+  const files = logs.find(l => l.event === "files");
+  expect(files.instructions).toContain("JSON schema");
+  expect(files.catalog.models[0]).toEqual({ slug: "synthetic-model", experimental_supported_tools: [], context_window: 1000 });
+  for (const flag of ["include_permissions_instructions=false", "include_environment_context=false", "include_collaboration_mode_instructions=false", "features.collaboration_modes=false"]) expect(start.args).toContain(flag);
   for (const flag of ["exec", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json"]) expect(start.args).toContain(flag);
   for (const [flag, value] of [["--sandbox", "read-only"], ["-C", join(f.dir, "distill-work")], ["-m", "synthetic-model"]]) expect(start.args[start.args.indexOf(flag) + 1]).toBe(value);
   expect(start.args).toContain('approval_policy="never"');
@@ -94,6 +105,16 @@ test("Codex：安全参数、临时 schema 与输出、stdin 和 finally 清理"
   expect(schemaLog.schema).toEqual(schema); expect(schemaLog.mode).toBe(0o700);
   expect(await Bun.file(schemaLog.file).exists()).toBe(false);
   expect(f.rows).toHaveLength(1); expect(f.rows[0]).toMatchObject({ ok: 1, input_tokens: 12, output_tokens: 3 });
+});
+
+test("Codex：读不到模型目录时不覆盖，照常调用", async () => {
+  resetCodexCatalog();
+  const f = await fixture("codex-cli", "nocatalog");
+  expect((await f.llm.complete(request)).ok).toBe(true);
+  const logs = await f.logs();
+  expect(logs.find(l => l.event === "files").catalog).toBeNull();
+  expect(logs[0].args.some((a: string) => a.startsWith("model_catalog_json="))).toBe(false);
+  resetCodexCatalog();
 });
 
 for (const provider of ["claude-cli", "codex-cli"]) {

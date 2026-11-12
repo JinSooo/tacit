@@ -104,6 +104,7 @@ export class AudioStore {
       // 门槛调整后，已达新门槛但没有新上传的说话人也要进待确认。
       for (const s of this.sql.prepare("SELECT id FROM speakers WHERE status='new'").all() as { id: string }[]) this.ask(s.id);
       this.expireSampleRequests();
+      this.pruneOrphans();
       const me = this.activeSpeakers().filter(s => s.is_me);
       const purge = this.setting<string | null>("purge_before", null);
       const ack = this.setting<string | null>(`purged:${device}`, null);
@@ -167,9 +168,8 @@ export class AudioStore {
         let speaker = best && best.score >= MATCH_THRESHOLD ? best.speaker : undefined;
         const now = new Date().toISOString();
         if (!speaker) {
-          const count = (this.sql.prepare("SELECT COUNT(*) AS n FROM speakers").get() as { n: number }).n;
           const id = ulid();
-          this.sql.prepare("INSERT INTO speakers(id,label,status,centroid,created_at) VALUES(?,?,'new',?,?)").run(id,label(count),s.centroid,now);
+          this.sql.prepare("INSERT INTO speakers(id,label,status,centroid,created_at) VALUES(?,?,'new',?,?)").run(id,this.nextLabel(),s.centroid,now);
           speaker = this.speaker(id)!;
         }
         if (!Number.isFinite(speaker.seconds + s.seconds)) throw new InputError("累计 seconds 超出范围");
@@ -180,10 +180,43 @@ export class AudioStore {
         result.push(this.mapping(s.local, speaker.id));
       }
       for (const id of touched) this.ask(id);
+      this.pruneOrphans();
       // 再按整段对话把拆碎的并回去，返回并过之后的叫法（采集端用它写转写里的说话人）。
       this.consolidateConversation(ref);
       return { speakers: input.map(s => this.mapping(s.local, (this.sql.prepare("SELECT speaker_id FROM voice_embeddings WHERE conversation_ref=? AND local=?").get(ref, s.local) as { speaker_id: string }).speaker_id)) };
     }).immediate();
+  }
+  /** 编号只增不减：空壳说话人删掉以后，新编号不能和还在的人重名（转写正文里按编号认人）。 */
+  private labelSeq(): number {
+    const count = (this.sql.prepare("SELECT COUNT(*) AS n FROM speakers").get() as { n: number }).n;
+    return Math.max(count, this.setting("label_seq", 0));
+  }
+  private nextLabel(): string {
+    const next = this.labelSeq();
+    this.set("label_seq", next + 1);
+    return label(next);
+  }
+  /**
+   * 删掉没有任何逐条声纹的未确认说话人里不再有用的：它所在的对话被跳过（没有用户声音、不转写）或删掉了。
+   * 跳过时保留聚合中心是为了同一个人在别的对话再出现时还能认出来；但不到 6 秒的碎片中心不可靠，
+   * 过了录音保留期的也拿不到试听样本了，留着只会作为空壳参与匹配（2026-11-12 实测：260 个未确认里 217 个是空壳，252 个不到 6 秒）。
+   * 已确认、已忽略、被并走的保留；转写里还按 id 引用它的不删。
+   */
+  pruneOrphans(now = Date.now()): number {
+    const stale = new Date(now - this.settings().retention_days * 86_400_000).toISOString();
+    const ids = (this.sql.prepare(`SELECT id FROM speakers s WHERE status='new'
+      AND (seconds<? OR COALESCE(updated_at,created_at)<?)
+      AND NOT EXISTS(SELECT 1 FROM voice_embeddings e WHERE e.speaker_id=s.id)
+      AND NOT EXISTS(SELECT 1 FROM conversation_lines l WHERE l.speaker_id=s.id)
+      AND NOT EXISTS(SELECT 1 FROM speakers m WHERE m.merged_into=s.id)`).all(CONSOLIDATE.big, stale) as { id: string }[]).map(r => r.id);
+    // 删之前先记下已用到的编号，删完总数变小也不会再发出旧编号。
+    if (ids.length) this.set("label_seq", this.labelSeq());
+    for (const id of ids) {
+      this.sql.prepare("DELETE FROM voice_samples WHERE speaker_id=?").run(id);
+      this.sql.prepare("DELETE FROM sample_requests WHERE speaker_id=?").run(id);
+      this.sql.prepare("DELETE FROM speakers WHERE id=?").run(id);
+    }
+    return ids.length;
   }
   private mapping(local: string, id: string) {
     const s = this.speaker(id)!;
@@ -244,6 +277,8 @@ export class AudioStore {
     } else throw new InputError("说话人操作无效");
     this.sql.prepare("DELETE FROM voice_samples WHERE speaker_id=?").run(id);
     this.sql.prepare("DELETE FROM sample_requests WHERE speaker_id=?").run(id);
+    // 又标了一次"我"或者起了已有的名字：并到已确认的那个人身上，不留多个"我"（2026-11-12 实测：标了 8 次"我"，最后仍剩 3 个）。
+    if (action === "me" || action === "rename") this.mergeSameNames();
   }
   /** s 并进 dest：声纹按秒数加权、对话数去掉两人同在的对话，逐条声纹改挂 dest；s 的试听样本删掉。 */
   private mergeInto(s: Speaker, dest: Speaker, now: string) {
@@ -331,7 +366,10 @@ export class AudioStore {
   }
   skipped(ref: string) {
     text(ref,"conversation_ref");
-    this.sql.prepare("DELETE FROM voice_embeddings WHERE conversation_ref=?").run(ref);
+    this.sql.transaction(() => {
+      this.sql.prepare("DELETE FROM voice_embeddings WHERE conversation_ref=?").run(ref);
+      this.pruneOrphans();
+    }).immediate();
     return { skipped: true };
   }
   uploadSamples(value: unknown) {
@@ -385,5 +423,6 @@ export class AudioStore {
     const requests = this.sql.prepare("SELECT id FROM sample_requests WHERE conversation_ref=?").all(ref) as { id: string }[];
     for (const r of requests) this.sql.prepare("DELETE FROM voice_samples WHERE request_id=?").run(r.id);
     this.sql.prepare("DELETE FROM sample_requests WHERE conversation_ref=?").run(ref);
+    this.pruneOrphans();
   }
 }
