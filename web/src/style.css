@@ -159,6 +159,9 @@ dialog h2 { font-size: var(--text-title); font-weight: 600; margin: 0 0 16px; }
 .time-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .correction-form { margin-top: 16px; }
 .quote { margin: 0 0 16px; padding-left: 12px; border-left: 2px solid var(--line); color: var(--muted); }
+/* 确认框渲染在 .entity-detail 里，会被它的 p { margin: 0 } 清掉段间距；这里恢复。 */
+.entity-detail dialog p { margin: 0 0 12px; white-space: normal; }
+.entity-detail dialog .quote { margin-bottom: 16px; }
 .skip { position: fixed; left: 12px; top: -80px; z-index: 5; background: var(--raised); padding: 12px; border-radius: var(--radius-control); }
 .skip:focus { top: 12px; }
 
