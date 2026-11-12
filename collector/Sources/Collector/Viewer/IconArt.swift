@@ -1,8 +1,8 @@
 import AppKit
 
-/// 应用图标和菜单栏图标共用一个形象：录音键的圆里排着一段文字，每行被圆截断，末行短一截——
-/// 录下来的东西变成文字。应用图标是深色底上的红色圆；菜单栏是同形的单色模板图。
+/// 应用图标和菜单栏共用原版的圆环、文字行和短末行；应用图标配色为铜绿、暖炭灰和暖白。
 enum AppIconArt {
+  static let rowColors: [UInt32] = [0x8FC7B7, 0x7DB8A9, 0x66A796, 0x4B8D7E, 0x3B7468]
   static func image(size: CGFloat) -> NSImage {
     NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
       draw(in: rect); return true
@@ -23,35 +23,45 @@ enum AppIconArt {
     let shadow = NSShadow(); shadow.shadowColor = .black.withAlphaComponent(0.3); shadow.shadowBlurRadius = s * 0.025
     shadow.shadowOffset = NSSize(width: 0, height: -s * 0.012)
     shadow.set()
-    rgb(0x1A191E).setFill(); shape.fill()
+    rgb(0x181716).setFill(); shape.fill()
     NSGraphicsContext.restoreGraphicsState()
 
     NSGraphicsContext.saveGraphicsState()
     shape.addClip()
-    NSGradient(colors: [rgb(0x2A2830), rgb(0x141317)])!.draw(in: tile, angle: -90)
-    let c = CGPoint(x: tile.midX, y: tile.midY)
-    let r = tile.width * 0.265
-    NSGradient(colors: [rgb(0xFF5A4F, 0.28), rgb(0xFF5A4F, 0)])!.draw(fromCenter: c, radius: 0, toCenter: c, radius: r * 1.75, options: [])
-
-    // 录音键的外环。
-    let ringR = tile.width * 0.335
-    let ring = NSBezierPath(ovalIn: CGRect(x: c.x - ringR, y: c.y - ringR, width: ringR * 2, height: ringR * 2))
-    ring.lineWidth = tile.width * 0.028
-    rgb(0xF4EFE8, 0.92).setStroke(); ring.stroke()
-
-    // 圆里的文字行，上浅下深。
-    textDisc(center: c, radius: r, rows: 5, rowRatio: 1 / 1.42) { i, n in
-      let t = CGFloat(i) / CGFloat(n - 1)
-      (rgb(0xFF7A62).blended(withFraction: t, of: rgb(0xE5383B)) ?? rgb(0xE5383B)).setFill()
-    }
+    drawBackground(in: tile)
+    drawMark(in: tile, glow: true)
 
     NSGradient(colors: [NSColor.white.withAlphaComponent(0.10), NSColor.white.withAlphaComponent(0)])!
       .draw(in: CGRect(x: tile.minX, y: tile.midY, width: tile.width, height: tile.height / 2), angle: -90)
     NSGraphicsContext.restoreGraphicsState()
 
-    NSColor.white.withAlphaComponent(0.10).setStroke()
+    rgb(0x45413C).setStroke()
     let rim = NSBezierPath(roundedRect: tile.insetBy(dx: s * 0.002, dy: s * 0.002), xRadius: radius, yRadius: radius)
     rim.lineWidth = s * 0.004; rim.stroke()
+  }
+
+  static func drawBackground(in rect: CGRect) {
+    NSGradient(colors: [rgb(0x302E2B), rgb(0x181716)])!.draw(in: rect, angle: -90)
+  }
+
+  /// 各端导出复用同一图形，tile 是原版图标的底板范围。单色版用 alpha 轮廓由系统着色。
+  static func drawMark(in tile: CGRect, monochrome: Bool = false, glow: Bool = false) {
+    let c = CGPoint(x: tile.midX, y: tile.midY)
+    let r = tile.width * 0.265
+    if glow {
+      NSGradient(colors: [rgb(0x3B7468, 0.28), rgb(0x3B7468, 0)])!.draw(fromCenter: c, radius: 0, toCenter: c, radius: r * 1.75, options: [])
+    }
+
+    // 原版外环和内容比例不变。
+    let ringR = tile.width * 0.335
+    let ring = NSBezierPath(ovalIn: CGRect(x: c.x - ringR, y: c.y - ringR, width: ringR * 2, height: ringR * 2))
+    ring.lineWidth = tile.width * 0.028
+    (monochrome ? NSColor.white : rgb(0xE7E3DC)).setStroke(); ring.stroke()
+
+    // 圆里的文字行，上浅下深。
+    textDisc(center: c, radius: r, rows: 5, rowRatio: 1 / 1.42) { i, _ in
+      (monochrome ? NSColor.white : rgb(rowColors[i])).setFill()
+    }
   }
 
   /// 圆内的几行"文字"：等高的条，被圆截断；末行左对齐、右端圆头，停在圆心右侧一点。
