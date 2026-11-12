@@ -105,7 +105,6 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     const config = loadConfig();
     const db = openDatabase(join(config.dataDir, "history.db"), config.dbKey, config.token);
     // 回滚日志模式下 hub 连续写入时，等锁 5 秒常常轮不上；提炼是后台进程，等久一点无妨。
-    // hub 保持 5 秒：它单线程，等锁期间所有请求都会卡住。
     db.db.pragma("busy_timeout=30000");
     // --slice-only：只做切片和规则归属，不调用模型（排查和测试用）。
     if (flags.includes("--slice-only")) {
@@ -146,6 +145,9 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const config = loadConfig();
   const db = openDatabase(join(config.dataDir, "history.db"), config.dbKey, config.token);
   if (command === "serve") {
+    // 中枢单线程，同步等锁会阻塞所有请求，因此迁移完成后只短暂等锁。
+    const SERVE_BUSY_TIMEOUT_MS = 300;
+    db.db.pragma(`busy_timeout=${SERVE_BUSY_TIMEOUT_MS}`);
     const { stopAgentAudit } = await import("./agent-audit.ts");
     const flushAudit = () => stopAgentAudit(db);
     process.once("exit", flushAudit);

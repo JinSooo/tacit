@@ -1,3 +1,4 @@
+import { isDatabaseBusy } from "./db-busy.ts";
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
 import { toLocalIso, ulid, type RecordV1 } from "../../packages/record/index.ts";
@@ -193,7 +194,7 @@ export class AgentReads {
       value = result.value; ids = result.ids; status = "status" in result ? result.status! : 200;
     } catch (error) {
       if (error instanceof InputError) throw error;
-      value = { error: "存储操作失败" }; status = 500;
+      value = { error: isDatabaseBusy(error) ? "数据库忙，稍后再试" : "存储操作失败" }; status = isDatabaseBusy(error) ? 503 : 500;
     }
     const json = JSON.stringify(value);
     enqueueAgentAudit(this.hub, [ulid(),new Date().toISOString(),tool,kind,JSON.stringify(args),JSON.stringify(ids),Buffer.byteLength(json),Number(status < 400)]);
@@ -267,7 +268,7 @@ export class AgentReads {
       }).immediate() as Item;
     } catch (error) {
       if (error instanceof InputError) throw error;
-      value = { error: "存储操作失败" }; status = 500;
+      value = { error: isDatabaseBusy(error) ? "数据库忙，稍后再试" : "存储操作失败" }; status = isDatabaseBusy(error) ? 503 : 500;
     }
     args.result = value.result ?? "error";
     if (value.redactions) args.redactions = value.redactions;

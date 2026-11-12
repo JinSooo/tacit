@@ -81,6 +81,8 @@ final class HubClient {
       guard let self else { return }
       let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
       if let err { self.finish(error: "hub 连不上：\(err.localizedDescription)", done: nil); return }
+      // 503 是中枢撞上别的进程的写锁、不等锁直接返回：中枢是通的，记录留在队列里下一轮再发，不提示连不上。
+      if status == 503 { self.finish(error: nil, done: nil); return }
       guard status == 200, let data,
             let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         self.finish(error: "hub 返回 \(status)", done: nil); return

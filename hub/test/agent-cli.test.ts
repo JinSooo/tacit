@@ -34,6 +34,7 @@ function preload(dir: string) {
     const url = new URL(String(input));
     if (init.headers.Authorization !== 'Bearer ${token}') throw Error('鉴权失败');
     if (process.env.RA_EXPECT_EVENT && url.searchParams.get('event') !== process.env.RA_EXPECT_EVENT) throw Error('事件映射错误');
+    if (url.searchParams.get('id') === 'busy') return Response.json({error:'数据库忙，稍后再试'}, {status: 503});
     if (url.searchParams.get('id') === 'fail') return new Response('${token}', {status: 503});
     if (url.searchParams.get('id') === 'missing') return new Response('${token}', {status: 404});
     if (url.searchParams.get('cwd') === '/slow') return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(Error('超时'))));
@@ -84,6 +85,24 @@ test("MCP 转发参数、默认 brief、错误保密、截断及失败后继续�
     expect(messages[5].result.content[0].text.length).toBeLessThanOrEqual(40000); expect(messages[5].result.content[0].text).toContain("已截断");
     expect(messages[6].result.isError).toBeUndefined();
     expect(messages[7].result.isError).toBe(true); expect(messages[7].result.content[0].text).toContain("404");
+  } finally { ctx.cleanup(); }
+});
+
+test("MCP 503 透传可读 error，读写请求均提示稍后重试", async () => {
+  const ctx = environment();
+  try {
+    const mock = preload(ctx.dir);
+    const inputs = [call(1, "get", { id: "busy" }), call(2, "history_append", { title: "合成", body: "内容" })];
+    // append 没有 id，独立替身验证写入同样透传 503。
+    const writeMock = join(ctx.dir, "busy-fetch.ts");
+    writeFileSync(writeMock, `globalThis.fetch = async () => Response.json({error:'数据库忙，稍后再试'}, {status:503});`);
+    for (const [input, file] of [[inputs[0]!, mock], [inputs[1]!, writeMock]]) {
+      const result = await run(ctx.dir, ["mcp", "--tool", "codex"], input! + "\n", {}, file);
+      expect(result.code).toBe(0);
+      const message = JSON.parse(result.stdout).result;
+      expect(message.isError).toBe(true);
+      expect(message.content[0].text).toBe("数据库忙，稍后再试");
+    }
   } finally { ctx.cleanup(); }
 });
 

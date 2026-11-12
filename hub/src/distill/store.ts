@@ -1,3 +1,4 @@
+import { tryWriteWithoutWaiting } from "../db-busy.ts";
 import { AudioStore } from "../audio.ts";
 import { removeSummariesOf } from "../conversations.ts";
 import { frameRecordsSchema, frameRejectionsSchema } from "./schema.ts";
@@ -151,8 +152,9 @@ export class DistillStore {
     this.put("pending", "id", p);
   }
   pending(): Pending[] {
-    return this.sql.transaction(() => {
+    const { result, marks } = this.sql.transaction(() => {
       const result: Pending[] = [];
+      const marks: { id: string; resolution: string }[] = [];
       const rows = this.sql.prepare("SELECT * FROM pending WHERE resolved_at IS NULL ORDER BY created_at,id").all();
       for (const row of rows) {
         const p = decode<Pending>(row as Row);
@@ -177,11 +179,16 @@ export class DistillStore {
             p.payload = { ...p.payload,a_name: a.name,b_name: b.name };
           }
         }
-        if (stale || dismissed) this.sql.prepare("UPDATE pending SET resolved_at=?,resolution=? WHERE id=?").run(new Date().toISOString(),stale ? "stale" : "keep",p.id);
+        if (stale || dismissed) marks.push({ id: p.id, resolution: stale ? "stale" : "keep" });
         else result.push(p);
       }
-      return result;
+      return { result, marks };
     })();
+    if (marks.length) tryWriteWithoutWaiting(this.hub, () => {
+      const update = this.sql.prepare("UPDATE pending SET resolved_at=?,resolution=? WHERE id=? AND resolved_at IS NULL");
+      for (const mark of marks) update.run(new Date().toISOString(), mark.resolution, mark.id);
+    });
+    return result;
   }
   getState<T>(key: string): T | null { const row = this.sql.prepare("SELECT v FROM distill_state WHERE k=?").get(key) as Row | undefined; return row ? JSON.parse(row.v) : null; }
   setState(key: string, value: unknown) { this.sql.prepare("INSERT INTO distill_state VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(key,JSON.stringify(value)); }

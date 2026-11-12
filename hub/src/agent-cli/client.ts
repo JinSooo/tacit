@@ -25,10 +25,11 @@ export async function readHub(kind: string, params: URLSearchParams, signal: Abo
     throw new AgentError(signal.aborted ? "查询 hub 超时" : "hub 没运行，请运行 ./install.sh");
   }
   // 不转述服务端错误正文，避免把请求或鉴权信息带进错误通道。
-  // 唯一例外：写入的 400 是 hub 自己的参数校验文字，转给 Agent 才知道该怎么改参数。
-  if (body !== undefined && response.status === 400) {
+  // 例外：写入的 400 和 503 的 error 是 hub 给出的可读提示。
+  if ((body !== undefined && response.status === 400) || response.status === 503) {
     let message: unknown;
     try { message = (await response.json() as { error?: unknown }).error; } catch {}
+    if (response.status === 503) throw new AgentError(typeof message === "string" && message.length <= 300 ? message : "hub 暂时不可用，请稍后重试（HTTP 503）");
     throw new AgentError(typeof message === "string" && message.length <= 300 ? `hub 拒绝写入：${message}` : "hub 拒绝写入（HTTP 400）");
   }
   if (!response.ok) {

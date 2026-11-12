@@ -1,3 +1,4 @@
+import { tryWriteWithoutWaiting } from "./db-busy.ts";
 import { ulid } from "../../packages/record/index.ts";
 import { HubDB, InputError } from "./db.ts";
 import { saveLines } from "./conversations.ts";
@@ -100,11 +101,13 @@ export class AudioStore {
   purge() { const purge_before = new Date().toISOString(); this.set("purge_before", purge_before); return { purge_before }; }
   sync(value: unknown) {
     const device = deviceName(value);
-    return this.sql.transaction(() => {
+    tryWriteWithoutWaiting(this.hub, () => {
       // 门槛调整后，已达新门槛但没有新上传的说话人也要进待确认。
       for (const s of this.sql.prepare("SELECT id FROM speakers WHERE status='new'").all() as { id: string }[]) this.ask(s.id);
       this.expireSampleRequests();
       this.pruneOrphans();
+    });
+    return this.sql.transaction(() => {
       const me = this.activeSpeakers().filter(s => s.is_me);
       const purge = this.setting<string | null>("purge_before", null);
       const ack = this.setting<string | null>(`purged:${device}`, null);
@@ -114,7 +117,7 @@ export class AudioStore {
         sample_requests: this.sql.prepare("SELECT id,speaker_id,conversation_ref,local FROM sample_requests WHERE device=? AND fulfilled_at IS NULL ORDER BY created_at,id").all(device),
         delete_conversations: this.setting<string[]>(`delete:${device}`, []),
       };
-    }).immediate();
+    })();
   }
   ack(value: unknown) {
     const b = object(value), device = deviceName(b.device);

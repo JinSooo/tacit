@@ -1,3 +1,4 @@
+import { tryWriteWithoutWaiting } from "./db-busy.ts";
 import type { HubDB } from "./db.ts";
 
 type AuditRow = [string, string, string, string, string, string, number, number];
@@ -16,17 +17,14 @@ export function flushAgentAudit(hub: HubDB): void {
   }
   if (!queue.rows.length) return;
   try {
-    const timeout = hub.db.pragma("busy_timeout", { simple: true }) as number;
-    try {
-      hub.db.pragma("busy_timeout=0");
-      hub.db.transaction(() => {
-        const insert = hub.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?)");
-        for (const row of queue.rows) insert.run(...row);
-      }).immediate();
+    if (tryWriteWithoutWaiting(hub, () => {
+      const insert = hub.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?)");
+      for (const row of queue.rows) insert.run(...row);
+    })) {
       queue.rows.length = 0;
       clearInterval(queue.timer);
       queue.timer = undefined;
-    } finally { hub.db.pragma(`busy_timeout=${timeout}`); }
+    }
   } catch (error) {
     const code = (error as { code?: unknown } | null)?.code;
     if (code !== "SQLITE_BUSY" && !queue.errorLogged) {

@@ -1,3 +1,4 @@
+import { isDatabaseBusy } from "./db-busy.ts";
 import { AudioStore } from "./audio.ts";
 import { AgentReads } from "./agent.ts";
 import { DistillStore, type Fact } from "./distill/store.ts";
@@ -175,6 +176,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
       return Response.json({ error: "接口不存在" }, { status: 404 });
     } catch (e) {
       if (e instanceof InputError) return Response.json({ error: e.message }, { status: 400 });
+      if (isDatabaseBusy(e)) return Response.json({ error: "数据库忙，稍后再试" }, { status: 503 });
       // 不把异常对象或原始请求写到日志，防止密钥经过错误通道泄漏。
       return Response.json({ error: "存储操作失败" }, { status: 500 });
     }
