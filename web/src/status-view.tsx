@@ -16,7 +16,7 @@ function Counts({ items, unit = "" }: { items: { key: string; label: string; cou
 
 /** 启动以来的累计值，不把重启后清零的数字称为全天统计。 */
 export function BusyStatus({ busy }: { busy: HubStatus["hub"]["busy"] }) {
-  return <dl className="status-lines"><dt>库忙重试</dt><dd>
+  return <dl className="status-lines"><dt>后台服务忙，自动重试</dt><dd>
     启动以来 {formatNumber(busy.total)} 次，最近一次 {busy.last_at ? <Since at={busy.last_at} /> : "尚未发生"}
   </dd></dl>;
 }
