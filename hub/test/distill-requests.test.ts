@@ -151,3 +151,25 @@ test("库被另一连接占着写锁时这一次跳过，锁放开后照常领�
   const closed = new HubDB(ctx.file, ctx.config.dbKey); closed.close();
   await expect(tickSafely({ ...deps(now), db: closed }, state, now)).rejects.toThrow();
 });
+
+// 结束状态撞上库忙时不能把做完的请求标成失败，也不能一直留在 running 挡住新请求。
+test("请求做完后写结束状态时库忙，下一次补写原来的结果", async () => {
+  const now = day("2026-11-09", 12);
+  store.setState("slow_ms", now); store.setState("today_ms", now);
+  const state: LoopState = { lastRound: now, enabledDefault: localDayStart("2026-11-09")! };
+  const { request } = requests.create({ kind: "round" }, now);
+  const hub = new HubDB(ctx.file, ctx.config.dbKey);
+  ctx.db.db.pragma("busy_timeout=50");
+  // 这一轮整理写完日志后，另一个连接占住写锁，结束状态写不进去。
+  let locked = false;
+  const log = () => { if (!locked) { hub.db.exec("BEGIN IMMEDIATE"); locked = true; } };
+  expect(await tickSafely({ ...deps(now), log }, state, now)).toBe("busy");
+  expect(requests.get(request.id)!.status).toBe("running");
+  expect(state.unfinished).toMatchObject({ id: request.id, error: undefined });
+  hub.db.exec("COMMIT"); hub.close();
+  expect(await tickSafely(deps(now + 5000), state, now + 5000)).toBe("idle");
+  const done = requests.get(request.id)!;
+  expect(done.status).toBe("done"); expect(done.error).toBeUndefined();
+  expect(state.unfinished).toBeUndefined();
+  expect(requests.create({ kind: "round" }, now + 6000).created).toBe(true);
+});

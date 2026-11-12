@@ -609,14 +609,17 @@ export function backfillRange(db: HubDB, from: string, to: string, opts: { enabl
   return { days: days.length, frames };
 }
 
+/** unfinished：请求已执行完、但结束状态因库忙没写进去，下一次先补写，否则它一直是 running，新请求也排不进来。 */
+export interface LoopState { lastRound: number; enabledDefault: number; unfinished?: { id: string; error?: string; at: number } }
 /** 常驻循环的一步：有排队请求就领取执行；否则到时间了跑常规一轮。返回这一步做了什么。 */
-export interface LoopState { lastRound: number; enabledDefault: number }
 export async function distillTick(d: Deps, state: LoopState, now = d.now?.() ?? Date.now()): Promise<"request" | "round" | "idle"> {
   const store = new DistillStore(d.db), requests = new DistillRequests(d.db);
   const log = d.log ?? console.log;
   store.setState("heartbeat_at", toLocalIso(now));
+  if (state.unfinished) { const u = state.unfinished; requests.finish(u.id, u.error, u.at); state.unfinished = undefined; }
   const req = requests.claim(now);
   if (req) {
+    let error: string | undefined;
     try {
       if (req.kind === "backfill") {
         const r = backfillRange(d.db, req.from!, req.to!, { enabledDefault: state.enabledDefault, onProgress: (done, total) => requests.progress(req.id, done, total) });
@@ -624,12 +627,14 @@ export async function distillTick(d: Deps, state: LoopState, now = d.now?.() ?? 
         // 切好的片段接着归线程、写线程和日记；一轮处理不完的由后续常规轮次继续。
         log(JSON.stringify(await distillRound(d, { slow: true, days: "all", enabledDefault: state.enabledDefault })));
       } else await regularRound(d, state);
-      requests.finish(req.id);
     } catch (e) {
-      const error = e instanceof Error ? e.message.slice(0, 200) : "提炼失败";
-      requests.finish(req.id, error);
+      error = e instanceof Error ? e.message.slice(0, 200) : "提炼失败";
       log(JSON.stringify({ request: req.id, error }));
     }
+    // 先记下结果再写：写入撞上库忙时由 tickSafely 接住，下一次补写同样的结果。
+    state.unfinished = { id: req.id, error, at: d.now?.() ?? Date.now() };
+    requests.finish(req.id, error, state.unfinished.at);
+    state.unfinished = undefined;
     return "request";
   }
   if (now - state.lastRound < 15 * MIN) return "idle";
