@@ -107,7 +107,6 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
   const lastError = sql.prepare("SELECT id,at,tier,error FROM llm_usage WHERE ok=0 ORDER BY id DESC LIMIT 1").get() as { id: string; at: string; tier: string; error: string | null } | undefined;
   // 最近一次成功：网页据此判断最近错误之后是否已恢复。
   const lastOk = sql.prepare("SELECT id,at FROM llm_usage WHERE ok=1 ORDER BY id DESC LIMIT 1").get() as { id: string; at: string } | undefined;
-  const nowState = state("now") as { updated_at?: unknown } | null;
   const deletes = (sql.prepare("SELECT v FROM audio_settings WHERE k GLOB 'delete:*'").all() as { v: string }[])
     .reduce((n, r) => { try { const v = JSON.parse(r.v); return n + (Array.isArray(v) ? v.length : 0); } catch { return n; } }, 0);
   // 提炼请求队列（distill_requests，库版本 6 起一定存在）。
@@ -138,7 +137,7 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
     distill: {
       enabled_at: time(state("enabled_ms")),
       heartbeat_at: time(state("heartbeat_at")),
-      last_round_at: time(nowState?.updated_at),
+      last_round_at: time(state("last_round_at")),
       last_slow_round_at: time(state("slow_ms")),
       cursor_at: time(state("cursor_ms")),
       backfill_done: state("backfill_done") === true,

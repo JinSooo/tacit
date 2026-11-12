@@ -30,6 +30,7 @@ function seed() {
   const state = sql.prepare("INSERT INTO distill_state VALUES(?,?)");
   state.run("enabled_ms", JSON.stringify(now - 86_400_000));
   state.run("now", JSON.stringify({ brief: secret, detail: {}, updated_at: toLocalIso(now - 60_000) }));
+  state.run("last_round_at", JSON.stringify(toLocalIso(now - 5_000)));
   sql.prepare("INSERT INTO pending(id,kind,payload,created_at) VALUES(?,?,?,?)").run(ulid(), "thread_done", JSON.stringify({ title: secret }), toLocalIso(now));
   sql.prepare("INSERT INTO audio_settings VALUES(?,?)").run("delete:mac", JSON.stringify(["a", "b"]));
   return secret;
@@ -52,7 +53,7 @@ test("状态只读、只给计数，按来源和设备统计，今天用量按�
   ]);
   expect(status.records.by_device.map(d => [d.device, d.count])).toEqual([["mac", 2], ["phone", 1]]);
   expect(status.distill.frames).toEqual({ new: 1, assigned: 2 });
-  expect(status.distill.last_round_at).toBe(toLocalIso(now - 60_000));
+  expect(status.distill.last_round_at).toBe(toLocalIso(now - 5_000));
   expect(status.distill.enabled_at).toBe(toLocalIso(now - 86_400_000));
   expect(status.distill.heartbeat_at).toBeNull();
   expect(status.distill.pending_open).toEqual({ thread_done: 1 });

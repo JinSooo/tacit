@@ -3,6 +3,7 @@
 // 日志只写计数，不写任何记录内容或标题。
 import type { HubDB } from "../db.ts";
 import { chatKey } from "../chat.ts";
+import { recordSpans, unionSeconds } from "../durations.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { DistillStore, type Frame, type Thread } from "./store.ts";
@@ -37,7 +38,6 @@ const clock = (ms: number) => { const d = new Date(ms); return `${pad(d.getMonth
 const hhmm = (ms: number) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 export const localDate = (ms: number) => toLocalIso(ms).slice(0, 10);
 export const startOfDay = (ms: number) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
-const minutesOf = (f: Frame) => Math.max(0, (f.t_end_ms - f.t_start_ms) / MIN);
 const isSession = (source: string) => source === "claude_code.session" || source === "codex.session";
 
 /** 按条件读片段（避免整表读出后在内存里过滤）。 */
@@ -94,7 +94,7 @@ export function touchThread(store: DistillStore, threadId: string, frame: Frame)
     status: t.status === "paused" ? "active" : t.status,
     first_ms: Math.min(t.first_ms ?? frame.t_start_ms, frame.t_start_ms),
     last_ms: Math.max(t.last_ms ?? 0, frame.t_end_ms),
-    active_minutes: (t.active_minutes ?? 0) + Math.round(minutesOf(frame)),
+    active_minutes: store.activeMinutes(threadId),
     sessions: (t.sessions ?? 0) + (newSession ? 1 : 0),
     needs_regen: 1,
   });
@@ -216,7 +216,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
           cand = { id: ulid(now), title: title!, frame_ids: [], minutes: 0, last_ms: 0, project_id: project?.id ?? null };
           candidates.push(cand);
         }
-        cand.frame_ids.push(f.id); cand.minutes += minutesOf(f); cand.last_ms = Math.max(cand.last_ms, f.t_end_ms);
+        cand.frame_ids.push(f.id); cand.minutes = store.frameMinutes(cand.frame_ids); cand.last_ms = Math.max(cand.last_ms, f.t_end_ms);
         // 候选期间片段标为 ignored，不会被重复发给模型；建线程时再正式归属。
         store.hub.db.prepare("UPDATE frames SET status='ignored' WHERE id=?").run(f.id);
         if (cand.minutes >= LIMITS.threadMinutes || cand.frame_ids.length >= LIMITS.threadFrames) {
@@ -248,13 +248,13 @@ function threadFrames(store: DistillStore, threadId: string): Frame[] {
   return loadFrames(store, "WHERE id IN (SELECT frame_id FROM assignments WHERE thread_id=?) ORDER BY t_start_ms,id", threadId);
 }
 
-async function makeBrief(d: Deps, task: string, title: string, detail: unknown, facts: P.FactView[]): Promise<string | null> {
-  const r = await d.llm.complete<P.BriefOutput>({ tier: "minute", task, system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail, facts), schema: P.BRIEF_SCHEMA });
+async function makeBrief(d: Deps, task: string, title: string, detail: unknown): Promise<string | null> {
+  const r = await d.llm.complete<P.BriefOutput>({ tier: "minute", task, system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail), schema: P.BRIEF_SCHEMA });
   return r.ok ? r.data.brief.trim() : null;
 }
 
 /** 已经提炼进详细版的片段，以及当时这些片段的记录总数（变少说明有记录被删，要整条重建）。 */
-interface DigestMark { frames: string[]; records: number }
+interface DigestMark { frames: string[]; records: number; user_facts?: string[] }
 
 function projectHint(store: DistillStore, thread: Thread): P.ProjectHint {
   const p = thread.project_hint ? store.project(thread.project_hint) : null;
@@ -380,7 +380,12 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     let detail: unknown = rebuild ? { goal: "", progress: "", artifacts: { files: [], urls: [], commands: [], people: [] }, quotes: [] } : thread.detail;
     let title = thread.title, ok = true, doneHint = false;
     const views = fresh.map(f => ({ f, v: frameView(store, f, { maxRecords: LIMITS.digestRecords, excerpt: s => isSession(s) ? LIMITS.sessionExcerpt : LIMITS.otherExcerpt }) }));
-    for (const chunk of batches(views, x => JSON.stringify(x.v).length, LIMITS.digestChars, 50)) {
+    const userFacts = () => store.facts("thread_id", id).filter(f => f.origin === "user").map(f => f.id).sort();
+    const factIds = userFacts();
+    const chunks = batches(views, x => JSON.stringify(x.v).length, LIMITS.digestChars, 50);
+    // 用户纠错也使详细版失效；不能在没有新片段时绕过详细版、只改简略版。
+    if (!chunks.length && JSON.stringify(mark?.user_facts ?? []) !== JSON.stringify(factIds)) chunks.push([]);
+    for (const chunk of chunks) {
       calls++;
       const r = await d.llm.complete<P.ThreadOutput>({ tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: P.threadPrompt({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!)), schema: P.THREAD_SCHEMA });
       if (!r.ok) { ok = false; break; }
@@ -411,15 +416,15 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
         if (out.status_hint === "done_candidate") doneHint = true;
         store.upsertThread({ ...store.thread(id)!, title, detail });
         for (const x of chunk) done.add(x.f.id);
-        store.setState(`digest:${id}`, { frames: [...done], records: countOf(done) } satisfies DigestMark);
+        store.setState(`digest:${id}`, { frames: [...done], records: countOf(done), user_facts: factIds } satisfies DigestMark);
       })();
     }
     if (!ok) { failed++; log(JSON.stringify({ step: "digest", ok: false })); continue; }
     calls++;
-    const brief = await makeBrief(d, "thread_brief", title, detail, factViews(store, "thread_id", id));
+    const brief = await makeBrief(d, "thread_brief", title, detail);
     if (brief === null) { failed++; continue; }
     store.hub.db.transaction(() => {
-      store.upsertThread({ ...store.thread(id)!, brief, needs_regen: 0, updated_at: toLocalIso(now) });
+      store.upsertThread({ ...store.thread(id)!, brief, needs_regen: Number(JSON.stringify(userFacts()) !== JSON.stringify(factIds)), updated_at: toLocalIso(now) });
       const projectId = store.thread(id)!.project_id;
       if (projectId) store.hub.db.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(projectId);
       if (doneHint) askDone(store, id, now);
@@ -494,7 +499,7 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
       })();
     }
     calls++;
-    const brief = await makeBrief(d, "project_brief", p.name, detail, factViews(store, "project_id", p.id));
+    const brief = await makeBrief(d, "project_brief", p.name, detail);
     if (brief === null) { failed++; continue; }
     store.hub.db.transaction(() => {
       store.upsertProject({ ...store.project(p.id)!, brief, updated_at: toLocalIso(now) });
@@ -515,7 +520,9 @@ export function nowStep(store: DistillStore, now: number) {
   const top = items[0];
   // 简略版本身已说清在做什么，只在它没提到项目名时补上项目名。
   const brief = top ? (top.project && !top.brief!.includes(top.project) ? `${top.project}：${top.brief}` : top.brief!) : "最近 24 小时没有活跃的线程。";
-  store.setState("now", { brief, detail: { threads: items }, updated_at: toLocalIso(now) });
+  // 这是正文的生成时间，不是本轮轮询时间。旧数据缺时间时不伪造“刚更新”。
+  const updated = threads[0]?.updated_at;
+  store.setState("now", { brief, detail: { threads: items }, updated_at: top ? (updated && Number.isFinite(Date.parse(updated)) ? updated : null) : toLocalIso(now) });
   return { threads: items.length };
 }
 
@@ -567,24 +574,33 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
   const pendingKey = `day_brief:${date}`, day = store.day(date);
   let detail = day?.detail, calls = 0;
   if (day?.needs_regen || !store.getState<boolean>(pendingKey) || detail == null) {
-    const start = new Date(`${date}T00:00:00`).getTime(), end = start + DAY;
-    const frames = loadFrames(store, "WHERE t_start_ms>=? AND t_start_ms<? ORDER BY t_start_ms,id", start, end);
+    const start = new Date(`${date}T00:00:00`).getTime(), next = new Date(start);
+    next.setDate(next.getDate() + 1); // 中枢本地自然日，不能假定夏令时切换日恰好 24 小时。
+    const end = next.getTime();
+    const frames = loadFrames(store, "WHERE t_start_ms<? AND t_end_ms>=? ORDER BY t_start_ms,id", end, start);
     if (!frames.length) { store.setState(pendingKey, null); store.upsertDay({ date, needs_regen: 0, updated_at: toLocalIso(now) }); return { calls: 0, ok: true }; }
     const owner = new Map((store.hub.db.prepare("SELECT frame_id,thread_id FROM assignments").all() as { frame_id: string; thread_id: string }[]).map(r => [r.frame_id, r.thread_id]));
-    const blocks: P.DayBlock[] = [];
-    let previousKey: string | null = null;
+    type Block = { start: number; end: number; label: string; thread: Thread | null; spans: [number,number][] };
+    const blocks: Block[] = [], open = new Map<string,Block>();
     for (const f of frames) {
       const t = owner.get(f.id) ? store.thread(owner.get(f.id)!) : null;
       const label = t ? t.title : displayFrameKey(store, f).replace(/^(app|host|repo|chat):/, "");
-      const key = !t && f.key.startsWith("chat:") ? chatKey(label) : label;
-      const prev = blocks.at(-1);
-      if (prev && previousKey === key && Date.parse(`${date}T${prev.end}:00`) + 15 * MIN >= f.t_start_ms) {
-        prev.label = label; prev.end = hhmm(f.t_end_ms); prev.minutes += Math.round(minutesOf(f)); continue;
+      const key = t ? `thread:${t.id}` : f.key.startsWith("chat:") ? chatKey(f.key) : f.key;
+      const spans = recordSpans(store.hub, f.record_ids, start, end);
+      if (!spans.length) continue;
+      const first = Math.min(...spans.map(s => s[0])), last = Math.max(...spans.map(s => s[1]));
+      let block = open.get(key);
+      if (!block || first > block.end + 15 * MIN) {
+        block = { start: first, end: last, label, thread: t, spans: [] };
+        blocks.push(block); open.set(key, block);
       }
-      blocks.push({ start: hhmm(f.t_start_ms), end: hhmm(f.t_end_ms), minutes: Math.round(minutesOf(f)), label, brief: t?.brief ?? null, ...(t ? { thread_id: t.id, kind: "thread" as const } : { kind: "misc" as const }) });
-      previousKey = key;
+      block.end = Math.max(block.end,last); block.label = label; block.spans.push(...spans);
     }
-    const r = await d.llm.complete<P.DayOutput>({ tier: "day", task: "day", system: P.DAY_SYSTEM, prompt: P.dayPrompt(date, blocks.slice(0, 300)), schema: P.DAY_SCHEMA });
+    const input: P.DayBlock[] = blocks.sort((a,b) => a.start-b.start).map(b => ({ start: hhmm(b.start), end: b.end === end ? "24:00" : hhmm(b.end),
+      minutes: Math.round(unionSeconds(b.spans)/60), label: b.label, brief: b.thread?.brief ?? null,
+      ...(b.thread ? { kind: "thread" as const, thread_id: b.thread.id } : { kind: "misc" as const }) }));
+    const active = Math.round(unionSeconds(blocks.flatMap(b => b.spans))/60);
+    const r = await d.llm.complete<P.DayOutput>({ tier: "day", task: "day", system: P.DAY_SYSTEM, prompt: P.dayPrompt(date, input.slice(0, 300), active), schema: P.DAY_SCHEMA });
     if (!r.ok) return { calls: 1, ok: false };
     detail = r.data; calls++;
     store.hub.db.transaction(() => {
@@ -593,7 +609,7 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
     })();
   }
   calls++;
-  const brief = await makeBrief(d, "day_brief", date, detail, []);
+  const brief = await makeBrief(d, "day_brief", date, detail);
   if (brief === null) return { calls, ok: false };
   store.hub.db.transaction(() => {
     store.upsertDay({ date, brief, updated_at: toLocalIso(now) });
@@ -648,6 +664,7 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
   }
   out.lifecycle = lifecycleStep(store, now);
   out.now = nowStep(store, now);
+  store.setState("last_round_at", toLocalIso(now));
   if (opts.slow && opts.days !== "none") {
     const today = localDate(now);
     const days = (d.db.db.prepare("SELECT date FROM days WHERE needs_regen=1 OR EXISTS(SELECT 1 FROM distill_state WHERE k='day_brief:'||days.date AND v='true') ORDER BY date").all() as { date: string }[])
@@ -732,6 +749,7 @@ async function regularRound(d: Deps, state: LoopState) {
 
 export async function runDistill({ db, llm, once, backfill, range, log = console.log, pollMs = 5000 }: { db: HubDB; llm: LLM; once: boolean; backfill: boolean; range?: { from: string; to: string }; log?: (line: string) => void; pollMs?: number }) {
   const store = new DistillStore(db);
+  refreshDerivedState(store);
   const d: Deps = { db, llm, log };
   const enabledDefault = startOfDay(Date.now());
   if (range) log(JSON.stringify(backfillRange(db, range.from, range.to, { enabledDefault })));
@@ -746,6 +764,24 @@ export async function runDistill({ db, llm, once, backfill, range, log = console
       if (await tickSafely(d, state) !== "request") await new Promise(r => setTimeout(r, pollMs));
     }
   } finally { clearInterval(beat); }
+}
+
+/** 一次性使旧算法的派生结果失效；保留详细版和增量检查点，由现有有界队列重写。 */
+export function refreshDerivedState(store: DistillStore, now = Date.now()) {
+  const key = "derived_correctness_v1";
+  return store.hub.db.transaction(() => {
+    if (store.getState<boolean>(key)) return false;
+    const rows = store.hub.db.prepare("SELECT id FROM threads").all() as { id: string }[];
+    const update = store.hub.db.prepare("UPDATE threads SET active_minutes=?,needs_regen=1 WHERE id=?");
+    for (const { id } of rows) update.run(store.activeMinutes(id), id);
+    store.hub.db.prepare("UPDATE days SET needs_regen=1").run();
+    // 项目详细版没有受计时影响，简略版直接从现有详细版重写，不重放历史记录。
+    for (const p of store.projects()) if (p.detail != null) store.setState(`project_brief:${p.id}`, true);
+    store.setState("slow_ms", null); store.setState("today_ms", null);
+    nowStep(store, now);
+    store.setState(key, true);
+    return true;
+  })();
 }
 
 /**

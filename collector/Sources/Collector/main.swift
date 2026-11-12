@@ -439,7 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       let accepted = results.values.reduce(0) { $0 + $1.accepted }
       let failed = results.filter { !$0.value.ok }.keys.sorted().map { DataSourceCatalog.descriptor($0)?.title ?? $0 }
       let summary = "新增 \(accepted.formatted()) 条" + (failed.isEmpty ? "" : "，\(failed.joined(separator: "、"))没有成功")
-      Task {
+      Task { @MainActor in
         var text = summary
         // 同步全部之后请常驻的提炼进程立即跑一轮；采集端不自己启动提炼。
         if task == .syncAll {
@@ -448,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let done = "\(f.string(from: Date())) 完成，" + text
-        DispatchQueue.main.async { self?.jobs[task] = .init(running: false, text: done) }
+        self?.jobs[task] = .init(running: false, text: done)
       }
     }
   }

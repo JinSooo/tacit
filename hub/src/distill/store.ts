@@ -5,6 +5,7 @@ import { removeSummariesOf } from "../conversations.ts";
 import { frameRecordsSchema, frameRejectionsSchema } from "./schema.ts";
 import { HubDB, InputError } from "../db.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
+import { recordSpans, unionSeconds } from "../durations.ts";
 
 export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" }
 export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[] }
@@ -78,7 +79,19 @@ export class DistillStore {
       if (fact.thread_id && !this.thread(fact.thread_id) || fact.project_id && !this.project(fact.project_id)) throw new InputError("事实归属不存在");
       this.sql.prepare(`INSERT INTO facts(id,thread_id,project_id,kind,text,reason,evidence,confidence,origin,valid_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(fact.id,fact.thread_id ?? null,fact.project_id ?? null,fact.kind,fact.text,fact.reason ?? null,JSON.stringify(fact.evidence),fact.confidence ?? null,fact.origin,fact.valid_at,fact.created_at);
       if (supersedes) this.invalidateFact(supersedes, fact.id, fact.origin, fact.valid_at);
+      if (fact.origin === "user") {
+        this.sql.prepare("UPDATE threads SET needs_regen=1 WHERE id=?").run(fact.thread_id ?? null);
+        this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=? OR id=(SELECT project_id FROM threads WHERE id=?)").run(fact.project_id ?? null, fact.thread_id ?? null);
+      }
     })();
+  }
+  activeMinutes(threadId: string): number {
+    const frames = (this.sql.prepare("SELECT frame_id FROM assignments WHERE thread_id=?").all(threadId) as { frame_id: string }[]).map(r => r.frame_id);
+    return this.frameMinutes(frames);
+  }
+  frameMinutes(frames: string[]): number {
+    const ids = (this.sql.prepare("SELECT record_id FROM frame_records WHERE frame_id IN (SELECT value FROM json_each(?))").all(JSON.stringify(frames)) as { record_id: string }[]).map(r => r.record_id);
+    return Math.round(unionSeconds(recordSpans(this.hub, ids)) / 60);
   }
   /** 用户说过不属于的线程，整理时不能再把这个片段归进去。 */
   rejectedThreads(frameId: string): string[] {
@@ -115,6 +128,7 @@ export class DistillStore {
   /** 片段退回未分配，记下不能再分回这条线程，下一轮由模型重新归属。调用方负责事务和线程重新整理。 */
   private unassign(f: Frame, threadId: string, at: string) {
     this.sql.prepare("DELETE FROM assignments WHERE frame_id=?").run(f.id);
+    this.sql.prepare("UPDATE threads SET active_minutes=? WHERE id=?").run(this.activeMinutes(threadId), threadId);
     this.sql.prepare("UPDATE frames SET status='new' WHERE id=?").run(f.id);
     this.sql.prepare("INSERT OR IGNORE INTO frame_rejections(frame_id,thread_id,at) VALUES(?,?,?)").run(f.id, threadId, at);
     this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=?").run(toLocalIso(f.t_start_ms).slice(0,10));
@@ -244,7 +258,7 @@ export class DistillStore {
     const firsts = [a.first_ms, b.first_ms].filter((n): n is number => n != null), lasts = [a.last_ms, b.last_ms].filter((n): n is number => n != null);
     this.upsertThread({ ...b, status: later.status, project_hint: b.project_hint ?? a.project_hint ?? null,
       first_ms: firsts.length ? Math.min(...firsts) : undefined, last_ms: lasts.length ? Math.max(...lasts) : undefined,
-      active_minutes: (a.active_minutes ?? 0) + (b.active_minutes ?? 0), sessions: (a.sessions ?? 0) + (b.sessions ?? 0), needs_regen: 1 });
+      active_minutes: this.activeMinutes(target), sessions: (a.sessions ?? 0) + (b.sessions ?? 0), needs_regen: 1 });
     for (const pid of new Set([a.project_id, b.project_id])) if (pid) this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(pid);
     this.sql.prepare("DELETE FROM distill_state WHERE k IN (?,?)").run(`digest:${source}`, `digest:${target}`);
     // 已经并进 source 的旧 id 也改指 target。
@@ -344,7 +358,7 @@ export class DistillStore {
       this.sql.prepare("DELETE FROM facts WHERE id=?").run(f.id);
     }
     for (const tid of affected) {
-      this.sql.prepare("UPDATE threads SET needs_regen=1 WHERE id=?").run(tid);
+      this.sql.prepare("UPDATE threads SET needs_regen=1,active_minutes=? WHERE id=?").run(this.activeMinutes(tid),tid);
       this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=(SELECT project_id FROM threads WHERE id=?)").run(tid);
     }
     this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=?").run(time.slice(0,10));

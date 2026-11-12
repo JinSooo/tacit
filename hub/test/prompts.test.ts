@@ -15,9 +15,9 @@ test("编造的 evidence 被过滤，没有依据的 fact 丢弃", () => {
   expect(keepGroundedFacts(facts, new Set(["R1"]))).toEqual([{ text: "a", evidence: ["R1"] }]);
 });
 
-test("简略版输入不含推测，也不含原始记录", () => {
-  const p = briefPrompt("合成线程", { goal: "g" }, [{ id: "f1", kind: "decision", text: "定了", origin: "llm" }, { id: "f2", kind: "inference", text: "猜的", origin: "llm" }]);
-  expect(p).toContain("定了"); expect(p).not.toContain("猜的");
+test("简略版只从详细版派生", () => {
+  const p = briefPrompt("合成线程", { goal: "已确认的目标" });
+  expect(JSON.parse(p)).toEqual({ title: "合成线程", detail: { goal: "已确认的目标" } });
 });
 
 test("History 内容包在 data 标签里，private 片段不带正文", () => {

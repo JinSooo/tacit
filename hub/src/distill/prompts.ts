@@ -122,6 +122,7 @@ export const THREAD_SYSTEM = `${DATA_RULES}
 - invalidate：逐条检查已有 facts。被新证据推翻的决定、已经解决的 open、已经做完的 next，都要给出 fact_id；被新 fact 取代的填 replaced_by（new_facts 的下标）。宁可多作废过时的 open/next，也不要让它们留着误导读者。
 - progress 写的是截至最新片段的状态，不要沿用旧 progress 里已经过时的说法。
   origin=user 的 fact 是用户亲手写的，不能 invalidate。
+- 新片段为空时，根据当前有效 facts 修正旧详细版；用户事实优先于旧进展，不新增没有证据的事实。
 - status_hint：active | paused | done_candidate（只有出现明确完成信号时，例如 PR 合并、发版、用户说做完了）。`;
 
 export function threadPrompt(thread: { title: string; detail: unknown }, facts: FactView[], frames: FrameView[], project: ProjectHint = null): string {
@@ -189,11 +190,11 @@ export interface ThreadOutput extends Classification {
 
 export const BRIEF_SYSTEM = `任务：把一条线程（或项目）的详细版压缩成简略版，给人和 AI 助手快速扫一眼。
 - 一到两句，不超过 80 个汉字：在做什么、做到哪、卡在哪或下一步。
-- 只能使用下面给出的详细版和 facts 里的信息，不得补充任何其中没有的内容。
+- 只能使用下面给出的详细版，不得补充其中没有的内容。
 - 推测（inference）不写进简略版。`;
 
-export function briefPrompt(title: string, detail: unknown, facts: FactView[]): string {
-  return json({ title, detail, facts: facts.filter(f => f.kind !== "inference") });
+export function briefPrompt(title: string, detail: unknown): string {
+  return json({ title, detail });
 }
 
 export const BRIEF_SCHEMA = {
@@ -240,11 +241,13 @@ export const DAY_SYSTEM = `${DATA_RULES}
 
 任务：根据一天的活动时间块写日记，给本人回顾用。
 输入：threads 是线程字典（请求内编号、标题、简略版）；blocks 是时间块（起止、时长、类型），thread 引用字典编号，零碎活动用 label。
-- summary：这一天主要做了哪几件事、各花了多少时间（2–4 句）。
+- summary：这一天主要做了哪几件事（2–4 句）；需要时长时，只使用给出的记录覆盖时长。
+- minutes 已按原记录区间去重，不含空档；不同事项可能重叠，不可相加当作全天用时，也不可用时间块起止相减重新计算。全天去重时长是 active_minutes。
+- 用“相关记录覆盖约……”描述事项时长，不当作独占投入时间。正文不用 minutes、blocks 等内部字段名，不输出数据处理说明。
 - timeline：按时间顺序合并成 3–12 段，每段一句话；零碎活动可以合并成一段（例如\"刷视频、看资讯约 40 分钟\"）。
 - 时间写成 HH:MM，只用给出的内容。`;
 
-export function dayPrompt(date: string, blocks: DayBlock[]): string {
+export function dayPrompt(date: string, blocks: DayBlock[], activeMinutes?: number): string {
   const threads: { id: string; title: string; brief: string | null }[] = [];
   const ids = new Map<string, string>();
   const timeline = blocks.map(({ start, end, minutes, label, brief, kind, thread_id }) => {
@@ -254,7 +257,7 @@ export function dayPrompt(date: string, blocks: DayBlock[]): string {
     if (!id) { id = `t${ids.size + 1}`; ids.set(key, id); threads.push({ id, title: label, brief }); }
     return { start, end, minutes, kind, thread: id };
   });
-  return `日期：${date}\n\n<data>\n${json({ threads, blocks: timeline })}\n</data>`;
+  return `日期：${date}\n\n<data>\n${json({ threads, blocks: timeline, active_minutes: activeMinutes })}\n</data>`;
 }
 
 export const DAY_SCHEMA = {

@@ -1,5 +1,7 @@
 import { HubDB, InputError } from "./db.ts";
 import { conversationList } from "./conversations.ts";
+import { unionSeconds } from "./durations.ts";
+export { unionSeconds } from "./durations.ts";
 
 /**
  * History 列表给人看的"活动段"：同一线程时间上接得上的记录合成一段，还没归属线程的按应用临时分组。
@@ -30,18 +32,6 @@ export interface Segment {
 
 interface Row { id: string; source: string; title: string; t_start_ms: number; t_end: string | null; context: string | null; sensitivity: string; thread_id: string | null }
 interface Item { id: string; source: string; app: string | null; name: string | null; start: number; end: number; private: boolean }
-
-/** 区间并集的总秒数：重叠的时段只算一次，瞬时事件不计时长。 */
-export function unionSeconds(spans: [number, number][]): number {
-  const sorted = spans.filter(([s,e]) => e > s).sort((a,b) => a[0]-b[0]);
-  let total = 0, cur: [number, number] | null = null;
-  for (const [s,e] of sorted) {
-    if (cur && s <= cur[1]) cur[1] = Math.max(cur[1],e);
-    else { if (cur) total += cur[1]-cur[0]; cur = [s,e]; }
-  }
-  if (cur) total += cur[1]-cur[0];
-  return Math.round(total/1000);
-}
 
 function mostCommon(values: (string | null)[]): string | null {
   const counts = new Map<string, number>();
