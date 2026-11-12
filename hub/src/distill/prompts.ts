@@ -90,7 +90,8 @@ export interface Classification { domain: "work" | "life"; in_project: boolean }
 export type ProjectHint = { name: string; brief: string | null } | null;
 const CLASSIFICATION_RULES = `
 - cwd 只提名候选项目，不能据此确定归属。按线程内容判断：是否在推进候选项目的代码或产品。
-- 工作内容 domain=work；生活、学习计划、复盘、娱乐等 domain=life，in_project=false。
+- 工作内容 domain=work；生活、复盘、娱乐、和候选项目无关的学习与阅读等 domain=life，in_project=false。
+- 在候选项目的仓库里做的学习（课程、练习、笔记、复习材料就放在这个仓库里）算 domain=work，in_project=true。
 - 只有确实推进候选项目的代码或产品时 in_project=true；候选为“无”时必须 false。`;
 const classificationProperties = { domain: { enum: ["work", "life"] }, in_project: { type: "boolean" } } as const;
 export const CLASSIFY_SYSTEM = `${DATA_RULES}

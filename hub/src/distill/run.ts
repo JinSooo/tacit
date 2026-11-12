@@ -310,8 +310,18 @@ export function nominateByName(store: DistillStore): number {
   return n;
 }
 
+/** 判断规则改过一次：在仓库里做的学习从"生活"改算工作（用户 2026-11-12 确认）。之前判成生活、有候选项目的线程重判一次。 */
+const CLASSIFY_RULES_VERSION = 2;
+export function reclassifyAfterRuleChange(store: DistillStore): number {
+  if ((store.getState<number>("classify_rules") ?? 1) >= CLASSIFY_RULES_VERSION) return 0;
+  const n = store.hub.db.prepare("UPDATE threads SET domain=NULL WHERE domain='life' AND project_hint IS NOT NULL").run().changes;
+  store.setState("classify_rules", CLASSIFY_RULES_VERSION);
+  return n;
+}
+
 export async function classifyStep(d: Deps, store: DistillStore) {
   let calls = 0, updated = 0, failed = 0;
+  reclassifyAfterRuleChange(store);
   nominateByName(store);
   const rows = store.hub.db.prepare("SELECT id FROM threads WHERE domain IS NULL ORDER BY last_ms DESC,id").all() as { id: string }[];
   for (const { id } of rows) {

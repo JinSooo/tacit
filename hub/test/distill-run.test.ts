@@ -407,3 +407,17 @@ test("没有仓库线索的线程，标题写着已有项目名时提名为候�
   expect(store.thread("t-both")!.project_hint ?? null).toBeNull();
   expect(store.thread("t-short")!.project_hint ?? null).toBeNull();
 });
+
+// 回归（2026-11-12）：在课程仓库里学习的线程都被判成生活，ai-engineering-from-scratch 项目下一条线程都没有。
+test("判断规则改过后，之前判成生活、有候选项目的线程只重判一次", async () => {
+  const { reclassifyAfterRuleChange } = await import("../src/distill/run.ts");
+  store.upsertProject({ id: "p-course", name: "synthetic-course", keys: { repos: [], hosts: [], chats: [] } });
+  const mk = (id: string, domain: string, hint: string | null) => store.upsertThread({ id, status: "paused", title: id, brief: "合成", domain, project_hint: hint, last_ms: base, first_ms: base, needs_regen: 0 } as never);
+  mk("t-study", "life", "p-course"); mk("t-life", "life", null); mk("t-work", "work", "p-course");
+  expect(reclassifyAfterRuleChange(store)).toBe(1);
+  expect(store.thread("t-study")!.domain ?? null).toBeNull();
+  expect(store.thread("t-life")!.domain).toBe("life");
+  expect(store.thread("t-work")!.domain).toBe("work");
+  store.upsertThread({ ...store.thread("t-study")!, domain: "life" });
+  expect(reclassifyAfterRuleChange(store)).toBe(0);
+});
