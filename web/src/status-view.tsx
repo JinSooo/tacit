@@ -14,6 +14,13 @@ function Counts({ items, unit = "" }: { items: { key: string; label: string; cou
   return items.length ? <>{items.map(item => `${item.label} ${formatNumber(item.count)}${unit}`).join("，")}</> : <>没有</>;
 }
 
+/** 启动以来的累计值，不把重启后清零的数字称为全天统计。 */
+export function BusyStatus({ busy }: { busy: HubStatus["hub"]["busy"] }) {
+  return <dl className="status-lines"><dt>库忙重试</dt><dd>
+    启动以来 {formatNumber(busy.total)} 次，最近一次 {busy.last_at ? <Since at={busy.last_at} /> : "尚未发生"}
+  </dd></dl>;
+}
+
 /**
  * 后台服务的状态。数字的含义（见 hub/src/status.ts）：
  * 记录总数不含已删除的；已删除是删除后留下的墓碑数；读取次数是今天 AI 工具每次读取或添加留下的读取记录条数。
@@ -55,6 +62,7 @@ export function StatusView({ api }: { api: Api }) {
         ["已删除", `${formatNumber(records.tombstones)} 条`],
         ["今天 AI 工具读取", `${formatNumber(status.agent_reads_today)} 次`],
       ]} />
+      <BusyStatus busy={hub.busy} />
     </div>
 
     <div className="status-columns">

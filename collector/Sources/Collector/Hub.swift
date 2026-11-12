@@ -54,6 +54,8 @@ final class HubClient {
   private(set) var lastError: String?
   private(set) var sent = 0
   private(set) var rejected = 0
+  private var deliveryMetrics = HubDeliveryMetrics()
+  var hubBusy: Int { lock.lock(); defer { lock.unlock() }; return deliveryMetrics.hubBusy }
 
   init(config: Config) { self.config = config }
 
@@ -82,7 +84,7 @@ final class HubClient {
       let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
       if let err { self.finish(error: "hub 连不上：\(err.localizedDescription)", done: nil); return }
       // 503 是中枢撞上别的进程的写锁、不等锁直接返回：中枢是通的，记录留在队列里下一轮再发，不提示连不上。
-      if status == 503 { self.finish(error: nil, done: nil); return }
+      if status == 503 { self.finish(error: nil, done: nil, status: status); return }
       guard status == 200, let data,
             let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         self.finish(error: "hub 返回 \(status)", done: nil); return
@@ -94,8 +96,9 @@ final class HubClient {
     }.resume()
   }
 
-  private func finish(error: String?, done: (Set<String>, Int, Int)?) {
+  private func finish(error: String?, done: (Set<String>, Int, Int)?, status: Int? = nil) {
     lock.lock()
+    if let status { deliveryMetrics.received(status: status) }
     inFlight = false
     lastError = error
     if let done { queue.remove(ids: done.0); sent += done.1; rejected += done.2 }

@@ -6,7 +6,7 @@ export interface TierUsage { tier: string; models: string[]; calls: number; ok: 
 /** 与 hub/src/status.ts 的返回保持一致。 */
 export interface HubStatus {
   generated_at: string;
-  hub: { started_at: string; uptime_s: number; pid: number; bun: string | null; schema_version: number };
+  hub: { started_at: string; uptime_s: number; pid: number; bun: string | null; schema_version: number; busy: { since: string; total: number; by_route: { ingest: number; agent: number; web: number }; last_at: string | null } };
   listen: { host: string; port: number; localhost_only: boolean };
   database: { file: string; bytes: number | null };
   records: { total: number; tombstones: number; by_source: { source: string; count: number; last_received: string | null }[]; by_device: { device: string; count: number; last_received: string | null }[] };

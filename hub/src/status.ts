@@ -1,3 +1,4 @@
+import { BusyResponses } from "./db-busy.ts";
 import { statSync } from "node:fs";
 import { toLocalIso } from "../../packages/record/index.ts";
 import type { HubDB } from "./db.ts";
@@ -53,7 +54,7 @@ function recordGroups(hub: HubDB) {
   return { bySource: merge("source") as { source: string; count: number; last_received: string | null }[], byDevice: merge("device") as { device: string; count: number; last_received: string | null }[], tombstones };
 }
 
-export function hubStatus(hub: HubDB, options: { port: number; now?: number }) {
+export function hubStatus(hub: HubDB, options: { port: number; now?: number; busy?: ReturnType<BusyResponses["snapshot"]> }) {
   const sql = hub.db;
   const now = options.now ?? Date.now();
   const counts = (query: string, ...args: unknown[]): Counts =>
@@ -122,6 +123,7 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number }) {
       uptime_s: Math.round(process.uptime()),
       pid: process.pid,
       bun: typeof Bun === "undefined" ? null : Bun.version,
+      busy: options.busy ?? new BusyResponses().snapshot(),
       schema_version: sql.pragma("user_version", { simple: true }) as number,
     },
     // 还没有局域网配对：服务固定只绑定 127.0.0.1。

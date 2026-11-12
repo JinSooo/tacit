@@ -1,4 +1,4 @@
-import { isDatabaseBusy } from "./db-busy.ts";
+import { BusyResponses, isDatabaseBusy } from "./db-busy.ts";
 import { AudioStore } from "./audio.ts";
 import { AgentReads } from "./agent.ts";
 import { DistillStore, type Fact } from "./distill/store.ts";
@@ -65,7 +65,8 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
   if (!options.token) throw new Error("本地 token 不能为空");
   const { db, token } = options;
   const settings = createSettings(options.settings ?? { dataDir: dataDirOf() });
-  return async (request: Request): Promise<Response> => {
+  const busy = new BusyResponses();
+  const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const method = request.method;
     const host = request.headers.get("host");
@@ -81,7 +82,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
     try {
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
-      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port }));
+      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, busy: busy.snapshot() }));
       if (url.pathname.startsWith("/v1/settings/")) { const r = await settings(request, url, { db, port, readJSON }); if (r) return r; }
       if (method === "GET" && url.pathname === "/v1/audit") return Response.json(new AgentReads(db).audit(url.searchParams));
       const audio = new AudioStore(db);
@@ -180,6 +181,12 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
       // 不把异常对象或原始请求写到日志，防止密钥经过错误通道泄漏。
       return Response.json({ error: "存储操作失败" }, { status: 500 });
     }
+  };
+  return async (request: Request): Promise<Response> => {
+    const response = await handle(request);
+    // Agent 内部也会捕获库忙并返回响应，统一在出口计数，避免漏计或重复计数。
+    if (response.status === 503) busy.record(new URL(request.url).pathname);
+    return response;
   };
 }
 

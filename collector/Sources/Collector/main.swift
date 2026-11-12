@@ -458,6 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     captureQueue.async { [self] in
       var s: [String: Any] = stats
       s["queue"] = hub.queue.count; s["dropped"] = hub.queue.dropped
+      s["hubBusy"] = hub.hubBusy; s["queuePeak"] = hub.queue.queuePeak
       s["sent"] = hub.sent; s["rejected"] = hub.rejected; s["hubError"] = hub.lastError ?? NSNull()
       s["axTrusted"] = AXIsProcessTrusted(); s["ocrEnabled"] = enabledSources["ocr"] ?? false; s["ocrGranted"] = ocr.granted
       s["sources"] = enabledSources

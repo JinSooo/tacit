@@ -54,6 +54,7 @@ public final class OutboundQueue {
   public let capacity: Int
   public private(set) var items: [Record] = []
   public private(set) var dropped = 0
+  private var peak = 0
   private let lock = NSLock()
 
   public init(capacity: Int = 5000) { self.capacity = capacity }
@@ -66,6 +67,7 @@ public final class OutboundQueue {
       dropped += n
       items.removeFirst(n)
     }
+    peak = max(peak, items.count)
   }
 
   public func peek(_ n: Int) -> [Record] {
@@ -78,6 +80,8 @@ public final class OutboundQueue {
     lock.lock(); defer { lock.unlock() }
     items.removeAll { ids.contains($0.id) }
   }
+
+  public var queuePeak: Int { lock.lock(); defer { lock.unlock() }; return peak }
 
   public var count: Int { lock.lock(); defer { lock.unlock() }; return items.count }
 }

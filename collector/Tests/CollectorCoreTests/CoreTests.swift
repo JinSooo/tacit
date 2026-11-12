@@ -134,10 +134,15 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
   let q = OutboundQueue(capacity: 2)
   let mk = { (i: Int) in Record(device: "mac", source: "mac.clipboard", kind: "event", start: t0, context: nil,
                                  title: "\(i)", body: "", capture: Capture(method: "api")) }
+  #expect(q.queuePeak == 0)
   q.push([mk(1), mk(2), mk(3)])
+  #expect(q.queuePeak == 2)
   #expect(q.count == 2 && q.dropped == 1 && q.peek(1)[0].title == "2")
   q.remove(ids: Set(q.peek(1).map(\.id)))
   #expect(q.count == 1)
+  #expect(q.queuePeak == 2)
+  q.remove(ids: Set(q.peek(10).map(\.id)))
+  #expect(q.count == 0 && q.queuePeak == 2)
 }
 
 @Test func titleClampAndDuration() {
@@ -160,4 +165,12 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
   _ = s.observe(Observation(time: t0.addingTimeInterval(30), bundleID: "com.tencent.xinWeChat", appName: "WeChat", window: "Weixin"))
   let out = s.flush()
   #expect(out.count == 1 && out[0].body == "")
+}
+
+@Test func hubBusyCountsOnlyRetryResponsesAndResetsOnRestart() {
+  var metrics = HubDeliveryMetrics()
+  #expect(metrics.hubBusy == 0)
+  for status in [503, 200, 400, 503, 500, 0] { metrics.received(status: status) }
+  #expect(metrics.hubBusy == 2)
+  #expect(HubDeliveryMetrics().hubBusy == 0)
 }

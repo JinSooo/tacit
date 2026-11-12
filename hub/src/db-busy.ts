@@ -19,3 +19,22 @@ export function tryWriteWithoutWaiting(hub: HubDB, write: () => void): boolean {
     }
   } finally { hub.db.pragma(`busy_timeout=${timeout}`); }
 }
+
+/** 只记响应次数，不保留请求、路径或内容；每个服务实例启动时清零。 */
+export class BusyResponses {
+  readonly since = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString();
+  private total = 0;
+  private byRoute = { ingest: 0, agent: 0, web: 0 };
+  private lastAt: string | null = null;
+
+  record(path: string) {
+    const route = path === "/v1/ingest" ? "ingest" : path.startsWith("/v1/agent/") ? "agent" : "web";
+    this.total++;
+    this.byRoute[route]++;
+    this.lastAt = new Date().toISOString();
+  }
+
+  snapshot() {
+    return { since: this.since, total: this.total, by_route: { ...this.byRoute }, last_at: this.lastAt };
+  }
+}
