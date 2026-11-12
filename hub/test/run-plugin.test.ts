@@ -199,3 +199,24 @@ test("buffer 目录不存在时仍拒绝删除外部现存文件", async () => {
   expect(result).toMatchObject({ stateWritten: true, releaseErrors: 1, released: 0 });
   expect(existsSync(file)).toBe(true);
 });
+
+test.skipIf(bindDenied)("HTTP 中枢库忙返回 503 时退避重试，恢复后保存 state；一直忙则不保存", async () => {
+  for (const busyTimes of [2, Infinity]) {
+    let calls = 0, handler: ReturnType<typeof createHandler> | undefined;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => ++calls <= busyTimes
+      ? Response.json({ error: "数据库忙，稍后再试" }, { status: 503 }) : handler!(request) });
+    handler = createHandler({ db: ctx.db, token: ctx.config.token, port: server.port });
+    const r = fixture();
+    try {
+      const result = await runPlugin({ hub: `http://127.0.0.1:${server.port}`, dataDir: ctx.dir, name: "fake",
+        command: fakePlugin([{ type: "record", record: r }, { type: "checkpoint", state: { busy: busyTimes } }]) });
+      if (busyTimes === 2) {
+        expect(calls).toBe(3); expect(result).toMatchObject({ accepted: 1, stateWritten: true });
+        expect(ctx.db.get(r.id)).not.toBeNull();
+      } else {
+        expect(calls).toBe(6); expect(result.stateWritten).toBe(false); expect(ctx.db.get(r.id)).toBeNull();
+        expect(JSON.parse(readFileSync(join(ctx.dir, "plugins/fake/state.json"), "utf8"))).toEqual({ busy: 2 });
+      }
+    } finally { await server.stop(true); }
+  }
+}, 15_000);

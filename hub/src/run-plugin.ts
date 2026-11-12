@@ -5,6 +5,9 @@ import { spawn } from "node:child_process";
 import { HubDB, type IngestResult } from "./db.ts";
 import { jsonLines } from "./jsonl.ts";
 
+/** 中枢返回 503（库忙）时每次重试前等待的毫秒数，合计约 7.75 秒。 */
+const BUSY_RETRY_MS = [250, 500, 1000, 2000, 4000];
+
 export interface PluginSummary {
   accepted: number; duplicates: number; rejected: number; exitCode: number;
   stateWritten: boolean; protocolErrors: number; released: number; releaseErrors: number;
@@ -23,11 +26,19 @@ export async function runPlugin(options: {
   if (options.hub && !token) throw new Error("本地 token 文件为空");
   const ingest = async (records: unknown[]): Promise<IngestResult> => {
     if (!options.hub) return options.db!.ingest(records);
-    const response = await fetch(new URL("/v1/ingest", options.hub), {
-      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ device, records }), signal: AbortSignal.timeout(30_000), redirect: "error",
-    });
-    if (!response.ok) throw new Error("Hub 接收失败");
+    const body = JSON.stringify({ device, records });
+    let response: Response;
+    // 503 是中枢撞上写锁、不等锁直接返回；runner 是独立进程，在这里退避重试不会卡住中枢，免得整次运行白跑。
+    for (let attempt = 0; ; attempt++) {
+      response = await fetch(new URL("/v1/ingest", options.hub), {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body, signal: AbortSignal.timeout(30_000), redirect: "error",
+      });
+      if (response.status !== 503 || attempt === BUSY_RETRY_MS.length) break;
+      await response.body?.cancel();
+      await Bun.sleep(BUSY_RETRY_MS[attempt]!);
+    }
+    if (!response.ok) throw new Error(response.status === 503 ? "Hub 数据库忙，稍后重试" : "Hub 接收失败");
     const result = await response.json() as IngestResult;
     if (!result || !Number.isSafeInteger(result.accepted) || result.accepted < 0
       || !Number.isSafeInteger(result.duplicates) || result.duplicates < 0 || !Array.isArray(result.rejected)

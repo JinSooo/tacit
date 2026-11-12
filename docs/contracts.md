@@ -51,7 +51,7 @@
   - `{"type":"record","record":{…RecordV1}}`
   - `{"type":"checkpoint","state":{…任意 JSON},"release":["/abs/path", …]}`，最后输出一次，代表"处理到这里了"。`release` 可选，列出这次已经完整读完、可以删除的缓冲文件。
 - **stderr**：日志。**exit 0** 表示成功；非 0 时 runner 丢弃这次的 checkpoint，记录已发的照常入库（靠 `source_ref` 去重）。
-- **state 文件插件只读不写**。runner 在 hub 接收成功后把最后一个 checkpoint 写进 state 文件，下次传回来。这样采集失败不会丢数据。
+- **state 文件插件只读不写**。runner 在 hub 接收成功后把最后一个 checkpoint 写进 state 文件，下次传回来。这样采集失败不会丢数据。HTTP 模式下 hub 返回 503（库忙）时，runner 退避重试 5 次（合计约 8 秒），仍失败才算这次运行失败。
 - 首次运行（没有 state）默认只回溯 7 天，`--since` 可覆盖。已有 state 时再传 `--since` 表示从该时刻起重新读取（采集端的"重新导入最近 7 天""导入全部历史"）：插件忽略增量游标重读该时刻之后的数据，已入库的靠 `source_ref` 去重，输出的 checkpoint 不能把游标倒退。没有历史可回溯的插件（shell 只读缓冲）由采集端不传 `--since`。
 - 插件不联网、不调模型、不写任何文件。两个例外：临时复制数据库到 `os.tmpdir()` 并在退出前删除；在数据目录的 `buffer/` 下把自己的缓冲文件改名"领走"（例如 `shell.jsonl` → `shell.<ULID>.pending.jsonl`）。
 - **缓冲文件的清理**：runner 只在插件 exit 0、全部批次被 hub 接收、state 已落盘之后，才删除 `release` 里的文件。路径解析后必须位于 `<数据目录>/buffer/` 之内，否则拒绝删除并报错。失败时这些文件保留，下次重读，靠 `source_ref` 去重。这样缓冲里的明文最多留到下一次成功运行。
@@ -102,7 +102,7 @@
 
 端口来源（`hub/src/hub-json.ts` 的 `resolvePort`，中枢、`cli.ts open`、MCP 客户端共用）：环境变量 `RA_PORT` > `<数据目录>/hub.json` 的 `port`（1024–65535）> `47823`。采集端 `Config.load` 的顺序是 `--port` > `collector.json` 的 `port` > `hub.json` 的 `port` > `47823`；`install.sh` 的健康检查也读 `hub.json`。
 
-错误一律 `{ "error": "<中文说明>" }`：参数不合法 400，状态冲突 409，写文件或钥匙串失败 500（不带细节）。请求体只接受列出的字段，多余字段 400。
+错误一律 `{ "error": "<中文说明>" }`：参数不合法 400，状态冲突 409，写文件或钥匙串失败 500（不带细节）。所有接口撞上别的进程的写锁时返回 503 `数据库忙，稍后再试`：中枢单线程，`serve` 只等锁 300 毫秒，调用方稍后重试。请求体只接受列出的字段，多余字段 400。
 
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
@@ -128,7 +128,7 @@
 
 ### 4.1 进程与节奏
 
-- 提炼是独立进程：`bun hub/src/cli.ts distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]]`，和 `serve` 共用同一个加密库（`HubDB`，`busy_timeout=5000`）。提炼进程崩溃不影响 ingest。常驻时每 5 秒看一次请求队列（4.8），常规轮次仍按 15 分钟。
+- 提炼是独立进程：`bun hub/src/cli.ts distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]]`，和 `serve` 共用同一个加密库（`HubDB`）。等锁时间：`serve` 300 毫秒（撞锁返回 503），提炼进程 30 秒，插件 runner 等其他入口 5 秒。读接口里顺带的写入（审计、待确认的 stale 标记、音频同步时的补问和清理）不等锁，撞锁跳过，下次再写。提炼进程崩溃不影响 ingest。常驻时每 5 秒看一次请求队列（4.8），常规轮次仍按 15 分钟。
 - 节奏：每 15 分钟做一次"切片 + 归线程"（CLI 后端一次调用开销大，不按分钟跑）；每小时更新活跃线程、项目、当前状态；每天 04:00 写前一天的日记，把疑似完成的线程放进待确认。
 - 首次启用时 `distill_state.cursor_ms` 设为启用时刻，增量只处理之后的记录。`--backfill` 对之前的全部记录**按天**做一次批量整理：每天先规则切片，再一次调用归线程，最后统一合并项目。只跑一次，跑完写 `distill_state.backfill_done`。按日期范围的整理（`--from/--to` 或 4.8 的 backfill 请求）不看也不写这个标志，可以对任意范围重复执行。
 - `sensitivity = private` 的记录照样切片，但正文不进任何模型调用；片段里只给模型看"应用 + 时长"。
@@ -265,7 +265,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
   - 存在且脱敏后的标题、正文与最新版本（最后一条 `manual.correction`，没有就是原记录）相同 → `result: "unchanged"`；
   - 内容不同 → 写一条 `source=manual.correction`、`corrects` 指向原记录的修正，`result: "corrected"`、`correction_id`。
   没有修改和删除接口。审计 `kind=append`，`args` 只存 `title_length`、`body_length`、`has_ref`、`result`、`redactions`，`result_ids` 是原记录和新修正的 id。Codex 安装时给这个工具写 `approval_mode = "prompt"`，其余只读工具写 `approve`。
-- 审计表 `agent_reads`：除 400 以外的每次调用都写一条。只存参数和结果 id，检索词只存长度（`q_length`），被删记录的内容不会残留在审计里。401 和 421 不写审计，未鉴权的来源不能往库里写东西。
+- 审计表 `agent_reads`：除 400 以外的每次调用都写一条。先进中枢进程内的队列（上限 1 万条），撞锁时留在队列里，下次请求、每 2 秒或中枢退出时补写；中枢在这期间崩溃会丢掉还没写进去的审计。只存参数和结果 id，检索词只存长度（`q_length`），被删记录的内容不会残留在审计里。401 和 421 不写审计，未鉴权的来源不能往库里写东西。
 
 ### 4.7 线程归属、生命周期与迁移（`user_version` 4）
 
