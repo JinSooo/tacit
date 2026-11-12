@@ -124,7 +124,8 @@ test("search 跨种类统一分页、时间范围及私密标记，timeline 无 
     if (items[0].id === records[0]!.id) { expect(items[0].private).toBe(true); expect(items[0]).not.toHaveProperty("body"); }
     expect(ids.length).toBeLessThanOrEqual(4);
   } while (cursor);
-  expect(ids).toEqual([records[0]!.id,"t","p",records[1]!.id]);
+  // 回归（2026-11-12）：线程和项目排在记录前面，不被更新的记录挤到后面几页。
+  expect(ids).toEqual(["t","p",records[0]!.id,records[1]!.id]);
   const range = await read(`/v1/agent/search?tool=codex&q=needle&from=${new Date(1500).toISOString()}&to=${new Date(2500).toISOString()}`);
   expect(range.threads.map((t: any) => t.id)).toEqual(["t"]); expect(range.records).toEqual([]); expect(range.projects).toEqual([]);
   const first = await read("/v1/agent/timeline?tool=codex&limit=1&body=1");

@@ -47,11 +47,39 @@ function cachedCatalog(ctx: BackendContext): Promise<string | null> {
   if (!catalog || Date.now() - catalog.at > CATALOG_TTL) catalog = { at: Date.now(), text: readCatalog(ctx) };
   return catalog.text;
 }
-/** 测试用：清掉缓存的模型目录。 */
-export function resetCodexCatalog() { catalog = null; }
+
+// codex 默认先走 WebSocket，连不上要超时重连 5 次（约 110 秒）才退回 HTTPS（2026-11-12 实测：用户换了代理后
+// 每次提炼调用从约 10 秒变成约 115 秒，接近 180 秒上限）。用 ChatGPT 账号登录时，提炼改用一个只走 HTTPS 的
+// provider，仍由 codex 自己的登录认证，不读也不存令牌。用户 2026-11-12 确认。其他登录方式不改。
+const CHATGPT_HTTPS = '{name="OpenAI",base_url="https://chatgpt.com/backend-api/codex",wire_api="responses",requires_openai_auth=true,supports_websockets=false}';
+let login: { at: number; chatgpt: Promise<boolean> } | null = null;
+
+function readLogin(ctx: BackendContext): Promise<boolean> {
+  return new Promise(resolve => {
+    let out = "", done = false;
+    const finish = (v: boolean) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
+    let child;
+    try { child = ctx.spawn("codex", ["login", "status"], { cwd: ctx.cwd, stdio: "pipe", env: cliEnv() }); }
+    catch { finish(false); return; }
+    const timer = setTimeout(() => { child.kill("SIGKILL"); finish(false); }, 10_000);
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    // 状态写在 stdout 或 stderr 里都有可能，只看是不是 ChatGPT 登录，不保留其他内容。
+    const take = (c: string) => { out = (out + c).slice(-2000); };
+    child.stdout.on("data", take); child.stderr.on("data", take);
+    child.on("error", () => finish(false));
+    child.on("close", code => finish(code === 0 && /using ChatGPT/i.test(out)));
+    child.stdin.end();
+  });
+}
+function cachedLogin(ctx: BackendContext): Promise<boolean> {
+  if (!login || Date.now() - login.at > CATALOG_TTL) login = { at: Date.now(), chatgpt: readLogin(ctx) };
+  return login.chatgpt;
+}
+/** 测试用：清掉缓存的模型目录和登录方式。 */
+export function resetCodexCatalog() { catalog = null; login = null; }
 
 export async function codexCLI(ctx: BackendContext): Promise<unknown> {
-  const trimmed = await cachedCatalog(ctx);
+  const trimmed = await cachedCatalog(ctx), https = await cachedLogin(ctx);
   const dir = await mkdtemp(join(tmpdir(), "record-anything-llm-"));
   try {
     const schema = join(dir, "schema.json"), output = join(dir, "result.json"), instructions = join(dir, "instructions.md"), models = join(dir, "models.json");
@@ -63,7 +91,8 @@ export async function codexCLI(ctx: BackendContext): Promise<unknown> {
       "-c", `model_instructions_file=${JSON.stringify(instructions)}`, ...(trimmed ? ["-c", `model_catalog_json=${JSON.stringify(models)}`] : []),
       "-c", "include_permissions_instructions=false", "-c", "include_environment_context=false", "-c", "include_apps_instructions=false", "-c", "include_collaboration_mode_instructions=false",
       "-c", "features.shell_tool=false", "-c", "features.unified_exec=false", "-c", "features.view_image=false", "-c", "features.image_generation=false", "-c", "features.apps=false", "-c", "features.memories=false", "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.sleep_tool=false", "-c", "features.tool_suggest=false", "-c", "features.plugins=false", "-c", "features.hooks=false",
-      "-c", "features.goals=false", "-c", "features.collaboration_modes=false", "-c", "features.skill_search=false", "-"]);
+      "-c", "features.goals=false", "-c", "features.collaboration_modes=false", "-c", "features.skill_search=false",
+      ...(https ? ["-c", `model_providers.ra-https=${CHATGPT_HTTPS}`, "-c", 'model_provider="ra-https"'] : []), "-"]);
     // JSONL 事件只取用量，不把事件正文写入日志。
     for (const line of stdout.split("\n").filter(Boolean)) {
       try {

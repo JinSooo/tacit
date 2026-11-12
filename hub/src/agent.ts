@@ -159,7 +159,10 @@ export class AgentReads {
         candidates.push({ kind,ms: row.last_ms ?? 0,id: row.id,item: row });
       }
     }
-    candidates.sort((a,b) => b.ms-a.ms || (a.id < b.id ? 1 : a.id > b.id ? -1 : a.kind.localeCompare(b.kind)));
+    // 线程和项目（整理好的摘要）排在原始记录前面，各自按时间倒序；用户 2026-11-12 确认：
+    // 按时间混排时，搜关键词的第一页常被几分钟前的屏幕记录占满，相关线程被挤到后面几页。
+    const rank = { threads: 0, projects: 1, records: 2 } as const;
+    candidates.sort((a,b) => rank[a.kind]-rank[b.kind] || b.ms-a.ms || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
     const page = candidates.slice(0,limit), result: Record<keyof SearchCursor, Item[]> = { threads: [],projects: [],records: [] };
     for (const entry of page) { result[entry.kind].push(entry.item); cursor[entry.kind] = [entry.ms,entry.id]; }
     return { value: { notice,...result,next_cursor: more || candidates.length > limit ? encode(cursor) : null }, ids: page.map(e => e.id) };

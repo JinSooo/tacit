@@ -27,6 +27,7 @@ async function fixture(provider = "claude-cli", mode = "success") {
 import { appendFileSync, writeFileSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 const args = process.argv.slice(2), mode = process.env.TEST_MODE, log = process.env.TEST_LOG;
+if (args[0] === "login") { console.log(mode === "nocatalog" ? "Logged in using an API key" : "Logged in using ChatGPT"); process.exit(0); }
 if (args[0] === "debug") { console.log(mode === "nocatalog" ? "not json" : JSON.stringify({models:[{slug:"synthetic-model", tool_mode:"code_mode_only", multi_agent_version:"v1", experimental_supported_tools:["clock"], context_window:1000}]})); process.exit(0); }
 const stdin = await Bun.stdin.text();
 appendFileSync(log, JSON.stringify({event:"start", pid:process.pid, args, stdin, cwd:process.cwd(), mode:statSync(process.cwd()).mode & 0o777, at:Date.now()})+"\\n");
@@ -95,6 +96,9 @@ test("Codex：安全参数、临时 schema 与输出、stdin 和 finally 清理"
   expect(files.instructions).toContain("JSON schema");
   expect(files.catalog.models[0]).toEqual({ slug: "synthetic-model", experimental_supported_tools: [], context_window: 1000 });
   for (const flag of ["include_permissions_instructions=false", "include_environment_context=false", "include_collaboration_mode_instructions=false", "features.collaboration_modes=false"]) expect(start.args).toContain(flag);
+  // 回归（2026-11-12）：WebSocket 连不上时每次调用先重连约 110 秒；ChatGPT 登录时直接走 HTTPS。
+  expect(start.args).toContain('model_provider="ra-https"');
+  expect(start.args.find((a: string) => a.startsWith("model_providers.ra-https="))).toContain("supports_websockets=false");
   for (const flag of ["exec", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json"]) expect(start.args).toContain(flag);
   for (const [flag, value] of [["--sandbox", "read-only"], ["-C", join(f.dir, "distill-work")], ["-m", "synthetic-model"]]) expect(start.args[start.args.indexOf(flag) + 1]).toBe(value);
   expect(start.args).toContain('approval_policy="never"');
@@ -107,13 +111,15 @@ test("Codex：安全参数、临时 schema 与输出、stdin 和 finally 清理"
   expect(f.rows).toHaveLength(1); expect(f.rows[0]).toMatchObject({ ok: 1, input_tokens: 12, output_tokens: 3 });
 });
 
-test("Codex：读不到模型目录时不覆盖，照常调用", async () => {
+test("Codex：读不到模型目录、不是 ChatGPT 登录时不覆盖，照常调用", async () => {
   resetCodexCatalog();
   const f = await fixture("codex-cli", "nocatalog");
   expect((await f.llm.complete(request)).ok).toBe(true);
   const logs = await f.logs();
   expect(logs.find(l => l.event === "files").catalog).toBeNull();
   expect(logs[0].args.some((a: string) => a.startsWith("model_catalog_json="))).toBe(false);
+  // 不是 ChatGPT 登录时不改 provider。
+  expect(logs[0].args.some((a: string) => a.startsWith("model_provider"))).toBe(false);
   resetCodexCatalog();
 });
 

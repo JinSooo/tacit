@@ -209,6 +209,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
   - 用 JSON Schema 约束输出；
   - 同一时刻只跑一个调用，单次超时 180 秒。
   - `codex exec` 默认带编程 Agent 的整套说明和工具，固定开销约 1.1 万输入 token（2026-11-12 实测）。适配器用 `model_instructions_file` 换成一句说明，关掉权限、环境、协作模式说明和技能检索，并用 `codex debug models` 拿本机模型目录、去掉 `tool_mode` / `multi_agent_version` 后经 `model_catalog_json` 传回（这两项强制打开代码执行和多 Agent 工具，配置项关不掉）。读不到目录时不覆盖、照常调用。实测固定开销降到约 1800 token。
+  - codex 默认先走 WebSocket，连不上时要超时重连 5 次（约 110 秒）才退回 HTTPS。`codex login status` 显示用 ChatGPT 登录时，适配器加一个只走 HTTPS 的 provider（`model_providers.ra-https`，`base_url = https://chatgpt.com/backend-api/codex`、`requires_openai_auth = true`、`supports_websockets = false`），认证仍由 codex 自己完成。其他登录方式不改。（2026-11-12 用户确认）
 - 输出不符合 schema 就当作失败，不重试，等下一轮再处理。
 
 ### 4.5 hub 接口（读给网页和 MCP，写只给网页）
@@ -252,7 +253,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 | GET | `/v1/agent/context?cwd&event&tool` | `{ text, project_id, tokens_est }`。`event` 为 startup / resume / clear / compact。cwd 按路径边界取最长匹配的 `keys.repos`，匹配不到再用 git 归到主仓库（见 4.7）：匹配到时放项目简略版和它的进行中线程、3 天内有活动的已暂停线程；没匹配到时只放最近 5 个项目的简略版。不放没有项目的线程、`domain=life` 的线程、全私密线程，也不放 done / abandoned / archived 的线程。估算不超过 800 token，超了先丢最旧的线程；没有内容时 `text` 为空 |
 | GET | `/v1/agent/now?tool` | `{ notice, now }` |
 | GET | `/v1/agent/get?tool&id&level` | `{ notice, kind: thread\|project\|day, item, truncated? }`，响应超过 40000 字符时截断 |
-| GET | `/v1/agent/search?tool&q&from&to&limit&cursor` | `{ notice, threads, projects, records, next_cursor }`，三类合计受 `limit` 限制，records 不带 body，私密记录带 `private: true` |
+| GET | `/v1/agent/search?tool&q&from&to&limit&cursor` | `{ notice, threads, projects, records, next_cursor }`，三类合计受 `limit` 限制，线程、项目排在记录前面（各自按时间倒序，2026-11-12 起），records 不带 body，私密记录带 `private: true` |
 | GET | `/v1/agent/timeline?tool&from&to&device&limit&cursor` | `{ notice, records, next_cursor }` |
 | POST | `/v1/agent/append?tool` | 正文 `{ title, body, source_ref?, occurred_at?, url?, project?, tags?, sensitivity? }`，返回 `{ result, id, … }`，见下 |
 | GET | `/v1/audit?limit&cursor&tool` | `{ reads: [{ id, at, tool, kind, args, result_ids, bytes, ok }], next_cursor }` |
