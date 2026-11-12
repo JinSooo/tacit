@@ -164,31 +164,53 @@ public enum RecordRuns {
 }
 
 /// 菜单栏面板的最近记录：相邻的同一件事合成一行（用户报告：同一个微信聊天的几条消息分开列，占满了面板）。
-/// 同一应用里同一个会话（微信按聊天）或同一个标题的记录合并；同一应用里读窗口得来、不带会话的界面记录并进旁边那个会话。
+/// 同一应用的窗口、浏览器记录不按标题拆行；微信按聊天合并。孤立的剪贴板记录可并进两侧的同一件事。
 public enum RecentRuns {
   /// records 按开始时间从新到旧排列；最多返回 limit 行，每行里新的在前。
   public static func group(_ records: [HistoryRecord], gap: TimeInterval = 300, limit: Int = 5) -> [[HistoryRecord]] {
     var out: [[HistoryRecord]] = []
-    for r in records {
+    var i = 0
+    while i < records.count {
+      let r = records[i]
+      // 只跨过夹在两条可合并记录之间的单条剪贴板；首条仍是最新的非剪贴板记录。
+      if r.source == "mac.clipboard", i > 0, i + 1 < records.count,
+         records[i - 1].source != "mac.clipboard", records[i + 1].source != "mac.clipboard",
+         let run = out.last, joins(records[i + 1], run), joins(records[i + 1], [records[i - 1]]),
+         records[i - 1].start.timeIntervalSince(r.end ?? r.start) <= gap,
+         r.start.timeIntervalSince(records[i + 1].end ?? records[i + 1].start) <= gap {
+        out[out.count - 1].append(contentsOf: [r, records[i + 1]])
+        i += 2
+        continue
+      }
       if let run = out.last, joins(r, run), run.last!.start.timeIntervalSince(r.end ?? r.start) <= gap {
         out[out.count - 1].append(r)
       } else {
         if out.count == limit { break }
         out.append([r])
       }
+      i += 1
     }
     return out
   }
 
-  public static func chat(_ run: [HistoryRecord]) -> String? { run.lazy.compactMap { $0.contextText("chat") }.first }
+  public static func chat(_ run: [HistoryRecord]) -> String? {
+    let activity = run.filter { $0.source != "mac.clipboard" }
+    return (activity.isEmpty ? run : activity).lazy.compactMap { $0.contextText("chat") }.first
+  }
 
   static func joins(_ r: HistoryRecord, _ run: [HistoryRecord]) -> Bool {
+    // 并入的剪贴板不改变这行所属的应用、聊天或来源。
+    let activity = run.filter { $0.source != "mac.clipboard" }
+    let run = activity.isEmpty ? run : activity
     guard let app = r.contextText("app"), run.allSatisfy({ $0.contextText("app") == app }) else { return false }
     switch (r.contextText("chat"), chat(run)) {
-    case let (c?, rc?): return c == rc
+    case let (c?, rc?): return c.filter { !$0.isWhitespace } == rc.filter { !$0.isWhitespace }
     case (_?, nil): return run.allSatisfy { $0.source == "mac.screen" }
     case (nil, _?): return r.source == "mac.screen"
-    case (nil, nil): return r.source == run[0].source && r.title == run[0].title
+    case (nil, nil):
+      let windows = ["mac.screen", "mac.browser"]
+      if windows.contains(r.source), run.allSatisfy({ windows.contains($0.source) }) { return true }
+      return r.source == run[0].source && r.title == run[0].title
     }
   }
 }

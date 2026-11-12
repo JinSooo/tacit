@@ -304,11 +304,83 @@ private enum InstanceLockUnavailableCheck {
     try r("h", "mac.screen", "Ghostty · 任务 B", "2026-11-12T01:08:00+09:00", app: "ghostty"),
   ]
   let runs = RecentRuns.group(rows)
-  // 换了聊天另起一行；同一应用里标题不同的不合并。
-  #expect(runs.map { $0.map(\.id) } == [["a"], ["b", "c", "d"], ["e"], ["f"], ["g", "h"]])
+  // 换了聊天另起一行；同一应用里的窗口标题变化仍合并。
+  #expect(runs.map { $0.map(\.id) } == [["a"], ["b", "c", "d"], ["e"], ["f", "g", "h"]])
   #expect(RecentRuns.chat(runs[1]) == "F吴广雷")
   #expect(RecentRuns.group(rows, limit: 2).count == 2)
   // 隔了 5 分钟以上不算同一段。
   let far = [rows[1], try r("x", "mac.wechat", "微信 · F吴广雷 · 我", "2026-11-12T01:10:00+09:00", app: wx, chat: "F吴广雷")]
   #expect(RecentRuns.group(far).count == 2)
+}
+
+// 回归：真实菜单栏序列中窗口换标题、浏览器双来源和微信剪贴板把同一件事拆成多行。
+private func recentRecord(_ id: String, _ source: String = "mac.screen", _ title: String = "ChatGPT · ChatGPT",
+                          app: String = "com.openai.codex", seconds: Int, chat: String? = nil) throws -> HistoryRecord {
+  var context = ["app": app]
+  if let chat { context["chat"] = chat }
+  let data = try JSONSerialization.data(withJSONObject: [
+    "id": id, "device": "mac", "source": source, "title": title, "body": "合成文本",
+    "t_start": ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 1794452400 + TimeInterval(seconds))), "context": context,
+  ])
+  return try HubJSON.decoder().decode(HistoryRecord.self, from: data)
+}
+
+@Test func recentRunsMergeChangingWindowTitlesAndBrowserSources() throws {
+  let rows = [
+    try recentRecord("a", seconds: 180),
+    try recentRecord("b", seconds: 120),
+    try recentRecord("c", seconds: 60),
+    try recentRecord("d", "mac.screen", "ChatGPT · 我先查看关联会话，确认企业级大屏对应的接口范围。", seconds: 0),
+  ]
+  #expect(RecentRuns.group(rows).map { $0.map(\.id) } == [["a", "b", "c", "d"]])
+  let browser = [
+    try recentRecord("screen", "mac.screen", "ego lite · 黑洞引擎", app: "ego", seconds: 60),
+    try recentRecord("browser", "mac.browser", "黑洞引擎", app: "ego", seconds: 0),
+  ]
+  #expect(RecentRuns.group(browser).map { $0.map(\.id) } == [["screen", "browser"]])
+  let browserFirst = [browser[1], try recentRecord("screen2", "mac.screen", "ego lite · 黑洞引擎", app: "ego", seconds: -60)]
+  #expect(RecentRuns.group(browserFirst).count == 1)
+}
+
+@Test func recentRunsBridgeOnlyAnIsolatedClipboardWithinGap() throws {
+  let newer = try recentRecord("new", seconds: 600)
+  // 从微信复制的内容不应抢走该行的应用和正文。
+  let clipboard = try recentRecord("clip", "mac.clipboard", "合成文本", app: "com.tencent.xinWeChat", seconds: 300)
+  let older = try recentRecord("old", "mac.screen", "ChatGPT · 我先查看关联会话，确认企业级大屏对应的接口范围。", seconds: 0)
+  let continued = try recentRecord("continued", seconds: -60)
+  let runs = RecentRuns.group([newer, clipboard, older, continued], gap: 300, limit: 1)
+  #expect(runs.map { $0.map(\.id) } == [["new", "clip", "old", "continued"]])
+  #expect(runs.first?.first?.id == "new")
+  #expect(RecentRuns.chat(runs[0]) == nil)
+  let other = try recentRecord("other", app: "other.app", seconds: 0)
+  #expect(RecentRuns.group([newer, clipboard, other]).map { $0.map(\.id) } == [["new"], ["clip"], ["other"]])
+  #expect(RecentRuns.group([clipboard]).map { $0.map(\.id) } == [["clip"]])
+  #expect(RecentRuns.group([clipboard, older]).count == 2)
+  #expect(RecentRuns.group([newer, clipboard]).count == 2)
+  let clip2 = try recentRecord("clip2", "mac.clipboard", "合成文本", app: "com.tencent.xinWeChat", seconds: 299)
+  #expect(RecentRuns.group([newer, clipboard, clip2, older]).map { $0.map(\.id) } == [["new"], ["clip", "clip2"], ["old"]])
+  // 两侧各自都必须满足 gap；不要求跨剪贴板的总间隔小于 gap。
+  #expect(RecentRuns.group([newer, clipboard, older], gap: 299).count == 3)
+  let lateClip = try recentRecord("late", "mac.clipboard", "合成文本", app: "com.tencent.xinWeChat", seconds: 301)
+  let earlyClip = try recentRecord("early", "mac.clipboard", "合成文本", app: "com.tencent.xinWeChat", seconds: 299)
+  #expect(RecentRuns.group([newer, lateClip, older]).count == 3)
+  #expect(RecentRuns.group([newer, earlyClip, older]).count == 3)
+}
+
+@Test func recentRunsIgnoreChatWhitespaceButKeepOtherSourceRules() throws {
+  let chats = [
+    try recentRecord("a", "mac.wechat", "微信", app: "com.tencent.xinWeChat", seconds: 60, chat: "C 王家琪"),
+    try recentRecord("b", "mac.wechat", "微信", app: "com.tencent.xinWeChat", seconds: 30, chat: "C王家琪"),
+    try recentRecord("c", "mac.wechat", "微信", app: "com.tencent.xinWeChat", seconds: 0, chat: "C\t王\n家\u{3000}琪"),
+  ]
+  #expect(RecentRuns.group(chats).map { $0.map(\.id) } == [["a", "b", "c"]])
+  #expect(RecentRuns.chat(chats) == "C 王家琪")
+  for source in ["mac.audio", "mac.file", "mac.shell", "agent.session"] {
+    let a = try recentRecord("a", source, "任务 A", seconds: 60)
+    let b = try recentRecord("b", source, "任务 B", seconds: 30)
+    let c = try recentRecord("c", source, "任务 B", seconds: 0)
+    #expect(RecentRuns.group([a, b, c]).map { $0.map(\.id) } == [["a"], ["b", "c"]])
+    let screen = try recentRecord("screen", "mac.screen", "任务 A", seconds: 0)
+    #expect(RecentRuns.group([a, screen]).count == 2)
+  }
 }
