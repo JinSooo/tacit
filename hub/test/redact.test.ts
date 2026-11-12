@@ -123,3 +123,15 @@ test("剪贴板普通文字、地址、路径和边界长度不按密码拦截",
     }
   } finally { ctx.cleanup(); }
 });
+
+test("剪贴板密码规则不误伤 UUID、文件名、代码标识符和带中文的名字（2026-11-12 正式库复核的误判形状）", () => {
+  const clip = (body: string) => redactRecord({ ...fixture(), source: "mac.clipboard", title: `复制 · ${body}`, body });
+  // 合成样例，形状照正式库里的误判：UUID、kebab 版本串、带中文的文件名和名字、snake 标识符、带扩展名的文件
+  for (const body of ["3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f", "abc-def-12-34", "a-1.2-b", "A9运营期需求清单.xlsx", "饭耳-Ab全天录音智能体",
+                      "Foo_bar9baz", "FOO_BAR1.2.3", "Report-xY(2).pdf", "AbCd-Ef"]) {
+    expect(clip(body).body).toBe(body);
+  }
+  for (const body of ["aBcD1$", "Qw#58kLp2z", "Ab@1234567", "xY9$kLmN"]) {
+    if (body.length >= 8) expect(clip(body).body).toBe("[已脱敏:密码]");
+  }
+});

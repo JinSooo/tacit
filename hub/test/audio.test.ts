@@ -34,7 +34,7 @@ test("v4 加密库事务升级 v5，保留旧数据并可重复打开", () => {
   for (let i=0;i<2;i++) {
     const upgraded = new HubDB(ctx.file,ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(9);
+      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(10);
       expect(upgraded.get(record.id)?.body).toBe(record.body);
       expect(new AudioStore(upgraded).settings()).toEqual({ retention_days: 7 });
     } finally { upgraded.close(); }
@@ -54,7 +54,7 @@ test("跨对话按余弦聚类，同人归一、异人分开、中心按秒数�
   expect(Math.hypot(...v)).toBeCloseTo(1,6);
 });
 
-test("系统声音 3 段或 120 秒只提问一次，同对话重复上传与覆盖不增加次数", () => {
+test("系统声音 3 段且至少 30 秒或 120 秒只提问一次，同对话重复上传与覆盖不增加次数", () => {
   const sys = (ref: string, seconds: number, axis = 0) => upload(ref,seconds,axis,"mac","sys");
   const a = sys("one",10);
   sys("one",10); sys("one",20);
@@ -71,17 +71,61 @@ test("系统声音 3 段或 120 秒只提问一次，同对话重复上传与覆
   expect(audio.sync("mac").voiceprint).toBeNull();
 });
 
-test("麦克风说话人 2 段或 30 秒就提问；门槛下调后已有说话人在同步时补问", () => {
+test("麦克风说话人 2 段且至少 15 秒或 45 秒提问；同步时补问", () => {
   upload("m1",10); expect(pending()).toHaveLength(0);
   upload("m2",10); expect(pending()).toHaveLength(1);
-  upload("long-mic",30,2); expect(pending()).toHaveLength(2);
+  upload("long-mic",45,2); expect(pending()).toHaveLength(2);
   // 模拟旧门槛下已累计到 2 段、但一直没被问的麦克风说话人。
-  const old = upload("old-1",10,3);
+  const old = upload("old-1",15,3);
   ctx.db.db.prepare("DELETE FROM pending WHERE payload LIKE ?").run(`%${old.speaker_id}%`);
   ctx.db.db.prepare("UPDATE speakers SET status='new',conversations=2 WHERE id=?").run(old.speaker_id);
   expect(pending().some(p => p.payload.speaker_id === old.speaker_id)).toBe(false);
   audio.sync("mac");
   expect(pending().some(p => p.payload.speaker_id === old.speaker_id)).toBe(true);
+});
+
+test.each([
+  ["mic", 2, 14, false], ["mic", 2, 15, true],
+  ["mic", 1, 44, false], ["mic", 1, 45, true],
+  ["sys", 3, 29, false], ["sys", 3, 30, true],
+  ["sys", 1, 119, false], ["sys", 1, 120, true],
+] as const)("新声音门槛：%s %i 段累计 %i 秒，提问=%p", (track, conversations, seconds, asked) => {
+  let id = "";
+  for (let i = 0; i < conversations; i++) {
+    id = upload(`boundary-${i}`, i === 0 ? seconds : 0, 0, "mac", track).speaker_id;
+  }
+  expect(audio.speaker(id)).toMatchObject({ conversations, seconds, status: asked ? "asked" : "new" });
+  audio.sync("mac");
+  expect(pending()).toHaveLength(asked ? 1 : 0);
+});
+
+test("skipped 清掉全部逐条声纹后，同步及系统声音上传仍按麦克风门槛", () => {
+  const a = upload("mic-skipped",20);
+  audio.skipped("mic-skipped");
+  expect(ctx.db.db.prepare("SELECT 1 FROM voice_embeddings").get()).toBeUndefined();
+  // 模拟仍未提问但已累计两段的旧说话人，sync 没有逐条声纹可查。
+  ctx.db.db.prepare("UPDATE speakers SET conversations=2 WHERE id=?").run(a.speaker_id);
+  audio.sync("mac");
+  expect(pending().some(p => p.payload.speaker_id === a.speaker_id)).toBe(true);
+
+  const b = upload("mic-before-sys",14,2);
+  audio.skipped("mic-before-sys");
+  expect(pending().some(p => p.payload.speaker_id === b.speaker_id)).toBe(false);
+  expect(upload("sys-after-skip",1,2,"mac","sys").speaker_id).toBe(b.speaker_id);
+  expect(pending().some(p => p.payload.speaker_id === b.speaker_id)).toBe(true);
+});
+
+test("麦克风碎片并入系统声音说话人后保留来源", () => {
+  const b = body("mixed-tracks",11,0,"mac","sys");
+  const mic = vector(2); mic[0] = 0.4; mic[2] = Math.sqrt(0.84);
+  b.speakers.push({ local: "S2", track: "mic", seconds: 4, centroid: mic });
+  const result = audio.embeddings(b).speakers;
+  expect(result[0]!.speaker_id).toBe(result[1]!.speaker_id);
+  const id = result[0]!.speaker_id;
+  expect(audio.speaker(id)).toMatchObject({ mic: 1, seconds: 15, conversations: 1, status: "new" });
+  audio.skipped("mixed-tracks");
+  expect(upload("merged-sys",0,0,"mac","sys").speaker_id).toBe(id);
+  expect(pending().some(p => p.payload.speaker_id === id)).toBe(true);
 });
 
 test("同对话多个标签归到同人只计一段，并只向相应设备请求样本", () => {
@@ -292,6 +336,9 @@ test("多段中心及覆盖上传按逐条秒数重算，不反减已归一化�
 
 test("零秒声纹可归类并标我，下发仍是归一化向量", () => {
   upload("zero-one",0); upload("zero-two",0); upload("zero-three",0);
+  expect(pending()).toHaveLength(0);
+  // 零秒声纹仍可归类，补足有效时长后才进待确认。
+  upload("zero-four",45);
   const p = pending()[0]!;
   new DistillStore(ctx.db).resolvePending(p.id,"me");
   const voiceprint = audio.sync("mac").voiceprint!;

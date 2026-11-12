@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
+import { AudioStore } from "../src/audio.ts";
 import { HubDB } from "../src/db.ts";
 import { fixture, setup } from "./helpers.ts";
 import { ulid } from "../../packages/record/index.ts";
@@ -16,7 +17,7 @@ test("SQLCipher 实际文件加密，错误密钥拒绝，正确密钥重开及�
   const reopened = new HubDB(ctx.file, ctx.config.dbKey);
   try {
     expect(reopened.get(record.id)?.body).toBe(record.body);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(9);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(10);
   } finally { reopened.close(); }
 });
 
@@ -142,8 +143,8 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
       }
       writeFileSync(gate, "go");
       const results = await Promise.all(children.map(async child => ({ code: await child.exited, error: await new Response(child.stderr).text(), output: await new Response(child.stdout).text() })));
-      expect(results).toEqual([{ code: 0, error: "", output: "9\n" }, { code: 0, error: "", output: "9\n" }]);
-      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(9);
+      expect(results).toEqual([{ code: 0, error: "", output: "10\n" }, { code: 0, error: "", output: "10\n" }]);
+      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(10);
       expect(ctx.db.db.pragma("table_info(threads)")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "domain" }), expect.objectContaining({ name: "project_hint" })]));
       expect(ctx.db.db.pragma("table_info(agent_reads)")).toHaveLength(8);
       expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'agent_reads_%'").all()).toHaveLength(2);
@@ -160,9 +161,39 @@ test("v8 用量升级到 v9：task 列可空，旧行不变，重开幂等", () 
   for (let i = 0; i < 2; i++) {
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(9);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(10);
       expect((upgraded.db.pragma("table_info(llm_usage)") as { name: string; type: string }[]).filter(c => c.name === "task")).toMatchObject([{ name: "task", type: "TEXT" }]);
       expect(upgraded.db.prepare("SELECT id,tier,input_tokens,ok,task FROM llm_usage WHERE id=?").get("legacy-usage")).toEqual({ id: "legacy-usage", tier: "hour", input_tokens: 123, ok: 1, task: null });
+    } finally { upgraded.close(); }
+  }
+});
+
+test("v9 声纹升级 v10：mic 列按现有声纹回填，重开及已有列幂等", () => {
+  const audio = new AudioStore(ctx.db);
+  const add = (ref: string, track: string, axis: number) => {
+    const centroid = Array<number>(512).fill(0); centroid[axis] = 1;
+    return audio.embeddings({ device: "mac", conversation_ref: ref,
+      t_start: "2026-11-12T01:00:00Z", t_end: "2026-11-12T01:03:00Z",
+      speakers: [{ local: "S1", track, seconds: 10, centroid }] }).speakers[0]!.speaker_id;
+  };
+  const mic = add("legacy-mic", "mic", 0), sys = add("legacy-sys", "sys", 2);
+  add("legacy-mixed", "sys", 0);
+  // 还原 v9 结构，保留真实声纹行供升级回填。
+  if ((ctx.db.db.pragma("table_info(speakers)") as { name: string }[]).some(c => c.name === "mic")) {
+    ctx.db.db.exec("ALTER TABLE speakers DROP COLUMN mic;");
+  }
+  ctx.db.db.pragma("user_version=9");
+  for (let i = 0; i < 3; i++) {
+    const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
+    try {
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(10);
+      expect((upgraded.db.pragma("table_info(speakers)") as { name: string }[]).filter(c => c.name === "mic"))
+        .toMatchObject([{ name: "mic", type: "INTEGER", notnull: 1, dflt_value: "0" }]);
+      expect(upgraded.db.prepare("SELECT mic FROM speakers WHERE id=?").get(mic)).toEqual({ mic: 1 });
+      expect(upgraded.db.prepare("SELECT mic FROM speakers WHERE id=?").get(sys)).toEqual({ mic: 0 });
+      // 已有列但版本号尚旧时也能迁移；声纹清理后重开不能丢掉 mic。
+      upgraded.db.prepare("DELETE FROM voice_embeddings WHERE track='mic'").run();
+      if (i === 0) upgraded.db.pragma("user_version=9");
     } finally { upgraded.close(); }
   }
 });

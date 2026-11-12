@@ -39,13 +39,18 @@ export function redactString(input: string): { text: string; count: number } {
 
 /** 只用于剪贴板正文整体；普通文本里的标识符不能用这个启发式。 */
 function isClipboardPassword(value: string): boolean {
-  if (value.length < 8 || value.length > 64 || /\s/u.test(value)) return false;
+  // 密码只由可打印 ASCII 组成；带中文的是名字或句子（2026-11-12 正式库复核：26 条命中里一半是文件名、UUID、代码标识符）。
+  if (value.length < 8 || value.length > 64 || !/^[\x21-\x7e]+$/.test(value)) return false;
   if (/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i.test(value)
     || /^[^@]+@[^@]+\.[^@]+$/.test(value)
     || /^(?:[a-z]:[\\/]|[\\/]|~[\\/]|\.{1,2}[\\/])/i.test(value)
     || /^[^\\/:*?"<>|]+(?:[\\/][^\\/:*?"<>|]+)+$/.test(value)
-    || /^(?:\p{L}+|\p{N}+)$/u.test(value)) return false;
-  return [/[A-Z]/, /[a-z]/, /[0-9]/, /[^\p{L}\p{N}]/u].filter(pattern => pattern.test(value)).length >= 3;
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+    // 文件名（结尾是扩展名）、只用 - _ . 连接的标识符（kebab、snake、版本号）不算密码。
+    || /\.[A-Za-z][A-Za-z0-9]{0,5}$/.test(value)
+    || /^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)+$/.test(value)
+    || /^(?:[A-Za-z]+|[0-9]+)$/.test(value)) return false;
+  return [/[A-Z]/, /[a-z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(pattern => pattern.test(value)).length >= 3;
 }
 
 export function redactRecord(record: RecordV1): RecordV1 {
