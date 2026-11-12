@@ -14,6 +14,7 @@ final class AudioPipeline {
   var nextTime: Date?
   var pending: [Float] = []
   var speechActive = false
+  var skippedSilence = false
   let emit: ([Float], Date, Date) throws -> Void
   let level: (Double, Date, Date) -> Void
 
@@ -43,8 +44,13 @@ final class AudioPipeline {
     let start = Date().addingTimeInterval(seconds - ProcessInfo.processInfo.systemUptime)
     let end = start.addingTimeInterval(Double(samples.count) / rate)
     level(Self.dbfs(samples), start, end)
+    // 整段都是数字静音（系统没在放声音、麦克风被静音）时不重采样、不跑 VAD：零采样里不可能有人声，
+    // 两路一直跑 VAD 是采集端空闲时 CPU 的大头。跳过过的话，下一段有声音时重建流、从这一段重新计时，
+    // 否则 VAD 按喂进去的采样数算时间，跳过的那段会让之后的时间戳整体提前。
+    if !speechActive, samples.allSatisfy({ $0 == 0 }) { skippedSilence = true; return }
     // 丢帧或设备格式变化时重建流，避免错误的时间戳持续累积。
-    if self.rate != rate || nextTime.map({ abs(start.timeIntervalSince($0)) > 0.2 }) == true {
+    if self.rate != rate || skippedSilence || nextTime.map({ abs(start.timeIntervalSince($0)) > 0.2 }) == true {
+      skippedSilence = false
       try flush(); SherpaOnnxVoiceActivityDetectorReset(vad); origin = nil; pending = []
       self.rate = rate
       converter = try PCMResampler(rate: rate)

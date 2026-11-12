@@ -42,6 +42,7 @@ final class AudioCoordinator {
   private var retentionDays = 7
   private var retentionKnown = false
   private var meetingHistory = MeetingMicrophoneHistory()
+  private var lastMeetingProbe = Date.distantPast
   private let calendarMeetings = CalendarMeetingQuery()
   private var failure: String?
   private var lastMaintenance = Date.distantPast
@@ -71,7 +72,13 @@ final class AudioCoordinator {
   func update(enabled: Bool) {
     queue.async { [self] in
       let now = Date()
-      meetingHistory.observe(inputBundles: microphoneInputBundles(), at: now)
+      // 逐个读系统里所有音频进程的属性很贵（空闲时占采集端一半以上 CPU）。会议判定只看有人说话的那段时间里
+      // 会议软件是否在用麦克风：有人说话时每秒查，没人说话时每 10 秒查一次，够刷新 90 秒窗口。
+      let speaking = pipelines.values.contains { $0.speechActive }
+      if speaking || now.timeIntervalSince(lastMeetingProbe) >= 10 {
+        lastMeetingProbe = now
+        meetingHistory.observe(inputBundles: microphoneInputBundles(), at: now)
+      }
       if !initialized {
         guard now.timeIntervalSince(lastInitialize) >= 60 else { return }
         lastInitialize = now
