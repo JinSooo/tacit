@@ -27,7 +27,7 @@ export interface ThreadView { id: string; title: string; brief: string; project:
 
 export interface FactView { id: string; kind: string; text: string; origin: string }
 
-const json = (v: unknown) => JSON.stringify(v, null, 1);
+const json = (v: unknown) => JSON.stringify(v);
 
 /** 片段正文截断：每条记录最多 maxChars 字，按码点截，避免切坏中文和 emoji。 */
 export function excerpt(text: string, maxChars: number): string {

@@ -75,3 +75,13 @@ test("日记字典按线程身份区分同名线程，空简略版保留", async
   expect(data.threads.map((t: { id: string }) => t.id)).toEqual(["t1", "t2"]);
   expect(data.blocks.map((b: { thread: string }) => b.thread)).toEqual(["t1", "t2"]);
 });
+
+test("提示词里的 JSON 紧凑序列化：不带缩进换行，内容不变", async () => {
+  const { assignPrompt } = await import("../src/distill/prompts.ts");
+  const threads = Array.from({ length: 5 }, (_, i) => ({ id: `t${i}`, title: `合成线程 ${i}`, brief: "合成简略版", project: null, status: "active", last: "" }));
+  const prompt = assignPrompt([], threads);
+  const list = prompt.split("\n")[1]!;
+  // 线程列表整段在一行里，原样解析回来和输入一致（正式库实测 assign 提示词因此少约 12% 字符）。
+  expect(JSON.parse(list)).toEqual(threads);
+  expect(prompt).not.toMatch(/\n {1,2}["{\[]/);
+});
