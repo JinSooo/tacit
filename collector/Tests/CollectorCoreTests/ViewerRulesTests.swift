@@ -24,13 +24,10 @@ private func read(_ id: String, tool: String = "claude-code", kind: String = "co
   #expect(groups.count == 7)
 }
 
-@Test func threadDoneShowsDaysUntilAutoArchive() {
+@Test func threadDoneDoesNotInferArchiveDateFromCalendarDays() {
   let created = "2026-11-03T12:00:00Z"
-  let now = ViewerTime.parse(created)!
-  #expect(PendingArchive.notice(createdAt: created, now: now) == "7 天后自动归档")
-  #expect(PendingArchive.notice(createdAt: created, now: now.addingTimeInterval(6.5 * 86400)) == "1 天后自动归档")
-  #expect(PendingArchive.notice(createdAt: created, now: now.addingTimeInterval(7 * 86400 + 1)) == "即将自动归档")
-  #expect(PendingArchive.notice(createdAt: nil, now: now) == nil)
+  #expect(PendingArchive.notice(createdAt: created) == "按使用天数自动归档")
+  #expect(PendingArchive.notice(createdAt: nil) == nil)
 }
 
 // 用户报告：数据源状态"成功 · 新增 0 · 0s"里的 0s 没有意义。

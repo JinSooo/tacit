@@ -111,10 +111,10 @@ struct GeneralSettingsView: View {
           Note("新开 Claude Code、Codex 会话时，带入当前项目进展的最大长度。更早、更细的内容 AI 会自己查。")
         }
         Section {
-          row("问我“做完了吗”", value: d.askDoneDays, key: "ask_done_days", step: 1, unit: "天没动静后")
-          row("自动归档", value: d.archiveDays, key: "archive_days", step: 1, unit: "天没回答后")
+          row("问我“做完了吗”", value: d.askDoneDays, key: "ask_done_days", step: 1, unit: "使用天没动静后")
+          row("自动归档", value: d.archiveDays, key: "archive_days", step: 1, unit: "使用天没回答后")
         } footer: {
-          Note("归档的事项不再自动带入，仍然可以搜到。")
+          Note("有历史记录的日子才算使用天，最后活动或提问当天不算。归档的事项不再自动带入，仍然可以搜到。")
         }
         if draft != saved {
           HStack {

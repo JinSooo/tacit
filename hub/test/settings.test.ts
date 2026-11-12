@@ -12,7 +12,7 @@ import { AgentReads } from "../src/agent.ts";
 import { securityKeychain, type Keychain } from "../src/llm/keychain.ts";
 import type { SettingsDeps } from "../src/settings.ts";
 import type { Spawn } from "../src/llm/index.ts";
-import { networkDenied, setup } from "./helpers.ts";
+import { fixture, networkDenied, setup } from "./helpers.ts";
 
 const host = "127.0.0.1:47823";
 const SECRET = "sk-synthetic-SECRET-0123456789abcdef";
@@ -216,15 +216,17 @@ test("general：默认值、范围、只改给出的字段；注入上限和提�
   const small = await inject();
   expect(small.text).not.toContain("合成线程new"); expect(small.tokens_est).toBeLessThanOrEqual(200);
 
-  // 生命周期现读：问"做完了吗"和归档的天数。
+  // 生命周期现读：问"做完了吗"和归档的使用天数。
   const now = Date.parse("2026-11-08T12:00:00+08:00"), DAY = 86_400_000;
   for (const id of ["new", "old"]) store.upsertThread({ ...store.thread(id)!, status: "done" });
   store.upsertThread({ id: "quiet", project_id: "p", title: "合成安静线程", brief: "合成", status: "paused", last_ms: now - 2 * DAY });
+  expect(ctx.db.ingest([fixture({ t_start: new Date(now).toISOString() })]).accepted).toBe(1);
   await call(h, "PUT", "/v1/settings/general", { ask_done_days: 3 });
   expect(lifecycleStep(store, now).asked).toBe(0);
   await call(h, "PUT", "/v1/settings/general", { ask_done_days: 1, archive_days: 1 });
   expect(lifecycleStep(store, now).asked).toBe(1);
   expect(lifecycleStep(store, now + DAY - 1).archived).toBe(0);
+  expect(ctx.db.ingest([fixture({ t_start: new Date(now + DAY).toISOString() })]).accepted).toBe(1);
   expect(lifecycleStep(store, now + DAY + 1).archived).toBe(1);
   expect(store.thread("quiet")?.status).toBe("archived");
 });

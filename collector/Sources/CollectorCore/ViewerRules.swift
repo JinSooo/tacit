@@ -23,14 +23,10 @@ public enum AuditGrouping {
   }
 }
 
-/// "做完了吗"放进待确认 7 天没人处理，线程自动归档（hub/src/distill/run.ts 的 archiveAfter）。
+/// 使用天数由后台按所有设备的历史记录计算，客户端不按日历时间推算倒计时。
 public enum PendingArchive {
-  public static let after: TimeInterval = 7 * 86400
-
-  public static func notice(createdAt: String?, now: Date = Date()) -> String? {
-    guard let createdAt, let created = ViewerTime.parse(createdAt) else { return nil }
-    let left = created.addingTimeInterval(after).timeIntervalSince(now)
-    if left <= 0 { return "即将自动归档" }
-    return "\(Int((left / 86400).rounded(.up))) 天后自动归档"
+  public static func notice(createdAt: String?) -> String? {
+    guard let createdAt, ViewerTime.parse(createdAt) != nil else { return nil }
+    return "按使用天数自动归档"
   }
 }
