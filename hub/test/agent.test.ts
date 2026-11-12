@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { AgentReads, estimateTokens } from "../src/agent.ts";
+import { stopAgentAudit } from "../src/agent-audit.ts";
 import { HubDB } from "../src/db.ts";
 import { DistillStore, type Thread } from "../src/distill/store.ts";
 import { createHandler } from "../src/server.ts";
@@ -28,6 +29,70 @@ function assigned(id: string, privateOnly: boolean, mixed = false) {
   store.assign(fid,id,"rule",1);
 }
 const context = (cwd = "/synthetic/foo", event = "startup") => read(`/v1/agent/context?tool=codex&cwd=${encodeURIComponent(cwd)}&event=${event}`);
+
+test("审计撞写锁不阻塞读取，不同 AgentReads 共享队列并在解锁后补齐", async () => {
+  const other = new HubDB(ctx.file, ctx.config.dbKey);
+  try {
+    other.db.exec("BEGIN IMMEDIATE");
+    const started = performance.now();
+    const response = await new AgentReads(ctx.db).handle("now", new URLSearchParams({ tool: "codex" }));
+    expect(response.status).toBe(200);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(ctx.db.db.pragma("busy_timeout", { simple: true })).toBe(5000);
+    expect(ctx.db.db.prepare("SELECT * FROM agent_reads").all()).toHaveLength(0);
+    other.db.exec("ROLLBACK");
+    expect((await new AgentReads(ctx.db).handle("now", new URLSearchParams({ tool: "claude-code" }))).status).toBe(200);
+    const audit = new AgentReads(ctx.db).audit(new URLSearchParams());
+    expect(audit.reads.map((r: any) => r.tool).sort()).toEqual(["claude-code", "codex"]);
+  } finally {
+    if (other.db.inTransaction) other.db.exec("ROLLBACK");
+    other.close();
+  }
+});
+
+test("append 已成功时审计失败仍返回 200，审计列表读取前补写且错误只报一次", async () => {
+  ctx.db.db.exec(`CREATE TRIGGER reject_audit BEFORE INSERT ON agent_reads
+    BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`);
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const response = new AgentReads(ctx.db).append(new URLSearchParams({ tool: "codex" }), { title: "合成追加", body: "合成正文" });
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.result).toBe("created");
+    expect(ctx.db.get(result.id)?.body).toBe("合成正文");
+    expect((await new AgentReads(ctx.db).handle("now", new URLSearchParams({ tool: "codex" }))).status).toBe(200);
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(ctx.db.db.pragma("busy_timeout", { simple: true })).toBe(5000);
+    ctx.db.db.exec("DROP TRIGGER reject_audit");
+    const audit = new AgentReads(ctx.db).audit(new URLSearchParams());
+    expect(audit.reads).toHaveLength(2);
+    expect(audit.reads.find((r: any) => r.kind === "append")).toMatchObject({ ok: 1, result_ids: [result.id] });
+  } finally { logged.mockRestore(); }
+});
+
+test("审计解锁后无需新请求也会定时补写，停止时尽力冲刷", async () => {
+  const other = new HubDB(ctx.file, ctx.config.dbKey);
+  try {
+    other.db.exec("BEGIN IMMEDIATE");
+    await new AgentReads(ctx.db).handle("now", new URLSearchParams({ tool: "codex" }));
+    other.db.exec("ROLLBACK");
+    await Bun.sleep(2200);
+    expect(ctx.db.db.prepare("SELECT * FROM agent_reads").all()).toHaveLength(1);
+    other.db.exec("BEGIN IMMEDIATE");
+    await new AgentReads(ctx.db).handle("now", new URLSearchParams({ tool: "codex" }));
+    // 退出时仍有锁也不能阻塞或抛错。
+    const started = performance.now();
+    stopAgentAudit(ctx.db);
+    expect(performance.now() - started).toBeLessThan(1000);
+    other.db.exec("ROLLBACK");
+    stopAgentAudit(ctx.db);
+    expect(ctx.db.db.prepare("SELECT * FROM agent_reads").all()).toHaveLength(2);
+  } finally {
+    if (other.db.inTransaction) other.db.exec("ROLLBACK");
+    stopAgentAudit(ctx.db);
+    other.close();
+  }
+});
 
 test("context 精确、子目录和最长仓库匹配，路径前缀不误配", async () => {
   project(); project("nested","/synthetic/foo/nested");

@@ -146,16 +146,19 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const config = loadConfig();
   const db = openDatabase(join(config.dataDir, "history.db"), config.dbKey, config.token);
   if (command === "serve") {
+    const { stopAgentAudit } = await import("./agent-audit.ts");
+    const flushAudit = () => stopAgentAudit(db);
+    process.once("exit", flushAudit);
     try {
       let stopping = false;
-      const stop = async () => { if (stopping) return; stopping = true; await server.stop(true); db.close(); process.exit(0); };
+      const stop = async () => { if (stopping) return; stopping = true; await server.stop(true); flushAudit(); process.removeListener("exit", flushAudit); db.close(); process.exit(0); };
       // 改端口后退出，launchd 的 KeepAlive 用 hub.json 里的新端口重新拉起。
       const restart = () => { console.log("端口已改，中枢退出以便用新端口重启"); void stop(); };
       const server = startServer({ db, token: config.token, port: config.port, settings: { dataDir: config.dataDir, restart } });
       console.log(`Hub 已启动：http://127.0.0.1:${server.port}`);
       process.once("SIGINT", stop);
       process.once("SIGTERM", stop);
-    } catch (e) { db.close(); throw e; }
+    } catch (e) { flushAudit(); process.removeListener("exit", flushAudit); db.close(); throw e; }
   } else {
     try {
       const summary = await runPlugin({ db, dataDir: config.dataDir, name: name!, command: argv.slice(separator + 1), report: result => console.log(JSON.stringify(result)) });

@@ -6,6 +6,7 @@ import { redactString } from "./redact.ts";
 import { DistillStore, type Thread } from "./distill/store.ts";
 import { projectForPath, resolveRepoRoot } from "./distill/repos.ts";
 import { readGeneral } from "./general-settings.ts";
+import { enqueueAgentAudit, flushAgentAudit } from "./agent-audit.ts";
 
 // 暂停线程只自动注入最近 3 天有活动的；进行中的线程不受时间限制。
 const PAUSED_CONTEXT_MS = 3 * 24 * 60 * 60 * 1000;
@@ -195,7 +196,7 @@ export class AgentReads {
       value = { error: "存储操作失败" }; status = 500;
     }
     const json = JSON.stringify(value);
-    this.hub.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?)").run(ulid(),new Date().toISOString(),tool,kind,JSON.stringify(args),JSON.stringify(ids),Buffer.byteLength(json),Number(status < 400));
+    enqueueAgentAudit(this.hub, [ulid(),new Date().toISOString(),tool,kind,JSON.stringify(args),JSON.stringify(ids),Buffer.byteLength(json),Number(status < 400)]);
     return new Response(json,{ status,headers: { "Content-Type": "application/json" } });
   }
 
@@ -271,11 +272,12 @@ export class AgentReads {
     args.result = value.result ?? "error";
     if (value.redactions) args.redactions = value.redactions;
     const json = JSON.stringify(value);
-    this.hub.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?)").run(ulid(),new Date().toISOString(),tool,"append",JSON.stringify(args),JSON.stringify(ids),Buffer.byteLength(json),Number(status < 400));
+    enqueueAgentAudit(this.hub, [ulid(),new Date().toISOString(),tool,"append",JSON.stringify(args),JSON.stringify(ids),Buffer.byteLength(json),Number(status < 400)]);
     return new Response(json,{ status,headers: { "Content-Type": "application/json" } });
   }
 
   audit(params: URLSearchParams) {
+    flushAgentAudit(this.hub);
     const limit = limitOf(params), where: string[] = [], args: unknown[] = [];
     if (params.has("tool")) { where.push("tool=?"); args.push(required(params,"tool",32)); }
     if (params.has("cursor")) {
