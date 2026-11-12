@@ -202,6 +202,10 @@ public enum RecentRuns {
     // 并入的剪贴板不改变这行所属的应用、聊天或来源。
     let activity = run.filter { $0.source != "mac.clipboard" }
     let run = activity.isEmpty ? run : activity
+    // git 提交、终端命令、Agent 会话没有应用，按同一来源、同一仓库或目录合并（用户截图：连着 4 次提交各占一行）。
+    if r.contextText("app") == nil, let place = r.contextText("repo") ?? r.contextText("cwd") {
+      return run.allSatisfy { $0.source == r.source && $0.contextText("app") == nil && ($0.contextText("repo") ?? $0.contextText("cwd")) == place }
+    }
     guard let app = r.contextText("app"), run.allSatisfy({ $0.contextText("app") == app }) else { return false }
     switch (r.contextText("chat"), chat(run)) {
     case let (c?, rc?): return c.filter { !$0.isWhitespace } == rc.filter { !$0.isWhitespace }

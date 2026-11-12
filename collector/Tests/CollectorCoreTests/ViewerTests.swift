@@ -384,3 +384,28 @@ private func recentRecord(_ id: String, _ source: String = "mac.screen", _ title
     #expect(RecentRuns.group([a, screen]).count == 2)
   }
 }
+
+private func placeRecord(_ id: String, _ source: String, _ title: String, seconds: Int, repo: String? = nil, cwd: String? = nil) throws -> HistoryRecord {
+  var context: [String: String] = [:]
+  if let repo { context["repo"] = repo }
+  if let cwd { context["cwd"] = cwd }
+  let data = try JSONSerialization.data(withJSONObject: [
+    "id": id, "device": "mac", "source": source, "title": title, "body": "合成文本",
+    "t_start": ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 1794452400 + TimeInterval(seconds))), "context": context,
+  ])
+  return try HubJSON.decoder().decode(HistoryRecord.self, from: data)
+}
+
+/// 用户截图：同一个仓库连着 4 次 git 提交各占一行，挤掉了其他记录。没有应用的来源按仓库或目录合并。
+@Test func recentRunsMergeAppLessRecordsByRepoOrDirectory() throws {
+  let commits = try (0..<4).map { try placeRecord("c\($0)", "mac.git", "synthetic · 提交 \($0)", seconds: -60 * $0, repo: "/synthetic/repo") }
+  #expect(RecentRuns.group(commits).map { $0.map(\.id) } == [["c0", "c1", "c2", "c3"]])
+  let otherRepo = try placeRecord("x", "mac.git", "other · 提交", seconds: -240, repo: "/synthetic/other")
+  #expect(RecentRuns.group(commits + [otherRepo]).count == 2)
+  // 同一目录的终端命令合并；和同一仓库的 git 提交来源不同，不合。
+  let shell = try (0..<2).map { try placeRecord("s\($0)", "mac.shell", "命令 \($0)", seconds: -300 - 60 * $0, cwd: "/synthetic/repo") }
+  #expect(RecentRuns.group(commits + shell).map { $0.map(\.id) } == [["c0", "c1", "c2", "c3"], ["s0", "s1"]])
+  // 没有应用也没有仓库、目录的记录保持原样，不合。
+  let bare = try (0..<2).map { try placeRecord("b\($0)", "mac.file", "文件 \($0)", seconds: -60 * $0) }
+  #expect(RecentRuns.group(bare).count == 2)
+}
