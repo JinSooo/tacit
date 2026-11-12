@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { DistillStore } from "../src/distill/store.ts";
 import { DistillRequests, defaultBackfillRange, localDayStart } from "../src/distill/requests.ts";
-import { backfillRange, distillTick, sliceStep, type LLM, type LoopState } from "../src/distill/run.ts";
+import { backfillRange, distillTick, sliceStep, tickSafely, type LLM, type LoopState } from "../src/distill/run.ts";
+import { HubDB } from "../src/db.ts";
 import { createHandler } from "../src/server.ts";
 import { fixture, setup } from "./helpers.ts";
 
@@ -131,4 +132,22 @@ test("CLI distill --slice-only --backfill --from --to 按范围切片，参数�
   expect(run("--slice-only", "--backfill", "--from", "2026-11-05").status).toBe(1);
   expect(run("--slice-only", "--from", "2026-11-05", "--to", "2026-11-06").status).toBe(1);
   expect(run("--slice-only", "--backfill", "--from", "2026-13-01", "--to", "2026-11-06").status).toBe(1);
+});
+
+// 2026-11-12：导入全部历史时 hub 连续写入，心跳写入等锁超过 5 秒抛 SQLITE_BUSY，常驻提炼进程整个退出。
+test("库被另一连接占着写锁时这一次跳过，锁放开后照常领取请求；其他错误照旧抛出", async () => {
+  const now = day("2026-11-09", 12);
+  const state: LoopState = { lastRound: now, enabledDefault: localDayStart("2026-11-09")! };
+  const { request } = requests.create({ kind: "round" }, now);
+  const hub = new HubDB(ctx.file, ctx.config.dbKey);
+  ctx.db.db.pragma("busy_timeout=50");
+  hub.db.exec("BEGIN IMMEDIATE");
+  await expect(distillTick(deps(now), state, now)).rejects.toMatchObject({ code: "SQLITE_BUSY" });
+  expect(await tickSafely(deps(now), state, now)).toBe("busy");
+  expect(requests.get(request.id)!.status).toBe("queued");
+  hub.db.exec("COMMIT"); hub.close();
+  expect(await tickSafely(deps(now), state, now)).toBe("request");
+  expect(requests.get(request.id)!.status).toBe("done");
+  const closed = new HubDB(ctx.file, ctx.config.dbKey); closed.close();
+  await expect(tickSafely({ ...deps(now), db: closed }, state, now)).rejects.toThrow();
 });

@@ -613,7 +613,20 @@ export async function runDistill({ db, llm, once, backfill, range, log = console
   try {
     for (;;) {
       // 刚执行完请求时立刻再看一次队列；空闲时每 pollMs 看一次，常规轮次仍按 15 分钟。
-      if (await distillTick(d, state) !== "request") await new Promise(r => setTimeout(r, pollMs));
+      if (await tickSafely(d, state) !== "request") await new Promise(r => setTimeout(r, pollMs));
     }
   } finally { clearInterval(beat); }
+}
+
+/**
+ * 库被 hub 连续写入（例如导入全部历史）时，心跳和领取请求可能等锁超时；
+ * 这只是这一次没轮上，下一次再试，不能让常驻进程退出。其他错误照旧抛出。
+ */
+export async function tickSafely(d: Deps, state: LoopState, now?: number): Promise<"request" | "round" | "idle" | "busy"> {
+  try { return await distillTick(d, state, now); }
+  catch (e) {
+    if ((e as { code?: unknown })?.code !== "SQLITE_BUSY") throw e;
+    (d.log ?? console.log)(JSON.stringify({ error: "数据库忙，下一次再试" }));
+    return "busy";
+  }
 }

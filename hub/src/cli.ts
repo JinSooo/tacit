@@ -104,6 +104,9 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     if (range && (!range.from || !range.to || range.from > range.to || !flags.includes("--backfill"))) throw new Error("--from/--to 需要同时给出、from 不晚于 to，并配合 --backfill");
     const config = loadConfig();
     const db = openDatabase(join(config.dataDir, "history.db"), config.dbKey, config.token);
+    // 回滚日志模式下 hub 连续写入时，等锁 5 秒常常轮不上；提炼是后台进程，等久一点无妨。
+    // hub 保持 5 秒：它单线程，等锁期间所有请求都会卡住。
+    db.db.pragma("busy_timeout=30000");
     // --slice-only：只做切片和规则归属，不调用模型（排查和测试用）。
     if (flags.includes("--slice-only")) {
       try {
