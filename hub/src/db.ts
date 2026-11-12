@@ -52,7 +52,7 @@ export class HubDB {
       this.db.pragma(`key='${key.replaceAll("'", "''")}'`);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 9) throw new Error("数据库版本比当前 hub 新");
+      if (version > 10) throw new Error("数据库版本比当前 hub 新");
       if (version === 1 && file !== ":memory:") {
         try { copyFileSync(file, join(dirname(file), "history.db.bak-v1"), constants.COPYFILE_EXCL); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
@@ -63,7 +63,7 @@ export class HubDB {
       // 必须先拿写锁再读取版本，等待另一进程迁移完成后才能决定迁移步骤。
       this.db.transaction(() => {
         const version = this.db.pragma("user_version", { simple: true }) as number;
-        if (version > 9) throw new Error("数据库版本比当前 hub 新");
+        if (version > 10) throw new Error("数据库版本比当前 hub 新");
         if (version === 0) {
           this.db.exec(`
             CREATE TABLE records (
@@ -112,6 +112,12 @@ export class HubDB {
           const columns = this.db.pragma("table_info(llm_usage)") as { name: string }[];
           if (!columns.some(c => c.name === "task")) this.db.exec(usageTaskSchema);
           this.db.pragma("user_version=9");
+        }
+        if (version < 10) {
+          const columns = this.db.pragma("table_info(speakers)") as { name: string }[];
+          if (!columns.some(c => c.name === "mic")) this.db.exec("ALTER TABLE speakers ADD COLUMN mic INTEGER NOT NULL DEFAULT 0;");
+          this.db.exec("UPDATE speakers SET mic=1 WHERE id IN (SELECT speaker_id FROM voice_embeddings WHERE track='mic');");
+          this.db.pragma("user_version=10");
         }
       }).immediate();
     } catch (e) { this.db.close(); throw e; }

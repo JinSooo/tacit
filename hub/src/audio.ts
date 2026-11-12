@@ -7,7 +7,7 @@ export const MATCH_THRESHOLD = 0.5;
 export const DEFAULT_ME_THRESHOLD = 0.49;
 const VECTOR_SIZE = 512;
 // 麦克风那路的说话人门槛低，让"我"尽快进待确认；系统声音只在开会时上传。
-const ASK = { mic: { conversations: 2, seconds: 30 }, sys: { conversations: 3, seconds: 120 } };
+const ASK = { mic: { conversations: 2, minSeconds: 15, seconds: 45 }, sys: { conversations: 3, minSeconds: 30, seconds: 120 } };
 const MAX_CLIPS = 3, MAX_CLIP_BYTES = 2 * 1024 * 1024;
 // 与采集端 WorkerLogic.consolidate 一致；elsewhere 是并走在别的对话也出现过的说话人时要求的整体相似度。
 const CONSOLIDATE = { big: 6, join: 0.5, attach: 0.3, elsewhere: 0.55 };
@@ -23,7 +23,7 @@ CREATE TABLE audio_settings(k TEXT PRIMARY KEY,v TEXT);
 PRAGMA user_version=5;
 `;
 interface Speaker {
-  id: string; label: string; name: string | null; is_me: number; status: string;
+  id: string; label: string; name: string | null; is_me: number; mic: number; status: string;
   centroid: Buffer; conversations: number; seconds: number;
 }
 interface Embedding { conversation_ref: string; local: string; device: string; speaker_id: string; track: string; seconds: number; centroid: Buffer }
@@ -177,7 +177,7 @@ export class AudioStore {
         }
         if (!Number.isFinite(speaker.seconds + s.seconds)) throw new InputError("累计 seconds 超出范围");
         const center = weighted([...(this.contributions(speaker) ?? [speaker]), s]);
-        this.sql.prepare("UPDATE speakers SET centroid=?,seconds=seconds+?,conversations=conversations+?,updated_at=? WHERE id=?").run(pack(center.some(n => n !== 0) ? center : v), s.seconds, Number(!touched.has(speaker.id)), now, speaker.id);
+        this.sql.prepare("UPDATE speakers SET centroid=?,seconds=seconds+?,conversations=conversations+?,mic=MAX(mic,?),updated_at=? WHERE id=?").run(pack(center.some(n => n !== 0) ? center : v), s.seconds, Number(!touched.has(speaker.id)), Number(s.track === "mic"), now, speaker.id);
         this.sql.prepare("INSERT INTO voice_embeddings VALUES(?,?,?,?,?,?,?,?,?)").run(ref,s.local,device,speaker.id,s.track,s.seconds,s.centroid,start,end);
         touched.add(speaker.id);
         result.push(this.mapping(s.local, speaker.id));
@@ -228,9 +228,8 @@ export class AudioStore {
   private ask(id: string) {
     const s = this.speaker(id)!;
     if (s.status !== "new") return;
-    const mic = Boolean(this.sql.prepare("SELECT 1 FROM voice_embeddings WHERE speaker_id=? AND track='mic' LIMIT 1").get(id));
-    const limit = ASK[mic ? "mic" : "sys"];
-    if (s.conversations < limit.conversations && s.seconds < limit.seconds) return;
+    const limit = ASK[s.mic ? "mic" : "sys"];
+    if (s.seconds < limit.seconds && (s.conversations < limit.conversations || s.seconds < limit.minSeconds)) return;
     const now = new Date().toISOString();
     this.sql.prepare("INSERT INTO pending(id,kind,payload,created_at) VALUES(?,'voice',?,?)").run(ulid(),JSON.stringify({ speaker_id: id }),now);
     this.sql.prepare("UPDATE speakers SET status='asked',updated_at=? WHERE id=?").run(now,id);
@@ -288,7 +287,7 @@ export class AudioStore {
     const overlap = (this.sql.prepare("SELECT COUNT(DISTINCT conversation_ref) AS n FROM voice_embeddings WHERE speaker_id=? AND conversation_ref IN (SELECT conversation_ref FROM voice_embeddings WHERE speaker_id=?)").get(s.id,dest.id) as { n: number }).n;
     const center = weighted([dest,s]);
     if (!Number.isFinite(dest.seconds+s.seconds)) throw new InputError("累计 seconds 超出范围");
-    this.sql.prepare("UPDATE speakers SET centroid=?,seconds=?,conversations=?,is_me=?,name=?,updated_at=? WHERE id=?").run(pack(center.some(n => n !== 0) ? center : unpack(dest.centroid)), dest.seconds+s.seconds, dest.conversations+s.conversations-overlap, Number(Boolean(dest.is_me || s.is_me)), dest.is_me || s.is_me ? "我" : dest.name, now,dest.id);
+    this.sql.prepare("UPDATE speakers SET centroid=?,seconds=?,conversations=?,is_me=?,mic=?,name=?,updated_at=? WHERE id=?").run(pack(center.some(n => n !== 0) ? center : unpack(dest.centroid)), dest.seconds+s.seconds, dest.conversations+s.conversations-overlap, Number(Boolean(dest.is_me || s.is_me)), Number(Boolean(dest.mic || s.mic)), dest.is_me || s.is_me ? "我" : dest.name, now,dest.id);
     this.sql.prepare("UPDATE voice_embeddings SET speaker_id=? WHERE speaker_id=?").run(dest.id,s.id);
     this.sql.prepare("UPDATE speakers SET status='merged',merged_into=?,updated_at=? WHERE id=?").run(dest.id,now,s.id);
     this.sql.prepare("DELETE FROM voice_samples WHERE speaker_id=?").run(s.id);
