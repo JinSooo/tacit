@@ -116,7 +116,7 @@
 | PUT | `/v1/settings/keys/:provider` | `{ key }`，8–1024 个可见 ASCII，不含空格、`"`、`\` | `{ provider, set: true }`；写钥匙串 service `record-anything`、account `provider:<provider>`（已有则覆盖） |
 | DELETE | `/v1/settings/keys/:provider` | — | `{ provider, deleted }`；`deleted` 为删除前是否存在 |
 | GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, defaults, ranges }` |
-| PUT | `/v1/settings/general` | 三项中任意几项 | 同 GET。`inject_tokens` 200–4000（默认 800）、`ask_done_days` 1–30（默认 3）、`archive_days` 1–90（默认 7），都是整数 |
+| PUT | `/v1/settings/general` | 三项中任意几项 | 同 GET。`inject_tokens` 200–4000（默认 800）、`ask_done_days` 1–30 使用天（默认 3）、`archive_days` 1–90 使用天（默认 7），都是整数 |
 | GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial }] }`，`id` 为 `claude-code`、`codex`。只读配置文件判断：会话开始钩子（`~/.claude/settings.json`、`~/.codex/hooks.json`）和 MCP 登记（`~/.claude.json` 的 `mcpServers`、`~/.codex/config.toml` 的 `mcp_servers`）都在才算 `connected`，只有一个算 `partial` |
 | PUT | `/v1/settings/agents/:id` | `{ connected }` | `{ tools, note }`。等同 `cli.ts agents install|uninstall --tool <id> --yes`；本机找不到该工具时连接返回 409；执行失败 500，带原因。`note` 是连接 Codex 后要告诉用户的话（第一次要在 Codex 里批准钩子），其他情况为 null |
 
@@ -204,6 +204,8 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 
 - `user_version=9` 在现有 `BEGIN IMMEDIATE` 迁移事务中为 `llm_usage` 添加可空的 `task TEXT`，旧行保持 NULL；检查列是否存在，重复打开不重复添加。
 - `task` 标记 `assign`、`thread_digest`、`thread_brief`、`project`、`project_brief`、`classify`、`conversation_summary`、`day`、`day_brief`、`dedupe`。仅记录任务名及现有用量指标，不记录提示词或输出正文。
+- 状态接口 `GET /v1/status` 的 `hub.busy`：`{ since, total, by_route: { ingest, agent, web }, last_at }`。仅在内存中累计数据库忙返回的 503 响应，每个响应记一次；服务重启归零。`since` 为进程启动时间（ISO），`total` 为启动以来总次数；`ingest` 对应 `/v1/ingest`，`agent` 对应 `/v1/agent/*`，其余接口归 `web`。`last_at` 为最近一次的 ISO 时间，从未发生时为 null，所有计数初值为 0。不保存请求内容。不包含后台任务内部跳过写入或未返回 503 的锁冲突，也不是全天统计。
+- Mac `collector-status.json` 新增 `hubBusy`（启动以来收到的 503 响应次数）和 `queuePeak`（启动以来内存队列实际保留条数的峰值，不超过容量），初值均为 0，重启归零。
 - 状态接口 `GET /v1/status` 的 `llm_today` 保留 `total`、`by_tier`，新增 `by_task`：每项含 `task`、`calls`、`ok`、`failed`、`input_tokens`、`output_tokens`、`ms`。旧调用及未传任务名的调用归入 `task: null`；未知 token 用量仍为 null，统计日期与原档位统计一致。
 - 配置 `<数据目录>/models.json`：`{ "tiers": { "minute": { "provider": "claude-cli", "model": "haiku" }, … } }`。provider 有 `claude-cli`、`codex-cli`、`anthropic`、`openai-compatible`（`base_url`）。API key 存在钥匙串（service `record-anything`，account `provider:<名字>`），不写进文件。
 - 当前配置（2026-11-08 起，避免占用户的 Claude 额度）：三档都用 `codex-cli`，`minute` 用 gpt-6-luna，`hour`、`day` 用 gpt-6.1-sol。没有 `models.json` 时代码里的默认仍是 `claude-cli`（haiku / sonnet）。以后换成单独的 API 通道。
@@ -282,7 +284,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 - **仓库归一**：用 `git rev-parse --git-common-dir` 找主仓库，worktree 和子目录都归到主仓库的项目，worktree 路径作为别名追加进 `keys.repos`。目录已删除、git 探测失败时，按已登记的 `keys.repos` 做路径边界最长匹配。家目录本身不算仓库。git 探测带 500ms 超时和 60 秒缓存。
 - **合并重复线程**：慢轮次每天最多一次，把最近 60 条有简略版的线程（进行中、暂停、14 天内完成的）交给 hour 档找"其实是同一件事"的分组，模型把握 ≥ 0.8、同一 `domain`、不分属两个项目才并。片段最多的那条留下：片段、事实、"不属于这里"记录都转过去，被并线程未处理的"做完了吗"结项为 `merged`，状态取最近活动的那条，整条重写详细版。被并线程的 id 写进 `distill_state.thread_redirect:<旧 id>`，Agent `get` 用旧 id 也能查到。
 - **按名字提名项目**：`project_hint` 和 `project_id` 都为空的线程，标题或简略版里恰好写了一个已有项目名（不少于 4 个字符，不分大小写）时，把它写进 `project_hint` 并清空 `domain`，下一次判断归属时由模型决定是否挂上。
-- **线程状态**：2 小时没新记录 → `paused`；3 天没动静或有完成信号 → 进 `pending(kind=thread_done)`。这条待确认 **7 天**没人处理：线程改为 `archived`，待确认结项为 `resolution=expired`，同一事务。用户点"完成 / 继续 / 放弃"对应 `done` / `active` / `abandoned`。`archived` 和 `done` 分开，用来区分到期结掉和用户确认。`archived` 线程不再提问、不进注入、不参与归线程候选，`/v1/threads?status=archived`、`get`、`search` 仍能查到。
+- **线程状态**：2 小时没新记录 → `paused`（仍按日历时间）；最后活动后满 `ask_done_days` 个使用天（默认 3），或有完成信号 → 进 `pending(kind=thread_done)`。这条待确认在提问后满 `archive_days` 个使用天（默认 **7**）没人处理：线程改为 `archived`，待确认结项为 `resolution=expired`，同一事务。使用天是 `records` 表中至少有一条记录的中枢本地自然日，按 `t_start_ms` 分日，不限来源和设备、不算墓碑；最后活动当天和提问当天分别不计入对应门槛，只算截至当前时刻的记录。用户点"完成 / 继续 / 放弃"对应 `done` / `active` / `abandoned`。`archived` 和 `done` 分开，用来区分到期结掉和用户确认。`archived` 线程不再提问、不进注入、不参与归线程候选，`/v1/threads?status=archived`、`get`、`search` 仍能查到。
 
 ### 4.8 提炼请求队列（`user_version` 6）
 
@@ -370,6 +372,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 speakers(id TEXT PRIMARY KEY,            -- ULID
          label TEXT NOT NULL,            -- 临时标签："说话人 A"、"说话人 B"…，按创建顺序
          name TEXT, is_me INTEGER NOT NULL DEFAULT 0,
+         mic INTEGER NOT NULL DEFAULT 0,  -- 曾上传麦克风声纹；清理逐条声纹不重置，合并时取两者的或
          status TEXT NOT NULL,           -- new | asked | confirmed | ignored | merged
          merged_into TEXT, centroid BLOB NOT NULL,   -- 512 个 float32，按秒数加权平均后归一化
          conversations INTEGER NOT NULL DEFAULT 0, seconds REAL NOT NULL DEFAULT 0,
@@ -387,7 +390,8 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 ```
 
 - **聚类**（规则，不调模型）：上传的每个说话人中心和已有说话人（`status` 不是 `merged`）比余弦，最高的 ≥ `match_threshold`（起始 0.5）就归入并更新中心，否则新建 `new` 说话人。阈值是实验 2-C 的起始值，要用真实录音再调。
-- **进待确认**：`status=new` 的说话人，录到过麦克风这路的累计 ≥ 2 段对话或 ≥ 30 秒、只在系统声音这路的累计 ≥ 3 段对话或 ≥ 120 秒，就建 `pending(kind="voice", payload={ speaker_id })`，改成 `asked`，同时按秒数最长的 3 段对话建样本请求。除了上传 embeddings 时检查，`/v1/audio/sync` 也会重查一遍 `new` 说话人（门槛调整后不必等新上传）。
+- **进待确认**：`status=new` 的说话人，录到过麦克风这路的（累计 ≥ 2 段对话且 ≥ 15 秒）或累计 ≥ 45 秒、只在系统声音这路的（累计 ≥ 3 段对话且 ≥ 30 秒）或累计 ≥ 120 秒（2026-11-12 确认），就建 `pending(kind="voice", payload={ speaker_id })`，改成 `asked`，同时按秒数最长的 3 段对话建样本请求。除了上传 embeddings 时检查，`/v1/audio/sync` 也会重查一遍 `new` 说话人（门槛调整后不必等新上传）。
+- 来源由 `speakers.mic` 持久记录：每次上传 `track="mic"` 置 1，逐条声纹被跳过、删除或保留期清理后不重置；合并说话人时保留任一方的麦克风来源。数据库 v10 在 `BEGIN IMMEDIATE` 事务内先查列再添加，按现有 `voice_embeddings` 的麦克风行回填，可重复打开。
 - 待确认操作（`POST /v1/pending/:id`）：`me`（就是我：`is_me=1`、`name="我"`）、`rename`（填名字）、`merge_into`（和某人是同一人，`target` 是说话人 id）、`ignore`。处理后删掉这个说话人的试听样本。`GET /v1/pending` 里 voice 项的 payload 补 `{ speaker_id, label, conversations, seconds, samples: [{ id, mime }], samples_pending: bool }`。
 - 标了"我"或起了已有的名字：确认后立即和已确认的同名说话人（"我"按 `is_me`）合并，不留多个"我"。
 - **清理空壳**：`status=new`、没有任何逐条声纹、转写里也没按 id 引用、没有别人并进来的说话人，累计不到 6 秒或超过录音保留期没更新的直接删掉（对话跳过、删除、`/v1/audio/sync` 时检查）。编号只增不减（`audio_settings.label_seq`），删掉的编号不再发出。
