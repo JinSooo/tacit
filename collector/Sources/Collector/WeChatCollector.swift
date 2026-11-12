@@ -35,7 +35,7 @@ final class WeChatCollector {
     queue.async { [self] in
       guard !running, Date().timeIntervalSince(lastRun) >= Self.interval, ocr.granted else { return }
       running = true; lastRun = Date()
-      ocr.recognizeLines(pid: pid, frame: frame) { [self] lines, size, _ in
+      ocr.recognizeLines(pid: pid, frame: frame, skipFilePreviews: true) { [self] lines, size, _ in
         queue.async { [self] in
           defer { running = false }
           let now = Date()
@@ -58,7 +58,7 @@ final class WeChatCollector {
       let fp = WeChatLayout.fingerprint(chat: view.chat, message: m)
       guard !seenSet.contains(fp) else { continue }
       remember(fp)
-      let group = [view.chat, m.fromMe ? "\u{1}me" : (m.sender ?? ""), m.shownTime].joined(separator: "\u{0}")
+      let group = [ChatNames.key(view.chat), m.fromMe ? "\u{1}me" : (m.sender ?? ""), m.shownTime].joined(separator: "\u{0}")
       if recent[group, default: []].contains(where: { WeChatLayout.sameText($0, m.text) }) { continue }
       recent[group, default: []].append(m.text)
       if recent.count > 2000 { recent.removeAll() }

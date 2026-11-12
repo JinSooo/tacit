@@ -1,4 +1,5 @@
 import { tryWriteWithoutWaiting } from "../db-busy.ts";
+import { chatKey } from "../chat.ts";
 import { AudioStore } from "../audio.ts";
 import { removeSummariesOf } from "../conversations.ts";
 import { frameRecordsSchema, frameRejectionsSchema } from "./schema.ts";
@@ -257,7 +258,10 @@ export class DistillStore {
     const project = this.project(source), dest = this.project(target);
     if (!project || !dest || source === target) throw new InputError("合并目标无效");
     const keys = { ...dest.keys };
-    for (const k of ["repos","hosts","chats"] as const) keys[k] = [...new Set([...keys[k],...project.keys[k]])];
+    for (const k of ["repos","hosts","chats"] as const) {
+      const values = [...keys[k], ...project.keys[k]];
+      keys[k] = k === "chats" ? [...new Map(values.map(value => [chatKey(value), value])).values()] : [...new Set(values)];
+    }
     this.upsertProject({ ...dest, keys, needs_regen: 1 });
     this.sql.prepare("UPDATE threads SET project_id=?,needs_regen=1 WHERE project_id=?").run(dest.id,source);
     this.sql.prepare("UPDATE threads SET project_hint=? WHERE project_hint=?").run(dest.id,source);

@@ -82,3 +82,12 @@ test("并集时长：重叠只算一次，瞬时事件不计", () => {
   expect(unionSeconds([[0, 60_000], [30_000, 90_000], [200_000, 200_000], [300_000, 360_000]])).toBe(150);
   expect(unionSeconds([])).toBe(0);
 });
+
+test("活动段兼容微信旧聊天名写法，不改原记录", async () => {
+  const records = ["C 王家琪", "C王家琪"].map((chat, i) => fixture({ source: "mac.wechat", t_start: at(`10:0${i}`), context: { app: "com.tencent.xinWeChat", chat } }));
+  ctx.db.ingest(records);
+  const { segments } = await (await call(`/v1/history/segments?${day}`)).json();
+  expect(segments).toHaveLength(1);
+  expect(segments[0].record_ids).toEqual(records.map(r => r.id));
+  expect(records.map(r => ctx.db.get(r.id)?.context?.chat)).toEqual(["C 王家琪", "C王家琪"]);
+});

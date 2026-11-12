@@ -8,7 +8,7 @@ import { HubDB } from "../src/db.ts";
 import { DistillStore, type Frame, type Fact } from "../src/distill/store.ts";
 import { sliceFrames, frameKey, persistFrames } from "../src/distill/frames.ts";
 import { DistillRules } from "../src/distill/rules.ts";
-import { sliceStep as distillOnce } from "../src/distill/run.ts";
+import { sliceStep as distillOnce, frameView } from "../src/distill/run.ts";
 import { createHandler } from "../src/server.ts";
 import { fixture, setup } from "./helpers.ts";
 import { ulid } from "../../packages/record/index.ts";
@@ -191,9 +191,10 @@ test("pending 所有项目操作及线程操作实际落库，合并迁移 keys�
   const pending = (kind: "project" | "thread_done",payload: Record<string,unknown>) => { const id = ulid(); store.createPending({ id,kind,payload,created_at: new Date().toISOString() }); return id; };
   expect((await request(`pending/${pending("project",{ project_id: "p" })}`,{ action: "confirm" })).status).toBe(200); expect(store.project("p")?.confirmed).toBe(1);
   expect((await request(`pending/${pending("project",{ project_id: "p" })}`,{ action: "rename",name: "新名称" })).status).toBe(200); expect(store.project("p")?.name).toBe("新名称");
-  store.upsertProject({ id: "target",name: "目标",keys: { repos: ["/target"],hosts: [],chats: [] } });
+  store.upsertProject({ id: "target",name: "目标",keys: { repos: ["/target"],hosts: [],chats: ["chat.app:合成 群"] } });
   expect((await request(`pending/${pending("project",{ project_id: "p" })}`,{ action: "merge_into",target: "target" })).status).toBe(200);
   expect(store.project("p")).toBeNull(); expect(store.thread("t")?.project_id).toBe("target"); expect(store.facts("project_id","target")).toHaveLength(1); expect(store.project("target")?.keys.repos).toEqual(["/target","/synthetic/repo"]);
+  expect(store.project("target")?.keys.chats).toEqual(["chat.app:合成群"]);
   for (const [action,status] of [["done","done"],["continue","active"],["abandon","abandoned"]] as const) {
     expect((await request(`pending/${pending("thread_done",{ thread_id: "t" })}`,{ action })).status).toBe(200); expect(store.thread("t")?.status).toBe(status);
   }
@@ -377,4 +378,24 @@ test("事实不属于这条线程：证据所在片段退回未分配并记下�
   // 删除片段里的全部记录时，拒绝记录跟着删。
   ctx.db.delete(a.id); ctx.db.delete(b.id);
   expect(ctx.db.db.prepare("SELECT count(*) AS n FROM frame_rejections").get()).toEqual({ n: 0 });
+});
+
+test("微信旧聊天名空白差异合并切片，项目匹配兼容旧键且原记录不改", () => {
+  const app = "com.tencent.xinWeChat";
+  const names = ["C 王家琪", "C王家琪", "C童文科", "C 童文科", "File Transfer", "FileTransfer"];
+  const records = names.map((chat, i) => fixture({ source: "mac.wechat", t_start: new Date(base + i * 60000).toISOString(), context: { app, chat } }));
+  ctx.db.ingest(records);
+  const result = sliceFrames(records, base - 1, base + 3600000);
+  expect(result.frames.map(f => f.record_ids)).toEqual([records.slice(0, 2).map(r => r.id), records.slice(2, 4).map(r => r.id), records.slice(4, 6).map(r => r.id)]);
+  expect(records.map(r => ctx.db.get(r.id)?.context?.chat)).toEqual(names);
+  store.upsertProject({ id: "p", name: "项目", keys: { repos: [], hosts: [], chats: [`${app}:C 王家琪`] } });
+  thread();
+  const f = { ...result.frames[0]!, id: ulid() };
+  store.createFrame(f);
+  expect(new DistillRules(store).assign(f)).toEqual({ status: "assigned", thread_id: "t", project_id: "p" });
+  const other = { ...result.frames[1]!, id: ulid() };
+  expect(frameView(store, other, { maxRecords: 10, excerpt: () => 100 }).key).toBe(`chat:${app}:C 童文科`);
+  // 已持久化、带空格的旧片段同样能匹配不带空格的项目键。
+  store.upsertProject({ id: "p", name: "项目", keys: { repos: [], hosts: [], chats: [`${app}:C王家琪`] } });
+  expect(new DistillRules(store).assign({ ...f, key: `chat:${app}:C 王家琪` }).status).toBe("assigned");
 });

@@ -2,6 +2,7 @@
 // 模型调用都在事务之外；每一步落库用小事务，失败只影响这一步，下一轮再试。
 // 日志只写计数，不写任何记录内容或标题。
 import type { HubDB } from "../db.ts";
+import { chatKey } from "../chat.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { DistillStore, type Frame, type Thread } from "./store.ts";
@@ -102,6 +103,15 @@ export function touchThread(store: DistillStore, threadId: string, frame: Frame)
 
 // ---------------- 片段给模型看的样子 ----------------
 
+/** 比较用规整键，给模型的名称仍取组内最新记录的原文。 */
+function displayFrameKey(store: DistillStore, f: Frame): string {
+  if (!f.key.startsWith("chat:")) return f.key;
+  const latest = f.record_ids.map(id => store.hub.get(id)).filter(r => r?.context?.chat)
+    .sort((a, b) => Date.parse(b!.t_start) - Date.parse(a!.t_start) || b!.id.localeCompare(a!.id))
+    .find(r => chatKey(`chat:${r!.context!.app ?? r!.source}:${r!.context!.chat}`) === chatKey(f.key));
+  return latest ? `chat:${latest.context!.app ?? latest.source}:${latest.context!.chat}` : f.key;
+}
+
 export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: number; excerpt: (source: string) => number }): P.FrameView {
   const ids = f.record_ids.length <= opts.maxRecords ? f.record_ids
     : Array.from({ length: opts.maxRecords }, (_, i) => f.record_ids[Math.round(i * (f.record_ids.length - 1) / (opts.maxRecords - 1))]!);
@@ -123,7 +133,7 @@ export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: num
   if (ids.length < f.record_ids.length) records.push({ id: "", source: "note", title: `（共 ${f.record_ids.length} 条，只列出 ${ids.length} 条）`, excerpt: "" });
   // 整个片段都是私密记录时才整段隐藏（只给应用和时长）。
   const allPrivate = hidden > 0 && records.every(r => r.source === "note");
-  return { id: f.id, start: clock(f.t_start_ms), end: clock(f.t_end_ms), key: f.key, private: allPrivate, records };
+  return { id: f.id, start: clock(f.t_start_ms), end: clock(f.t_end_ms), key: displayFrameKey(store, f), private: allPrivate, records };
 }
 
 /** 按字数预算分批，单个片段超预算时自成一批。 */
@@ -521,14 +531,17 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
   if (!frames.length) { store.upsertDay({ date, needs_regen: 0, updated_at: toLocalIso(now) }); return { calls: 0, ok: true }; }
   const owner = new Map((store.hub.db.prepare("SELECT frame_id,thread_id FROM assignments").all() as { frame_id: string; thread_id: string }[]).map(r => [r.frame_id, r.thread_id]));
   const blocks: P.DayBlock[] = [];
+  let previousKey: string | null = null;
   for (const f of frames) {
     const t = owner.get(f.id) ? store.thread(owner.get(f.id)!) : null;
-    const label = t ? t.title : f.key.replace(/^(app|host|repo|chat):/, "");
+    const label = t ? t.title : displayFrameKey(store, f).replace(/^(app|host|repo|chat):/, "");
+    const key = !t && f.key.startsWith("chat:") ? chatKey(label) : label;
     const prev = blocks.at(-1);
-    if (prev && prev.label === label && Date.parse(`${date}T${prev.end}:00`) + 15 * MIN >= f.t_start_ms) {
-      prev.end = hhmm(f.t_end_ms); prev.minutes += Math.round(minutesOf(f)); continue;
+    if (prev && previousKey === key && Date.parse(`${date}T${prev.end}:00`) + 15 * MIN >= f.t_start_ms) {
+      prev.label = label; prev.end = hhmm(f.t_end_ms); prev.minutes += Math.round(minutesOf(f)); continue;
     }
     blocks.push({ start: hhmm(f.t_start_ms), end: hhmm(f.t_end_ms), minutes: Math.round(minutesOf(f)), label, brief: t?.brief ?? null, kind: t ? "thread" : "misc" });
+    previousKey = key;
   }
   const r = await d.llm.complete<P.DayOutput>({ tier: "day", system: P.DAY_SYSTEM, prompt: P.dayPrompt(date, blocks.slice(0, 300)), schema: P.DAY_SCHEMA });
   if (!r.ok) return { calls: 1, ok: false };

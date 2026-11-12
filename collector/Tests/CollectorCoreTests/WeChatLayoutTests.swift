@@ -94,3 +94,40 @@ private let sidebar: [OCRLine] = [
   #expect(!WeChatLayout.sameText("好的", "不行"))
   #expect(!WeChatLayout.sameText(long, String(repeating: "别的内容", count: 25)))
 }
+
+@Test func weChatChatNameNormalizationAndComparison() {
+  for (raw, expected) in [(" C 王家琪 \n", "C王家琪"), ("C 童文科", "C童文科"), ("中 交 三航局 星云测试", "中交三航局星云测试"), ("群 123 A", "群123 A"), (" File   Transfer ", "File Transfer"), ("C王家琪", "C王家琪")] {
+    #expect(ChatNames.normalize(raw) == expected)
+  }
+  #expect(ChatNames.key("C 王家琪") == ChatNames.key("C王家琪"))
+  #expect(ChatNames.key("File Transfer") == ChatNames.key("FileTransfer"))
+}
+
+@Test func weChatRejectsNoiseWithoutFallingBackToAnotherTitle() throws {
+  let rejected = ["←品", "←→品", "●••", "●", "→群", "‹群", "›群", "<群", ">群", "", "  "]
+  for name in rejected {
+    #expect(!ChatNames.isValid(name))
+    let lines = [line(name, 304, 400, 19, h: 18), line("真实会话", 500, 600, 19, h: 18), line("正文", 370, 470, 100)]
+    #expect(WeChatLayout.parse(lines, width: W, height: H) == nil)
+  }
+  for name in ["File Transfer", "中交三航局星云测试", "C王家琪", "図", "群"] {
+    #expect(ChatNames.isValid(name))
+    let view = try #require(WeChatLayout.parse([line(name, 304, 500, 19, h: 18), line("正文", 370, 470, 100)], width: W, height: H))
+    #expect(view.chat == name)
+    #expect(view.messages.count == 1)
+  }
+  let view = try #require(WeChatLayout.parse([line("C 王家琪（19）", 304, 600, 19, h: 18)], width: W, height: H))
+  #expect(view.chat == "C王家琪")
+  #expect(view.isGroup)
+}
+
+@Test func weChatFilePreviewsAreNotChats() {
+  for name in ["2026111116361055124.pdf", "金凡-简历-定稿V2-20261026（1）.pdf", "报告.PDF", "表格.xlsx", "归档.ZIP", "照片.JPEG", "视频.MOV", "文档.docx", "演示.pptx", "说明.txt", "归档.rar", "照片.png", "照片.jpg", "视频.mp4", "旧文档.doc", "旧表格.xls", "旧演示.ppt"] {
+    #expect(ChatNames.isFilePreview(name))
+    #expect(!ChatNames.isValid(name))
+    #expect(WeChatLayout.parse([line(name, 304, 800, 19, h: 18), line("文件内容", 370, 470, 100)], width: W, height: H) == nil)
+  }
+  for name in ["File Transfer", "中交三航局星云测试", "C王家琪", "pdf讨论群", "文档.pdf讨论"] {
+    #expect(!ChatNames.isFilePreview(name))
+  }
+}

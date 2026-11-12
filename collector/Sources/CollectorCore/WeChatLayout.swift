@@ -84,10 +84,11 @@ public enum WeChatLayout {
   public static func parse(_ lines: [OCRLine], width: Double, height: Double) -> WeChatView? {
     guard let title = title(lines, width: width) else { return nil }
     let left = title.minX
-    var chat = title.text.trimmingCharacters(in: .whitespaces)
+    var chat = title.text.trimmingCharacters(in: .whitespacesAndNewlines)
     var isGroup = false
     if let r = chat.range(of: #"\s*[（(]\d+[）)]$"#, options: .regularExpression) { chat.removeSubrange(r); isGroup = true }
-    guard !chat.isEmpty else { return nil }
+    chat = ChatNames.normalize(chat)
+    guard ChatNames.isValid(chat) else { return nil }
     let chatCenter = (left - 15 + width) / 2
     let sendRow = lines.filter { $0.minX > width - 100 && $0.y > height * 0.7 }.map(\.y).min()
     let body = lines
@@ -148,7 +149,7 @@ public enum WeChatLayout {
   /// 去重用的指纹：会话、发送人、内容、最近的时间分隔。来回切换会话、上下滚动都算同一条。
   /// 内容先去掉空白和标点：同一条长消息两次识别常差一个句点或空格（2026-11-10 实测）。
   public static func fingerprint(chat: String, message m: WeChatMessage) -> String {
-    let key = [chat, m.fromMe ? "\u{1}me" : (m.sender ?? ""), normalized(m.text), m.shownTime].joined(separator: "\u{0}")
+    let key = [ChatNames.key(chat), m.fromMe ? "\u{1}me" : (m.sender ?? ""), normalized(m.text), m.shownTime].joined(separator: "\u{0}")
     return SHA256.hash(data: Data(key.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
   }
 

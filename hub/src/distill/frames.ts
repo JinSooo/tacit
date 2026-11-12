@@ -1,3 +1,4 @@
+import { chatKey } from "../chat.ts";
 import type { RecordV1 } from "../../../packages/record/index.ts";
 import { ulid } from "../../../packages/record/index.ts";
 import type { HubDB } from "../db.ts";
@@ -9,7 +10,7 @@ export function frameKey(record: RecordV1): string {
   const c = record.context;
   if (c?.repo) return `repo:${c.repo}`;
   if ((record.source === "codex.session" || record.source === "claude_code.session") && c?.cwd) return `repo:${c.cwd}`;
-  if (c?.chat) return `chat:${c.app ?? record.source}:${c.chat}`;
+  if (c?.chat) return `chat:${c.app ?? record.source}:${chatKey(c.chat)}`;
   if (c?.url) { try { return `host:${new URL(c.url).host}`; } catch { /* 无效 URL 按应用分组。 */ } }
   return `app:${c?.app ?? record.source}`;
 }

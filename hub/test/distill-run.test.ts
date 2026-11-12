@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { DistillStore } from "../src/distill/store.ts";
 import * as P from "../src/distill/prompts.ts";
-import { assignStep, classifyStep, digestStep, touchThread, projectStep, LIMITS, distillRound, type LLM } from "../src/distill/run.ts";
+import { assignStep, classifyStep, digestStep, touchThread, projectStep, dayStep, LIMITS, distillRound, type LLM } from "../src/distill/run.ts";
 import type { LLMRequest } from "../src/llm/index.ts";
 import { fixture, setup } from "./helpers.ts";
 import { AgentReads } from "../src/agent.ts";
@@ -420,4 +420,20 @@ test("判断规则改过后，之前判成生活、有候选项目的线程只�
   expect(store.thread("t-work")!.domain).toBe("work");
   store.upsertThread({ ...store.thread("t-study")!, domain: "life" });
   expect(reclassifyAfterRuleChange(store)).toBe(0);
+});
+
+test("日记合并带空白的旧微信片段，显示最新记录原名", async () => {
+  const app = "com.tencent.xinWeChat";
+  const names = ["C童文科", "C 童文科"];
+  const records = names.map((chat, i) => fixture({ source: "mac.wechat", t_start: iso(base + i * MIN), context: { app, chat } }));
+  ctx.db.ingest(records);
+  for (const [i, record] of records.entries()) {
+    store.createFrame({ id: `wechat-${i}`, key: `chat:${app}:${names[i]}`, record_ids: [record.id], t_start_ms: base + i * MIN, t_end_ms: base + i * MIN, chars: 1, private: 0, status: "new" });
+  }
+  const fake = fakeLLM();
+  await dayStep({ db: ctx.db, llm: fake.llm }, store, "2026-11-08", base + 3600000);
+  const prompt = fake.calls.find(c => c.kind === "day")!.req.prompt;
+  const blocks = framesIn(prompt) as unknown as { label: string }[];
+  expect(blocks).toHaveLength(1);
+  expect(blocks[0]!.label).toBe(`${app}:C 童文科`);
 });
