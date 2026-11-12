@@ -44,9 +44,9 @@ struct SpeakerCache: Codable {
   let windows: [VoiceWindow]
   let speakers: [LocalSpeaker]
   var hub: [HubSpeaker]
-  /// 2：说话人按整段对话归并过、短段也认了人；3：多半是扬声器声音的说话人整个去掉（2026-11-11）。旧缓存没有这一项，已写进历史的对话要按新规则重新认一遍人。
+  /// 2：归并说话人并识别短段；3：扩展扬声器声音；4：会议隐藏需同时有声纹和文字覆盖。旧录音按新规则重认。
   var version: Int? = nil
-  static let current = 3
+  static let current = 4
 }
 final class Worker {
   let store: AudioStore; let hub: any HubTransport; let device: String
@@ -125,7 +125,21 @@ final class Worker {
       guard a.count >= WorkerLogic.shortSegmentSamples else { continue }
       if WorkerLogic.isBleed(mic: try inference().embedding(a), sys: try overlapping.compactMap(voice)) { out.insert(i) }
     }
-    return WorkerLogic.expandBleed(out, windows: windows, segments: meta.segments)
+    // 会议里每段都要独立命中声纹，不能因同一说话人的其他段像回声就一起隐藏。
+    return meta.meeting_apps.isEmpty ? WorkerLogic.expandBleed(out, windows: windows, segments: meta.segments) : out
+  }
+  func transcribe(_ meta: AudioMetadata, windows: [VoiceWindow], skipping: Set<Int> = []) throws -> [TranscriptLine] {
+    var lines: [TranscriptLine] = []
+    for (i, segment) in meta.segments.enumerated() {
+      // 非会议的系统转写只辅助去回声，不写进记录。
+      if meta.meeting_apps.isEmpty && segment.track == .sys && !WorkerLogic.overlapsMic(segment, meta.segments) { continue }
+      if skipping.contains(i) { continue }
+      let recognition = try inference().transcribe(audio(segment, meta))
+      if !recognition.text.isEmpty {
+        lines.append(TranscriptLine(segment: segment, local: WorkerLogic.majority(windows.filter { $0.segment == i }), text: recognition.text, confidence: recognition.confidence))
+      }
+    }
+    return lines
   }
   /// 已经写进历史的对话按新规则重新认人：记录不改，每句是谁、哪句是扬声器声音另存在 hub（AGENTS.md：归属关系另存一张表）。
   func relabel(_ meta: AudioMetadata) async throws {
@@ -137,7 +151,9 @@ final class Worker {
         "t_end": meta.t_end!, "speakers": uploaded.map { ["local": $0.local, "track": $0.track.rawValue, "seconds": $0.seconds, "centroid": $0.centroid] as [String: Any] }])
       cache.hub = try JSONDecoder().decode(EmbeddingsResponse.self, from: response).speakers
     }
-    let bleed = try bleedSegments(meta, windows: cache.windows)
+    let candidates = try bleedSegments(meta, windows: cache.windows)
+    let transcripts = meeting ? try transcribe(meta, windows: cache.windows) : []
+    let bleed = WorkerLogic.confirmedBleed(candidates, segments: meta.segments, lines: transcripts, meeting: meeting)
     let ids = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.speaker_id) })
     let lines: [[String: Any]] = meta.segments.enumerated().compactMap { i, segment in
       if !meeting && segment.track == .sys { return nil }
@@ -176,20 +192,14 @@ final class Worker {
         let next = WorkerLogic.decision(speakers: cache.speakers, voiceprint: sync.voiceprint?.vector, threshold: sync.voiceprint?.threshold ?? 1, meetings: meta.meeting_apps)
         if next == .skipped { _ = try await post("/v1/audio/conversations/\(meta.id)/skipped", [:]) }
         if next == .done {
-          var lines: [TranscriptLine] = []
-          let bleed = try bleedSegments(meta, windows: cache.windows)
-          for (i, segment) in meta.segments.enumerated() {
-            // 不开会时系统声音只用来去掉麦克风录到的回声：只转写和麦克风段重叠的部分，结果不写进记录。
-            if !meeting && segment.track == .sys && !WorkerLogic.overlapsMic(segment, meta.segments) { continue }
-            // 麦克风录到的扬声器声音（放歌、对方的声音）：和同时的系统声音是同一个声音，不当成有人在说话。
-            if bleed.contains(i) { continue }
-            let recognition = try inference().transcribe(audio(segment, meta))
-            let text = recognition.text
-            if !text.isEmpty { lines.append(TranscriptLine(segment: segment, local: WorkerLogic.majority(cache.windows.filter { $0.segment == i }), text: text, confidence: recognition.confidence)) }
-          }
+          let candidates = try bleedSegments(meta, windows: cache.windows)
+          let lines = try transcribe(meta, windows: cache.windows, skipping: meeting ? [] : candidates)
+          let bleed = WorkerLogic.confirmedBleed(candidates, segments: meta.segments, lines: lines, meeting: meeting)
+          let hiddenFiles = Set(bleed.map { meta.segments[$0].file })
+          let kept = meeting ? lines.filter { !hiddenFiles.contains($0.segment.file) } : WorkerLogic.removeEcho(lines)
           let labels = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.is_me ? "我" : $0.label) })
           let ids = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.speaker_id) })
-          let record = WorkerLogic.record(meta: meta, device: device, lines: WorkerLogic.removeEcho(lines).filter { meeting || $0.segment.track == .mic }, labels: labels, ids: ids, retention: sync.retention_days)
+          let record = WorkerLogic.record(meta: meta, device: device, lines: kept.filter { meeting || $0.segment.track == .mic }, labels: labels, ids: ids, retention: sync.retention_days)
           guard (record["body"] as! String).unicodeScalars.count <= 200000 else { throw WorkerError.recordTooLarge }
           let result = try JSONDecoder().decode(IngestResponse.self, from: await post("/v1/ingest", ["device": device, "records": [record]]))
           guard result.rejected.isEmpty, result.accepted + result.duplicates == 1 else { throw WorkerError.response }

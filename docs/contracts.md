@@ -397,7 +397,8 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
    - 没有 `voiceprint` → `waiting_me`，不转写；
    - 麦克风这路有本地说话人中心和 voiceprint 的余弦 ≥ threshold，或 `meeting_apps` 非空 → 转写；
    - 否则 → `skipped`，调 `/skipped`，不写记录。
-3. 转写每个人声段（SenseVoice）。**去回声**：麦克风这路的段和系统声音这路的段时间重叠、且转写文字相似度 ≥ 0.6 时，丢掉麦克风这路的那一段。`meeting_apps` 为空时，系统声音这路只转写和麦克风段重叠的部分，去回声后不写进记录。
+3. 转写每个人声段（SenseVoice）。**去回声**：非会议中，麦克风与系统声音时间重叠、且转写文字相似度 ≥ 0.6 或文字覆盖率 ≥ 0.6（至少 4 个字）时，丢掉麦克风那一段。`meeting_apps` 为空时，系统声音这路只转写和麦克风段重叠的部分，去回声后不写进记录。
+   会议中（`meeting_apps` 非空）隐藏麦克风段必须同时满足声纹相似度 ≥ 0.55、文字被邻近系统转写覆盖 ≥ 0.6（沿用 `removeEcho` 的 coverage，时间前后各放宽 3 秒、按时间拼接系统文字），不按说话人扩大隐藏范围；非会议维持原有声纹隐藏规则，保留期内旧录音由 v4 缓存触发重认并重新上传逐行标记。
 4. 写一条记录，经 `POST /v1/ingest`：
    - `source: "mac.audio"`，`source_ref: conversation_id`，`kind: "span"`，`t_start`、`t_end` 取对话首尾。
    - `title`：`对话 · HH:MM–HH:MM · 我、说话人 B`（规则生成）。

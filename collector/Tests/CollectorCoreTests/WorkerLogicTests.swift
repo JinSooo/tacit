@@ -2,6 +2,35 @@ import Testing
 import Foundation
 @testable import CollectorCore
 
+@Test func meetingBleedRequiresTextCoverage() {
+  func line(_ track: AudioTrack, _ start: String, _ end: String, _ text: String) -> TranscriptLine {
+    TranscriptLine(segment: AudioSegment(file: "\(track.rawValue)-\(start).enc", track: track,
+      start: AudioPolicy.date("2026-11-11T\(start)+08:00")!, end: AudioPolicy.date("2026-11-11T\(end)+08:00")!, dbfs: -20), local: "S1", text: text)
+  }
+  let question = line(.mic, "16:22:43", "16:22:55", "呃，这个chat指的是是图表是吗？图表对图表呃，那我们就先从phone开始，就先后开图表。")
+  let questionSys = line(.sys, "16:22:45", "16:22:55", "那我们就先从洞开始，就先抛开口掉。")
+  let analysis = line(.mic, "16:30:42", "16:30:57", "可能前期就是不管是项目还是产品，就是确认好，就是和客户去沟通，就是对确O我直接都说了嗯，就是需求分析对吧？嗯，呃总体设计")
+  let analysisSys = line(.sys, "16:30:45", "16:30:55", "这些都说了，就是需求分析，对吧？")
+  let echo = line(.mic, "16:34:30", "16:34:34", "有些我们可能需要在手机上进行操作。")
+  // 系统声音早切段，末尾与 mic 相差一秒：仍在前后各三秒的范围内。
+  let echoSys = line(.sys, "16:34:21", "16:34:29", "还有，有些我们可能需要在手机上进行操作。")
+  for (mic, sys, hidden) in [(question, questionSys, false), (analysis, analysisSys, false), (echo, echoSys, true)] {
+    let segments = [mic.segment, sys.segment]
+    let candidates: Set<Int> = WorkerLogic.isBleed(mic: [1, 0.1], sys: [[1, 0]]) ? [0] : []
+    #expect(candidates == [0])
+    #expect(WorkerLogic.confirmedBleed(candidates, segments: segments, lines: [mic, sys], meeting: true).contains(0) == hidden)
+    #expect(WorkerLogic.confirmedBleed(candidates, segments: segments, lines: [], meeting: false) == [0])
+    // 会议不能因系统文字缺失而退回仅看声纹，也不能仅凭文字隐藏。
+    #expect(WorkerLogic.confirmedBleed(candidates, segments: segments, lines: [mic], meeting: true).isEmpty)
+    #expect(WorkerLogic.confirmedBleed([], segments: segments, lines: [mic, sys], meeting: true).isEmpty)
+  }
+  let before = line(.sys, "16:34:20", "16:34:28", "有些我们可能需要")
+  let after = line(.sys, "16:34:36", "16:34:40", "在手机上进行操作。")
+  #expect(WorkerLogic.confirmedBleed([0], segments: [echo.segment], lines: [after, echo, before], meeting: true) == [0])
+  let distant = line(.sys, "16:33:00", "16:33:10", echo.text)
+  #expect(WorkerLogic.confirmedBleed([0], segments: [echo.segment], lines: [echo, distant], meeting: true).isEmpty)
+}
+
 @Test func windowsAndAACPadding() {
   #expect(WorkerLogic.windows(count: 23999, segment: 0).isEmpty)
   #expect(WorkerLogic.windows(count: 72000, segment: 2).map(\.count) == [48000, 24000])

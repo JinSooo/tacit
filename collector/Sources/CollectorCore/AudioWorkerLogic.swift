@@ -119,7 +119,7 @@ public enum WorkerLogic {
 
   /// 旧对话按当前规则都重认完以后，转写进程在录音目录里留这个文件；采集端看不到它就再启动一次转写进程接着做。
   /// 规则升级时改文件名里的版本号。
-  public static let relabelMarker = "relabel-v3"
+  public static let relabelMarker = "relabel-v4"
 
   /// 0.5 秒以下的段多是咳嗽、碰撞，不认人。
   public static let shortSegmentSamples = 8000
@@ -152,6 +152,20 @@ public enum WorkerLogic {
   public static let bleedThreshold = 0.55
   public static func isBleed(mic: [Float], sys: [[Float]]) -> Bool {
     sys.contains { cosine(mic, $0) >= bleedThreshold }
+  }
+
+  /// 会议里声纹相似仍可能混有本人发言，必须由邻近系统转写覆盖才隐藏。
+  /// 非会议没有系统转写进记录，沿用声纹判定（包括同一说话人的扩展）。
+  public static func confirmedBleed(_ candidates: Set<Int>, segments: [AudioSegment], lines: [TranscriptLine], meeting: Bool) -> Set<Int> {
+    guard meeting else { return candidates }
+    let system = lines.filter { $0.segment.track == .sys }.sorted { $0.segment.t_start < $1.segment.t_start }
+    return Set(candidates.filter { i in
+      guard let mic = lines.first(where: { $0.segment == segments[i] }) else { return false }
+      let start = AudioPolicy.date(mic.segment.t_start)!.addingTimeInterval(-3)
+      let end = AudioPolicy.date(mic.segment.t_end)!.addingTimeInterval(3)
+      let nearby = system.filter { start < AudioPolicy.date($0.segment.t_end)! && AudioPolicy.date($0.segment.t_start)! < end }
+      return coverage(mic.text, in: nearby.map(\.text).joined()) >= 0.6
+    })
   }
 
   /// 同一段里首尾相接的窗口合成一个整段，供试听片段挑选。

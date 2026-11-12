@@ -8,8 +8,9 @@ import AudioStore
 
 final class FakeModels: Inference {
   var transcriptions = 0
+  var text: ([Float]) -> String = { _ in "合成测试文字" }
   func embedding(_ samples: [Float]) throws -> [Float] { [1] + Array(repeating: 0, count: 511) }
-  func transcribe(_ samples: [Float]) throws -> Recognition { transcriptions += 1; return Recognition(text: "合成测试文字", confidence: 0.9) }
+  func transcribe(_ samples: [Float]) throws -> Recognition { transcriptions += 1; return Recognition(text: text(samples), confidence: 0.9) }
 }
 final class FakeHub: HubTransport {
   var voice = true
@@ -21,6 +22,7 @@ final class FakeHub: HubTransport {
   var requests: [[String: Any]] = []
   var samples: [[String: Any]] = []
   var uploads: [[String: Any]] = []
+  var lineUploads: [[String: Any]] = []
   func request(_ path: String, body: Data?) async throws -> Data {
     paths.append(path)
     let json = try body.map { try JSONSerialization.jsonObject(with: $0) as! [String: Any] } ?? [:]
@@ -38,6 +40,8 @@ final class FakeHub: HubTransport {
     } else if path == "/v1/ingest" {
       records += json["records"] as! [[String: Any]]
       reply = ["accepted": reject || duplicate ? 0 : 1, "duplicates": duplicate ? 1 : 0, "rejected": reject ? [["index": 0]] : []]
+    } else if path == "/v1/audio/lines" {
+      lineUploads.append(json)
     } else if path == "/v1/audio/samples" {
       // 和 hub 一样：每个说话人（测试里只有一个）最多存 3 段。
       let stored = samples.reduce(0) { $0 + ($1["clips"] as! [Any]).count }
@@ -312,16 +316,53 @@ func clusterProbe() throws {
   #expect(try await worker.run() == 0)
   #expect(try store.conversations().first?.status == .done)
   #expect(!hub.paths.contains("/v1/audio/lines"))
-  // 模拟旧版缓存：去掉 version。
+  // 模拟上一版缓存和已完成标记：新版本仍须重认一次。
   let url = try store.directory(for: try store.conversations().first!).appendingPathComponent("speakers.json")
   var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
-  json["version"] = nil
+  json["version"] = 3
   try JSONSerialization.data(withJSONObject: json).write(to: url)
+  try Data().write(to: store.root.appendingPathComponent("relabel-v3"))
   #expect(try await worker.run() == 0)
   #expect(hub.paths.filter { $0 == "/v1/audio/lines" }.count == 1)
+  #expect(try JSONDecoder().decode(SpeakerCache.self, from: Data(contentsOf: url)).version == 4)
   #expect(try await worker.run() == 0)
   #expect(hub.paths.filter { $0 == "/v1/audio/lines" }.count == 1)
   // 都重认完了，留下标记，采集端不再为此启动转写进程。
   #expect(FileManager.default.fileExists(atPath: store.root.appendingPathComponent(WorkerLogic.relabelMarker).path))
   _ = meta
+}
+
+// 两处生产路径都必须用文字确认：首次转写不跳过混合段，旧录音重认上传 visible。
+@Test func workerMeetingBleedAndRelabelPreserveMixedSpeech() async throws {
+  let question = "呃，这个chat指的是是图表是吗？图表对图表呃，那我们就先从phone开始，就先后开图表。"
+  let system = "那我们就先从洞开始，就先抛开口掉。"
+  let micAudio = [Float](repeating: 0.1, count: 48000), sysAudio = [Float](repeating: 0.2, count: 48000)
+  for (meetings, micText, hidden) in [(["com.tencent.meeting"], question, false), (["com.tencent.meeting"], system, true), ([], question, true)] {
+    let (root, store, original) = try fixture([micAudio, sysAudio], meetings: meetings, encode: { Data([$0[0] < 0.15 ? 1 : 2]) })
+    defer { try? FileManager.default.removeItem(at: root) }
+    var meta = original
+    let start = AudioPolicy.date(meta.t_start)!
+    meta.segments[1] = AudioSegment(file: meta.segments[1].file, track: .sys, start: start.addingTimeInterval(1), end: start.addingTimeInterval(4), dbfs: -20)
+    try store.writeMetadata(meta)
+    let hub = FakeHub(), models = FakeModels()
+    models.text = { $0[0] < 0.15 ? micText : system }
+    let worker = Worker(store: store, hub: hub, device: "mac-test", decode: { $0[0] == 1 ? micAudio : sysAudio }) { models }
+    #expect(try await worker.run() == 0)
+    let body = try #require(hub.records.first?["body"] as? String)
+    let micClock = "[\(WorkerLogic.clock(meta.t_start, seconds: true))]"
+    #expect(body.contains(micClock) == !hidden)
+    if !hidden { #expect(body.contains(question)) }
+    if !meetings.isEmpty { #expect(body.contains(system)) }
+    let url = try worker.cacheURL(meta)
+    var cache = try JSONDecoder().decode(SpeakerCache.self, from: Data(contentsOf: url))
+    cache.version = 3
+    try worker.save(cache, meta)
+    #expect(try await worker.run() == 0)
+    let uploaded = try #require(hub.lineUploads.last?["lines"] as? [[String: Any]])
+    let mic = try #require(uploaded.first { $0["at"] as? String == WorkerLogic.clock(meta.t_start, seconds: true) })
+    #expect(mic["hidden"] as? Bool == hidden)
+    #expect(mic["speaker_id"] as? String == "speaker-test")
+    #expect(try await worker.run() == 0)
+    #expect(hub.lineUploads.count == 1)
+  }
 }
