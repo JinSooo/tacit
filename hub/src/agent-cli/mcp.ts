@@ -1,5 +1,5 @@
-import { createInterface } from "node:readline";
 import { readHub, reason } from "./client.ts";
+import { jsonLines } from "../jsonl.ts";
 
 const versions = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const string = { type: "string" };
@@ -81,9 +81,8 @@ async function dispatch(method: string, params: unknown, tool: string) {
 }
 
 export async function runMcp(tool: string): Promise<void> {
-  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const write = (value: unknown) => process.stdout.write(JSON.stringify(value) + "\n");
-  for await (const line of lines) {
+  for await (const line of jsonLines(process.stdin)) {
     let message: unknown;
     try { message = JSON.parse(line); }
     catch { write({ jsonrpc: "2.0", id: null, ...error(-32700, "JSON 解析失败") }); continue; }

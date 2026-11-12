@@ -2,8 +2,8 @@ import { mkdirSync, renameSync, rmSync, writeFileSync, readFileSync, realpathSyn
 import { isAbsolute, join, relative, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
 import { HubDB, type IngestResult } from "./db.ts";
+import { jsonLines } from "./jsonl.ts";
 
 export interface PluginSummary {
   accepted: number; duplicates: number; rejected: number; exitCode: number;
@@ -68,8 +68,7 @@ export async function runPlugin(options: {
   try {
     // Bun 在 ENOENT 时不会结束 stdout；必须先确认启动成功，再等待输出流。
     await started;
-    const lines = createInterface({ input: child.stdout!, crlfDelay: Infinity });
-    for await (const line of lines) {
+    for await (const line of jsonLines(child.stdout!)) {
       try {
         const message = JSON.parse(line);
         if (!message || typeof message !== "object") throw new Error();

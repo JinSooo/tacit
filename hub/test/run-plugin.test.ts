@@ -54,6 +54,16 @@ test("批次最大 500、所有成功后原子保存最后 checkpoint", async ()
   expect(JSON.parse(readFileSync(join(dir, "state.json"), "utf8"))).toEqual({ offset: 1001 });
 });
 
+// 2026-11-12：AI 会话里带 U+2028 / U+2029 的 17 条记录被 readline 切断，导入全部历史时 117 个协议错误、state 不写。
+test("记录正文含 U+2028 / U+2029 时按一行读入", async () => {
+  const r = fixture({ body: `第一段${String.fromCharCode(0x2029)}第二段${String.fromCharCode(0x2028)}第三行` });
+  const result = await run(fakePlugin([{ type: "record", record: r }, checkpoint]));
+  expect(result.protocolErrors).toBe(0);
+  expect(result.accepted).toBe(1);
+  expect(result.stateWritten).toBe(true);
+  expect(ctx.db.get(r.id)?.body).toBe(r.body);
+});
+
 test("拒绝记录或非法协议行阻止 checkpoint，合法记录仍入库", async () => {
   for (const line of [{ type: "record", record: { bad: true } }, { type: "unknown" }]) {
     const r = fixture();
