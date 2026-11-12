@@ -52,7 +52,7 @@ function parseLog(output: string): Commit[] {
   for (const section of output.split(marker).slice(1)) {
     const fields = section.split("\0");
     const [hash, author, email, authored, committed, message] = fields;
-    if (!hash || !/^[a-f0-9]{40,64}$/.test(hash) || author === undefined || !email || !authored || !committed || message === undefined) throw new Error("无法解析 git log");
+    if (!hash || !/^[a-f0-9]{40,64}$/.test(hash) || author === undefined || email === undefined || !authored || !committed || message === undefined) throw new Error("无法解析 git log");
     const commit: Commit = { hash, author, email, authored, committed, message, files: [], added: 0, deleted: 0 };
     for (const field of fields.slice(6)) {
       const line = field.replace(/^\n/, "");

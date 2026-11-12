@@ -127,3 +127,15 @@ if test "$1" = rev-parse; then pwd; else exec /bin/sleep 20; fi
   expect(Date.now() - started).toBeGreaterThanOrEqual(9900); expect(Date.now() - started).toBeLessThan(13_000);
   expect(logs).toHaveLength(1); expect(logs[0]).toContain("超过时限"); expect(state.progress[dir]).toBeUndefined();
 }, 15_000);
+
+test("历史里有作者邮箱为空的提交时，仓库不被跳过，用户自己的提交照常导入", async () => {
+  const dir = await temp(), repo = path.join(dir, "repo"); await init(repo, "local@example.test");
+  await writeFile(path.join(repo, "空邮箱.txt"), "内容\n"); await git(repo, ["add", "."]);
+  await git(repo, ["commit", "--author", "无邮箱作者 <>", "-m", "空邮箱的提交"]);
+  const mine = await commit(repo, "local@example.test", "自己的提交");
+  const records: RecordV1[] = [], logs: string[] = [];
+  const state = await collectGit({ device: "mac", roots: [dir], emit: (r) => records.push(r), log: (m) => logs.push(m) });
+  expect(logs).toEqual([]);
+  expect(records.map((r) => r.context?.extra?.hash)).toEqual([mine]);
+  expect(state.progress[repo]).toBeDefined();
+});
