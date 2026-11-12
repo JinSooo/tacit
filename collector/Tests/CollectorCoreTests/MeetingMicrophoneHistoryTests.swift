@@ -17,7 +17,9 @@ import Testing
 @Test func meetingMicrophoneWhitelistRetainsAllSupportedBundles() {
   for bundle in ["com.tencent.meeting", "com.tencent.wemeet", "com.ss.desktop.lark", "com.electron.lark",
                  "us.zoom.xos", "com.microsoft.teams", "com.microsoft.teams2", "com.apple.FaceTime",
-                 "com.tencent.xinWeChat", "com.tencent.xinwechat"] {
+                 "com.tencent.xinWeChat", "com.tencent.xinwechat",
+                 "com.alibaba.DingTalkMac", "com.tencent.qq", "ru.keepcoder.Telegram",
+                 "com.tencent.WeWorkMac", "com.tinyspeck.slackmacgap", "com.hnc.Discord", "Cisco-Systems.Spark"] {
     var history = MeetingMicrophoneHistory()
     history.observe(inputBundles: [bundle, "dev.synthetic.recorder"], at: t0)
     #expect(history.apps(since: t0, through: t0) == [bundle])
@@ -40,4 +42,10 @@ import Testing
   #expect(history.apps(since: t0, through: t0.addingTimeInterval(90)) == ["com.tencent.meeting", "us.zoom.xos"])
   history.observe(inputBundles: [], at: t0.addingTimeInterval(90.01))
   #expect(history.apps(since: t0, through: t0.addingTimeInterval(91)) == ["us.zoom.xos"])
+}
+
+@Test func browsersAndMusicAppsAreNotMeetings() {
+  var history = MeetingMicrophoneHistory()
+  history.observe(inputBundles: ["com.google.Chrome", "app.zen-browser.zen", "com.tencent.QQMusicMac"], at: t0)
+  #expect(history.apps(since: t0, through: t0).isEmpty)
 }

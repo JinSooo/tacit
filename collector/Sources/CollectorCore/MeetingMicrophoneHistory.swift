@@ -5,7 +5,11 @@ public struct MeetingMicrophoneHistory {
   public static let meetingBundles: Set<String> = [
     "com.tencent.meeting", "com.tencent.wemeet", "com.ss.desktop.lark", "com.electron.lark",
     "us.zoom.xos", "com.microsoft.teams", "com.microsoft.teams2", "com.apple.FaceTime",
-    "com.tencent.xinWeChat", "com.tencent.xinwechat"
+    "com.tencent.xinWeChat", "com.tencent.xinwechat",
+    // 2026-11-12 补：钉钉、QQ、Telegram 的 id 在开发机上核对过；企业微信、Slack、Discord、Webex 没装，按官方 id 填。
+    // 浏览器不放进来：网页会议和网页里的语音输入分不开。
+    "com.alibaba.DingTalkMac", "com.tencent.qq", "ru.keepcoder.Telegram",
+    "com.tencent.WeWorkMac", "com.tinyspeck.slackmacgap", "com.hnc.Discord", "Cisco-Systems.Spark"
   ]
   private var samples: [(Date, Set<String>)] = []
   public init() {}
