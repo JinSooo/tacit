@@ -49,3 +49,39 @@ import Testing
   history.observe(inputBundles: ["com.google.Chrome", "app.zen-browser.zen", "com.tencent.QQMusicMac"], at: t0)
   #expect(history.apps(since: t0, through: t0).isEmpty)
 }
+
+@Test func disabledRecordingDoesNotReadMicrophoneProcesses() {
+  var history = MeetingMicrophoneHistory(), reads = 0
+  let read = { reads += 1; return Set(["com.tencent.meeting"]) }
+  history.sample(enabled: false, speaking: false, at: t0, read: read)
+  history.sample(enabled: false, speaking: true, at: t0.addingTimeInterval(60), read: read)
+  #expect(reads == 0)
+  #expect(history.apps(since: t0, through: t0.addingTimeInterval(60)).isEmpty)
+
+  history.sample(enabled: true, speaking: false, at: t0.addingTimeInterval(61), read: read)
+  #expect(reads == 1)
+  #expect(history.apps(since: t0, through: t0.addingTimeInterval(61)) == ["com.tencent.meeting"])
+}
+
+@Test func disabledRecordingDropsMeetingSamplesAndResumeProbesImmediately() {
+  var history = MeetingMicrophoneHistory(), reads = 0
+  history.sample(enabled: true, speaking: false, at: t0) { reads += 1; return ["com.tencent.meeting"] }
+  history.sample(enabled: false, speaking: false, at: t0.addingTimeInterval(1)) { reads += 1; return [] }
+  #expect(history.apps(since: t0, through: t0.addingTimeInterval(2)).isEmpty)
+  history.sample(enabled: true, speaking: false, at: t0.addingTimeInterval(2)) { reads += 1; return [] }
+  #expect(reads == 2)
+  #expect(history.apps(since: t0, through: t0.addingTimeInterval(2)).isEmpty)
+}
+
+@Test func meetingProbeKeepsExistingSpeakingAndIdleCadence() {
+  var history = MeetingMicrophoneHistory(), reads = 0
+  let read = { reads += 1; return Set<String>() }
+  history.sample(enabled: true, speaking: false, at: t0, read: read)
+  history.sample(enabled: true, speaking: false, at: t0.addingTimeInterval(9.99), read: read)
+  #expect(reads == 1)
+  history.sample(enabled: true, speaking: false, at: t0.addingTimeInterval(10), read: read)
+  #expect(reads == 2)
+  history.sample(enabled: true, speaking: true, at: t0.addingTimeInterval(11), read: read)
+  history.sample(enabled: true, speaking: true, at: t0.addingTimeInterval(12), read: read)
+  #expect(reads == 4)
+}

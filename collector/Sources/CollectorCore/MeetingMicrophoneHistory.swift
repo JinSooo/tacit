@@ -12,7 +12,20 @@ public struct MeetingMicrophoneHistory {
     "com.tencent.WeWorkMac", "com.tinyspeck.slackmacgap", "com.hnc.Discord", "Cisco-Systems.Spark"
   ]
   private var samples: [(Date, Set<String>)] = []
+  private var lastProbe: Date?
   public init() {}
+
+  /// 对读取闭包限频；关闭录音时不查询系统麦克风使用情况。
+  public mutating func sample(enabled: Bool, speaking: Bool, at now: Date, read: () -> Set<String>) {
+    guard enabled else {
+      samples.removeAll(); lastProbe = nil
+      return
+    }
+    if speaking || lastProbe.map({ now.timeIntervalSince($0) >= 10 }) ?? true {
+      lastProbe = now
+      observe(inputBundles: read(), at: now)
+    }
+  }
 
   public mutating func observe(inputBundles: Set<String>, at now: Date) {
     samples.append((now, inputBundles.intersection(Self.meetingBundles)))

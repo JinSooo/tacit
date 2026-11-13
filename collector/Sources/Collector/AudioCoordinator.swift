@@ -42,7 +42,6 @@ final class AudioCoordinator {
   private var retentionDays = 7
   private var retentionKnown = false
   private var meetingHistory = MeetingMicrophoneHistory()
-  private var lastMeetingProbe = Date.distantPast
   private let calendarMeetings = CalendarMeetingQuery()
   private var failure: String?
   private var lastMaintenance = Date.distantPast
@@ -78,14 +77,17 @@ final class AudioCoordinator {
     queue.async { [self] in
       guard !shuttingDown else { return }
       let now = Date()
+      if !enabled {
+        // 先用已采到的会议上下文结束当前对话，再清空探针历史；停用不能继续读取新的系统输入。
+        self.enabled = false; stop()
+      }
       // 逐个读系统里所有音频进程的属性很贵（空闲时占采集端一半以上 CPU）。会议判定只看有人说话的那段时间里
       // 会议软件是否在用麦克风：有人说话时每秒查，没人说话时每 10 秒查一次，够刷新 90 秒窗口。
       let speaking = pipelines.values.contains { $0.speechActive }
-      if speaking || now.timeIntervalSince(lastMeetingProbe) >= 10 {
-        lastMeetingProbe = now
-        meetingHistory.observe(inputBundles: microphoneInputBundles(), at: now)
-      }
+      meetingHistory.sample(enabled: enabled && !startGuard.blocked, speaking: speaking, at: now, read: microphoneInputBundles)
       if !initialized {
+        // 从未开启过录音时不读钥匙串、不扫描音频目录；已初始化的历史维护仍按原节奏继续。
+        guard enabled, !startGuard.blocked else { publish(); return }
         guard now.timeIntervalSince(lastInitialize) >= 60 else { return }
         lastInitialize = now
         do {
@@ -107,9 +109,8 @@ final class AudioCoordinator {
         failure = "上次开启录音时崩溃，已暂停录音"; publish(); return
       }
       self.enabled = enabled
-      if !enabled { stop() }
-      else if tapStop == nil && now.timeIntervalSince(lastStart) >= 60 { start() }
-      else if tapStop != nil && mic == nil && now.timeIntervalSince(lastMicStart) >= 60 { rebuildMicrophone() }
+      if enabled && tapStop == nil && now.timeIntervalSince(lastStart) >= 60 { start() }
+      else if enabled && tapStop != nil && mic == nil && now.timeIntervalSince(lastMicStart) >= 60 { rebuildMicrophone() }
       if current != nil {
         // 给 VAD 的最短人声/静音窗口留 1 秒判定时间，避免第 60 秒附近的人声被提前切断。
         if boundary.shouldClose(at: now.addingTimeInterval(-1)), !pipelines.values.contains(where: { $0.speechActive }) { tryOperation { try close() } }
