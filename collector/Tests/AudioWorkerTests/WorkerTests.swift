@@ -81,7 +81,7 @@ func fixture(_ samples: [[Float]], meetings: [String] = [], encode: ([Float]) th
   #expect(try await worker.run() == 0)
   #expect(try store.conversations().first?.status == .waiting_me)
   #expect(models.transcriptions == 0)
-  let original = try Data(contentsOf: store.directory(for: meta).appendingPathComponent("speakers.json"))
+  let original = try store.readPrivateData(at: store.directory(for: meta).appendingPathComponent("speakers.json"))
   hub.voice = true; hub.reject = true
   #expect(try await worker.run() == 1)
   #expect(try store.conversations().first?.status == .failed)
@@ -94,7 +94,7 @@ func fixture(_ samples: [[Float]], meetings: [String] = [], encode: ([Float]) th
   let clips = hub.samples[0]["clips"] as! [[String: String]]
   #expect(clips.count <= 3)
   #expect(clips.allSatisfy { Data(base64Encoded: $0["data"]!)!.count <= 320044 })
-  let cached = try Data(contentsOf: store.directory(for: meta).appendingPathComponent("speakers.json"))
+  let cached = try store.readPrivateData(at: store.directory(for: meta).appendingPathComponent("speakers.json"))
   #expect(try JSONDecoder().decode(SpeakerCache.self, from: original).windows == JSONDecoder().decode(SpeakerCache.self, from: cached).windows)
   let (otherRoot, otherStore, _) = try fixture([synthetic], encode: { _ in Data([1, 2, 3]) })
   defer { try? FileManager.default.removeItem(at: otherRoot) }
@@ -318,13 +318,13 @@ func clusterProbe() throws {
   #expect(!hub.paths.contains("/v1/audio/lines"))
   // 模拟上一版缓存和已完成标记：新版本仍须重认一次。
   let url = try store.directory(for: try store.conversations().first!).appendingPathComponent("speakers.json")
-  var json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+  var json = try JSONSerialization.jsonObject(with: store.readPrivateData(at: url)) as! [String: Any]
   json["version"] = 3
   try JSONSerialization.data(withJSONObject: json).write(to: url)
   try Data().write(to: store.root.appendingPathComponent("relabel-v3"))
   #expect(try await worker.run() == 0)
   #expect(hub.paths.filter { $0 == "/v1/audio/lines" }.count == 1)
-  #expect(try JSONDecoder().decode(SpeakerCache.self, from: Data(contentsOf: url)).version == 4)
+  #expect(try JSONDecoder().decode(SpeakerCache.self, from: store.readPrivateData(at: url)).version == 4)
   #expect(try await worker.run() == 0)
   #expect(hub.paths.filter { $0 == "/v1/audio/lines" }.count == 1)
   // 都重认完了，留下标记，采集端不再为此启动转写进程。
@@ -354,7 +354,7 @@ func clusterProbe() throws {
     if !hidden { #expect(body.contains(question)) }
     if !meetings.isEmpty { #expect(body.contains(system)) }
     let url = try worker.cacheURL(meta)
-    var cache = try JSONDecoder().decode(SpeakerCache.self, from: Data(contentsOf: url))
+    var cache = try JSONDecoder().decode(SpeakerCache.self, from: store.readPrivateData(at: url))
     cache.version = 3
     try worker.save(cache, meta)
     #expect(try await worker.run() == 0)

@@ -120,6 +120,6 @@ export function StatusView({ api }: { api: Api }) {
     </div>
 
     <h2 className="section-title">密钥备份</h2>
-    <p className="muted">数据库和音频的密钥只存在这台 Mac 的钥匙串里，丢了就再也打不开记录。在仓库目录运行 <code>bun hub/src/cli.ts keys export</code>，把输出存进密码管理器。</p>
+    <p className="muted">数据库和音频的密钥只存在这台 Mac 的钥匙串里，丢了就再也打不开记录。在 Mac 客户端的“设置 → 维护 → 密钥备份”里复制，存进密码管理器。</p>
   </section>;
 }

@@ -1,3 +1,4 @@
+import CollectorCore
 import AppKit
 import ApplicationServices
 
@@ -57,6 +58,9 @@ final class AXReader {
     guard let win = element(app, kAXFocusedWindowAttribute) else { return nil }
     let title = string(win, kAXTitleAttribute) ?? ""
     let frame = frameOf(win)
+    if CapturePolicy.shouldSkip(bundleID: "", window: title) {
+      return AXSnapshot(window: title, url: nil, lines: [], frame: frame, chars: 0, elements: 0, calls: 4, truncated: false, ms: Int(Date().timeIntervalSince(started) * 1000))
+    }
     var w = Walk(deadline: started.addingTimeInterval(budget))
     w.skipEditable = skipEditable
     w.calls = 4
@@ -147,7 +151,7 @@ final class AXReader {
       if AXUIElementCopyParameterizedAttributeValue(el, kAXStringForRangeParameterizedAttribute as CFString, range, &out) == .success,
          let s = out as? String { return s }
     }
-    return String((string(el, kAXValueAttribute) ?? "").suffix(5000))
+    return Text.captureSuffix(string(el, kAXValueAttribute) ?? "", limit: 5000)
   }
 
   // MARK: AX helpers

@@ -1,7 +1,10 @@
 # record-anything 设计文档
 
-> 草案 v0.1 · 2026-11-08 · 设计讨论已结束，尚未开工
-> record-anything 是工作名，正式名称未定。
+> 原始设计：2026-11-08；实现状态更新：2026-11-13。品牌暂定 Tacit，仓库和数据目录沿用 record-anything。
+> v1 和 v2 的 Mac 音频已实现，处于试用验收。当前产品规则以 `AGENTS.md` 为准，接口以 `docs/contracts.md` 为准。
+> 本文仍含规划项：三端类型生成、插件密钥配置尚未实现；迁移备份（成功后移除）及 Git 插件固定提交已实现；MCP 实际使用 stdio 转发本机 HTTP，准备清单在“此刻”页，常规整理每 15 分钟一轮。
+> 插件以本机用户权限运行，入库校验不是操作系统沙箱；黑名单目前覆盖密码管理器，隐私窗口标题识别的跨浏览器可靠性仍待验证。终端钩子的明文缓冲在下一次成功入库后删除，这也是“密钥从不落盘”口径的已知例外。
+> 2026-11-13 修复：安装运行代码改为应用包固定快照；修正正文进入原活动的整理；删除立即撤下派生摘要，重新整理成功后恢复。具体范围和验证见 `architecture-review-2026-11-13.md`。
 
 ## 1. 定位
 
@@ -72,7 +75,7 @@ dup_of:      null                # 重复记录指向代表记录
 corrects:    null                # 修正记录指向被修正的那条
 ```
 
-格式只在一份 JSON Schema 里定义，生成 Swift、Kotlin、TypeScript 三端类型。
+格式以一份 JSON Schema 为准；当前 TypeScript 与 Swift 生产方子集为手写，并用共享样例约束编解码与校验。三端类型自动生成仍是后续工程改进，尚未交付。
 
 ### 3.3 各来源怎么切成一条
 
@@ -319,7 +322,7 @@ AX 扫描约束（实验 0-B）：
 - **会话开始时注入**：SessionStart hook 带当前目录问中枢，注入当前状态 + 匹配项目的活跃线程简略版，**默认预算 800 token，可在设置中调整**，附一行可用工具提示。会话压缩后重新注入。
   - Claude Code：hook 输出 `hookSpecificOutput.additionalContext`（必须嵌套，放顶层会被丢弃）；写在用户级 settings，不走插件（插件 hook 有已知 bug）。
   - Codex：SessionStart hook（需 `codex_hooks = true`，开工时核实）。
-- **MCP（stdio，以读取为主）**：两边配置里只写一条命令（`bun …/hub/src/cli.ts mcp`），进程自己读数据目录里的 hub token 文件（0600） 再调用 hub 的 `/v1/agent/*`，token 不出现在任何配置文件里。（2026-11-08 确认，原方案是本机 HTTP）读取逻辑和审计都在 hub 里，MCP 进程只做转发。
+- **MCP（stdio，以读取为主）**：两边配置里只写一条命令（`bun …/hub/src/cli.ts mcp`），进程自己读数据目录里的 agent-token 文件（0600，仅允许 AI 查询/追加） 再调用 hub 的 `/v1/agent/*`，token 不出现在任何配置文件里。（2026-11-08 确认，原方案是本机 HTTP）读取逻辑和审计都在 hub 里，MCP 进程只做转发。
   - `now()`：当前状态
   - `get(id, level)`：读线程、项目、人、日记；`level` = `brief` | `detail` | `evidence`，Agent 自己选读几层
   - `search(query, time_range)`
@@ -426,7 +429,7 @@ macOS 的权限按签名身份授权。暂时没有 Apple 开发者账号：
 | 网页 | React + Vite，由中枢提供 |
 | 传输加密 | HPKE（CryptoKit / Tink / Node 库） |
 | 设备发现 | Bonjour / mDNS |
-| MCP | 官方 TypeScript SDK，本机 HTTP |
+| MCP | 手写 stdio JSON-RPC 薄进程，转发至本机 HTTP；尚未采用官方 SDK |
 | 记录格式 | JSON Schema → 生成三端类型 |
 | 向量检索 | v1 不做 |
 

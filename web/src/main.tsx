@@ -258,12 +258,12 @@ function App() {
     document.addEventListener("keydown", keyboard);
     return () => document.removeEventListener("keydown", keyboard);
   }, []);
-  if (!token) return <div className="token-prompt"><strong>请重新打开网页版</strong><p className="muted">网页版要从 Mac 客户端或终端打开，在仓库目录运行 <code>bun hub/src/cli.ts open</code>。</p></div>;
+  if (!token) return <div className="token-prompt"><strong>请重新打开网页版</strong><p className="muted">在 Mac 客户端的“设置 → 后台服务”里点“在浏览器中打开”。</p></div>;
   return <><a className="skip" href="#content" onClick={event => { event.preventDefault(); document.getElementById("content")?.focus(); }}>跳到内容</a><main>
-    <header><div className="heading-row"><h1>Record Anything</h1><nav aria-label="页面">{([["history", "历史记录"], ["now", "此刻"], ["pending", "待确认"], ["audit", "读取记录"], ["status", "状态"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => navigate(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count" aria-label={`${pendingCount} 项`}>{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
+    <header><div className="heading-row"><h1>Tacit</h1><nav aria-label="页面">{([["history", "历史记录"], ["now", "此刻"], ["pending", "待确认"], ["audit", "读取记录"], ["status", "状态"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => navigate(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count" aria-label={`${pendingCount} 项`}>{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
       <input ref={search} type="search" aria-label="搜索历史记录" placeholder="搜索历史记录" value={q} onChange={event => setQ(event.target.value)} />
-      <select aria-label="来源" value={source} onChange={event => setSource(event.target.value)}><option value="">所有来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
-      <input className="device" list="devices" aria-label="设备" placeholder="所有设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
+      <select aria-label="来源" value={source} onChange={event => setSource(event.target.value)}><option value="">全部来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
+      <input className="device" list="devices" aria-label="设备" placeholder="全部设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
       <input className="date" type="date" aria-label="跳到日期" value={date} onChange={event => setDate(event.target.value)} />
       <button onClick={() => setNote(true)}>补写</button>
     </div>}</header>

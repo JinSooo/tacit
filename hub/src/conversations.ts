@@ -155,7 +155,7 @@ const toAudio = (r: RecordRow): AudioRow => ({ id: r.id, start_ms: r.t_start_ms,
 /** 范围内的对话分组。范围两头各多读一段，免得把跨边界的一场切开。 */
 export function conversationsIn(db: HubDB, from: number, to: number): ConversationGroup[] {
   const pad = 4 * 3600_000;
-  return groupConversations(audioRows(db, from - pad, to + pad).map(toAudio)).filter(g => g.end_ms >= from && g.start_ms <= to);
+  return groupConversations(audioRows(db, from - pad, to + pad).map(r => toAudio({ ...r, sensitivity: db.effective(r.id)?.sensitivity ?? r.sensitivity }))).filter(g => g.end_ms >= from && g.start_ms <= to);
 }
 
 /** 用户写的修正优先于转写原文。 */
@@ -190,8 +190,9 @@ export function saveSummary(db: HubDB, g: ConversationGroup, s: Summary, at = ne
     .run(g.id, JSON.stringify(g.record_ids), s.title, s.summary, JSON.stringify(s.points), at);
 }
 /** 真删记录时连带删掉引用它的总结，下一轮按剩下的记录重写。 */
-export function removeSummariesOf(db: HubDB, recordId: string) {
-  db.db.prepare("DELETE FROM conversation_summaries WHERE EXISTS(SELECT 1 FROM json_each(record_ids) WHERE value=?)").run(recordId);
+export function removeSummariesOf(db: HubDB, recordId: string | string[]) {
+  const ids = JSON.stringify(Array.isArray(recordId) ? recordId : [recordId]);
+  db.db.prepare("DELETE FROM conversation_summaries WHERE EXISTS(SELECT 1 FROM json_each(record_ids) WHERE value IN (SELECT value FROM json_each(?)))").run(ids);
 }
 
 export type SummaryState = "ready" | "waiting" | "short" | "private";

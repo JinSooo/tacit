@@ -7,8 +7,8 @@ import { dataDirOf } from "./hub-json.ts";
 
 export interface PluginField { key: string; label: string; type: "string" | "boolean" | "number"; description?: string; required?: boolean; default?: string | boolean | number }
 export interface PluginManifest { schema: 1; id: string; name: string; version: string; description: string; entry: string; permissions: string[]; config: PluginField[] }
-export interface InstalledPlugin { manifest: PluginManifest; origin: string; values: Record<string, string | number | boolean> }
-export interface PluginPreview extends InstalledPlugin { ticket: string; updating: boolean }
+export interface InstalledPlugin { manifest: PluginManifest; origin: string; values: Record<string, string | number | boolean>; revision?: string; contentHash?: string }
+export interface PluginPreview extends InstalledPlugin { ticket: string; updating: boolean; previousRevision?: string }
 export interface PluginRequest { action: "list" | "prepare" | "install" | "configure" | "uninstall" | "discard"; source?: string; id?: string; ticket?: string; values?: unknown; deleteRecords?: boolean; hub?: string }
 export class PluginError extends Error {}
 const fail = (message: string): never => { throw new PluginError(message); };
@@ -52,6 +52,12 @@ function valuesFor(m: PluginManifest, input: unknown, required: boolean): Instal
   if (redactString(JSON.stringify(result)).count) fail("普通配置不能保存密钥，请移除疑似密钥内容");
   return result;
 }
+export function gitRevision(directory: string): string {
+  const r = spawnSync("/usr/bin/git", ["-C", directory, "rev-parse", "--verify", "HEAD"], { encoding: "utf8", timeout: 5000 });
+  const revision = r.stdout?.trim();
+  if (r.status !== 0 || !/^[0-9a-f]{40,64}$/.test(revision ?? "")) fail("无法确定插件提交，未安装");
+  return revision;
+}
 function snapshotHash(directory: string): string {
   const h = createHash("sha256"); let bytes = 0, count = 0;
   const visit = (dir: string) => {
@@ -82,6 +88,7 @@ export class PluginManager {
     const ticket = randomUUID(), stage = join(this.root, ".preview-" + ticket), code = join(stage, "code");
     mkdirSync(stage, { mode: 0o700 });
     try {
+      let revision: string | undefined;
       if (isAbsolute(source)) {
         const original = realpathSync(source);
         const rel = relative(original, this.root);
@@ -94,6 +101,7 @@ export class PluginManager {
         const r = spawnSync("/usr/bin/git", ["-c", "core.hooksPath=/dev/null", "-c", "protocol.ext.allow=never", "-c", "protocol.file.allow=never", "clone", "--depth", "1", "--", source, code],
           { timeout: 60_000, stdio: "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -oBatchMode=yes -oStrictHostKeyChecking=yes" } });
         if (r.status !== 0) fail("无法读取 Git 仓库，请检查地址、网络和本机 Git 权限");
+        revision = gitRevision(code);
         rmSync(join(code, ".git"), { recursive: true, force: true });
       }
       const hash = snapshotHash(code), manifest = manifestAt(code);
@@ -102,7 +110,7 @@ export class PluginManager {
       const old = id ? this.installed(id) : undefined;
       const candidates = Object.fromEntries(manifest.config.filter(f => old?.values[f.key] !== undefined && typeof old.values[f.key] === f.type).map(f => [f.key, old!.values[f.key]]));
       const values = valuesFor(manifest, candidates, false);
-      const preview = { ticket, manifest, origin: source, values, updating: !!id };
+      const preview = { ticket, manifest, origin: source, values, updating: !!id, revision, contentHash: hash, previousRevision: old?.revision };
       atomic(join(stage, "preview.json"), { ...preview, hash });
       return preview;
     } catch (error) { rmSync(stage, { recursive: true, force: true }); throw error; }
@@ -113,7 +121,7 @@ export class PluginManager {
     if (snapshotHash(join(stage, "code")) !== p.hash) fail("预览后的插件文件发生变化，请重新预览");
     const m = manifestAt(join(stage, "code")), values = valuesFor(m, input, true), target = this.path(m.id);
     if (existsSync(target) !== p.updating) fail("安装状态已变化，请重新预览");
-    const installed = { manifest: m, origin: p.origin, values };
+    const installed = { manifest: m, origin: p.origin, values, revision: p.revision, contentHash: p.hash };
     atomic(join(stage, "installed.json"), installed);
     rmSync(join(stage, "preview.json"));
     const backup = join(this.root, ".previous-" + randomUUID());
@@ -130,15 +138,16 @@ export class PluginManager {
     if (deleteRecords) {
       if (!hub) fail("后台服务未连接，记录尚未删除，插件也未卸载");
       const token = readFileSync(join(this.dataDir, "token"), "utf8").trim();
-      const request = async (path: string, method = "GET") => {
-        const r = await fetch(new URL(path, hub), { method, headers: { authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
+      const request = async (path: string, method = "GET", body?: unknown) => {
+        const r = await fetch(new URL(path, hub), { method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, ...(body === undefined ? {} : {body: JSON.stringify(body)}), redirect: "error", signal: AbortSignal.timeout(30_000) });
         if (!r.ok) fail("删除未完成，插件仍保留且停用；请稍后重试");
         return r.json();
       };
       for (;;) {
         const page = await request(`/v1/records?source=${encodeURIComponent(pluginSource(id))}&limit=100`) as { records: { id: string }[] };
         if (!page.records.length) break;
-        for (const r of page.records) { await request(`/v1/records/${r.id}`, "DELETE"); deleted++; }
+        const result = await request("/v1/records", "DELETE", {ids: page.records.map(r=>r.id)}) as {deleted: number};
+        deleted += result.deleted;
       }
     }
     rmSync(this.path(id), { recursive: true });

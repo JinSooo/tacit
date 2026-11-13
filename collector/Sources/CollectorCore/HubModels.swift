@@ -227,6 +227,7 @@ public struct AuditRead: Decodable, Identifiable, Hashable, Sendable {
 }
 
 public struct NowState: Decodable, Sendable {
+  public let feedback: String?
   public let brief: String?
   public let updatedAt: String?
 }

@@ -66,11 +66,13 @@ struct SettingsPage: View {
 struct SettingsForm<Content: View>: View {
   @ViewBuilder var content: Content
   var body: some View {
-    Form { content }
-      .formStyle(.grouped)
-      .scrollContentBackground(.hidden)
-      .frame(maxWidth: 760)
-      .frame(maxWidth: .infinity)
+    // 滚动区域占满整栏、内容居中限宽：只限制 Form 自身宽度时，标题栏下的滚动边缘效果只盖住中间一段。
+    GeometryReader { geo in
+      Form { content }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .contentMargins(.horizontal, max(0, (geo.size.width - 760) / 2), for: .scrollContent)
+    }
   }
 }
 
@@ -169,12 +171,12 @@ struct GeneralPreferencesSection: View {
     Section {
       if let d = Binding($p.draft) {
         if context {
-          row("摘要长度上限", value: d.injectTokens, key: "inject_tokens", unit: "token")
+          row("自动带入的长度上限", value: d.injectTokens, key: "inject_tokens", unit: "token")
           Text("调大可带入更多背景，也会占用更多 AI 上下文。超出时先舍弃较旧事项，不影响历史记录的保存和主动查询。")
             .foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
         } else {
-          row("多久没活动后询问完成", value: d.askDoneDays, key: "ask_done_days", unit: "个使用天")
-          row("询问后多久没回答就归档", value: d.archiveDays, key: "archive_days", unit: "个使用天")
+          row("事项多久没动静就问“做完了吗”", value: d.askDoneDays, key: "ask_done_days", unit: "天")
+          row("问了多久没回答就归档", value: d.archiveDays, key: "archive_days", unit: "天")
         }
         HStack {
           Button("恢复默认") { p.restore(context: context) }.disabled(p.busy)
@@ -187,14 +189,14 @@ struct GeneralPreferencesSection: View {
       } else if p.error == nil { ProgressView() }
       if let error = p.error {
         SettingsMessage(text: error)
-        Button("重新读取") { Task { await p.load(api: store.api) } }
+        Button("重试") { Task { await p.load(api: store.api) } }
       }
       if let message = p.message { SettingsMessage(text: message, warning: false) }
     } header: { Text(context ? "自动带入项目进展" : "事项整理") }
     footer: {
       Note(context
-        ? "Claude Code、Codex 新会话开始时带入当前项目摘要。默认 800 token 是长度预算，并非按你的记录量计算；更早、更细的内容可由 AI 主动查询。"
-        : "有历史记录的日子才算使用天，最后活动和提问当天不算。归档后不再自动带入，也不再询问，历史内容仍可搜索。")
+        ? "Claude Code、Codex 新会话开始时带入当前项目摘要。默认 800 token 是模型的文字计量预算（中文通常约数百字），并非按你的记录量计算；更早、更细的内容可由 AI 主动查询。"
+        : "只算有历史记录的日子，最后活动和提问当天不算。归档后不再自动带入，也不再问，仍然搜得到。")
     }
     .task { await p.load(api: store.api) }
   }
@@ -235,7 +237,7 @@ struct HubSettingsView: View {
         SettingsRow("等待保存", value: "\(c.queue) 条")
         SettingsRow("本次已保存", value: "\(c.sent) 条")
         SettingsRow("详细状态") {
-          Button("在浏览器中打开…") {
+          Button("在浏览器中打开") {
             if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务尚未准备好，请稍后重试。" }
           }
         }
@@ -248,14 +250,14 @@ struct HubSettingsView: View {
             TextField("端口", text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
               .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
             if let p = Int(port), p != info?.port, info?.locked == false {
-              Button(busy ? "正在重启…" : "应用") { Task { await apply(p) } }.disabled(busy || !(1024...65535).contains(p))
+              Button(busy ? "正在重启…" : "保存并重启") { Task { await apply(p) } }.disabled(busy || !(1024...65535).contains(p))
             }
           }
         }
         if info?.locked == true { SettingsMessage(text: "端口由环境变量 RA_PORT 固定，这里不能改。", warning: false) }
         if let message { SettingsMessage(text: message, warning: false) }
         if let error { SettingsMessage(text: error) }
-        Text("仅在端口冲突时修改。应用后后台服务会重启，采集端会自动重新连接。")
+        Text("仅在端口冲突时修改。保存后后台服务会重启，记录会自动接上。")
           .foregroundStyle(Palette.muted)
       }
     }
@@ -325,6 +327,7 @@ struct PrivacySettingsView: View {
       }
       Section("其他不记录的内容") {
         SettingsRow("浏览器隐私窗口", value: "按窗口标题识别")
+        Note("部分浏览器或语言可能不在标题中标记隐私窗口，不能保证自动排除；浏览私密内容前请暂停记录。")
         SettingsRow("剪贴板", value: "从密码管理器复制的内容")
         SettingsRow("文件", value: "隐藏目录、密码管理器的目录")
       }
@@ -403,18 +406,18 @@ struct MaintenanceSettingsView: View {
       }
       Section {
         SettingsRow("密钥备份") {
-          Button(keys == .running ? "正在读取…" : "拷贝") { Task { keys = await KeyBackup.copy() } }.disabled(keys == .running)
+          Button(keys == .running ? "正在读取…" : "复制") { Task { keys = await KeyBackup.copy() } }.disabled(keys == .running)
         }
         switch keys {
-        case .copied: SettingsMessage(text: "已拷贝。粘贴到密码管理器里保存。", warning: false)
+        case .copied: SettingsMessage(text: "已复制。粘贴到密码管理器里保存。", warning: false)
         case .failed(let message): SettingsMessage(text: message)
         default: EmptyView()
         }
         SettingsRow("记录与音频的数据目录") {
-          Button("在访达中显示…") { NSWorkspace.shared.activateFileViewerSelecting([Config.load().dataDir]) }
+          Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([Config.load().dataDir]) }
         }
       } header: { Text("数据与备份") } footer: {
-        Note("这里只拷贝解密密钥，不包含历史记录或录音。换电脑时还需保留数据目录；只有密钥不能恢复记录。请将密钥存入密码管理器。")
+        Note("只复制密钥，不含历史记录和录音。换电脑时，密钥和数据目录都要带上，缺一个都打不开。")
       }
     }
     .task {
@@ -494,7 +497,7 @@ enum KeyBackup {
       return (p.terminationStatus, String(decoding: data, as: UTF8.self))
     }.value
     guard result.status == 0, !result.out.isEmpty else {
-      return .failed("钥匙串里有密钥没读到，备份不完整，所以没有拷贝。可以在终端运行 bun hub/src/cli.ts keys export 看是哪一把。")
+      return .failed("钥匙串里有密钥没读到，备份不完整，所以没有复制。可以在终端运行 bun hub/src/cli.ts keys export 看是哪一把。")
     }
     let pb = NSPasteboard.general
     pb.declareTypes([.string, .init("org.nspasteboard.ConcealedType"), .init("org.nspasteboard.TransientType")], owner: nil)

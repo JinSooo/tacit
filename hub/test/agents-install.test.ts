@@ -95,7 +95,7 @@ test("Desktop 未安装不创建配置；默认卸载包含卸载应用后留下
   runAgents(["uninstall", "--yes"], ctx.env);
   expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")?.connected).toBe(false);
 });
-test("两工具安装幂等，保留用户 hook、字段顺序、权限和逐次备份；卸载往返一致", () => {
+test("两工具安装幂等，保留用户 hook、字段顺序、权限和最近一份备份；卸载往返一致", () => {
   const ctx = setup(); ctx.write(ctx.original); chmodSync(ctx.file, 0o640);
   const codexFile = join(ctx.home, ".codex/hooks.json"); ctx.write(ctx.original, codexFile);
   const before = readFileSync(ctx.file, "utf8");
@@ -116,7 +116,7 @@ test("两工具安装幂等，保留用户 hook、字段顺序、权限和逐次
     expect(readFileSync(codexFile, "utf8")).toBe(before);
   }
   expect(statSync(ctx.file).mode & 0o777).toBe(0o640);
-  expect(readdirSync(dirname(ctx.file)).filter(name => name.includes(".ra-backup-"))).toHaveLength(4);
+  expect(readdirSync(dirname(ctx.file)).filter(name => name.includes(".ra-backup-"))).toHaveLength(1);
   expect(ctx.calls.slice(0, 3).map(call => call[2])).toEqual(["get", "remove", "add"]);
   expect(ctx.calls.some(call => call.includes("--scope"))).toBe(true);
   expect(ctx.calls.some(call => call[0] === "/fake/codex" && call.includes("--scope"))).toBe(false);

@@ -54,7 +54,7 @@ struct ModelSettingsView: View {
         if draft != saved {
           HStack {
             Spacer()
-            Button("还原") { draft = saved }.disabled(saving)
+            Button("撤销修改") { draft = saved }.disabled(saving)
             Button(saving ? "正在保存…" : "保存") { Task { await save() } }.keyboardShortcut(.defaultAction).disabled(saving)
           }
         }
@@ -67,8 +67,8 @@ struct ModelSettingsView: View {
     .sheet(item: Binding(get: { editingKey.map(KeyTarget.init) }, set: { editingKey = $0?.id })) { target in
       KeyEntrySheet(provider: target.id, label: label(target.id, info: info)) { await load() }
     }
-    .confirmationDialog("清除 API key？", isPresented: Binding(get: { removingKey != nil }, set: { if !$0 { removingKey = nil } })) {
-      if let provider = removingKey { Button("清除", role: .destructive) { Task { await removeKey(provider); removingKey = nil } } }
+    .confirmationDialog("删除 API key？", isPresented: Binding(get: { removingKey != nil }, set: { if !$0 { removingKey = nil } })) {
+      if let provider = removingKey { Button("删除", role: .destructive) { Task { await removeKey(provider); removingKey = nil } } }
       Button("取消", role: .cancel) { removingKey = nil }
     } message: { Text("使用这个提供商的模型将无法连接，直到重新填写 key。") }
   }
@@ -133,7 +133,7 @@ struct ModelSettingsView: View {
       switch tests[tier] {
       case .ok(let ms): Text(ms.map { String(format: "连接正常，用时 %.1f 秒", $0 / 1000) } ?? "连接正常").foregroundStyle(Palette.muted)
       case .failed(let e): SettingsMessage(text: e)
-      case .running: Text("正在连接，最长等 60 秒").foregroundStyle(Palette.muted)
+      case .running: Text("正在连接，最长等 1 分钟…").foregroundStyle(Palette.muted)
       case nil: EmptyView()
       }
     } header: {
@@ -161,7 +161,7 @@ struct ModelSettingsView: View {
             case nil: Text("读不到钥匙串").foregroundStyle(Palette.attention)
             }
             Button("设置…") { editingKey = p.id }
-            if (info.keys[p.id] ?? nil) == true { Button("清除…", role: .destructive) { removingKey = p.id } }
+            if (info.keys[p.id] ?? nil) == true { Button("删除…", role: .destructive) { removingKey = p.id } }
           }
         }
       }

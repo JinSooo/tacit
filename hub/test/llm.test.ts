@@ -33,6 +33,11 @@ const stdin = await Bun.stdin.text();
 appendFileSync(log, JSON.stringify({event:"start", pid:process.pid, args, stdin, cwd:process.cwd(), mode:statSync(process.cwd()).mode & 0o777, at:Date.now()})+"\\n");
 if (mode === "timeout") await new Promise(() => setInterval(() => {}, 1000));
 await Bun.sleep(50);
+if (mode === "codex-error" || mode === "codex-echo") {
+  console.log(JSON.stringify({type:"thread.started", thread_id:"synthetic"}));
+  console.log(JSON.stringify({type:"turn.failed", error:{message:mode === "codex-echo" ? JSON.parse(stdin).prompt : "HTTP 429: rate limit exceeded"}}));
+  process.exit(1);
+}
 if (mode === "limit") { console.log(JSON.stringify({type:"result", subtype:"success", is_error:true, result:"You've hit your 5-hour limit · resets 7:20pm"})); process.exit(1); }
 if (mode === "exit" || mode === "echo") { console.error(mode === "echo" ? JSON.parse(stdin).prompt : "x".repeat(900)); process.exit(2); }
 const data = mode === "schema" ? {text:42} : {text:"hello"};
@@ -241,7 +246,10 @@ for (const provider of ["anthropic", "openai-compatible"]) {
         return provider === "anthropic" ? Response.json({ stop_reason: mode === "truncated" ? "max_tokens" : "tool_use", content: [{ type: "tool_use", name: "emit_result", input: { text: 42 } }] }) : Response.json({ choices: [{ finish_reason: mode === "truncated" ? "length" : "stop", message: { content: '{"text":42}' } }] });
       }) as typeof fetch;
       const result = await llm.complete({ ...request, timeoutMs: 50 });
-      expect(result.ok).toBe(false); if (!result.ok) expect(result.error).not.toContain(request.prompt);
+      expect(result.ok).toBe(false); if (!result.ok) {
+        expect(result.error).not.toContain(request.prompt);
+        if (provider === "anthropic" && mode === "truncated") expect(result.error).toContain("8192 token 上限");
+      }
     }
     expect(rows).toHaveLength(5); expect(rows.every(r => r.ok === 0)).toBe(true);
   });
@@ -285,4 +293,16 @@ test("task 在成功和失败用量中保留，未提供时为 NULL", async () =
   await failure.llm.complete({ ...request, task: "project_brief" });
   expect(success.rows.map(r => [r.task, r.ok])).toEqual([["thread_brief", 1], [null, 1]]);
   expect(failure.rows.map(r => [r.task, r.ok])).toEqual([["project_brief", 0]]);
+});
+
+for (const mode of ["codex-error", "codex-echo"]) test(`Codex JSONL 失败诊断：${mode}`, async () => {
+  resetCodexCatalog();
+  const f = await fixture("codex-cli", mode);
+  const result = await f.llm.complete(request);
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.error).toContain(mode === "codex-error" ? "HTTP 429" : "已隐藏");
+    expect(result.error).not.toContain(request.prompt);
+    expect(f.rows[0]!.error).toBe(result.error);
+  }
 });

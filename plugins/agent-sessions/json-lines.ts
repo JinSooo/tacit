@@ -1,3 +1,4 @@
+import { capturePrefix } from "../../packages/record/capture-prefix.ts";
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { createZstdDecompress } from "node:zlib";
@@ -20,6 +21,7 @@ export class EventParser {
   private stack: Frame[] = [];
   private mode: "normal" | "string" | "primitive" = "normal";
   private token = "";
+  private truncated = false;
   private primitiveState = "";
   private primitivePosition = 0;
   private capture = false;
@@ -36,6 +38,7 @@ export class EventParser {
     return !!top && top.kind === "object" && !!fields[top.context]?.has(top.key);
   }
   private append(value: string) {
+    if (this.capture && this.token.length + value.length > (this.keyToken ? 512 : STRING_LIMIT)) this.truncated = true;
     if (this.capture && this.token.length < (this.keyToken ? 512 : STRING_LIMIT)) {
       this.token += value.slice(0, (this.keyToken ? 512 : STRING_LIMIT) - this.token.length);
     }
@@ -79,6 +82,10 @@ export class EventParser {
     throw Error();
   }
   private finishString() {
+    if (this.truncated) {
+      if (this.keyToken) throw Error();
+      this.token = capturePrefix(this.token, this.token.length, true) + "…[已截断]";
+    }
     if (this.keyToken) {
       const top = this.stack.at(-1)!; top.key = this.token; top.state = "colon";
     } else this.accept(this.capture ? this.token : null);
@@ -171,7 +178,7 @@ export class EventParser {
         if (char === '"') {
           const top = this.stack.at(-1);
           this.keyToken = !!top && top.kind === "object" && ["key", "first-key"].includes(top.state);
-          this.capture = this.keyToken || this.keep(); this.token = ""; this.mode = "string";
+          this.capture = this.keyToken || this.keep(); this.token = ""; this.truncated = false; this.mode = "string";
         } else if ("{}[]:,".includes(char)) this.symbol(char);
         else { this.token = ""; this.primitiveState = ""; this.mode = "primitive"; this.primitiveChar(char); }
       }

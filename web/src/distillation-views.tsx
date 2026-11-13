@@ -113,7 +113,7 @@ function NowView({ projects, api, onHistory }: { projects: Project[]; api: Disti
   }
   const recent = recentPaused(paused.data ?? []);
   return <div className="distillation-view">
-    <section className="now-brief" aria-label="此刻在做什么">{now.data ? now.data.now?.brief ? <p>{now.data.now.brief}</p> : <p className="muted">还没有整理出摘要</p> : <Status error={now.error} retry={now.retry} />}</section>
+    <section className="now-brief" aria-label="此刻在做什么">{now.data?.now?.feedback && <p className="muted" role="status">{now.data.now.feedback}</p>}{now.data ? now.data.now?.brief ? <p>{now.data.now.brief}</p> : <p className="muted">还没有整理出摘要</p> : <Status error={now.error} retry={now.retry} />}</section>
     <section><h2 className="section-title">进行中</h2>{!threads.data ? <Status error={threads.error} retry={threads.retry} /> : !threads.data.length ? <p className="muted">没有进行中的事项</p> : [...groups].map(([id, rows]) => {
       const project = projects.find(project => project.id === id);
       return <section className="thread-group" key={id ?? "unassigned"}><h3>{project?.name ?? (id ? "未知项目" : "不属于任何项目")}{project && !project.confirmed && <span className="unconfirmed">未确认</span>}</h3><ThreadRows threads={rows} api={api} onHistory={onHistory} /></section>;
@@ -153,15 +153,15 @@ function PendingRow({ item, projects, api, onDecide, onHistory, error }: { item:
   const threadId = item.kind === "thread_done" ? item.payload.thread_id : undefined;
   return <article className="pending-row group"><h3>{pendingTitle(item)}</h3>{item.kind === "project" ? <ul className="pending-basis">{pendingSummary(item.payload).map((line, index) => <li key={index}>{line}</li>)}</ul> : (item.kind === "merge" ? item.payload.reason : item.payload.brief) && <p>{item.kind === "merge" ? item.payload.reason : item.payload.brief}</p>}
     {threadId && <><button className="text-button compact" aria-expanded={thread} aria-controls={`pending-thread-${item.id}`} onClick={() => setThread(!thread)}>{thread ? "收起" : "查看这件事"}</button>{thread && <div id={`pending-thread-${item.id}`}><ThreadContent thread={{ id: threadId }} api={api} onHistory={onHistory} /></div>}</>}
-    {item.kind === "project" && <div className="actions"><button className="primary" onClick={() => onDecide({ action: "confirm" })}>是项目</button><button aria-expanded={mode === "rename"} onClick={() => setMode("rename")}>改名后确认</button><button aria-expanded={mode === "merge_into"} onClick={() => setMode("merge_into")}>并入已有项目</button><button onClick={() => onDecide({ action: "ignore" })}>不是项目</button></div>}
+    {item.kind === "project" && <div className="actions"><button className="primary" onClick={() => onDecide({ action: "confirm" })}>是个项目</button><button aria-expanded={mode === "rename"} onClick={() => setMode("rename")}>改名后确认</button><button aria-expanded={mode === "merge_into"} onClick={() => setMode("merge_into")}>并入已有项目</button><button onClick={() => onDecide({ action: "ignore" })}>不是项目</button></div>}
     {item.kind === "merge" && <div className="actions"><button className="primary" onClick={() => onDecide({ action: "merge" })}>合并</button><button onClick={() => onDecide({ action: "keep" })}>保持分开</button></div>}
-    {item.kind === "thread_done" && <div className="actions"><button className="primary" onClick={() => onDecide({ action: "done" })}>完成了</button><button onClick={() => onDecide({ action: "continue" })}>还在做</button><button onClick={() => onDecide({ action: "abandon" })}>不做了</button></div>}
+    {item.kind === "thread_done" && <div className="actions"><button className="primary" onClick={() => onDecide({ action: "done" })}>做完了</button><button onClick={() => onDecide({ action: "continue" })}>还在做</button><button onClick={() => onDecide({ action: "abandon" })}>不做了</button></div>}
     {mode && <form className="pending-form" onSubmit={event => { event.preventDefault(); onDecide(mode === "rename" ? { action: "rename", name: name.trim() } : { action: "merge_into", target }); }}>{mode === "rename" ? <label>项目名<input autoFocus required value={name} onChange={event => setName(event.target.value)} /></label> : <label>并入哪个项目<select autoFocus required value={target} onChange={event => setTarget(event.target.value)}><option value="">选择</option>{projects.filter(project => project.id !== item.payload.project_id).map(project => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label>}<div className="actions"><button className="primary" type="submit" disabled={mode === "rename" ? !name.trim() : !target}>确定</button><button type="button" onClick={() => setMode(undefined)}>取消</button></div></form>}
     {error && <p className="error" role="alert">{error}</p>}
   </article>;
 }
-const pendingKinds = { voice: "新声音", project: "新项目", thread_done: "做完了吗", merge: "可能是同一件事" } as const;
-const pendingNotes: Partial<Record<keyof typeof pendingKinds, string>> = { voice: "听一下样本，标出这是谁。", thread_done: "这些事有一阵子没动静了。" };
+const pendingKinds = { voice: "这是谁的声音", project: "新项目", thread_done: "这件事做完了吗", merge: "是同一个项目吗" } as const;
+const pendingNotes: Partial<Record<keyof typeof pendingKinds, string>> = { thread_done: "这些事有一阵子没动静了。" };
 type Decision = { item: Pending; resolution: Resolution };
 export function DistillationWorkspace({ view, api, audio, onHistory, onCount }: { view: View; api: DistillationApi; audio: AudioApi; onHistory: (title: string) => void; onCount: (count: number) => void }) {
   const [revision, setRevision] = useState(0);
@@ -220,7 +220,7 @@ export function DistillationWorkspace({ view, api, audio, onHistory, onCount }: 
   if (view === "history") return null;
   if (view === "now" && !projects.data) return <Status error={projects.error} retry={projects.retry} />;
   if (view === "now") return <NowView key={revision} projects={projects.data!.projects} api={api} onHistory={onHistory} />;
-  return <div className="distillation-view">{!pending.data ? <Status error={pending.error} retry={pending.retry} /> : !items.length ? <p className="empty"><strong>都处理完了</strong>系统拿不准的事会放在这里问你。</p> : (["voice", "project", "thread_done", "merge"] as const).map(kind => {
+  return <div className="distillation-view">{!pending.data ? <Status error={pending.error} retry={pending.retry} /> : !items.length ? <p className="empty"><strong>没有要确认的事</strong>拿不准的事会放在这里问你。</p> : (["voice", "project", "thread_done", "merge"] as const).map(kind => {
     const rows = items.filter(item => item.kind === kind);
     return rows.length > 0 && <section key={kind}><h2 className="section-title">{pendingKinds[kind]}</h2>{pendingNotes[kind] && <p className="section-note">{pendingNotes[kind]}</p>}{kind !== "voice" && !projects.data ? <Status error={projects.error} retry={projects.retry} /> : rows.map(item => kind === "voice" ? <VoicePendingRow key={item.id} item={item} audio={audio} error={failures[item.id]} onDecide={resolution => decide(item, resolution)} /> : <PendingRow key={item.id} item={item} projects={projects.data!.projects} api={api} onHistory={onHistory} error={failures[item.id]} onDecide={resolution => decide(item, resolution)} />)}</section>;
   })}

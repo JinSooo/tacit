@@ -11,9 +11,9 @@ export async function readHub(kind: string, params: URLSearchParams, signal: Abo
   try { port = resolvePort(process.env, dir).port; } catch (error) { throw new AgentError(error instanceof Error ? error.message : "端口配置无效"); }
   if (port < 1) throw new AgentError("RA_PORT 必须是 1–65535 的整数");
   let token: string;
-  try { token = (await readFile(join(dir, "token"), { encoding: "utf8", signal })).trim(); }
-  catch { throw new AgentError("无法读取本地 token 文件"); }
-  if (!token) throw new AgentError("本地 token 文件为空");
+  try { token = (await readFile(join(dir, "agent-token"), { encoding: "utf8", signal })).trim(); }
+  catch { throw new AgentError("无法读取 AI 查询令牌，请重新安装 Tacit"); }
+  if (!token) throw new AgentError("AI 查询令牌为空");
   let response: Response;
   try {
     response = await fetch(`http://127.0.0.1:${port}/v1/agent/${kind}?${params}`, {

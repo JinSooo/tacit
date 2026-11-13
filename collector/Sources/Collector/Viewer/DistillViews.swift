@@ -74,6 +74,7 @@ struct NowPage: View {
       }
       Group {
         if let state = now.value {
+          if let feedback = state?.feedback { Text(feedback).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true) }
           let brief = state?.brief?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
           Text(brief.isEmpty ? "记录一会儿之后，这里会写出你此刻在做什么。" : brief)
             .font(.serif(TextSize.display))

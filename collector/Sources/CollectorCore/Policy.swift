@@ -36,10 +36,10 @@ public enum ClipboardPolicy {
     if shouldSkip(types: types) { return nil }
     let ctx = RecordContext(app: app)
     if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      let body = text.count > maxBody ? String(text.prefix(maxBody)) + "…[已截断]" : text
+      let body = Text.capturePrefix(text, limit: maxBody)
       let first = Text.lines(text).first ?? ""
       return Record(device: device, source: "mac.clipboard", kind: "event", start: time, context: ctx,
-                    title: "复制 · " + Text.clamp(first, 80), body: body, capture: Capture(method: "api"))
+                    title: "复制 · " + Text.capturePrefix(first.isEmpty ? "（无标题）" : first, limit: 79, suffix: "…"), body: body, capture: Capture(method: "api"))
     }
     if types.contains(where: { imageTypes.contains($0) }) {
       return Record(device: device, source: "mac.clipboard", kind: "event", start: time, context: ctx,

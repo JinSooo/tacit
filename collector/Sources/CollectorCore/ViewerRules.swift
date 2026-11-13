@@ -27,6 +27,6 @@ public enum AuditGrouping {
 public enum PendingArchive {
   public static func notice(createdAt: String?) -> String? {
     guard let createdAt, ViewerTime.parse(createdAt) != nil else { return nil }
-    return "按使用天数自动归档"
+    return "继续使用后会自动归档"
   }
 }

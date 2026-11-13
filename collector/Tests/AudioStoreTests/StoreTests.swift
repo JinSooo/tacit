@@ -4,6 +4,27 @@ import CryptoKit
 import CollectorCore
 @testable import AudioStore
 
+@Test func metadataAndSpeakerCacheMigrateInPlaceAndAuthenticate() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = try AudioStore(dataDirectory: root, key: SymmetricKey(size: .bits256))
+  let meta = AudioMetadata(start: Date())
+  try store.writeMetadata(meta)
+  let dir = try store.directory(for: meta), file = dir.appendingPathComponent("meta.json")
+  #expect(try !Data(contentsOf: file).contains(Data(meta.id.utf8)))
+  // 模拟升级前两份明文，读回正确后确认磁盘已没有原文。
+  try meta.encoded().write(to: file)
+  let speaker = dir.appendingPathComponent("speakers.json")
+  let legacy = Data("{\"name\":\"合成姓名\",\"embedding\":[1,2,3]}".utf8)
+  try legacy.write(to: speaker)
+  #expect(try store.readMetadata(at: dir).id == meta.id)
+  #expect(try store.readPrivateData(at: speaker) == legacy)
+  #expect(try Data(contentsOf: speaker) != legacy)
+  #expect(try !Data(contentsOf: file).contains(Data(meta.id.utf8)))
+  var bytes = try Data(contentsOf: speaker); bytes[bytes.count - 1] ^= 1; try bytes.write(to: speaker)
+  #expect(throws: (any Error).self) { try store.readPrivateData(at: speaker) }
+}
+
 @Test func encryptedAudioRoundTripRejectsTamperingAndUnsafePaths() throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: root) }
@@ -80,4 +101,16 @@ func aacCodecRoundTripInMemory() throws {
   try store.moveOpenConversation(from: old, to: meta)
   #expect(try store.readSegment("sys-0001.enc", meta: meta) == audio)
   #expect(try store.conversations() == [meta])
+}
+
+@Test func inventoryReadDoesNotRewriteLegacyMetadataOrInspectSpeakerCache() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = try AudioStore(dataDirectory: root, key: SymmetricKey(size: .bits256))
+  let meta = AudioMetadata(start: Date()); try store.writeMetadata(meta)
+  let dir = try store.directory(for: meta), file = dir.appendingPathComponent("meta.json")
+  let original = try meta.encoded();try original.write(to:file)
+  try Data("deliberately invalid speaker cache".utf8).write(to:dir.appendingPathComponent("speakers.json"))
+  #expect(try store.conversations(readOnly:true).map(\.id) == [meta.id])
+  #expect(try Data(contentsOf:file) == original)
 }

@@ -1,6 +1,6 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, readdirSync, lstatSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -85,15 +85,33 @@ function hookFile(file: string, install: boolean, cli: string, bun: string, tool
   // 没有目标条目时卸载不重排、不创建文件。
   return { file, existed, before, after: !install && !found && JSON.stringify(data) === JSON.stringify(existed ? JSON.parse(before) : {}) ? before : after };
 }
-function save(plan: ReturnType<typeof hookFile>) {
+/** 每个配置只留最近一份；只清理本应用命名的普通文件。 */
+export function pruneConnectionBackups(file: string): number {
+  const prefix = `${basename(file)}.ra-backup-`;
+  const backups = readdirSync(dirname(file)).filter(name => name.startsWith(prefix) && /^\d+-[0-9a-f-]+$/.test(name.slice(prefix.length)))
+    .map(name => ({ name, path: resolve(dirname(file), name) }))
+    .filter(item => lstatSync(item.path).isFile()).sort((a, b) => b.name.localeCompare(a.name));
+  for (const item of backups) chmodSync(item.path, 0o600);
+  for (const item of backups.slice(1)) unlinkSync(item.path);
+  return Math.max(0, backups.length - 1);
+}
+function backupConnection(file: string) {
+  const prefix = `${basename(file)}.ra-backup-`;
+  const previous = readdirSync(dirname(file)).filter(n => n.startsWith(prefix)).map(n => Number(n.slice(prefix.length).split("-")[0])).filter(Number.isFinite);
+  const stamp = Math.max(Date.now(), ...previous.map(n => n + 1));
+  const backup = `${file}.ra-backup-${stamp}-${crypto.randomUUID()}`;
+  copyFileSync(file, backup); chmodSync(backup, 0o600);
+}
+export function saveConnectionPlan(plan: ReturnType<typeof hookFile>) {
   const mode = plan.existed ? statSync(plan.file).mode & 0o7777 : 0o600;
-  if (plan.existed) copyFileSync(plan.file, `${plan.file}.ra-backup-${Date.now()}-${crypto.randomUUID()}`);
+  if (plan.existed) backupConnection(plan.file);
   mkdirSync(dirname(plan.file), { recursive: true });
   const temp = `${plan.file}.ra-tmp-${crypto.randomUUID()}`;
   try {
     writeFileSync(temp, plan.after, { mode, flag: "wx" });
     chmodSync(temp, mode);
     renameSync(temp, plan.file);
+    pruneConnectionBackups(plan.file);
   } finally { if (existsSync(temp)) unlinkSync(temp); }
 }
 
@@ -205,18 +223,19 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}) {
     if (yes) {
       const registered = run(command, get, home);
       if (registered.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(registered.stderr + registered.stdout)) throw new Error(`${tool} MCP 查询失败，未继续注册`);
-      if (tool === "codex" && approvalPlan?.existed) copyFileSync(codexFile, `${codexFile}.ra-backup-${Date.now()}-${crypto.randomUUID()}`);
+      if (tool === "codex" && approvalPlan?.existed) backupConnection(codexFile);
       for (const args of [...(registered.status === 0 ? [remove] : []), ...(action === "install" ? [add] : [])]) {
         if (run(command, args, home).status !== 0) throw new Error(`${tool} MCP ${args[1]} 失败，请检查该工具配置后重试`);
       }
       if (tool === "codex") {
         const plan = codexApprovals(codexFile, action === "install", approvalPlan?.preserved);
-        if (plan.before !== plan.after) { print(approvalDiff(plan)); save(plan); }
+        if (plan.before !== plan.after) { print(approvalDiff(plan)); saveConnectionPlan(plan); }
+        pruneConnectionBackups(codexFile);
       }
     }
   }
-  if (yes) for (const plan of plans) if (plan.before !== plan.after) save(plan);
-  if (yes && desktopPlan && desktopPlan.before !== desktopPlan.after) save(desktopPlan);
+  if (yes) for (const plan of plans) if (plan.before !== plan.after) saveConnectionPlan(plan);
+  if (yes && desktopPlan && desktopPlan.before !== desktopPlan.after) saveConnectionPlan(desktopPlan);
   if (desktopPlan) print("完全退出并重新打开 Claude Desktop 后生效；连接后可让它查询历史记录。");
   if (action === "install" && tools.includes("codex")) print("Codex 新 hook 需要在 Codex 里批准一次（trusted_hash）才会生效。");
 }

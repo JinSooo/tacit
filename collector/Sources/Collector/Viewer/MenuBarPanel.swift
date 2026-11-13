@@ -137,13 +137,14 @@ struct MenuBarPanel: View {
     Button { open(.now) } label: {
       VStack(alignment: .leading, spacing: 4) {
         if let state = now.value {
+          if let feedback = state?.feedback { Text(feedback).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true) }
           if let brief = state?.brief, !brief.isEmpty {
             Text(brief)
               .font(.serif(TextSize.title)).lineSpacing(TextSize.serifLineSpacing(TextSize.title)).foregroundStyle(.primary)
               .lineLimit(4).multilineTextAlignment(.leading)
               .fixedSize(horizontal: false, vertical: true)
           } else {
-            Text("记录一段时间后，这里会写出你正在做什么。").font(.system(size: TextSize.body)).foregroundStyle(.secondary)
+            Text("记录一会儿之后，这里会写出你此刻在做什么。").font(.system(size: TextSize.body)).foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           if let at = state?.updatedAt.flatMap(ViewerTime.parse) {
@@ -232,7 +233,7 @@ struct MenuBarPanel: View {
       Button { open(.settings) } label: { PhIcon("gear-six", size: 16) }
         .buttonStyle(PanelButtonStyle()).help("设置").accessibilityLabel("设置")
       Button { open(.now) } label: { PhIcon("app-window", size: 16) }
-        .buttonStyle(PanelButtonStyle()).keyboardShortcut("o").help("打开 Record Anything").accessibilityLabel("打开 Record Anything")
+        .buttonStyle(PanelButtonStyle()).keyboardShortcut("o").help("打开 Tacit").accessibilityLabel("打开 Tacit")
     }
     .font(.system(size: TextSize.body))
     .foregroundStyle(.secondary)

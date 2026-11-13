@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { createRequire } from "node:module";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -38,13 +38,16 @@ test("真实 v1 加密结构升级，备份仍为 v1 且不覆盖，未来版本
   expect(upgraded.db.pragma("busy_timeout",{ simple: true })).toBe(5000);
   const r = rec(0); expect(upgraded.ingest([r]).accepted).toBe(1);
   upgraded.close();
-  const backupFile = join(ctx.dir,"history.db.bak-v1"), backup = readFileSync(backupFile);
-  const old = new Database(backupFile); old.pragma("cipher='sqlcipher'"); old.pragma("legacy=4"); old.pragma(`key='${ctx.config.dbKey}'`);
-  expect(old.pragma("user_version",{ simple: true })).toBe(1); old.close();
+  const backupFile = `${file}.migration-v1.bak`;
+  expect(existsSync(backupFile)).toBe(false);
   const again = new HubDB(file,ctx.config.dbKey);
   expect(again.get(r.id)?.id).toBe(r.id);
   again.db.pragma("user_version=1"); again.close();
-  // 制造迁移失败也不能覆盖已有备份。
+  // 制造迁移失败：保留加密旧版本，失败重试不能覆盖。
+  expect(() => new HubDB(file,ctx.config.dbKey)).toThrow();
+  const backup = readFileSync(backupFile);
+  const old = new Database(backupFile); old.pragma("cipher='sqlcipher'"); old.pragma("legacy=4"); old.pragma(`key='${ctx.config.dbKey}'`);
+  expect(old.pragma("user_version",{ simple: true })).toBe(1); old.close();
   expect(() => new HubDB(file,ctx.config.dbKey)).toThrow();
   expect(readFileSync(backupFile)).toEqual(backup);
   const future = new Database(file); future.pragma("cipher='sqlcipher'"); future.pragma("legacy=4"); future.pragma(`key='${ctx.config.dbKey}'`); future.pragma("user_version=11"); future.close();
@@ -164,7 +167,7 @@ test("提炼接口鉴权、Host、evidence 无正文、有效 facts 和游标", 
   const request = api();
   expect((await request("now",undefined,{ authorization: "" })).status).toBe(401);
   expect((await request("projects",undefined,{ host: "evil.test" })).status).toBe(421);
-  expect(await (await request("now")).json()).toEqual({ now: null });
+  expect(await (await request("now")).json()).toEqual({ now: { feedback: "已有活动记录，等待整理出摘要。" } });
   expect(await (await request("threads/t?level=brief")).json()).not.toHaveProperty("detail");
   const evidence = await (await request("threads/t?level=evidence")).json();
   expect(evidence.records).toEqual([{ id: r.id,title: r.title,t_start: r.t_start,source: r.source }]); expect(evidence.facts).toHaveLength(1);
@@ -244,7 +247,7 @@ test("迟到会话、三天前补写和开放记录均可续切且归属唯一",
   expect(ctx.db.db.prepare("SELECT count(*) n FROM frame_records").get()).toEqual({ n: 4 });
 });
 
-test("删除记录立即清除所有线程和项目中引用它的原话，保留其他原话", () => {
+test("删除记录立即撤下所有引用它的线程与项目详细版，剩余依据保留供重建", () => {
   const a = rec(0), b = rec(1); ctx.db.ingest([a,b]); project(); thread();
   const detail = { goal: "合成目标",quotes: [{ record_id: a.id,text: "应删除的合成原话" },{ record_id: b.id,text: "保留的合成原话" }] };
   store.upsertThread({ ...store.thread("t")!,detail });
@@ -253,7 +256,8 @@ test("删除记录立即清除所有线程和项目中引用它的原话，保�
   expect(JSON.stringify(store.thread("unrelated")?.detail)).toContain("应删除的合成原话");
   ctx.db.delete(a.id);
   for (const entity of [store.thread("t"),store.thread("unrelated"),store.project("p")]) {
-    expect(entity?.detail).toEqual({ ...detail,quotes: [detail.quotes[1]] });
+    expect(entity?.detail).toBeNull();
+    expect(entity?.brief).toBeNull();
     expect(entity?.needs_regen).toBe(1);
   }
 });

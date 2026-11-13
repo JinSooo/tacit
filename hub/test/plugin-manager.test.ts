@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { PluginManager, type PluginManifest } from "../src/plugin-manager.ts";
+import { spawnSync } from "node:child_process";
+import { gitRevision, PluginManager, type PluginManifest } from "../src/plugin-manager.ts";
 import { runPlugin } from "../src/run-plugin.ts";
 import { startServer } from "../src/server.ts";
 import { fixture, setup } from "./helpers.ts";
@@ -136,3 +137,17 @@ try { console.log(JSON.stringify(await runPlugin({db,name:'ext-example',dataDir:
     if (pid) { try { process.kill(pid, "SIGKILL"); } catch {} }
   }
 }, 10_000);
+
+
+test("真实 Git 提交能固定识别；安装快照留存内容哈希且来源后续改动不影响它", async () => {
+  for (const args of [["init"], ["add", "."], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture"]]) {
+    expect(spawnSync("/usr/bin/git", ["-C", source, ...args], { stdio: "ignore" }).status).toBe(0);
+  }
+  const revision = gitRevision(source); expect(revision).toMatch(/^[a-f0-9]{40}$/);
+  const preview = await manager.prepare(source);
+  expect(preview.contentHash).toMatch(/^[a-f0-9]{64}$/);
+  const result = manager.install(preview.ticket, { directory: "/synthetic" });
+  expect(result.contentHash).toBe(preview.contentHash);
+  writeFileSync(join(source, "main.ts"), "changed");
+  expect(manager.installed(manifest.id).contentHash).toBe(preview.contentHash);
+});

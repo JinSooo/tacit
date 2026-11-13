@@ -42,11 +42,18 @@ struct ExportIcons {
 
   static func fullBleed(_ rect: CGRect) {
     AppIconArt.drawBackground(in: rect)
-    AppIconArt.drawMark(in: rect.insetBy(dx: rect.width * 0.1, dy: rect.height * 0.1), glow: true)
+    AppIconArt.drawMark(in: rect.insetBy(dx: rect.width * 0.1, dy: rect.height * 0.1))
   }
 
-  static func status(_ state: StatusIconArt.State, in rect: CGRect, white: Bool = false) {
-    StatusIconArt.draw(state, in: rect.insetBy(dx: rect.width * 0.05, dy: rect.height * 0.05))
+  static func androidMark(_ layer: CGRect, monochrome: Bool = false) {
+    // 108dp 图层裁到桌面可见区域后，圆环仍应有清晰的深色留白。
+    // 圆环外径约 49dp；彩色、单色和预览使用同一比例。
+    AppIconArt.drawMark(in: layer.insetBy(dx: layer.width * 0.175, dy: layer.height * 0.175),
+                       monochrome: monochrome)
+  }
+
+  static func status(_ state: StatusIconArt.State, in rect: CGRect, white: Bool = false, textRows: Int = 5) {
+    StatusIconArt.draw(state, in: rect.insetBy(dx: rect.width * 0.05, dy: rect.height * 0.05), textRows: textRows)
     if white {
       NSColor.white.setFill()
       NSGraphicsContext.current!.cgContext.setBlendMode(.sourceIn)
@@ -78,7 +85,9 @@ struct ExportIcons {
     for size in [16, 32, 128, 256, 512] {
       for scale in [1, 2] {
         let suffix = scale == 2 ? "@2x" : ""
-        try png("\(base)/macos/AppIcon.iconset/icon_\(size)x\(size)\(suffix).png", size: size * scale, draw: AppIconArt.draw)
+        try png("\(base)/macos/AppIcon.iconset/icon_\(size)x\(size)\(suffix).png", size: size * scale) { rect in
+          AppIconArt.draw(in: rect, compact: size <= 32)
+        }
       }
     }
     for (name, state) in [("recording", StatusIconArt.State.recording), ("paused", .paused), ("warning", .warning)] {
@@ -89,7 +98,10 @@ struct ExportIcons {
 
     var favicons: [(Int, Data)] = []
     for size in [16, 32, 48] {
-      let data = try png("web/public/icons/favicon-\(size).png", size: size, draw: fullBleed)
+      let data = try png("web/public/icons/favicon-\(size).png", size: size) { rect in
+        AppIconArt.drawBackground(in: rect)
+        AppIconArt.drawMark(in: rect.insetBy(dx: rect.width * 0.1, dy: rect.height * 0.1), compact: true)
+      }
       favicons.append((size, data))
     }
     try write(ico(favicons), "web/public/favicon.ico")
@@ -99,7 +111,7 @@ struct ExportIcons {
       try png("web/public/icons/maskable-\(size).png", size: size, draw: fullBleed)
     }
 
-    // 108dp 图层，标志外径 62.82dp，完整落在 Android 中央 66dp 安全圆内。
+    // 108dp 图层，标志外径约 49dp，不能把 66dp 安全圆当作目标填满尺寸。
     let densities: [(String, Double)] = [("mdpi", 1), ("hdpi", 1.5), ("xhdpi", 2), ("xxhdpi", 3), ("xxxhdpi", 4)]
     for (density, scale) in densities {
       let dir = "\(base)/android/res"
@@ -110,15 +122,15 @@ struct ExportIcons {
       for mono in [false, true] {
         let name = mono ? "ic_launcher_monochrome" : "ic_launcher_foreground"
         try png("\(dir)/drawable-\(density)/\(name).png", size: Int(108 * scale)) { rect in
-          AppIconArt.drawMark(in: rect.insetBy(dx: rect.width / 12, dy: rect.height / 12), monochrome: mono)
+          androidMark(rect, monochrome: mono)
         }
       }
-      try png("\(dir)/drawable-\(density)/ic_stat_tacit.png", size: Int(24 * scale)) { status(.recording, in: $0, white: true) }
+      try png("\(dir)/drawable-\(density)/ic_stat_tacit.png", size: Int(24 * scale)) { status(.recording, in: $0, white: true, textRows: 3) }
     }
     try text("""
     <?xml version="1.0" encoding="utf-8"?>
     <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-      <gradient android:angle="90" android:startColor="#181716" android:endColor="#302E2B" />
+      <solid android:color="#211F1D" />
     </shape>
     """, "\(base)/android/res/drawable/ic_launcher_background.xml")
     for version in [26, 33] {
@@ -144,17 +156,30 @@ struct ExportIcons {
           .font: NSFont.systemFont(ofSize: size), .foregroundColor: AppIconArt.rgb(0x1C1B1A)])
       }
       label("Tacit", 80, 595, size: 30)
-      label("Original geometry · Verdigris", 80, 66)
+      label("Continuing context", 80, 66)
+      label("Web / favicon", 80, 25, size: 14)
+      for (i, size) in [16, 32, 48].enumerated() {
+        NSImage(contentsOf: root.appendingPathComponent("web/public/icons/favicon-\(size).png"))?
+          .draw(in: CGRect(x: 220 + i * 80, y: 20, width: size, height: size))
+      }
       label("macOS / Web", 590, 590)
       for (i, size) in [128, 64, 32, 16].enumerated() {
-        AppIconArt.draw(in: CGRect(x: 580 + i * 145, y: 420, width: size, height: size))
+        AppIconArt.draw(in: CGRect(x: 580 + i * 145, y: 420, width: size, height: size), compact: size <= 32)
         label("\(size) px", CGFloat(590 + i * 145), 390, size: 14)
       }
-      label("Menu bar · 18 px", 590, 330)
+      label("Menu bar / 18 px", 590, 330)
+      AppIconArt.rgb(AppIconArt.background).setFill()
+      CGRect(x: 825, y: 275, width: 220, height: 38).fill()
       for (i, state) in [StatusIconArt.State.recording, .paused, .warning].enumerated() {
         status(state, in: CGRect(x: 590 + i * 70, y: 285, width: 18, height: 18))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current!.cgContext.clip(to: CGRect(x: 840 + i * 70, y: 285, width: 18, height: 18))
+        NSGraphicsContext.current!.cgContext.beginTransparencyLayer(auxiliaryInfo: nil)
+        status(state, in: CGRect(x: 840 + i * 70, y: 285, width: 18, height: 18), white: true)
+        NSGraphicsContext.current!.cgContext.endTransparencyLayer()
+        NSGraphicsContext.restoreGraphicsState()
       }
-      label("Android · adaptive masks", 590, 230)
+      label("Android / adaptive masks", 590, 230)
       for i in 0..<3 {
         let tile = CGRect(x: 590 + i * 170, y: 70, width: 120, height: 120)
         NSGraphicsContext.saveGraphicsState()
@@ -163,7 +188,7 @@ struct ExportIcons {
         AppIconArt.drawBackground(in: tile)
         // Launcher 的可见窗口是 72dp，原始前景图层 108dp。
         let layer = tile.insetBy(dx: -30, dy: -30)
-        AppIconArt.drawMark(in: layer.insetBy(dx: layer.width / 12, dy: layer.height / 12), monochrome: i == 2)
+        androidMark(layer, monochrome: i == 2)
         NSGraphicsContext.restoreGraphicsState()
       }
     }

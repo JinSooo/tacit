@@ -30,7 +30,10 @@ struct PendingPage: View {
         } else if items.isEmpty {
           VStack(spacing: 12) {
             PhIcon("check-circle", size: 32).foregroundStyle(Palette.faint)
-            Text("没有要确认的事").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+            VStack(spacing: 4) {
+              Text("没有要确认的事").font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink)
+              Text("拿不准的事会放在这里问你。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+            }
           }
           .frame(maxWidth: .infinity).padding(.vertical, 80)
           .transition(.opacity)
@@ -100,7 +103,7 @@ struct PendingCard: View {
         Text(item.kind == "voice" ? "这是谁？" : "项目叫什么？").font(.system(size: TextSize.body, weight: .semibold))
         TextField(item.kind == "voice" ? "名字" : "项目名", text: $name).textFieldStyle(.roundedBorder).frame(width: 220)
           .onSubmit(submitName)
-        HStack { Spacer(); Button("好", action: submitName).buttonStyle(.accent).keyboardShortcut(.defaultAction).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty) }
+        HStack { Spacer(); Button("确定", action: submitName).buttonStyle(.accent).keyboardShortcut(.defaultAction).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty) }
       }
       .padding(16)
     }
@@ -204,12 +207,12 @@ struct PendingCard: View {
       switch item.kind {
       case "voice":
         Button("是我") { resolve("me") }.buttonStyle(.accent)
-        Button("填名字…") { name = ""; renaming = true }.help("这是别人，填上他的名字")
+        Button("填名字") { name = ""; renaming = true }.help("这是别人，填上他的名字")
         // 同名的人只列一次；还没确认的只列像样的几个（见 SpeakerMenu）。
         let known = SpeakerMenu.known(store.speakers, excluding: p.speakerId)
         let unknown = SpeakerMenu.unknown(store.speakers, excluding: p.speakerId)
         if !known.isEmpty || !unknown.isEmpty {
-          Menu("其实是…") {
+          Menu("是已有的人") {
             ForEach(known) { s in Button(s.name) { resolve("merge_into", target: s.id) } }
             if !unknown.isEmpty {
               Section("还没确认的声音") {

@@ -15,31 +15,42 @@ protocol Inference {
 }
 final class Models: Inference {
   let strings = Strings()
-  let recognizer: OpaquePointer
-  let extractor: OpaquePointer
-  init(directory: URL) throws {
-    let required = ["sense-voice/model.int8.onnx", "sense-voice/tokens.txt", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"]
-    guard required.allSatisfy({ FileManager.default.isReadableFile(atPath: directory.appendingPathComponent($0).path) }) else { throw WorkerError.models }
+  let directory: URL
+  private var recognizer: OpaquePointer?
+  private var extractor: OpaquePointer?
+  init(directory: URL) throws { self.directory = directory }
+  private func speakerModel() throws -> OpaquePointer {
+    if let extractor { return extractor }
+    let file = directory.appendingPathComponent("3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
+    guard FileManager.default.isReadableFile(atPath: file.path) else { throw WorkerError.models }
     var ec = SherpaOnnxSpeakerEmbeddingExtractorConfig()
-    ec.model = strings.c(directory.appendingPathComponent(required[2]).path); ec.num_threads = 4; ec.provider = strings.c("cpu")
-    guard let extractor = SherpaOnnxCreateSpeakerEmbeddingExtractor(&ec) else { throw WorkerError.models }
-    self.extractor = extractor
-    guard SherpaOnnxSpeakerEmbeddingExtractorDim(extractor) == 512 else {
-      SherpaOnnxDestroySpeakerEmbeddingExtractor(extractor); throw WorkerError.models
+    ec.model = strings.c(file.path); ec.num_threads = 4; ec.provider = strings.c("cpu")
+    guard let value = SherpaOnnxCreateSpeakerEmbeddingExtractor(&ec) else { throw WorkerError.models }
+    guard SherpaOnnxSpeakerEmbeddingExtractorDim(value) == 512 else {
+      SherpaOnnxDestroySpeakerEmbeddingExtractor(value); throw WorkerError.models
     }
+    extractor = value; return value
+  }
+  private func transcriptionModel() throws -> OpaquePointer {
+    if let recognizer { return recognizer }
+    let model = directory.appendingPathComponent("sense-voice/model.int8.onnx")
+    let tokens = directory.appendingPathComponent("sense-voice/tokens.txt")
+    guard [model, tokens].allSatisfy({ FileManager.default.isReadableFile(atPath: $0.path) }) else { throw WorkerError.models }
     var rc = SherpaOnnxOfflineRecognizerConfig()
     rc.feat_config.sample_rate = 16000; rc.feat_config.feature_dim = 80
-    rc.model_config.sense_voice.model = strings.c(directory.appendingPathComponent(required[0]).path)
+    rc.model_config.sense_voice.model = strings.c(model.path)
     rc.model_config.sense_voice.language = strings.c("auto"); rc.model_config.sense_voice.use_itn = 1
-    rc.model_config.tokens = strings.c(directory.appendingPathComponent(required[1]).path)
+    rc.model_config.tokens = strings.c(tokens.path)
     rc.model_config.num_threads = 4; rc.model_config.provider = strings.c("cpu"); rc.decoding_method = strings.c("greedy_search")
-    guard let recognizer = SherpaOnnxCreateOfflineRecognizer(&rc) else {
-      SherpaOnnxDestroySpeakerEmbeddingExtractor(extractor); throw WorkerError.models
-    }
-    self.recognizer = recognizer
+    guard let value = SherpaOnnxCreateOfflineRecognizer(&rc) else { throw WorkerError.models }
+    recognizer = value; return value
   }
-  deinit { SherpaOnnxDestroyOfflineRecognizer(recognizer); SherpaOnnxDestroySpeakerEmbeddingExtractor(extractor) }
+  deinit {
+    if let recognizer { SherpaOnnxDestroyOfflineRecognizer(recognizer) }
+    if let extractor { SherpaOnnxDestroySpeakerEmbeddingExtractor(extractor) }
+  }
   func embedding(_ samples: [Float]) throws -> [Float] {
+    let extractor = try speakerModel()
     guard let stream = SherpaOnnxSpeakerEmbeddingExtractorCreateStream(extractor) else { throw WorkerError.embedding }
     defer { SherpaOnnxDestroyOnlineStream(stream) }
     samples.withUnsafeBufferPointer { SherpaOnnxOnlineStreamAcceptWaveform(stream, 16000, $0.baseAddress, Int32($0.count)) }
@@ -51,6 +62,7 @@ final class Models: Inference {
     guard result.count == 512 else { throw WorkerError.embedding }; return result
   }
   func transcribe(_ samples: [Float]) throws -> Recognition {
+    let recognizer = try transcriptionModel()
     guard !samples.isEmpty, samples.count <= Int(Int32.max), let stream = SherpaOnnxCreateOfflineStream(recognizer) else { throw WorkerError.transcription }
     defer { SherpaOnnxDestroyOfflineStream(stream) }
     samples.withUnsafeBufferPointer { SherpaOnnxAcceptWaveformOffline(stream, 16000, $0.baseAddress, Int32($0.count)) }

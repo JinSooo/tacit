@@ -30,7 +30,7 @@ test("忽略的大字符串无正文驻留，直接可见字符串保留有界�
   expect(JSON.stringify(result.event).length).toBeLessThan(200);
   expect(result.event?.message.content).toEqual([{ type: "tool_result" }, { text: "真正用户输入", type: "text" }]);
   const visible = parse(JSON.stringify({ type: "user", message: { role: "user", content: huge } }), 8192);
-  expect(visible.damaged).toBe(false); expect(visible.event?.message.content.length).toBe(150064);
+  expect(visible.damaged).toBe(false); expect(visible.event?.message.content.length).toBeLessThanOrEqual(150064 + "…[已截断]".length);
 });
 
 test("损坏语法被识别，空行和合法无关 JSON 不算损坏", () => {

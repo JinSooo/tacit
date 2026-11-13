@@ -17,7 +17,7 @@ export function frameKey(record: RecordV1): string {
 interface Group { key: string; records: RecordV1[]; start: number; end: number; last: number }
 /** 不生成随机 ID，纯函数输出可直接用于边界测试。 */
 export function sliceFrames(records: RecordV1[], cursor_ms: number, now = Date.now()): { frames: Omit<Frame,"id">[]; cursor_ms: number } {
-  const sorted = records.slice().sort((a,b) => Date.parse(a.t_start)-Date.parse(b.t_start) || a.id.localeCompare(b.id));
+  const sorted = records.filter(r => r.source !== "manual.correction").sort((a,b) => Date.parse(a.t_start)-Date.parse(b.t_start) || a.id.localeCompare(b.id));
   const groups: Group[] = [], current = new Map<string,Group>();
   const auxiliary = (r: RecordV1) => r.source === "mac.clipboard" || r.source === "mac.file";
   const add = (r: RecordV1, key: string) => {

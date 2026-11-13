@@ -36,6 +36,7 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
       ctx.metrics.inputTokens = tokens(anthropic ? body?.usage?.input_tokens : body?.usage?.prompt_tokens);
       ctx.metrics.outputTokens = tokens(anthropic ? body?.usage?.output_tokens : body?.usage?.completion_tokens);
       if (anthropic) {
+        if (body.stop_reason === "max_tokens") throw new Error("Anthropic 输出达到 8192 token 上限，结果未保存");
         const tool = body?.content?.find((part: any) => part.type === "tool_use" && part.name === "emit_result");
         if (!tool || body.stop_reason !== "tool_use") throw new Error("Anthropic 未返回完整结构化结果");
         ctx.metrics.outputChars = Array.from(JSON.stringify(tool.input)).length;
@@ -49,7 +50,7 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
   } catch (error) {
     if (controller.signal.aborted) throw new Error(`模型 HTTP 调用超时（${ctx.timeoutMs}ms）`);
     // 不回传 fetch/钥匙串的原始异常，避免 URL、凭证或响应内容泄漏。
-    if (error instanceof Error && /^(模型 HTTP|API key|模型返回|Anthropic 未|OpenAI 兼容)/.test(error.message)) throw error;
+    if (error instanceof Error && /^(模型 HTTP|API key|模型返回|Anthropic 未|Anthropic 输出|OpenAI 兼容)/.test(error.message)) throw error;
     throw new Error("模型 HTTP 调用失败（网络或钥匙串读取失败）");
   } finally { clearTimeout(timer); }
 }

@@ -24,3 +24,9 @@ test("同一毫秒内生成的 ulid 严格递增（审计和修正按 id 取最�
   expect(ids.every((id, i) => i === 0 || ids[i - 1]! < id)).toBe(true);
   expect(ids.every((id) => /^[0-9A-HJKMNP-TV-Z]{26}$/.test(id))).toBe(true);
 });
+
+test("Mac 编码共享样例符合唯一 JSON Schema，未知字段仍拒绝", async () => {
+  const sample = (await import("../../schema/fixtures/mac-record.json")).default;
+  expect(validateRecord(sample)).toEqual({ok:true});
+  expect(validateRecord({...sample,context:{...sample.context,unsupported:"x"}}).ok).toBe(false);
+});

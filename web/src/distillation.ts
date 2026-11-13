@@ -69,7 +69,7 @@ export function recentPaused(threads: Thread[], now = Date.now()): Thread[] {
 }
 export function createDistillationApi(api: Api) {
   return {
-    now: (signal?: AbortSignal) => api<{ now: { brief: string; detail: unknown; updated_at: string | null } | null }>("/v1/now", { signal }),
+    now: (signal?: AbortSignal) => api<{ now: { brief: string; detail: unknown; updated_at: string | null; feedback?: string | null } | null }>("/v1/now", { signal }),
     projects: (signal?: AbortSignal) => api<{ projects: Project[] }>("/v1/projects", { signal }),
     pending: (signal?: AbortSignal) => api<{ pending: Pending[] }>("/v1/pending", { signal }),
     threads: async (project?: string, signal?: AbortSignal): Promise<Thread[]> => {

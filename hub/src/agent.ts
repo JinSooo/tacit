@@ -1,3 +1,5 @@
+import { currentNow } from "./now-status.ts";
+import { logFailure } from "./diagnostics.ts";
 import { isDatabaseBusy } from "./db-busy.ts";
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve } from "node:path";
@@ -90,7 +92,7 @@ export class AgentReads {
   }
 
   private now() {
-    const now = this.store.getState<{ detail?: { threads?: { thread_id: string }[] } }>("now");
+    const now = currentNow(this.hub) as { detail?: { threads?: { thread_id: string }[] } } | null;
     return { value: { notice, now }, ids: (now?.detail?.threads ?? []).map(t => t.thread_id) };
   }
 
@@ -148,7 +150,8 @@ export class AgentReads {
     for (const r of records.records) candidates.push({ kind: "records", ms: Date.parse(r.t_start!),id: r.id!,item: { ...r,...(r.sensitivity === "private" ? { private: true } : {}) } });
     let more = records.next_cursor !== null;
     for (const kind of ["threads","projects"] as const) {
-      const where = [`(instr(lower(${kind === "threads" ? "title" : "name"}),lower(?))>0 OR instr(lower(COALESCE(brief,'')),lower(?))>0)`], args: unknown[] = [q,q];
+      const terms = q.trim().split(/\s+/);
+      const where = terms.map(() => `(instr(lower(${kind === "threads" ? "title" : "name"}),lower(?))>0 OR instr(lower(COALESCE(brief,'')),lower(?))>0)`), args: unknown[] = terms.flatMap(term => [term, term]);
       if (times.from !== null) { where.push("COALESCE(last_ms,0)>=?"); args.push(times.from); }
       if (times.to !== null) { where.push("COALESCE(last_ms,0)<=?"); args.push(times.to); }
       const pos = cursor[kind];
@@ -194,6 +197,7 @@ export class AgentReads {
       value = result.value; ids = result.ids; status = "status" in result ? result.status! : 200;
     } catch (error) {
       if (error instanceof InputError) throw error;
+      if (!isDatabaseBusy(error)) logFailure("agent.storage", error);
       value = { error: isDatabaseBusy(error) ? "数据库忙，稍后再试" : "存储操作失败" }; status = isDatabaseBusy(error) ? 503 : 500;
     }
     const json = JSON.stringify(value);
@@ -236,6 +240,7 @@ export class AgentReads {
     let value: Item, ids: string[] = [], status = 200;
     try {
       value = this.hub.db.transaction(() => {
+        const perform = (): Item => {
         const ingest = (record: RecordV1) => {
           const result = this.hub.ingest([record]);
           if (result.rejected.length) throw new InputError(result.rejected[0]!.errors.join("；"));
@@ -265,15 +270,23 @@ export class AgentReads {
           sensitivity: original.sensitivity === "private" || sensitivity === "private" ? "private" : "normal" });
         ids = [original.id,id];
         return { result: "corrected", id: original.id, correction_id: id, redactions };
+        };
+        const result = perform();
+        const auditArgs = { ...args, result: result.result ?? "error", ...(result.redactions ? { redactions: result.redactions } : {}) };
+        // 追加与成功审计同一事务；不能出现内容已写入但没有审计的窗口。
+        this.hub.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?)")
+          .run(ulid(), new Date().toISOString(), tool, "append", JSON.stringify(auditArgs), JSON.stringify(ids), Buffer.byteLength(JSON.stringify(result)), 1);
+        return result;
       }).immediate() as Item;
     } catch (error) {
       if (error instanceof InputError) throw error;
+      if (!isDatabaseBusy(error)) logFailure("agent.storage", error);
       value = { error: isDatabaseBusy(error) ? "数据库忙，稍后再试" : "存储操作失败" }; status = isDatabaseBusy(error) ? 503 : 500;
     }
     args.result = value.result ?? "error";
     if (value.redactions) args.redactions = value.redactions;
     const json = JSON.stringify(value);
-    enqueueAgentAudit(this.hub, [ulid(),new Date().toISOString(),tool,"append",JSON.stringify(args),JSON.stringify(ids),Buffer.byteLength(json),Number(status < 400)]);
+    if (status >= 400) enqueueAgentAudit(this.hub, [ulid(),new Date().toISOString(),tool,"append",JSON.stringify(args),"[]",Buffer.byteLength(json),0]);
     return new Response(json,{ status,headers: { "Content-Type": "application/json" } });
   }
 

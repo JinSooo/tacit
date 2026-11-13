@@ -165,14 +165,16 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     const SERVE_BUSY_TIMEOUT_MS = 300;
     db.db.pragma(`busy_timeout=${SERVE_BUSY_TIMEOUT_MS}`);
     const { stopAgentAudit } = await import("./agent-audit.ts");
-    const flushAudit = () => stopAgentAudit(db);
+    const { startLogRetention } = await import("./log-retention.ts");
+    const stopLogs = startLogRetention(config.dataDir);
+    const flushAudit = () => { stopLogs(); stopAgentAudit(db); };
     process.once("exit", flushAudit);
     try {
       let stopping = false;
       const stop = async () => { if (stopping) return; stopping = true; await server.stop(true); flushAudit(); process.removeListener("exit", flushAudit); db.close(); process.exit(0); };
       // 改端口后退出，launchd 的 KeepAlive 用 hub.json 里的新端口重新拉起。
       const restart = () => { console.log("端口已改，中枢退出以便用新端口重启"); void stop(); };
-      const server = startServer({ db, token: config.token, port: config.port, settings: { dataDir: config.dataDir, restart } });
+      const server = startServer({ db, token: config.token, agentToken: config.agentToken, port: config.port, settings: { dataDir: config.dataDir, restart } });
       console.log(`Hub 已启动：http://127.0.0.1:${server.port}`);
       process.once("SIGINT", stop);
       process.once("SIGTERM", stop);
@@ -186,6 +188,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 }
 
 if (import.meta.main) main().catch(error => {
+  if (["run-plugin", "plugin-run"].includes(process.argv[2] ?? "")) {
+    const code = (error as { code?: string })?.code;
+    console.log(JSON.stringify({ failure: code === "ENOENT" ? "missing_file" : code === "EACCES" || code === "EPERM" ? "permission" : "process" }));
+  }
   console.error("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。");
   console.error(cliErrorDetail(error));
   process.exitCode = 1;

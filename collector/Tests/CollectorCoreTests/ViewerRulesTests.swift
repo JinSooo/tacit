@@ -26,7 +26,7 @@ private func read(_ id: String, tool: String = "claude-code", kind: String = "co
 
 @Test func threadDoneDoesNotInferArchiveDateFromCalendarDays() {
   let created = "2026-11-03T12:00:00Z"
-  #expect(PendingArchive.notice(createdAt: created) == "按使用天数自动归档")
+  #expect(PendingArchive.notice(createdAt: created) == "继续使用后会自动归档")
   #expect(PendingArchive.notice(createdAt: nil) == nil)
 }
 

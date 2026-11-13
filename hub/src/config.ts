@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dataDirOf, resolvePort } from "./hub-json.ts";
 
-export interface HubConfig { dataDir: string; dbKey: string; token: string; port: number }
+export interface HubConfig { dataDir: string; dbKey: string; token: string; agentToken: string; port: number }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): HubConfig {
   const dataDir = dataDirOf(env);
@@ -23,7 +23,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HubConfig {
     } else throw new Error("无法读取数据库钥匙串（不会覆盖已有密钥）");
   }
   if (!dbKey) throw new Error("数据库密钥不能为空");
-  const tokenFile = join(dataDir, "token");
+  const token = localToken(dataDir, "token"), agentToken = localToken(dataDir, "agent-token");
+  return { dataDir, dbKey, token, agentToken, port };
+}
+function localToken(dataDir: string, name: string): string {
+  const tokenFile = join(dataDir, name);
   if (!existsSync(tokenFile)) {
     try {
       const fd = openSync(tokenFile, "wx", 0o600);
@@ -33,5 +37,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HubConfig {
   chmodSync(tokenFile, 0o600);
   const token = readFileSync(tokenFile, "utf8").trim();
   if (!token) throw new Error("本地 token 文件为空");
-  return { dataDir, dbKey, token, port };
+  return token;
 }

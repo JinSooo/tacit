@@ -2,10 +2,11 @@ import AppKit
 
 /// 应用图标和菜单栏共用原版的圆环、文字行和短末行；应用图标配色为铜绿、暖炭灰和暖白。
 enum AppIconArt {
-  static let rowColors: [UInt32] = [0x8FC7B7, 0x7DB8A9, 0x66A796, 0x4B8D7E, 0x3B7468]
+  static let rowColors: [UInt32] = [0x93CBBD, 0x81BFB0, 0x6BAE9F, 0x599D8E, 0x4B8D7E]
+  static let background: UInt32 = 0x211F1D
   static func image(size: CGFloat) -> NSImage {
     NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-      draw(in: rect); return true
+      draw(in: rect, compact: size <= 32); return true
     }
   }
 
@@ -14,53 +15,47 @@ enum AppIconArt {
   }
 
   static func draw(in rect: CGRect) {
+    draw(in: rect, compact: false)
+  }
+
+  static func draw(in rect: CGRect, compact: Bool) {
     let s = rect.width
     let tile = rect.insetBy(dx: s * 0.1, dy: s * 0.1)
     let radius = tile.width * 0.225
     let shape = NSBezierPath(roundedRect: tile, xRadius: radius, yRadius: radius)
 
     NSGraphicsContext.saveGraphicsState()
-    let shadow = NSShadow(); shadow.shadowColor = .black.withAlphaComponent(0.3); shadow.shadowBlurRadius = s * 0.025
-    shadow.shadowOffset = NSSize(width: 0, height: -s * 0.012)
+    let shadow = NSShadow(); shadow.shadowColor = .black.withAlphaComponent(0.16); shadow.shadowBlurRadius = s * 0.015
+    shadow.shadowOffset = NSSize(width: 0, height: -s * 0.006)
     shadow.set()
-    rgb(0x181716).setFill(); shape.fill()
+    rgb(background).setFill(); shape.fill()
     NSGraphicsContext.restoreGraphicsState()
 
     NSGraphicsContext.saveGraphicsState()
     shape.addClip()
     drawBackground(in: tile)
-    drawMark(in: tile, glow: true)
-
-    NSGradient(colors: [NSColor.white.withAlphaComponent(0.10), NSColor.white.withAlphaComponent(0)])!
-      .draw(in: CGRect(x: tile.minX, y: tile.midY, width: tile.width, height: tile.height / 2), angle: -90)
+    drawMark(in: tile, compact: compact)
     NSGraphicsContext.restoreGraphicsState()
-
-    rgb(0x45413C).setStroke()
-    let rim = NSBezierPath(roundedRect: tile.insetBy(dx: s * 0.002, dy: s * 0.002), xRadius: radius, yRadius: radius)
-    rim.lineWidth = s * 0.004; rim.stroke()
   }
 
   static func drawBackground(in rect: CGRect) {
-    NSGradient(colors: [rgb(0x302E2B), rgb(0x181716)])!.draw(in: rect, angle: -90)
+    rgb(background).setFill(); rect.fill()
   }
 
   /// 各端导出复用同一图形，tile 是原版图标的底板范围。单色版用 alpha 轮廓由系统着色。
-  static func drawMark(in tile: CGRect, monochrome: Bool = false, glow: Bool = false) {
+  static func drawMark(in tile: CGRect, monochrome: Bool = false, compact: Bool = false) {
     let c = CGPoint(x: tile.midX, y: tile.midY)
     let r = tile.width * 0.265
-    if glow {
-      NSGradient(colors: [rgb(0x3B7468, 0.28), rgb(0x3B7468, 0)])!.draw(fromCenter: c, radius: 0, toCenter: c, radius: r * 1.75, options: [])
-    }
 
     // 原版外环和内容比例不变。
     let ringR = tile.width * 0.335
     let ring = NSBezierPath(ovalIn: CGRect(x: c.x - ringR, y: c.y - ringR, width: ringR * 2, height: ringR * 2))
-    ring.lineWidth = tile.width * 0.028
+    ring.lineWidth = tile.width * (compact ? 0.045 : 0.024)
     (monochrome ? NSColor.white : rgb(0xE7E3DC)).setStroke(); ring.stroke()
 
     // 圆里的文字行，上浅下深。
-    textDisc(center: c, radius: r, rows: 5, rowRatio: 1 / 1.42) { i, _ in
-      (monochrome ? NSColor.white : rgb(rowColors[i])).setFill()
+    textDisc(center: c, radius: r, rows: compact ? 3 : 5, rowRatio: compact ? 0.6 : 1 / 1.42) { i, _ in
+      (monochrome ? NSColor.white : rgb(rowColors[compact ? i * 2 : i])).setFill()
     }
   }
 
@@ -95,7 +90,8 @@ enum AppIconArt {
                                          hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { continue }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        draw(in: CGRect(x: 0, y: 0, width: px, height: px))
+        // 简化按逻辑尺寸选择，1× / 2× 保持同样的行数。
+        draw(in: CGRect(x: 0, y: 0, width: px, height: px), compact: base <= 32)
         NSGraphicsContext.restoreGraphicsState()
         let name = scale == 1 ? "icon_\(base)x\(base).png" : "icon_\(base)x\(base)@2x.png"
         try rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent(name))
@@ -104,7 +100,7 @@ enum AppIconArt {
   }
 }
 
-/// 菜单栏模板图：细环 + 环内内容。记录中是三行文字（和应用图标同形），暂停是两道竖条，缺权限是感叹号。
+/// 菜单栏模板图：细环 + 环内内容。记录中是五行文字与短末行（按选定配套图），暂停是两道竖条，缺权限是感叹号。
 enum StatusIconArt {
   enum State { case recording, paused, warning }
 
@@ -116,17 +112,17 @@ enum StatusIconArt {
     return image
   }
 
-  static func draw(_ state: State, in rect: CGRect) {
+  static func draw(_ state: State, in rect: CGRect, textRows: Int = 5) {
     let s = rect.width
     let c = CGPoint(x: rect.midX, y: rect.midY)
     NSColor.black.setStroke(); NSColor.black.setFill()
     let ringR = s * 0.42
     let ring = NSBezierPath(ovalIn: CGRect(x: c.x - ringR, y: c.y - ringR, width: ringR * 2, height: ringR * 2))
-    ring.lineWidth = s * 0.085; ring.stroke()
+    ring.lineWidth = s * 0.06; ring.stroke()
     let h = s * 0.1
     switch state {
     case .recording:
-      AppIconArt.textDisc(center: c, radius: s * 0.27, rows: 3, rowRatio: 0.6) { _, _ in }
+      AppIconArt.textDisc(center: c, radius: s * 0.32, rows: textRows, rowRatio: textRows == 3 ? 0.6 : 1 / 1.42) { _, _ in }
     case .paused:
       for dx: CGFloat in [-1, 1] {
         let bar = CGRect(x: c.x + dx * s * 0.1 - h / 2, y: c.y - s * 0.17, width: h, height: s * 0.34)

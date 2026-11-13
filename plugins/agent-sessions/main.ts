@@ -1,3 +1,4 @@
+import { capturePrefix } from "../../packages/record/capture-prefix.ts";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -55,11 +56,8 @@ function repoRoot(cwd: string | null): string | null {
     if (path.dirname(dir) === dir) return null;
   }
 }
-function shorten(text: string, length: number): string { return Array.from(text).slice(0, length).join(""); }
-function safePrefix(text: string, length: number): string {
-  const prefix = text.slice(0, length);
-  return /[\uD800-\uDBFF]$/.test(prefix) ? prefix.slice(0, -1) : prefix;
-}
+function shorten(text: string, length: number): string { return capturePrefix(text, Array.from(text).slice(0, length).join("").length); }
+function safePrefix(text: string, length: number): string { return capturePrefix(text, length); }
 
 export async function collect(options: Options): Promise<State> {
   const now = options.now ?? Date.now();

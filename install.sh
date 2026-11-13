@@ -9,6 +9,7 @@ AGENTS="$HOME/Library/LaunchAgents"
 if [ -f "$DATA/launch-agents/dev.record-anything.collector.plist" ]; then AGENTS="$DATA/launch-agents"; fi
 APP_DIR=/Applications; [ -w "$APP_DIR" ] || APP_DIR="$HOME/Applications"
 APP="$APP_DIR/Record Anything.app"
+RUNTIME="$APP/Contents/Resources/runtime"
 DOMAIN="gui/$(id -u)"
 step() { printf '\n== %s\n' "$1"; }
 
@@ -31,13 +32,15 @@ def directories(path, name):
     real = os.path.realpath(path)
     if not os.path.isfile(real) or not os.access(real, os.X_OK) or temporary(real):
         return None
-    # npm 等安装会把 codex 链接到 cli.js：真实目录之外还需保留同名入口。
+    # 优先保留用户安装的稳定入口；升级只改变链接目标，不把 PATH 钉在旧版本目录。
+    entry_dir = os.path.dirname(os.path.abspath(path))
+    if not temporary(os.path.abspath(path)) and os.path.basename(path) == name:
+        return [entry_dir]
+    # 临时 shim 才退到真实目录；npm 的 cli.js 不是同名可执行入口。
     real_dir = os.path.dirname(real)
     entry = os.path.join(real_dir, name)
     if os.path.isfile(entry) and os.access(entry, os.X_OK) and os.path.realpath(entry) == real:
         return [real_dir]
-    if not temporary(os.path.abspath(path)) and os.path.basename(path) == name:
-        return [real_dir, os.path.dirname(os.path.abspath(path))]
     return None
 
 paths = []
@@ -67,9 +70,9 @@ write_distill_plist() {
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.record-anything.distill</string>
   <key>ProgramArguments</key><array>
-    <string>$(xml "$BUN")</string><string>$(xml "$REPO/hub/src/cli.ts")</string><string>distill</string>
+    <string>$(xml "$BUN")</string><string>$(xml "$RUNTIME/hub/src/cli.ts")</string><string>distill</string>
   </array>
-  <key>WorkingDirectory</key><string>$(xml "$REPO")</string>
+  <key>WorkingDirectory</key><string>$(xml "$RUNTIME")</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>60</integer>
@@ -160,7 +163,18 @@ step "构建并签名采集端（固定的自签名证书，升级后系统权�
 collector/build.sh
 
 step "停止旧进程"
-for l in collector distill hub; do launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/dev/null || true; done
+# 先让采集端完成收尾；它退出前后台服务必须继续接收最后一批记录。
+COLLECTOR_PIDS="$(pgrep -f '/Record Anything.app/Contents/MacOS/Collector$' || true)"
+launchctl bootout "$DOMAIN/dev.record-anything.collector" 2>/dev/null || true
+for pid in $COLLECTOR_PIDS; do
+  kill -TERM "$pid" 2>/dev/null || true
+  for i in 1 2 3 4 5; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+  if kill -0 "$pid" 2>/dev/null; then echo "采集端尚未退出，停止升级以保留待发送记录。" >&2; exit 1; fi
+done
+for l in distill hub; do launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/dev/null || true; done
 if [ "${RA_NO_DISTILL:-0}" = 1 ]; then rm -f "$AGENTS/dev.record-anything.distill.plist"; fi
 pkill -f 'Record Anything.app/Contents/MacOS/Collector' 2>/dev/null || true
 pkill -f 'Record Anything.app/Contents/MacOS/ra-audio-worker' 2>/dev/null || true
@@ -173,16 +187,22 @@ ditto "collector/build/Record Anything.app" "$APP"
 step "初始化数据目录和数据库密钥（钥匙串）"
 mkdir -p "$DATA/logs"
 chmod 700 "$DATA"
-"$BUN" hub/src/cli.ts init >/dev/null
+"$BUN" "$RUNTIME/hub/src/cli.ts" init >/dev/null
 # 采集端配置：只更新仓库和 bun 的路径，保留用户改过的其他项。
-python3 -I - "$DATA/collector.json" "$REPO" "$BUN" <<'PY'
-import json, sys
+python3 -I - "$DATA/collector.json" "$RUNTIME" "$BUN" <<'PY'
+import json, os, sys
 path, repo, bun = sys.argv[1:4]
 try: conf = json.load(open(path))
 except Exception: conf = {}
 conf.update(repo=repo, bun=bun)
-open(path, "w").write(json.dumps(conf, ensure_ascii=False, indent=2) + "\n")
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
+    os.fchmod(f.fileno(), 0o600)
+    f.write(json.dumps(conf, ensure_ascii=False, indent=2) + "\n")
 PY
+
+step "更新已连接 AI 工具和终端记录的运行路径"
+"$BUN" "$RUNTIME/hub/src/relocate-install.ts" "$RUNTIME" "$BUN"
 
 step "更新启动配置（保留登录启动选择）"
 mkdir -p "$AGENTS"
@@ -192,9 +212,9 @@ cat > "$AGENTS/dev.record-anything.hub.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.record-anything.hub</string>
   <key>ProgramArguments</key><array>
-    <string>$(xml "$BUN")</string><string>$(xml "$REPO/hub/src/cli.ts")</string><string>serve</string>
+    <string>$(xml "$BUN")</string><string>$(xml "$RUNTIME/hub/src/cli.ts")</string><string>serve</string>
   </array>
-  <key>WorkingDirectory</key><string>$(xml "$REPO")</string>
+  <key>WorkingDirectory</key><string>$(xml "$RUNTIME")</string>
   <key>EnvironmentVariables</key><dict>
     <!-- 设置页的"测试连接"由中枢直接调用模型，要和提炼进程一样能找到 codex、claude。 -->
     <key>PATH</key><string>$(xml "${DISTILL_PATH:-$(dirname "$BUN"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}")</string>
@@ -244,7 +264,7 @@ launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.collector.plist"
 
 step "装好了"
 cat <<MSG
-1. 屏幕右上角的菜单栏里出现了 Record Anything 图标。第一次运行时，macOS 会请你在“辅助功能”里允许它，打开后才能记录屏幕上的文字。
+1. 屏幕右上角的菜单栏里出现了 Tacit 图标。第一次运行时，macOS 会请你在“辅助功能”里允许它，打开后才能记录屏幕上的文字。
 2. 点这个图标，从面板里打开主窗口。“此刻”页会列出还差的几步：打开系统权限、确认 AI 能整理记录、接入 Claude Desktop、Claude Code 或 Codex，跟着点就行。
 3. 建议备份密钥：设置 → 维护 → 密钥备份。记录都加了密，密钥丢了就打不开。
 

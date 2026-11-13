@@ -73,7 +73,7 @@ final class SystemTap {
     let queue = DispatchQueue(label: "record-anything.audio.tap")
     func start() throws {
         let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
-        description.name = "Record Anything"
+        description.name = "Tacit"
         description.uuid = UUID()
         description.isPrivate = true
         description.muteBehavior = .unmuted
@@ -88,7 +88,7 @@ final class SystemTap {
             throw AudioCaptureError("tap 返回非 Float32 little-endian PCM；无法解码该格式")
         }
         let config: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Record Anything Audio", kAudioAggregateDeviceUIDKey: UUID().uuidString,
+            kAudioAggregateDeviceNameKey: "Tacit Audio", kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceIsPrivateKey: true, kAudioAggregateDeviceTapAutoStartKey: true,
             kAudioAggregateDeviceTapListKey: [[kAudioSubTapUIDKey: description.uuid.uuidString,
                                              kAudioSubTapDriftCompensationKey: true]]]

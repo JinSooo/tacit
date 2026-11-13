@@ -16,7 +16,7 @@ const call = (id: number, name: string, args = {}) => rpc(id, "tools/call", { na
 
 function environment() {
   const dir = mkdtempSync(join(tmpdir(), "ra-agent-cli-"));
-  writeFileSync(join(dir, "token"), token);
+  writeFileSync(join(dir, "agent-token"), token);
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 async function run(dir: string, args: string[], input: string, extra: Record<string, string> = {}, preload?: string) {
@@ -126,7 +126,7 @@ test("hook 子进程输出嵌套 JSON，空内容、坏输入、缺 token 和失
       if (input.includes("/empty")) expect(result.stderr).toBe(""); else expect(result.stderr.trim().split("\n")).toHaveLength(1);
     }
     const missing = await run(join(ctx.dir, "missing"), ["hook", "session-start", "--tool", "codex"], '{"cwd":"/synthetic"}');
-    expect(missing.code).toBe(0); expect(missing.stdout).toBe(""); expect(missing.stderr).toContain("token");
+    expect(missing.code).toBe(0); expect(missing.stdout).toBe(""); expect(missing.stderr).toContain("令牌");
     const slow = await run(ctx.dir, ["hook", "session-start", "--tool", "codex"], '{"cwd":"/slow"}', {}, mock);
     expect(slow.code).toBe(0); expect(slow.stdout).toBe(""); expect(slow.stderr).toContain("超时"); expect(slow.ms).toBeLessThan(2600);
   } finally { ctx.cleanup(); }
@@ -171,7 +171,7 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
   let handler: ReturnType<typeof createHandler>;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => handler(request) });
   try {
-    writeFileSync(join(ctx.dir, "token"), token);
+    writeFileSync(join(ctx.dir, "agent-token"), token);
     handler = createHandler({ db: ctx.db, token, port: server.port });
     const store = new DistillStore(ctx.db);
     store.upsertProject({ id: "p", name: "合成项目", confirmed: 1, keys: { repos: ["/synthetic"], hosts: [], chats: [] }, brief: "合成摘要", last_ms: 1000 });

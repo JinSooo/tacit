@@ -1,0 +1,22 @@
+{
+  "id": "01JC0000000000000000000000",
+  "schema": 1,
+  "device": "mac",
+  "source": "mac.wechat",
+  "source_ref": "contract:wechat:1",
+  "people": ["合成发送者"],
+  "kind": "span",
+  "t_start": "2026-11-13T10:00:00+08:00",
+  "t_end": "2026-11-13T10:02:00+08:00",
+  "context": {
+    "app": "com.tencent.xinWeChat",
+    "window": "合成窗口",
+    "url": "https://example.com",
+    "chat": "合成会话",
+    "extra": {"sender":"合成发送者", "from_me": 0, "group": 1}
+  },
+  "title": "合成契约记录",
+  "body": "只用于验证 Mac 编码与后台 Schema 的边界。",
+  "capture": {"method":"ocr", "confidence":0.9},
+  "sensitivity": "normal"
+}

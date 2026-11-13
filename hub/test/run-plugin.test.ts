@@ -220,3 +220,13 @@ test.skipIf(bindDenied)("HTTP 中枢库忙返回 503 时退避重试，恢复后
     } finally { await server.stop(true); }
   }
 }, 15_000);
+
+
+test("插件 stderr 持续排空，诊断只保留固定类别，不回显路径或正文", async () => {
+  const file = join(ctx.dir, "diagnostic.ts");
+  writeFileSync(file, `process.stderr.write("EACCES synthetic-secret " + "x".repeat(200000)); process.exitCode = 2;`);
+  const result = await run([process.execPath, file]);
+  expect(result.failure).toBe("permission");
+  expect(JSON.stringify(result)).not.toContain("synthetic-secret");
+  expect(result.stateWritten).toBe(false);
+});

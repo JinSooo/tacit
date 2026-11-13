@@ -1,3 +1,5 @@
+import { currentNow } from "./now-status.ts";
+import { logFailure } from "./diagnostics.ts";
 import { BusyResponses, isDatabaseBusy } from "./db-busy.ts";
 import { AudioStore } from "./audio.ts";
 import { AgentReads } from "./agent.ts";
@@ -61,7 +63,7 @@ function authorized(request: Request, token: string): boolean {
 }
 
 /** settings 不传时用默认数据目录和系统钥匙串，不会重启进程。 */
-export function createHandler(options: { db: HubDB; token: string; port?: number; webDir?: string; settings?: SettingsDeps }) {
+export function createHandler(options: { db: HubDB; token: string; agentToken?: string; port?: number; webDir?: string; settings?: SettingsDeps }) {
   if (!options.token) throw new Error("本地 token 不能为空");
   const { db, token } = options;
   const settings = createSettings(options.settings ?? { dataDir: dataDirOf() });
@@ -75,7 +77,11 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return new Response("Host 不被允许", { status: 421 });
     if (method === "GET" && url.pathname === "/v1/health") return Response.json({ ok: true });
     if (method === "GET" && url.pathname !== "/v1" && !url.pathname.startsWith("/v1/")) return serveWeb(url.pathname, options.webDir ?? defaultWebDir);
-    if (!authorized(request, token)) return Response.json({ error: "需要有效的 Bearer token" }, { status: 401 });
+    const admin = authorized(request, token);
+    const agent = !!options.agentToken && authorized(request, options.agentToken);
+    if (!admin && !agent) return Response.json({ error: "需要有效的 Bearer token" }, { status: 401 });
+    if (!admin && !(method === "GET" && /^\/v1\/agent\/(now|get|search|timeline|context)$/.test(url.pathname)
+      || method === "POST" && url.pathname === "/v1/agent/append")) return Response.json({ error: "此令牌仅允许 AI 查询与追加" }, { status: 403 });
     const readJSON = async (): Promise<unknown> => {
       try { return await request.json(); } catch { throw new InputError("请求体必须是 JSON"); }
     };
@@ -116,7 +122,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
           return Response.json(r, { status: created ? 202 : 200 });
         }
       }
-      if (method === "GET" && url.pathname === "/v1/now") return Response.json({ now: store.getState("now") });
+      if (method === "GET" && url.pathname === "/v1/now") return Response.json({ now: currentNow(db) });
       if (method === "GET" && url.pathname === "/v1/threads") return Response.json(store.threads(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/projects") return Response.json({ projects: store.projectSummaries() });
       if (method === "GET" && url.pathname === "/v1/pending") return Response.json({ pending: store.pending() });
@@ -156,6 +162,12 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
         }
         return Response.json(db.ingest((body as { records: unknown[] }).records));
       }
+      if (method === "DELETE" && url.pathname === "/v1/records") {
+        const body = await readJSON() as { ids?: unknown };
+        if (!body || !Array.isArray(body.ids) || body.ids.length < 1 || body.ids.length > 100
+          || body.ids.some(id => typeof id !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id))) throw new InputError("每次删除需要 1–100 个有效记录 id");
+        return Response.json({ deleted: db.deleteMany(body.ids) });
+      }
       if (method === "GET" && url.pathname === "/v1/records") return Response.json(db.list(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/history/segments") return Response.json(historySegments(db,url.searchParams));
       const conversation = /^\/v1\/conversations\/([0-9A-HJKMNP-TV-Z]{26})$/.exec(url.pathname);
@@ -178,7 +190,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
     } catch (e) {
       if (e instanceof InputError) return Response.json({ error: e.message }, { status: 400 });
       if (isDatabaseBusy(e)) return Response.json({ error: "数据库忙，稍后再试" }, { status: 503 });
-      // 不把异常对象或原始请求写到日志，防止密钥经过错误通道泄漏。
+      logFailure("server.request", e);
       return Response.json({ error: "存储操作失败" }, { status: 500 });
     }
   };
@@ -190,7 +202,7 @@ export function createHandler(options: { db: HubDB; token: string; port?: number
   };
 }
 
-export function startServer(options: { db: HubDB; token: string; port?: number; settings?: SettingsDeps }) {
+export function startServer(options: { db: HubDB; token: string; agentToken?: string; port?: number; settings?: SettingsDeps }) {
   let handler: ReturnType<typeof createHandler>;
   return Bun.serve({ hostname: "127.0.0.1", port: options.port ?? DEFAULT_PORT, fetch(request, server) {
     handler ??= createHandler({ ...options, port: server.port });

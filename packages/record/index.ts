@@ -1,3 +1,4 @@
+import { capturePrefix } from "./capture-prefix.ts";
 // Shared helpers for producers (plugins, collectors) and the hub.
 // Contract: docs/contracts.md · Schema: schema/record.schema.json
 import fs from "node:fs";
@@ -130,5 +131,5 @@ export function emitCheckpoint(state: unknown, release?: string[]): void {
 export function clampTitle(s: string, max = 200): string {
   const one = s.replace(/\s+/g, " ").trim() || "(untitled)";
   const cps = Array.from(one);
-  return cps.length <= max ? one : cps.slice(0, max - 1).join("") + "…";
+  return cps.length <= max ? one : capturePrefix(one, cps.slice(0, max - 1).join("").length) + "…";
 }

@@ -80,15 +80,17 @@ public final class AudioStore {
   public func writeMetadata(_ meta: AudioMetadata) throws {
     let dir = try directory(for: meta)
     try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    try atomic(try meta.encoded(), to: dir.appendingPathComponent("meta.json"))
+    try writePrivateData(try meta.encoded(), to: dir.appendingPathComponent("meta.json"))
   }
-  public func readMetadata(at directory: URL) throws -> AudioMetadata {
+  public func readMetadata(at directory: URL, readOnly: Bool = false) throws -> AudioMetadata {
     try rejectLink(directory); try rejectLink(directory.appendingPathComponent("meta.json"))
-    let meta = try AudioMetadata.decode(Data(contentsOf: directory.appendingPathComponent("meta.json")))
+    let meta = try AudioMetadata.decode(readPrivateData(at: directory.appendingPathComponent("meta.json"), migrate: !readOnly))
     guard try self.directory(for: meta).standardizedFileURL == directory.standardizedFileURL else { throw AudioError.invalidPath }
+    let cache = directory.appendingPathComponent("speakers.json")
+    if !readOnly && fm.fileExists(atPath: cache.path) { _ = try readPrivateData(at: cache) }
     return meta
   }
-  public func conversations() throws -> [AudioMetadata] {
+  public func conversations(readOnly: Bool = false) throws -> [AudioMetadata] {
     var result: [AudioMetadata] = []
     for day in try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
       try rejectLink(day)
@@ -96,7 +98,7 @@ public final class AudioStore {
       for dir in try fm.contentsOfDirectory(at: day, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
         try rejectLink(dir)
         guard try dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
-        result.append(try readMetadata(at: dir))
+        result.append(try readMetadata(at: dir, readOnly: readOnly))
       }
     }
     return result
@@ -117,7 +119,7 @@ public final class AudioStore {
   /// 调用者必须确保 worker 没在处理这些目录；open 对话始终保留。
   @discardableResult public func cleanup(now: Date, retentionDays: Int, purgeBefore: Date? = nil, deleting: [String] = []) throws -> [String] {
     guard (1...365).contains(retentionDays), deleting.allSatisfy(AudioPolicy.validID) else { throw AudioError.invalidMetadata }
-    let all = try conversations()
+    let all = try conversations(readOnly: true)
     var deleted: [String] = []
     for meta in all where meta.status != .open && (deleting.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: now, retentionDays: retentionDays, purgeBefore: purgeBefore)) {
       try fm.removeItem(at: directory(for: meta)); deleted.append(meta.id)
@@ -132,6 +134,34 @@ public final class AudioStore {
       }
       meta.t_end = LocalTime.iso(end); try meta.transition(to: .closed, at: Date()); try writeMetadata(meta)
     }
+  }
+  private static let documentHeader = Data("RAAE1".utf8)
+  private func validateDocument(_ url: URL) throws {
+    let base = root.standardizedFileURL.pathComponents, parts = url.standardizedFileURL.pathComponents
+    guard ["meta.json", "speakers.json"].contains(url.lastPathComponent), parts.count > base.count,
+          Array(parts.prefix(base.count)) == base else { throw AudioError.invalidPath }
+    // contentsOfDirectory 返回的 URL 可能带 baseURL；按绝对路径组件检查，不能靠相对 URL 循环退父级。
+    for length in stride(from: parts.count, through: base.count, by: -1) {
+      try rejectLink(URL(fileURLWithPath: NSString.path(withComponents: Array(parts.prefix(length)))))
+    }
+  }
+  /// 旧 JSON 首次读取时原位加密，任何解密/JSON 校验失败均保留原文件并报错。
+  public func readPrivateData(at url: URL, migrate: Bool = true) throws -> Data {
+    try validateDocument(url)
+    let data = try Data(contentsOf: url)
+    if data.starts(with: Self.documentHeader) {
+      return try AES.GCM.open(AES.GCM.SealedBox(combined: data.dropFirst(Self.documentHeader.count)), using: key,
+                              authenticating: Data(url.lastPathComponent.utf8))
+    }
+    _ = try JSONSerialization.jsonObject(with: data)
+    if migrate { try writePrivateData(data, to: url) }
+    return data
+  }
+  public func writePrivateData(_ data: Data, to url: URL) throws {
+    try validateDocument(url)
+    let box = try AES.GCM.seal(data, using: key, authenticating: Data(url.lastPathComponent.utf8))
+    guard let encrypted = box.combined else { throw AudioError.invalidMetadata }
+    try atomic(Self.documentHeader + encrypted, to: url)
   }
   private func validateFile(_ file: String) throws {
     guard file.range(of: "^(mic|sys)-[0-9]{4,}\\.enc$", options: .regularExpression) != nil else { throw AudioError.invalidPath }

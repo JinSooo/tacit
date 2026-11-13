@@ -73,13 +73,13 @@ final class Worker {
   }
   func save(_ cache: SpeakerCache, _ meta: AudioMetadata) throws {
     let url = try cacheURL(meta)
-    try JSONEncoder().encode(cache).write(to: url, options: .atomic)
+    try store.writePrivateData(JSONEncoder().encode(cache), to: url)
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
   }
   func clustered(_ meta: AudioMetadata) throws -> SpeakerCache {
     let url = try cacheURL(meta)
     if FileManager.default.fileExists(atPath: url.path) {
-      let cache = try JSONDecoder().decode(SpeakerCache.self, from: Data(contentsOf: url))
+      let cache = try JSONDecoder().decode(SpeakerCache.self, from: store.readPrivateData(at: url))
       guard cache.segments == meta.segments else { throw WorkerError.cache }; return cache
     }
     let cache = try computeClusters(meta)
@@ -223,7 +223,7 @@ final class Worker {
     for meta in all.reversed() where meta.status == .done {
       guard Date() < relabelUntil else { relabelLeft = true; break }
       if sync.delete_conversations.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: Date(), retentionDays: sync.retention_days, purgeBefore: AudioPolicy.date(sync.purge_before)) { continue }
-      let current = (try? cacheURL(meta)).flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(SpeakerCache.self, from: $0) }
+      let current = (try? cacheURL(meta)).flatMap { try? store.readPrivateData(at: $0) }.flatMap { try? JSONDecoder().decode(SpeakerCache.self, from: $0) }
       if current?.version == SpeakerCache.current { continue }
       var sorted = meta
       sorted.segments.sort { AudioPolicy.date($0.t_start)! == AudioPolicy.date($1.t_start)! ? $0.file < $1.file : AudioPolicy.date($0.t_start)! < AudioPolicy.date($1.t_start)! }

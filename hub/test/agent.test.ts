@@ -50,23 +50,23 @@ test("审计撞写锁不阻塞读取，不同 AgentReads 共享队列并在解�
   }
 });
 
-test("append 已成功时审计失败仍返回 200，审计列表读取前补写且错误只报一次", async () => {
+test("append 与成功审计原子提交：审计失败回滚内容，失败审计加密等待补写", async () => {
   ctx.db.db.exec(`CREATE TRIGGER reject_audit BEFORE INSERT ON agent_reads
     BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`);
   const logged = spyOn(console, "error").mockImplementation(() => {});
   try {
     const response = new AgentReads(ctx.db).append(new URLSearchParams({ tool: "codex" }), { title: "合成追加", body: "合成正文" });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(500);
     const result = await response.json();
-    expect(result.result).toBe("created");
-    expect(ctx.db.get(result.id)?.body).toBe("合成正文");
+    expect(result.error).toBe("存储操作失败");
+    expect(ctx.db.db.prepare("SELECT COUNT(*) n FROM records").get()).toEqual({ n: 0 });
     expect((await new AgentReads(ctx.db).handle("now", new URLSearchParams({ tool: "codex" }))).status).toBe(200);
-    expect(logged).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("synthetic audit failure");
     expect(ctx.db.db.pragma("busy_timeout", { simple: true })).toBe(5000);
     ctx.db.db.exec("DROP TRIGGER reject_audit");
     const audit = new AgentReads(ctx.db).audit(new URLSearchParams());
     expect(audit.reads).toHaveLength(2);
-    expect(audit.reads.find((r: any) => r.kind === "append")).toMatchObject({ ok: 1, result_ids: [result.id] });
+    expect(audit.reads.find((r: any) => r.kind === "append")).toMatchObject({ ok: 0, result_ids: [] });
   } finally { logged.mockRestore(); }
 });
 
@@ -137,7 +137,7 @@ test("get 各层、日记、now 以及五种读取和 404 均审计，bytes 为 
   store.upsertDay({ date: "2026-11-08",brief: "合成日摘要",detail: { text: "合成日详情" } });
   const now = { brief: "合成当前状态",detail: { threads: [{ thread_id: "t" }] },updated_at: "2026-11-08T10:00:00+08:00" };
   store.setState("now",now);
-  expect((await read("/v1/agent/now?tool=codex")).now).toEqual(now);
+  expect((await read("/v1/agent/now?tool=codex")).now).toEqual({ ...now, feedback: null });
   for (const [id,kind] of [["t","thread"],["p","project"],["2026-11-08","day"]]) {
     const brief = await read(`/v1/agent/get?tool=codex&id=${id}&level=brief`);
     expect(brief.kind).toBe(kind); expect(brief.item).not.toHaveProperty("detail");

@@ -7,7 +7,7 @@ import { HubDB, InputError } from "../db.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { recordSpans, unionSeconds } from "../durations.ts";
 
-export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" }
+export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" | "candidate" | "candidate_expired" }
 export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[] }
 export interface Project { id: string; name: string; confirmed?: number; keys: ProjectKeys; brief?: string | null; detail?: unknown; salience?: number; last_ms?: number; needs_regen?: number; updated_at?: string }
 export interface Thread { id: string; domain?: "work" | "life" | null; project_hint?: string | null; project_id?: string | null; status: "active" | "paused" | "done" | "abandoned" | "archived"; title: string; brief?: string | null; detail?: unknown; first_ms?: number; last_ms?: number; active_minutes?: number; sessions?: number; needs_regen?: number; updated_at?: string }
@@ -322,45 +322,88 @@ export class DistillStore {
       this.sql.prepare("UPDATE pending SET resolved_at=?,resolution=? WHERE id=?").run(new Date().toISOString(),action,id);
     })();
   }
-  removeRecord(id: string, time: string) {
-    const record = this.hub.get(id);
-    if (record?.source === "mac.audio" && record.source_ref) new AudioStore(this.hub).removeConversation(record.source_ref,record.device);
+  /** 删除/修正立即撤下派生文字；模型调用中的旧快照也不能再写回来。 */
+  private clearDerived(threads: Set<string>, projects: Set<string>, times: string[]) {
+    this.setState("content_revision", (this.getState<number>("content_revision") ?? 0) + 1);
+    for (const id of threads) {
+      const t = this.thread(id);
+      if (t?.project_id) projects.add(t.project_id);
+      // 日记会复用事项摘要，清理事项覆盖日期，而不只清理被删记录当天。
+      if (t?.first_ms != null && t?.last_ms != null) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date BETWEEN date(? / 1000.0,'unixepoch','localtime') AND date(? / 1000.0,'unixepoch','localtime')").run(t.first_ms,t.last_ms);
+      this.sql.prepare("UPDATE threads SET title='正在重新整理',brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE id=?").run(id);
+      this.setState(`digest:${id}`, null);
+    }
+    for (const id of projects) {
+      this.sql.prepare("UPDATE projects SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE id=?").run(id);
+      this.setState(`project_brief:${id}`, null);
+    }
+    for (const time of new Set(times)) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date=date(?,'localtime')").run(time);
+    this.setState("now", null);
+    const affected = new Set([...threads, ...projects]);
+    const references = (v: unknown): boolean => typeof v === "string" ? affected.has(v)
+      : Array.isArray(v) ? v.some(references) : !!v && typeof v === "object" && Object.values(v).some(references);
+    for (const row of this.sql.prepare("SELECT id,payload FROM pending").all() as Row[]) {
+      if (references(JSON.parse(row.payload))) this.sql.prepare("DELETE FROM pending WHERE id=?").run(row.id);
+    }
+  }
+
+  /** 修正不另起一段活动；已有整理必须回到原活动，用新正文重建。 */
+  correctRecord(id: string) {
+    const original = this.hub.get(id);
+    if (!original) return;
+    const ids = [id, ...original.corrections.map(r => r.id)];
+    const placeholders = ids.map(() => "?").join(",");
+    const affected = this.sql.prepare(`SELECT DISTINCT a.thread_id FROM assignments a JOIN frame_records r ON r.frame_id=a.frame_id WHERE r.record_id IN (${placeholders})
+      UNION SELECT thread_id FROM facts WHERE thread_id IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (${placeholders}))`).all(...ids, ...ids) as { thread_id: string }[];
+    this.sql.prepare(`UPDATE facts SET invalid_at=? WHERE origin='llm' AND invalid_at IS NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (${placeholders}))`).run(new Date().toISOString(), ...ids);
+    this.clearDerived(new Set(affected.map(r => r.thread_id)), new Set(), [original.t_start]);
     removeSummariesOf(this.hub, id);
-    const affected = new Set<string>();
-    for (const row of this.sql.prepare("SELECT f.*,a.thread_id FROM frame_records r JOIN frames f ON f.id=r.frame_id LEFT JOIN assignments a ON a.frame_id=f.id WHERE r.record_id=?").all(id) as Row[]) {
+    this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=date(?, 'localtime')").run(original.t_start);
+  }
+
+  removeRecord(id: string, time: string) { this.removeRecords([{id,time}]); }
+
+  removeRecords(records: { id: string; time: string }[]) {
+    const removed = new Set(records.map(r => r.id)), input = JSON.stringify([...removed]);
+    for (const {id} of records) {
+      const record = this.hub.get(id);
+      if (record?.source === "mac.audio" && record.source_ref) new AudioStore(this.hub).removeConversation(record.source_ref,record.device);
+    }
+    removeSummariesOf(this.hub, [...removed]);
+    const affected = new Set<string>(), projects = new Set<string>(), changedFrames = new Set<string>();
+    for (const row of this.sql.prepare(`SELECT DISTINCT f.*,a.thread_id FROM frame_records r JOIN frames f ON f.id=r.frame_id
+      LEFT JOIN assignments a ON a.frame_id=f.id WHERE r.record_id IN (SELECT value FROM json_each(?))`).all(input) as Row[]) {
+      changedFrames.add(row.id);
       if (row.thread_id) affected.add(row.thread_id);
-      const ids = (JSON.parse(row.record_ids) as string[]).filter(r => r !== id);
+      const ids = (JSON.parse(row.record_ids) as string[]).filter(r => !removed.has(r));
       if (!ids.length) {
         this.sql.prepare("DELETE FROM assignments WHERE frame_id=?").run(row.id);
         this.sql.prepare("DELETE FROM frame_rejections WHERE frame_id=?").run(row.id);
         this.sql.prepare("DELETE FROM frames WHERE id=?").run(row.id);
       } else {
-        const records = ids.map(r => this.hub.get(r)!);
-        this.sql.prepare("UPDATE frames SET record_ids=?,chars=?,private=?,t_start_ms=?,t_end_ms=? WHERE id=?").run(JSON.stringify(ids),records.reduce((n,r) => n+r.body.length,0),Number(records.some(r => r.sensitivity === "private")),Math.min(...records.map(r => Date.parse(r.t_start))),Math.max(...records.map(r => Date.parse(r.t_end ?? r.t_start))),row.id);
+        const kept = ids.map(r => this.hub.get(r)!);
+        this.sql.prepare("UPDATE frames SET record_ids=?,chars=?,private=?,t_start_ms=?,t_end_ms=? WHERE id=?").run(JSON.stringify(ids),kept.reduce((n,r) => n+r.body.length,0),Number(kept.some(r => r.sensitivity === "private")),Math.min(...kept.map(r => Date.parse(r.t_start))),Math.max(...kept.map(r => Date.parse(r.t_end ?? r.t_start))),row.id);
       }
     }
-    this.sql.prepare("DELETE FROM frame_records WHERE record_id=?").run(id);
-    // 不等模型重生成，立即移除所有实体中引用已删记录的原话。
+    this.sql.prepare("DELETE FROM frame_records WHERE record_id IN (SELECT value FROM json_each(?))").run(input);
+    // 每个批次只扫描一次全部原话和事实，关联文字在同一事务内立即撤下。
     for (const table of ["threads","projects"]) {
       for (const row of this.sql.prepare(`SELECT id,detail FROM ${table} WHERE detail IS NOT NULL`).all() as Row[]) {
         const detail = decode<Row>(row).detail;
-        if (!detail || !Array.isArray(detail.quotes)) continue;
-        const quotes = detail.quotes.filter((q: Row) => q?.record_id !== id);
-        if (quotes.length === detail.quotes.length) continue;
-        this.sql.prepare(`UPDATE ${table} SET detail=?,needs_regen=1 WHERE id=?`).run(JSON.stringify({ ...detail,quotes }),row.id);
-        if (table === "threads") affected.add(row.id);
+        if (Array.isArray(detail?.quotes) && detail.quotes.some((q: Row) => removed.has(q?.record_id))) {
+          if (table === "threads") affected.add(row.id); else projects.add(row.id);
+        }
       }
     }
-    const facts = this.sql.prepare("SELECT * FROM facts WHERE EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value=?)").all(id) as Row[];
+    const facts = this.sql.prepare("SELECT * FROM facts WHERE EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (SELECT value FROM json_each(?)))").all(input) as Row[];
     for (const f of facts) {
       if (f.thread_id) affected.add(f.thread_id);
-      if (f.project_id) this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(f.project_id);
+      if (f.project_id) projects.add(f.project_id);
       this.sql.prepare("DELETE FROM facts WHERE id=?").run(f.id);
     }
-    for (const tid of affected) {
-      this.sql.prepare("UPDATE threads SET needs_regen=1,active_minutes=? WHERE id=?").run(this.activeMinutes(tid),tid);
-      this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=(SELECT project_id FROM threads WHERE id=?)").run(tid);
-    }
-    this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=?").run(time.slice(0,10));
+    for (const tid of affected) this.sql.prepare("UPDATE threads SET active_minutes=? WHERE id=?").run(this.activeMinutes(tid),tid);
+    this.clearDerived(affected, projects, records.map(r=>r.time));
+    const candidates = this.getState<{ frame_ids: string[] }[]>("candidates");
+    if (candidates) this.setState("candidates", candidates.filter(c => !c.frame_ids.some(id => changedFrames.has(id))));
   }
 }

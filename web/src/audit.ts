@@ -17,11 +17,11 @@ export const toolNames: Record<string, string> = { "claude-code": "Claude Code",
 /** 这次读取做了什么。 */
 export function auditAction(kind: string, args: AuditRead["args"]): string {
   switch (kind) {
-    case "context": return args.event === "compact" ? "压缩上下文后重新带入" : "新会话开始时带入";
-    case "now": return "读取当前状态";
+    case "context": return args.event === "compact" ? "对话压缩后重新带入" : "新会话开始时带入";
+    case "now": return "查看此刻";
     case "get": return `读取${levels[String(args.level)] ?? "内容"}`;
     case "search": return "搜索历史记录";
-    case "timeline": return "读取时间线";
+    case "timeline": return "查看时间线";
     case "append": return "添加到历史记录";
     default: return kind;
   }
@@ -36,7 +36,7 @@ export function auditSummary(args: AuditRead["args"], targets?: ReadonlyMap<stri
     args.q_length !== undefined && `搜索词 ${args.q_length} 个字`,
     (args.from || args.to) && (args.from && args.to ? `${shortTime(args.from)} 至 ${shortTime(args.to)}` : args.from ? `${shortTime(args.from)} 以后` : `${shortTime(args.to!)} 以前`),
     args.result !== undefined && (appendResults[args.result] ?? String(args.result)),
-    args.redactions !== undefined && `拦下 ${args.redactions} 处密钥`,
+    args.redactions !== undefined && `隐去了 ${args.redactions} 处密钥`,
   ].filter(value => value !== undefined && value !== false && value !== "").join("，");
 }
 // 只把 404 当作不存在，权限、网络和存储故障必须交给页面报错。

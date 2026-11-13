@@ -211,3 +211,19 @@ test("历史里有作者邮箱为空的提交时，仓库不被跳过，用户�
   expect(records.map((r) => r.context?.extra?.hash)).toEqual([mine]);
   expect(state.progress[repo]).toBeDefined();
 });
+
+test("主仓库与多个 worktree 的同一提交只发一次，增量与重导入使用同一来源键", async () => {
+  const dir = await temp(), repo = path.join(dir, "main"), worktree = path.join(dir, "linked");
+  await init(repo, "local@example.test");
+  const hash = await commit(repo, "local@example.test", "跨 worktree 的提交");
+  await git(repo, ["worktree", "add", "-b", "linked", worktree]);
+  const records: RecordV1[] = [];
+  const state = await collectGit({ device: "mac", roots: [dir], emit: r => records.push(r) });
+  expect(records.map(r => r.source_ref)).toEqual([`${repo}:${hash}`]);
+  expect(records[0]!.context?.repo).toBe(repo);
+  records.length = 0;
+  await collectGit({ device: "mac", roots: [worktree], state, emit: r => records.push(r) });
+  expect(records).toEqual([]);
+  await collectGit({ device: "mac", roots: [worktree], since: new Date(0), emit: r => records.push(r) });
+  expect(records.map(r => r.source_ref)).toEqual([`${repo}:${hash}`]);
+});

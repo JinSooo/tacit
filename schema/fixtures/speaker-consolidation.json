@@ -1,0 +1,172 @@
+[
+  {
+    "name": "long-above",
+    "speakers": [
+      {
+        "local": "A",
+        "seconds": 10,
+        "centroid": [
+          1,
+          0
+        ]
+      },
+      {
+        "local": "B",
+        "seconds": 7,
+        "centroid": [
+          0.5001,
+          0.8659676610590029
+        ]
+      }
+    ],
+    "groups": [
+      [
+        "A",
+        "B"
+      ]
+    ]
+  },
+  {
+    "name": "long-below",
+    "speakers": [
+      {
+        "local": "A",
+        "seconds": 10,
+        "centroid": [
+          1,
+          0
+        ]
+      },
+      {
+        "local": "B",
+        "seconds": 7,
+        "centroid": [
+          0.4999,
+          0.8660831311138671
+        ]
+      }
+    ],
+    "groups": [
+      [
+        "A"
+      ],
+      [
+        "B"
+      ]
+    ]
+  },
+  {
+    "name": "short-above",
+    "speakers": [
+      {
+        "local": "A",
+        "seconds": 10,
+        "centroid": [
+          1,
+          0
+        ]
+      },
+      {
+        "local": "B",
+        "seconds": 5,
+        "centroid": [
+          0.3001,
+          0.9539077471118473
+        ]
+      }
+    ],
+    "groups": [
+      [
+        "A",
+        "B"
+      ]
+    ]
+  },
+  {
+    "name": "short-below",
+    "speakers": [
+      {
+        "local": "A",
+        "seconds": 10,
+        "centroid": [
+          1,
+          0
+        ]
+      },
+      {
+        "local": "B",
+        "seconds": 5,
+        "centroid": [
+          0.2999,
+          0.9539706442024304
+        ]
+      }
+    ],
+    "groups": [
+      [
+        "A"
+      ],
+      [
+        "B"
+      ]
+    ]
+  },
+  {
+    "name": "six-seconds-is-long",
+    "speakers": [
+      {
+        "local": "A",
+        "seconds": 10,
+        "centroid": [
+          1,
+          0
+        ]
+      },
+      {
+        "local": "B",
+        "seconds": 6,
+        "centroid": [
+          0.4,
+          0.916515138991168
+        ]
+      }
+    ],
+    "groups": [
+      [
+        "A"
+      ],
+      [
+        "B"
+      ]
+    ]
+  },
+  {
+    "name": "no-long-speaker",
+    "speakers": [
+      {
+        "local": "A",
+        "seconds": 5,
+        "centroid": [
+          1,
+          0
+        ]
+      },
+      {
+        "local": "B",
+        "seconds": 5,
+        "centroid": [
+          0.9,
+          0.4358898943540673
+        ]
+      }
+    ],
+    "groups": [
+      [
+        "A"
+      ],
+      [
+        "B"
+      ]
+    ]
+  }
+]

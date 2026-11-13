@@ -135,3 +135,14 @@ test("剪贴板密码规则不误伤 UUID、文件名、代码标识符和带中
     if (body.length >= 8) expect(clip(body).body).toBe("[已脱敏:密码]");
   }
 });
+
+test("people 和 media 中的自由文本也在入库前脱敏", () => {
+  const ctx = setup(), key = "ghp_" + "aB3".repeat(12);
+  try {
+    const record = fixture({ people: [key], media: [{ path: `https://user:synthetic-password@example.invalid/${key}`, kind: "audio" }] });
+    expect(ctx.db.ingest([record]).accepted).toBe(1);
+    const stored = ctx.db.get(record.id)!;
+    expect(JSON.stringify(stored)).not.toContain(key); expect(JSON.stringify(stored)).not.toContain("synthetic-password");
+    expect(stored.redactions).toBe(3); expect(stored.sensitivity).toBe("redacted");
+  } finally { ctx.cleanup(); }
+});

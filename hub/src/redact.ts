@@ -76,8 +76,10 @@ export function redactRecord(record: RecordV1): RecordV1 {
   const title = redactClipboard(visit(record.title) as string);
   const body = redactClipboard(visit(record.body) as string);
   const context = record.context === undefined ? undefined : visit(record.context) as RecordV1["context"];
+  const people = record.people === undefined ? undefined : visit(record.people) as RecordV1["people"];
+  const media = record.media === undefined ? undefined : visit(record.media) as RecordV1["media"];
   return {
-    ...record, title, body, ...(context === undefined ? {} : { context }),
+    ...record, title, body, ...(people === undefined ? {} : { people }), ...(media === undefined ? {} : { media }), ...(context === undefined ? {} : { context }),
     redactions: (record.redactions ?? 0) + count,
     sensitivity: count && record.sensitivity === "normal" ? "redacted" : record.sensitivity,
   };

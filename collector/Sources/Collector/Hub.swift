@@ -210,10 +210,11 @@ final class PluginScheduler {
     p.waitUntilExit(); timer.cancel()
     let summary = String(data: data, encoding: .utf8)?.split(separator: "\n").last.map(String.init) ?? ""
     let ok = p.terminationStatus == 0
-    var accepted: Int?
-    if let d = summary.data(using: .utf8), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-       let a = j["accepted"] as? Int { accepted = a }
-    let text = PluginImport.outcomeText(ok: ok, exitStatus: p.terminationStatus, accepted: accepted, elapsed: Date().timeIntervalSince(started))
+    var accepted: Int?, failure: String?
+    if let d = summary.data(using: .utf8), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+      accepted = j["accepted"] as? Int; failure = j["failure"] as? String
+    }
+    let text = PluginImport.outcomeText(ok: ok, exitStatus: p.terminationStatus, accepted: accepted, elapsed: Date().timeIntervalSince(started), failure: failure)
     return set(name, Outcome(ok: ok, accepted: accepted ?? 0, text: text, at: Date()))
   }
 

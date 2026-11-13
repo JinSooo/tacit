@@ -56,7 +56,7 @@ test("tiers 表单整理：去空白，账号登录类和空 base_url 不发", (
 test("设置页三块首屏：读取中、本机限定说明、无 key 内容", () => {
   const api = createSettingsApi(async <T,>() => new Promise<T>(() => {}));
   const html = renderToStaticMarkup(<><ModelSettings api={api} /><GeneralSettings api={api} /><HubSettingsBlock api={api} token="synthetic-token" /></>);
-  for (const text of ["AI 模型", "通用", "后台服务", "正在读取", "只接受这台 Mac 上的连接", "才开放局域网", 'min="1024"', 'max="65535"', "自动带入上限"]) expect(html).toContain(text);
+  for (const text of ["AI 模型", "通用", "后台服务", "正在读取", "只接受这台 Mac 上的连接", "才开放局域网", 'min="1024"', 'max="65535"', "自动带入的长度上限"]) expect(html).toContain(text);
   expect(html).not.toContain("synthetic-token");
 });
 

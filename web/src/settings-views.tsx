@@ -31,7 +31,7 @@ export function AgentSettings({ api }: { api: SettingsApi }) {
   </section>;
 }
 
-/** 读取一块设置，失败时给重新读取；各块独立，一块出错不影响其他块。 */
+/** 读取一块设置，失败时给重试；各块独立，一块出错不影响其他块。 */
 function useLoad<T>(load: (signal: AbortSignal) => Promise<T>, apply: (data: T) => void) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -45,7 +45,7 @@ function useLoad<T>(load: (signal: AbortSignal) => Promise<T>, apply: (data: T) 
   return { loading, error, retry: () => setRevision(v => v + 1) };
 }
 function LoadState({ loaded }: { loaded: { loading: boolean; error: string; retry: () => void } }) {
-  return <>{loaded.loading && <p className="muted" role="status">正在读取…</p>}{loaded.error && <p className="error" role="alert">{loaded.error} <button onClick={loaded.retry}>重新读取</button></p>}</>;
+  return <>{loaded.loading && <p className="muted" role="status">正在读取…</p>}{loaded.error && <p className="error" role="alert">{loaded.error} <button onClick={loaded.retry}>重试</button></p>}</>;
 }
 
 function LocalModels({ api, baseURL, value, label, onSelect }: { api: SettingsApi; baseURL: string; value: string; label: string; onSelect: (model: string) => void }) {

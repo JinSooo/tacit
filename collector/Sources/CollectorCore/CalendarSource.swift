@@ -33,12 +33,12 @@ public struct CalendarEventSnapshot {
     var body: [String] = []
     if let location, !location.isEmpty { body.append("地点：" + location) }
     if !names.isEmpty { body.append("参会人：" + names.joined(separator: "、")) }
-    if let notes, !notes.isEmpty { body.append("备注：" + String(notes.prefix(2000))) }
+    if let notes, !notes.isEmpty { body.append("备注：" + Text.capturePrefix(notes, limit: 2000, suffix: "")) }
     var extra: [String: ContextValue] = ["calendar": .string(calendar)]
     if let organizer { extra["organizer"] = .string(organizer) }
     return Record(device: device, source: "mac.calendar", kind: "span", start: start, end: end,
                   context: RecordContext(app: "com.apple.iCal", extra: extra), title: "日程 · " + title,
-                  body: String(body.joined(separator: "\n").prefix(200000)), capture: Capture(method: "api"),
+                  body: Text.capturePrefix(body.joined(separator: "\n"), limit: 199990), capture: Capture(method: "api"),
                   sourceRef: sourceRef, people: names)
   }
 }

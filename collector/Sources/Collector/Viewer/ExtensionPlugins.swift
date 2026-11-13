@@ -26,11 +26,11 @@ struct ExtensionManifest: Codable, Equatable {
   let permissions: [String]; let config: [Field]
 }
 struct ExtensionPlugin: Codable, Equatable, Identifiable {
-  let manifest: ExtensionManifest; let origin: String; var values: [String: PluginValue]
+  let manifest: ExtensionManifest; let origin: String; var revision: String?; var contentHash: String?; var values: [String: PluginValue]
   var id: String { manifest.id }
 }
 struct ExtensionPreview: Codable, Identifiable {
-  let ticket: String; let manifest: ExtensionManifest; let origin: String; let updating: Bool; var values: [String: PluginValue]
+  let ticket: String; let manifest: ExtensionManifest; let origin: String; let updating: Bool; var revision: String?; var contentHash: String?; var previousRevision: String?; var values: [String: PluginValue]
   var id: String { ticket }
 }
 struct PluginRequest: Encodable {

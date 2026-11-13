@@ -158,7 +158,7 @@ private struct ShellHookSettings: View {
       }
       if let e = c.shellHookError { SettingsMessage(text: e) }
     } footer: {
-      Note("关掉这个数据源时，会把这一行从 ~/.zshrc 里删掉。")
+      Note("目前支持 zsh；命令以空格开头时不记录。关掉这个数据源时，会把这一行从 ~/.zshrc 里删掉。")
     }
   }
 }

@@ -174,3 +174,17 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
   #expect(metrics.hubBusy == 2)
   #expect(HubDeliveryMetrics().hubBusy == 0)
 }
+
+@Test func privateStatusFileKeepsPermissionsAcrossReplacement() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let file = root.appendingPathComponent("status.json")
+  for text in ["first", "updated"] {
+    try PrivateFile.write(Data(text.utf8), to: file)
+    #expect(try String(contentsOf: file, encoding: .utf8) == text)
+    let attrs = try FileManager.default.attributesOfItem(atPath: file.path)
+    #expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+  }
+  #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["status.json"])
+}

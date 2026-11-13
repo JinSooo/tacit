@@ -94,12 +94,15 @@ export async function collectGit(options: {
   const repos = [...new Set([...await discoverRepos(options.roots), ...(options.state?.repos ?? []).map(expandHome)])].sort();
   const progress = { ...options.state?.progress };
   const globalEmail = options.emails ? "" : (await git(["config", "--global", "--get", "user.email"], Date.now() + 10_000, undefined, true)).trim();
+  const emitted = new Set<string>();
   for (const repo of repos) {
     // 显式 --since（导入全部历史）要读的提交可能很多，放宽到 2 分钟；常规增量仍是 10 秒。
     const started = Date.now(), deadline = started + (options.since ? 120_000 : 10_000);
     try {
       const top = (await git(["rev-parse", "--show-toplevel"], deadline, repo)).trim();
       if (await realpath(top) !== await realpath(repo)) throw new Error("路径不是仓库根目录");
+      const common = await realpath((await git(["rev-parse", "--path-format=absolute", "--git-common-dir"], deadline, repo)).trim());
+      const root = path.basename(common) === ".git" ? path.dirname(common) : common;
       const localEmail = options.emails ? "" : (await git(["config", "--get", "user.email"], deadline, repo, true)).trim();
       const emails = new Set((options.emails ?? [globalEmail, localEmail]).filter(Boolean).map((email) => email.toLowerCase()));
       if (!emails.size) throw new Error("未配置用户邮箱");
@@ -115,10 +118,10 @@ export async function collectGit(options: {
         if (!emails.has(commit.email.toLowerCase()) || seen.has(commit.hash)) continue;
         const record: RecordV1 = {
           id: ulid(), schema: 1, device: options.device, source: "mac.git", kind: "event",
-          source_ref: `${repo}:${commit.hash}`, t_start: toLocalIso(new Date(commit.authored)),
-          title: clampTitle(`${path.basename(repo)} · ${commit.message.split("\n")[0]}`),
+          source_ref: `${root}:${commit.hash}`, t_start: toLocalIso(new Date(commit.authored)),
+          title: clampTitle(`${path.basename(root)} · ${commit.message.split("\n")[0]}`),
           body: `${commit.message}\n作者：${commit.author} <${commit.email}>\n提交：${commit.hash}\n改动：${commit.files.length} 个文件，新增 ${commit.added} 行，删除 ${commit.deleted} 行\n${commit.files.slice(0, 50).map((file) => JSON.stringify(file)).join("\n")}${commit.files.length > 50 ? `\n（另有 ${commit.files.length - 50} 个文件）` : ""}`,
-          context: { repo, extra: { author: commit.author, author_email: commit.email, hash: commit.hash, files: commit.files.length, added: commit.added, deleted: commit.deleted } },
+          context: { repo: root, extra: { author: commit.author, author_email: commit.email, hash: commit.hash, files: commit.files.length, added: commit.added, deleted: commit.deleted } },
           capture: { method: "db" }, sensitivity: "normal",
         };
         const validation = validateRecord(record);
@@ -129,7 +132,10 @@ export async function collectGit(options: {
         records.push(record);
       }
       if (Date.now() > deadline) throw new Error("超过时限");
-      for (const record of records) options.emit(record);
+      for (const record of records) {
+        if (emitted.has(record.source_ref!)) continue;
+        options.emit(record); emitted.add(record.source_ref!);
+      }
       // --since 覆盖到未来时不把游标倒退，否则下一次会意外回溯。
       const boundary = new Date(Math.max(nextSince.valueOf(), since.valueOf()));
       // 坏提交的数据不会改变：照常推进游标，回看窗口内（含日期损坏）的已知 hash 也记入 seen，不再重试。

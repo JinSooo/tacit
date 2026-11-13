@@ -34,6 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     StatusPanel(store: viewer.store) { [weak self] page in self?.viewer.show(page) }
   }
   var timers: [Timer] = []
+  var terminationSignal: TerminationSignal?
+  var terminating = false
   var pausedUntil: Date?
   var lastOCR: [String: Date] = [:]
   var clipboardCount = NSPasteboard.general.changeCount
@@ -54,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func enabled(_ id: String) -> Bool { toggles.isEnabled(id) }
 
   func applicationDidFinishLaunching(_ n: Notification) {
+    terminationSignal = TerminationSignal { NSApp.terminate(nil) }
     let startup = LoginStartup(home: FileManager.default.homeDirectoryForCurrentUser, dataDir: config.dataDir)
     DispatchQueue.global(qos: .utility).async { startup.startServices() }
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -163,10 +166,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func applicationWillTerminate(_ n: Notification) {
+    guard !terminating else { return }
+    terminating = true
+    timers.forEach { $0.invalidate() }
     files.flush(force: true)
     files.stop()
     audio.shutdown()
-    closeSegment()
+    captureQueue.sync { emit(segmenter.flush()) }
     let deadline = Date().addingTimeInterval(3)
     hub.flush()
     while hub.queue.count > 0 && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
@@ -181,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func tick() {
+    guard !terminating else { return }
     // 微信对话不依赖屏幕文字和辅助功能：只要开着、微信在前台就截图拆消息。
     if !paused, enabled("wechat"), !IsSecureEventInputEnabled(),
        let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier == WeChatCollector.bundleID,
@@ -208,6 +215,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let wechatOn = enabled("wechat")
 
     captureQueue.async { [self] in
+      if CapturePolicy.shouldSkip(bundleID: bundle, window: "") {
+        stats["skippedPolicy", default: 0] += 1
+        emit(segmenter.flush()); return
+      }
       let snap = ax.snapshot(pid: pid, skipEditable: ScreenTextPolicy.skipsEditable(bundleID: bundle))
       let window = snap?.window ?? ""
       if CapturePolicy.shouldSkip(bundleID: bundle, window: window) {
@@ -261,6 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func pollClipboard() {
+    guard !terminating else { return }
     updateAudio()
     let pb = NSPasteboard.general
     guard pb.changeCount != clipboardCount else { return }
@@ -290,7 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func updateIcon() {
     guard let statusItem else { return }
     let image = StatusIconArt.image(paused ? .paused : (missingAX ? .warning : .recording))
-    image.accessibilityDescription = "Record Anything"
+    image.accessibilityDescription = "Tacit"
     statusItem.button?.image = image
   }
 
@@ -328,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       menu.addItem(item("暂停 1 小时", #selector(pauseHour)))
       menu.addItem(item("暂停到明天", #selector(pauseTomorrow)))
     }
-    let open = item("打开 Record Anything", #selector(openHistory)); open.keyEquivalent = "o"
+    let open = item("打开 Tacit", #selector(openHistory)); open.keyEquivalent = "o"
     menu.addItem(open)
     menu.addItem(.separator())
 
@@ -471,7 +483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s["footprintMB"] = Int(footprintMB()); s["cpuSeconds"] = Int(cpuSeconds())
       s["time"] = LocalTime.iso(Date())
       if let d = try? JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted, .sortedKeys]) {
-        try? d.write(to: config.dataDir.appendingPathComponent("collector-status.json"), options: .atomic)
+        try? PrivateFile.write(d, to: config.dataDir.appendingPathComponent("collector-status.json"))
       }
     }
   }

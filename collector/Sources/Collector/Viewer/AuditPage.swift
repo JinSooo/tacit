@@ -15,7 +15,7 @@ struct AuditPage: View {
   var body: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
-        Text("AI 工具每次读取或写入你的历史记录，都会记在这里。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        Text("AI 工具每次读取你的记录、往历史记录里添加内容，都会记在这里。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
           .padding(.bottom, 24)
         if reads.isEmpty {
           if loading { Placeholder(kind: .loading).frame(height: 240) }
@@ -120,7 +120,7 @@ struct AuditRow: View {
           VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
               Text(action).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink)
-              if !read.ok.value { Text("没成功").font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.attention) }
+              if !read.ok.value { Text("失败").font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.attention) }
             }
             if path != nil || summary != nil {
               HStack(spacing: 8) {
@@ -133,8 +133,8 @@ struct AuditRow: View {
           Spacer(minLength: 16)
           // count：连续几次一模一样的读取被合成这一行；resultIds：这次读到 / 带入的项目、事项、事实和记录的条数。
           Group {
-            if count > 1 { Text("\(count) 次").help("连续 \(count) 次相同的读取，点开逐次查看") }
-            else if !read.resultIds.isEmpty { Text("\(Fmt.count(Set(read.resultIds).count)) 项").help(read.kind == "context" ? "带入了几个项目和事项" : "读到了几个项目、事项、事实或记录") }
+            if count > 1 { Text("重复 \(count) 次").help("连续 \(count) 次相同的读取，点开逐次查看") }
+            else if !read.resultIds.isEmpty { Text("读到 \(Fmt.count(Set(read.resultIds).count)) 项").help(read.kind == "context" ? "带入了几个项目和事项" : "读到了几个项目、事项、事实或记录") }
           }
           .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
           Text(read.date.map { ViewerFormat.clock($0) } ?? "").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).frame(width: 40, alignment: .trailing)
@@ -195,7 +195,7 @@ struct AuditRow: View {
     case "get": return "读取\(["brief": "简介", "detail": "详情", "evidence": "依据"][read.args["level"]?.text ?? "brief"] ?? "内容")"
     case "search": return "搜索历史记录"
     case "timeline": return "查看时间线"
-    case "append": return "写入历史记录"
+    case "append": return "添加到历史记录"
     default: return read.kind
     }
   }
@@ -210,7 +210,7 @@ struct AuditRow: View {
       if let t = targets[id], let title = t?.title { parts.append(title) } else { parts.append(id) }
     }
     if let n = read.args["q_length"]?.text { parts.append("搜了 \(n) 个字") }
-    if let r = read.args["result"]?.text { parts.append(["created": "新写入一条", "unchanged": "已经有了，没有重复写", "corrected": "内容变了，记成一条修正", "deleted": "以前删过，没有写入"][r] ?? r) }
+    if let r = read.args["result"]?.text { parts.append(["created": "新添加一条", "unchanged": "已经有了，没有重复添加", "corrected": "内容变了，记成一条修正", "deleted": "以前删过，没有添加"][r] ?? r) }
     if let n = read.args["redactions"]?.text { parts.append("隐去了 \(n) 处密钥") }
     if let from = read.args["from"]?.text ?? read.args["to"]?.text { parts.append(from) }
     return parts.isEmpty ? nil : parts.joined(separator: "，")

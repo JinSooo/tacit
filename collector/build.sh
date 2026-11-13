@@ -15,7 +15,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>dev.record-anything.collector</string>
-  <key>CFBundleName</key><string>Record Anything</string>
+  <key>CFBundleName</key><string>Tacit</string>
   <key>CFBundleExecutable</key><string>Collector</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSAccentColorName</key><string>AccentColor</string>
@@ -62,6 +62,8 @@ for bin in "$APP/Contents/MacOS/"*; do
   sdk="$(otool -l "$bin" | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "sdk" { print $2; exit }')"
   [ "$sdk" != "14.0" ] || { echo "$bin 的构建 SDK 被记成 14.0（应为 $(xcrun --sdk macosx --show-sdk-version)）" >&2; exit 1; }
 done
+# 与采集端一同签名的后台运行快照。先构建网页，再执行本脚本。
+bun ../scripts/stage-runtime.ts .. "$APP/Contents/Resources/runtime"
 ../scripts/dev-cert.sh
 KC="$HOME/Library/Keychains/ra-dev.keychain-db"
 for lib in "$APP/Contents/Frameworks/"*.dylib; do

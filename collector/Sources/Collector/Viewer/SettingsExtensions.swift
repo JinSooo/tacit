@@ -24,6 +24,10 @@ struct ExtensionInstallView: View {
           VStack(alignment: .leading, spacing: 16) {
             Text("\(preview.manifest.name)  \(preview.manifest.version)").font(.system(size: TextSize.body, weight: .semibold))
             Text(preview.manifest.description)
+            if let revision = preview.revision {
+              Text("固定提交：" + revision).textSelection(.enabled).font(.system(size: TextSize.caption))
+              if let previous = preview.previousRevision { Text("原提交：" + previous).textSelection(.enabled).font(.system(size: TextSize.caption)) }
+            }
             PluginPermissions(manifest: preview.manifest)
             PluginFields(manifest: preview.manifest, values: $values, invalidNumbers: $invalidNumbers)
             Note("安装后默认停用。插件代码以你的本机权限运行，只安装你信任的来源。记录入库前会过滤黑名单与密钥。")
@@ -125,6 +129,7 @@ struct ExtensionDetailSettings: View {
       Text(plugin.manifest.description)
       SettingsRow("版本", value: plugin.manifest.version)
       SettingsRow("安装来源") { Text(plugin.origin).textSelection(.enabled).lineLimit(nil) }
+      if let revision = plugin.revision { SettingsRow("固定提交") { Text(revision).textSelection(.enabled).lineLimit(nil) } }
       PluginPermissions(manifest: plugin.manifest)
       Button("打开系统隐私设置…") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") { NSWorkspace.shared.open(url) } }
       Note("权限清单由插件声明。插件以你的本机权限运行，系统权限仍需在系统设置中授权。")

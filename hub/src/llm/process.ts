@@ -47,6 +47,17 @@ export function run(ctx: BackendContext, command: string, args: string[]): Promi
         // claude -p 出错时常把原因写在 stdout 的 JSON（result 字段）里，stderr 是空的，例如"额度用完"。
         let reason = stderr;
         try { const o = JSON.parse(stdout); if (o?.is_error && typeof o.result === "string") reason = o.result; } catch { /* 不是 JSON 就用 stderr */ }
+        if (command === "codex") {
+          // --json 的错误在 stdout 的 JSONL 事件里，stderr 经常为空。
+          // 只提取错误事件；不能把其他事件（含模型正文）当作诊断。
+          for (const line of stdout.split("\n")) {
+            try {
+              const event = JSON.parse(line);
+              const message = event.type === "turn.failed" ? event.error?.message : event.type === "error" ? event.message : null;
+              if (typeof message === "string" && message.trim()) reason = message;
+            } catch { /* 非事件行忽略。 */ }
+          }
+        }
         fail(`${command} 退出失败（${code}）：${safeError(reason, [ctx.req.system, ctx.req.prompt, input(ctx)])}`); return;
       }
       settled = true; clearTimeout(timer); resolve(stdout);

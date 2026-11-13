@@ -1,4 +1,4 @@
-# Record Anything
+# Tacit
 
 把你在 Mac 上做过的事记成文字，由 AI 整理成“在做哪些事、进展到哪了”，再交给 Claude Desktop、Claude Code、Codex 查询。Claude Code、Codex 新开会话时，还会自动带上当前项目的进展。
 
@@ -23,11 +23,11 @@
 
 ## 第一次使用
 
-1. 菜单栏右上角会出现 Record Anything 图标。macOS 会请你在“辅助功能”里允许它，打开后才能开始记录。
+1. 菜单栏右上角会出现 Tacit 图标。macOS 会请你在“辅助功能”里允许它，打开后才能开始记录。
 2. 点图标，从面板里打开主窗口。“此刻”页会列出还差的几步，跟着点就行：
    - 打开系统权限
    - 确认 AI 能整理你的记录（默认用这台 Mac 上已登录的 Claude Code；也可以在设置 → AI 模型里改成 Codex 或 API）
-   - 在设置 → AI 工具里接入 Claude Desktop、Claude Code 或 Codex
+   - 在设置 → AI 工具里连接 Claude Desktop、Claude Code 或 Codex
 3. 正常用电脑就好。每 15 分钟整理一次，“此刻”页会出现你正在做的事。
 4. 在连接的 AI 工具里问“我昨天下午在做什么”。Claude Desktop 连接或断开后，需要完全退出并重新打开应用才会生效；Claude Code、Codex 新开会话时会自动带上当前项目的进展。
 

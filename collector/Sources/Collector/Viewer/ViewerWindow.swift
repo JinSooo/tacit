@@ -32,7 +32,7 @@ import CollectorCore
     let w = NSWindow(contentViewController: hosting)
     w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
     w.toolbarStyle = .unified
-    w.title = "Record Anything"
+    w.title = "Tacit"
     w.contentMinSize = NSSize(width: 1080, height: 640)
     w.setContentSize(NSSize(width: 1360, height: 880))
     w.isReleasedWhenClosed = false
@@ -63,12 +63,12 @@ import CollectorCore
       let i = NSMenuItem(title: title, action: sel, keyEquivalent: key); i.keyEquivalentModifierMask = mods; i.target = target; i.tag = tag; return i
     }
     // ⌘Q 只关窗口：采集端要一直在后台记录，真正退出走菜单栏图标里的"退出"。
-    submenu("Record Anything", [
-      item("关于 Record Anything", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp),
+    submenu("Tacit", [
+      item("关于 Tacit", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp),
       .separator(),
       item("设置…", #selector(go(_:)), ",", target: self, tag: 5),
       .separator(),
-      item("隐藏 Record Anything", #selector(NSApplication.hide(_:)), "h", target: NSApp),
+      item("隐藏 Tacit", #selector(NSApplication.hide(_:)), "h", target: NSApp),
       .separator(),
       item("关闭窗口（继续在后台记录）", #selector(closeWindow), "q", target: self),
     ])

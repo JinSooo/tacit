@@ -1,3 +1,4 @@
+import { logFailure } from "./diagnostics.ts";
 import { mkdirSync, renameSync, rmSync, writeFileSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -10,6 +11,7 @@ import { jsonLines } from "./jsonl.ts";
 const BUSY_RETRY_MS = [250, 500, 1000, 2000, 4000];
 
 export interface PluginSummary {
+  failure?: string;
   accepted: number; duplicates: number; rejected: number; exitCode: number;
   filtered: number; stateWritten: boolean; protocolErrors: number; released: number; releaseErrors: number;
 }
@@ -50,7 +52,10 @@ export async function runPlugin(options: {
   const dir = join(options.dataDir, "plugins", options.name);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stateFile = join(dir, "state.json");
-  const child = spawn(options.command[0]!, [...options.command.slice(1), "--device", device, "--state", stateFile], { stdio: ["ignore", "pipe", "inherit"], env: options.env, cwd: options.cwd, detached: process.platform !== "win32" });
+  const child = spawn(options.command[0]!, [...options.command.slice(1), "--device", device, "--state", stateFile], { stdio: ["ignore", "pipe", "pipe"], env: options.env, cwd: options.cwd, detached: process.platform !== "win32" });
+  let diagnostic = "";
+  child.stderr!.setEncoding("utf8");
+  child.stderr!.on("data", (chunk: string) => { diagnostic = (diagnostic + chunk).slice(0, 8192); });
   let interrupted = false;
   const kill = (signal: NodeJS.Signals) => {
     try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, signal); else child.kill(signal); } catch {}
@@ -86,7 +91,7 @@ export async function runPlugin(options: {
       summary.accepted += result.accepted;
       summary.duplicates += result.duplicates;
       summary.rejected += result.rejected.length;
-    } catch { storageFailed = true; summary.rejected += batch.length; }
+    } catch (error) { logFailure("plugin.ingest", error); storageFailed = true; summary.rejected += batch.length; }
     batch = [];
   };
   try {
@@ -148,6 +153,14 @@ export async function runPlugin(options: {
     process.removeListener("SIGTERM", stop); process.removeListener("SIGINT", stop);
     if (forceStop) clearTimeout(forceStop);
   }
+  if (summary.exitCode !== 0) summary.failure = /EACCES|EPERM|permission denied/i.test(diagnostic) ? "permission"
+    : /ENOENT|no such file/i.test(diagnostic) ? "missing_file"
+    : /ETIMEDOUT|ECONNREFUSED|ENOTFOUND|fetch failed/i.test(diagnostic) ? "network"
+    : interrupted ? "interrupted" : "process";
+  else if (storageFailed) summary.failure = "storage";
+  else if (summary.protocolErrors) summary.failure = "protocol";
+  else if (summary.rejected) summary.failure = "rejected";
+  else if (summary.releaseErrors) summary.failure = "cleanup";
   options.report?.(summary);
   return summary;
 }

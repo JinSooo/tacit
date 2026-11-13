@@ -11,6 +11,8 @@ case "${1:-}" in
 esac
 xcrun swiftc "$ROOT/collector/Sources/Collector/Viewer/IconArt.swift" "$ROOT/scripts/export-icons.swift" -o "$WORK/export-icons"
 "$WORK/export-icons" "$OUT"
+xcrun swift "$ROOT/scripts/check-menubar-icon.swift" "$OUT/assets/icons/generated/menubar"
+xcrun swift "$ROOT/scripts/check-android-icon-insets.swift" "$OUT/assets/icons/generated/android/res"
 iconutil -c icns "$OUT/assets/icons/generated/macos/AppIcon.iconset" -o "$OUT/assets/icons/generated/macos/AppIcon.icns"
 if [ "${1:-}" = --check ]; then
   diff -r "$ROOT/assets/icons/generated" "$OUT/assets/icons/generated"

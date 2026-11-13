@@ -7,7 +7,8 @@
 - 唯一来源：`schema/record.schema.json`。TS 类型和校验在 `packages/record/index.ts`（`RecordV1`、`validateRecord`）。
 - `id` 是生产方生成的 ULID（`ulid()`）。
 - `source_ref`：来源内部的稳定键。凡是会重复读取外部存储的来源（会话日志、浏览器历史、git、shell 日志），**必须**填，hub 以 `(source, source_ref)` 唯一，重复发送是空操作。
-- 时间一律 RFC 3339 带时区（`toLocalIso()`）。`kind=span` 必须有 `t_end`。
+- 时间一律 RFC 3339 带时区；采集活动使用 `toLocalIso()` / `LocalTime.iso()`，服务端接收、审计和墓碑使用 UTC `Z`。`kind=span` 必须有 `t_end`。允许同一时刻使用不同偏移表示；排序、范围和间隔必须使用 `Date.parse` / `t_start_ms`，不得按带偏移的时间字符串比较。日记和使用天按中枢当地自然日；已有不可变记录不为统一格式改写。
+- 当前 TS 类型及 Swift 的生产方子集为手写，不声称已经生成。`schema/fixtures/mac-record.json` 同时由 Schema 校验与 Swift 编解码往返测试约束；Swift 未声明的字段（例如媒体和修正）由对应生产方另行产出。
 - `title` 一行，能用规则拼就不调模型；`body` 是详细正文。
 - 记录写入后不可修改。修正是一条 `source: "manual.correction"`、`corrects` 指向原记录的新记录。
 - 生产方不做模型调用。密钥拦截以 hub 为准（hub 写库前一定再过一遍）；生产方能先拦更好，拦了就把数量写进 `redactions`。
@@ -93,6 +94,7 @@
 | GET | `/v1/records?from&to&device&source&q&limit&cursor` | 时间倒序；`q` 走全文检索；`cursor` 分页；默认不返回 `body`，`?body=1` 才返回 |
 | GET | `/v1/records/:id` | 单条，带 body，带挂在它上面的修正 |
 | POST | `/v1/records` | 手动补写或修正（body 是一条 RecordV1，`source` 必须是 `manual.*`） |
+| DELETE | `/v1/records` | 管理令牌；`{ ids: [ULID] }`，每批 1–100 个；同一事务清理引用并连带删修正，返回 `{ deleted }`（含修正数量），不存在的 id 忽略 |
 | DELETE | `/v1/records/:id` | 真删：记录、全文索引一起删，留墓碑（只存 id、source、source_ref、内容哈希、删除时间） |
 | GET | `/v1/health` | 不需要 token |
 
@@ -436,3 +438,10 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 
 - 采集端启动转写进程的时机：有 `closed` 对话且距上次运行 ≥ 10 分钟，或收到新的 voiceprint，或 hub 有未完成的样本请求（同样间隔 ≥ 10 分钟）；同一时刻只跑一个；低优先级（`taskpolicy -b` 或 `setpriority`）。
 - 提炼切片：`mac.audio` 的分组键是 `audio:<source_ref>`，每段对话一个片段。
+
+### 2026-11-13 维护契约补充
+
+- 候选活动 `frames.status=candidate`，过期后 `candidate_expired`；模型明确忽略仍为 `ignored`，不改变候选成熟、过期、日记规则。旧库尚在候选列表中的帧按列表恢复状态；早已过期且被旧实现丢失分类依据的 `ignored` 不猜测、不重分类。
+- Mac 与中枢的同路声纹归并共用 `schema/fixtures/speaker-consolidation.json` 测试向量（6 秒长说话人门槛、0.5 长段合并、0.3 短段附着）；中枢仍额外保护已确认人物和跨对话的 0.55 阈值。Android 需在其仓库接入同一组向量后才能宣称三端一致。
+- 音频目录扫描和保留期清理由独立串行队列执行，合并重复扫描请求；转写启动与维护互斥，维护结果回到音频状态队列，较旧的扫描不能覆盖刚结束的对话。状态发布只读内存快照。音频片段编码及加密写盘仍顺序执行并受现有背压保护。
+- 日志每 30 秒检查：活动文件达到 5 MiB 时保留最近 5 MiB 到 `.1`，旧 `.1` 变 `.2`；超过两份移除。采用 copy-truncate 以保持 launchd 的打开句柄，轮转瞬间少量并发日志可能丢失；不用于审计持久化。单次突发可短暂超过上限，旧大文件也只读取上限长度到内存。文件权限 0600，拒绝链接。

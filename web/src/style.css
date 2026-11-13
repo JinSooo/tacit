@@ -169,6 +169,7 @@ dialog h2 { font-size: var(--text-title); font-weight: 600; margin: 0 0 16px; }
 .distillation-view { padding-bottom: 24px; overflow-wrap: anywhere; }
 .now-brief { padding: 32px 0 8px; }
 .now-brief p { font-family: var(--serif); font-size: var(--text-display); line-height: 1.6; margin: 0; white-space: pre-wrap; max-width: 880px; }
+.now-brief p[role="status"] { font-family: inherit; font-size: var(--text-body); margin-bottom: 16px; }
 .thread-group { margin: 16px 0 24px; }
 .thread-group > h3 { font-size: var(--text-body); font-weight: 600; color: var(--muted); margin: 0 0 8px; }
 .unconfirmed { font-weight: 400; font-size: var(--text-caption); margin-left: 8px; color: var(--muted); }
@@ -311,5 +312,5 @@ dialog h2 { font-size: var(--text-title); font-weight: 600; margin: 0 0 16px; }
   .stack-table .audit-detail-cell { margin: 8px -12px -8px; }
 }
 @media (max-width: 440px) { .time-fields { grid-template-columns: 1fr; gap: 0; } dialog { padding: 16px; } .stats { grid-template-columns: 1fr 1fr; } }
-.local-models { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.local-models { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
 .local-models select { min-width: 0; max-width: 100%; }

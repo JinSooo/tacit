@@ -13,10 +13,10 @@ test("审计筛选和不透明游标正确编码；摘要写成人话，只显�
   expect(auditSummary({ q_length: 12 })).toBe("搜索词 12 个字");
   expect(auditSummary({ from: "2026-01-01T08:30:00+08:00" })).toBe("2026-01-01 08:30 以后");
   expect(auditSummary({ from: "2026-01-01T08:30:00+08:00", to: "2026-01-02T09:00:00+08:00" })).toBe("2026-01-01 08:30 至 2026-01-02 09:00");
-  expect(auditSummary({ result: "unchanged", redactions: 2 })).toBe("已经有了，没有重复添加，拦下 2 处密钥");
+  expect(auditSummary({ result: "unchanged", redactions: 2 })).toBe("已经有了，没有重复添加，隐去了 2 处密钥");
   expect(auditSummary({})).toBe("");
   expect(auditAction("get", { level: "evidence" })).toBe("读取依据");
-  expect(auditAction("context", { event: "compact" })).toBe("压缩上下文后重新带入");
+  expect(auditAction("context", { event: "compact" })).toBe("对话压缩后重新带入");
   expect(auditAction("context", {})).toBe("新会话开始时带入");
   expect(auditAction("search", {})).toBe("搜索历史记录");
   expect(auditAction("custom", {})).toBe("custom");

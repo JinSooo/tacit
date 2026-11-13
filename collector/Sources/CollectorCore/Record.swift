@@ -120,11 +120,46 @@ public enum LocalTime {
 }
 
 public enum Text {
+  /// 文本区兜底取尾部时同样不能留下凭据尾巴。
+  public static func captureSuffix(_ text: String, limit: Int) -> String {
+    guard text.count > limit else { return text }
+    var start = text.index(text.endIndex, offsetBy: -max(0, limit))
+    let ascii: (Character) -> Bool = { c in c.unicodeScalars.allSatisfy { $0.value > 32 && $0.value < 127 } }
+    if start > text.startIndex, ascii(text[text.index(before: start)]) {
+      while start < text.endIndex, ascii(text[start]) { start = text.index(after: start) }
+    }
+    if let re = try? NSRegularExpression(pattern: "-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----") {
+      for match in re.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+        guard let begin = Range(match.range, in: text), let kind = Range(match.range(at: 1), in: text), begin.lowerBound < start else { continue }
+        guard let end = text[begin.upperBound...].range(of: "-----END \(text[kind])-----") else { return "" }
+        if end.upperBound > start { start = end.upperBound }
+      }
+    }
+    return String(text[start...])
+  }
+  /// 采集截断不保留半个 ASCII 凭据或没有尾标记的私钥块；完整值仍由入库规则脱敏。
+  public static func capturePrefix(_ text: String, limit: Int, suffix: String = "…[已截断]") -> String {
+    guard text.count > limit else { return text }
+    var end = text.index(text.startIndex, offsetBy: max(0, limit))
+    let asciiToken: (Character) -> Bool = { c in c.unicodeScalars.allSatisfy { $0.value > 32 && $0.value < 127 } }
+    if end < text.endIndex, asciiToken(text[end]) {
+      while end > text.startIndex, asciiToken(text[text.index(before: end)]) { end = text.index(before: end) }
+    }
+    let prefix = String(text[..<end])
+    if let re = try? NSRegularExpression(pattern: "-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----"),
+       let match = re.matches(in: prefix, range: NSRange(prefix.startIndex..., in: prefix)).last,
+       let kindRange = Range(match.range(at: 1), in: prefix), let begin = Range(match.range, in: prefix),
+       prefix[begin.upperBound...].range(of: "-----END \(prefix[kindRange])-----") == nil {
+      return String(prefix[..<begin.lowerBound]) + suffix
+    }
+    return prefix + suffix
+  }
+
   /// 压成一行并按字符数截断。
   public static func clamp(_ s: String, _ max: Int) -> String {
     let one = s.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
     let v = one.isEmpty ? "（无标题）" : one
-    return v.count <= max ? v : String(v.prefix(max - 1)) + "…"
+    return v.count <= max ? v : capturePrefix(v, limit: max - 1, suffix: "…")
   }
 
   /// 拆成去掉首尾空白的非空行。

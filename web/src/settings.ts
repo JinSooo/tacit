@@ -48,9 +48,9 @@ export type General = Record<GeneralKey, number>;
 export interface GeneralData extends General { defaults: General; ranges: Record<GeneralKey, [number, number]> }
 
 export const generalLabels: Record<GeneralKey, { label: string; unit: string; hint: string }> = {
-  inject_tokens: { label: "自动带入上限", unit: "token", hint: "新会话开始时，自动带入当前项目的摘要，超出上限时先舍弃最早的事项。" },
-  ask_done_days: { label: "事项多久没动静就问“做完了吗”", unit: "使用天", hint: "有历史记录的日子才算使用天，最后活动当天不算。" },
-  archive_days: { label: "问了多久没回答就归档", unit: "使用天", hint: "提问当天不算。归档的事项不再自动带入，也不再问，仍然搜得到。" },
+  inject_tokens: { label: "自动带入的长度上限", unit: "token", hint: "新会话开始时，自动带入当前项目的摘要。token 是模型的文字计量单位，800 token 中文通常约数百字；超出上限时先舍弃最早的事项。" },
+  ask_done_days: { label: "事项多久没动静就问“做完了吗”", unit: "天", hint: "只算有历史记录的日子，最后活动当天不算。" },
+  archive_days: { label: "问了多久没回答就归档", unit: "天", hint: "只算有历史记录的日子，提问当天不算。归档的事项不再自动带入，也不再问，仍然搜得到。" },
 };
 export const fallbackRanges: Record<GeneralKey, [number, number]> = { inject_tokens: [200, 4000], ask_done_days: [1, 30], archive_days: [1, 90] };
 

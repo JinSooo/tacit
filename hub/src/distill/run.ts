@@ -21,6 +21,14 @@ import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSu
 export interface LLM { complete<T>(req: LLMRequest): Promise<LLMResult<T>> }
 export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: string) => void }
 
+/** 事务外等待模型时用户可能删除/修正内容：丢弃旧快照的响应，下一轮重试。 */
+async function complete<T>(d: Deps, req: LLMRequest): Promise<LLMResult<T>> {
+  const store = new DistillStore(d.db), revision = store.getState<number>("content_revision");
+  const result = await d.llm.complete<T>(req);
+  return result.ok && revision !== store.getState<number>("content_revision")
+    ? { ok: false, error: "记录已变化，等待重新整理", ms: result.ms } : result;
+}
+
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 export const LIMITS = {
   assignBatch: 20, assignChars: 24_000, assignExcerpt: 240, assignRecords: 10, assignThreads: 40,
@@ -57,6 +65,14 @@ interface Candidate { id: string; title: string; frame_ids: string[]; minutes: n
 export function sliceStep(db: HubDB, backfill = false, now = Date.now(), enabledDefault = now) {
   const store = new DistillStore(db), rules = new DistillRules(store);
   return db.db.transaction(() => {
+    // 补处理先前版本已入库但未影响整理的修正，也去掉旧的独立修正片段。
+    const correctionCursor = store.getState<number>("correction_rowid") ?? 0;
+    const corrections = db.db.prepare("SELECT rowid,id,corrects,t_start FROM records WHERE source='manual.correction' AND rowid>? ORDER BY rowid").all(correctionCursor) as { rowid: number; id: string; corrects: string; t_start: string }[];
+    for (const r of corrections) {
+      store.removeRecord(r.id, r.t_start);
+      store.correctRecord(r.corrects);
+    }
+    if (corrections.length) store.setState("correction_rowid", corrections.at(-1)!.rowid);
     let cursor = store.getState<number>("cursor_ms");
     if (cursor === null) { cursor = now; store.setState("cursor_ms", cursor); }
     const enabled = store.getState<number>("enabled_ms") ?? enabledDefault;
@@ -121,8 +137,9 @@ export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: num
   let hidden = 0;
   const conversations = new Set<string>();
   const records = ids.flatMap(id => {
-    const r = store.hub.get(id);
-    if (!r) return [];
+    const original = store.hub.get(id);
+    if (!original || original.source === "manual.correction") return [];
+    const r = store.hub.effective(id)!;
     // private 记录的标题和正文都不发给模型；同一片段里的其他记录照常发送。
     if (r.sensitivity === "private") { hidden++; return []; }
     // 对话开头常是寒暄和噪声，总结另附一次，不挤占每条原文的截断预算。
@@ -162,7 +179,15 @@ function batches<T>(items: T[], size: (item: T) => number, budget: number, maxCo
 export async function assignStep(d: Deps, store: DistillStore, now: number) {
   const log = d.log ?? (() => {});
   let assigned = 0, created = 0, ignored = 0, calls = 0, failed = 0;
-  let candidates = (store.getState<Candidate[]>("candidates") ?? []).filter(c => now - c.last_ms < LIMITS.candidateTTL);
+  const previous = store.getState<Candidate[]>("candidates") ?? [];
+  let candidates = previous.filter(c => now - c.last_ms < LIMITS.candidateTTL);
+  store.hub.db.transaction(() => {
+    const live = JSON.stringify(candidates.flatMap(c=>c.frame_ids));
+    const expired = JSON.stringify(previous.filter(c=>!candidates.includes(c)).flatMap(c=>c.frame_ids));
+    store.hub.db.prepare("UPDATE frames SET status='candidate_expired' WHERE (status='candidate' AND id NOT IN (SELECT value FROM json_each(?))) OR (status='ignored' AND id IN (SELECT value FROM json_each(?)))").run(live,expired);
+    store.hub.db.prepare("UPDATE frames SET status='candidate' WHERE status='ignored' AND id IN (SELECT value FROM json_each(?))").run(live);
+    store.setState("candidates",candidates);
+  })();
   const pending = loadFrames(store, "WHERE status='new' ORDER BY t_start_ms,id");
   // 用户说过"不属于"某些线程的片段按拒绝的线程分组单独成批：候选里直接去掉这些线程（只在提示里写不能选，
   // 模型仍会被片段里的字样带回原线程，2026-11-10 实测），片段带上被拒线程的标题，避免另起同名线程。
@@ -175,7 +200,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
     if (!groups.has(key)) groups.set(key, { rejected, views: [] });
     groups.get(key)!.views.push({ f, v: titles.length ? { ...v, not_threads: titles } : v });
   }
-  outer: for (const group of groups.values()) for (const batch of batches(group.views, x => JSON.stringify(x.v).length, LIMITS.assignChars, LIMITS.assignBatch)) {
+  for (const group of groups.values()) for (const batch of batches(group.views, x => JSON.stringify(x.v).length, LIMITS.assignChars, LIMITS.assignBatch)) {
     const excluded = new Set(group.rejected);
     const open = (store.hub.db.prepare("SELECT * FROM threads WHERE status IN ('active','paused') ORDER BY last_ms DESC LIMIT ?").all(LIMITS.assignThreads + excluded.size) as (Thread & { project_id: string | null })[])
       .filter(t => !excluded.has(t.id)).slice(0, LIMITS.assignThreads);
@@ -189,8 +214,8 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
     ];
     calls++;
     const request = assignRequest(batch.map(x => x.v), choices);
-    const r = await d.llm.complete<P.AssignOutput>({ tier: "minute", task: "assign", system: P.ASSIGN_SYSTEM, prompt: request.prompt, schema: request.schema });
-    if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length })); break outer; }
+    const r = await complete<P.AssignOutput>(d, { tier: "minute", task: "assign", system: P.ASSIGN_SYSTEM, prompt: request.prompt, schema: request.schema });
+    if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length, category: modelFailureCategory(r.error) })); continue; }
     const byFrame = new Map(request.decode(r.data).items.map(i => [i.frame_id, i]));
     const real = new Set(threads.map(t => t.id));
     // 同一批里多个片段提议同一个新标题，或者提议的标题就是已有线程：归到同一条，不重复建。
@@ -221,8 +246,8 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
           candidates.push(cand);
         }
         cand.frame_ids.push(f.id); cand.minutes = store.frameMinutes(cand.frame_ids); cand.last_ms = Math.max(cand.last_ms, f.t_end_ms);
-        // 候选期间片段标为 ignored，不会被重复发给模型；建线程时再正式归属。
-        store.hub.db.prepare("UPDATE frames SET status='ignored' WHERE id=?").run(f.id);
+        // 候选单独计数，不重复送模型；建事项时正式归属，过期后仍保留原因。
+        store.hub.db.prepare("UPDATE frames SET status='candidate' WHERE id=?").run(f.id);
         if (cand.minutes >= LIMITS.threadMinutes || cand.frame_ids.length >= LIMITS.threadFrames) {
           const frames = loadFrames(store, `WHERE id IN (${cand.frame_ids.map(() => "?").join(",")}) ORDER BY t_start_ms,id`, ...cand.frame_ids);
           if (frames.length) {
@@ -253,7 +278,7 @@ function threadFrames(store: DistillStore, threadId: string): Frame[] {
 }
 
 async function makeBrief(d: Deps, task: string, title: string, detail: unknown): Promise<string | null> {
-  const r = await d.llm.complete<P.BriefOutput>({ tier: "minute", task, system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail), schema: P.BRIEF_SCHEMA });
+  const r = await complete<P.BriefOutput>(d, { tier: "minute", task, system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail), schema: P.BRIEF_SCHEMA });
   return r.ok ? r.data.brief.trim() : null;
 }
 
@@ -303,14 +328,15 @@ export async function conversationStep(d: Deps, now: number) {
   let calls = 0, done = 0;
   for (const { g, turns } of todo.slice(0, LIMITS.conversationsPerRound)) {
     calls++;
-    const r = await d.llm.complete<P.ConversationOutput>({ tier: "minute", task: "conversation_summary", system: P.CONVERSATION_SYSTEM,
+    const r = await complete<P.ConversationOutput>(d, { tier: "minute", task: "conversation_summary", system: P.CONVERSATION_SYSTEM,
       prompt: P.conversationPrompt({ start: clock(g.start_ms), end: clock(g.end_ms), app: g.app }, conversationTranscript(turns)), schema: P.CONVERSATION_SCHEMA });
     if (!r.ok) continue;
     const out = { title: r.data.title.trim(), summary: r.data.summary.trim(), points: r.data.points.map(p => p.trim()).filter(Boolean).slice(0, 5) };
     if (!out.title || !out.summary) continue;
     // 调用期间记录可能被删或者接上了新的一段：组成变了就不写，下一轮重来。
     const current = conversationsIn(d.db, g.start_ms, g.start_ms).find(c => c.id === g.id);
-    if (!current || JSON.stringify(current.record_ids) !== JSON.stringify(g.record_ids)) continue;
+    if (!current || JSON.stringify(current.record_ids) !== JSON.stringify(g.record_ids)
+      || JSON.stringify(groupTurns(d.db, current, namer())) !== JSON.stringify(turns)) continue;
     saveSummary(d.db, g, out); done++;
   }
   return { calls, done, pending: todo.length - done };
@@ -353,7 +379,7 @@ export async function classifyStep(d: Deps, store: DistillStore) {
     calls++;
     try {
       const t = store.thread(id)!;
-      const r = await d.llm.complete<P.Classification>({ tier: "minute", task: "classify", system: P.CLASSIFY_SYSTEM,
+      const r = await complete<P.Classification>(d, { tier: "minute", task: "classify", system: P.CLASSIFY_SYSTEM,
         prompt: P.classifyPrompt(t, projectHint(store, t)), schema: P.CLASSIFY_SCHEMA });
       if (!r.ok) { failed++; continue; }
       store.hub.db.transaction(() => applyClassification(store, id, r.data))();
@@ -370,6 +396,8 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
   for (const { id } of threads) {
     const thread = store.thread(id)!;
     const frames = threadFrames(store, id);
+    const recordVersions = frames.flatMap(f => f.record_ids).map(id => [id, store.hub.effective(id)?.id]);
+    const unchanged = () => recordVersions.every(([id, version]) => store.hub.effective(id!)?.id === version);
     const countOf = (ids: Set<string>) => frames.filter(f => ids.has(f.id)).reduce((n, f) => n + f.record_ids.length, 0);
     if (!frames.length) {
       store.upsertThread({ ...thread, detail: null, brief: null, needs_regen: 0, updated_at: toLocalIso(now) });
@@ -402,8 +430,9 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     for (const chunk of chunks) {
       calls++;
       const request = threadRequest({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!), recordId => store.hub.get(recordId));
-      const r = await d.llm.complete<ThreadModelOutput>({ tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: request.prompt, schema: request.schema });
-      if (!r.ok) { ok = false; break; }
+      const r = await complete<ThreadModelOutput>(d, { tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: request.prompt, schema: request.schema });
+      if (!r.ok) { log(JSON.stringify({ step: "digest", ok: false, category: modelFailureCategory(r.error) })); ok = false; break; }
+      if (!unchanged()) { ok = false; break; }
       const known = new Set(chunk.flatMap(x => x.v.records.map(rec => rec.id)).filter(Boolean));
       const out = request.decode(r.data);
       store.hub.db.transaction(() => {
@@ -480,7 +509,7 @@ export async function dedupStep(d: Deps, store: DistillStore, now: number) {
   if (rows.length < 2) return { calls: 0, merged: 0, failed: 0 };
   const names = new Map(store.projects().map(p => [p.id, p.name]));
   const views = rows.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: t.project_id ? names.get(t.project_id) ?? null : null, status: t.status, first: t.first_ms ? clock(t.first_ms) : "", last: t.last_ms ? clock(t.last_ms) : "" }));
-  const r = await d.llm.complete<P.DedupOutput>({ tier: "hour", task: "dedupe", system: P.DEDUP_SYSTEM, prompt: P.dedupPrompt(views), schema: P.DEDUP_SCHEMA });
+  const r = await complete<P.DedupOutput>(d, { tier: "hour", task: "dedupe", system: P.DEDUP_SYSTEM, prompt: P.dedupPrompt(views), schema: P.DEDUP_SCHEMA });
   if (!r.ok) return { calls: 1, merged: 0, failed: 1 };
   const byId = new Map(rows.map(t => [t.id, t]));
   let merged = 0;
@@ -515,7 +544,7 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
       if (!described.length) { store.setState(pendingKey, null); store.upsertProject({ ...p, brief: null, detail: null, last_ms: last || p.last_ms, salience, needs_regen: 0, updated_at: toLocalIso(now) }); continue; }
       calls++;
       const views: P.ThreadView[] = described.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: p.name, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" }));
-      const r = await d.llm.complete<P.ProjectOutput>({ tier: "hour", task: "project", system: P.PROJECT_SYSTEM, prompt: P.projectPrompt(p.name, views, factViews(store, "project_id", p.id)), schema: P.PROJECT_SCHEMA });
+      const r = await complete<P.ProjectOutput>(d, { tier: "hour", task: "project", system: P.PROJECT_SYSTEM, prompt: P.projectPrompt(p.name, views, factViews(store, "project_id", p.id)), schema: P.PROJECT_SCHEMA });
       if (!r.ok) { failed++; continue; }
       detail = r.data;
       store.hub.db.transaction(() => {
@@ -625,7 +654,7 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
       minutes: Math.round(unionSeconds(b.spans)/60), label: b.label, brief: b.thread?.brief ?? null,
       ...(b.thread ? { kind: "thread" as const, thread_id: b.thread.id } : { kind: "misc" as const }) }));
     const active = Math.round(unionSeconds(blocks.flatMap(b => b.spans))/60);
-    const r = await d.llm.complete<P.DayOutput>({ tier: "day", task: "day", system: P.DAY_SYSTEM, prompt: P.dayPrompt(date, input.slice(0, 300), active), schema: P.DAY_SCHEMA });
+    const r = await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM, prompt: P.dayPrompt(date, input.slice(0, 300), active), schema: P.DAY_SCHEMA });
     if (!r.ok) return { calls: 1, ok: false };
     detail = r.data; calls++;
     store.hub.db.transaction(() => {
@@ -649,7 +678,15 @@ export interface RoundOptions { backfill?: boolean; slow?: boolean; days?: "all"
 
 /** 快步骤（切片、归线程、当前状态、生命周期）每轮都跑；slow=true 时再跑线程、项目和日记。 */
 /** 额度、频率限制类错误：本轮剩下的调用直接跳过，不再继续消耗。 */
-export const QUOTA_ERROR = /limit|quota|rate.?limit|usage|exceeded|429|额度|限额/i;
+export const QUOTA_ERROR = /\b429\b|\brate[ _-]?limit(?:ed|ing|s|_exceeded)?\b|\bquota\b|\binsufficient_quota\b|\busage[ _-]+limit\b|\b(?:hit|reached|exceeded)\s+(?:your\s+|the\s+)?(?:\d+[ -](?:hour|day|week|month)\s+)?(?:usage\s+)?limit\b|额度|限额|频率限制/i;
+/** 日志只写固定类别；底层 stderr 可能带用户正文，不能直接写。 */
+export function modelFailureCategory(error: string): string {
+  if (QUOTA_ERROR.test(error)) return "quota";
+  if (/超时|timed? ?out/i.test(error)) return "timeout";
+  if (/schema|结构化|JSON/i.test(error)) return "output";
+  if (/HTTP|连接|connect|network/i.test(error)) return "connection";
+  return "model";
+}
 export function withBreaker(llm: LLM, onTrip: (error: string) => void): LLM {
   let tripped: string | null = null;
   return {

@@ -50,7 +50,7 @@ export function AudioSettings({ api }: { api: AudioApi }) {
     catch (error) { setError(message(error)); dialog.current?.close(); } finally { setBusy(false); }
   }
   return <section className="settings-block"><h2>录音</h2><form onSubmit={save}><label>录音保留多少天<span className="field-row"><input type="number" required min={1} max={365} step={1} value={days} disabled={loading || busy} onChange={event => { setDays(event.target.value); setStatus(""); }} /><span>天</span></span><span className="hint">只影响原始音频，转写出的文字一直保留。可填 1–365。</span></label><div className="actions"><button className="primary" type="submit" disabled={loading || busy || !valid}>保存</button>{status && <span role="status">{status}</span>}</div></form>
-    {loading && <p className="muted" role="status">正在读取…</p>}{error && <p className="error" role="alert">{error} <button onClick={() => setRevision(value => value + 1)}>重新读取</button></p>}
+    {loading && <p className="muted" role="status">正在读取…</p>}{error && <p className="error" role="alert">{error} <button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
     <h3>删除全部音频</h3><p className="muted">只删原始音频，转写出的文字会保留。</p>
     <button className="danger" disabled={busy} onClick={() => dialog.current?.showModal()}>删除全部音频…</button>
     <dialog ref={dialog} aria-labelledby="purge-audio-title" onCancel={event => { if (busy) event.preventDefault(); }}><h2 id="purge-audio-title">删除全部音频？</h2><p>还没转写的对话会丢失，转写出的文字会保留。设备下次同步时删除，正在录的不受影响。</p><div className="actions"><button className="danger" disabled={busy} onClick={() => void purge()}>{busy ? "正在删除…" : "删除"}</button><button disabled={busy} onClick={() => dialog.current?.close()}>取消</button></div></dialog>
