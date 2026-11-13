@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { createHandler } from "../src/server.ts";
+import { connectAgent } from "../src/agents-install.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { fixture, networkDenied, setup } from "./helpers.ts";
 
@@ -187,12 +188,29 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
       expect(messages[i].content[0].text).toBe(JSON.stringify(await response.json(), null, 2));
     }
     expect(messages[4].isError).toBe(true); expect(messages[4].content[0].text).toContain("404");
+    // 从真实生成的 Desktop 配置启动进程，覆盖带空格的路径及独立审计身份。
+    const desktopHome = join(ctx.dir, "desktop home");
+    connectAgent("claude-desktop", true, { home: desktopHome, repo: resolve(import.meta.dir, "../.."), bun: process.execPath, appExists: () => true });
+    const entry = JSON.parse(readFileSync(join(desktopHome, "Library/Application Support/Claude/claude_desktop_config.json"), "utf8")).mcpServers["record-anything"];
+    const desktop = Bun.spawn([entry.command, ...entry.args], {
+      cwd: "/",
+      env: { PATH: "/usr/bin:/bin", HOME: desktopHome, RA_DATA_DIR: ctx.dir, RA_PORT: String(server.port) },
+      stdin: new TextEncoder().encode([rpc(1, "initialize", { protocolVersion: "2025-06-18" }), rpc(2, "tools/list"), call(3, "now")].join("\n") + "\n"),
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [desktopOut, desktopError, desktopCode] = await Promise.all([new Response(desktop.stdout).text(), new Response(desktop.stderr).text(), desktop.exited]);
+    expect(desktopCode).toBe(0); expect(desktopError).toBe("");
+    const desktopMessages = desktopOut.trim().split("\n").map(line => JSON.parse(line).result);
+    expect(desktopMessages[1].tools.map((t: any) => t.name)).toEqual(["now", "get", "search", "timeline", "history_append"]);
+    expect(desktopMessages[2].isError).toBeUndefined();
+    expect(desktopMessages[2].content[0].text).toContain("合成当前状态");
     for (const source of ["startup", "resume", "clear", "compact", "unknown", undefined]) {
       const hook = await run(ctx.dir, ["hook", "session-start", "--tool", "claude-code"], JSON.stringify({ cwd: "/synthetic", source }), env);
       expect(hook.code).toBe(0); expect(hook.stderr).toBe(""); expect(JSON.parse(hook.stdout).hookSpecificOutput.additionalContext).toContain("合成摘要");
     }
     const audit = ctx.db.db.prepare("SELECT tool,kind,args FROM agent_reads").all() as any[];
     expect(audit.some(r => r.tool === "codex" && r.kind === "search" && JSON.parse(r.args).q_length === 6)).toBe(true);
+    expect(audit.some(r => r.tool === "claude-desktop" && r.kind === "now")).toBe(true);
     expect(audit.filter(r => r.kind === "context").map(r => JSON.parse(r.args).event)).toEqual(["startup", "resume", "clear", "compact", "startup", "startup"]);
     ctx.db.db.prepare("DELETE FROM projects").run();
     const empty = await run(ctx.dir, ["hook", "session-start", "--tool", "codex"], '{"cwd":"/synthetic"}', env);

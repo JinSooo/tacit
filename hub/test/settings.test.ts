@@ -39,6 +39,24 @@ async function call(h: ReturnType<typeof handler>, method: string, path: string,
 }
 const tier = (provider: string, model = "synthetic-model", extra = {}) => ({ provider, model, ...extra });
 
+test("Desktop 设置接口连接、断开、重启提示及鉴权；无需编程 CLI", async () => {
+  const home = join(ctx.dir, "desktop-home");
+  const agents = { home, repo: "/tmp/合成仓库", bun: "/tmp/bun", which: () => null, appExists: () => false };
+  const h = handler({ agents });
+  const path = "/v1/settings/agents/claude-desktop";
+  expect((await call(h, "PUT", path, { connected: true }, false)).status).toBe(401);
+  expect((await call(h, "PUT", path, { connected: true })).status).toBe(409);
+  expect(existsSync(home)).toBe(false);
+  agents.appExists = () => true;
+  const connected = await call(h, "PUT", path, { connected: true });
+  expect(connected.status).toBe(200);
+  expect(connected.body.tools.find((t: any) => t.id === "claude-desktop")).toMatchObject({ connected: true, partial: false });
+  expect(connected.body.note).toContain("完全退出");
+  expect(existsSync(join(home, ".claude"))).toBe(false);
+  expect((await call(h, "PUT", path, { connected: false })).body.tools.find((t: any) => t.id === "claude-desktop").connected).toBe(false);
+  expect((await call(h, "PUT", "/v1/settings/agents/workbuddy", { connected: true })).status).toBe(400);
+});
+
 test("端口优先级：RA_PORT > hub.json > 47823；hub.json 无效时报错，写入保留其他字段", () => {
   expect(resolvePort({}, ctx.dir)).toEqual({ port: 47823, source: "default" });
   writeFileSync(join(ctx.dir, "hub.json"), JSON.stringify({ port: 50001, note: "保留" }));
@@ -277,6 +295,7 @@ test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；�
   const calls: string[][] = [];
   const agents = {
     home, repo: "/tmp/合成仓库", bun: "/tmp/bun",
+    appExists: () => false,
     which: (command: string) => command === "claude" ? "/fake/claude" : null,
     print: () => {},
     run: (command: string, args: string[]) => {
@@ -291,7 +310,7 @@ test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；�
   };
   const h = handler({ agents });
   const before = await call(h, "GET", "/v1/settings/agents");
-  expect(before.body.tools.map((t: any) => [t.id, t.installed, t.connected])).toEqual([["claude-code", true, false], ["codex", false, false]]);
+  expect(before.body.tools.map((t: any) => [t.id, t.installed, t.connected])).toEqual([["claude-code", true, false], ["codex", false, false], ["claude-desktop", false, false]]);
 
   const connected = await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: true });
   expect(connected.status).toBe(200);

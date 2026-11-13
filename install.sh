@@ -245,7 +245,7 @@ launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.collector.plist"
 step "装好了"
 cat <<MSG
 1. 屏幕右上角的菜单栏里出现了 Record Anything 图标。第一次运行时，macOS 会请你在“辅助功能”里允许它，打开后才能记录屏幕上的文字。
-2. 点这个图标，从面板里打开主窗口。“此刻”页会列出还差的几步：打开系统权限、确认 AI 能整理记录、接入 Claude Code 或 Codex，跟着点就行。
+2. 点这个图标，从面板里打开主窗口。“此刻”页会列出还差的几步：打开系统权限、确认 AI 能整理记录、接入 Claude Desktop、Claude Code 或 Codex，跟着点就行。
 3. 建议备份密钥：设置 → 维护 → 密钥备份。记录都加了密，密钥丢了就打不开。
 
 数据存在 $DATA

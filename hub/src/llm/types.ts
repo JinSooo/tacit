@@ -4,7 +4,8 @@ export type Tier = "minute" | "hour" | "day";
 export type Provider = "claude-cli" | "codex-cli" | "anthropic" | "openai-compatible";
 export interface LLMRequest { tier: Tier; task?: string; system: string; prompt: string; schema: object; timeoutMs?: number }
 export type LLMResult<T> = { ok: true; data: T; ms: number } | { ok: false; error: string; ms: number };
-export interface ModelConfig { provider: Provider; model: string; base_url?: string }
+export type ReasoningEffort = "none" | "low" | "medium" | "high";
+export interface ModelConfig { provider: Provider; model: string; base_url?: string; reasoning_effort?: ReasoningEffort }
 export interface UsageRow {
   id: string; at: string; tier: Tier; task: string | null; provider: string; model: string;
   input_chars: number; output_chars: number; input_tokens: number | null; output_tokens: number | null;

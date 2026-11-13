@@ -1,11 +1,7 @@
 import { parseJSON, tokens } from "./process.ts";
 import type { BackendContext, ReadKey } from "./types.ts";
-
-/** 本机模型服务（Ollama、LM Studio 等）：不需要 API key，也不把钥匙串里的 key 发过去。 */
-export function isLoopback(baseURL: string | undefined): boolean {
-  if (!baseURL) return false;
-  try { const host = new URL(baseURL).hostname; return host === "localhost" || host === "[::1]" || /^127\./.test(host); } catch { return false; }
-}
+import { isLoopback } from "./local.ts";
+export { isLoopback } from "./local.ts";
 
 export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promise<unknown> {
   const anthropic = ctx.config.provider === "anthropic";
@@ -29,6 +25,7 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
           tools: [{ name: "emit_result", description: "返回符合 schema 的结果", input_schema: ctx.req.schema }], tool_choice: { type: "tool", name: "emit_result" },
         } : {
           model: ctx.config.model, messages: [{ role: "system", content: ctx.req.system }, { role: "user", content: ctx.req.prompt }],
+          ...(ctx.config.reasoning_effort === undefined ? {} : { reasoning_effort: ctx.config.reasoning_effort }),
           response_format: { type: "json_schema", json_schema: { name: "result", strict: true, schema: ctx.req.schema } },
         }),
       });

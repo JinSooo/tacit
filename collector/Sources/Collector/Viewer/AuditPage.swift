@@ -15,7 +15,7 @@ struct AuditPage: View {
   var body: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
-        Text("Claude Code、Codex 每次读取或写入你的历史记录，都会记在这里。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        Text("AI 工具每次读取或写入你的历史记录，都会记在这里。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
           .padding(.bottom, 24)
         if reads.isEmpty {
           if loading { Placeholder(kind: .loading).frame(height: 240) }
@@ -58,7 +58,7 @@ struct AuditPage: View {
     .toolbar {
       ToolbarItem(placement: .principal) {
         Picker("工具", selection: $tool) {
-          Text("全部").tag(""); Text("Claude Code").tag("claude-code"); Text("Codex").tag("codex")
+          Text("全部").tag(""); Text("Claude Desktop").tag("claude-desktop"); Text("Claude Code").tag("claude-code"); Text("Codex").tag("codex")
         }
         .pickerStyle(.segmented).labelsHidden()
       }
@@ -113,7 +113,10 @@ struct AuditRow: View {
     VStack(alignment: .leading, spacing: 0) {
       Button(action: toggle) {
         HStack(spacing: 12) {
-          if !nested { SourceGlyph(source: read.tool == "codex" ? "codex.session" : "claude_code.session", size: 28) }
+          if !nested {
+            SourceGlyph(source: read.tool == "codex" ? "codex.session" : "claude_code.session", size: 28)
+              .help(["claude-desktop": "Claude Desktop", "claude-code": "Claude Code", "codex": "Codex"][read.tool] ?? read.tool)
+          }
           VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
               Text(action).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink)

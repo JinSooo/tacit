@@ -113,22 +113,29 @@
 | GET | `/v1/settings/hub` | — | `{ port, listen: "127.0.0.1", lan: false, locked }`；`port` 是正在监听的端口，`locked` 为 true 表示设了 `RA_PORT` |
 | PUT | `/v1/settings/hub` | `{ port }`，1024–65535 的整数 | `{ port, restarting }`。先在 127.0.0.1 试绑定新端口，再原子写 `hub.json`（保留其他字段），响应发出约 300ms 后中枢退出，launchd KeepAlive 用新端口拉起。和当前端口相同时只写文件，`restarting: false`。被占用 409「端口 N 已被占用，请换一个」；设了 `RA_PORT` 时 409「端口由环境变量 RA_PORT 固定…」 |
 | GET | `/v1/settings/models` | — | `{ tiers, config_error, keys, providers, tier_info }`，见下 |
-| PUT | `/v1/settings/models` | `{ tiers: { minute, hour, day } }`，每档 `{ provider, model, base_url? }` | 同 GET。三档都要给，规则和读取 `models.json` 相同（`validateTiers`）；原子写回，下一次模型调用生效 |
-| POST | `/v1/settings/models/test` | `{ tier, config? }`；`config` 是一档未保存的配置，不给就用已保存的 | `{ ok, ms, provider, model, error }`。最小提示调用一次，超时 60 秒，`error` 已脱敏、≤300 字；不写 `llm_usage`。同一时间只跑一个，否则 409 |
+| PUT | `/v1/settings/models` | `{ tiers: { minute, hour, day } }`，每档 `{ provider, model, base_url?, reasoning_effort? }` | 同 GET。三档都要给，规则和读取 `models.json` 相同（`validateTiers`）；原子写回，下一次模型调用生效 |
+| POST | `/v1/settings/models/local` | `{ base_url }`，无凭证、查询参数和片段的本机 HTTP(S) 地址 | `{ models: string[] }`，通过兼容接口 `/models` 读取、去重和排序；空数组表示服务正常但没有模型。5 秒超时，不发送 key，不跟随重定向；连接或响应异常 503。需要与其他设置接口相同的鉴权 |
+| POST | `/v1/settings/models/test` | `{ tier, config? }`；`config` 是一档未保存的配置，不给就用已保存的 | `{ ok, ms, provider, model, error }`。最小提示调用一次，要求返回 `ok=true`，只验证连接与输出格式，超时 60 秒，`error` 已脱敏、≤300 字；不写 `llm_usage`。同一时间只跑一个，否则 409 |
 | PUT | `/v1/settings/keys/:provider` | `{ key }`，8–1024 个可见 ASCII，不含空格、`"`、`\` | `{ provider, set: true }`；写钥匙串 service `record-anything`、account `provider:<provider>`（已有则覆盖） |
 | DELETE | `/v1/settings/keys/:provider` | — | `{ provider, deleted }`；`deleted` 为删除前是否存在 |
 | GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, defaults, ranges }` |
 | PUT | `/v1/settings/general` | 三项中任意几项 | 同 GET。`inject_tokens` 200–4000（默认 800）、`ask_done_days` 1–30 使用天（默认 3）、`archive_days` 1–90 使用天（默认 7），都是整数 |
-| GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial }] }`，`id` 为 `claude-code`、`codex`。只读配置文件判断：会话开始钩子（`~/.claude/settings.json`、`~/.codex/hooks.json`）和 MCP 登记（`~/.claude.json` 的 `mcpServers`、`~/.codex/config.toml` 的 `mcp_servers`）都在才算 `connected`，只有一个算 `partial` |
-| PUT | `/v1/settings/agents/:id` | `{ connected }` | `{ tools, note }`。等同 `cli.ts agents install|uninstall --tool <id> --yes`；本机找不到该工具时连接返回 409；执行失败 500，带原因。`note` 是连接 Codex 后要告诉用户的话（第一次要在 Codex 里批准钩子），其他情况为 null |
+| GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial }] }`，`id` 为 `claude-code`、`codex`、`claude-desktop`。前两者的会话开始钩子（`~/.claude/settings.json`、`~/.codex/hooks.json`）和 MCP 登记（`~/.claude.json` 的 `mcpServers`、`~/.codex/config.toml` 的 `mcp_servers`）都在才算 `connected`，只有一个算 `partial`。Desktop 检查 `/Applications/Claude.app` 或 `~/Applications/Claude.app` 是否存在，MCP 配置见下，不要求 hook。状态表示配置已登记，不表示应用已重载 |
+| PUT | `/v1/settings/agents/:id` | `{ connected }` | `{ tools, note }`。等同 `cli.ts agents install|uninstall --tool <id> --yes`；本机找不到该工具时连接返回 409；执行失败 500，带原因。Codex 连接后的 `note` 提醒首次批准钩子；Desktop 连接、断开均提醒完全退出并重新打开应用；其他情况为 null |
 
 - `:provider` 只能是 `anthropic`、`openai-compatible`。key 只进钥匙串：不出现在响应、错误信息、日志、文件和 `security` 的进程参数里（经 `security -i` 的 stdin 传入）。
 - models 的 GET 字段：`tiers` 当前三档（`models.json` 不存在时是代码默认值；文件无效时 `tiers` 是默认值、`config_error` 是原因，此时提炼会失败，应提示用户保存一份新的）；`keys` 形如 `{ "anthropic": true, "openai-compatible": false }`，查询钥匙串失败时为 `null`；`providers` 是 `[{ id, label, needs_key, base_url }]`，`base_url` 为 true 表示该后端可填 `base_url`；`tier_info` 是 `{ minute: { label, description }, … }`。
-- 账号登录类后端（`claude-cli`、`codex-cli`）只调用本机已登录的命令，不需要 key，不接受 `base_url`。
+- `reasoning_effort` 仅适用于 `openai-compatible`，可选 `none`、`low`、`medium`、`high`；省略表示跟随模型，不发送此参数。连接测试与实际整理使用同一份配置；服务和模型可能不支持某个强度，客户端不承诺统一能力。旧配置无需迁移。
+- 本机地址只是连接位置，不保证推理不转发到云端；本次接入不改变 private 内容排除规则。Mac 和网页通过同一个列表接口读取，区分未连接、读取失败和空模型列表。本机连接不提示填写 API key。
+- 账号登录类后端（`claude-cli`、`codex-cli`）只调用本机已登录的命令，不需要 key，不接受 `base_url` 或 `reasoning_effort`。
 - general 存在 `distill_state` 表的 `general_settings` 键里。中枢生成自动注入时、提炼进程每轮线程生命周期步骤时现读，改完不需要重启。
 - 只监听 127.0.0.1；没有开放局域网的接口，配对和应用层 HPKE 加密之后才开放（v3），`lan` 目前恒为 false。
 
+Claude Desktop 的 MCP 配置写入 `~/Library/Application Support/Claude/claude_desktop_config.json` 的 `mcpServers.record-anything`：Bun 与入口均用绝对路径，参数为 `<repo>/hub/src/cli.ts mcp --tool claude-desktop`。不写 token、不登记 hook、不采集 Desktop 聊天记录。保留其他连接器和偏好；写前备份，原子替换；同名非本工具配置拒绝覆盖。路径过期显示 `partial`，重新连接修复。默认 `agents install` 在发现应用时包含 Desktop，默认 `uninstall` 也清理应用移除后遗留的配置。读取及用户明确要求的追加沿用 4.6，审计 tool 为 `claude-desktop`。
+
 ## 4. 提炼层（v1）
+
+整理写入前只保留能引用输入记录的事实；`inference` 的置信度必须小于 0.8，否则丢弃并计入 `dropped_invalid_inference`。不改写为已定，也不虚构较低置信度。用户事实不能被模型作废；替代事实被过滤时，原事实也不能因此作废。此校验不等于语义准确率保证。
 
 ### 4.1 进程与节奏
 

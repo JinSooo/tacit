@@ -239,6 +239,7 @@ struct ModelTierConfig: Codable, Equatable {
   var provider: String
   var model: String
   var baseUrl: String?
+  var reasoningEffort: String?
 }
 struct ModelSettingsInfo: Decodable {
   struct ProviderInfo: Decodable, Hashable { let id: String; let label: String; let needsKey: Bool; let baseUrl: Bool }
@@ -267,6 +268,7 @@ extension HubAPI {
   static func tierJSON(_ t: ModelTierConfig) -> [String: Any] {
     var d: [String: Any] = ["provider": t.provider, "model": t.model]
     if let b = t.baseUrl, !b.isEmpty { d["base_url"] = b }
+    if let r = t.reasoningEffort, !r.isEmpty { d["reasoning_effort"] = r }
     return d
   }
 
@@ -289,13 +291,8 @@ extension HubAPI {
     try await call(GeneralSettingsInfo.self, "PUT", "/v1/settings/general", values)
   }
 
-  /// 本机模型服务（Ollama、LM Studio）上已有的模型，走 OpenAI 兼容的 GET /models。
-  static func localModels(baseURL: String) async -> [String]? {
-    guard let url = URL(string: baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/models") else { return nil }
-    var r = URLRequest(url: url); r.timeoutInterval = 3
-    struct R: Decodable { struct M: Decodable { let id: String }; let data: [M] }
-    guard let (data, resp) = try? await URLSession.shared.data(for: r), (resp as? HTTPURLResponse)?.statusCode == 200,
-          let m = try? JSONDecoder().decode(R.self, from: data) else { return nil }
-    return m.data.map(\.id).sorted()
+  func localModels(baseURL: String) async throws -> [String] {
+    struct R: Decodable { let models: [String] }
+    return try await call(R.self, "POST", "/v1/settings/models/local", ["base_url": baseURL], timeout: 8).models
   }
 }

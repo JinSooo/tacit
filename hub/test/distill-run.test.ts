@@ -26,17 +26,21 @@ const MIN = 60_000;
 
 function session(startMin: number, minutes: number, body: string, extra: Partial<RecordV1> = {}): RecordV1 {
   return fixture({ source: "claude_code.session", source_ref: `s#${startMin}`, kind: "span", t_start: iso(base + startMin * MIN), t_end: iso(base + (startMin + minutes) * MIN),
-    context: { app: "claude-code", repo, cwd: repo }, title: `Claude Code · synthetic-repo · ${body.slice(0, 10)}`, body, capture: { method: "file" }, ...extra });
+    context: { app: "claude-code", repo, cwd: repo }, title: `Claude Code · synthetic-repo · ${body.slice(0, 10)}`, body: /^\[(我|AI)\] /.test(body) ? body : `[我] ${body}`, capture: { method: "file" }, ...extra });
 }
 
 /** 从提示词里取出 <data> 中的片段列表。 */
-function framesIn(prompt: string): { id: string; key: string; records?: { id: string }[] }[] {
+function framesIn(prompt: string): { id: string; key: string; records?: { id: string; excerpt: string }[] }[] {
   const m = /<data>\n([\s\S]*)\n<\/data>/.exec(prompt);
   return m ? JSON.parse(m[1]!) : [];
 }
 
+function choicesIn(prompt: string): P.ThreadView[] {
+  return JSON.parse(prompt.split("\n")[1]!);
+}
+
 interface Call { kind: string; req: LLMRequest }
-function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>, prompt: string) => P.AssignOutput["items"]; failAssign: boolean; done: boolean; classification: P.Classification; dedup: (ids: string[]) => P.DedupOutput["groups"] }> = {}) {
+function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>, prompt: string) => P.AssignOutput["items"]; failAssign: boolean; done: boolean; strictReferences: boolean; classification: P.Classification; dedup: (ids: string[]) => P.DedupOutput["groups"] }> = {}) {
   const calls: Call[] = [];
   const llm: LLM = {
     async complete<T>(req: LLMRequest) {
@@ -52,15 +56,17 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
           : { frame_id: f.id, thread_id: null, new_thread_title: null, ignore: true, confidence: 0.9 }) });
       }
       if (kind === "thread") {
-        const ids = framesIn(req.prompt).flatMap(f => (f.records ?? []).map(r => r.id)).filter(Boolean);
+        const records = framesIn(req.prompt).flatMap(f => f.records ?? []).filter(r => r.id);
+        const ids = records.map(r => r.id);
+        const supports = [{ record_id: ids[0], text: records[0]?.excerpt.replace(/^\[我\] /, "") ?? "" }];
         return ok({
           domain: behave.classification?.domain ?? "work", in_project: behave.classification?.in_project ?? true, title: "合成线程", status_hint: behave.done ? "done_candidate" : "active", invalidate: [],
           detail: { goal: "合成目标", progress: "合成进展", artifacts: { files: [], urls: [], commands: [], people: [] },
-            quotes: [{ text: "合成原话", record_id: ids[0] }, { text: "编造的原话", record_id: "FAKE" }] },
+            quotes: [{ text: "合成原话", record_id: ids[0] }, ...(behave.strictReferences ? [] : [{ text: "编造的原话", record_id: "FAKE" }])] },
           new_facts: [
-            { kind: "decision", text: `合成决定 ${ids.length}`, reason: "合成理由", evidence: [ids[0]], confidence: 0.9 },
-            { kind: "inference", text: "合成推测内容", reason: null, evidence: [ids[0]], confidence: 0.5 },
-            { kind: "decision", text: "没有依据的决定", reason: null, evidence: ["FAKE"], confidence: 0.9 },
+            { kind: "decision", text: `合成决定 ${ids.length}`, reason: "合成理由", evidence: [ids[0]], supports, confidence: 0.9 },
+            { kind: "inference", text: "合成推测内容", reason: null, evidence: [ids[0]], supports, confidence: 0.5 },
+            ...(behave.strictReferences ? [] : [{ kind: "decision", text: "没有依据的决定", reason: null, evidence: ["FAKE"], supports: [{ record_id: "FAKE", text: "伪造依据" }], confidence: 0.9 }]),
           ],
         });
       }
@@ -148,8 +154,9 @@ test("增量只发新片段；删除记录后整条重建且删掉的内容不�
   const threadCalls = second.calls.filter(x => x.kind === "thread");
   expect(threadCalls).toHaveLength(1);
   // 只发新片段：<data> 里只有 c，旧记录只会以详细版里的原话引用出现在 <data> 之外。
-  const sent = framesIn(threadCalls[0]!.req.prompt).flatMap(f => (f.records ?? []).map(r => r.id));
-  expect(sent).toEqual([c.id]);
+  const sent = framesIn(threadCalls[0]!.req.prompt).flatMap(f => f.records ?? []);
+  expect(sent.map(r => r.id)).toEqual(["r1"]);
+  expect(sent.map(r => r.excerpt)).toEqual([c.body]);
 
   expect(ctx.db.delete(a.id)).toBe(true);
   const third = fakeLLM();
@@ -157,7 +164,7 @@ test("增量只发新片段；删除记录后整条重建且删掉的内容不�
   const rebuild = third.calls.filter(x => x.kind === "thread");
   expect(rebuild).toHaveLength(1);
   expect(rebuild[0]!.req.prompt).not.toContain("早先的合成会话");
-  expect(rebuild[0]!.req.prompt).toContain(b.id); expect(rebuild[0]!.req.prompt).toContain(c.id);
+  expect(rebuild[0]!.req.prompt).toContain(b.body); expect(rebuild[0]!.req.prompt).toContain(c.body);
   const t = store.thread((ctx.db.db.prepare("SELECT id FROM threads").get() as { id: string }).id)!;
   expect(JSON.stringify(t.detail)).not.toContain(a.id);
 });
@@ -179,8 +186,9 @@ test("不够门槛的新线程先当候选，下一段同一件事出现才建�
   expect(cands).toHaveLength(1);
   ctx.db.ingest([session(70, 5, "又一段短的合成会话")]);
   const second = fakeLLM({ assign: (frames, prompt) => {
-    expect(prompt).toContain(`cand:${cands[0]!.id}`);
-    return frames.map(f => ({ frame_id: f.id, thread_id: `cand:${cands[0]!.id}`, new_thread_title: null, ignore: false, confidence: 0.8 }));
+    const candidate = choicesIn(prompt).find(t => t.status === "candidate")!;
+    expect(candidate).toBeDefined();
+    return frames.map(f => ({ frame_id: f.id, thread_id: candidate.id, new_thread_title: null, ignore: false, confidence: 0.8 }));
   } });
   await round(second.llm, base + 2 * 60 * MIN, false);
   expect(ctx.db.db.prepare("SELECT count(*) n FROM threads").get()).toEqual({ n: 1 });
@@ -322,14 +330,18 @@ test("拒绝过的线程：单独成批且不出现在候选里，片段带被�
     store.createFrame({ id, key: `repo:${repo}`, record_ids: [r.id], t_start_ms: base + start * MIN, t_end_ms: base + (start + 20) * MIN, chars: 10, private: 0, status: "new" });
   }
   ctx.db.db.prepare("INSERT INTO frame_rejections(frame_id,thread_id,at) VALUES('fa','wrong',?),('fb','wrong',?)").run(iso(base), iso(base));
-  const fake = fakeLLM({ assign: frames => frames.map(f => ({ frame_id: f.id, thread_id: f.id === "fa" ? "wrong" : f.id === "fb" ? "other" : "wrong", new_thread_title: null, ignore: false, confidence: 0.9 })) });
+  const fake = fakeLLM({ assign: (frames, prompt) => frames.map(f => {
+    const rejected = f.records?.[0]?.excerpt === "[我] 合成片段一";
+    const title = f.records?.[0]?.excerpt === "[我] 合成片段二" ? "合成另一线程" : "合成原线程";
+    return { frame_id: f.id, thread_id: rejected ? null : choicesIn(prompt).find(t => t.title === title)!.id, new_thread_title: rejected ? title : null, ignore: false, confidence: 0.9 };
+  }) });
   await assignStep({ db: ctx.db, llm: fake.llm }, store, base + 120 * MIN);
   const prompts = fake.calls.filter(c => c.kind === "assign").map(c => c.req.prompt);
   expect(prompts).toHaveLength(2);
-  const rejectedBatch = prompts.find(p => framesIn(p).some(f => f.id === "fa"))!;
-  expect(framesIn(rejectedBatch).map(f => [f.id, (f as { not_threads?: string[] }).not_threads])).toEqual([["fa", ["合成原线程"]], ["fb", ["合成原线程"]]]);
-  expect(rejectedBatch.split("<data>")[0]).not.toContain('"wrong"');
-  expect(prompts.find(p => framesIn(p).some(f => f.id === "fc"))!.split("<data>")[0]).toContain('"wrong"');
+  const rejectedBatch = prompts.find(p => framesIn(p).some(f => f.records?.[0]?.excerpt === "[我] 合成片段一"))!;
+  expect(framesIn(rejectedBatch).map(f => [f.id, (f as { not_threads?: string[] }).not_threads])).toEqual([["s1", ["合成原线程"]], ["s2", ["合成原线程"]]]);
+  expect(choicesIn(rejectedBatch).map(t => t.title)).not.toContain("合成原线程");
+  expect(choicesIn(prompts.find(p => framesIn(p).some(f => f.records?.[0]?.excerpt === "[我] 合成片段三"))!).map(t => t.title)).toContain("合成原线程");
   expect(ctx.db.db.prepare("SELECT frame_id,thread_id FROM assignments ORDER BY frame_id").all()).toEqual([{ frame_id: "fb", thread_id: "other" }, { frame_id: "fc", thread_id: "wrong" }]);
   expect(ctx.db.db.prepare("SELECT status FROM frames WHERE id='fa'").get()).toEqual({ status: "ignored" });
 });
@@ -342,11 +354,11 @@ test("最近结束的线程进候选，归进去不改变状态；太久以前�
   const a = session(0, 20, "合成跟进");
   ctx.db.ingest([a]);
   store.createFrame({ id: "follow", key: `repo:${repo}`, record_ids: [a.id], t_start_ms: base, t_end_ms: base + 20 * MIN, chars: 10, private: 0, status: "new" });
-  const fake = fakeLLM({ assign: frames => frames.map(f => ({ frame_id: f.id, thread_id: "recent-done", new_thread_title: null, ignore: false, confidence: 0.9 })) });
+  const fake = fakeLLM({ assign: (frames, prompt) => frames.map(f => ({ frame_id: f.id, thread_id: choicesIn(prompt).find(t => t.title === "合成已完成线程")!.id, new_thread_title: null, ignore: false, confidence: 0.9 })) });
   await assignStep({ db: ctx.db, llm: fake.llm }, store, now);
   const choices = fake.calls.find(c => c.kind === "assign")!.req.prompt.split("<data>")[0]!;
-  expect(choices).toContain('"recent-done"');
-  expect(choices).not.toContain('"old-done"');
+  expect(choices).toContain("合成已完成线程");
+  expect(choices).not.toContain("合成很早完成的线程");
   expect(ctx.db.db.prepare("SELECT thread_id FROM assignments WHERE frame_id='follow'").get()).toEqual({ thread_id: "recent-done" });
   expect(store.thread("recent-done")?.status).toBe("done");
   expect(store.thread("recent-done")?.needs_regen).toBe(1);
@@ -445,7 +457,7 @@ test("假模型完整一轮经真实适配器写用量，十类任务均正确�
   ctx.db.ingest([session(0, 20, "合成开发会话"), fixture({ source: "mac.audio", source_ref: "usage-audio", kind: "span",
     t_start: iso(base + 30 * MIN), t_end: iso(base + 35 * MIN), body: `[10:30:00] 我：${"这是本轮的合成对话内容。".repeat(30)}`, capture: { method: "asr" } })]);
   for (const id of ["old-a", "old-b"]) store.upsertThread({ id, title: "旧线程", status: "active", brief: "旧简略", detail: {}, last_ms: base, needs_regen: 0 });
-  const fake = fakeLLM(), originalFetch = globalThis.fetch;
+  const fake = fakeLLM({ strictReferences: true }), originalFetch = globalThis.fetch;
   let request: LLMRequest;
   const config = { provider: "openai-compatible" as const, model: "fake", base_url: "http://localhost:1/v1" };
   const adapter = createLLM({ dataDir: ctx.dir, configs: async () => ({ minute: config, hour: config, day: config }),
@@ -468,4 +480,41 @@ test("假模型完整一轮经真实适配器写用量，十类任务均正确�
     ["project", "hour"], ["project_brief", "minute"], ["day", "day"], ["day_brief", "minute"],
   ]);
   expect(JSON.stringify(rows)).not.toContain("合成");
+});
+
+test("本地模型实测回归：错误推测、事实ID证据和作废用户事实都不能入库", async () => {
+  const record = session(0, 20, "[我] 本地测试通过，尚未部署，等待业务验收。");
+  ctx.db.ingest([record]);
+  store.upsertThread({ id: "local-eval", title: "合成修复", status: "active", needs_regen: 1 });
+  store.createFrame({ id: "local-frame", key: `repo:${repo}`, record_ids: [record.id], t_start_ms: base, t_end_ms: base + 20 * MIN, chars: 30, private: 0, status: "new" });
+  store.assign("local-frame", "local-eval", "user", 1);
+  store.writeFact({ id: "user-correction", thread_id: "local-eval", kind: "decision", text: "尚未部署", origin: "user", evidence: [record.id], valid_at: iso(base), created_at: iso(base) });
+  store.writeFact({ id: "existing-open", thread_id: "local-eval", kind: "open", text: "等待业务验收", origin: "llm", evidence: [record.id], valid_at: iso(base), created_at: iso(base) });
+  const original = fakeLLM().llm;
+  const llm: LLM = { async complete<T>(req: LLMRequest) {
+    const result = await original.complete<any>(req);
+    if (req.task === "thread_digest" && result.ok) {
+      const recordRef = framesIn(req.prompt)[0]!.records![0]!.id;
+      const factRefs = JSON.parse(/已有有效 facts：\n([^\n]+)/.exec(req.prompt)![1]!) as P.FactView[];
+      const userRef = factRefs.find(f => f.origin === "user")!.id;
+      const supports = [{ record_id: recordRef, text: "本地测试通过，尚未部署，等待业务验收。" }];
+      const oldRef = factRefs.find(f => f.text === "等待业务验收")!.id;
+      result.data.new_facts = [
+        { kind: "inference", text: "超出上限的推测", confidence: 0.95, evidence: [recordRef], supports, reason: null },
+        { kind: "inference", text: "恰好等于上限也不行", confidence: 0.8, evidence: [recordRef], supports, reason: null },
+        { kind: "inference", text: "保留有依据且低置信度的推测", confidence: 0.79, evidence: [recordRef], supports, reason: null },
+        { kind: "decision", text: "把事实ID错当记录ID", confidence: 1, evidence: [userRef], supports: [{ record_id: userRef, text: "伪造依据" }], reason: null },
+        { kind: "decision", text: "保留有原始依据的决定", confidence: 1, evidence: [recordRef], supports, reason: null },
+      ];
+      result.data.invalidate = [{ fact_id: userRef, replaced_by: 3 }, { fact_id: oldRef, replaced_by: 0 }];
+    }
+    return result;
+  } };
+  const result = await digestStep({ db: ctx.db, llm }, store, base + 30 * MIN);
+  expect(result.updated).toBe(1);
+  expect(result.dropped_invalid_inference).toBe(2);
+  expect(result.dropped_ungrounded).toBe(1);
+  const facts = store.facts("thread_id", "local-eval");
+  expect(facts.map(f => f.text).sort()).toEqual(["尚未部署", "等待业务验收", "保留有依据且低置信度的推测", "保留有原始依据的决定"].sort());
+  expect(facts.find(f => f.id === "user-correction")?.origin).toBe("user");
 });

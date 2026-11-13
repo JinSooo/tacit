@@ -58,7 +58,7 @@ struct AgentSettingsView: View {
             SettingsRow(t.label) {
               HStack(spacing: 8) {
                 Text(status(t)).foregroundStyle(t.partial ? Palette.attention : Palette.muted)
-                if t.installed {
+                if t.installed || t.connected || t.partial {
                   Button(busy == t.id ? (t.connected ? "正在断开…" : "正在连接…") : (t.connected ? "断开" : "连接")) {
                     Task { await set(t, !t.connected) }
                   }
@@ -73,7 +73,7 @@ struct AgentSettingsView: View {
         if let note { SettingsMessage(text: note, warning: false) }
         if let error { SettingsMessage(text: error) }
       } header: { Text("已连接的工具") } footer: {
-        Note("连接后，新开的会话会自动带入当前项目的进展，AI 也能随时查你的历史记录。每次读取都记在“AI 读取记录”里。")
+        Note("连接后，AI 可以查询你的历史记录，每次读取都记在“AI 读取记录”里。Claude Code、Codex 还会自动带入当前项目进展。Claude Desktop 的连接或断开需要完全退出并重新打开应用后生效。")
       }
       GeneralPreferencesSection(context: true)
     }
@@ -126,7 +126,7 @@ struct SetupChecklist: View {
               Button("检查 AI 模型…") { open(.models) }
             }
             Divider()
-            step(done: agentsReady, title: "接入 Claude Code 或 Codex", detail: agentsReady ? nil : agentDetail(tools)) {
+            step(done: agentsReady, title: "接入你使用的 AI 工具", detail: agentsReady ? nil : agentDetail(tools)) {
               if tools.contains(where: \.installed) { Button("连接…") { open(.agents) } }
             }
           }
@@ -155,8 +155,8 @@ struct SetupChecklist: View {
 
   func agentDetail(_ tools: [AgentToolState]) -> String {
     tools.contains(where: \.installed)
-      ? "接入后，新开的会话会自动知道你最近在做什么。"
-      : "这台 Mac 上没找到 Claude Code 或 Codex，装好并登录后再回来连接。"
+      ? "接入后，可以让 AI 查询你最近在做什么。"
+      : "这台 Mac 上没找到 Claude Desktop、Claude Code 或 Codex，装好并登录后再回来连接。"
   }
 
   func modelDetail(_ s: DistillHealth.State) -> String? {

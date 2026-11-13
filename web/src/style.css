@@ -222,6 +222,8 @@ dialog h2 { font-size: var(--text-title); font-weight: 600; margin: 0 0 16px; }
 .settings-block h3 { font-size: var(--text-body); font-weight: 600; margin: 24px 0 4px; }
 .settings-block form { max-width: 480px; }
 .settings-block form.tiers { max-width: none; }
+.agent-connection { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.agent-connection > :first-child { flex: 1; min-width: 140px; font-weight: 600; }
 .tier-row { padding: 16px; margin: 0 0 8px; min-width: 0; }
 .tier-row legend { float: left; width: 100%; padding: 0; font-weight: 600; margin-bottom: 4px; }
 .tier-row legend + p { clear: both; margin: 0 0 12px; color: var(--muted); }
@@ -309,3 +311,5 @@ dialog h2 { font-size: var(--text-title); font-weight: 600; margin: 0 0 16px; }
   .stack-table .audit-detail-cell { margin: 8px -12px -8px; }
 }
 @media (max-width: 440px) { .time-fields { grid-template-columns: 1fr; gap: 0; } dialog { padding: 16px; } .stats { grid-template-columns: 1fr 1fr; } }
+.local-models { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.local-models select { min-width: 0; max-width: 100%; }

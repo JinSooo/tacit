@@ -2,7 +2,7 @@ import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import type { ModelConfig, Provider, Tier } from "./types.ts";
+import type { ModelConfig, Provider, ReasoningEffort, Tier } from "./types.ts";
 
 export const TIERS: Tier[] = ["minute", "hour", "day"];
 export const PROVIDERS: Provider[] = ["claude-cli", "codex-cli", "anthropic", "openai-compatible"];
@@ -20,7 +20,11 @@ export function validateTier(item: unknown, prefix: string): ModelConfig {
   if (!PROVIDERS.includes(item.provider as Provider)) throw new Error(`${prefix}.provider 不支持`);
   if (typeof item.model !== "string" || !item.model.trim()) throw new Error(`${prefix}.model 必须是非空字符串`);
   if (item.model.length > 200 || /[\x00-\x1f\x7f]/.test(item.model)) throw new Error(`${prefix}.model 不能超过 200 字符或含控制字符`);
-  if (Object.keys(item).some(k => !["provider", "model", "base_url"].includes(k))) throw new Error(`${prefix} 含未知字段（API key 必须放钥匙串）`);
+  if (Object.keys(item).some(k => !["provider", "model", "base_url", "reasoning_effort"].includes(k))) throw new Error(`${prefix} 含未知字段（API key 必须放钥匙串）`);
+  if (item.reasoning_effort !== undefined) {
+    if (item.provider !== "openai-compatible") throw new Error(`${prefix}.reasoning_effort 只适用于 OpenAI 兼容接口`);
+    if (!["none", "low", "medium", "high"].includes(item.reasoning_effort as string)) throw new Error(`${prefix}.reasoning_effort 必须为 none、low、medium 或 high`);
+  }
   if (item.base_url !== undefined) {
     if ((item.provider as string).endsWith("-cli")) throw new Error(`${prefix}.base_url 只适用于 HTTP 后端`);
     try {
@@ -29,7 +33,7 @@ export function validateTier(item: unknown, prefix: string): ModelConfig {
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
     } catch { throw new Error(`${prefix}.base_url 必须是无凭证、查询参数和片段的 HTTP(S) URL`); }
   }
-  return { provider: item.provider as Provider, model: item.model, ...(item.base_url === undefined ? {} : { base_url: item.base_url as string }) };
+  return { provider: item.provider as Provider, model: item.model, ...(item.base_url === undefined ? {} : { base_url: item.base_url as string }), ...(item.reasoning_effort === undefined ? {} : { reasoning_effort: item.reasoning_effort as ReasoningEffort }) };
 }
 
 /** 校验整份 tiers：三档都要有，不接受未知档位。 */

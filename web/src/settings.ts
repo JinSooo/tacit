@@ -6,7 +6,25 @@ export const tiers: Tier[] = ["minute", "hour", "day"];
 export type Provider = "claude-cli" | "codex-cli" | "anthropic" | "openai-compatible";
 export type KeyProvider = "anthropic" | "openai-compatible";
 export const keyProviders: KeyProvider[] = ["anthropic", "openai-compatible"];
-export interface TierConfig { provider: Provider; model: string; base_url?: string }
+export type ReasoningEffort = "none" | "low" | "medium" | "high";
+export interface TierConfig { provider: Provider; model: string; base_url?: string; reasoning_effort?: ReasoningEffort }
+export const localPresets = [
+  { id: "ollama", label: "本机 Ollama", url: "http://127.0.0.1:11434/v1" },
+  { id: "lmstudio", label: "本机 LM Studio", url: "http://127.0.0.1:1234/v1" },
+];
+export const reasoningOptions = [["", "跟随模型"], ["none", "关闭"], ["low", "低"], ["medium", "中"], ["high", "高"]] as const;
+export function isLocalURL(value: string | undefined): boolean {
+  try {
+    const u = new URL(value ?? ""), h = u.hostname;
+    return ["http:", "https:"].includes(u.protocol) && !u.username && !u.password && (h === "localhost" || h === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(h));
+  } catch { return false; }
+}
+export function providerChoice(c: { provider: Provider; base_url?: string }): string {
+  return c.provider === "openai-compatible" ? localPresets.find(p => p.url === c.base_url)?.id ?? c.provider : c.provider;
+}
+export function needsKey(c: { provider: Provider; base_url?: string }, providers: ProviderInfo[]): boolean {
+  return !isLocalURL(c.base_url) && !!providers.find(p => p.id === c.provider)?.needs_key;
+}
 export interface ProviderInfo { id: Provider; label: string; needs_key: boolean; base_url: boolean }
 export interface ModelSettingsData {
   tiers: Record<Tier, TierConfig>;
@@ -17,6 +35,13 @@ export interface ModelSettingsData {
 }
 export interface TestResult { ok: boolean; ms: number; provider: string; model: string; error: string | null }
 export interface HubSettings { port: number; listen: string; lan: boolean; locked: boolean }
+export interface AgentToolState {
+  id: "claude-code" | "codex" | "claude-desktop";
+  label: string;
+  installed: boolean;
+  connected: boolean;
+  partial: boolean;
+}
 export type GeneralKey = "inject_tokens" | "ask_done_days" | "archive_days";
 export const generalKeys: GeneralKey[] = ["inject_tokens", "ask_done_days", "archive_days"];
 export type General = Record<GeneralKey, number>;
@@ -38,21 +63,24 @@ export function integerIn(value: string | number, [min, max]: [number, number], 
 export const hubPort = (value: string | number) => integerIn(value, [1024, 65535], "端口");
 
 /** 表单值整理成接口要的 tiers：去掉首尾空白，账号登录类后端和空的 base_url 不发。 */
-export function tierPayload(form: Record<Tier, { provider: Provider; model: string; base_url: string }>, providers: ProviderInfo[]): Record<Tier, TierConfig> {
+export function tierPayload(form: Record<Tier, { provider: Provider; model: string; base_url: string; reasoning_effort?: ReasoningEffort | "" }>, providers: ProviderInfo[]): Record<Tier, TierConfig> {
   const result = {} as Record<Tier, TierConfig>;
   for (const tier of tiers) result[tier] = tierConfig(form[tier], providers);
   return result;
 }
-export function tierConfig(item: { provider: Provider; model: string; base_url: string }, providers: ProviderInfo[]): TierConfig {
+export function tierConfig(item: { provider: Provider; model: string; base_url: string; reasoning_effort?: ReasoningEffort | "" }, providers: ProviderInfo[]): TierConfig {
   const allowsUrl = providers.find(p => p.id === item.provider)?.base_url ?? false;
   const base_url = item.base_url.trim();
-  return { provider: item.provider, model: item.model.trim(), ...(allowsUrl && base_url ? { base_url } : {}) };
+  return { provider: item.provider, model: item.model.trim(), ...(allowsUrl && base_url ? { base_url } : {}), ...(item.provider === "openai-compatible" && item.reasoning_effort ? { reasoning_effort: item.reasoning_effort } : {}) };
 }
 
 export function createSettingsApi(api: Api) {
   const json = (method: string, body: unknown) => ({ method, body: JSON.stringify(body) });
   return {
+    agents: (signal?: AbortSignal) => api<{ tools: AgentToolState[] }>("/v1/settings/agents", { signal }),
+    setAgent: (id: AgentToolState["id"], connected: boolean) => api<{ tools: AgentToolState[]; note: string | null }>(`/v1/settings/agents/${id}`, json("PUT", { connected })),
     models: (signal?: AbortSignal) => api<ModelSettingsData>("/v1/settings/models", { signal }),
+    localModels: (base_url: string, signal?: AbortSignal) => api<{ models: string[] }>("/v1/settings/models/local", { ...json("POST", { base_url }), signal }),
     saveModels: (value: Record<Tier, TierConfig>) => api<ModelSettingsData>("/v1/settings/models", json("PUT", { tiers: value })),
     test: (tier: Tier, config?: TierConfig) => api<TestResult>("/v1/settings/models/test", json("POST", config ? { tier, config } : { tier })),
     setKey: (provider: KeyProvider, key: string) => api<{ provider: KeyProvider; set: boolean }>(`/v1/settings/keys/${provider}`, json("PUT", { key: key.trim() })),

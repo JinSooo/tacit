@@ -11,6 +11,8 @@ struct ModelSettingsView: View {
   @State private var saving = false
   @State private var tests: [String: TestState] = [:]
   @State private var localModels: [String: [String]] = [:]
+  @State private var localModelErrors: [String: String] = [:]
+  @State private var localModelLoading: Set<String> = []
   @State private var editingKey: String?
   @State private var removingKey: String?
   @State private var health: DistillHealth?
@@ -105,9 +107,28 @@ struct ModelSettingsView: View {
         if let url = c.baseUrl, !url.isEmpty, !local {
           SettingsMessage(text: "整理时，记录会发到这个地址。")
         }
-        if local, localModels[c.baseUrl ?? ""] == [] {
-          SettingsMessage(text: "连不上 \(c.baseUrl ?? "")，先打开本机的模型服务再试。")
+        if local, c.provider == "openai-compatible", let url = c.baseUrl {
+          HStack {
+            if localModelLoading.contains(url) { Text("正在读取本机模型…").foregroundStyle(Palette.muted) }
+            else if let error = localModelErrors[url] { SettingsMessage(text: error) }
+            else if localModels[url] == [] { Text("服务已连接，但没有可用模型，请先在模型服务中下载或加载模型。").foregroundStyle(Palette.muted) }
+            Spacer()
+            Button("刷新模型") { Task { await loadLocalModels(url) } }.disabled(localModelLoading.contains(url))
+          }
         }
+        if local {
+          Text("本机地址也可能转发到云端，实际运行位置由模型服务决定。").foregroundStyle(Palette.muted)
+        }
+      }
+      if c.provider == "openai-compatible" {
+        Picker("思考强度", selection: Binding(get: { c.reasoningEffort ?? "" }, set: { config.wrappedValue.reasoningEffort = $0.isEmpty ? nil : $0 })) {
+          Text("跟随模型").tag("")
+          Text("关闭").tag("none")
+          Text("低").tag("low")
+          Text("中").tag("medium")
+          Text("高").tag("high")
+        }
+        Text("思考强度取决于服务和模型是否支持；不确定时选“跟随模型”。关闭可能更快，也可能降低整理质量。").foregroundStyle(Palette.muted)
       }
       switch tests[tier] {
       case .ok(let ms): Text(ms.map { String(format: "连接正常，用时 %.1f 秒", $0 / 1000) } ?? "连接正常").foregroundStyle(Palette.muted)
@@ -120,7 +141,8 @@ struct ModelSettingsView: View {
     } footer: {
       if let d = info.tierInfo[tier]?.description { Note(d) }
     }
-    .task(id: c.baseUrl) { if local, let url = c.baseUrl { localModels[url] = await HubAPI.localModels(baseURL: url) ?? [] } }
+    .task(id: c.baseUrl) { if local, c.provider == "openai-compatible", let url = c.baseUrl { await loadLocalModels(url) } }
+    .onChange(of: c) { _, _ in tests[tier] = nil }
   }
 
   // MARK: API key
@@ -154,8 +176,23 @@ struct ModelSettingsView: View {
   // MARK: 逻辑
 
   static func isLoopback(_ url: String?) -> Bool {
-    guard let url, let host = URL(string: url)?.host else { return false }
-    return host == "localhost" || host == "::1" || host.hasPrefix("127.")
+    guard let url, let u = URL(string: url), let host = u.host, ["http", "https"].contains(u.scheme ?? ""), u.user == nil, u.password == nil else { return false }
+    if ["localhost", "::1", "[::1]"].contains(host) { return true }
+    let parts = host.split(separator: ".")
+    return parts.count == 4 && parts.first == "127" && parts.allSatisfy { Int($0).map { (0...255).contains($0) } ?? false }
+  }
+
+  func loadLocalModels(_ url: String) async {
+    guard !localModelLoading.contains(url) else { return }
+    localModelLoading.insert(url); localModelErrors[url] = nil; localModels[url] = nil
+    defer { localModelLoading.remove(url) }
+    do {
+      let models = try await store.api.localModels(baseURL: url)
+      try Task.checkCancellation()
+      localModels[url] = models
+    } catch is CancellationError {} catch {
+      if !Task.isCancelled { localModelErrors[url] = error.localizedDescription }
+    }
   }
 
   func choice(_ c: ModelTierConfig) -> String {
@@ -217,8 +254,9 @@ struct ModelSettingsView: View {
     tests[tier] = .running
     do {
       let r = try await store.api.testModel(tier: tier, config: c)
+      guard draft[tier] == c else { return }
       tests[tier] = r.ok ? .ok(r.ms) : .failed(r.error ?? "连接失败")
-    } catch { tests[tier] = .failed(error.localizedDescription) }
+    } catch { if draft[tier] == c { tests[tier] = .failed(error.localizedDescription) } }
   }
 
   func removeKey(_ provider: String) async {

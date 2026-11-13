@@ -3,14 +3,14 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { runAgents, type InstallEnvironment } from "../src/agents-install.ts";
+import { agentStatus, connectAgent, runAgents, type InstallEnvironment } from "../src/agents-install.ts";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function setup() {
   const home = mkdtempSync(join(tmpdir(), "ra-agents-")); dirs.push(home);
   const calls: string[][] = [], output: string[] = [];
   let registered = true;
-  const env: InstallEnvironment = { home, repo: "/tmp/合成仓库 with 'quote'", bun: "/tmp/bun bin", which: command => `/fake/${command}`, print: line => output.push(line), run: (command, args, passedHome) => {
+  const env: InstallEnvironment = { home, repo: "/tmp/合成仓库 with 'quote'", bun: "/tmp/bun bin", appExists: () => false, which: command => `/fake/${command}`, print: line => output.push(line), run: (command, args, passedHome) => {
     expect(passedHome).toBe(home); calls.push([command, ...args]);
     if (args[1] === "get") return { status: registered ? 0 : 1, stdout: "", stderr: registered ? "" : "No MCP server found" };
     return { status: 0, stdout: "", stderr: "" };
@@ -31,6 +31,69 @@ test("预览给出 unified diff 和外部命令，既不写文件也不调用外
   expect(ctx.output.join("\n")).toContain("@@ -1,");
   expect(ctx.output.join("\n")).toContain("--scope user record-anything --");
   expect(ctx.output.join("\n")).toContain("trusted_hash");
+});
+
+test("Desktop 不依赖 CLI 或 hook：预览不泄密，连接幂等并保留其他配置，断开只删自身", () => {
+  const ctx = setup();
+  ctx.env.which = () => null;
+  ctx.env.appExists = path => path === join(ctx.home, "Applications/Claude.app");
+  const file = join(ctx.home, "Library/Application Support/Claude/claude_desktop_config.json");
+  const original = { preferences: { theme: "dark" }, mcpServers: { unrelated: { command: "other", env: { TOKEN: "synthetic-private-do-not-print" } } } };
+  ctx.write(original, file); chmodSync(file, 0o600);
+  const before = readFileSync(file, "utf8");
+  runAgents(["install", "--tool", "claude-desktop"], ctx.env);
+  expect(readFileSync(file, "utf8")).toBe(before);
+  expect(ctx.output.join("\n")).not.toContain("synthetic-private-do-not-print");
+  expect(ctx.calls).toEqual([]);
+  expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")).toMatchObject({ installed: true, connected: false, partial: false });
+  const result = connectAgent("claude-desktop", true, ctx.env);
+  expect(result.note).toContain("完全退出");
+  expect(result.states.find(t => t.id === "claude-desktop")).toMatchObject({ installed: true, connected: true, partial: false });
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  expect(data.preferences).toEqual(original.preferences);
+  expect(data.mcpServers.unrelated).toEqual(original.mcpServers.unrelated);
+  expect(data.mcpServers["record-anything"]).toEqual({ command: ctx.env.bun, args: [ctx.env.repo + "/hub/src/cli.ts", "mcp", "--tool", "claude-desktop"] });
+  expect(statSync(file).mode & 0o777).toBe(0o600);
+  const files = readdirSync(dirname(file));
+  expect(files.some(name => name.includes(".ra-backup-") && readFileSync(join(dirname(file), name), "utf8") === before)).toBe(true);
+  connectAgent("claude-desktop", true, ctx.env);
+  expect(readdirSync(dirname(file))).toEqual(files);
+  expect(existsSync(join(ctx.home, ".claude"))).toBe(false);
+  expect(existsSync(join(ctx.home, ".codex"))).toBe(false);
+  ctx.env.appExists = () => false;
+  const removed = connectAgent("claude-desktop", false, ctx.env);
+  expect(removed.note).toContain("重新打开");
+  expect(removed.states.find(t => t.id === "claude-desktop")).toMatchObject({ installed: false, connected: false, partial: false });
+  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(original);
+  expect(ctx.calls).toEqual([]);
+});
+
+test("Desktop 损坏配置和同名冲突不覆盖；路径过期可重新连接", () => {
+  const ctx = setup(); ctx.env.appExists = () => true;
+  const file = join(ctx.home, "Library/Application Support/Claude/claude_desktop_config.json");
+  ctx.write({}, file);
+  for (const text of ["{broken", "null", "[]", '{"mcpServers":[]}', '{"mcpServers":{"record-anything":{"command":"unrelated"}}}']) {
+    writeFileSync(file, text);
+    expect(() => connectAgent("claude-desktop", true, ctx.env)).toThrow();
+    expect(readFileSync(file, "utf8")).toBe(text);
+    expect(readdirSync(dirname(file))).toEqual(["claude_desktop_config.json"]);
+  }
+  ctx.write({ mcpServers: { "record-anything": { command: "/old/bun", args: ["/old/repo/hub/src/cli.ts", "mcp", "--tool", "claude-desktop"] } } }, file);
+  expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")).toMatchObject({ connected: false, partial: true });
+  expect(connectAgent("claude-desktop", true, ctx.env).states.find(t => t.id === "claude-desktop")).toMatchObject({ connected: true, partial: false });
+});
+
+test("Desktop 未安装不创建配置；默认卸载包含卸载应用后留下的 Desktop 配置", () => {
+  const ctx = setup();
+  expect(() => connectAgent("claude-desktop", true, ctx.env)).toThrow("没找到 Claude Desktop");
+  connectAgent("claude-desktop", false, ctx.env);
+  expect(readdirSync(ctx.home)).toEqual([]);
+  ctx.env.appExists = () => true;
+  runAgents(["install", "--yes"], ctx.env);
+  expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")?.connected).toBe(true);
+  ctx.env.appExists = () => false;
+  runAgents(["uninstall", "--yes"], ctx.env);
+  expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")?.connected).toBe(false);
 });
 test("两工具安装幂等，保留用户 hook、字段顺序、权限和逐次备份；卸载往返一致", () => {
   const ctx = setup(); ctx.write(ctx.original); chmodSync(ctx.file, 0o640);

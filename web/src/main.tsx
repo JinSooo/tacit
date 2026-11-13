@@ -13,7 +13,7 @@ import { createAudioApi } from "./audio.ts";
 import { clockMs, conversationDetail, type ConversationDetail } from "./segments.ts";
 import { AudioSettings } from "./audio-views.tsx";
 import { createSettingsApi } from "./settings.ts";
-import { GeneralSettings, HubSettingsBlock, ModelSettings } from "./settings-views.tsx";
+import { AgentSettings, GeneralSettings, HubSettingsBlock, ModelSettings } from "./settings-views.tsx";
 import { StatusView } from "./status-view.tsx";
 import { initialPage, pageHash, parseHash, type Page } from "./route.ts";
 import "./style.css";
@@ -269,7 +269,7 @@ function App() {
     </div>}</header>
     <div id="content" tabIndex={-1}>
     <DistillationWorkspace view={view === "audit" || view === "settings" || view === "status" ? "history" : view} audio={audioApi} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); navigate("history"); setRevision(value => value + 1); }} />
-    {view === "settings" && <section className="distillation-view settings-view" aria-label="设置"><ModelSettings api={settingsApi} /><GeneralSettings api={settingsApi} /><AudioSettings api={audioApi} /><HubSettingsBlock api={settingsApi} token={token} /></section>}
+    {view === "settings" && <section className="distillation-view settings-view" aria-label="设置"><AgentSettings api={settingsApi} /><ModelSettings api={settingsApi} /><GeneralSettings api={settingsApi} /><AudioSettings api={audioApi} /><HubSettingsBlock api={settingsApi} token={token} /></section>}
     {view === "status" && <StatusView api={api} />}
     {view === "audit" && <AuditView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); navigate("history"); setRevision(value => value + 1); }} />}
     {view === "history" && !q.trim() && <DayOverview api={api} day={date || dayKey(new Date())} revision={overviewRevision} selected={expanded} onPick={pick} />}

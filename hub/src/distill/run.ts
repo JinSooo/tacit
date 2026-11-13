@@ -11,6 +11,10 @@ import { persistFrames } from "./frames.ts";
 import { DistillRules, projectByName } from "./rules.ts";
 import { DistillRequests, localDayStart } from "./requests.ts";
 import * as P from "./prompts.ts";
+import { digestPieces, digestFrameSize } from "./digest-input.ts";
+import { threadRequest, type ThreadModelOutput } from "./thread-request.ts";
+import { assignRequest } from "./assign-request.ts";
+import { groundedQuote } from "./quotes.ts";
 import { readGeneral } from "../general-settings.ts";
 import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
 
@@ -20,7 +24,7 @@ export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: st
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 export const LIMITS = {
   assignBatch: 20, assignChars: 24_000, assignExcerpt: 240, assignRecords: 10, assignThreads: 40,
-  digestChars: 45_000, sessionExcerpt: 3_000, otherExcerpt: 800, digestRecords: 40, threadsPerRound: 12,
+  digestChars: 45_000, threadsPerRound: 12,
   candidateTTL: DAY, newSession: 30 * MIN, pauseAfter: 2 * HOUR,
   // 最近确认完成的线程也给模型选：结束后又聊到它的零星跟进归回去，不再只进日记（2026-11-10 实测：九院线程已完成，后续对话无处可归）。
   // 自动归档（archived）的不放：用户没确认，按规则不再参与。
@@ -38,7 +42,6 @@ const clock = (ms: number) => { const d = new Date(ms); return `${pad(d.getMonth
 const hhmm = (ms: number) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 export const localDate = (ms: number) => toLocalIso(ms).slice(0, 10);
 export const startOfDay = (ms: number) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
-const isSession = (source: string) => source === "claude_code.session" || source === "codex.session";
 
 /** 按条件读片段（避免整表读出后在内存里过滤）。 */
 export function loadFrames(store: DistillStore, where: string, ...args: unknown[]): Frame[] {
@@ -185,9 +188,10 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
       ...candidates.map(c => ({ id: `cand:${c.id}`, title: c.title, brief: "", project: c.project_id ? names.get(c.project_id) ?? null : null, status: "candidate", last: clock(c.last_ms) })),
     ];
     calls++;
-    const r = await d.llm.complete<P.AssignOutput>({ tier: "minute", task: "assign", system: P.ASSIGN_SYSTEM, prompt: P.assignPrompt(batch.map(x => x.v), choices), schema: P.ASSIGN_SCHEMA });
+    const request = assignRequest(batch.map(x => x.v), choices);
+    const r = await d.llm.complete<P.AssignOutput>({ tier: "minute", task: "assign", system: P.ASSIGN_SYSTEM, prompt: request.prompt, schema: request.schema });
     if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length })); break outer; }
-    const byFrame = new Map(r.data.items.map(i => [i.frame_id, i]));
+    const byFrame = new Map(request.decode(r.data).items.map(i => [i.frame_id, i]));
     const real = new Set(threads.map(t => t.id));
     // 同一批里多个片段提议同一个新标题，或者提议的标题就是已有线程：归到同一条，不重复建。
     const byTitle = new Map(threads.map(t => [t.title, t.id]));
@@ -254,7 +258,7 @@ async function makeBrief(d: Deps, task: string, title: string, detail: unknown):
 }
 
 /** 已经提炼进详细版的片段，以及当时这些片段的记录总数（变少说明有记录被删，要整条重建）。 */
-interface DigestMark { frames: string[]; records: number; user_facts?: string[] }
+interface DigestMark { frames: string[]; records: number; user_facts?: string[]; parts?: string[] }
 
 function projectHint(store: DistillStore, thread: Thread): P.ProjectHint {
   const p = thread.project_hint ? store.project(thread.project_hint) : null;
@@ -361,7 +365,7 @@ export async function classifyStep(d: Deps, store: DistillStore) {
 
 export async function digestStep(d: Deps, store: DistillStore, now: number) {
   const log = d.log ?? (() => {});
-  let updated = 0, failed = 0, facts = 0, calls = 0, dropped = 0;
+  let updated = 0, failed = 0, facts = 0, calls = 0, dropped = 0, invalidInference = 0;
   const threads = store.hub.db.prepare("SELECT id FROM threads WHERE needs_regen=1 AND status!='abandoned' ORDER BY last_ms DESC LIMIT ?").all(LIMITS.threadsPerRound) as { id: string }[];
   for (const { id } of threads) {
     const thread = store.thread(id)!;
@@ -374,27 +378,43 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     const mark = store.getState<DigestMark>(`digest:${id}`);
     const present = new Set(frames.map(f => f.id));
     // 片段或记录被删过就整条线程从头重建，保证删掉的内容不会留在详细版里。
-    const rebuild = !mark || mark.frames.some(f => !present.has(f)) || countOf(new Set(mark.frames)) < mark.records;
+    let rebuild = !mark || mark.frames.some(f => !present.has(f)) || countOf(new Set(mark.frames)) < mark.records;
     const done = new Set(rebuild ? [] : mark!.frames);
-    const fresh = frames.filter(f => !done.has(f.id));
+    let fresh = frames.filter(f => !done.has(f.id));
+    const toPieces = () => digestPieces(fresh.map(f => frameView(store, f, { maxRecords: Infinity, excerpt: () => Infinity })), LIMITS.digestChars);
+    let pieces = toPieces();
+    // 部分成功后原记录被删除/移走时，旧分段摘要也必须从头重建。
+    if (!rebuild && mark?.parts?.some(key => !pieces.some(p => p.key === key))) {
+      rebuild = true; done.clear(); fresh = frames; pieces = toPieces();
+    }
     let detail: unknown = rebuild ? { goal: "", progress: "", artifacts: { files: [], urls: [], commands: [], people: [] }, quotes: [] } : thread.detail;
+    if (detail && typeof detail === "object" && "quotes" in detail && Array.isArray(detail.quotes)) {
+      detail = { ...detail, quotes: detail.quotes.filter(q => typeof q?.text === "string" && typeof q.record_id === "string" && groundedQuote(store.hub.get(q.record_id), q.text)) };
+    }
     let title = thread.title, ok = true, doneHint = false;
-    const views = fresh.map(f => ({ f, v: frameView(store, f, { maxRecords: LIMITS.digestRecords, excerpt: s => isSession(s) ? LIMITS.sessionExcerpt : LIMITS.otherExcerpt }) }));
+    const presentParts = new Set(pieces.map(p => p.key));
+    const doneParts = new Set((rebuild ? [] : mark!.parts ?? []).filter(key => presentParts.has(key)));
     const userFacts = () => store.facts("thread_id", id).filter(f => f.origin === "user").map(f => f.id).sort();
     const factIds = userFacts();
-    const chunks = batches(views, x => JSON.stringify(x.v).length, LIMITS.digestChars, 50);
+    const chunks = batches(pieces.filter(p => !doneParts.has(p.key)), x => digestFrameSize(x.v) + 1, LIMITS.digestChars - 1, 50);
     // 用户纠错也使详细版失效；不能在没有新片段时绕过详细版、只改简略版。
     if (!chunks.length && JSON.stringify(mark?.user_facts ?? []) !== JSON.stringify(factIds)) chunks.push([]);
     for (const chunk of chunks) {
       calls++;
-      const r = await d.llm.complete<P.ThreadOutput>({ tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: P.threadPrompt({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!)), schema: P.THREAD_SCHEMA });
+      const request = threadRequest({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!), recordId => store.hub.get(recordId));
+      const r = await d.llm.complete<ThreadModelOutput>({ tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: request.prompt, schema: request.schema });
       if (!r.ok) { ok = false; break; }
       const known = new Set(chunk.flatMap(x => x.v.records.map(rec => rec.id)).filter(Boolean));
-      const out = r.data;
+      const out = request.decode(r.data);
       store.hub.db.transaction(() => {
         applyClassification(store, id, out);
-        const kept = out.new_facts.map(f => P.keepGroundedFacts([f], known)[0] ?? null);
-        dropped += kept.filter(k => !k).length;
+        const kept = out.new_facts.map(f => {
+          const grounded = P.keepGroundedFacts([f], known)[0];
+          if (!grounded) { dropped++; return null; }
+          // 不把高置信度推测自动改写成“已定”，也不替模型编一个置信度。
+          if (f.kind === "inference" && f.confidence >= 0.8) { invalidInference++; return null; }
+          return grounded;
+        });
         const ids = kept.map(f => {
           if (!f) return null;
           const fid = ulid(now);
@@ -406,17 +426,22 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
         for (const inv of out.invalidate) {
           if (!valid.has(inv.fact_id)) continue; // 用户写的 fact 不在集合里，模型推翻不了
           const by = inv.replaced_by === null ? null : ids[inv.replaced_by] ?? null;
+          if (inv.replaced_by !== null && by === null) continue; // 替代事实被过滤时，不能连带作废原事实
           store.hub.db.prepare("UPDATE facts SET invalid_at=?,superseded_by=? WHERE id=? AND invalid_at IS NULL").run(new Date(now).toISOString(), by, inv.fact_id);
         }
-        // 原话只保留能对上本批或之前已有记录的，避免编造。
+        // 只接受原记录中逐字存在的原话；AI 会话必须来自单段用户发言，不能串到 AI 回复。
         const prevQuotes = ((detail as { quotes?: { record_id: string }[] })?.quotes ?? []).map(q => q.record_id);
         const allowed = new Set([...known, ...prevQuotes]);
-        detail = { ...out.detail, quotes: out.detail.quotes.filter(q => allowed.has(q.record_id) && !!store.hub.get(q.record_id)) };
+        detail = { ...out.detail, quotes: out.detail.quotes.filter(q => allowed.has(q.record_id) && groundedQuote(store.hub.get(q.record_id), q.text)) };
         title = out.title.trim() || title;
         if (out.status_hint === "done_candidate") doneHint = true;
         store.upsertThread({ ...store.thread(id)!, title, detail });
-        for (const x of chunk) done.add(x.f.id);
-        store.setState(`digest:${id}`, { frames: [...done], records: countOf(done), user_facts: factIds } satisfies DigestMark);
+        for (const piece of chunk) doneParts.add(piece.key);
+        for (const frame of fresh) {
+          if (pieces.filter(p => p.frameId === frame.id).every(p => doneParts.has(p.key))) done.add(frame.id);
+        }
+        const partial = pieces.filter(p => !done.has(p.frameId) && doneParts.has(p.key)).map(p => p.key);
+        store.setState(`digest:${id}`, { frames: [...done], records: countOf(done), user_facts: factIds, ...(partial.length ? { parts: partial } : {}) } satisfies DigestMark);
       })();
     }
     if (!ok) { failed++; log(JSON.stringify({ step: "digest", ok: false })); continue; }
@@ -431,7 +456,7 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     })();
     updated++;
   }
-  return { calls, updated, failed, facts, dropped_ungrounded: dropped };
+  return { calls, updated, failed, facts, dropped_ungrounded: dropped, dropped_invalid_inference: invalidInference };
 }
 
 /** 放进待确认问\"做完了吗\"；同一线程有未处理的、或在最后活动之后已经问过的，不再问。 */

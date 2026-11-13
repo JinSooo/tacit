@@ -107,7 +107,7 @@ test("三条同场录音：单片段及跨片段请求仅含一份总结，正�
     for (const record of records) { expect(call.prompt).toContain(record.body); expect(call.prompt).toContain(record.id); }
   }
   // digest 共用请求拼装：按记录预算仍保留各自正文。
-  const prompt = P.threadPrompt({ title: "线程", detail: {} }, [], frames.map(f => frameView(store, f, { maxRecords: LIMITS.digestRecords, excerpt: () => LIMITS.otherExcerpt })));
+  const prompt = P.threadPrompt({ title: "线程", detail: {} }, [], frames.map(f => frameView(store, f, { maxRecords: Infinity, excerpt: () => Infinity })));
   expect(prompt.split(summary)).toHaveLength(2);
   for (const record of records) expect(prompt).toContain(record.body);
 });

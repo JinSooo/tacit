@@ -336,7 +336,7 @@ AX 扫描约束（实验 0-B）：
 
 ### 7.3 适配器
 
-接入的 AI 工具做成**适配器**，一个适配器负责两件事：读这个工具的会话记录（作为数据源）、把上下文交给它（hook / MCP 注册）。v1 实现 Claude Code 和 Codex，之后扩展 Cursor、Gemini CLI、OpenCode 等。
+接入的 AI 工具做成**适配器**，按工具实际能力分别接入会话记录（作为数据源）与上下文查询（hook / MCP 注册）。Claude Code 和 Codex 支持会话采集、hook 和 MCP；Claude Desktop 通过本机 MCP 查询记录，不注册 hook，不采集聊天记录。其他工具等实际用到再扩展。（2026-11-12）
 
 安装命令（如 `ra agents install`）在写入 `~/.claude/settings.json`、`~/.codex/config.toml` 之前先展示改动；`uninstall` 原样撤销。
 

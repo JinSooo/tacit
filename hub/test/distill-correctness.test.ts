@@ -147,7 +147,7 @@ test("候选事项的十五分钟门槛不把片段内空档算作活动", async
   thread(); const f=frame("sparse",[[0,2],[9,11],[18,20]]);
   ctx.db.db.prepare("DELETE FROM assignments WHERE frame_id=?").run(f.id);
   ctx.db.db.prepare("UPDATE frames SET status='new' WHERE id=?").run(f.id);
-  const llm: LLM = { async complete<T>() { return { ok:true,data:{ items:[{ frame_id:f.id,thread_id:null,new_thread_title:"稀疏活动",ignore:false,confidence:0.9 }] } as T,ms:1 }; } };
+  const llm: LLM = { async complete<T>(req: LLMRequest) { const input = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!); return { ok:true,data:{ items:[{ frame_id:input[0].id,thread_id:null,new_thread_title:"稀疏活动",ignore:false,confidence:0.9 }] } as T,ms:1 }; } };
   const result=await assignStep({db:ctx.db,llm},store,base+60*MIN);
   expect(result.created_threads).toBe(0);
   expect(store.getState<any[]>("candidates")![0].minutes).toBe(6);

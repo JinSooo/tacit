@@ -8,6 +8,7 @@ import { KEY_PATTERN, systemKeychain, type Keychain } from "./llm/keychain.ts";
 import { createLLM, type ModelConfig, type ReadKey, type Spawn, type Tier } from "./llm/index.ts";
 import { GENERAL_DEFAULTS, GENERAL_RANGES, readGeneral, updateGeneral } from "./general-settings.ts";
 import { redactString } from "./redact.ts";
+import { isLoopback, localModels } from "./llm/local.ts";
 import { agentStatus, connectAgent, type AgentTool, type InstallEnvironment } from "./agents-install.ts";
 
 export interface SettingsDeps {
@@ -38,7 +39,7 @@ export const TIER_INFO: Record<Tier, { label: string; description: string }> = {
   day: { label: "每日日记", description: "当天每 3 小时更新一次日记，以前的日子有新内容时重写。整理启用前的历史也用它。" },
 };
 
-const TEST_SCHEMA = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false };
+const TEST_SCHEMA = { type: "object", properties: { ok: { type: "boolean", enum: [true] } }, required: ["ok"], additionalProperties: false };
 const TEST_TIMEOUT_MS = 60_000;
 
 function defaultProbe(port: number): Promise<void> {
@@ -117,6 +118,15 @@ export function createSettings(deps: SettingsDeps) {
       }
     }
 
+    if (pathname === "/v1/settings/models/local" && method === "POST") {
+      const body = object(await ctx.readJSON());
+      if (Object.keys(body).some(k => k !== "base_url") || typeof body.base_url !== "string") throw new InputError("只接受 base_url");
+      const config = asInput(() => validateTier({ provider: "openai-compatible", model: "list", base_url: body.base_url }, "config"));
+      if (!isLoopback(config.base_url)) throw new InputError("模型列表只接受本机 HTTP(S) 地址");
+      try { return Response.json({ models: await localModels(config.base_url!) }); }
+      catch (error) { return fail(503, error instanceof Error ? error.message : "读取本机模型列表失败"); }
+    }
+
     if (pathname === "/v1/settings/models/test" && method === "POST") {
       const body = object(await ctx.readJSON());
       if (Object.keys(body).some(k => k !== "tier" && k !== "config")) throw new InputError("只接受 tier 和 config");
@@ -162,7 +172,7 @@ export function createSettings(deps: SettingsDeps) {
     const agent = /^\/v1\/settings\/agents\/([^/]+)$/.exec(pathname);
     if (agent && method === "PUT") {
       const id = agent[1] as AgentTool;
-      if (id !== "claude-code" && id !== "codex") throw new InputError("只能接入 claude-code 或 codex");
+      if (id !== "claude-code" && id !== "codex" && id !== "claude-desktop") throw new InputError("只能接入 claude-code、codex 或 claude-desktop");
       const body = object(await ctx.readJSON());
       if (Object.keys(body).some(k => k !== "connected") || typeof body.connected !== "boolean") throw new InputError("只接受 connected（true 或 false）");
       const tool = agentStatus(deps.agents).find(t => t.id === id)!;
