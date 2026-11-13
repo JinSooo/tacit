@@ -15,3 +15,19 @@ experiments/02-audio/vendor/
 collector/vendor
 collector/.cache/
 node_modules
+
+# Local diagnostics, credentials, and raw recordings
+__pycache__/
+*.py[cod]
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.wav
+*.m4a
+*.pcm
+*.aiff

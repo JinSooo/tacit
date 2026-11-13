@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title description">
+  <title id="title">Tacit</title>
+  <desc id="description">让 AI 接上你的上下文。暖炭灰底色、铜绿文字行与暖白圆环。</desc>
+  <defs>
+    <clipPath id="disc"><circle cx="984" cy="180" r="79.5"/></clipPath>
+  </defs>
+  <rect width="1200" height="360" rx="24" fill="#211f1d"/>
+  <text x="72" y="139" font-family="Georgia, 'Times New Roman', serif" font-size="86" fill="#eeeae3" letter-spacing="-3">Tacit</text>
+  <text x="76" y="205" font-family="'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" fill="#93cbbd">让 AI 接上你的上下文。</text>
+  <path d="M76 251H690" stroke="#49433e"/>
+  <text x="76" y="291" font-family="'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#b7afa5">记录日常</text>
+  <text x="284" y="291" font-family="'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#b7afa5">整理进展</text>
+  <text x="492" y="291" font-family="'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#b7afa5">接续工作</text>
+  <!-- Same ring/disc proportions and five-row palette as AppIconArt. -->
+  <circle cx="984" cy="180" r="100.5" fill="none" stroke="#e7e3dc" stroke-width="7.2"/>
+  <g clip-path="url(#disc)">
+    <path fill="#93cbbd" d="M904.5 100.5h159v23.803H904.5z"/>
+    <path fill="#81bfb0" d="M904.5 134.299h159v23.803H904.5z"/>
+    <path fill="#6bae9f" d="M904.5 168.098h159v23.803H904.5z"/>
+    <path fill="#599d8e" d="M904.5 201.897h159v23.803H904.5z"/>
+    <rect x="904.5" y="235.696" width="89.04" height="23.804" rx="11.902" fill="#4b8d7e"/>
+    <path fill="#4b8d7e" d="M904.5 235.696H984V259.5h-79.5z"/>
+  </g>
+</svg>

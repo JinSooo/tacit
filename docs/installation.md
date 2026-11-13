@@ -21,8 +21,9 @@ RA_NO_DISTILL=1 ./install.sh
 `~/Library/Application Support/record-anything/models.json`；文件不存在时默认使用
 本机已登录的 Claude CLI（minute 用 haiku，hour、day 用 sonnet）。已有配置按文件生效。
 
-安装脚本通过 `command -v codex` 和 `command -v claude` 找到命令，用 realpath
-解析符号链接，把真实目录、必要的同名入口目录、Bun 目录及系统目录加入提炼的 PATH。
+安装脚本通过 `command -v codex` 和 `command -v claude` 找到命令，优先把稳定的
+同名入口目录加入提炼的 PATH，避免将版本钉死在符号链接当时指向的旧目录；
+临时入口才尝试解析真实目录。PATH 同时包含 Bun 目录及系统目录。
 临时 shim 不会写入 PATH：优先解析到稳定的真实入口，否则查找 mise shims、
 `~/.local/bin`、`~/.bun/bin`、`~/.npm-global/bin`、Homebrew 等稳定位置。
 只有临时或无效入口且找不到稳定替代时，安装报错退出；完全未找到某个 CLI 时会提示并跳过。

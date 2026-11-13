@@ -100,7 +100,7 @@ enum AppIconArt {
   }
 }
 
-/// 菜单栏模板图：细环 + 环内内容。记录中是五行文字与短末行（按选定配套图），暂停是两道竖条，缺权限是感叹号。
+/// 菜单栏模板图：细环 + 三行文字与短末行；小尺寸保留清晰的行距和环内留白。
 enum StatusIconArt {
   enum State { case recording, paused, warning }
 
@@ -112,7 +112,7 @@ enum StatusIconArt {
     return image
   }
 
-  static func draw(_ state: State, in rect: CGRect, textRows: Int = 5) {
+  static func draw(_ state: State, in rect: CGRect, radiusRatio: CGFloat = 0.27) {
     let s = rect.width
     let c = CGPoint(x: rect.midX, y: rect.midY)
     NSColor.black.setStroke(); NSColor.black.setFill()
@@ -122,7 +122,7 @@ enum StatusIconArt {
     let h = s * 0.1
     switch state {
     case .recording:
-      AppIconArt.textDisc(center: c, radius: s * 0.32, rows: textRows, rowRatio: textRows == 3 ? 0.6 : 1 / 1.42) { _, _ in }
+      AppIconArt.textDisc(center: c, radius: s * radiusRatio, rows: 3, rowRatio: 0.6) { _, _ in }
     case .paused:
       for dx: CGFloat in [-1, 1] {
         let bar = CGRect(x: c.x + dx * s * 0.1 - h / 2, y: c.y - s * 0.17, width: h, height: s * 0.34)

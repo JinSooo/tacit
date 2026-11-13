@@ -74,7 +74,7 @@ export function safeUrl(value: string): string | undefined {
 export const sourceNames: Record<string, string> = {
   "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板", "mac.file": "文件", "mac.calendar": "日历", "mac.wechat": "微信",
   "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
-  "manual.note": "补写", "manual.correction": "修正",
+  "manual.note": "补写", "manual.correction": "修正", "manual.agent": "AI 补写",
 };
 /**
  * 列表、时间轴、依据和读取记录里显示的记录标题，规则和 Mac 端 RecordTitles 一致：

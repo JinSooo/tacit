@@ -52,8 +52,8 @@ struct ExportIcons {
                        monochrome: monochrome)
   }
 
-  static func status(_ state: StatusIconArt.State, in rect: CGRect, white: Bool = false, textRows: Int = 5) {
-    StatusIconArt.draw(state, in: rect.insetBy(dx: rect.width * 0.05, dy: rect.height * 0.05), textRows: textRows)
+  static func status(_ state: StatusIconArt.State, in rect: CGRect, white: Bool = false, radiusRatio: CGFloat = 0.27) {
+    StatusIconArt.draw(state, in: rect.insetBy(dx: rect.width * 0.05, dy: rect.height * 0.05), radiusRatio: radiusRatio)
     if white {
       NSColor.white.setFill()
       NSGraphicsContext.current!.cgContext.setBlendMode(.sourceIn)
@@ -125,7 +125,7 @@ struct ExportIcons {
           androidMark(rect, monochrome: mono)
         }
       }
-      try png("\(dir)/drawable-\(density)/ic_stat_tacit.png", size: Int(24 * scale)) { status(.recording, in: $0, white: true, textRows: 3) }
+      try png("\(dir)/drawable-\(density)/ic_stat_tacit.png", size: Int(24 * scale)) { status(.recording, in: $0, white: true, radiusRatio: 0.32) }
     }
     try text("""
     <?xml version="1.0" encoding="utf-8"?>

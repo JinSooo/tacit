@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-const vendor = process.env.RA_WORKER_SMOKE_VENDOR ?? "/Users/jinso/Study/Project/record-anything/experiments/02-audio/vendor";
+const vendor = process.env.RA_WORKER_SMOKE_VENDOR ?? path.resolve(import.meta.dir, "../../experiments/02-audio/vendor");
 const models = mkdtempSync(path.join(tmpdir(), "worker-models-"));
 let embeddings = 0, ingested = 0;
 try {

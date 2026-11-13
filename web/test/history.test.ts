@@ -105,3 +105,8 @@ test("记录标题不用中间点：应用加冒号，微信写会话和发言�
   expect(recordTitle({ source: "mac.browser", title: "中铁二十三局集团有限公司-招聘主页-国聘" })).toBe("中铁二十三局集团有限公司-招聘主页-国聘");
   expect(recordTitle({ source: "mac.screen", title: "  " })).toBe("屏幕");
 });
+
+test("AI 补写的无标题记录使用可读来源名，未知第三方来源仍可辨认", () => {
+  expect(recordTitle({ source: "manual.agent", title: "" })).toBe("AI 补写");
+  expect(recordTitle({ source: "ext-example.note", title: "" })).toBe("ext-example.note");
+});

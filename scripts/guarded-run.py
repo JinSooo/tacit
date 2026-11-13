@@ -60,6 +60,13 @@ def run(command, memory_mb=1536, seconds=180):
             os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # macOS can reject a now-empty group after tracked members were killed.
+            # Never suppress a permission failure while the root is still alive.
+            try:
+                child.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                raise PermissionError("cannot stop the guarded process group")
         child.wait()
     try:
         while child.poll() is None:
