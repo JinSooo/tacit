@@ -49,7 +49,7 @@ public enum ClipboardPolicy {
   }
 }
 
-/// 发不出去的记录只排在内存里（产品规则：采集端不落盘明文），超过上限丢最旧的并计数。
+/// 有界发送窗口。HubClient 用加密 outbox 保存窗口以外的记录；存储失效时内存退路超限会计数。
 public final class OutboundQueue {
   public let capacity: Int
   public private(set) var items: [Record] = []

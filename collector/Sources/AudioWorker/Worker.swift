@@ -14,8 +14,6 @@ struct Sync: Decodable {
 }
 struct HubSpeaker: Codable { let local: String; let speaker_id: String; let label: String; let is_me: Bool }
 struct EmbeddingsResponse: Decodable { let speakers: [HubSpeaker] }
-struct IngestResponse: Decodable { let accepted: Int; let duplicates: Int; let rejected: [Rejection] }
-struct Rejection: Decodable { let index: Int }
 protocol HubTransport { func request(_ path: String, body: Data?) async throws -> Data }
 final class Hub: HubTransport {
   let base: URL; let token: String
@@ -201,8 +199,8 @@ final class Worker {
           let ids = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.speaker_id) })
           let record = WorkerLogic.record(meta: meta, device: device, lines: kept.filter { meeting || $0.segment.track == .mic }, labels: labels, ids: ids, retention: sync.retention_days)
           guard (record["body"] as! String).unicodeScalars.count <= 200000 else { throw WorkerError.recordTooLarge }
-          let result = try JSONDecoder().decode(IngestResponse.self, from: await post("/v1/ingest", ["device": device, "records": [record]]))
-          guard result.rejected.isEmpty, result.accepted + result.duplicates == 1 else { throw WorkerError.response }
+          let response = try await post("/v1/ingest", ["device": device, "records": [record]])
+          guard let receipt = DeliveryReceipt.decode(response, batchCount: 1), receipt.rejected.isEmpty else { throw WorkerError.response }
         }
         var completed = meta
         try completed.transition(to: next, at: Date()); try store.writeMetadata(completed); meta = completed

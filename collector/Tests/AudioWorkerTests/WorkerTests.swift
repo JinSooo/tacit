@@ -17,6 +17,7 @@ final class FakeHub: HubTransport {
   var hit = true
   var reject = false
   var duplicate = false
+  var ingestOverride: [String: Any]?
   var paths: [String] = []
   var records: [[String: Any]] = []
   var requests: [[String: Any]] = []
@@ -39,7 +40,7 @@ final class FakeHub: HubTransport {
       reply = ["speakers": speakers.map { ["local": $0["local"]!, "speaker_id": "speaker-test", "label": "说话人 A", "is_me": true] }]
     } else if path == "/v1/ingest" {
       records += json["records"] as! [[String: Any]]
-      reply = ["accepted": reject || duplicate ? 0 : 1, "duplicates": duplicate ? 1 : 0, "rejected": reject ? [["index": 0]] : []]
+      reply = ingestOverride ?? ["accepted": reject || duplicate ? 0 : 1, "duplicates": duplicate ? 1 : 0, "rejected": reject ? [["index": 0, "errors": ["synthetic rejection"]]] : []]
     } else if path == "/v1/audio/lines" {
       lineUploads.append(json)
     } else if path == "/v1/audio/samples" {
@@ -365,4 +366,19 @@ func clusterProbe() throws {
     #expect(try await worker.run() == 0)
     #expect(hub.lineUploads.count == 1)
   }
+}
+
+
+@Test func workerRejectsInvalidIngestCountsAndRetries() async throws {
+  let synthetic = (0..<48000).map { Float(sin(Double($0) * 0.17) * 0.2) }
+  let (root, store, _) = try fixture([synthetic], meetings: ["us.zoom.xos"], encode: { _ in Data([1, 2, 3]) })
+  defer { try? FileManager.default.removeItem(at: root) }
+  let hub = FakeHub()
+  hub.ingestOverride = ["accepted": -1, "duplicates": 2, "rejected": []]
+  let worker = Worker(store: store, hub: hub, device: "mac-test", decode: { _ in synthetic }) { FakeModels() }
+  #expect(try await worker.run() == 1)
+  #expect(try store.conversations().first?.status == .failed)
+  hub.ingestOverride = nil; hub.duplicate = true
+  #expect(try await worker.run() == 0)
+  #expect(try store.conversations().first?.status == .done)
 }

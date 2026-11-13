@@ -1,0 +1,7 @@
+{
+  "accepted": 1,
+  "duplicates": 1,
+  "rejected": [
+    { "index": 2, "errors": ["/source_ref 重读外部存储的来源必须提供稳定键"] }
+  ]
+}

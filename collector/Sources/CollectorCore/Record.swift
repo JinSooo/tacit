@@ -55,6 +55,7 @@ public struct Record: Codable, Equatable {
   public var body: String
   public var capture: Capture
   public var sensitivity: String
+  public var redactions: Int?
 
   public init(device: String, source: String, kind: String, start: Date, end: Date? = nil,
               context: RecordContext?, title: String, body: String, capture: Capture,

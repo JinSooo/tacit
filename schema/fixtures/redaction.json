@@ -1,0 +1,201 @@
+{
+  "strings": [
+    {
+      "input": "-----BEGIN RSA PRIVATE KEY-----\nSYNTHETICCONTENT\n-----END RSA PRIVATE KEY-----",
+      "text": "[已脱敏:私钥]",
+      "count": 1
+    },
+    {
+      "input": "AKIAABCDEFGHIJKLMNOP",
+      "text": "[已脱敏:AWS]",
+      "count": 1
+    },
+    {
+      "input": "ghp_aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3",
+      "text": "[已脱敏:GitHub]",
+      "count": 1
+    },
+    {
+      "input": "github_pat_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_",
+      "text": "[已脱敏:GitHub]",
+      "count": 1
+    },
+    {
+      "input": "sk-proj-aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_",
+      "text": "[已脱敏:OpenAI]",
+      "count": 1
+    },
+    {
+      "input": "sk-ant-api03-aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_aB3_",
+      "text": "[已脱敏:Anthropic]",
+      "count": 1
+    },
+    {
+      "input": "xoxb-1234567890-abcdefghijk",
+      "text": "[已脱敏:Slack]",
+      "count": 1
+    },
+    {
+      "input": "sk_live_aB3aB3aB3aB3aB3aB3aB3aB3",
+      "text": "[已脱敏:Stripe]",
+      "count": 1
+    },
+    {
+      "input": "rk_test_aB3aB3aB3aB3aB3aB3aB3aB3",
+      "text": "[已脱敏:Stripe]",
+      "count": 1
+    },
+    {
+      "input": "AIzaSyaB3-aB3-aB3-aB3-aB3-aB3-aB3-aB3-a",
+      "text": "[已脱敏:Google]",
+      "count": 1
+    },
+    {
+      "input": "glpat-aB3_aB3_aB3_aB3_aB3_",
+      "text": "[已脱敏:GitLab]",
+      "count": 1
+    },
+    {
+      "input": "hf_aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3",
+      "text": "[已脱敏:HuggingFace]",
+      "count": 1
+    },
+    {
+      "input": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGljU2lnbmF0dXJl",
+      "text": "[已脱敏:JWT]",
+      "count": 1
+    },
+    {
+      "input": "https://fake-user:synth-pass@example.invalid/path",
+      "text": "https://fake-user:[已脱敏:URL密码]@example.invalid/path",
+      "count": 1
+    },
+    {
+      "input": "Authorization: Bearer aB3.aB3.aB3.aB3.aB3.aB3.",
+      "text": "Authorization: Bearer [已脱敏:Bearer]",
+      "count": 1
+    },
+    {
+      "input": "password=aB3cD4eF5gH6iJ7kL8mN9pQ0",
+      "text": "password=[已脱敏:赋值密钥]",
+      "count": 1
+    },
+    {
+      "input": "token=aB3cD4eF5gH6iJ7kL8mN9pQ0",
+      "text": "token=[已脱敏:赋值密钥]",
+      "count": 1
+    },
+    {
+      "input": "api_key=aB3cD4eF5gH6iJ7kL8mN9pQ0",
+      "text": "api_key=[已脱敏:赋值密钥]",
+      "count": 1
+    },
+    {
+      "input": "secret=aB3cD4eF5gH6iJ7kL8mN9pQ0",
+      "text": "secret=[已脱敏:赋值密钥]",
+      "count": 1
+    },
+    {
+      "input": "client_secret=aB3cD4eF5gH6iJ7kL8mN9pQ0",
+      "text": "client_secret=[已脱敏:赋值密钥]",
+      "count": 1
+    },
+    {
+      "input": "password=\"aB3!cD4@eF5#gH6$iJ7%kL8\";",
+      "text": "password=\"[已脱敏:赋值密钥]\";",
+      "count": 1
+    },
+    {
+      "input": "{\"api_key\":\"aB3!cD4@eF5#gH6$iJ7%kL8\"}",
+      "text": "{\"api_key\":\"[已脱敏:赋值密钥]\"}",
+      "count": 1
+    },
+    {
+      "input": "token=aaaaaaaaaaaaaaaaaaaaaaaa",
+      "text": "token=aaaaaaaaaaaaaaaaaaaaaaaa",
+      "count": 0
+    },
+    {
+      "input": "password=internationalization",
+      "text": "password=internationalization",
+      "count": 0
+    },
+    {
+      "input": "你好普通文字",
+      "text": "你好普通文字",
+      "count": 0
+    },
+    {
+      "input": "hf_hub_download",
+      "text": "hf_hub_download",
+      "count": 0
+    },
+    {
+      "input": "12ab34cd56ef78ab90cd12ef34ab56cd78ef90ab",
+      "text": "12ab34cd56ef78ab90cd12ef34ab56cd78ef90ab",
+      "count": 0
+    }
+  ],
+  "clipboard": [
+    {
+      "input": "Qw#58kLp2z",
+      "text": "[已脱敏:密码]",
+      "count": 2
+    },
+    {
+      "input": "Aa@1234567",
+      "text": "[已脱敏:密码]",
+      "count": 2
+    },
+    {
+      "input": "Abc12345",
+      "text": "[已脱敏:密码]",
+      "count": 2
+    },
+    {
+      "input": "abc@1234",
+      "text": "[已脱敏:密码]",
+      "count": 2
+    },
+    {
+      "input": "https://Example.com/A?b=1",
+      "text": "https://Example.com/A?b=1",
+      "count": 0
+    },
+    {
+      "input": "User1@example.com",
+      "text": "User1@example.com",
+      "count": 0
+    },
+    {
+      "input": "/Users/A1/b.txt",
+      "text": "/Users/A1/b.txt",
+      "count": 0
+    },
+    {
+      "input": "C:\\Users\\A1\\b.txt",
+      "text": "C:\\Users\\A1\\b.txt",
+      "count": 0
+    },
+    {
+      "input": "hello-world",
+      "text": "hello-world",
+      "count": 0
+    },
+    {
+      "input": "b278b7dc-d7ad-4fe8-a3de-8d5a9d6f0123",
+      "text": "b278b7dc-d7ad-4fe8-a3de-8d5a9d6f0123",
+      "count": 0
+    },
+    {
+      "input": "Ab1 short sentence",
+      "text": "Ab1 short sentence",
+      "count": 0
+    },
+    {
+      "input": "Ab1\nnext",
+      "text": "Ab1\nnext",
+      "count": 0
+    }
+  ]
+}

@@ -1,11 +1,12 @@
 import Foundation
 import CollectorCore
+import AudioStore
 
 struct Config {
   var dataDir: URL
   var device = "mac"
   /// 命令行或 collector.json 指定的端口；没指定时每次都现读中枢的 hub.json，
-  /// 设置页改端口后中枢重启到新端口，采集端不用重启（重启会丢掉内存里还没发出的记录）。
+  /// 设置页改端口后中枢重启到新端口，采集端继续重试待发送记录。
   var fixedPort: String?
   var hubURL: URL { URL(string: "http://127.0.0.1:\(fixedPort ?? Config.hubPort(dataDir) ?? "47823")")! }
   var repo: String?
@@ -45,23 +46,64 @@ struct Config {
   }
 }
 
-/// 把记录经 POST /v1/ingest 发给 hub。发不出去就留在内存队列里重试。
+/// 先在独立 I/O 队列脱敏、加密保存，再发送；成功确认后删除本机待发送副本。
 final class HubClient {
   let config: Config
   let queue = OutboundQueue()
   private var inFlight = false
   private let lock = NSLock()
-  private(set) var lastError: String?
+  private var networkError: String?
+  private var storageError: String?
+  private var storedCount = 0
+  private var pendingWrites = 0
+  private let io = DispatchQueue(label: "record-anything.outbox", qos: .utility)
+  private var outbox: OutboxStore?
+  var lastError: String? { lock.lock(); defer { lock.unlock() }; return storageError ?? networkError }
+  var pendingCount: Int { lock.lock(); defer { lock.unlock() }; return max(storedCount, queue.count) + pendingWrites }
   private(set) var sent = 0
   private(set) var rejected = 0
   private var deliveryMetrics = HubDeliveryMetrics()
   var hubBusy: Int { lock.lock(); defer { lock.unlock() }; return deliveryMetrics.hubBusy }
 
-  init(config: Config) { self.config = config }
+  init(config: Config) {
+    self.config = config
+    io.async { [self] in
+      do { outbox = try OutboxStore(dataDirectory: config.dataDir); refill() }
+      catch { savingFailed() }
+    }
+  }
 
-  func enqueue(_ records: [Record]) { if !records.isEmpty { queue.push(records) } }
+  private func savingFailed() {
+    lock.lock(); storageError = "待发送记录无法安全保存或恢复，请检查磁盘空间和数据目录；暂时只在内存中重试。"; lock.unlock()
+  }
+  private func refill() {
+    guard let outbox else { return }
+    let restored = outbox.restore(limit: queue.capacity - queue.count, excluding: Set(queue.peek(queue.capacity).map(\.id)))
+    queue.push(restored.records)
+    lock.lock(); storedCount = outbox.count + queue.peek(queue.capacity).filter { !outbox.contains($0.id) }.count; lock.unlock()
+    if restored.unreadable > 0 { savingFailed() }
+  }
+  func enqueue(_ records: [Record]) {
+    guard !records.isEmpty else { return }
+    lock.lock(); pendingWrites += records.count; lock.unlock()
+    io.async { [self] in
+      for record in records {
+        do {
+          if let outbox { _ = try outbox.append(record) }
+          else { queue.push([RecordRedaction.record(record)]) }
+        } catch {
+          savingFailed()
+          // 已有同 id 的损坏副本不以新捕获的内容替换；保留原文件供修复。
+          if outbox?.contains(record.id) != true { queue.push([RecordRedaction.record(record)]) }
+        }
+      }
+      refill()
+      lock.lock(); pendingWrites -= records.count; lock.unlock()
+    }
+  }
 
-  func flush() {
+  func flush() { io.async { [self] in sendNext() } }
+  private func sendNext() {
     lock.lock()
     if inFlight { lock.unlock(); return }
     let batch = queue.peek(200)
@@ -85,26 +127,35 @@ final class HubClient {
       if let err { self.finish(error: "hub 连不上：\(err.localizedDescription)", done: nil); return }
       // 503 是中枢撞上别的进程的写锁、不等锁直接返回：中枢是通的，记录留在队列里下一轮再发，不提示连不上。
       if status == 503 { self.finish(error: nil, done: nil, status: status); return }
-      guard status == 200, let data,
-            let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      guard status == 200, let data else {
         self.finish(error: "hub 返回 \(status)", done: nil); return
       }
-      // 被拒的记录重试也不会成功，记数后丢掉；其余视为已送达。
-      let bad = (j["rejected"] as? [[String: Any]])?.count ?? 0
-      if bad > 0 { NSLog("record-anything: hub 拒收 \(bad) 条：\(String(describing: j["rejected"]))") }
+      guard let receipt = DeliveryReceipt.decode(data, batchCount: batch.count) else {
+        self.finish(error: "后台未确认完整接收，待发送记录已保留。", done: nil); return
+      }
+      // 明确拒收的项不会因重试而成功；只记数量，不把服务器返回的正文写入日志。
+      let bad = receipt.rejected.count
+      if bad > 0 { NSLog("record-anything: hub 拒收 %d 条", bad) }
       self.finish(error: nil, done: (Set(batch.map(\.id)), batch.count - bad, bad))
     }.resume()
   }
 
   private func finish(error: String?, done: (Set<String>, Int, Int)?, status: Int? = nil) {
-    lock.lock()
-    if let status { deliveryMetrics.received(status: status) }
-    inFlight = false
-    lastError = error
-    if let done { queue.remove(ids: done.0); sent += done.1; rejected += done.2 }
-    let more = done != nil && queue.count > 0
-    lock.unlock()
-    if more { flush() }
+    io.async { [self] in
+      var acknowledged = done
+      if let done, let outbox {
+        do { try outbox.acknowledge(done.0) }
+        catch { savingFailed(); acknowledged = nil }
+      }
+      lock.lock()
+      if let status { deliveryMetrics.received(status: status) }
+      inFlight = false
+      networkError = error
+      if let done = acknowledged { queue.remove(ids: done.0); sent += done.1; rejected += done.2 }
+      lock.unlock()
+      refill()
+      if acknowledged != nil && queue.count > 0 { sendNext() }
+    }
   }
 }
 

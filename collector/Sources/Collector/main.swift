@@ -175,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     captureQueue.sync { emit(segmenter.flush()) }
     let deadline = Date().addingTimeInterval(3)
     hub.flush()
-    while hub.queue.count > 0 && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+    while hub.pendingCount > 0 && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
   }
 
   // MARK: 屏幕
@@ -329,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     else if let p = pausedUntil, paused { state = "已暂停，到 \(f.string(from: p))" }
     else { state = "正在记录" }
     menu.addItem(disabled(state))
-    let pending = hub.queue.count
+    let pending = hub.pendingCount
     if let e = hub.lastError { menu.addItem(disabled("\(e)，\(pending) 条等着发送")) }
     else if pending > 0 { menu.addItem(disabled("\(pending) 条等着发送")) }
     if hub.queue.dropped > 0 { menu.addItem(disabled("等太久丢掉了 \(hub.queue.dropped) 条")) }
@@ -474,7 +474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let enabledSources = Dictionary(uniqueKeysWithValues: DataSourceCatalog.all.map { ($0.id, enabled($0.id)) })
     captureQueue.async { [self] in
       var s: [String: Any] = stats
-      s["queue"] = hub.queue.count; s["dropped"] = hub.queue.dropped
+      s["queue"] = hub.pendingCount; s["dropped"] = hub.queue.dropped
       s["hubBusy"] = hub.hubBusy; s["queuePeak"] = hub.queue.queuePeak
       s["sent"] = hub.sent; s["rejected"] = hub.rejected; s["hubError"] = hub.lastError ?? NSNull()
       s["axTrusted"] = AXIsProcessTrusted(); s["ocrEnabled"] = enabledSources["ocr"] ?? false; s["ocrGranted"] = ocr.granted
@@ -560,7 +560,7 @@ extension AppDelegate: CaptureControlling {
   func captureSnapshot() -> CaptureSnapshot {
     var c = CaptureSnapshot()
     if missingAX { c.state = .noPermission } else if let p = pausedUntil, paused { c.state = .paused(p) }
-    c.queue = hub.queue.count
+    c.queue = hub.pendingCount
     c.sent = hub.sent
     c.hubError = hub.lastError
     c.sources = sources.statuses()
