@@ -143,7 +143,7 @@ public enum PluginImport {
   public static func outcomeText(ok: Bool, exitStatus: Int32, accepted: Int?, elapsed: TimeInterval, failure: String? = nil) -> String {
     let head: String
     if !ok {
-      let labels = ["permission": "无权读取来源", "missing_file": "来源文件或程序不存在", "network": "连接失败", "interrupted": "已中断", "storage": "记录保存失败", "protocol": "输出格式无效", "rejected": "记录未通过校验", "cleanup": "缓冲清理失败", "process": "插件进程失败"]
+      let labels = ["sandbox": "当前系统无法隔离此数据源，未执行", "permission": "无权读取来源", "missing_file": "来源文件或程序不存在", "network": "连接失败", "interrupted": "已中断", "storage": "记录保存失败", "protocol": "输出格式无效", "rejected": "记录未通过校验", "cleanup": "缓冲清理失败", "process": "插件进程失败"]
       head = (failure.flatMap { labels[$0] } ?? "失败") + "（退出码 \(exitStatus)）"
     }
     else if let accepted { head = accepted == 0 ? "没有新记录" : "新增 \(accepted.formatted()) 条" }

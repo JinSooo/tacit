@@ -23,7 +23,8 @@ struct ExtensionManifest: Codable, Equatable {
     var id: String { key }
   }
   let schema: Int; let id: String; let name: String; let version: String; let description: String; let entry: String
-  let permissions: [String]; let config: [Field]
+  struct Access: Codable, Equatable { var readFiles: [String]?; var readDirectories: [String]? }
+  let permissions: [String]; let config: [Field]; var access: Access?
 }
 struct ExtensionPlugin: Codable, Equatable, Identifiable {
   let manifest: ExtensionManifest; let origin: String; var revision: String?; var contentHash: String?; var values: [String: PluginValue]

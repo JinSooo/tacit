@@ -3,10 +3,11 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { redactString } from "./redact.ts";
+import { validatePluginAccess, pluginReadAccess, SandboxError, type PluginAccess } from "./plugin-sandbox.ts";
 import { dataDirOf } from "./hub-json.ts";
 
 export interface PluginField { key: string; label: string; type: "string" | "boolean" | "number"; description?: string; required?: boolean; default?: string | boolean | number }
-export interface PluginManifest { schema: 1; id: string; name: string; version: string; description: string; entry: string; permissions: string[]; config: PluginField[] }
+export interface PluginManifest { schema: 1; id: string; name: string; version: string; description: string; entry: string; permissions: string[]; config: PluginField[]; access?: PluginAccess }
 export interface InstalledPlugin { manifest: PluginManifest; origin: string; values: Record<string, string | number | boolean>; revision?: string; contentHash?: string }
 export interface PluginPreview extends InstalledPlugin { ticket: string; updating: boolean; previousRevision?: string }
 export interface PluginRequest { action: "list" | "prepare" | "install" | "configure" | "uninstall" | "discard"; source?: string; id?: string; ticket?: string; values?: unknown; deleteRecords?: boolean; hub?: string }
@@ -35,6 +36,7 @@ export function manifestAt(directory: string): PluginManifest {
     if (f.default !== undefined && (typeof f.default !== f.type || f.type === "number" && !Number.isFinite(f.default))) fail("插件配置默认值类型不正确");
     keys.add(f.key);
   }
+  try { validatePluginAccess(m); } catch (e) { fail(e instanceof SandboxError ? e.message : "插件读取范围格式不正确"); }
   if (redactString(JSON.stringify(m)).count) fail("插件清单里含有疑似密钥，请先移除");
   return m;
 }
@@ -51,6 +53,13 @@ function valuesFor(m: PluginManifest, input: unknown, required: boolean): Instal
   }
   if (redactString(JSON.stringify(result)).count) fail("普通配置不能保存密钥，请移除疑似密钥内容");
   return result;
+}
+function approvePaths(m: PluginManifest, values: InstalledPlugin["values"], dataDir: string) {
+  pluginReadAccess(m, values, dataDir);
+  // Persist the approved target, so retargeting a source symlink cannot change a saved grant.
+  for (const key of [...m.access?.readFiles ?? [], ...m.access?.readDirectories ?? []]) {
+    if (typeof values[key] === "string" && values[key]) values[key] = realpathSync(values[key] as string);
+  }
 }
 export function gitRevision(directory: string): string {
   const r = spawnSync("/usr/bin/git", ["-C", directory, "rev-parse", "--verify", "HEAD"], { encoding: "utf8", timeout: 5000 });
@@ -121,6 +130,7 @@ export class PluginManager {
     if (snapshotHash(join(stage, "code")) !== p.hash) fail("预览后的插件文件发生变化，请重新预览");
     const m = manifestAt(join(stage, "code")), values = valuesFor(m, input, true), target = this.path(m.id);
     if (existsSync(target) !== p.updating) fail("安装状态已变化，请重新预览");
+    approvePaths(m, values, this.dataDir);
     const installed = { manifest: m, origin: p.origin, values, revision: p.revision, contentHash: p.hash };
     atomic(join(stage, "installed.json"), installed);
     rmSync(join(stage, "preview.json"));
@@ -131,7 +141,7 @@ export class PluginManager {
     return installed;
   }
   configure(id: string, input: unknown): InstalledPlugin {
-    const p = this.installed(id); p.values = valuesFor(p.manifest, input, true); atomic(join(this.path(id), "installed.json"), p); return p;
+    const p = this.installed(id); p.values = valuesFor(p.manifest, input, true); approvePaths(p.manifest, p.values, this.dataDir); atomic(join(this.path(id), "installed.json"), p); return p;
   }
   async uninstall(id: string, deleteRecords: boolean, hub?: string) {
     this.installed(id); let deleted = 0;
@@ -168,5 +178,5 @@ export class PluginManager {
 }
 export async function pluginCLI() {
   try { const request = await Bun.stdin.json() as PluginRequest; console.log(JSON.stringify(await new PluginManager(dataDirOf()).dispatch(request))); }
-  catch (error) { console.log(JSON.stringify({ error: error instanceof PluginError ? error.message : "插件操作失败，请检查目录权限和清单后重试" })); process.exitCode = 1; }
+  catch (error) { console.log(JSON.stringify({ error: error instanceof PluginError || error instanceof SandboxError ? error.message : "插件操作失败，请检查目录权限和清单后重试" })); process.exitCode = 1; }
 }

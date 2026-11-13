@@ -38,6 +38,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     const dataDir = dataDirOf(), manager = new PluginManager(dataDir), plugin = manager.installed(name);
     const code = join(manager.path(name), "code");
     const summary = await runPlugin({ name, dataDir, hub: argv[3], allowedSource: pluginSource(name),
+      sandbox: { code, manifest: plugin.manifest, values: plugin.values },
       command: [process.execPath, "--no-install", "--no-env-file", join(code, plugin.manifest.entry), ...argv.slice(4)], cwd: code,
       env: { PATH: process.env.PATH, HOME: homedir(), TMPDIR: process.env.TMPDIR, RA_PLUGIN_CONFIG: JSON.stringify(plugin.values) } });
     console.log(JSON.stringify(summary));
@@ -190,7 +191,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 if (import.meta.main) main().catch(error => {
   if (["run-plugin", "plugin-run"].includes(process.argv[2] ?? "")) {
     const code = (error as { code?: string })?.code;
-    console.log(JSON.stringify({ failure: code === "ENOENT" ? "missing_file" : code === "EACCES" || code === "EPERM" ? "permission" : "process" }));
+    console.log(JSON.stringify({ failure: error?.name === "SandboxUnavailableError" ? "sandbox" : code === "ENOENT" ? "missing_file" : code === "EACCES" || code === "EPERM" ? "permission" : "process" }));
   }
   console.error("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。");
   console.error(cliErrorDetail(error));

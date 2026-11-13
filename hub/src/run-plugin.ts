@@ -1,3 +1,4 @@
+import { sandboxLaunch, type PluginSandbox } from "./plugin-sandbox.ts";
 import { logFailure } from "./diagnostics.ts";
 import { mkdirSync, renameSync, rmSync, writeFileSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
@@ -18,7 +19,7 @@ export interface PluginSummary {
 
 export async function runPlugin(options: {
   db?: HubDB; hub?: string; tokenFile?: string; dataDir: string; name: string; command: string[]; device?: string;
-  allowedSource?: string; env?: NodeJS.ProcessEnv; cwd?: string;
+  allowedSource?: string; sandbox?: PluginSandbox; env?: NodeJS.ProcessEnv; cwd?: string;
   report?: (summary: PluginSummary) => void;
 }): Promise<PluginSummary> {
   if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(options.name)) throw new Error("插件名称无效");
@@ -52,7 +53,8 @@ export async function runPlugin(options: {
   const dir = join(options.dataDir, "plugins", options.name);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stateFile = join(dir, "state.json");
-  const child = spawn(options.command[0]!, [...options.command.slice(1), "--device", device, "--state", stateFile], { stdio: ["ignore", "pipe", "pipe"], env: options.env, cwd: options.cwd, detached: process.platform !== "win32" });
+  const launch = options.sandbox ? sandboxLaunch({ sandbox: options.sandbox, dataDir: options.dataDir, stateFile, command: options.command }) : options;
+  const child = spawn(launch.command[0]!, [...launch.command.slice(1), "--device", device, "--state", stateFile], { stdio: ["ignore", "pipe", "pipe"], env: launch.env, cwd: launch.cwd, detached: process.platform !== "win32" });
   let diagnostic = "";
   child.stderr!.setEncoding("utf8");
   child.stderr!.on("data", (chunk: string) => { diagnostic = (diagnostic + chunk).slice(0, 8192); });
@@ -112,6 +114,8 @@ export async function runPlugin(options: {
           if (batch.length === 500) await flush();
         } else if (message.type === "checkpoint" && Object.hasOwn(message, "state")) {
           if (message.release !== undefined && (!Array.isArray(message.release) || !message.release.every((p: unknown) => typeof p === "string"))) throw new Error();
+          // Sandboxed plugins cannot write buffers, so they must not use the trusted runner as a deletion proxy.
+          if (options.sandbox && message.release?.length) throw new Error();
           release = message.release ?? [];
           checkpoint = message.state; hasCheckpoint = true;
         } else throw new Error();
@@ -153,7 +157,7 @@ export async function runPlugin(options: {
     process.removeListener("SIGTERM", stop); process.removeListener("SIGINT", stop);
     if (forceStop) clearTimeout(forceStop);
   }
-  if (summary.exitCode !== 0) summary.failure = /EACCES|EPERM|permission denied/i.test(diagnostic) ? "permission"
+  if (summary.exitCode !== 0) summary.failure = options.sandbox && /sandbox-exec:|sandbox_init/i.test(diagnostic) ? "sandbox" : /EACCES|EPERM|permission denied/i.test(diagnostic) ? "permission"
     : /ENOENT|no such file/i.test(diagnostic) ? "missing_file"
     : /ETIMEDOUT|ECONNREFUSED|ENOTFOUND|fetch failed/i.test(diagnostic) ? "network"
     : interrupted ? "interrupted" : "process";

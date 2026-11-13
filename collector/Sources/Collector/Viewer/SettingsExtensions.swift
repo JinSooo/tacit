@@ -28,9 +28,9 @@ struct ExtensionInstallView: View {
               Text("固定提交：" + revision).textSelection(.enabled).font(.system(size: TextSize.caption))
               if let previous = preview.previousRevision { Text("原提交：" + previous).textSelection(.enabled).font(.system(size: TextSize.caption)) }
             }
-            PluginPermissions(manifest: preview.manifest)
+            PluginPermissions(manifest: preview.manifest, values: values)
             PluginFields(manifest: preview.manifest, values: $values, invalidNumbers: $invalidNumbers)
-            Note("安装后默认停用。插件代码以你的本机权限运行，只安装你信任的来源。记录入库前会过滤黑名单与密钥。")
+            Note("安装后默认停用。插件只能读取下列获准范围，不能联网、修改文件或启动其他程序；记录入库前仍会过滤黑名单与密钥。")
           }.frame(maxWidth: .infinity, alignment: .leading)
         }
         HStack {
@@ -75,11 +75,23 @@ struct ExtensionInstallView: View {
 
 struct PluginPermissions: View {
   let manifest: ExtensionManifest
+  var values: [String: PluginValue] = [:]
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("插件声明的读取范围与权限").fontWeight(.semibold)
+      Text("插件用途说明").fontWeight(.semibold)
       if manifest.permissions.isEmpty { Text("未声明额外权限").foregroundStyle(Palette.muted) }
       ForEach(manifest.permissions, id: \.self) { Text("• " + $0) }
+      Text("实际允许读取").fontWeight(.semibold)
+      let files = manifest.access?.readFiles ?? []
+      let directories = manifest.access?.readDirectories ?? []
+      if files.isEmpty && directories.isEmpty {
+        Text("仅插件自身代码与上次读取进度。旧插件需要更新读取范围声明后才能读取其他文件。").foregroundStyle(Palette.muted)
+      }
+      ForEach(files + directories, id: \.self) { key in
+        let label = manifest.config.first(where: { $0.key == key })?.label ?? key
+        let path = values[key]?.text ?? manifest.config.first(where: { $0.key == key })?.default?.text ?? ""
+        Text(label + (directories.contains(key) ? "（含子目录）：" : "：") + (path.isEmpty ? "尚未指定" : path)).textSelection(.enabled)
+      }
     }
   }
 }
@@ -130,14 +142,14 @@ struct ExtensionDetailSettings: View {
       SettingsRow("版本", value: plugin.manifest.version)
       SettingsRow("安装来源") { Text(plugin.origin).textSelection(.enabled).lineLimit(nil) }
       if let revision = plugin.revision { SettingsRow("固定提交") { Text(revision).textSelection(.enabled).lineLimit(nil) } }
-      PluginPermissions(manifest: plugin.manifest)
+      PluginPermissions(manifest: plugin.manifest, values: values)
       Button("打开系统隐私设置…") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") { NSWorkspace.shared.open(url) } }
-      Note("权限清单由插件声明。插件以你的本机权限运行，系统权限仍需在系统设置中授权。")
+      Note("只能读取获准文件与目录；不能联网、修改文件或启动其他程序。修改读取范围后确认并保存才会生效。系统隐私权限仍需单独授权。")
     }
     if !plugin.manifest.config.isEmpty {
       Section("配置") {
         PluginFields(manifest: plugin.manifest, values: $values, invalidNumbers: $invalidNumbers).id(formRevision)
-        Button("保存配置") { Task { _ = await model.send(PluginRequest(action: "configure", id: plugin.id, values: values), store: store) } }
+        Button("确认范围并保存") { Task { _ = await model.send(PluginRequest(action: "configure", id: plugin.id, values: values), store: store) } }
           .disabled(model.busy || values == plugin.values || !invalidNumbers.isEmpty)
       }
     }
