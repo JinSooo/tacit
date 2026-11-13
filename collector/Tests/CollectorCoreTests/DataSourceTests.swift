@@ -2,6 +2,19 @@ import Foundation
 import Testing
 @testable import CollectorCore
 
+@Test func sourceOverviewSeparatesEnabledFromPermissionAndPause() {
+  var source = DataSourceStatus(id: "screen", title: "屏幕文字", kind: .builtin, enabled: true,
+    permission: .denied, permissionName: "辅助功能", lastRun: nil, detail: "", ok: true, canRunNow: false)
+  #expect(SourceFilter.enabled.includes(source) && SourceFilter.attention.includes(source))
+  #expect(source.overviewStatus(paused: false) == "需要辅助功能权限")
+  source.permission = .granted
+  #expect(!SourceFilter.attention.includes(source))
+  #expect(source.overviewStatus(paused: true) == "已启用，记录暂停中")
+  source.enabled = false
+  #expect(source.overviewStatus(paused: true) == "已停用")
+  #expect(!SourceFilter.enabled.includes(source))
+}
+
 @Test func catalogRegistersAllSourcesWithLegacyKeys() {
   let ids = DataSourceCatalog.all.map(\.id)
   #expect(ids == ["screen", "ocr", "clipboard", "audio", "files", "calendar", "wechat", "agent-sessions", "browser", "shell", "git"])
@@ -156,4 +169,33 @@ private final class Probe {
   let legacy = original + "# record-anything：记录终端命令（卸载时删掉这两行）\n[ -f \"/old/plugins/shell/hook.zsh\" ] && source \"/old/plugins/shell/hook.zsh\"\n"
   #expect(ShellHook.installed(in: legacy))
   #expect(ShellHook.removing(from: legacy) == original)
+}
+
+@Test func installedExtensionDefaultsOffAndPersistsIndependently() {
+  let memory = MemorySettings(), toggles = SourceToggles(store: MemorySettings())
+  #expect(!toggles.isEnabled("ext-example"))
+  let saved = SourceToggles(store: memory)
+  saved.setEnabled("ext-example", true)
+  #expect(SourceToggles(store: memory).isEnabled("ext-example"))
+  #expect(!saved.isEnabled("ext-another"))
+  #expect(saved.isEnabled("browser"))
+  saved.setEnabled("ext-example", false)
+  #expect(!SourceToggles(store: memory).isEnabled("ext-example"))
+}
+
+@Test func pauseAndUnregisterStopSourcesBeforeRemovingThem() {
+  let registry = DataSourceRegistry(toggles: SourceToggles(store: MemorySettings()))
+  let probe = Probe()
+  registry.register(probe.source("browser"))
+  registry.launch(paused: false)
+  probe.events = []
+  registry.applyAll(paused: true)
+  #expect(probe.events == ["browser.stop"])
+  probe.events = []
+  registry.applyAll(paused: false)
+  #expect(probe.events == ["browser.start"])
+  probe.events = []
+  registry.unregister("browser")
+  #expect(probe.events == ["browser.stop"])
+  #expect(registry.statuses().isEmpty)
 }

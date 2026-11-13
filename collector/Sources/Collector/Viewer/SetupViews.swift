@@ -55,7 +55,7 @@ struct AgentSettingsView: View {
       Section {
         if let tools {
           ForEach(tools) { t in
-            LabeledContent(t.label) {
+            SettingsRow(t.label) {
               HStack(spacing: 8) {
                 Text(status(t)).foregroundStyle(t.partial ? Palette.attention : Palette.muted)
                 if t.installed {
@@ -72,9 +72,10 @@ struct AgentSettingsView: View {
         }
         if let note { SettingsMessage(text: note, warning: false) }
         if let error { SettingsMessage(text: error) }
-      } footer: {
+      } header: { Text("已连接的工具") } footer: {
         Note("连接后，新开的会话会自动带入当前项目的进展，AI 也能随时查你的历史记录。每次读取都记在“AI 读取记录”里。")
       }
+      GeneralPreferencesSection(context: true)
     }
     .task { await load() }
   }

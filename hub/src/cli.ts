@@ -28,6 +28,22 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     catch (error) { console.error(error instanceof Error ? error.message : "Agent 注册失败"); process.exitCode = 1; }
     return;
   }
+  if (command === "plugins") {
+    const { pluginCLI } = await import("./plugin-manager.ts");
+    await pluginCLI(); return;
+  }
+  if (command === "plugin-run") {
+    const [{ PluginManager, pluginSource }, { runPlugin }, { dataDirOf }] = await Promise.all([import("./plugin-manager.ts"), import("./run-plugin.ts"), import("./hub-json.ts")]);
+    if (!name || argv[2] !== "--hub" || !argv[3]) throw new Error("插件运行参数无效");
+    const dataDir = dataDirOf(), manager = new PluginManager(dataDir), plugin = manager.installed(name);
+    const code = join(manager.path(name), "code");
+    const summary = await runPlugin({ name, dataDir, hub: argv[3], allowedSource: pluginSource(name),
+      command: [process.execPath, "--no-install", "--no-env-file", join(code, plugin.manifest.entry), ...argv.slice(4)], cwd: code,
+      env: { PATH: process.env.PATH, HOME: homedir(), TMPDIR: process.env.TMPDIR, RA_PLUGIN_CONFIG: JSON.stringify(plugin.values) } });
+    console.log(JSON.stringify(summary));
+    if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors || summary.releaseErrors) process.exitCode = 1;
+    return;
+  }
   if (command === "audio") {
     // 一次性整理旧版采集端拆碎的说话人，见 AudioStore.consolidateAll。
     if (name !== "consolidate" || argv.length !== 2) throw new Error("用法：bun hub/src/cli.ts audio consolidate");

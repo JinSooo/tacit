@@ -61,11 +61,13 @@ public struct SourceToggles {
   public let store: SettingsStore
   public init(store: SettingsStore) { self.store = store }
   public func isEnabled(_ id: String) -> Bool {
-    guard let d = DataSourceCatalog.descriptor(id) else { return false }
+    guard let d = DataSourceCatalog.descriptor(id) else { return id.hasPrefix("ext-") && (store.object(forKey: "source.\(id).enabled") as? Bool ?? false) }
     return store.object(forKey: d.defaultsKey) as? Bool ?? d.defaultEnabled
   }
   public func setEnabled(_ id: String, _ on: Bool) {
-    guard let d = DataSourceCatalog.descriptor(id) else { return }
+    guard let d = DataSourceCatalog.descriptor(id) else {
+      if id.hasPrefix("ext-") { store.set(on, forKey: "source.\(id).enabled") }; return
+    }
     store.set(on, forKey: d.defaultsKey)
   }
 }

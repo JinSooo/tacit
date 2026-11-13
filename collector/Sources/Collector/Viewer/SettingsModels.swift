@@ -12,6 +12,9 @@ struct ModelSettingsView: View {
   @State private var tests: [String: TestState] = [:]
   @State private var localModels: [String: [String]] = [:]
   @State private var editingKey: String?
+  @State private var removingKey: String?
+  @State private var health: DistillHealth?
+  @State private var healthError: String?
 
   enum TestState: Equatable { case running, ok(Double?), failed(String) }
 
@@ -24,6 +27,24 @@ struct ModelSettingsView: View {
 
   var body: some View {
     SettingsForm {
+      Section("整理状态") {
+        if let health {
+          switch health.state {
+          case .working: SettingsRow("后台整理", value: "正常")
+          case .waiting: SettingsRow("后台整理", value: "等待首次完成")
+          case .failing(let reason): SettingsMessage(text: reason)
+          }
+          if let time = health.lastOkAt { SettingsRow("最近完成", value: String(time.prefix(16)).replacingOccurrences(of: "T", with: " ")) }
+        }
+        if let healthError { SettingsMessage(text: healthError) }
+        HStack {
+          Button("刷新状态") { Task { await loadHealth() } }
+          Spacer()
+          Button("查看用量与详细状态…") {
+            if let url = store.api.statusPageURL() { NSWorkspace.shared.open(url) }
+          }
+        }
+      }
       if let info {
         if let e = info.configError { SettingsMessage(text: "模型配置文件有问题，整理会失败，保存一次就能修好：\(e)") }
         ForEach(Self.tiers, id: \.self) { tier in tierSection(tier, info: info) }
@@ -40,10 +61,14 @@ struct ModelSettingsView: View {
       }
       if let error { SettingsMessage(text: error) }
     }
-    .task { await load() }
+    .task { await load(); await loadHealth() }
     .sheet(item: Binding(get: { editingKey.map(KeyTarget.init) }, set: { editingKey = $0?.id })) { target in
       KeyEntrySheet(provider: target.id, label: label(target.id, info: info)) { await load() }
     }
+    .confirmationDialog("清除 API key？", isPresented: Binding(get: { removingKey != nil }, set: { if !$0 { removingKey = nil } })) {
+      if let provider = removingKey { Button("清除", role: .destructive) { Task { await removeKey(provider); removingKey = nil } } }
+      Button("取消", role: .cancel) { removingKey = nil }
+    } message: { Text("使用这个提供商的模型将无法连接，直到重新填写 key。") }
   }
 
   struct KeyTarget: Identifiable { let id: String }
@@ -61,7 +86,7 @@ struct ModelSettingsView: View {
         Divider()
         ForEach(Self.presets, id: \.id) { Text($0.label).tag($0.id) }
       }
-      LabeledContent("模型") {
+      SettingsRow("模型") {
         HStack(spacing: 6) {
           TextField("模型", text: config.model, prompt: Text(placeholder(c.provider))).labelsHidden()
           if local, let models = localModels[c.baseUrl ?? ""], !models.isEmpty {
@@ -73,7 +98,7 @@ struct ModelSettingsView: View {
         }
       }
       if provider?.baseUrl == true {
-        LabeledContent("地址") {
+        SettingsRow("地址") {
           TextField("地址", text: Binding(get: { c.baseUrl ?? "" }, set: { config.wrappedValue.baseUrl = $0.isEmpty ? nil : $0 }),
                     prompt: Text(c.provider == "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).labelsHidden()
         }
@@ -101,10 +126,12 @@ struct ModelSettingsView: View {
   // MARK: API key
 
   @ViewBuilder func keysSection(_ info: ModelSettingsInfo) -> some View {
-    let keyProviders = info.providers.filter(\.needsKey)
+    let usedProviders = Set(draft.values.filter { !Self.isLoopback($0.baseUrl) }.map(\.provider))
+    let keyProviders = info.providers.filter { $0.needsKey && (usedProviders.contains($0.id) || (info.keys[$0.id] ?? nil) == true) }
+    if !keyProviders.isEmpty {
     Section {
       ForEach(keyProviders, id: \.id) { p in
-        LabeledContent(p.label) {
+        SettingsRow(p.label) {
           HStack(spacing: 8) {
             switch info.keys[p.id] ?? nil {
             case true?: Text("已设置").foregroundStyle(Palette.muted)
@@ -112,7 +139,7 @@ struct ModelSettingsView: View {
             case nil: Text("读不到钥匙串").foregroundStyle(Palette.attention)
             }
             Button("设置…") { editingKey = p.id }
-            if (info.keys[p.id] ?? nil) == true { Button("清除") { Task { await removeKey(p.id) } } }
+            if (info.keys[p.id] ?? nil) == true { Button("清除…", role: .destructive) { removingKey = p.id } }
           }
         }
       }
@@ -120,6 +147,7 @@ struct ModelSettingsView: View {
       Text("API key")
     } footer: {
       Note("key 存在这台 Mac 的钥匙串里，设置后不再显示。同一个提供商共用一个 key。")
+    }
     }
   }
 
@@ -171,6 +199,11 @@ struct ModelSettingsView: View {
     }
     catch is CancellationError {}
     catch { self.error = error.localizedDescription }
+  }
+
+  func loadHealth() async {
+    do { health = try await store.api.distillHealth(); healthError = nil }
+    catch is CancellationError {} catch { healthError = error.localizedDescription }
   }
 
   func save() async {

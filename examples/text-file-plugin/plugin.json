@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "id": "ext-text-file",
+  "name": "文本文件",
+  "version": "1.0.0",
+  "description": "把指定 UTF-8 文本文件的每次内容变化记成一条记录。相同内容不会重复导入。",
+  "entry": "main.ts",
+  "permissions": ["读取你在配置中指定的 UTF-8 文本文件，不扫描其他目录"],
+  "config": [
+    {"key": "path", "label": "文件完整路径", "type": "string", "required": true, "description": "例如 /Users/你的名字/Documents/notes.txt。"}
+  ]
+}

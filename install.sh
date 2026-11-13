@@ -5,6 +5,8 @@ set -eu
 REPO="$(cd "$(dirname "$0")" && pwd)"
 DATA="$HOME/Library/Application Support/record-anything"
 AGENTS="$HOME/Library/LaunchAgents"
+# 关闭登录启动时定义保存在数据目录；升级沿用选择，仍启动本次安装后的服务。
+if [ -f "$DATA/launch-agents/dev.record-anything.collector.plist" ]; then AGENTS="$DATA/launch-agents"; fi
 APP_DIR=/Applications; [ -w "$APP_DIR" ] || APP_DIR="$HOME/Applications"
 APP="$APP_DIR/Record Anything.app"
 DOMAIN="gui/$(id -u)"
@@ -182,7 +184,7 @@ conf.update(repo=repo, bun=bun)
 open(path, "w").write(json.dumps(conf, ensure_ascii=False, indent=2) + "\n")
 PY
 
-step "注册开机自启"
+step "更新启动配置（保留登录启动选择）"
 mkdir -p "$AGENTS"
 cat > "$AGENTS/dev.record-anything.hub.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

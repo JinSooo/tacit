@@ -46,6 +46,7 @@ enum CaptureAction {
 protocol CaptureControlling: AnyObject {
   func captureSnapshot() -> CaptureSnapshot
   func perform(_ action: CaptureAction)
+  func pluginCommand(_ request: PluginRequest) async throws -> PluginResponse
 }
 
 enum Page: Hashable {
@@ -70,6 +71,8 @@ enum Route: Hashable {
   var speakers: [Speaker] = []
   var sharedError: String?
   var capture = CaptureSnapshot()
+  let preferences = SettingsPreferences()
+  let extensions = ExtensionSettings()
 
   /// 历史记录当前看的那一天，以及要选中的记录（从证据、读取记录跳过来时用）。
   var historyDay = Calendar.current.startOfDay(for: Date())

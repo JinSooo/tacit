@@ -285,9 +285,8 @@ extension HubAPI {
   func setKey(provider: String, key: String) async throws { try await send("PUT", "/v1/settings/keys/\(provider)", ["key": key]) }
   func deleteKey(provider: String) async throws { try await send("DELETE", "/v1/settings/keys/\(provider)") }
   func generalSettings() async throws -> GeneralSettingsInfo { try await get(GeneralSettingsInfo.self, "/v1/settings/general") }
-  func saveGeneral(_ g: GeneralSettingsInfo) async throws -> GeneralSettingsInfo {
-    try await call(GeneralSettingsInfo.self, "PUT", "/v1/settings/general",
-                   ["inject_tokens": g.injectTokens, "ask_done_days": g.askDoneDays, "archive_days": g.archiveDays])
+  func saveGeneral(_ values: [String: Int]) async throws -> GeneralSettingsInfo {
+    try await call(GeneralSettingsInfo.self, "PUT", "/v1/settings/general", values)
   }
 
   /// 本机模型服务（Ollama、LM Studio）上已有的模型，走 OpenAI 兼容的 GET /models。

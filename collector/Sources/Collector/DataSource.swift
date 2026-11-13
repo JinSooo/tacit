@@ -11,6 +11,10 @@ final class PluginSource: DataSource {
     descriptor = DataSourceCatalog.descriptor(id)!
     self.scheduler = scheduler
   }
+  init(_ plugin: ExtensionPlugin, scheduler: PluginScheduler) {
+    descriptor = DataSourceDescriptor(id: plugin.id, title: plugin.manifest.name, defaultEnabled: false, kind: .plugin)
+    self.scheduler = scheduler
+  }
   /// 只有浏览器插件读受保护的位置（Safari 的历史库需要完全磁盘访问）。
   var permissionName: String? { descriptor.id == "browser" ? "完全磁盘访问" : nil }
   var permission: SourcePermission {
@@ -19,7 +23,7 @@ final class PluginSource: DataSource {
   }
   func requestPermission() { SystemPermissions.openPrivacyPane("Privacy_AllFiles") }
   func didEnable(userInitiated: Bool) {}
-  func apply(active: Bool) {}
+  func apply(active: Bool) { scheduler.setActive(descriptor.id, active) }
   var lastRun: Date? { scheduler.outcome(descriptor.id)?.at }
   var canRunNow: Bool { scheduler.available }
   func runNow() { scheduler.run([descriptor.id], since: nil) }

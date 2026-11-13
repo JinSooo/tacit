@@ -42,6 +42,8 @@
 
 ## 2. 插件协议
 
+第三方数据源的清单、安装、更新和卸载规范见 [plugins.md](plugins.md)。内置插件保留原来的来源名；扩展插件使用 `ext-…` id 和 `plugin.ext_…` source 命名空间。Mac 设置页从清单生成配置表单，安装和更新确认后均停用，由用户开启。
+
 插件是一个可执行程序（v1 用 Bun + TS 写，放在 `plugins/<名字>/`），**一次性运行**：读增量、输出、退出。由采集端（或开发期的 `hub run-plugin`）定时调用。
 
 ```
@@ -265,7 +267,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 
 | 方法 | 路径 | 返回 |
 |---|---|---|
-| GET | `/v1/agent/context?cwd&event&tool` | `{ text, project_id, tokens_est }`。`event` 为 startup / resume / clear / compact。cwd 按路径边界取最长匹配的 `keys.repos`，匹配不到再用 git 归到主仓库（见 4.7）：匹配到时放项目简略版和它的进行中线程、3 天内有活动的已暂停线程；没匹配到时只放最近 5 个项目的简略版。不放没有项目的线程、`domain=life` 的线程、全私密线程，也不放 done / abandoned / archived 的线程。估算不超过 800 token，超了先丢最旧的线程；没有内容时 `text` 为空 |
+| GET | `/v1/agent/context?cwd&event&tool` | `{ text, project_id, tokens_est }`。`event` 为 startup / resume / clear / compact。cwd 按路径边界取最长匹配的 `keys.repos`，匹配不到再用 git 归到主仓库（见 4.7）：匹配到时放项目简略版和它的进行中线程、3 天内有活动的已暂停线程；没匹配到时只放最近 5 个项目的简略版。不放没有项目的线程、`domain=life` 的线程、全私密线程，也不放 done / abandoned / archived 的线程。估算不超过用户设置的预算（默认 800 token），超了先丢最旧的线程；没有内容时 `text` 为空 |
 | GET | `/v1/agent/now?tool` | `{ notice, now }` |
 | GET | `/v1/agent/get?tool&id&level` | `{ notice, kind: thread\|project\|day, item, truncated? }`，响应超过 40000 字符时截断 |
 | GET | `/v1/agent/search?tool&q&from&to&limit&cursor` | `{ notice, threads, projects, records, next_cursor }`，三类合计受 `limit` 限制，线程、项目排在记录前面（各自按时间倒序，2026-11-12 起），records 不带 body，私密记录带 `private: true` |

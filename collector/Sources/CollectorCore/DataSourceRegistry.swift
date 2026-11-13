@@ -65,6 +65,11 @@ public final class DataSourceRegistry {
     sources.sort { (order.firstIndex(of: $0.descriptor.id) ?? .max) < (order.firstIndex(of: $1.descriptor.id) ?? .max) }
   }
 
+  public func unregister(_ id: String) {
+    source(id)?.apply(active: false)
+    sources.removeAll { $0.descriptor.id == id }
+  }
+
   public func source(_ id: String) -> DataSource? { sources.first { $0.descriptor.id == id } }
   public func isEnabled(_ id: String) -> Bool { toggles.isEnabled(id) }
 

@@ -5,32 +5,71 @@ import CollectorCore
 /// 数据源：左边列表，右边详情（AGENTS.md 2026-11-10：不平铺）。
 struct SourcesSettingsView: View {
   @Environment(ViewerStore.self) private var store
-  @AppStorage("settings.source") private var selected = "screen"
+  @State private var selected: String?
+  @State private var install = false
+  @State private var filter = SourceFilter.all
+  private var paused: Bool { if case .paused = store.capture.state { return true }; return false }
 
   var body: some View {
     let sources = store.capture.sources
-    HStack(spacing: 0) {
-      List(selection: Binding(get: { selected }, set: { if let s = $0 { selected = s } })) {
-        ForEach(sources) { s in
-          HStack(spacing: 8) {
-            Text(s.title).foregroundStyle(s.enabled ? Palette.ink : Palette.muted)
-            Spacer()
-            // 状态正常不上色；关着的写"已关闭"，出问题的才用胭脂色标出来。
-            if !s.enabled { Text("已关闭").foregroundStyle(Palette.muted) }
-            else if !(s.ok && !s.needsPermission) { PhIcon("warning-circle", size: 14).foregroundStyle(Palette.attention) }
+    VStack(alignment: .leading, spacing: 0) {
+      if let id = selected, let source = sources.first(where: { $0.id == id }) {
+        HStack {
+          Button { selected = nil } label: { Label("全部数据源", systemImage: "chevron.left") }
+          Text(source.title).font(.system(size: TextSize.title, weight: .semibold))
+          Spacer()
+        }.padding(20)
+        SourceDetail(source: source).id(source.id)
+      } else {
+        SettingsForm {
+          Section {
+            HStack {
+              Text("已启用 \(sources.filter(\.enabled).count) 个，共 \(sources.count) 个")
+              Spacer()
+              Button("安装数据源…") { store.extensions.preview = nil; store.extensions.error = nil; install = true }.disabled(store.extensions.busy)
+              if paused { Text("记录已暂停").foregroundStyle(Palette.muted) }
+            }
+            Picker("显示", selection: $filter) {
+              ForEach(SourceFilter.allCases, id: \.self) { Text($0.title).tag($0) }
+            }.pickerStyle(.segmented)
+          } header: { Text("数据源") }
+          ForEach(SourceCategory.allCases, id: \.self) { category in
+            let rows = sources.filter { $0.category == category && filter.includes($0) }
+            if !rows.isEmpty {
+              Section(category.title) {
+                ForEach(rows) { source in sourceRow(source) }
+              }
+            }
           }
-          .tag(s.id)
+          if sources.filter({ filter.includes($0) }).isEmpty {
+            Text(filter == .attention ? "没有需要处理的数据源" : "没有符合条件的数据源").foregroundStyle(Palette.muted)
+          }
         }
       }
-      .listStyle(.sidebar)
-      .scrollContentBackground(.hidden)
-      .frame(width: 190)
-      Divider()
-      if let s = sources.first(where: { $0.id == selected }) ?? sources.first {
-        SourceDetail(source: s).id(s.id)
-      } else {
-        ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-      }
+    }
+    .task { _ = await store.extensions.send(PluginRequest(action: "list"), store: store) }
+    .sheet(isPresented: $install) { ExtensionInstallView(updating: nil).environment(store) }
+  }
+
+  func sourceRow(_ s: DataSourceStatus) -> some View {
+    HStack(spacing: 16) {
+      Button { selected = s.id } label: {
+        HStack {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(s.title).foregroundStyle(Palette.ink)
+            Text(s.overviewStatus(paused: paused)).font(.system(size: TextSize.caption))
+              .foregroundStyle(s.needsAttention ? Palette.attention : Palette.muted)
+          }
+          Spacer()
+          if let last = s.lastRun {
+            Text(ViewerFormat.clock(last)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+              .accessibilityLabel("上次运行 " + ViewerFormat.clock(last))
+          }
+          PhIcon("caret-right", size: 14).foregroundStyle(Palette.muted)
+        }.contentShape(Rectangle())
+      }.buttonStyle(.plain).accessibilityLabel("\(s.title)，\(s.overviewStatus(paused: paused))，查看详情")
+      Toggle(s.title, isOn: Binding(get: { s.enabled }, set: { store.perform(.setSource(s.id, $0)) }))
+        .labelsHidden().toggleStyle(.switch).accessibilityLabel("启用" + s.title).disabled(store.extensions.busy)
     }
   }
 }
@@ -62,12 +101,12 @@ struct SourceDetail: View {
           Text(s.title).font(.system(size: TextSize.body, weight: .semibold))
           if let text = Self.summaries[s.id] { Text(text).foregroundStyle(Palette.muted) }
         }
-        .toggleStyle(.switch)
+        .toggleStyle(.switch).disabled(store.extensions.busy)
       }
       if s.enabled {
         Section {
           if let name = s.permissionName {
-            LabeledContent(name + "权限") {
+            SettingsRow(name + "权限") {
               HStack(spacing: 8) {
                 Text(permissionText(s.permission)).foregroundStyle(s.permission.satisfied ? Palette.muted : Palette.attention)
                 if s.needsPermission { Button("授权…") { store.perform(.requestPermission(s.id)) } }
@@ -75,10 +114,10 @@ struct SourceDetail: View {
             }
           }
           if !s.detail.isEmpty {
-            LabeledContent("状态") { Text(s.detail).foregroundStyle(s.ok ? Palette.muted : Palette.attention) }
+            SettingsRow("状态") { Text(s.detail).foregroundStyle(s.ok ? Palette.muted : Palette.attention) }
           }
           if s.running || s.lastRun != nil || s.canRunNow {
-            LabeledContent("上次运行") {
+            SettingsRow("上次运行") {
               HStack(spacing: 8) {
                 Text(s.running ? "正在运行…" : s.lastRun.map { ViewerFormat.clock($0) } ?? "还没运行过").foregroundStyle(Palette.muted)
                 if s.canRunNow { Button("运行") { store.perform(.runSource(s.id)) }.disabled(s.running) }
@@ -86,12 +125,14 @@ struct SourceDetail: View {
             }
           }
         }
-        switch s.id {
-        case "shell": ShellHookSettings()
-        case "audio": AudioSourceSettings()
-        case "files": FileDirectorySettings()
-        default: EmptyView()
-        }
+      }
+      if let plugin = store.extensions.plugins.first(where: { $0.id == s.id }) { ExtensionDetailSettings(plugin: plugin) }
+      // 先配置、再启用；查看或修改配置不读取来源，也不申请系统权限。
+      switch s.id {
+      case "shell": if s.enabled { ShellHookSettings() }
+      case "audio": AudioSourceSettings()
+      case "files": FileDirectorySettings()
+      default: EmptyView()
       }
     }
   }
@@ -111,7 +152,7 @@ private struct ShellHookSettings: View {
   var body: some View {
     let c = store.capture
     Section {
-      LabeledContent("~/.zshrc") {
+      SettingsRow("~/.zshrc") {
         if c.shellHook { Text("已加上，新开的终端窗口开始记录").foregroundStyle(Palette.muted) }
         else { Button("加上记录钩子") { store.perform(.installShellHook) } }
       }
@@ -133,7 +174,7 @@ private struct AudioSourceSettings: View {
 
   var body: some View {
     let c = store.capture
-    Section {
+    Section("输入设备") {
       Picker("麦克风", selection: Binding(get: { c.microphone }, set: { v in
         store.perform(.selectMicrophone(v))
         // 采集端在音频队列上写入设置，下一次快照才读得到；先按选中的显示。
@@ -146,19 +187,19 @@ private struct AudioSourceSettings: View {
       ForEach(MicrophoneChoices.statusLines(Array(c.audio.dropFirst())), id: \.self) { Text($0).foregroundStyle(Palette.muted) }
     }
     Section {
-      LabeledContent("原始音频保留") {
+      SettingsRow("原始音频保留") {
         HStack(spacing: 8) {
           Text("\(days) 天").monospacedDigit()
           Stepper("原始音频保留", value: $days, in: 1...365).labelsHidden()
           if savedDays != nil, days != savedDays { Button("保存") { Task { await save() } } }
         }
       }
-      LabeledContent("原始音频") {
+      SettingsRow("原始音频") {
         Button("全部删除…") { confirmPurge = true }
       }
       if let status { SettingsMessage(text: status, warning: false) }
       if let error { SettingsMessage(text: error) }
-    } footer: {
+    } header: { Text("音频保留与清理") } footer: {
       Note("只删原始音频，转写出来的文字不受影响。")
     }
     .task { await load() }
@@ -194,7 +235,7 @@ private struct FileDirectorySettings: View {
     let dirs = store.capture.fileDirectories
     Section {
       ForEach(dirs, id: \.self) { d in
-        LabeledContent {
+        SettingsRow {
           Button { set(dirs.filter { $0 != d }) } label: { PhIcon("minus-circle", size: 15) }
             .buttonStyle(.borderless).help("移除").accessibilityLabel("移除 \(d)")
         } label: {

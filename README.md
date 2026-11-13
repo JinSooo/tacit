@@ -51,3 +51,7 @@
 - 界面规范：[docs/ui.md](docs/ui.md)
 
 MIT 许可证。
+
+### 扩展数据源
+
+Mac 设置 → 数据源 → 安装数据源，选择本地目录或 Git 地址，预览权限和配置后安装，默认停用。详情中可配置、运行、更新及卸载。开发规范与示例见 [docs/plugins.md](docs/plugins.md)。

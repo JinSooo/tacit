@@ -7,6 +7,7 @@ DOMAIN="gui/$(id -u)"
 for l in collector distill hub; do
   launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/dev/null || true
   rm -f "$AGENTS/dev.record-anything.$l.plist"
+  rm -f "$DATA/launch-agents/dev.record-anything.$l.plist"
 done
 pkill -f 'Record Anything.app/Contents/MacOS/Collector' 2>/dev/null || true
 pkill -f 'Record Anything.app/Contents/MacOS/ra-audio-worker' 2>/dev/null || true

@@ -114,7 +114,44 @@ final class HubClient {
 final class PluginScheduler {
   struct Outcome { let ok: Bool; let accepted: Int; let text: String; let at: Date }
   let config: Config
-  let plugins = DataSourceCatalog.plugins.map(\.id)
+  var plugins: [String] { DataSourceCatalog.plugins.map(\.id) + installedExtensions().map(\.id) }
+  private var active = Set<String>()
+  private var process: Process?
+  func setActive(_ id: String, _ on: Bool) {
+    lock.lock(); defer { lock.unlock() }
+    if on { active.insert(id) } else { active.remove(id); if current == id, let process, process.isRunning { process.terminate() } }
+  }
+  private func canRun(_ id: String) -> Bool { lock.lock(); defer { lock.unlock() }; return active.contains(id) && isEnabled(id) }
+  func installedExtensions() -> [ExtensionPlugin] {
+    let root = config.dataDir.appendingPathComponent("extensions")
+    return ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
+      .filter { $0.lastPathComponent.hasPrefix("ext-") }
+      .compactMap { url in guard let data = try? Data(contentsOf: url.appendingPathComponent("installed.json")) else { return nil }; return try? JSONDecoder().decode(ExtensionPlugin.self, from: data) }
+      .sorted { $0.id < $1.id }
+  }
+  func manage(_ request: PluginRequest) async throws -> PluginResponse {
+    let config = self.config
+    let queue = ["install", "configure", "uninstall"].contains(request.action) ? jobs : DispatchQueue.global(qos: .utility)
+    return try await withCheckedThrowingContinuation { continuation in
+      queue.async {
+        do {
+          guard let repo = config.repo else { throw PluginFailure(message: "找不到安装目录，请重新安装应用。") }
+          let p = Process(), output = Pipe(), input = Pipe()
+          p.executableURL = URL(fileURLWithPath: config.bun)
+          p.arguments = ["\(repo)/hub/src/cli.ts", "plugins"]
+          var env = ProcessInfo.processInfo.environment; env["RA_DATA_DIR"] = config.dataDir.path; p.environment = env
+          var command = request; command.hub = config.hubURL.absoluteString
+          let data = try JSONEncoder().encode(command)
+          p.standardOutput = output; p.standardInput = input; p.standardError = FileHandle.nullDevice
+          try p.run()
+          input.fileHandleForWriting.write(data); try? input.fileHandleForWriting.close()
+          let response = output.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
+          let result = try JSONDecoder().decode(PluginResponse.self, from: response)
+          continuation.resume(returning: result)
+        } catch { continuation.resume(throwing: error) }
+      }
+    }
+  }
   /// 由注册表提供：停用的插件不运行。
   var isEnabled: (String) -> Bool = { _ in true }
   private var last: [String: Outcome] = [:]
@@ -133,7 +170,7 @@ final class PluginScheduler {
     lock.lock(); if regularQueued { lock.unlock(); return }; regularQueued = true; lock.unlock()
     jobs.async {
       self.lock.lock(); self.regularQueued = false; self.lock.unlock()
-      for p in self.plugins where self.isEnabled(p) { _ = self.run(p, since: nil) }
+      for p in self.plugins where self.canRun(p) { _ = self.run(p, since: nil) }
     }
   }
 
@@ -142,7 +179,7 @@ final class PluginScheduler {
     guard available else { completion?([:]); return }
     jobs.async {
       var results: [String: Outcome] = [:]
-      for p in names where self.isEnabled(p) { results[p] = self.run(p, since: since) }
+      for p in names where self.canRun(p) { results[p] = self.run(p, since: since) }
       completion?(results)
     }
   }
@@ -150,17 +187,23 @@ final class PluginScheduler {
   private func run(_ name: String, since: Date?) -> Outcome {
     guard let repo = config.repo else { return Outcome(ok: false, accepted: 0, text: "未配置仓库", at: Date()) }
     lock.lock(); current = name; lock.unlock()
-    defer { lock.lock(); current = nil; lock.unlock() }
+    defer { lock.lock(); current = nil; process = nil; lock.unlock() }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: config.bun)
-    p.arguments = ["\(repo)/hub/src/cli.ts", "run-plugin", name, "--hub", config.hubURL.absoluteString,
-                   "--", config.bun, "\(repo)/plugins/\(name)/main.ts"] + PluginImport.arguments(plugin: name, since: since)
+    if name.hasPrefix("ext-") {
+      p.arguments = ["\(repo)/hub/src/cli.ts", "plugin-run", name, "--hub", config.hubURL.absoluteString] + PluginImport.arguments(plugin: name, since: since)
+    } else {
+      p.arguments = ["\(repo)/hub/src/cli.ts", "run-plugin", name, "--hub", config.hubURL.absoluteString,
+                     "--", config.bun, "\(repo)/plugins/\(name)/main.ts"] + PluginImport.arguments(plugin: name, since: since)
+    }
     var env = ProcessInfo.processInfo.environment
     env["RA_DATA_DIR"] = config.dataDir.path
     p.environment = env
     let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
     let started = Date()
-    do { try p.run() } catch { return set(name, Outcome(ok: false, accepted: 0, text: "启动失败", at: Date())) }
+    lock.lock()
+    guard active.contains(name) && isEnabled(name) else { lock.unlock(); return Outcome(ok: true, accepted: 0, text: "已停用或暂停", at: Date()) }
+    do { try p.run(); process = p; lock.unlock() } catch { lock.unlock(); return set(name, Outcome(ok: false, accepted: 0, text: "启动失败", at: Date())) }
     let timer = DispatchWorkItem { if p.isRunning { p.terminate() } }
     DispatchQueue.global().asyncAfter(deadline: .now() + PluginImport.timeout(since: since), execute: timer)
     let data = out.fileHandleForReading.readDataToEndOfFile()

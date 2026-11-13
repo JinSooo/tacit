@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   /// 维护任务（同步、导入）的进行状态，只在主线程读写。
   var jobs: [MaintenanceTask: CaptureSnapshot.Job] = [:]
   var shellHookError: String?
+  var managingPlugins = Set<String>()
 
   // 只计数，不含任何内容；写到 collector-status.json 便于排查和验收。
   var stats: [String: Int] = ["ticks": 0, "scanMsTotal": 0, "scanMsMax": 0, "truncated": 0,
@@ -53,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func enabled(_ id: String) -> Bool { toggles.isEnabled(id) }
 
   func applicationDidFinishLaunching(_ n: Notification) {
+    let startup = LoginStartup(home: FileManager.default.homeDirectoryForCurrentUser, dataDir: config.dataDir)
+    DispatchQueue.global(qos: .utility).async { startup.startServices() }
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     // 左键弹面板，右键（或按住 control 点）弹菜单。菜单不常驻在 statusItem 上，否则左键也会弹菜单。
     statusMenu.delegate = self
@@ -150,7 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s.run = { calendar.poll() }
     })
     plugins.isEnabled = { [toggles] in toggles.isEnabled($0) }
-    for name in plugins.plugins { sources.register(PluginSource(name, scheduler: plugins)) }
+    for name in DataSourceCatalog.plugins.map(\.id) { sources.register(PluginSource(name, scheduler: plugins)) }
+    reloadExtensions()
   }
 
   /// 从 Finder、Spotlight 或 Dock 再次打开 App 时弹出主窗口。
@@ -172,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   var paused: Bool {
     if let p = pausedUntil, p > Date() { return true }
-    pausedUntil = nil
+    if pausedUntil != nil { pausedUntil = nil; sources.applyAll(paused: false) }
     return false
   }
 
@@ -405,6 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     setSource(id, !enabled(id))
   }
   func setSource(_ id: String, _ on: Bool) {
+    if on && managingPlugins.contains(id) { return }
     sources.setEnabled(id, on, paused: paused); updateIcon()
     // 终端命令的开关同时管 ~/.zshrc 里那一行（AGENTS.md 2026-11-10）。
     if id == "shell" { setShellHook(on) }
@@ -514,6 +519,32 @@ app.run()
 // MARK: 主窗口读取采集状态
 
 extension AppDelegate: CaptureControlling {
+  func reloadExtensions() {
+    let installed = plugins.installedExtensions()
+    for source in sources.sources where source.descriptor.id.hasPrefix("ext-") {
+      if !installed.contains(where: { $0.id == source.descriptor.id && $0.manifest.name == source.descriptor.title }) {
+        sources.unregister(source.descriptor.id)
+      }
+    }
+    for plugin in installed where sources.source(plugin.id) == nil {
+      let source = PluginSource(plugin, scheduler: plugins)
+      sources.register(source)
+      source.apply(active: !paused && enabled(plugin.id))
+    }
+  }
+  @MainActor func pluginCommand(_ request: PluginRequest) async throws -> PluginResponse {
+    // 管理和采集共用串行队列：先停用，再等待已运行的进程退出，避免更新/删除时还在写记录。
+    let managed = ["install", "uninstall"].contains(request.action) ? request.id : nil
+    if let id = managed { managingPlugins.insert(id); setSource(id, false) }
+    defer { if let id = managed { managingPlugins.remove(id) } }
+    let result = try await plugins.manage(request)
+    if result.error == nil && ["install", "uninstall"].contains(request.action) {
+      if let id = result.plugin?.id { toggles.setEnabled(id, false) }
+      reloadExtensions()
+    }
+    return result
+  }
+
   func captureSnapshot() -> CaptureSnapshot {
     var c = CaptureSnapshot()
     if missingAX { c.state = .noPermission } else if let p = pausedUntil, paused { c.state = .paused(p) }

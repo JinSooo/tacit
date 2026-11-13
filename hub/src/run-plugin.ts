@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { HubDB, type IngestResult } from "./db.ts";
+import { pluginRecordPolicy } from "./plugin-policy.ts";
 import { jsonLines } from "./jsonl.ts";
 
 /** 中枢返回 503（库忙）时每次重试前等待的毫秒数，合计约 7.75 秒。 */
@@ -10,11 +11,12 @@ const BUSY_RETRY_MS = [250, 500, 1000, 2000, 4000];
 
 export interface PluginSummary {
   accepted: number; duplicates: number; rejected: number; exitCode: number;
-  stateWritten: boolean; protocolErrors: number; released: number; releaseErrors: number;
+  filtered: number; stateWritten: boolean; protocolErrors: number; released: number; releaseErrors: number;
 }
 
 export async function runPlugin(options: {
   db?: HubDB; hub?: string; tokenFile?: string; dataDir: string; name: string; command: string[]; device?: string;
+  allowedSource?: string; env?: NodeJS.ProcessEnv; cwd?: string;
   report?: (summary: PluginSummary) => void;
 }): Promise<PluginSummary> {
   if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(options.name)) throw new Error("插件名称无效");
@@ -48,7 +50,17 @@ export async function runPlugin(options: {
   const dir = join(options.dataDir, "plugins", options.name);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stateFile = join(dir, "state.json");
-  const child = spawn(options.command[0]!, [...options.command.slice(1), "--device", device, "--state", stateFile], { stdio: ["ignore", "pipe", "inherit"] });
+  const child = spawn(options.command[0]!, [...options.command.slice(1), "--device", device, "--state", stateFile], { stdio: ["ignore", "pipe", "inherit"], env: options.env, cwd: options.cwd, detached: process.platform !== "win32" });
+  let interrupted = false;
+  const kill = (signal: NodeJS.Signals) => {
+    try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, signal); else child.kill(signal); } catch {}
+  };
+  let forceStop: ReturnType<typeof setTimeout> | undefined;
+  const stop = () => {
+    interrupted = true; kill("SIGTERM");
+    forceStop ??= setTimeout(() => kill("SIGKILL"), 2000); forceStop.unref();
+  };
+  process.once("SIGTERM", stop); process.once("SIGINT", stop);
   const started = new Promise<void>((resolve, reject) => {
     child.once("spawn", () => resolve());
     child.once("error", reject);
@@ -60,7 +72,7 @@ export async function runPlugin(options: {
   });
   // 在异步读取 stdout 时，启动失败也不会产生未处理的 rejection。
   void exited.catch(() => {});
-  const summary: PluginSummary = { accepted: 0, duplicates: 0, rejected: 0, exitCode: 1, stateWritten: false, protocolErrors: 0, released: 0, releaseErrors: 0 };
+  const summary: PluginSummary = { accepted: 0, duplicates: 0, rejected: 0, exitCode: 1, filtered: 0, stateWritten: false, protocolErrors: 0, released: 0, releaseErrors: 0 };
   let batch: unknown[] = [];
   let checkpoint: unknown;
   let release: string[] = [];
@@ -68,6 +80,7 @@ export async function runPlugin(options: {
   let storageFailed = false;
   const flush = async () => {
     if (!batch.length) return;
+    if (interrupted) { batch = []; return; }
     try {
       const result: IngestResult = await ingest(batch);
       summary.accepted += result.accepted;
@@ -81,9 +94,15 @@ export async function runPlugin(options: {
     await started;
     for await (const line of jsonLines(child.stdout!)) {
       try {
+        if (interrupted) continue;
         const message = JSON.parse(line);
         if (!message || typeof message !== "object") throw new Error();
         if (message.type === "record" && Object.hasOwn(message, "record")) {
+          if (options.allowedSource) {
+            const policy = pluginRecordPolicy(message.record, options.allowedSource);
+            if (policy === "invalid") { summary.rejected++; continue; }
+            if (policy === "blocked") { summary.filtered++; continue; }
+          }
           batch.push(message.record);
           if (batch.length === 500) await flush();
         } else if (message.type === "checkpoint" && Object.hasOwn(message, "state")) {
@@ -95,6 +114,7 @@ export async function runPlugin(options: {
     }
     await flush();
     summary.exitCode = await exited;
+    if (interrupted) summary.exitCode = 143;
     if (summary.exitCode === 0 && !summary.rejected && !summary.protocolErrors && !storageFailed && hasCheckpoint) {
       const tempFile = join(dir, `.state-${process.pid}-${randomBytes(8).toString("hex")}.tmp`);
       try {
@@ -121,9 +141,12 @@ export async function runPlugin(options: {
       } finally { rmSync(tempFile, { force: true }); }
     }
   } catch (e) {
-    child.kill();
+    kill("SIGKILL");
     await exited.catch(() => {});
     throw e;
+  } finally {
+    process.removeListener("SIGTERM", stop); process.removeListener("SIGINT", stop);
+    if (forceStop) clearTimeout(forceStop);
   }
   options.report?.(summary);
   return summary;

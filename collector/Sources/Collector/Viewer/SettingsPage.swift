@@ -74,6 +74,28 @@ struct SettingsForm<Content: View>: View {
   }
 }
 
+/// macOS Form 会把 LabeledContent 的交互内容合并进静态 AX 文本；显式保留子控件。
+struct SettingsRow<Label: View, Content: View>: View {
+  let label: Label
+  let content: Content
+  init(_ title: String, @ViewBuilder content: () -> Content) where Label == SwiftUI.Text {
+    label = Text(title); self.content = content()
+  }
+  init(@ViewBuilder content: () -> Content, @ViewBuilder label: () -> Label) {
+    self.label = label(); self.content = content()
+  }
+  init(_ title: String, value: String) where Label == SwiftUI.Text, Content == SwiftUI.Text {
+    label = Text(title); content = Text(value).foregroundColor(Palette.muted)
+  }
+  var body: some View {
+    HStack(alignment: .center, spacing: 16) {
+      VStack(alignment: .leading, spacing: 4) { label }
+      Spacer(minLength: 12)
+      content
+    }.accessibilityElement(children: .contain)
+  }
+}
+
 /// 分组下方的说明。macOS 的分组表单默认把它靠右放，这里统一靠左。
 struct Note: View {
   let text: String
@@ -97,59 +119,96 @@ struct SettingsMessage: View {
 // MARK: 通用
 
 struct GeneralSettingsView: View {
-  @Environment(ViewerStore.self) private var store
-  @State private var saved: GeneralSettingsInfo?
-  @State private var draft: GeneralSettingsInfo?
-  @State private var error: String?
-
   var body: some View {
     SettingsForm {
-      if let d = Binding($draft) {
-        Section {
-          row("自动带入的上限", value: d.injectTokens, key: "inject_tokens", step: 100, unit: "token")
-        } footer: {
-          Note("新开 Claude Code、Codex 会话时，带入当前项目进展的最大长度。更早、更细的内容 AI 会自己查。")
+      LoginStartupSection()
+      GeneralPreferencesSection(context: false)
+      Section("关于") {
+        SettingsRow("Tacit", value: "版本 " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版"))
+        SettingsRow("构建", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "本地")
+      }
+    }
+  }
+}
+
+private struct LoginStartupSection: View {
+  @State private var enabled = false
+  @State private var installed = false
+  @State private var mixed = false
+  @State private var busy = false
+  @State private var error: String?
+  private var startup: LoginStartup {
+    LoginStartup(home: FileManager.default.homeDirectoryForCurrentUser, dataDir: Config.load().dataDir)
+  }
+  var body: some View {
+    Section {
+      Toggle("登录后自动启动", isOn: Binding(get: { enabled }, set: { value in
+        busy = true; error = nil
+        Task {
+          do { try startup.setEnabled(value) } catch { self.error = error.localizedDescription }
+          refresh(); busy = false
         }
-        Section {
-          row("问我“做完了吗”", value: d.askDoneDays, key: "ask_done_days", step: 1, unit: "使用天没动静后")
-          row("自动归档", value: d.archiveDays, key: "archive_days", step: 1, unit: "使用天没回答后")
-        } footer: {
-          Note("有历史记录的日子才算使用天，最后活动或提问当天不算。归档的事项不再自动带入，仍然可以搜到。")
+      })).toggleStyle(.switch).disabled(!installed || busy)
+      if mixed { SettingsMessage(text: "部分启动项的设置不一致，重新打开这个开关可统一。") }
+      if !installed { SettingsMessage(text: "启动配置不完整，请重新安装应用。") }
+      if let error { SettingsMessage(text: error) }
+    } header: { Text("启动与运行") }
+    footer: { Note("登录这台 Mac 后在菜单栏运行，并启动保存与整理服务。关闭后本次继续运行，下次需手动打开应用。关闭主窗口不会停止记录。") }
+    .task {
+      while !Task.isCancelled { refresh(); try? await Task.sleep(for: .seconds(5)) }
+    }
+  }
+  func refresh() { enabled = startup.enabled; installed = startup.installed; mixed = startup.mixed }
+}
+
+struct GeneralPreferencesSection: View {
+  @Environment(ViewerStore.self) private var store
+  let context: Bool
+  var body: some View {
+    @Bindable var p = store.preferences
+    Section {
+      if let d = Binding($p.draft) {
+        if context {
+          row("摘要长度上限", value: d.injectTokens, key: "inject_tokens", unit: "token")
+          Text("调大可带入更多背景，也会占用更多 AI 上下文。超出时先舍弃较旧事项，不影响历史记录的保存和主动查询。")
+            .foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
+        } else {
+          row("多久没活动后询问完成", value: d.askDoneDays, key: "ask_done_days", unit: "个使用天")
+          row("询问后多久没回答就归档", value: d.archiveDays, key: "archive_days", unit: "个使用天")
         }
-        if draft != saved {
-          HStack {
-            Spacer()
-            Button("还原") { draft = saved }
-            Button("保存") { Task { await save() } }.keyboardShortcut(.defaultAction)
+        HStack {
+          Button("恢复默认") { p.restore(context: context) }.disabled(p.busy)
+          Spacer()
+          if p.changed(context: context) {
+            Button("撤销修改") { p.revert(context: context) }.disabled(p.busy)
+            Button(p.busy ? "正在保存…" : "保存") { Task { await p.save(api: store.api, context: context) } }.disabled(p.busy)
           }
         }
-      } else if error == nil {
-        ProgressView().frame(maxWidth: .infinity)
+      } else if p.error == nil { ProgressView() }
+      if let error = p.error {
+        SettingsMessage(text: error)
+        Button("重新读取") { Task { await p.load(api: store.api) } }
       }
-      if let error { SettingsMessage(text: error) }
+      if let message = p.message { SettingsMessage(text: message, warning: false) }
+    } header: { Text(context ? "自动带入项目进展" : "事项整理") }
+    footer: {
+      Note(context
+        ? "Claude Code、Codex 新会话开始时带入当前项目摘要。默认 800 token 是长度预算，并非按你的记录量计算；更早、更细的内容可由 AI 主动查询。"
+        : "有历史记录的日子才算使用天，最后活动和提问当天不算。归档后不再自动带入，也不再询问，历史内容仍可搜索。")
     }
-    .task { await load() }
+    .task { await p.load(api: store.api) }
   }
-
-  func row(_ title: String, value: Binding<Int>, key: String, step: Int, unit: String) -> some View {
-    let range = draft?.ranges[key].flatMap { $0.count == 2 ? $0[0]...$0[1] : nil } ?? 1...10_000
-    return LabeledContent(title) {
+  func row(_ title: String, value: Binding<Int>, key: String, unit: String) -> some View {
+    let limits = store.preferences.draft?.ranges[key] ?? [1, 90]
+    return SettingsRow(title) {
       HStack(spacing: 8) {
-        Text("\(value.wrappedValue) \(unit)").monospacedDigit()
-        Stepper(title, value: value, in: range, step: step).labelsHidden()
+        TextField(title, value: value, format: .number.grouping(.never))
+          .labelsHidden().textFieldStyle(.roundedBorder).frame(width: 72).multilineTextAlignment(.trailing)
+          .accessibilityLabel(title)
+        Text(unit).foregroundStyle(Palette.muted)
+        Stepper(title, value: value, in: limits[0]...limits[1], step: context ? 100 : 1).labelsHidden()
       }
     }
-  }
-
-  func load() async {
-    do { let g = try await store.api.generalSettings(); saved = g; draft = g; error = nil }
-    catch is CancellationError {}
-    catch { self.error = error.localizedDescription }
-  }
-  func save() async {
-    guard let draft else { return }
-    do { let g = try await store.api.saveGeneral(draft); saved = g; self.draft = g; error = nil }
-    catch { self.error = error.localizedDescription }
   }
 }
 
@@ -168,12 +227,23 @@ struct HubSettingsView: View {
     let c = store.capture
     SettingsForm {
       Section {
-        LabeledContent("地址") { Text(store.api.base.absoluteString).font(.mono(TextSize.body)).textSelection(.enabled) }
-        LabeledContent("状态") {
+        SettingsRow("地址") { Text(store.api.base.absoluteString).font(.mono(TextSize.body)).textSelection(.enabled) }
+        SettingsRow("状态") {
           let problem = store.sharedError ?? c.hubError
-          Text(problem ?? "正在运行").foregroundStyle(problem == nil ? Palette.muted : Palette.attention)
+          Text(problem ?? (info == nil ? "正在检查…" : "已连接")).foregroundStyle(problem == nil ? Palette.muted : Palette.attention)
         }
-        LabeledContent("端口") {
+        SettingsRow("等待保存", value: "\(c.queue) 条")
+        SettingsRow("本次已保存", value: "\(c.sent) 条")
+        SettingsRow("详细状态") {
+          Button("在浏览器中打开…") {
+            if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务尚未准备好，请稍后重试。" }
+          }
+        }
+      } header: { Text("连接与保存") } footer: {
+        Note("仅接受这台 Mac 上的连接。配对和加密完成前，其他设备不能接入。")
+      }
+      Section("连接设置") {
+        SettingsRow("端口") {
           HStack(spacing: 8) {
             TextField("端口", text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
               .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
@@ -185,13 +255,8 @@ struct HubSettingsView: View {
         if info?.locked == true { SettingsMessage(text: "端口由环境变量 RA_PORT 固定，这里不能改。", warning: false) }
         if let message { SettingsMessage(text: message, warning: false) }
         if let error { SettingsMessage(text: error) }
-        LabeledContent("详细状态") {
-          Button("在浏览器中打开…") {
-            if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务还没启动过，重新运行一次 install.sh。" }
-          }
-        }
-      } footer: {
-        Note("目前只接受这台 Mac 上的连接，手机等其他设备要等配对和加密做好之后才能接入。")
+        Text("仅在端口冲突时修改。应用后后台服务会重启，采集端会自动重新连接。")
+          .foregroundStyle(Palette.muted)
       }
     }
     .task {
@@ -241,9 +306,9 @@ struct PrivacySettingsView: View {
       Section("暂停记录") {
         switch c.state {
         case .paused(let until):
-          LabeledContent("已暂停到 \(ViewerFormat.clock(until))") { Button("继续记录") { store.perform(.resume) } }
+          SettingsRow("已暂停到 \(ViewerFormat.clock(until))") { Button("继续记录") { store.perform(.resume) } }
         default:
-          LabeledContent("正在记录") {
+          SettingsRow("正在记录") {
             HStack {
               Button("暂停 1 小时") { store.perform(.pauseHour) }
               Button("暂停到明天") { store.perform(.pauseTomorrow) }
@@ -259,13 +324,14 @@ struct PrivacySettingsView: View {
         Note("这些应用在前台时什么都不读。")
       }
       Section("其他不记录的内容") {
-        LabeledContent("浏览器隐私窗口", value: "按窗口标题识别")
-        LabeledContent("剪贴板", value: "从密码管理器复制的内容")
-        LabeledContent("文件", value: "隐藏目录、密码管理器的目录")
+        SettingsRow("浏览器隐私窗口", value: "按窗口标题识别")
+        SettingsRow("剪贴板", value: "从密码管理器复制的内容")
+        SettingsRow("文件", value: "隐藏目录、密码管理器的目录")
       }
       Section {
-        LabeledContent("密码和密钥", value: "存之前换成 [已脱敏]，原文不写进磁盘")
-        LabeledContent("标为私密的内容", value: "不交给 AI 整理，也不自动带入")
+        SettingsRow("密码和密钥", value: "存之前换成 [已脱敏]，原文不写进磁盘")
+        SettingsRow("标为私密的内容", value: "不交给 AI 整理，也不自动带入")
+        Text("已连接的 AI 工具主动查询时仍可读取私密记录；每次查询都留在“AI 读取记录”中。").foregroundStyle(Palette.muted)
       } header: {
         Text("写入时")
       }
@@ -319,7 +385,7 @@ struct MaintenanceSettingsView: View {
         store.perform(.maintenance(.importAll))
       }
       Section {
-        LabeledContent("日期范围") {
+        SettingsRow("日期范围") {
           HStack {
             DatePicker("从", selection: $backfillFrom, in: ...backfillTo, displayedComponents: .date).labelsHidden()
             Text("至").foregroundStyle(Palette.muted)
@@ -336,7 +402,7 @@ struct MaintenanceSettingsView: View {
               dedupe: "已经整理过的记录不会重复整理", distill: "会调用 AI 模型，同一段日期可以再整理一次")
       }
       Section {
-        LabeledContent("密钥备份") {
+        SettingsRow("密钥备份") {
           Button(keys == .running ? "正在读取…" : "拷贝") { Task { keys = await KeyBackup.copy() } }.disabled(keys == .running)
         }
         switch keys {
@@ -344,8 +410,11 @@ struct MaintenanceSettingsView: View {
         case .failed(let message): SettingsMessage(text: message)
         default: EmptyView()
         }
-      } footer: {
-        Note("记录和音频都加了密，钥匙串里的两把密钥丢了就打不开。换电脑或重装系统时用这份备份恢复。")
+        SettingsRow("记录与音频的数据目录") {
+          Button("在访达中显示…") { NSWorkspace.shared.activateFileViewerSelecting([Config.load().dataDir]) }
+        }
+      } header: { Text("数据与备份") } footer: {
+        Note("这里只拷贝解密密钥，不包含历史记录或录音。换电脑时还需保留数据目录；只有密钥不能恢复记录。请将密钥存入密码管理器。")
       }
     }
     .task {
@@ -360,7 +429,7 @@ struct MaintenanceSettingsView: View {
   func operation(_ task: MaintenanceTask, verb: String, job: CaptureSnapshot.Job?, extra: String? = nil,
                  what: String, sources: String, dedupe: String, distill: String, action: @escaping () -> Void) -> some View {
     Section {
-      LabeledContent {
+      SettingsRow {
         Button(job?.running == true ? "进行中…" : verb, action: action).disabled(job?.running == true)
       } label: {
         Text(task.title)
@@ -376,10 +445,12 @@ struct MaintenanceSettingsView: View {
   func facts(what: String, sources: String, dedupe: String, distill: String) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(what)
-      Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 2) {
-        GridRow { Text("读取"); Text(sources) }
-        GridRow { Text("去重"); Text(dedupe) }
-        GridRow { Text("整理"); Text(distill) }
+      DisclosureGroup("读取范围与处理方式") {
+        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 4) {
+          GridRow { Text("读取"); Text(sources) }
+          GridRow { Text("去重"); Text(dedupe) }
+          GridRow { Text("整理"); Text(distill) }
+        }.padding(.top, 4)
       }
     }
     .foregroundStyle(Palette.muted)
