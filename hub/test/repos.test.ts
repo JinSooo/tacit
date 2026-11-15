@@ -45,7 +45,8 @@ test("worktree repo key 复用主项目并保存根别名，不新增项目或�
   expect(rules.projectForRepo(worktree)?.id).toBe("main");
   expect(store.project("main")?.keys.repos).toEqual([repo, worktree]);
   expect(store.projects()).toHaveLength(1); expect(store.pending()).toHaveLength(0);
-  expect(rules.assign(frame(worktree))).toEqual({ status: "assigned", thread_id: "thread", project_id: "main" });
+  expect(rules.projectForFrame(frame(worktree))?.id).toBe("main");
+  expect(rules.assign(frame(worktree))).toEqual({ status: "unassigned" });
 });
 
 test("首次从 worktree 发现仓库只创建一个主项目及其确认项", () => {
@@ -63,7 +64,8 @@ test("worktree 删除后未缓存的子路径仍靠持久化别名归属", async
   expect(resolveRepoRoot(deleted, store.projects())).toBe(repo);
   const rules = new DistillRules(store);
   expect(rules.projectForRepo(worktree)?.id).toBe("main");
-  expect(rules.assign(frame(deleted)).status).toBe("assigned");
+  expect(rules.projectForFrame(frame(deleted))?.id).toBe("main");
+  expect(rules.assign(frame(deleted)).status).toBe("unassigned");
   expect((await context(deleted)).project_id).toBe("main");
   expect(store.projects()).toHaveLength(1); expect(store.pending()).toHaveLength(0);
 });
@@ -71,11 +73,13 @@ test("worktree 删除后未缓存的子路径仍靠持久化别名归属", async
 test("子目录 repo key 归主项目，保存的是 worktree 根", () => {
   const child = join(worktree, "src"); mkdirSync(child);
   const rules = new DistillRules(store); active();
-  expect(rules.assign(frame(child)).status).toBe("assigned");
+  expect(rules.projectForFrame(frame(child))?.id).toBe("main");
+  expect(rules.assign(frame(child)).status).toBe("unassigned");
   expect(rules.projectForRepo(child)?.keys.repos).toEqual([repo, worktree]);
   const mainChild = join(repo, "src"); mkdirSync(mainChild);
   expect(rules.projectForRepo(mainChild)?.id).toBe("main");
-  expect(rules.assign(frame(mainChild)).status).toBe("assigned");
+  expect(rules.projectForFrame(frame(mainChild))?.id).toBe("main");
+  expect(rules.assign(frame(mainChild)).status).toBe("unassigned");
 });
 
 test("context 未见过的 worktree cwd 和子目录返回主项目，不写别名", async () => {

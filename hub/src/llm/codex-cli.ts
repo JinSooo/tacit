@@ -106,6 +106,7 @@ export async function codexCLI(ctx: BackendContext): Promise<unknown> {
     let text: string;
     try { text = await readFile(output, "utf8"); } catch { throw new Error("Codex 未写入结果文件"); }
     ctx.metrics.outputChars = Array.from(text).length;
+    try { ctx.observer?.response(text); } catch { throw new Error("调用结果记录失败，结果未采用"); }
     return parseJSON(text);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }

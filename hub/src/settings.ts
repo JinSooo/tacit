@@ -8,6 +8,7 @@ import { KEY_PATTERN, systemKeychain, type Keychain } from "./llm/keychain.ts";
 import { createLLM, type ModelConfig, type ReadKey, type Spawn, type Tier } from "./llm/index.ts";
 import { GENERAL_DEFAULTS, GENERAL_RANGES, readGeneral, updateGeneral } from "./general-settings.ts";
 import { redactString } from "./redact.ts";
+import { RuntimeLog, appliedCall } from "./runtime-log.ts";
 import { isLoopback, localModels } from "./llm/local.ts";
 import { agentStatus, connectAgent, type AgentTool, type InstallEnvironment } from "./agents-install.ts";
 
@@ -143,10 +144,11 @@ export function createSettings(deps: SettingsDeps) {
       try {
         // 不记进 llm_usage：用量表统计的是提炼的消耗，测试调用不混进去。
         const llm = createLLM({
-          dataDir: deps.dataDir, recordUsage: () => {}, ...deps.llm,
+          dataDir: deps.dataDir, recordUsage: () => {}, journal: new RuntimeLog(ctx.db), ...deps.llm,
           configs: async () => ({ ...structuredClone(DEFAULT_TIERS), [tier]: config }),
         });
-        const result = await llm.complete<{ ok: boolean }>({ tier, system: "这是连接测试。只按 schema 返回 {\"ok\": true}。", prompt: "连接测试：返回 ok=true。", schema: TEST_SCHEMA, timeoutMs: TEST_TIMEOUT_MS });
+        const result = await llm.complete<{ ok: boolean }>({ tier, task: "connection_test", system: "这是连接测试。只按 schema 返回 {\"ok\": true}。", prompt: "连接测试：返回 ok=true。", schema: TEST_SCHEMA, timeoutMs: TEST_TIMEOUT_MS });
+        if (result.ok) appliedCall(ctx.db,result.call_id);
         return Response.json({ ok: result.ok, ms: result.ms, provider: config.provider, model: config.model, error: result.ok ? null : redactString(result.error).text.slice(0, 300) });
       } finally { testing = false; }
     }

@@ -81,7 +81,7 @@ test("修正回到原活动：读最新正文、证据引用修正、旧摘要�
   sliceStep(ctx.db, false, now, now - 7200_000);
   expect(store.frames().flatMap(f => f.record_ids)).toEqual([original.id]);
   expect(frameView(store, store.frames()[0]!, { maxRecords: Infinity, excerpt: () => Infinity }).records).toEqual([
-    { id: correction.id, source: "manual.correction", title: "修正标题", excerpt: "用户确认的正确正文" },
+    { id: correction.id, source: "manual.correction", title: "修正标题", excerpt: "用户确认的正确正文", recorded_at: correction.t_start },
   ]);
   const prompts: string[] = [];
   const llm: LLM = { async complete(req) { prompts.push(req.prompt); return { ok: false, error: "合成连接失败", ms: 1 }; } };

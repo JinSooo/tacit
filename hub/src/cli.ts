@@ -70,6 +70,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const { localDayStart } = await import("./distill/requests.ts");
   const { DistillStore } = await import("./distill/store.ts");
   const { createLLM } = await import("./llm/index.ts");
+  const { RuntimeLog } = await import("./runtime-log.ts");
   const openDatabase = (file: string, key: string, token: string) => {
     try { return new HubDB(file, key); }
     catch (error) {
@@ -134,7 +135,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       return;
     }
     const store = new DistillStore(db);
-    const llm = createLLM({ dataDir: config.dataDir, recordUsage: row => store.writeUsage({ ...row, input_tokens: row.input_tokens ?? undefined, output_tokens: row.output_tokens ?? undefined, error: row.error ?? undefined }) });
+    const llm = createLLM({ dataDir: config.dataDir, journal: new RuntimeLog(db), recordUsage: row => store.writeUsage({ ...row, input_tokens: row.input_tokens ?? undefined, output_tokens: row.output_tokens ?? undefined, error: row.error ?? undefined }) });
     try { await runDistill({ db, llm, once: flags.includes("--once"), backfill: flags.includes("--backfill"), range }); }
     finally { db.close(); }
     return;

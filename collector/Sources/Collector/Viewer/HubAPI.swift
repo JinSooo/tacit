@@ -212,6 +212,16 @@ final class HubAPI: @unchecked Sendable {
   func setRetentionDays(_ days: Int) async throws { try await send("PUT", "/v1/audio/settings", ["retention_days": days]) }
   func purgeAudio() async throws { try await send("POST", "/v1/audio/purge") }
 
+  func modelCalls(cursor: String?) async throws -> ModelCallPage {
+    try await get(ModelCallPage.self, "/v1/runtime/models", ["limit":"30", "cursor":cursor])
+  }
+  func callSnapshot(_ id: String) async throws -> CallSnapshot {
+    try await get(CallSnapshot.self, "/v1/runtime/calls/" + id)
+  }
+  func backgroundLog(_ source: String) async throws -> BackgroundLogPage {
+    try await get(BackgroundLogPage.self, "/v1/runtime/background", ["source":source])
+  }
+
   // MARK: 读取记录
 
   func audit(tool: String?, cursor: String?) async throws -> (reads: [AuditRead], next: String?) {

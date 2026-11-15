@@ -25,7 +25,7 @@ export function AgentSettings({ api }: { api: SettingsApi }) {
       <span className="muted">{!tool.installed ? "这台 Mac 上没有安装" : tool.partial ? "没连好，重新连接一次" : tool.connected ? "已连接" : "未连接"}</span>
       {(tool.installed || tool.connected || tool.partial) && <button className="compact" disabled={busy !== undefined} aria-label={`${tool.connected ? "断开" : "连接"} ${tool.label}`} onClick={() => void connect(tool)}>{busy === tool.id ? "正在处理…" : tool.connected ? "断开" : "连接"}</button>}
     </div>)}
-    <p className="muted">Claude Desktop 的连接或断开需要完全退出并重新打开应用后生效。每次读取都记在“AI 读取记录”里。</p>
+    <p className="muted">Claude Desktop 的连接或断开需要完全退出并重新打开应用后生效。每次读取都记在“运行记录”里。</p>
     {note && <p role="status">{note}</p>}
     {error && <p className="error" role="alert">{error}</p>}
   </section>;

@@ -34,7 +34,7 @@ test("真实 v1 加密结构升级，备份仍为 v1 且不覆盖，未来版本
   PRAGMA user_version=1;`);
   db.close();
   const upgraded = new HubDB(file,ctx.config.dbKey);
-  expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(10);
+  expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(11);
   expect(upgraded.db.pragma("busy_timeout",{ simple: true })).toBe(5000);
   const r = rec(0); expect(upgraded.ingest([r]).accepted).toBe(1);
   upgraded.close();
@@ -50,7 +50,7 @@ test("真实 v1 加密结构升级，备份仍为 v1 且不覆盖，未来版本
   expect(old.pragma("user_version",{ simple: true })).toBe(1); old.close();
   expect(() => new HubDB(file,ctx.config.dbKey)).toThrow();
   expect(readFileSync(backupFile)).toEqual(backup);
-  const future = new Database(file); future.pragma("cipher='sqlcipher'"); future.pragma("legacy=4"); future.pragma(`key='${ctx.config.dbKey}'`); future.pragma("user_version=11"); future.close();
+  const future = new Database(file); future.pragma("cipher='sqlcipher'"); future.pragma("legacy=4"); future.pragma(`key='${ctx.config.dbKey}'`); future.pragma("user_version=12"); future.close();
   expect(() => new HubDB(file,ctx.config.dbKey)).toThrow("版本");
 });
 
@@ -96,10 +96,10 @@ test("JSON 编解码、事实不可覆盖、用户优先、失败替代回滚、
 });
 
 test("切片键优先级、十分钟边界、两小时边界、剪贴板跟随和 private", () => {
-  expect(frameKey(fixture({ context: { repo: "/repo",chat: "群",url: "https://example.test" } }))).toBe("repo:/repo");
-  expect(frameKey(fixture({ source: "codex.session",context: { cwd: "/cwd" } }))).toBe("repo:/cwd");
+  expect(frameKey(fixture({ context: { repo: "/repo",chat: "群",url: "https://example.test" } }))).toBe("chat:mac.screen:群");
+  expect(frameKey(fixture({ source: "codex.session",source_ref: "session-1#hour",context: { cwd: "/cwd" } }))).toBe("session:codex.session:session-1");
   expect(frameKey(fixture({ context: { chat: "群",app: "chat.app" } }))).toBe("chat:chat.app:群");
-  expect(frameKey(fixture({ context: { url: "https://example.test/a" } }))).toBe("host:example.test");
+  expect(frameKey(fixture({ context: { url: "https://example.test/a" } }))).toBe("url:https://example.test/a");
   const records = Array.from({ length: 14 },(_,i) => rec(i*10));
   const clip = { ...rec(5),source: "mac.clipboard",sensitivity: "private" as const };
   const orphan = { ...rec(200),source: "mac.file" };
@@ -124,12 +124,12 @@ test("开放片段阻止 cursor 越过它，重复轮次不丢失、不重复，
   expect(() => store.createFrame(frame([a.id]))).toThrow();
 });
 
-test("规则匹配项目 keys：唯一且 2 小时内活跃的线程才直接归，多条或久未活动交给模型", () => {
+test("只有明确聊天可规则归属，repo 和 host 只提名项目", () => {
   project(); thread("recent",base); store.upsertThread({ id: "done",title: "已完成",project_id: "p",status: "done",last_ms: base+100 });
   const rules = new DistillRules(store);
   for (const key of ["repo:/synthetic/repo","host:example.test","chat:chat.app:合成群"]) {
     const r = rec(0); ctx.db.ingest([r]); const f = frame([r.id],key); store.createFrame(f);
-    expect(rules.assign(f)).toEqual({ status: "assigned",thread_id: "recent",project_id: "p" });
+    expect(rules.assign(f)).toEqual(key.startsWith("chat:") ? { status: "assigned",thread_id: "recent",project_id: "p" } : { status: "unassigned" });
   }
   expect(rules.assign({ ...frame([]),t_start_ms: base + 3 * 3_600_000 })).toEqual({ status: "unassigned" });
   thread("other",base);
@@ -170,7 +170,7 @@ test("提炼接口鉴权、Host、evidence 无正文、有效 facts 和游标", 
   expect(await (await request("now")).json()).toEqual({ now: { feedback: "已有活动记录，等待整理出摘要。" } });
   expect(await (await request("threads/t?level=brief")).json()).not.toHaveProperty("detail");
   const evidence = await (await request("threads/t?level=evidence")).json();
-  expect(evidence.records).toEqual([{ id: r.id,title: r.title,t_start: r.t_start,source: r.source }]); expect(evidence.facts).toHaveLength(1);
+  expect(evidence.records).toEqual([{ id: r.id,title: r.title,t_start: r.t_start,source: r.source,relation: "support" }]); expect(evidence.facts).toHaveLength(1);
   expect((await request("threads/t?level=wrong")).status).toBe(400);
   const page = await (await request("threads?limit=1")).json(); expect(page.threads[0].id).toBe("t2");
   const next = await (await request(`threads?limit=1&cursor=${page.next_cursor}`)).json(); expect(next.threads[0].id).toBe("t");
@@ -267,7 +267,7 @@ test("旧开发版 v2 打开时补建归属索引，删除与 JSON 归属保持�
   ctx.db.db.exec("DROP TABLE frame_records");
   const reopened = new HubDB(ctx.file,ctx.config.dbKey);
   try {
-    expect(reopened.db.pragma("user_version",{ simple: true })).toBe(10);
+    expect(reopened.db.pragma("user_version",{ simple: true })).toBe(11);
     expect(reopened.db.prepare("SELECT record_id,frame_id FROM frame_records ORDER BY record_id").all()).toEqual([a.id,b.id].sort().map(record_id => ({ record_id,frame_id: f.id })));
     expect(() => new DistillStore(reopened).createFrame(frame([a.id]))).toThrow();
     reopened.delete(a.id);

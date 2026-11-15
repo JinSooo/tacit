@@ -18,6 +18,23 @@ const rec = (ms: number) => fixture({ t_start: new Date(ms).toISOString(), conte
 const failingLLM: LLM = { async complete() { return { ok: false as const, error: "合成失败", ms: 1 }; } };
 const deps = (now: number) => ({ db: ctx.db, llm: failingLLM, now: () => now, log: () => {} });
 
+test("当天日记失败不推进慢速检查点，十五分钟重试且不在轮询时连发", async () => {
+  const now = day("2026-11-09", 12), r = rec(now - HOUR);
+  ctx.db.ingest([r]);
+  store.createFrame({ id: "retry", key: "app:synthetic.app", record_ids: [r.id], t_start_ms: now - HOUR, t_end_ms: now - HOUR, chars: r.body.length, private: 0, status: "ignored" });
+  store.upsertDay({ date: "2026-11-09", needs_regen: 1 });
+  let calls = 0;
+  const llm: LLM = { async complete(req) { if (req.task === "day") calls++; return { ok: false, error: "合成路由失败", ms: 1 }; } };
+  const state: LoopState = { lastRound: 0, enabledDefault: now - 2 * HOUR };
+  await distillTick({ ...deps(now), llm }, state, now);
+  expect(calls).toBe(1);
+  expect(store.getState("slow_ms")).toBeNull(); expect(store.getState("today_ms")).toBeNull();
+  await distillTick({ ...deps(now + 5000), llm }, state, now + 5000);
+  expect(calls).toBe(1);
+  await distillTick({ ...deps(now + HOUR / 4), llm }, state, now + HOUR / 4);
+  expect(calls).toBe(2);
+});
+
 function api() {
   const handler = createHandler({ db: ctx.db, token: "synthetic-token" });
   return (method: string, body?: unknown, token = "synthetic-token") => handler(new Request("http://127.0.0.1:47823/v1/distill/requests", {

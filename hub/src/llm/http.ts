@@ -17,20 +17,23 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
       if (controller.signal.aborted) throw new Error(`模型 HTTP 调用超时（${ctx.timeoutMs}ms）`);
       if (!local && !key.trim()) throw new Error("API key 为空");
       const base = ctx.config.base_url ?? (anthropic ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1");
-      const response = await fetch(`${base.replace(/\/$/, "")}/${anthropic ? "messages" : "chat/completions"}`, {
-        method: "POST", signal: controller.signal, redirect: "error",
-        headers: { "content-type": "application/json", ...(anthropic ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : local ? {} : { authorization: `Bearer ${key}` }) },
-        body: JSON.stringify(anthropic ? {
+      const requestBody = anthropic ? {
           model: ctx.config.model, max_tokens: 8192, system: ctx.req.system, messages: [{ role: "user", content: ctx.req.prompt }],
           tools: [{ name: "emit_result", description: "返回符合 schema 的结果", input_schema: ctx.req.schema }], tool_choice: { type: "tool", name: "emit_result" },
         } : {
           model: ctx.config.model, messages: [{ role: "system", content: ctx.req.system }, { role: "user", content: ctx.req.prompt }],
           ...(ctx.config.reasoning_effort === undefined ? {} : { reasoning_effort: ctx.config.reasoning_effort }),
           response_format: { type: "json_schema", json_schema: { name: "result", strict: true, schema: ctx.req.schema } },
-        }),
+        };
+      ctx.observer?.request("api",requestBody);
+      const response = await fetch(`${base.replace(/\/$/, "")}/${anthropic ? "messages" : "chat/completions"}`, {
+        method: "POST", signal: controller.signal, redirect: "error",
+        headers: { "content-type": "application/json", ...(anthropic ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : local ? {} : { authorization: `Bearer ${key}` }) },
+        body: JSON.stringify(requestBody),
       });
       if (!response.ok) throw new Error(`模型 HTTP 请求失败（${response.status}）`);
       const text = await response.text();
+      try { ctx.observer?.response(text); } catch { throw new Error("调用结果记录失败，结果未采用"); }
       ctx.metrics.outputChars = Array.from(text).length;
       const body = parseJSON(text) as any;
       ctx.metrics.inputTokens = tokens(anthropic ? body?.usage?.input_tokens : body?.usage?.prompt_tokens);
@@ -50,7 +53,7 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
   } catch (error) {
     if (controller.signal.aborted) throw new Error(`模型 HTTP 调用超时（${ctx.timeoutMs}ms）`);
     // 不回传 fetch/钥匙串的原始异常，避免 URL、凭证或响应内容泄漏。
-    if (error instanceof Error && /^(模型 HTTP|API key|模型返回|Anthropic 未|Anthropic 输出|OpenAI 兼容)/.test(error.message)) throw error;
+    if (error instanceof Error && /^(调用记录|调用结果|记录已变化|模型 HTTP|API key|模型返回|Anthropic 未|Anthropic 输出|OpenAI 兼容)/.test(error.message)) throw error;
     throw new Error("模型 HTTP 调用失败（网络或钥匙串读取失败）");
   } finally { clearTimeout(timer); }
 }

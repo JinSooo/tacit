@@ -16,6 +16,7 @@ import { conversationDetail } from "./conversations.ts";
 import { hubStatus } from "./status.ts";
 import { DEFAULT_PORT, dataDirOf } from "./hub-json.ts";
 import { createSettings, type SettingsDeps } from "./settings.ts";
+import { RuntimeLog, backgroundLog } from "./runtime-log.ts";
 
 const defaultWebDir = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'";
@@ -91,6 +92,13 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, busy: busy.snapshot() }));
       if (url.pathname.startsWith("/v1/settings/")) { const r = await settings(request, url, { db, port, readJSON }); if (r) return r; }
       if (method === "GET" && url.pathname === "/v1/audit") return Response.json(new AgentReads(db).audit(url.searchParams));
+      if (method === "GET" && url.pathname === "/v1/runtime/models") return Response.json(new RuntimeLog(db).models(url.searchParams));
+      if (method === "GET" && url.pathname === "/v1/runtime/background") return Response.json(backgroundLog(options.settings?.dataDir ?? dataDirOf(),url.searchParams.get("source") ?? "hub"));
+      const runtime = /^\/v1\/runtime\/calls\/([\w-]{1,128})$/.exec(url.pathname);
+      if (method === "GET" && runtime) {
+        const detail = new RuntimeLog(db).detail(runtime[1]!);
+        return Response.json(detail ?? { error: "当时未保存正文" },{ status: detail ? 200 : 404, headers: { "Cache-Control": "no-store" } });
+      }
       const audio = new AudioStore(db);
       if (method === "GET" && url.pathname === "/v1/audio/sync") return Response.json(audio.sync(url.searchParams.get("device")));
       if (method === "POST" && url.pathname === "/v1/audio/sync/ack") return Response.json(audio.ack(await readJSON()));

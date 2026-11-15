@@ -51,7 +51,7 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
       if (kind === "assign") {
         if (behave.failAssign) return { ok: false as const, error: "合成失败", ms: 1 };
         const frames = framesIn(req.prompt);
-        return ok({ items: behave.assign ? behave.assign(frames, req.prompt) : frames.map(f => f.key.startsWith("repo:")
+        return ok({ items: behave.assign ? behave.assign(frames, req.prompt) : frames.map(f => (f.key.startsWith("repo:") || f.key.startsWith("session:"))
           ? { frame_id: f.id, thread_id: null, new_thread_title: "合成线程", ignore: false, confidence: 0.9 }
           : { frame_id: f.id, thread_id: null, new_thread_title: null, ignore: true, confidence: 0.9 }) });
       }
@@ -74,7 +74,7 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
       if (kind === "classify") return ok({ domain: "work", in_project: false });
       if (kind === "conversation") return ok({ title: "合成对话", summary: "合成总结", points: [] });
       if (kind === "brief") return ok({ brief: "合成简略" });
-      if (kind === "project") return ok({ goal: "合成项目目标", status: "合成项目进展", people: [] });
+      if (kind === "project") return ok({ goal: "合成项目目标", status: "合成项目进展", people: [], resolutions: [] });
       if (kind === "day") return ok({ summary: "合成日记", timeline: [{ start: "10:00", end: "11:00", text: "合成" }] });
       throw new Error("未知调用");
     },
@@ -131,7 +131,7 @@ test("完整一轮：建线程与项目、事实有依据、private 不外发、
   const project = store.projects()[0]!;
   expect(t.project_id).toBe(project.id); expect(project.brief).toBe("合成简略");
   expect(store.pending().map(p => p.kind).sort()).toEqual(["project", "thread_done"]);
-  expect(ctx.db.db.prepare("SELECT status FROM frames WHERE key LIKE 'host:%'").get()).toEqual({ status: "ignored" });
+  expect(ctx.db.db.prepare("SELECT status FROM frames WHERE key LIKE 'url:%'").get()).toEqual({ status: "ignored" });
   expect(store.day("2026-11-08")?.brief).toBe("合成简略");
   // 当前状态用线程的简略版，简略版没提到项目名时补上项目名，不重复拼标题。
   expect((store.getState<{ brief: string }>("now"))!.brief).toBe("synthetic-repo：合成简略");
@@ -286,10 +286,10 @@ test("存量已 digest 且没有新片段时走 classify；有新片段留给 di
 
 test("v3 加密库真实升级 v5：旧归属保留并复制成 hint，domain 留空，重开幂等", () => {
   store.upsertThread({ id: "legacy", title: "合成旧线程", status: "active", project_id: "p" });
-  ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=3;");
+  ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; DROP TABLE runtime_calls; PRAGMA user_version=3;");
   const db = new HubDB(ctx.file, ctx.config.dbKey);
   try {
-    expect(db.db.pragma("user_version", { simple: true })).toBe(10);
+    expect(db.db.pragma("user_version", { simple: true })).toBe(11);
     const t = new DistillStore(db).thread("legacy")!;
     expect(t.project_id).toBe("p"); expect(t.project_hint).toBe("p"); expect(t.domain).toBeNull();
   } finally { db.close(); }
@@ -368,7 +368,7 @@ test("最近结束的线程进候选，归进去不改变状态；太久以前�
 test("每天合并一次重复线程：片段、事实、拒绝记录转到片段多的那条，旧 id 能跳转；不同项目的不并", async () => {
   ctx.db.ingest([session(0, 30, "合成工作 A"), session(120, 30, "合成工作 B"), session(240, 30, "合成工作 C")]);
   let n = 0;
-  const first = fakeLLM({ assign: frames => frames.map(f => ({ frame_id: f.id, thread_id: null, new_thread_title: f.key.startsWith("repo:") ? `合成线程 ${n++ % 2}` : null, ignore: !f.key.startsWith("repo:"), confidence: 0.9 })) });
+  const first = fakeLLM({ assign: frames => frames.map(f => ({ frame_id: f.id, thread_id: null, new_thread_title: (f.key.startsWith("repo:") || f.key.startsWith("session:")) ? `合成线程 ${n++ % 2}` : null, ignore: !(f.key.startsWith("repo:") || f.key.startsWith("session:")), confidence: 0.9 })) });
   // 先不合并，建出两条线程。
   await round(first.llm, base + 300 * MIN);
   const threads = (ctx.db.db.prepare("SELECT id,(SELECT count(*) FROM assignments a WHERE a.thread_id=t.id) n FROM threads t ORDER BY n DESC").all() as { id: string; n: number }[]);
@@ -517,4 +517,17 @@ test("本地模型实测回归：错误推测、事实ID证据和作废用户事
   const facts = store.facts("thread_id", "local-eval");
   expect(facts.map(f => f.text).sort()).toEqual(["尚未部署", "等待业务验收", "保留有依据且低置信度的推测", "保留有原始依据的决定"].sort());
   expect(facts.find(f => f.id === "user-correction")?.origin).toBe("user");
+});
+
+test('详细整理跨活动片段去重相同提交，内容不同的提交材料仍进入模型', async()=>{
+  const records=['同一提交材料','同一提交材料','用户修正后的不同材料'].map((body,i)=>fixture({source:'mac.git',source_ref:'git-'+i,body,t_start:iso(base+i*MIN),context:{repo,extra:{hash:'a'.repeat(40)}}}));
+  ctx.db.ingest(records);store.upsertThread({id:'git-thread',title:'提交工作',status:'active',needs_regen:1});
+  for(const [i,r] of records.entries()){const f={id:'git-f'+i,key:'repo:'+repo,record_ids:[r.id],t_start_ms:base+i*MIN,t_end_ms:base+i*MIN,chars:r.body.length,private:0,status:'new' as const};store.createFrame(f);store.assign(f.id,'git-thread','llm',1);}
+  const {llm,calls}=fakeLLM();await digestStep({db:ctx.db,llm},store,base+3600000);
+  const later=fixture({source:'mac.git',source_ref:'git-later',body:'同一提交材料',t_start:iso(base+4*MIN),context:{repo,extra:{hash:'a'.repeat(40)}}});ctx.db.ingest([later]);
+  store.createFrame({id:'git-later',key:'repo:'+repo,record_ids:[later.id],t_start_ms:base+4*MIN,t_end_ms:base+4*MIN,chars:later.body.length,private:0,status:'new'});store.assign('git-later','git-thread','llm',1);store.upsertThread({...store.thread('git-thread')!,needs_regen:1});
+  await digestStep({db:ctx.db,llm},store,base+2*3600000);
+  const inputs=calls.filter(c=>c.kind==='thread').flatMap(c=>framesIn(c.req.prompt).flatMap(f=>f.records??[]));
+  expect(inputs.filter(r=>r.excerpt==='同一提交材料')).toHaveLength(1);expect(inputs.filter(r=>r.excerpt==='用户修正后的不同材料')).toHaveLength(1);
+  expect(records.every(r=>!!ctx.db.get(r.id))).toBe(true);expect(store.getState<{frames:string[]}>('digest:git-thread')?.frames).toHaveLength(4);
 });

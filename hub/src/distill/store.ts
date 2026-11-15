@@ -232,12 +232,13 @@ export class DistillStore {
     if (level === "brief") { delete result.detail; return result; }
     result.facts = this.facts(kind === "threads" ? "thread_id" : "project_id",id);
     if (level === "evidence") {
-      const ids = new Set<string>(result.facts.flatMap((f: Fact) => f.evidence));
+      const supports = new Set<string>(result.facts.flatMap((f: Fact) => f.evidence));
+      const ids = new Set(supports);
       const threads = kind === "threads" ? [id] : (this.sql.prepare("SELECT id FROM threads WHERE project_id=?").all(id) as Row[]).map(t => t.id);
       for (const tid of threads) for (const row of this.sql.prepare("SELECT f.record_ids FROM frames f JOIN assignments a ON a.frame_id=f.id WHERE a.thread_id=?").all(tid) as Row[]) for (const rid of JSON.parse(row.record_ids)) ids.add(rid);
-      const visit = (value: unknown): void => { if (!value || typeof value !== "object") return; for (const [k,v] of Object.entries(value)) { if (k === "record_id" && typeof v === "string") ids.add(v); else visit(v); } };
+      const visit = (value: unknown): void => { if (!value || typeof value !== "object") return; for (const [k,v] of Object.entries(value)) { if (k === "record_id" && typeof v === "string") { ids.add(v); supports.add(v); } else visit(v); } };
       visit(result.detail);
-      result.records = [...ids].flatMap(rid => { const r = this.sql.prepare("SELECT id,title,t_start,source FROM records WHERE id=?").get(rid); return r ? [r] : []; });
+      result.records = [...ids].flatMap(rid => { const r = this.sql.prepare("SELECT id,title,t_start,source FROM records WHERE id=?").get(rid); return r ? [{ ...r, relation: supports.has(rid) ? "support" : "activity" }] : []; });
     }
     return result;
   }
@@ -323,7 +324,7 @@ export class DistillStore {
     })();
   }
   /** 删除/修正立即撤下派生文字；模型调用中的旧快照也不能再写回来。 */
-  private clearDerived(threads: Set<string>, projects: Set<string>, times: string[]) {
+  clearDerived(threads: Set<string>, projects: Set<string>, times: string[], preserveResolvedPending = false) {
     this.setState("content_revision", (this.getState<number>("content_revision") ?? 0) + 1);
     for (const id of threads) {
       const t = this.thread(id);
@@ -342,7 +343,8 @@ export class DistillStore {
     const affected = new Set([...threads, ...projects]);
     const references = (v: unknown): boolean => typeof v === "string" ? affected.has(v)
       : Array.isArray(v) ? v.some(references) : !!v && typeof v === "object" && Object.values(v).some(references);
-    for (const row of this.sql.prepare("SELECT id,payload FROM pending").all() as Row[]) {
+    for (const row of this.sql.prepare("SELECT id,payload,resolved_at FROM pending").all() as Row[]) {
+      if (preserveResolvedPending && row.resolved_at) continue;
       if (references(JSON.parse(row.payload))) this.sql.prepare("DELETE FROM pending WHERE id=?").run(row.id);
     }
   }

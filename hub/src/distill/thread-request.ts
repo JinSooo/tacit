@@ -59,6 +59,7 @@ export function threadRequest(thread: { title: string; detail: unknown }, facts:
   const factsByRef = new Map([...factRefs].map(([id, ref]) => [ref, id]));
   const currentIDs = new Set([...recordRefs].filter(([, ref]) => current.has(ref)).map(([id]) => id));
   return {
+    refs: Object.fromEntries([...recordsByRef, ...factsByRef, ...frames.map((f,i) => [`s${i+1}`,f.id] as const)]),
     prompt: threadPrompt({ ...thread, detail: { ...oldDetail, quotes } }, inputFacts, inputFrames, project), schema,
     decode(out: ThreadModelOutput): ThreadOutput {
       return { ...out,
@@ -70,7 +71,8 @@ export function threadRequest(thread: { title: string; detail: unknown }, facts:
         new_facts: out.new_facts.map(({ supports, ...f }) => {
           // 不猜测或重挂错误引用。一条事实的每个证据都须有逐字依据；有任一错引就整条丢弃。
           const backed = supports?.length > 0 && f.evidence.length > 0
-            && supports.every(s => f.evidence.includes(s.record_id) && !!s.text.trim() && excerpts.get(s.record_id)?.some(r => r.body.includes(s.text)))
+            && supports.every(s => f.evidence.includes(s.record_id) && !!s.text.trim() && excerpts.get(s.record_id)?.some(r => r.body.includes(s.text))
+              && (!readRecord || !!readRecord(recordsByRef.get(s.record_id)!)?.body.includes(s.text)))
             && f.evidence.every(ref => current.has(ref) && supports.some(s => s.record_id === ref));
           const sourceRecords = f.evidence.flatMap(ref => excerpts.get(ref) ?? []);
           const sessionsOnly = sourceRecords.length > 0 && sourceRecords.every(r => sessionUserTexts(r.source, r.body) !== null);

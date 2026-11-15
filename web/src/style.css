@@ -314,3 +314,20 @@ dialog h2 { font-size: var(--text-title); font-weight: 600; margin: 0 0 16px; }
 @media (max-width: 440px) { .time-fields { grid-template-columns: 1fr; gap: 0; } dialog { padding: 16px; } .stats { grid-template-columns: 1fr 1fr; } }
 .local-models { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
 .local-models select { min-width: 0; max-width: 100%; }
+
+/* 运行记录延用暖灰表格；正文按需展开，长请求不撑宽页面。 */
+.runtime-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 24px; }
+.runtime-tabs button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.runtime-note { margin: 0 0 20px; max-width: 70ch; }
+.runtime-open { display: block; margin-top: 6px; text-align: left; }
+.runtime-table time, .runtime-usage { display: block; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.runtime-usage { margin-top: 6px; }
+.runtime-model { overflow-wrap: anywhere; max-width: 24ch; }
+.runtime-stages { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+.runtime-detail { padding: 20px !important; }
+.runtime-snapshot details { margin-top: 16px; }
+.runtime-snapshot summary { cursor: pointer; color: var(--accent); padding: 6px 0; }
+.runtime-snapshot pre, .runtime-events pre { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; overflow: auto; background: var(--paper); border: 1px solid var(--line); padding: 16px; border-radius: 6px; }
+.runtime-events { display: flex; flex-direction: column; gap: 12px; }
+.runtime-events pre { margin: 0; max-height: 240px; }
+@media (max-width: 600px) { .runtime-detail { padding: 12px !important; } .runtime-model { max-width: none; } }

@@ -1,3 +1,4 @@
+import { contentRevision, appliedCall, discardedCall } from "../runtime-log.ts";
 // 提炼流程：切片 → 归线程 → 线程详细版 → 简略版 → 项目 → 当前状态 → 日记。契约：docs/contracts.md 第 4 节。
 // 模型调用都在事务之外；每一步落库用小事务，失败只影响这一步，下一轮再试。
 // 日志只写计数，不写任何记录内容或标题。
@@ -14,8 +15,13 @@ import * as P from "./prompts.ts";
 import { digestPieces, digestFrameSize } from "./digest-input.ts";
 import { threadRequest, type ThreadModelOutput } from "./thread-request.ts";
 import { assignRequest } from "./assign-request.ts";
+import { projectRequest, type ProjectModelOutput } from "./project-request.ts";
 import { groundedQuote } from "./quotes.ts";
+import { gitMaterialKey, materialBody, uniqueMaterials } from "./material.ts";
+import { evidenceTime } from "./evidence-time.ts";
+import { resolveRepoRoot } from "./repos.ts";
 import { readGeneral } from "../general-settings.ts";
+import { redactString } from "../redact.ts";
 import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
 
 export interface LLM { complete<T>(req: LLMRequest): Promise<LLMResult<T>> }
@@ -23,15 +29,18 @@ export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: st
 
 /** 事务外等待模型时用户可能删除/修正内容：丢弃旧快照的响应，下一轮重试。 */
 async function complete<T>(d: Deps, req: LLMRequest): Promise<LLMResult<T>> {
-  const store = new DistillStore(d.db), revision = store.getState<number>("content_revision");
-  const result = await d.llm.complete<T>(req);
-  return result.ok && revision !== store.getState<number>("content_revision")
-    ? { ok: false, error: "记录已变化，等待重新整理", ms: result.ms } : result;
+  const revision = contentRevision(d.db);
+  const result = await d.llm.complete<T>({ ...req, prompt: redactString(req.prompt).text, system: redactString(req.system).text, contentRevision: revision });
+  if (result.ok && revision !== contentRevision(d.db)) {
+    discardedCall(d.db,result.call_id);
+    return { ok: false, error: "记录已变化，等待重新整理", ms: result.ms, call_id: result.call_id };
+  }
+  return result;
 }
 
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
 export const LIMITS = {
-  assignBatch: 20, assignChars: 24_000, assignExcerpt: 240, assignRecords: 10, assignThreads: 40,
+  assignBatch: 20, assignChars: 24_000, assignExcerpt: 800, assignRecords: 10, assignThreads: 40,
   digestChars: 45_000, threadsPerRound: 12,
   candidateTTL: DAY, newSession: 30 * MIN, pauseAfter: 2 * HOUR,
   // 最近确认完成的线程也给模型选：结束后又聊到它的零星跟进归回去，不再只进日记（2026-11-10 实测：九院线程已完成，后续对话无处可归）。
@@ -93,7 +102,7 @@ export function sliceStep(db: HubDB, backfill = false, now = Date.now(), enabled
     store.setState("cursor_ms", result.cursor_ms);
     for (const f of touched) store.upsertDay({ date: localDate(f.t_start_ms), needs_regen: 1 });
     for (const frame of store.frames().filter(f => f.status === "new")) {
-      if (frame.key.startsWith("repo:")) rules.projectForRepo(frame.key.slice(5));
+      rules.projectForFrame(frame);
       const r = rules.assign(frame);
       if (r.status === "assigned") { assigned++; touchThread(store, r.thread_id, frame); }
     }
@@ -107,7 +116,7 @@ export function touchThread(store: DistillStore, threadId: string, frame: Frame)
   if (!t) return;
   const newSession = !t.last_ms || frame.t_start_ms - t.last_ms > LIMITS.newSession;
   let project_hint = t.project_hint ?? null;
-  if (!project_hint && frame.key.startsWith("repo:")) project_hint = new DistillRules(store).projectForRepo(frame.key.slice(5))?.id ?? null;
+  if (!project_hint) project_hint = new DistillRules(store).projectForFrame(frame)?.id ?? null;
   store.upsertThread({
     ...t, project_hint,
     status: t.status === "paused" ? "active" : t.status,
@@ -131,15 +140,24 @@ function displayFrameKey(store: DistillStore, f: Frame): string {
   return latest ? `chat:${latest.context!.app ?? latest.source}:${latest.context!.chat}` : f.key;
 }
 
-export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: number; excerpt: (source: string) => number }): P.FrameView {
-  const ids = f.record_ids.length <= opts.maxRecords ? f.record_ids
-    : Array.from({ length: opts.maxRecords }, (_, i) => f.record_ids[Math.round(i * (f.record_ids.length - 1) / (opts.maxRecords - 1))]!);
+export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: number; excerpt: (source: string) => number; seenMaterials?: Set<string> }): P.FrameView {
+  const projects = store.projects();
+  // 保留原活动 ID 供后续查 effective；修正记录本身不能误当成独立活动再被过滤掉。
+  const materials = uniqueMaterials(f.record_ids.flatMap(id => {
+    const r = store.hub.effective(id);
+    return r ? [{ ...r, id }] : [];
+  }), repo => resolveRepoRoot(repo, projects) ?? repo, opts.seenMaterials);
+  const materialIDs = materials.map(r => r.id);
+  // 去重先于抽样，不能让多个 worktree 的副本挤掉独立提交。
+  const ids = materialIDs.length <= opts.maxRecords ? materialIDs
+    : Array.from({ length: opts.maxRecords }, (_, i) => materialIDs[Math.round(i * (materialIDs.length - 1) / (opts.maxRecords - 1))]!);
   let hidden = 0;
   const conversations = new Set<string>();
-  const records = ids.flatMap(id => {
+  const records: P.FrameView["records"] = ids.flatMap(id => {
     const original = store.hub.get(id);
     if (!original || original.source === "manual.correction") return [];
-    const r = store.hub.effective(id)!;
+    const originalEffective = store.hub.effective(id)!;
+    const r = { ...originalEffective, body: materialBody(originalEffective) };
     // private 记录的标题和正文都不发给模型；同一片段里的其他记录照常发送。
     if (r.sensitivity === "private") { hidden++; return []; }
     // 对话开头常是寒暄和噪声，总结另附一次，不挤占每条原文的截断预算。
@@ -148,18 +166,19 @@ export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: num
       const s = g && storedSummary(store.hub, g);
       if (s && g) {
         const first = !conversations.has(g.id); conversations.add(g.id);
-        return [{ id: r.id, source: r.source, title: `对话：${s.title}`, conversation_id: g.id,
+        return [{ id: r.id, source: r.source, title: `对话：${s.title}`, ...evidenceTime(r), conversation_id: g.id,
           ...(first ? { conversation_summary: { summary: s.summary, points: s.points } } : {}),
           excerpt: P.excerpt(r.body, opts.excerpt(r.source)) }];
       }
     }
-    return [{ id: r.id, source: r.source, title: r.title, excerpt: P.excerpt(r.body, opts.excerpt(r.source)) }];
+    return [{ id: r.id, source: r.source, title: r.title, ...evidenceTime(r), excerpt: P.excerpt(r.body, opts.excerpt(r.source)) }];
   });
   if (hidden) records.push({ id: "", source: "note", title: `（另有 ${hidden} 条私密记录，内容未提供）`, excerpt: "" });
-  if (ids.length < f.record_ids.length) records.push({ id: "", source: "note", title: `（共 ${f.record_ids.length} 条，只列出 ${ids.length} 条）`, excerpt: "" });
+  if (ids.length < materialIDs.length) records.push({ id: "", source: "note", title: `（共 ${materialIDs.length} 条独立材料，只列出 ${ids.length} 条）`, excerpt: "" });
   // 整个片段都是私密记录时才整段隐藏（只给应用和时长）。
   const allPrivate = hidden > 0 && records.every(r => r.source === "note");
-  return { id: f.id, start: clock(f.t_start_ms), end: clock(f.t_end_ms), key: displayFrameKey(store, f), private: allPrivate, records };
+  const repos = [...new Set(ids.flatMap(id => { const r = store.hub.get(id); return r?.sensitivity !== "private" && r?.context?.repo ? [r.context.repo] : []; }))];
+  return { id: f.id, start: clock(f.t_start_ms), end: clock(f.t_end_ms), key: displayFrameKey(store, f), ...(repos.length ? { repos } : {}), private: allPrivate, records };
 }
 
 /** 按字数预算分批，单个片段超预算时自成一批。 */
@@ -214,7 +233,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
     ];
     calls++;
     const request = assignRequest(batch.map(x => x.v), choices);
-    const r = await complete<P.AssignOutput>(d, { tier: "minute", task: "assign", system: P.ASSIGN_SYSTEM, prompt: request.prompt, schema: request.schema });
+    const r = await complete<P.AssignOutput>(d, { tier: "minute", task: "assign", system: P.ASSIGN_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
     if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length, category: modelFailureCategory(r.error) })); continue; }
     const byFrame = new Map(request.decode(r.data).items.map(i => [i.frame_id, i]));
     const real = new Set(threads.map(t => t.id));
@@ -241,7 +260,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
         if (!cand && title) cand = candidates.find(c => c.title === title);
         if (!cand && !title) { ignore(); continue; }
         if (!cand) {
-          const project = f.key.startsWith("repo:") ? new DistillRules(store).projectForRepo(f.key.slice(5)) : null;
+          const project = new DistillRules(store).projectForFrame(f);
           cand = { id: ulid(now), title: title!, frame_ids: [], minutes: 0, last_ms: 0, project_id: project?.id ?? null };
           candidates.push(cand);
         }
@@ -261,6 +280,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
         }
       }
       store.setState("candidates", candidates);
+      appliedCall(d.db,r.call_id);
     })();
   }
   store.setState("candidates", candidates);
@@ -270,20 +290,20 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
 // ---------------- 3. 线程详细版 + 简略版 ----------------
 
 function factViews(store: DistillStore, field: "thread_id" | "project_id", id: string): P.FactView[] {
-  return store.facts(field, id).map(f => ({ id: f.id, kind: f.kind, text: f.text, origin: f.origin }));
+  return store.facts(field, id).map(f => ({ id: f.id, kind: f.kind, text: f.text, origin: f.origin, at: f.valid_at, scope: { thread_id: f.thread_id ?? null, project_id: f.project_id ?? null } }));
 }
 
 function threadFrames(store: DistillStore, threadId: string): Frame[] {
   return loadFrames(store, "WHERE id IN (SELECT frame_id FROM assignments WHERE thread_id=?) ORDER BY t_start_ms,id", threadId);
 }
 
-async function makeBrief(d: Deps, task: string, title: string, detail: unknown): Promise<string | null> {
+async function makeBrief(d: Deps, task: string, title: string, detail: unknown): Promise<{ text: string; call_id?: string } | null> {
   const r = await complete<P.BriefOutput>(d, { tier: "minute", task, system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail), schema: P.BRIEF_SCHEMA });
-  return r.ok ? r.data.brief.trim() : null;
+  return r.ok ? { text: r.data.brief.trim(), call_id: r.call_id } : null;
 }
 
 /** 已经提炼进详细版的片段，以及当时这些片段的记录总数（变少说明有记录被删，要整条重建）。 */
-interface DigestMark { frames: string[]; records: number; user_facts?: string[]; parts?: string[] }
+interface DigestMark { frames: string[]; records: number; user_facts?: string[]; fact_ids?: string[]; parts?: string[] }
 
 function projectHint(store: DistillStore, thread: Thread): P.ProjectHint {
   const p = thread.project_hint ? store.project(thread.project_hint) : null;
@@ -332,12 +352,12 @@ export async function conversationStep(d: Deps, now: number) {
       prompt: P.conversationPrompt({ start: clock(g.start_ms), end: clock(g.end_ms), app: g.app }, conversationTranscript(turns)), schema: P.CONVERSATION_SCHEMA });
     if (!r.ok) continue;
     const out = { title: r.data.title.trim(), summary: r.data.summary.trim(), points: r.data.points.map(p => p.trim()).filter(Boolean).slice(0, 5) };
-    if (!out.title || !out.summary) continue;
+    if (!out.title || !out.summary) { discardedCall(d.db,r.call_id); continue; }
     // 调用期间记录可能被删或者接上了新的一段：组成变了就不写，下一轮重来。
     const current = conversationsIn(d.db, g.start_ms, g.start_ms).find(c => c.id === g.id);
     if (!current || JSON.stringify(current.record_ids) !== JSON.stringify(g.record_ids)
-      || JSON.stringify(groupTurns(d.db, current, namer())) !== JSON.stringify(turns)) continue;
-    saveSummary(d.db, g, out); done++;
+      || JSON.stringify(groupTurns(d.db, current, namer())) !== JSON.stringify(turns)) { discardedCall(d.db,r.call_id); continue; }
+    d.db.db.transaction(() => { saveSummary(d.db, g, out); appliedCall(d.db,r.call_id); })(); done++;
   }
   return { calls, done, pending: todo.length - done };
 }
@@ -382,7 +402,7 @@ export async function classifyStep(d: Deps, store: DistillStore) {
       const r = await complete<P.Classification>(d, { tier: "minute", task: "classify", system: P.CLASSIFY_SYSTEM,
         prompt: P.classifyPrompt(t, projectHint(store, t)), schema: P.CLASSIFY_SCHEMA });
       if (!r.ok) { failed++; continue; }
-      store.hub.db.transaction(() => applyClassification(store, id, r.data))();
+      store.hub.db.transaction(() => { applyClassification(store,id,r.data); appliedCall(d.db,r.call_id); })();
       updated++;
     } catch { failed++; }
   }
@@ -409,7 +429,21 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     let rebuild = !mark || mark.frames.some(f => !present.has(f)) || countOf(new Set(mark.frames)) < mark.records;
     const done = new Set(rebuild ? [] : mark!.frames);
     let fresh = frames.filter(f => !done.has(f.id));
-    const toPieces = () => digestPieces(fresh.map(f => frameView(store, f, { maxRecords: Infinity, excerpt: () => Infinity })), LIMITS.digestChars);
+    const toPieces = () => {
+      const seenMaterials = new Set<string>();
+      const freshIDs = new Set(fresh.map(f => f.id)), views: P.FrameView[] = [], projects = store.projects();
+      // 续跑时也从已读片段恢复去重集合，不能让同一副本因跨批次重新变成正文。
+      for (const f of frames) {
+        if (freshIDs.has(f.id)) views.push(frameView(store, f, { maxRecords: Infinity, excerpt: () => Infinity, seenMaterials }));
+        else for (const id of f.record_ids) {
+          const r = store.hub.effective(id);
+          if (!r) continue;
+          const key = gitMaterialKey(r, r.context?.repo ? resolveRepoRoot(r.context.repo, projects) ?? r.context.repo : undefined);
+          if (key) seenMaterials.add(key);
+        }
+      }
+      return digestPieces(views, LIMITS.digestChars);
+    };
     let pieces = toPieces();
     // 部分成功后原记录被删除/移走时，旧分段摘要也必须从头重建。
     if (!rebuild && mark?.parts?.some(key => !pieces.some(p => p.key === key))) {
@@ -424,15 +458,17 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     const doneParts = new Set((rebuild ? [] : mark!.parts ?? []).filter(key => presentParts.has(key)));
     const userFacts = () => store.facts("thread_id", id).filter(f => f.origin === "user").map(f => f.id).sort();
     const factIds = userFacts();
+    const currentFacts = () => store.facts("thread_id", id).map(f => f.id).sort();
     const chunks = batches(pieces.filter(p => !doneParts.has(p.key)), x => digestFrameSize(x.v) + 1, LIMITS.digestChars - 1, 50);
     // 用户纠错也使详细版失效；不能在没有新片段时绕过详细版、只改简略版。
-    if (!chunks.length && JSON.stringify(mark?.user_facts ?? []) !== JSON.stringify(factIds)) chunks.push([]);
+    if (!chunks.length && (JSON.stringify(mark?.user_facts ?? []) !== JSON.stringify(factIds)
+      || JSON.stringify(mark?.fact_ids ?? currentFacts()) !== JSON.stringify(currentFacts()))) chunks.push([]);
     for (const chunk of chunks) {
       calls++;
       const request = threadRequest({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!), recordId => store.hub.get(recordId));
-      const r = await complete<ThreadModelOutput>(d, { tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: request.prompt, schema: request.schema });
+      const r = await complete<ThreadModelOutput>(d, { tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
       if (!r.ok) { log(JSON.stringify({ step: "digest", ok: false, category: modelFailureCategory(r.error) })); ok = false; break; }
-      if (!unchanged()) { ok = false; break; }
+      if (!unchanged()) { discardedCall(d.db,r.call_id); ok = false; break; }
       const known = new Set(chunk.flatMap(x => x.v.records.map(rec => rec.id)).filter(Boolean));
       const out = request.decode(r.data);
       store.hub.db.transaction(() => {
@@ -470,7 +506,8 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
           if (pieces.filter(p => p.frameId === frame.id).every(p => doneParts.has(p.key))) done.add(frame.id);
         }
         const partial = pieces.filter(p => !done.has(p.frameId) && doneParts.has(p.key)).map(p => p.key);
-        store.setState(`digest:${id}`, { frames: [...done], records: countOf(done), user_facts: factIds, ...(partial.length ? { parts: partial } : {}) } satisfies DigestMark);
+        store.setState(`digest:${id}`, { frames: [...done], records: countOf(done), user_facts: factIds, fact_ids: currentFacts(), ...(partial.length ? { parts: partial } : {}) } satisfies DigestMark);
+        appliedCall(d.db,r.call_id);
       })();
     }
     if (!ok) { failed++; log(JSON.stringify({ step: "digest", ok: false })); continue; }
@@ -478,10 +515,11 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     const brief = await makeBrief(d, "thread_brief", title, detail);
     if (brief === null) { failed++; continue; }
     store.hub.db.transaction(() => {
-      store.upsertThread({ ...store.thread(id)!, brief, needs_regen: Number(JSON.stringify(userFacts()) !== JSON.stringify(factIds)), updated_at: toLocalIso(now) });
+      store.upsertThread({ ...store.thread(id)!, brief: brief.text, needs_regen: Number(JSON.stringify(userFacts()) !== JSON.stringify(factIds)), updated_at: toLocalIso(now) });
       const projectId = store.thread(id)!.project_id;
       if (projectId) store.hub.db.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(projectId);
       if (doneHint) askDone(store, id, now);
+      appliedCall(d.db,brief.call_id);
     })();
     updated++;
   }
@@ -523,6 +561,7 @@ export async function dedupStep(d: Deps, store: DistillStore, now: number) {
       const [target, ...rest] = members.sort((a, b) => b.frames - a.frames || (b.last_ms ?? 0) - (a.last_ms ?? 0));
       for (const t of rest) { store.mergeThreads(t.id, target!.id, new Date(now).toISOString()); merged++; }
     }
+    appliedCall(d.db,r.call_id);
   })();
   return { calls: 1, merged, failed: 0 };
 }
@@ -544,20 +583,24 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
       if (!described.length) { store.setState(pendingKey, null); store.upsertProject({ ...p, brief: null, detail: null, last_ms: last || p.last_ms, salience, needs_regen: 0, updated_at: toLocalIso(now) }); continue; }
       calls++;
       const views: P.ThreadView[] = described.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: p.name, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" }));
-      const r = await complete<P.ProjectOutput>(d, { tier: "hour", task: "project", system: P.PROJECT_SYSTEM, prompt: P.projectPrompt(p.name, views, factViews(store, "project_id", p.id)), schema: P.PROJECT_SCHEMA });
+      const request = projectRequest(store, p.id, p.name, views);
+      const r = await complete<ProjectModelOutput>(d, { tier: "hour", task: "project", system: P.PROJECT_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
       if (!r.ok) { failed++; continue; }
-      detail = r.data;
+      detail = { goal: r.data.goal, status: r.data.status, people: r.data.people };
       store.hub.db.transaction(() => {
+        request.apply(r.data, now);
         store.upsertProject({ ...store.project(p.id)!, detail, last_ms: last, salience, needs_regen: 0, updated_at: toLocalIso(now) });
         store.setState(pendingKey, true);
+        appliedCall(d.db,r.call_id);
       })();
     }
     calls++;
     const brief = await makeBrief(d, "project_brief", p.name, detail);
     if (brief === null) { failed++; continue; }
     store.hub.db.transaction(() => {
-      store.upsertProject({ ...store.project(p.id)!, brief, updated_at: toLocalIso(now) });
+      store.upsertProject({ ...store.project(p.id)!, brief: brief.text, updated_at: toLocalIso(now) });
       store.setState(pendingKey, null);
+      appliedCall(d.db,brief.call_id);
     })();
     updated++;
   }
@@ -660,14 +703,16 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
     store.hub.db.transaction(() => {
       store.upsertDay({ date, detail, needs_regen: 0, updated_at: toLocalIso(now) });
       store.setState(pendingKey, true);
+      appliedCall(d.db,r.call_id);
     })();
   }
   calls++;
   const brief = await makeBrief(d, "day_brief", date, detail);
   if (brief === null) return { calls, ok: false };
   store.hub.db.transaction(() => {
-    store.upsertDay({ date, brief, updated_at: toLocalIso(now) });
+    store.upsertDay({ date, brief: brief.text, updated_at: toLocalIso(now) });
     store.setState(pendingKey, null);
+    appliedCall(d.db,brief.call_id);
   })();
   return { calls, ok: true };
 }
@@ -804,9 +849,13 @@ async function regularRound(d: Deps, state: LoopState) {
   const slowDue = now - (store.getState<number>("slow_ms") ?? 0) >= HOUR;
   // 当天的日记每 3 小时刷新一次；过去的日子有变化就在每小时那轮重写。
   const todayDue = now - (store.getState<number>("today_ms") ?? 0) >= 3 * HOUR;
-  log(JSON.stringify(await distillRound(d, { slow: slowDue, days: todayDue ? "all" : "past", enabledDefault: state.enabledDefault })));
-  if (slowDue) store.setState("slow_ms", now);
-  if (slowDue && todayDue) store.setState("today_ms", now);
+  const result = await distillRound(d, { slow: slowDue, days: todayDue ? "all" : "past", enabledDefault: state.enabledDefault });
+  log(JSON.stringify(result));
+  const failed = Object.values(result).some(v => v && typeof v === "object" && "failed" in v && Number(v.failed) > 0)
+    || Number((result.days as { pending?: number } | undefined)?.pending ?? 0) > 0;
+  // 失败的慢速整理在下一轮（15 分钟）重试；不能把失败当完成再等整整一小时。
+  if (slowDue && !failed) store.setState("slow_ms", now);
+  if (slowDue && todayDue && !failed) store.setState("today_ms", now);
 }
 
 export async function runDistill({ db, llm, once, backfill, range, log = console.log, pollMs = 5000 }: { db: HubDB; llm: LLM; once: boolean; backfill: boolean; range?: { from: string; to: string }; log?: (line: string) => void; pollMs?: number }) {

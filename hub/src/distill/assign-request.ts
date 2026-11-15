@@ -6,6 +6,7 @@ export function assignRequest(frames: FrameView[], threads: ThreadView[]) {
   const threadIDs = new Map(threads.map((t, i) => [`t${i + 1}`, t.id]));
   const base = ASSIGN_SCHEMA.properties.items;
   return {
+    refs: Object.fromEntries([...frameIDs,...threadIDs]),
     prompt: assignPrompt(frames.map((f, i) => ({ ...f, id: `s${i + 1}` })), threads.map((t, i) => ({ ...t, id: `t${i + 1}` }))),
     schema: { ...ASSIGN_SCHEMA, properties: { items: { ...base, items: { ...base.items, properties: {
       ...base.items.properties,

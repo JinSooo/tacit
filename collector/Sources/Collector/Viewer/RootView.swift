@@ -52,7 +52,7 @@ struct RootView: View {
     case .now: NowPage()
     case .history: HistoryPage()
     case .pending: PendingPage()
-    case .audit: AuditPage()
+    case .audit: RuntimePage()
     case .settings: SettingsPage()
     case .project(let id): ProjectPage(id: id).id(id)
     }
@@ -72,7 +72,7 @@ struct Sidebar: View {
         SidebarLabel(title: "待确认", icon: "tray")
           .badge(store.pending.count)
           .tag(Page.pending)
-        SidebarLabel(title: "AI 读取记录", icon: "eye").tag(Page.audit)
+        SidebarLabel(title: "运行记录", icon: "eye").tag(Page.audit)
       }
       if !store.projects.isEmpty {
         Section("项目") {

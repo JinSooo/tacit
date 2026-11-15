@@ -1,4 +1,4 @@
-import { AuditView } from "./audit-view.tsx";
+import { RuntimeView } from "./runtime-view.tsx";
 import { SegmentList } from "./segment-list.tsx";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -260,7 +260,7 @@ function App() {
   }, []);
   if (!token) return <div className="token-prompt"><strong>请重新打开网页版</strong><p className="muted">在 Mac 客户端的“设置 → 后台服务”里点“在浏览器中打开”。</p></div>;
   return <><a className="skip" href="#content" onClick={event => { event.preventDefault(); document.getElementById("content")?.focus(); }}>跳到内容</a><main>
-    <header><div className="heading-row"><h1>Tacit</h1><nav aria-label="页面">{([["history", "历史记录"], ["now", "此刻"], ["pending", "待确认"], ["audit", "读取记录"], ["status", "状态"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => navigate(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count" aria-label={`${pendingCount} 项`}>{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
+    <header><div className="heading-row"><h1>Tacit</h1><nav aria-label="页面">{([["history", "历史记录"], ["now", "此刻"], ["pending", "待确认"], ["audit", "运行记录"], ["status", "状态"], ["settings", "设置"]] as const).map(([key, label]) => <button key={key} aria-current={view === key ? "page" : undefined} onClick={() => navigate(key)}>{label}{key === "pending" && pendingCount > 0 && <span className="pending-count" aria-label={`${pendingCount} 项`}>{pendingCount}</span>}</button>)}</nav></div>{view === "history" && <div className="toolbar">
       <input ref={search} type="search" aria-label="搜索历史记录" placeholder="搜索历史记录" value={q} onChange={event => setQ(event.target.value)} />
       <select aria-label="来源" value={source} onChange={event => setSource(event.target.value)}><option value="">全部来源</option>{Object.entries(sourceNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select>
       <input className="device" list="devices" aria-label="设备" placeholder="全部设备" value={device} onChange={event => setDevice(event.target.value)} /><datalist id="devices">{devices.map(device => <option key={device} value={device} />)}</datalist>
@@ -271,7 +271,7 @@ function App() {
     <DistillationWorkspace view={view === "audit" || view === "settings" || view === "status" ? "history" : view} audio={audioApi} api={distillationApi} onCount={setPendingCount} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); navigate("history"); setRevision(value => value + 1); }} />
     {view === "settings" && <section className="distillation-view settings-view" aria-label="设置"><AgentSettings api={settingsApi} /><ModelSettings api={settingsApi} /><GeneralSettings api={settingsApi} /><AudioSettings api={audioApi} /><HubSettingsBlock api={settingsApi} token={token} /></section>}
     {view === "status" && <StatusView api={api} />}
-    {view === "audit" && <AuditView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); navigate("history"); setRevision(value => value + 1); }} />}
+    {view === "audit" && <RuntimeView api={api} distillation={distillationApi} onHistory={title => { setQ(title); setSource(""); setDevice(""); setDate(""); navigate("history"); setRevision(value => value + 1); }} />}
     {view === "history" && !q.trim() && <DayOverview api={api} day={date || dayKey(new Date())} revision={overviewRevision} selected={expanded} onPick={pick} />}
     {view === "history" && anchor && <p className="anchor-note">正在显示 {timeRange({ ...records.find(r => r.id === anchor.id) ?? { kind: "event", t_start: anchor.t_start } } as HistoryRow)} 及更早的记录 <button className="text-button compact" onClick={() => setAnchor(null)}>回到最新</button></p>}
     {view === "history" && segmentMode && <div id="segments" tabIndex={-1}><SegmentList api={api} day={shownDay} device={device} focus={expanded} revision={revision} collapse={collapse}

@@ -73,7 +73,7 @@ struct AgentSettingsView: View {
         if let note { SettingsMessage(text: note, warning: false) }
         if let error { SettingsMessage(text: error) }
       } header: { Text("已连接的工具") } footer: {
-        Note("连接后，AI 可以查询你的历史记录，每次读取都记在“AI 读取记录”里。Claude Code、Codex 还会自动带入当前项目进展。Claude Desktop 的连接或断开需要完全退出并重新打开应用后生效。")
+        Note("连接后，AI 可以查询你的历史记录，每次读取都记在“运行记录”里。Claude Code、Codex 还会自动带入当前项目进展。Claude Desktop 的连接或断开需要完全退出并重新打开应用后生效。")
       }
       GeneralPreferencesSection(context: true)
     }

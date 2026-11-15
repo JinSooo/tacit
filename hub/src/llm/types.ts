@@ -2,8 +2,8 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 
 export type Tier = "minute" | "hour" | "day";
 export type Provider = "claude-cli" | "codex-cli" | "anthropic" | "openai-compatible";
-export interface LLMRequest { tier: Tier; task?: string; system: string; prompt: string; schema: object; timeoutMs?: number }
-export type LLMResult<T> = { ok: true; data: T; ms: number } | { ok: false; error: string; ms: number };
+export interface LLMRequest { tier: Tier; task?: string; system: string; prompt: string; schema: object; timeoutMs?: number; contentRevision?: number; refs?: Record<string, string> }
+export type LLMResult<T> = ({ ok: true; data: T; ms: number } | { ok: false; error: string; ms: number }) & { call_id?: string };
 export type ReasoningEffort = "none" | "low" | "medium" | "high";
 export interface ModelConfig { provider: Provider; model: string; base_url?: string; reasoning_effort?: ReasoningEffort }
 export interface UsageRow {
@@ -14,4 +14,5 @@ export interface UsageRow {
 export type ReadKey = (provider: Provider) => string | Promise<string>;
 export type Spawn = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
 export interface Metrics { outputChars: number; inputTokens: number | null; outputTokens: number | null }
-export interface BackendContext { req: LLMRequest; config: ModelConfig; cwd: string; spawn: Spawn; metrics: Metrics; timeoutMs: number }
+export interface CallObserver { request(transport: "api" | "cli", payload: unknown): void; response(text: string): void }
+export interface BackendContext { req: LLMRequest; config: ModelConfig; cwd: string; spawn: Spawn; metrics: Metrics; timeoutMs: number; observer?: CallObserver }

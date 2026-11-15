@@ -37,6 +37,11 @@ export const textTransformRules = {
 /** 客户端包装的澄清回答只保留 answer，剥去 AI 问题和内部标识。 */
 export function cleanUserText(text: string): string {
   let value = text.trim();
+  // 桌面附件清单不是问题正文。只识别完整客户端包装，保留 My request 后的实际输入。
+  if (value.startsWith("# Files mentioned by the user:")) {
+    const marker = /^## My request:\s*$/m.exec(value);
+    if (marker) value = value.slice(marker.index + marker[0].length).replace(/(?:\n\s*<\/image>)+\s*$/, "").trim();
+  }
   const reply = value.match(textTransformRules.reply.pattern);
   if (reply) {
     try {
@@ -52,7 +57,7 @@ export function cleanUserText(text: string): string {
   do {
     previous = value;
     for (const { tag } of injectedBlockRules) {
-      value = value.replace(new RegExp(`(^|\\n)[ \\t]*<(${tag})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\2>[ \\t]*`, "g"), "$1");
+      value = value.replace(new RegExp(`(^|\\n)[ \\t]*(?:(?:Human|User):[ \\t]*)?<(${tag})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\2>[ \\t]*`, "g"), "$1");
       // 未闭合的注入块也不输出。
       const leading = value.trim();
       if (new RegExp(`^<(${tag})(?:\\s|>)`).test(leading)) {

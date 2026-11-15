@@ -15,7 +15,7 @@ struct AuditPage: View {
   var body: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
-        Text("AI 工具每次读取你的记录、往历史记录里添加内容，都会记在这里。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        Text("内容链接查看的是当前记录；自动带入可查看当时保存的正文。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
           .padding(.bottom, 24)
         if reads.isEmpty {
           if loading { Placeholder(kind: .loading).frame(height: 240) }
@@ -54,7 +54,7 @@ struct AuditPage: View {
       .frame(maxWidth: .infinity)
     }
     .background(Palette.paper)
-    .navigationTitle("AI 读取记录")
+    .navigationTitle("运行记录")
     .toolbar {
       ToolbarItem(placement: .principal) {
         Picker("工具", selection: $tool) {
@@ -108,6 +108,7 @@ struct AuditRow: View {
   let toggle: () -> Void
   @Environment(ViewerStore.self) private var store
   @State private var hovering = false
+  @State private var showSnapshot = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -151,6 +152,10 @@ struct AuditRow: View {
         VStack(alignment: .leading, spacing: 4) {
           if read.resultIds.isEmpty { Text("这次没有读到内容").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4) }
           ForEach(Array(Set(read.resultIds)).sorted(), id: \.self) { id in target(id) }
+          if read.kind == "context" {
+            Button(showSnapshot ? "收起当时带入" : "查看当时带入") { showSnapshot.toggle() }.buttonStyle(.link).padding(.vertical,8)
+            if showSnapshot { RuntimeSnapshotView(id:read.id) }
+          }
           // bytes：返回给 AI 工具的 JSON 大小。
           Text("共返回 \(ViewerFormat.bytes(read.bytes))").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).padding(.top, 4)
         }

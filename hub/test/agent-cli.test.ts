@@ -81,7 +81,7 @@ test("MCP 转发参数、默认 brief、错误保密、截断及失败后继续�
     expect(values[1].args).toEqual({ tool: "future-tool", id: "p", level: "brief" });
     expect(values[2].args).toEqual({ tool: "future-tool", q: "合成 & 关键词", from: "2026-11-08T00:00:00Z", to: "2026-11-09T00:00:00Z", limit: "2", cursor: "a+/=" });
     expect(values[3].args).toEqual({ tool: "future-tool", device: "mac", limit: "3", cursor: "next" });
-    expect(messages[0].result.content[0].text).toBe(JSON.stringify(values[0], null, 2));
+    expect(messages[0].result.content[0].text).toBe(JSON.stringify(values[0]));
     expect(messages[4].result.isError).toBe(true); expect(messages[4].result.content[0].text).toContain("503");
     expect(messages[5].result.content[0].text.length).toBeLessThanOrEqual(40000); expect(messages[5].result.content[0].text).toContain("已截断");
     expect(messages[6].result.isError).toBeUndefined();
@@ -185,7 +185,7 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     for (let i = 0; i < 4; i++) {
       const path = paths[i]!; const url = `http://127.0.0.1:${server.port}/v1/agent/${path}${path.includes("?") ? "&" : "?"}tool=codex`;
       const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      expect(messages[i].content[0].text).toBe(JSON.stringify(await response.json(), null, 2));
+      expect(messages[i].content[0].text).toBe(JSON.stringify(await response.json()));
     }
     expect(messages[4].isError).toBe(true); expect(messages[4].content[0].text).toContain("404");
     // 从真实生成的 Desktop 配置启动进程，覆盖带空格的路径及独立审计身份。

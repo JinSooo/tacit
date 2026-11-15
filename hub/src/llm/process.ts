@@ -19,6 +19,7 @@ export function cliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
 export function run(ctx: BackendContext, command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = "", stderr = "", settled = false, failure: string | undefined;
+    ctx.observer?.request("cli", { input: JSON.parse(input(ctx)), schema: ctx.req.schema });
     // 不继承额外的终端输入通道；认证仍由 CLI 自己处理。
     const child = ctx.spawn(command, args, { cwd: ctx.cwd, stdio: "pipe", detached: process.platform !== "win32", env: cliEnv() });
     function stop() {
@@ -42,6 +43,8 @@ export function run(ctx: BackendContext, command: string, args: string[]): Promi
     child.stdin.on("error", () => { /* 提前退出时由 close 统一报告。 */ });
     child.on("close", code => {
       if (settled) return;
+      try { ctx.observer?.response(stdout); }
+      catch { fail("调用结果记录失败，结果未采用"); return; }
       if (failure) { fail(failure); return; }
       if (code !== 0) {
         // claude -p 出错时常把原因写在 stdout 的 JSON（result 字段）里，stderr 是空的，例如"额度用完"。

@@ -30,11 +30,11 @@ function call(path: string, method = "GET", data?: unknown) {
 
 test("v4 加密库事务升级 v5，保留旧数据并可重复打开", () => {
   const record = fixture(); ctx.db.ingest([record]);
-  ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; PRAGMA user_version=4;");
+  ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; DROP TABLE runtime_calls; PRAGMA user_version=4;");
   for (let i=0;i<2;i++) {
     const upgraded = new HubDB(ctx.file,ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(10);
+      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(11);
       expect(upgraded.get(record.id)?.body).toBe(record.body);
       expect(new AudioStore(upgraded).settings()).toEqual({ retention_days: 7 });
     } finally { upgraded.close(); }

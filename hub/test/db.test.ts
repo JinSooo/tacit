@@ -17,7 +17,7 @@ test("SQLCipher 实际文件加密，错误密钥拒绝，正确密钥重开及�
   const reopened = new HubDB(ctx.file, ctx.config.dbKey);
   try {
     expect(reopened.get(record.id)?.body).toBe(record.body);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(10);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(11);
   } finally { reopened.close(); }
 });
 
@@ -132,7 +132,7 @@ test("来源稳定键、修正目标和不可排序的日期逐条拒绝", () =>
 test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成迁移（10 次）", async () => {
   const script = new URL("./fixtures/migrate-worker.ts", import.meta.url).pathname;
   for (let round = 0; round < 10; round++) {
-    ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; DROP TABLE agent_reads; DROP TABLE distill_requests; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; PRAGMA user_version=2;");
+    ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; DROP TABLE agent_reads; DROP TABLE distill_requests; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; DROP TABLE runtime_calls; PRAGMA user_version=2;");
     const gate = `${ctx.dir}/gate-${round}`;
     const children = [0, 1].map(index => Bun.spawn([process.execPath, script, ctx.file, ctx.config.dbKey, gate, String(index)], { stdout: "pipe", stderr: "pipe" }));
     try {
@@ -143,8 +143,8 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
       }
       writeFileSync(gate, "go");
       const results = await Promise.all(children.map(async child => ({ code: await child.exited, error: await new Response(child.stderr).text(), output: await new Response(child.stdout).text() })));
-      expect(results).toEqual([{ code: 0, error: "", output: "10\n" }, { code: 0, error: "", output: "10\n" }]);
-      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(10);
+      expect(results).toEqual([{ code: 0, error: "", output: "11\n" }, { code: 0, error: "", output: "11\n" }]);
+      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(11);
       expect(ctx.db.db.pragma("table_info(threads)")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "domain" }), expect.objectContaining({ name: "project_hint" })]));
       expect(ctx.db.db.pragma("table_info(agent_reads)")).toHaveLength(8);
       expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'agent_reads_%'").all()).toHaveLength(2);
@@ -156,12 +156,12 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
 }, 30000);
 
 test("v8 用量升级到 v9：task 列可空，旧行不变，重开幂等", () => {
-  ctx.db.db.exec("ALTER TABLE llm_usage DROP COLUMN task; PRAGMA user_version=8;");
+  ctx.db.db.exec("ALTER TABLE llm_usage DROP COLUMN task; DROP TABLE runtime_calls; PRAGMA user_version=8;");
   ctx.db.db.prepare("INSERT INTO llm_usage(id, tier, input_tokens, ok) VALUES(?,?,?,?)").run("legacy-usage", "hour", 123, 1);
   for (let i = 0; i < 2; i++) {
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(10);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(11);
       expect((upgraded.db.pragma("table_info(llm_usage)") as { name: string; type: string }[]).filter(c => c.name === "task")).toMatchObject([{ name: "task", type: "TEXT" }]);
       expect(upgraded.db.prepare("SELECT id,tier,input_tokens,ok,task FROM llm_usage WHERE id=?").get("legacy-usage")).toEqual({ id: "legacy-usage", tier: "hour", input_tokens: 123, ok: 1, task: null });
     } finally { upgraded.close(); }
@@ -182,18 +182,18 @@ test("v9 声纹升级 v10：mic 列按现有声纹回填，重开及已有列幂
   if ((ctx.db.db.pragma("table_info(speakers)") as { name: string }[]).some(c => c.name === "mic")) {
     ctx.db.db.exec("ALTER TABLE speakers DROP COLUMN mic;");
   }
-  ctx.db.db.pragma("user_version=9");
+  ctx.db.db.exec("DROP TABLE runtime_calls; PRAGMA user_version=9;");
   for (let i = 0; i < 3; i++) {
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(10);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(11);
       expect((upgraded.db.pragma("table_info(speakers)") as { name: string }[]).filter(c => c.name === "mic"))
         .toMatchObject([{ name: "mic", type: "INTEGER", notnull: 1, dflt_value: "0" }]);
       expect(upgraded.db.prepare("SELECT mic FROM speakers WHERE id=?").get(mic)).toEqual({ mic: 1 });
       expect(upgraded.db.prepare("SELECT mic FROM speakers WHERE id=?").get(sys)).toEqual({ mic: 0 });
       // 已有列但版本号尚旧时也能迁移；声纹清理后重开不能丢掉 mic。
       upgraded.db.prepare("DELETE FROM voice_embeddings WHERE track='mic'").run();
-      if (i === 0) upgraded.db.pragma("user_version=9");
+      if (i === 0) upgraded.db.exec("DROP TABLE runtime_calls; PRAGMA user_version=9;");
     } finally { upgraded.close(); }
   }
 });
