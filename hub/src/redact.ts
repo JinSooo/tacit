@@ -27,12 +27,37 @@ export function redactString(input: string): { text: string; count: number } {
     ["Bearer", /(?<=\b(?:Bearer|Token)\s+)[A-Za-z0-9._~+\/-]{16,}=*/gi],
   ];
   for (const [type, pattern] of patterns) text = text.replace(pattern, () => replace(type));
+  // 地图瓦片请求常只采到 DataServer?...&tk=…；限定查询参数和 32 位十六进制格式，普通哈希不动。
+  text = text.replace(/([?&](?:amp;)?tk=)[a-f0-9]{32}(?![a-f0-9])/gi,
+    (_, prefix: string) => prefix + replace("地图密钥"));
   text = text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+:)([^\s/@]+)(@)/gi,
     (_, prefix, _password, suffix) => prefix + replace("URL密码") + suffix);
   text = text.replace(/((?:["']?)(?:password|passwd|pwd|token|access_token|refresh_token|api[_-]?key|secret|client_secret)["']?\s*[:=]\s*)(["']?)([A-Za-z0-9_+\/.=~%!@#$^&*?:-]{16,})\2/gi,
     (whole, prefix: string, quote: string, value: string) => {
       const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(r => r.test(value)).length;
       return classes >= 2 && entropy(value) >= 3.5 ? prefix + quote + replace("赋值密钥") + quote : whole;
+    });
+  // 明确的账号/密码标签不靠长密钥熵值判断；屏幕和聊天中常出现短密码或纯数字密码。
+  text = text.replace(/((?:账号|帐号|账户|用户名|\busername|\baccount)[ \t]*(?:[/／][ \t]*)?(?:密码|口令|password|passwd|pwd)[ \t]*(?:是|为)?[ \t]*[:：=][ \t\r\n]*)([^\s/／:：=]{1,128}(?:[ \t]*[/／][ \t]*|[ \t]+|\r?\n[ \t]*))([A-Za-z0-9_+/.=~%!@#$^&*?:-]{1,128})/gi,
+    (_whole, label: string) => label + replace("账号密码"));
+  text = text.replace(/((?:\b(?:password|passwd|pwd)\b|密码|口令)["']?[ \t]*(?:[:：=]|为[:：]?|是[:：]?|\r?\n)[ \t]*)(["']?)([A-Za-z0-9_+/.=~%!@#$^&*?:-]{4,128})\2/gi,
+    (whole, label: string, quote: string, value: string) => {
+      const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(r => r.test(value)).length;
+      return classes >= 2 || /^\d+$/.test(value) ? label + quote + replace("密码") + quote : whole;
+    });
+  // 登录地址后直接粘贴“用户名 密码”，包括 OCR 把 https: 拆成多行的情况。
+  text = text.replace(/(https?\\?[ \t\r\n]*:[ \t\r\n]*\/\/[^\s]+[ \t\r\n]+)([^\s]{1,64})([ \t\r\n]+)([A-Za-z0-9_+/.=~%!@#$^&*?:-]{8,128})/gi,
+    (whole, url: string, user: string, space: string, value: string) => {
+      const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(r => r.test(value)).length;
+      return classes >= 3 ? url + user + space + replace("密码") : whole;
+    });
+  // 登录表单或账号对话把值单独放一行；沿用剪贴板密码判别，并要求附近有明确凭据语境。
+  const context = text;
+  text = text.replace(/(^|\n)([ \t]*)([^\s\n]+)([ \t]*)(?=\r?\n|$)/g,
+    (whole, line: string, indent: string, value: string, suffix: string, offset: number) => {
+      const nearby = context.slice(Math.max(0, offset - 300), offset + whole.length + 100);
+      return isClipboardPassword(value) && /账号|帐号|用户名|密码|口令|\b(?:password|login|sign in)\b/i.test(nearby)
+        ? line + indent + replace("密码") + suffix : whole;
     });
   return { text, count };
 }
@@ -79,7 +104,7 @@ export function redactRecord(record: RecordV1): RecordV1 {
   const people = record.people === undefined ? undefined : visit(record.people) as RecordV1["people"];
   const media = record.media === undefined ? undefined : visit(record.media) as RecordV1["media"];
   return {
-    ...record, title, body, ...(people === undefined ? {} : { people }), ...(media === undefined ? {} : { media }), ...(context === undefined ? {} : { context }),
+    ...record, title, body, ...(record.source_ref == null ? {} : { source_ref: visit(record.source_ref) as string }), ...(people === undefined ? {} : { people }), ...(media === undefined ? {} : { media }), ...(context === undefined ? {} : { context }),
     redactions: (record.redactions ?? 0) + count,
     sensitivity: count && record.sensitivity === "normal" ? "redacted" : record.sensitivity,
   };

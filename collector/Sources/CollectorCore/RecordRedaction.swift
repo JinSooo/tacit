@@ -33,6 +33,10 @@ public enum RecordRedaction {
       let r = replace(text, pattern: pattern) { _, _ in "[已脱敏:\(type)]" }
       text = r.0; count += r.1
     }
+    let mapKey = replace(text, pattern: #"(?i)([?&](?:amp;)?tk=)[a-f0-9]{32}(?![a-f0-9])"#) { m, s in
+      s.substring(with: m.range(at: 1)) + "[已脱敏:地图密钥]"
+    }
+    text = mapKey.0; count += mapKey.1
     // ICU 不支持 JS 的无限长 lookbehind，保留前缀而只替换第二组。
     let bearer = replace(text, pattern: #"(?i)(\b(?:Bearer|Token)\s+)[A-Za-z0-9._~+/\-]{16,}=*"#) { m, s in
       s.substring(with: m.range(at: 1)) + "[已脱敏:Bearer]"
@@ -47,7 +51,29 @@ public enum RecordRedaction {
       guard classes(value) >= 2, entropy(value) >= 3.5 else { return nil }
       return s.substring(with: m.range(at: 1)) + quote + "[已脱敏:赋值密钥]" + quote
     }
-    return (assignment.0, count + assignment.1)
+    text = assignment.0; count += assignment.1
+    let pair = replace(text, pattern: #"(?i)((?:账号|帐号|账户|用户名|\busername|\baccount)[ \t]*(?:[/／][ \t]*)?(?:密码|口令|password|passwd|pwd)[ \t]*(?:是|为)?[ \t]*[:：=][ \t\r\n]*)([^\s/／:：=]{1,128}(?:[ \t]*[/／][ \t]*|[ \t]+|\r?\n[ \t]*))([A-Za-z0-9_+/.=~%!@#$^&*?:\-]{1,128})"#) { m, s in
+      s.substring(with: m.range(at: 1)) + "[已脱敏:账号密码]"
+    }
+    text = pair.0; count += pair.1
+    let short = replace(text, pattern: #"(?i)((?:\b(?:password|passwd|pwd)\b|密码|口令)["']?[ \t]*(?:[:：=]|为[:：]?|是[:：]?|\r?\n)[ \t]*)(["']?)([A-Za-z0-9_+/.=~%!@#$^&*?:\-]{4,128})\2"#) { m, s in
+      let value = s.substring(with: m.range(at: 3)), quote = s.substring(with: m.range(at: 2))
+      guard classes(value) >= 2 || matches(value, #"^\d+$"#) else { return nil }
+      return s.substring(with: m.range(at: 1)) + quote + "[已脱敏:密码]" + quote
+    }
+    text = short.0; count += short.1
+    let loginLine = replace(text, pattern: #"(?i)(https?\\?[ \t\r\n]*:[ \t\r\n]*//[^\s]+[ \t\r\n]+)([^\s]{1,64})([ \t\r\n]+)([A-Za-z0-9_+/.=~%!@#$^&*?:\-]{8,128})"#) { m, s in
+      guard classes(s.substring(with: m.range(at: 4))) >= 3 else { return nil }
+      return s.substring(with: m.range(at: 1)) + s.substring(with: m.range(at: 2)) + s.substring(with: m.range(at: 3)) + "[已脱敏:密码]"
+    }
+    text = loginLine.0; count += loginLine.1
+    let lines = replace(text, pattern: #"(^|\n)([ \t]*)([^\s\n]+)([ \t]*)(?=\r?\n|$)"#) { m, s in
+      let start = max(0, m.range.location - 300), end = min(s.length, NSMaxRange(m.range) + 100)
+      let nearby = s.substring(with: NSRange(location: start, length: end - start))
+      guard clipboardPassword(s.substring(with: m.range(at: 3))), matches(nearby, #"(?i)账号|帐号|用户名|密码|口令|\b(?:password|login|sign in)\b"#) else { return nil }
+      return s.substring(with: m.range(at: 1)) + s.substring(with: m.range(at: 2)) + "[已脱敏:密码]" + s.substring(with: m.range(at: 4))
+    }
+    return (lines.0, count + lines.1)
   }
   private static func matches(_ value: String, _ pattern: String) -> Bool { value.range(of: pattern, options: .regularExpression) != nil }
   private static func classes(_ value: String) -> Int { ["[a-z]", "[A-Z]", "[0-9]", "[^A-Za-z0-9]"].filter { matches(value, $0) }.count }
