@@ -25,6 +25,7 @@ export function VoiceSamples({ samples, api }: { samples: { id: string; mime: st
 }
 export function AudioSettings({ api }: { api: AudioApi }) {
   const [days, setDays] = useState("");
+  const [keepForever, setKeepForever] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -34,14 +35,14 @@ export function AudioSettings({ api }: { api: AudioApi }) {
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError("");
-    api.settings(controller.signal).then(data => { if (!controller.signal.aborted) setDays(String(data.retention_days)); }).catch(error => { if (!controller.signal.aborted) setError(message(error)); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    api.settings(controller.signal).then(data => { if (!controller.signal.aborted) { setKeepForever(data.retention_days === 0); setDays(String(data.retention_days || 7)); } }).catch(error => { if (!controller.signal.aborted) setError(message(error)); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [api, revision]);
   let valid = false;
-  try { retentionDays(days); valid = true; } catch { /* 输入框保留无效输入，由表单和提交入口共同校验。 */ }
+  try { valid = keepForever || retentionDays(days) > 0; } catch { /* 输入框保留无效输入，由表单和提交入口共同校验。 */ }
   async function save(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(""); setStatus("");
-    try { const data = await api.saveSettings(days); setDays(String(data.retention_days)); setStatus("已保存"); }
+    try { const data = await api.saveSettings(keepForever ? 0 : days); setKeepForever(data.retention_days === 0); if (data.retention_days) setDays(String(data.retention_days)); setStatus("已保存"); }
     catch (error) { setError(message(error)); } finally { setBusy(false); }
   }
   async function purge() {
@@ -49,7 +50,7 @@ export function AudioSettings({ api }: { api: AudioApi }) {
     try { await api.purge(); dialog.current?.close(); setStatus("设备下次同步时会删除音频"); }
     catch (error) { setError(message(error)); dialog.current?.close(); } finally { setBusy(false); }
   }
-  return <section className="settings-block"><h2>录音</h2><form onSubmit={save}><label>录音保留多少天<span className="field-row"><input type="number" required min={1} max={365} step={1} value={days} disabled={loading || busy} onChange={event => { setDays(event.target.value); setStatus(""); }} /><span>天</span></span><span className="hint">只影响原始音频，转写出的文字一直保留。可填 1–365。</span></label><div className="actions"><button className="primary" type="submit" disabled={loading || busy || !valid}>保存</button>{status && <span role="status">{status}</span>}</div></form>
+  return <section className="settings-block"><h2>录音</h2><form onSubmit={save}><label>原始音频保留<select aria-label="原始音频保留" value={keepForever ? "forever" : "days"} disabled={loading || busy} onChange={event => { setKeepForever(event.target.value === "forever"); setStatus(""); }}><option value="days">按天清除</option><option value="forever">不自动清除</option></select></label>{!keepForever && <label>保留天数<span className="field-row"><input type="number" required min={1} max={365} step={1} value={days} disabled={loading || busy} onChange={event => { setDays(event.target.value); setStatus(""); }} /><span>天</span></span><span className="hint">只影响原始音频，转写出的文字一直保留。可填 1–365。</span></label>}{keepForever && <p className="hint">音频会持续占用磁盘；仍可手动删除，转写文字一直保留。</p>}<div className="actions"><button className="primary" type="submit" disabled={loading || busy || !valid}>保存</button>{status && <span role="status">{status}</span>}</div></form>
     {loading && <p className="muted" role="status">正在读取…</p>}{error && <p className="error" role="alert">{error} <button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
     <h3>删除全部音频</h3><p className="muted">只删原始音频，转写出的文字会保留。</p>
     <button className="danger" disabled={busy} onClick={() => dialog.current?.showModal()}>删除全部音频…</button>

@@ -96,7 +96,7 @@ final class AudioCoordinator {
           if let state, let json = try? JSONSerialization.jsonObject(with: state) as? [String: Any] {
             voiceHash = json["voice_hash"] as? String
             voiceChanged = json["voice_changed"] as? Bool ?? false
-            if let days = json["retention_days"] as? Int, (1...365).contains(days) {
+            if let days = json["retention_days"] as? Int, (0...365).contains(days) {
               retentionDays = days; retentionKnown = true
             }
             lastWorker = AudioPolicy.date(json["last_worker"] as? String) ?? .distantPast
@@ -332,7 +332,7 @@ final class AudioCoordinator {
       self.queue.async {
         defer { self.syncing = false; self.publish() }
         guard let data, let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let days = reply["retention_days"] as? Int, (1...365).contains(days),
+              let days = reply["retention_days"] as? Int, (0...365).contains(days),
               let deleting = reply["delete_conversations"] as? [String] else { return }
         do {
           self.retentionDays = days; self.retentionKnown = true

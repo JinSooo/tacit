@@ -94,7 +94,7 @@ export class AudioStore {
   settings() { return { retention_days: this.setting("retention_days", 7) }; }
   updateSettings(value: unknown) {
     const b = object(value);
-    if (!Number.isInteger(b.retention_days) || Number(b.retention_days) < 1 || Number(b.retention_days) > 365) throw new InputError("retention_days 必须是 1–365 的整数");
+    if (!Number.isInteger(b.retention_days) || Number(b.retention_days) < 0 || Number(b.retention_days) > 365) throw new InputError("retention_days 必须是 0–365 的整数（0 表示不自动清除）");
     this.set("retention_days", b.retention_days);
     return this.settings();
   }
@@ -206,7 +206,8 @@ export class AudioStore {
    * 已确认、已忽略、被并走的保留；转写里还按 id 引用它的不删。
    */
   pruneOrphans(now = Date.now()): number {
-    const stale = new Date(now - this.settings().retention_days * 86_400_000).toISOString();
+    const days = this.settings().retention_days;
+    const stale = days === 0 ? "" : new Date(now - days * 86_400_000).toISOString();
     const ids = (this.sql.prepare(`SELECT id FROM speakers s WHERE status='new'
       AND (seconds<? OR COALESCE(updated_at,created_at)<?)
       AND NOT EXISTS(SELECT 1 FROM voice_embeddings e WHERE e.speaker_id=s.id)
@@ -239,7 +240,8 @@ export class AudioStore {
   }
   /** 录音过了保留期已经被设备清掉，或对话已删：请求不会再有回音，删掉，免得待确认里一直写"还在路上"。 */
   expireSampleRequests(now = Date.now()) {
-    const cutoff = now - this.settings().retention_days * 86_400_000;
+    const days = this.settings().retention_days;
+    const cutoff = days === 0 ? -Infinity : now - days * 86_400_000;
     const open = this.sql.prepare("SELECT r.id,(SELECT MAX(t_end) FROM voice_embeddings e WHERE e.conversation_ref=r.conversation_ref) AS t_end FROM sample_requests r WHERE fulfilled_at IS NULL").all() as { id: string; t_end: string | null }[];
     for (const r of open) if (!r.t_end || Date.parse(r.t_end) < cutoff) this.sql.prepare("DELETE FROM sample_requests WHERE id=?").run(r.id);
   }

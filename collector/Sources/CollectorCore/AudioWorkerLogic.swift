@@ -299,7 +299,7 @@ public enum WorkerLogic {
       "context": ["app": meta.meeting_apps.first as Any? ?? NSNull(), "extra": [
         "speech_seconds": meta.segments.reduce(0.0) { $0 + AudioPolicy.date($1.t_end)!.timeIntervalSince(AudioPolicy.date($1.t_start)!) },
         "mic_dbfs": dbfs(.mic), "sys_dbfs": dbfs(.sys), "tracks": Array(Set(meta.segments.map { $0.track.rawValue })).sorted()]],
-      "media": [["path": "audio/\(meta.t_start.prefix(10))/\(meta.id)", "kind": "audio", "expires": LocalTime.iso(AudioPolicy.date(meta.t_end)!.addingTimeInterval(Double(retention) * 86400))]]]
+      "media": [["path": "audio/\(meta.t_start.prefix(10))/\(meta.id)", "kind": "audio", "expires": retention == 0 ? NSNull() : LocalTime.iso(AudioPolicy.date(meta.t_end)!.addingTimeInterval(Double(retention) * 86400)) as Any]]]
   }
   public static func wav(_ samples: [Float]) -> Data {
     var data = Data()

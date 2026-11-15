@@ -319,41 +319,16 @@ struct PrivacySettingsView: View {
         }
       }
       Section {
-        Text(blockedApps.joined(separator: "、")).frame(maxWidth: .infinity, alignment: .leading)
-      } header: {
-        Text("不记录的应用")
-      } footer: {
-        Note("这些应用在前台时什么都不读。")
-      }
-      Section("其他不记录的内容") {
-        SettingsRow("浏览器隐私窗口", value: "按窗口标题识别")
-        Note("部分浏览器或语言可能不在标题中标记隐私窗口，不能保证自动排除；浏览私密内容前请暂停记录。")
-        SettingsRow("剪贴板", value: "从密码管理器复制的内容")
-        SettingsRow("文件", value: "隐藏目录、密码管理器的目录")
-      }
-      Section {
         SettingsRow("密码和密钥", value: "存之前换成 [已脱敏]，原文不写进磁盘")
         SettingsRow("标为私密的内容", value: "不交给 AI 整理，也不自动带入")
-        Text("已连接的 AI 工具主动查询时仍可读取私密记录；每次查询都留在“AI 读取记录”中。").foregroundStyle(Palette.muted)
+        Text("已连接的 AI 工具主动查询时仍可读取私密记录；每次查询都留在“运行记录”中。").foregroundStyle(Palette.muted)
       } header: {
         Text("写入时")
       }
     }
   }
 
-  /// 黑名单里的应用：装了的显示本机名字（跟系统语言），没装的用常见名字。
-  static let knownNames: [String: String] = [
-    "com.1password.1password": "1Password", "com.agilebits.onepassword7": "1Password 7",
-    "com.bitwarden.desktop": "Bitwarden", "com.lastpass.LastPass": "LastPass",
-    "com.dashlane.dashlanephonefinal": "Dashlane", "me.proton.pass.electron": "Proton Pass",
-    "com.apple.keychainaccess": "钥匙串访问", "com.apple.Passwords": "密码",
-  ]
-  var blockedApps: [String] {
-    let names = CapturePolicy.blockedBundles.map { id in
-      NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { AppNames.systemLanguageName($0) } ?? Self.knownNames[id] ?? id
-    }
-    return Array(Set(names)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-  }
+
 }
 
 // MARK: 维护
@@ -398,11 +373,10 @@ struct MaintenanceSettingsView: View {
         }
         if let r = latest("backfill") { SettingsMessage(text: r.statusText, warning: r.status == "failed") }
         if let requestError { SettingsMessage(text: requestError) }
-      } header: {
-        Text(MaintenanceTask.backfill.title)
-      } footer: {
         facts(what: "把所选日期里、开始整理之前就有的记录交给 AI，整理出事项、项目和日记。", sources: "已有的记录，不重新采集",
               dedupe: "已经整理过的记录不会重复整理", distill: "会调用 AI 模型，同一段日期可以再整理一次")
+      } header: {
+        Text(MaintenanceTask.backfill.title)
       }
       Section {
         SettingsRow("密钥备份") {
@@ -439,7 +413,6 @@ struct MaintenanceSettingsView: View {
         if let text = job?.text, !text.isEmpty { Text(text) }
         if let extra { Text("整理：\(extra)") }
       }
-    } footer: {
       facts(what: what, sources: sources, dedupe: dedupe, distill: distill)
     }
   }
@@ -453,13 +426,13 @@ struct MaintenanceSettingsView: View {
           GridRow { Text("读取"); Text(sources) }
           GridRow { Text("去重"); Text(dedupe) }
           GridRow { Text("整理"); Text(distill) }
-        }.padding(.top, 4)
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
       }
     }
     .foregroundStyle(Palette.muted)
     .multilineTextAlignment(.leading)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(.horizontal, 12)
+    .padding(.vertical, 4)
   }
 
   func latest(_ kind: String) -> DistillRequestInfo? { requests.first { $0.kind == kind } }

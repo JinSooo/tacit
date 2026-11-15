@@ -114,7 +114,7 @@ public enum AudioPolicy {
   }()
   public static func shouldDelete(_ meta: AudioMetadata, now: Date, retentionDays: Int, purgeBefore: Date? = nil) -> Bool {
     guard meta.status != .open, let end = date(meta.t_end) else { return false }
-    return end < now.addingTimeInterval(-Double(retentionDays) * 86400) || purgeBefore.map { end < $0 } == true
+    return (retentionDays > 0 && end < now.addingTimeInterval(-Double(retentionDays) * 86400)) || purgeBefore.map { end < $0 } == true
   }
 }
 

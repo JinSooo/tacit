@@ -82,3 +82,16 @@ private let builtin = MicrophoneDevice(uid: "builtin-uid", name: "MacBook Pro Mi
   #expect(SpeakerMenu.match(" 刘朝刚 ", in: speakers)?.id == "a")
   #expect(SpeakerMenu.match("新的人", in: speakers) == nil)
 }
+
+
+@Test func pendingButtonsWrapWholeControlsWithoutOverlapping() {
+  let sizes = [CGSize(width: 66, height: 24), CGSize(width: 52, height: 24), CGSize(width: 126, height: 24), CGSize(width: 62, height: 24)]
+  let narrow = PendingActionRows.arrange(sizes, width: 308)
+  #expect(narrow.points == [CGPoint(x: 0, y: 0), CGPoint(x: 74, y: 0), CGPoint(x: 134, y: 0), CGPoint(x: 0, y: 32)])
+  #expect(narrow.size.height == 56)
+  for (index, point) in narrow.points.enumerated() { #expect(point.x + sizes[index].width <= 308) }
+  let wide = PendingActionRows.arrange(sizes, width: 528)
+  #expect(wide.points.allSatisfy { $0.y == 0 })
+  #expect(wide.size.height == 24)
+  #expect(PendingActionRows.arrange([], width: 308).size.height == 0)
+}

@@ -440,3 +440,20 @@ public enum SpeakerMenu {
       .max { ($0.conversations, $0.seconds) < ($1.conversations, $1.seconds) }
   }
 }
+
+
+/// 待确认操作按按钮的理想尺寸排版；中文标签不能为挤进同一行而被拆开。
+public enum PendingActionRows {
+  public static func arrange(_ sizes: [CGSize], width: CGFloat, gap: CGFloat = 8) -> (size: CGSize, points: [CGPoint]) {
+    var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, usedWidth: CGFloat = 0
+    var points: [CGPoint] = []
+    for size in sizes {
+      if x > 0 && x + size.width > width { x = 0; y += rowHeight + gap; rowHeight = 0 }
+      points.append(CGPoint(x: x, y: y))
+      usedWidth = max(usedWidth, x + size.width)
+      rowHeight = max(rowHeight, size.height)
+      x += size.width + gap
+    }
+    return (CGSize(width: width.isFinite ? width : usedWidth, height: y + rowHeight), points)
+  }
+}

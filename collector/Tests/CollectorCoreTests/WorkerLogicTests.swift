@@ -135,6 +135,10 @@ import Foundation
   let split = WorkerLogic.record(meta: meta, device: "mac-test", lines: ["S1", "S2", "S3"].map { TranscriptLine(segment: segment, local: $0, text: "合成") },
     labels: ["S1": "我", "S2": "同事", "S3": "我"], ids: [:], retention: 7)
   #expect((split["title"] as! String).hasSuffix(" · 我、同事"))
+  let unlimited = WorkerLogic.record(meta: meta, device: "mac-test", lines: [TranscriptLine(segment: segment, local: "S1", text: "合成")], labels: [:], ids: [:], retention: 0)
+  #expect((unlimited["media"] as! [[String: Any]])[0]["expires"] is NSNull)
+  #expect((record["media"] as! [[String: Any]])[0]["expires"] is String)
+  #expect(throws: Never.self) { _ = try JSONSerialization.data(withJSONObject: unlimited) }
   let wav = WorkerLogic.wav([0, 1, -1]); #expect(wav.count == 50)
   #expect(String(data: wav.prefix(4), encoding: .utf8) == "RIFF")
 }

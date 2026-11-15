@@ -203,52 +203,50 @@ struct PendingCard: View {
 
   @ViewBuilder var actions: some View {
     let p = item.payload
-    HStack(spacing: 8) {
-      switch item.kind {
-      case "voice":
-        Button("是我") { resolve("me") }.buttonStyle(.accent)
-        Button("填名字") { name = ""; renaming = true }.help("这是别人，填上他的名字")
-        // 同名的人只列一次；还没确认的只列像样的几个（见 SpeakerMenu）。
-        let known = SpeakerMenu.known(store.speakers, excluding: p.speakerId)
-        let unknown = SpeakerMenu.unknown(store.speakers, excluding: p.speakerId)
-        if !known.isEmpty || !unknown.isEmpty {
-          Menu("是已有的人") {
-            ForEach(known) { s in Button(s.name) { resolve("merge_into", target: s.id) } }
-            if !unknown.isEmpty {
-              Section("还没确认的声音") {
-                ForEach(unknown) { s in
-                  Button("\(s.name)，\(s.conversations) 段对话") { resolve("merge_into", target: s.id) }
+    VStack(alignment: .leading, spacing: 8) {
+      PendingActionFlow {
+        switch item.kind {
+        case "voice":
+          Button("是我") { resolve("me") }.buttonStyle(.accent)
+          Button("填名字") { name = ""; renaming = true }.help("这是别人，填上他的名字")
+          // 同名的人只列一次；还没确认的只列像样的几个（见 SpeakerMenu）。
+          let known = SpeakerMenu.known(store.speakers, excluding: p.speakerId)
+          let unknown = SpeakerMenu.unknown(store.speakers, excluding: p.speakerId)
+          if !known.isEmpty || !unknown.isEmpty {
+            Menu("是已有的人") {
+              ForEach(known) { s in Button(s.name) { resolve("merge_into", target: s.id) } }
+              if !unknown.isEmpty {
+                Section("还没确认的声音") {
+                  ForEach(unknown) { s in
+                    Button("\(s.name)，\(s.conversations) 段对话") { resolve("merge_into", target: s.id) }
+                  }
                 }
               }
             }
+            .fixedSize()
+            .help("这个声音和已有的某个人是同一个人")
           }
-          .fixedSize()
-          .help("这个声音和已有的某个人是同一个人")
+          Button("忽略") { resolve("ignore") }.buttonStyle(.borderless).foregroundStyle(Palette.muted).help("以后不再问这个声音")
+        case "project":
+          Button("是个项目") { resolve("confirm") }.buttonStyle(.accent)
+          Button("改名…") { name = p.name ?? ""; renaming = true }
+          let others = store.projects.filter { $0.id != p.projectId }
+          if !others.isEmpty {
+            Menu("并入已有项目") { ForEach(others) { o in Button(o.name) { resolve("merge_into", target: o.id) } } }.fixedSize()
+          }
+          Button("不是项目") { resolve("ignore") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
+        case "thread_done":
+          Button("做完了") { resolve("done") }.buttonStyle(.accent)
+          Button("还在做") { resolve("continue") }
+          Button("不做了") { resolve("abandon") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
+        default:
+          Button("合并") { resolve("merge") }.buttonStyle(.accent)
+          Button("保持分开") { resolve("keep") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
         }
-        Spacer()
-        Button("忽略") { resolve("ignore") }.buttonStyle(.borderless).foregroundStyle(Palette.muted).help("以后不再问这个声音")
-      case "project":
-        Button("是个项目") { resolve("confirm") }.buttonStyle(.accent)
-        Button("改名…") { name = p.name ?? ""; renaming = true }
-        let others = store.projects.filter { $0.id != p.projectId }
-        if !others.isEmpty {
-          Menu("并入已有项目") { ForEach(others) { o in Button(o.name) { resolve("merge_into", target: o.id) } } }.fixedSize()
-        }
-        Spacer()
-        Button("不是项目") { resolve("ignore") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
-      case "thread_done":
-        Button("做完了") { resolve("done") }.buttonStyle(.accent)
-        Button("还在做") { resolve("continue") }
-        Spacer()
-        if let n = PendingArchive.notice(createdAt: item.createdAt) {
-          Text(n).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-            .help("一直不回答，这件事项会自动归档：不再问你，也不再带给 AI 工具，但仍能找到")
-        }
-        Button("不做了") { resolve("abandon") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
-      default:
-        Button("合并") { resolve("merge") }.buttonStyle(.accent)
-        Spacer()
-        Button("保持分开") { resolve("keep") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
+      }
+      if item.kind == "thread_done", let n = PendingArchive.notice(createdAt: item.createdAt) {
+        Text(n).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+          .fixedSize(horizontal: false, vertical: true)
       }
       if busy { ProgressView().controlSize(.small) }
     }
@@ -341,5 +339,23 @@ struct WaveformShape: Shape {
                        cornerSize: CGSize(width: bar / 2, height: bar / 2))
     }
     return p
+  }
+}
+
+/// 操作按钮保持完整文字；空间不足时换整颗按钮，不把中文拆成竖排。
+struct PendingActionFlow: Layout {
+  private let gap: CGFloat = 8
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let result = positions(width: proposal.width ?? .infinity, subviews: subviews)
+    return result.size
+  }
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    let result = positions(width: bounds.width, subviews: subviews)
+    for (index, subview) in subviews.enumerated() {
+      subview.place(at: CGPoint(x: bounds.minX + result.points[index].x, y: bounds.minY + result.points[index].y), anchor: .topLeading, proposal: .unspecified)
+    }
+  }
+  private func positions(width: CGFloat, subviews: Subviews) -> (size: CGSize, points: [CGPoint]) {
+    PendingActionRows.arrange(subviews.map { $0.sizeThatFits(.unspecified) }, width: width, gap: gap)
   }
 }

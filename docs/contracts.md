@@ -377,7 +377,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 | POST | `/v1/audio/conversations/:ref/skipped` | 转写进程 | 判定没有"我"：hub 删掉这段对话的逐条声纹行，说话人的聚合中心保留（不到 6 秒的碎片除外，见下面"清理空壳"） |
 | POST | `/v1/audio/samples` | 采集端（转写进程截取） | `{ request_id, clips: [{ mime: "audio/mp4"\|"audio/wav", data: base64 }] }`，每个说话人最多 3 段、每段约 10 秒 |
 | GET | `/v1/audio/samples/:id` | 网页 | 返回音频二进制，`Cache-Control: no-store` |
-| GET / PUT | `/v1/audio/settings` | 网页 | `{ retention_days }`，1–365 的整数，默认 7 |
+| GET / PUT | `/v1/audio/settings` | 网页 | `{ retention_days }`，0–365 的整数，默认 7；0 表示不自动清除，手动清理和按记录删除仍生效 |
 | POST | `/v1/audio/purge` | 网页 | 一键清理：记下 `purge_before = 现在`，采集端下次同步时执行 |
 | GET | `/v1/speakers` | 网页 | `{ speakers: [{ id, label, name, is_me, confirmed, conversations, seconds }] }` |
 
@@ -432,7 +432,7 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
    - `body`：每段一行 `[HH:MM:SS] 标签：文字`，按时间排序。
    - `people`：说话人 id 数组。`capture: { method: "asr", confidence }`（各段平均）。
    - `context: { app: 第一个会议软件或 null, extra: { speech_seconds, mic_dbfs, sys_dbfs, tracks } }`。
-   - `media: [{ path: "audio/<日期>/<id>", kind: "audio", expires: t_end + 保留天数 }]`。
+   - `media: [{ path: "audio/<日期>/<id>", kind: "audio", expires: t_end + 保留天数（不自动清除时为 null） }]`。
    - 记录写入后不改；之后说话人改名，网页按 `people` 的 id 显示新名字。
 5. 处理样本请求：每个请求只取对应本地说话人最长的一段连续人声，不超过 10 秒，上传 `/v1/audio/samples`。对话已经被清理的，请求留着，网页显示"样本待取"。
 

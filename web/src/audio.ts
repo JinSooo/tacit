@@ -40,7 +40,7 @@ export function sameNamedSpeaker(speakers: Speaker[], name: string): Speaker | u
 }
 export function retentionDays(value: string | number): number {
   const days = typeof value === "string" && !value.trim() ? NaN : Number(value);
-  if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("录音保留天数须为 1–365 的整数");
+  if (!Number.isInteger(days) || days < 0 || days > 365) throw new Error("录音保留天数须为 1–365 的整数，或选不自动清除（0）");
   return days;
 }
 export function createAudioApi(api: Api) {

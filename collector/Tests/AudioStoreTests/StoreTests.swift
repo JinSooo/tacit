@@ -114,3 +114,23 @@ func aacCodecRoundTripInMemory() throws {
   #expect(try store.conversations(readOnly:true).map(\.id) == [meta.id])
   #expect(try Data(contentsOf:file) == original)
 }
+
+
+@Test func unlimitedRetentionKeepsEncryptedFilesUntilExplicitPurge() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = try AudioStore(dataDirectory: root, key: SymmetricKey(size: .bits256))
+  let start = Date(timeIntervalSince1970: 1_794_000_000)
+  var meta = AudioMetadata(start: start)
+  meta.t_end = LocalTime.iso(start.addingTimeInterval(1))
+  try meta.transition(to: .closed, at: start.addingTimeInterval(1))
+  try store.writeMetadata(meta)
+  let bytes = Data([1, 2, 3])
+  try store.writeSegment(bytes, file: "mic-0001.enc", meta: meta)
+  let future = start.addingTimeInterval(1000 * 86400)
+  #expect(try store.cleanup(now: future, retentionDays: 0).isEmpty)
+  #expect(try store.readSegment("mic-0001.enc", meta: meta) == bytes)
+  #expect(try store.cleanup(now: future, retentionDays: 0, purgeBefore: future) == [meta.id])
+  #expect(try store.conversations().isEmpty)
+  #expect(!FileManager.default.fileExists(atPath: try store.directory(for: meta).appendingPathComponent("mic-0001.enc").path))
+}

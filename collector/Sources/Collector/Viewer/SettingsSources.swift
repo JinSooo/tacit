@@ -83,7 +83,7 @@ struct SourceDetail: View {
     "screen": "正在用的窗口：应用、标题、网址，以及窗口里新出现的文字。",
     "ocr": "有些应用读不到文字（例如微信、Zed），就在本机截图识别。截图只留在内存里，识别完就丢掉。",
     "clipboard": "复制的文字。从密码管理器复制的跳过；复制图片只记一句“复制了图片”。",
-    "audio": "麦克风和系统声音。有你说话的对话在本机转成文字；原始音频加密存在本机，到期自动删除。",
+    "audio": "麦克风和系统声音。有你说话的对话在本机转成文字；原始音频加密存在本机，保留期限由你设置。",
     "files": "下面这些文件夹里新出现的文件。只记文件名、位置和下载来源，不读文件内容。",
     "calendar": "已经结束的日程：标题、地点和参会人。录音也靠它判断你是不是在开会。",
     "wechat": "微信在最前面时，读聊天区里看到的消息，按会话分开记。没打开的会话、没往上翻的历史记不到。打开后“截图识字”不再重复读微信。",
@@ -167,6 +167,8 @@ private struct ShellHookSettings: View {
 private struct AudioSourceSettings: View {
   @Environment(ViewerStore.self) private var store
   @State private var days = 7
+  @State private var keepForever = false
+  @State private var saving = false
   @State private var savedDays: Int?
   @State private var error: String?
   @State private var status: String?
@@ -188,11 +190,25 @@ private struct AudioSourceSettings: View {
     }
     Section {
       SettingsRow("原始音频保留") {
-        HStack(spacing: 8) {
-          Text("\(days) 天").monospacedDigit()
-          Stepper("原始音频保留", value: $days, in: 1...365).labelsHidden()
-          if savedDays != nil, days != savedDays { Button("保存") { Task { await save() } } }
+        Picker("原始音频保留", selection: $keepForever) {
+          Text("按天清除").tag(false)
+          Text("不自动清除").tag(true)
+        }.labelsHidden().fixedSize()
+      }
+      if !keepForever {
+        SettingsRow("保留天数") {
+          HStack(spacing: 8) {
+            TextField("保留天数", value: $days, format: .number.grouping(.never))
+              .labelsHidden().accessibilityLabel("保留天数")
+              .textFieldStyle(.roundedBorder).frame(width: 72).multilineTextAlignment(.trailing)
+            Text("天").foregroundStyle(Palette.muted)
+            Stepper("保留天数", value: $days, in: 1...365).labelsHidden()
+          }
         }
+      }
+      if let savedDays, (keepForever ? 0 : days) != savedDays {
+        Button(saving ? "正在保存…" : "保存") { Task { await save() } }
+          .disabled(saving || (!keepForever && !(1...365).contains(days)))
       }
       SettingsRow("原始音频") {
         Button("全部删除…") { confirmPurge = true }
@@ -200,7 +216,7 @@ private struct AudioSourceSettings: View {
       if let status { SettingsMessage(text: status, warning: false) }
       if let error { SettingsMessage(text: error) }
     } header: { Text("音频保留与清理") } footer: {
-      Note("只删原始音频，转写出来的文字不受影响。")
+      Note("只影响原始音频，转写文字一直保留。不自动清除时会持续占用磁盘，仍可手动删除。")
     }
     .task { await load() }
     .confirmationDialog("删除全部原始音频？", isPresented: $confirmPurge) {
@@ -212,12 +228,15 @@ private struct AudioSourceSettings: View {
   }
 
   func load() async {
-    do { let d = try await store.api.retentionDays(); days = d; savedDays = d; error = nil }
+    do { let d = try await store.api.retentionDays(); keepForever = d == 0; days = d == 0 ? 7 : d; savedDays = d; error = nil }
     catch is CancellationError {}
     catch { self.error = error.localizedDescription }
   }
   func save() async {
-    do { try await store.api.setRetentionDays(days); savedDays = days; status = "已保存"; error = nil }
+    saving = true
+    defer { saving = false }
+    let value = keepForever ? 0 : days
+    do { try await store.api.setRetentionDays(value); savedDays = value; status = "已保存"; error = nil }
     catch { self.error = error.localizedDescription }
   }
   func purge() async {

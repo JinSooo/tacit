@@ -35,6 +35,8 @@ import Testing
   #expect(!AudioPolicy.shouldDelete(meta, now: now, retentionDays: 7))
   #expect(AudioPolicy.shouldDelete(meta, now: now.addingTimeInterval(1), retentionDays: 7))
   #expect(AudioPolicy.shouldDelete(meta, now: now, retentionDays: 365, purgeBefore: now))
+  #expect(!AudioPolicy.shouldDelete(meta, now: now.addingTimeInterval(1000 * 86400), retentionDays: 0))
+  #expect(AudioPolicy.shouldDelete(meta, now: now, retentionDays: 0, purgeBefore: now))
 }
 @Test func microphoneWarningRequiresContinuousTenMinutesAndResetsOnPause() {
   var health = MicrophoneHealth()

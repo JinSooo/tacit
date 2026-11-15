@@ -272,7 +272,7 @@ test("skipped 删除逐条声纹但保留说话人聚合中心，可重复调用
 
 test("sync/settings/purge HTTP 及设备独立 ack，不用未来 ack 吞掉后续清理", async () => {
   expect(await (await call("/v1/audio/settings")).json()).toEqual({ retention_days: 7 });
-  for (const value of [null,{}, { retention_days: "7" },{ retention_days: 0 },{ retention_days: 366 },{ retention_days: 1.5 }]) expect((await call("/v1/audio/settings","PUT",value)).status).toBe(400);
+  for (const value of [null,{}, { retention_days: "7" },{ retention_days: -1 },{ retention_days: 366 },{ retention_days: 1.5 }]) expect((await call("/v1/audio/settings","PUT",value)).status).toBe(400);
   expect(await (await call("/v1/audio/settings","PUT",{ retention_days: 365 })).json()).toEqual({ retention_days: 365 });
   const purge = await (await call("/v1/audio/purge","POST")).json();
   expect((await (await call("/v1/audio/sync?device=mac")).json()).purge_before).toBe(purge.purge_before);
@@ -414,4 +414,18 @@ test("再标一次我、或起了已有的名字，并到已确认的那个人",
   const a = resolve("rename",3,"李家辰"), b = resolve("rename",4,"李家辰");
   expect([audio.speaker(a.speaker_id)!.status, audio.speaker(b.speaker_id)!.status].sort()).toEqual(["confirmed","merged"]);
   expect(audio.speakers().speakers.filter(s => s.is_me)).toHaveLength(1);
+});
+
+
+test("不自动清除通过 HTTP 保存并同步，旧录音试听请求仍可获取，手动清理仍生效", async () => {
+  expect(await (await call("/v1/audio/settings", "PUT", { retention_days: 0 })).json()).toEqual({ retention_days: 0 });
+  const speaker = upload("unlimited-old", 120);
+  audio.expireSampleRequests(Date.parse("2030-01-01T00:00:00Z"));
+  expect(audio.pendingPayload(speaker.speaker_id)?.samples_pending).toBe(true);
+  expect(audio.sync("mac").retention_days).toBe(0);
+  const purge = await (await call("/v1/audio/purge", "POST")).json();
+  expect(audio.sync("mac").purge_before).toBe(purge.purge_before);
+  audio.updateSettings({ retention_days: 7 });
+  audio.expireSampleRequests(Date.parse("2030-01-01T00:00:00Z"));
+  expect(audio.pendingPayload(speaker.speaker_id)?.samples_pending).toBe(false);
 });

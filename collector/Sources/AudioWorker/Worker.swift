@@ -163,7 +163,7 @@ final class Worker {
   }
   func run() async throws -> Int {
     let sync = try JSONDecoder().decode(Sync.self, from: await hub.request("/v1/audio/sync?device=\(device)", body: nil))
-    guard (1...365).contains(sync.retention_days), sync.voiceprint.map({ $0.vector.count == 512 && $0.vector.allSatisfy(\.isFinite) && WorkerLogic.unit($0.vector).count == 512 && $0.threshold.isFinite && (0...1).contains($0.threshold) }) ?? true else { throw WorkerError.response }
+    guard (0...365).contains(sync.retention_days), sync.voiceprint.map({ $0.vector.count == 512 && $0.vector.allSatisfy(\.isFinite) && WorkerLogic.unit($0.vector).count == 512 && $0.threshold.isFinite && (0...1).contains($0.threshold) }) ?? true else { throw WorkerError.response }
     let all = try store.conversations().sorted { AudioPolicy.date($0.t_start)! < AudioPolicy.date($1.t_start)! }
     var failures = 0
     for var meta in all where meta.status == .closed || (meta.status == .failed && (meta.attempts ?? 0) < 3) || (meta.status == .waiting_me && sync.voiceprint != nil) {

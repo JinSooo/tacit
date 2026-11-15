@@ -62,8 +62,9 @@ test("新声音动作严格按待确认契约发送；列表和音频设置不�
   await audio.saveSettings("365"); expect(calls.at(-1)).toEqual({ path: "/v1/audio/settings", method: "PUT", body: { retention_days: 365 } });
   await audio.purge(); expect(calls.at(-1)).toEqual({ path: "/v1/audio/purge", method: "POST", body: undefined });
   const count = calls.length;
-  for (const value of ["", " ", "0", "366", "1.5", "no", Infinity, NaN, -1]) expect(() => audio.saveSettings(value)).toThrow("1–365");
+  for (const value of ["", " ", "366", "1.5", "no", Infinity, NaN, -1]) expect(() => audio.saveSettings(value)).toThrow("1–365");
   expect(calls).toHaveLength(count);
+  await audio.saveSettings("0"); expect(calls.at(-1)!.body).toEqual({ retention_days: 0 });
   expect(retentionDays("1")).toBe(1); expect(retentionDays(365)).toBe(365);
 });
 

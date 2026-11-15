@@ -118,7 +118,7 @@ public final class AudioStore {
   }
   /// 调用者必须确保 worker 没在处理这些目录；open 对话始终保留。
   @discardableResult public func cleanup(now: Date, retentionDays: Int, purgeBefore: Date? = nil, deleting: [String] = []) throws -> [String] {
-    guard (1...365).contains(retentionDays), deleting.allSatisfy(AudioPolicy.validID) else { throw AudioError.invalidMetadata }
+    guard (0...365).contains(retentionDays), deleting.allSatisfy(AudioPolicy.validID) else { throw AudioError.invalidMetadata }
     let all = try conversations(readOnly: true)
     var deleted: [String] = []
     for meta in all where meta.status != .open && (deleting.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: now, retentionDays: retentionDays, purgeBefore: purgeBefore)) {
