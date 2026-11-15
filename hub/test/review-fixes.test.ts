@@ -105,13 +105,18 @@ test("私密原文或私密修正都不泄漏到整理输入", async () => {
 test("真实 HTTP 删除立即清理摘要、日记、待确认和自动带入，模型失败也不恢复旧内容", async () => {
   const { startServer } = await import("../src/server.ts");
   const { digestStep, nowStep } = await import("../src/distill/run.ts");
-  const ctx = context(), store = new DistillStore(ctx.db), at = new Date().toISOString(), now = Date.now();
+  const ctx = context(), store = new DistillStore(ctx.db);
+  const at = "2026-11-15T16:30:00.000Z", now = Date.parse(at);
   const a = fixture({ t_start: at, body: "应删除的内容" }), b = fixture({ t_start: at, body: "剩余依据" }); ctx.db.ingest([a, b]);
   store.upsertProject({ id: "p", name: "项目", keys: { repos: [ctx.dir], hosts: [], chats: [] }, brief: "应删除的内容", detail: { goal: "应删除的内容" } });
   store.upsertThread({ id: "t", title: "应删除的内容", project_id: "p", domain: "work", status: "active", first_ms: now, last_ms: now, brief: "应删除的内容", detail: { progress: "应删除的内容" }, needs_regen: 0 });
   store.createFrame({ id: "f", key: "app:test", record_ids: [a.id, b.id], t_start_ms: now, t_end_ms: now, chars: 20, private: 0, status: "new" }); store.assign("f", "t", "user", 1);
-  const date = new Date(now).toLocaleDateString("sv-SE");
+  // 未设 TZ 时 Bun 测试进程的 JS 日期按 UTC，原生 SQLite 仍按系统时区。
+  const { date, previous } = ctx.db.db.prepare(
+    "SELECT date(?,'localtime') AS date, date(?,'localtime','-1 day') AS previous",
+  ).get(at, at) as { date: string; previous: string };
   store.upsertDay({ date, brief: "应删除的内容", detail: { summary: "应删除的内容" }, needs_regen: 0 });
+  store.upsertDay({ date: previous, brief: "相邻日记仍可查看", needs_regen: 0 });
   store.createPending({ id: "pending", kind: "thread_done", payload: { thread_id: "t", title: "应删除的内容" }, created_at: at }); nowStep(store, now);
   const server = startServer({ db: ctx.db, token: ctx.config.token, port: 0 });
   const request = async (path: string, method = "GET") => {
@@ -119,10 +124,12 @@ test("真实 HTTP 删除立即清理摘要、日记、待确认和自动带入�
     expect(r.ok).toBe(true); return r.text();
   };
   try {
+    expect(await request(`days/${date}`)).toContain("应删除的内容");
     expect(await request(`records/${a.id}`, "DELETE")).toContain('"deleted":true');
     for (const path of ["now", "threads/t?level=detail", "projects/p?level=detail", `days/${date}`, "pending", `agent/context?tool=codex&event=startup&cwd=${encodeURIComponent(ctx.dir)}`]) {
       expect(await request(path)).not.toContain("应删除的内容");
     }
+    expect(await request(`days/${previous}`)).toContain("相邻日记仍可查看");
     expect(ctx.db.get(b.id)?.body).toBe("剩余依据");
     const llm: LLM = { async complete() { return { ok: false, error: "合成离线", ms: 1 }; } };
     await digestStep({ db: ctx.db, llm }, store, now);

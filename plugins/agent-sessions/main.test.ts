@@ -163,8 +163,11 @@ test("损坏完整行跳过；文件缩短或替换后去重重读", async () =>
 });
 
 test("CLI 输出协议，state 只读，错误不泄露日志", async () => {
-  const s = setup(); s.write(s.file("claude"), [claude("user", "CLI 合成消息")]);
-  const args = ["bun", path.join(import.meta.dir, "main.ts"), "--device", "mac", "--since", "2026-11-01T00:00:00Z"];
+  const s = setup(), at = Date.now() - 2 * 3_600_000;
+  // 重导会重读旧文件，只有八天去重窗口内的消息由 checkpoint 跳过。
+  s.write(s.file("claude"), [claude("user", "CLI 合成消息", at)], at);
+  const since = new Date(at - 60_000).toISOString();
+  const args = [process.execPath, path.join(import.meta.dir, "main.ts"), "--device", "mac", "--since", since];
   const env = { ...process.env, RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir };
   const result = Bun.spawnSync(args, { env }); expect(result.exitCode).toBe(0);
   const output = result.stdout.toString().trim().split("\n").map(line => JSON.parse(line));
@@ -173,7 +176,9 @@ test("CLI 输出协议，state 只读，错误不泄露日志", async () => {
   const first = Bun.spawnSync([...args, "--state", path.join(s.root, "missing-state.json")], { env });
   expect(first.exitCode).toBe(0); expect(first.stdout.toString()).toContain('"type":"checkpoint"');
   const stateFile = path.join(s.root, "state.json"); const stateText = JSON.stringify(output.at(-1).state); fs.writeFileSync(stateFile, stateText);
-  const next = Bun.spawnSync([...args, "--state", stateFile], { env }); expect(next.exitCode).toBe(0); expect(next.stdout.toString().trim().split("\n")).toHaveLength(1);
+  const next = Bun.spawnSync([...args, "--state", stateFile], { env });
+  expect(next.exitCode).toBe(0);
+  expect(next.stdout.toString().trim().split("\n").map(line => JSON.parse(line).type)).toEqual(["checkpoint"]);
   expect(fs.readFileSync(stateFile, "utf8")).toBe(stateText);
   fs.writeFileSync(stateFile, "{秘密损坏状态"); const broken = Bun.spawnSync([...args, "--state", stateFile], { env }); expect(broken.exitCode).not.toBe(0); expect(broken.stderr.toString()).not.toContain("秘密"); expect(broken.stdout.length).toBe(0);
 });
