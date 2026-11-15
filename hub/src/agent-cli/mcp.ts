@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readHub, reason } from "./client.ts";
 import { jsonLines } from "../jsonl.ts";
 
@@ -39,7 +40,7 @@ function object(value: unknown): value is ObjectValue {
 const error = (code: number, message: string) => ({ error: { code, message } });
 const toolError = (text: string) => ({ result: { isError: true, content: [{ type: "text", text }] } });
 
-async function dispatch(method: string, params: unknown, tool: string) {
+async function dispatch(method: string, params: unknown, tool: string, session: string) {
   if (method === "initialize") {
     const requested = object(params) ? params.protocolVersion : undefined;
     return { result: {
@@ -66,7 +67,8 @@ async function dispatch(method: string, params: unknown, tool: string) {
     : schema.type === "array" ? Array.isArray(value) && value.length <= schema.maxItems! && value.every(item => valid(schema.items, item))
     : typeof value === "string" && (schema.minLength === undefined || value.length >= schema.minLength) && (schema.maxLength === undefined || value.length <= schema.maxLength) && (schema.enum === undefined || schema.enum.includes(value)));
   for (const [key, value] of Object.entries(args)) if (!valid(properties[key], value)) return error(-32602, "工具参数无效");
-  const query = new URLSearchParams({ tool });
+  // session 与 cwd 只进审计，用来统计带入后是否有主动查询；一个 MCP 进程对应一个 AI 会话。
+  const query = new URLSearchParams({ tool, session, cwd: process.cwd() });
   // 写入工具的参数以 JSON 正文发给 hub；读取工具的参数放在查询串里。
   const write = params.name === "history_append";
   if (!write) for (const [key, value] of Object.entries(args)) query.set(key === "query" ? "q" : key, String(value));
@@ -82,6 +84,7 @@ async function dispatch(method: string, params: unknown, tool: string) {
 
 export async function runMcp(tool: string): Promise<void> {
   const write = (value: unknown) => process.stdout.write(JSON.stringify(value) + "\n");
+  const session = randomUUID();
   for await (const line of jsonLines(process.stdin)) {
     let message: unknown;
     try { message = JSON.parse(line); }
@@ -91,7 +94,7 @@ export async function runMcp(tool: string): Promise<void> {
     }
     // 所有通知均不响应，包括客户端尚未识别的通知。
     if (!("id" in message)) continue;
-    try { write({ jsonrpc: "2.0", id: message.id, ...await dispatch(message.method, message.params, tool) }); }
+    try { write({ jsonrpc: "2.0", id: message.id, ...await dispatch(message.method, message.params, tool, session) }); }
     catch { write({ jsonrpc: "2.0", id: message.id, ...error(-32603, "处理请求失败") }); }
   }
 }

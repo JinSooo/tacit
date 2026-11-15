@@ -56,7 +56,11 @@ test("删除任意记录清空模型和自动带入正文，在途返回不能�
   const correction = fixture({ source: "manual.correction", corrects: record.id }); ctx.db.ingest([correction]);
   expect(log.detail(id)!.request).not.toBeNull();
   expect(log.detail(contextId)!.request.text).toBe("合成自动带入");
+  const searchAudit = ulid();
+  ctx.db.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?)")
+    .run(searchAudit,new Date().toISOString(),"codex","search",JSON.stringify({ q_length: 4, q: "合成检索", session: "s" }),"[]",2,1);
   ctx.db.deleteMany([record.id]);
+  expect(JSON.parse((ctx.db.db.prepare("SELECT args FROM agent_reads WHERE id=?").get(searchAudit) as { args: string }).args)).toEqual({ q_length: 4, session: "s" });
   observer.response("已删除内容的迟到回复"); log.finish(usage(id),true);
   for (const target of [id,contextId]) {
     expect(log.detail(target)).toMatchObject({ content_state: "deleted", request: null, response: null });
@@ -87,7 +91,13 @@ test("7 天保留边界、读取时过期和正文大小限制；列表无正文
   expect(log.detail(id)!.response_truncated).toBe(1);
   expect(JSON.stringify(log.models(new URLSearchParams()))).not.toContain(req.prompt);
   ctx.db.db.prepare("UPDATE runtime_calls SET at_ms=? WHERE id=?").run(Date.now()-7*86400_000,id);
+  const insertAudit = ctx.db.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?)");
+  const oldAudit = ulid(), freshAudit = ulid();
+  insertAudit.run(oldAudit,new Date(Date.now()-7*86400_000).toISOString(),"codex","search",'{"q_length":2,"q":"旧词"}',"[]",2,1);
+  insertAudit.run(freshAudit,new Date().toISOString(),"codex","search",'{"q_length":2,"q":"新词"}',"[]",2,1);
   expect(log.detail(id)).toMatchObject({ content_state: "expired", request: null, response: null });
+  const auditArgs = (auditId: string) => (ctx.db.db.prepare("SELECT args FROM agent_reads WHERE id=?").get(auditId) as { args: string }).args;
+  expect(auditArgs(oldAudit)).toBe('{"q_length":2}'); expect(auditArgs(freshAudit)).toBe('{"q_length":2,"q":"新词"}');
   observer.response("迟到回复");
   expect(log.detail(id)!.response).toBeNull();
 });

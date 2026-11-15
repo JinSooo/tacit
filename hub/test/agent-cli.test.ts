@@ -78,9 +78,10 @@ test("MCP 转发参数、默认 brief、错误保密、截断及失败后继续�
     const values = messages.slice(0, 4).map(m => JSON.parse(m.result.content[0].text));
     expect(values.map(v => v.path)).toEqual(["/v1/agent/now", "/v1/agent/get", "/v1/agent/search", "/v1/agent/timeline"]);
     expect(values.every(v => v.args.tool === "future-tool")).toBe(true);
-    expect(values[1].args).toEqual({ tool: "future-tool", id: "p", level: "brief" });
-    expect(values[2].args).toEqual({ tool: "future-tool", q: "合成 & 关键词", from: "2026-11-08T00:00:00Z", to: "2026-11-09T00:00:00Z", limit: "2", cursor: "a+/=" });
-    expect(values[3].args).toEqual({ tool: "future-tool", device: "mac", limit: "3", cursor: "next" });
+    expect(values[1].args).toEqual({ tool: "future-tool", id: "p", level: "brief", cwd: expect.any(String), session: values[0].args.session });
+    expect(values[0].args.session).toMatch(/^[0-9a-f-]{36}$/);
+    expect(values[2].args).toEqual({ tool: "future-tool", q: "合成 & 关键词", from: "2026-11-08T00:00:00Z", to: "2026-11-09T00:00:00Z", limit: "2", cursor: "a+/=", cwd: expect.any(String), session: values[0].args.session });
+    expect(values[3].args).toEqual({ tool: "future-tool", device: "mac", limit: "3", cursor: "next", cwd: expect.any(String), session: values[0].args.session });
     expect(messages[0].result.content[0].text).toBe(JSON.stringify(values[0]));
     expect(messages[4].result.isError).toBe(true); expect(messages[4].result.content[0].text).toContain("503");
     expect(messages[5].result.content[0].text.length).toBeLessThanOrEqual(40000); expect(messages[5].result.content[0].text).toContain("已截断");
@@ -205,12 +206,18 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     expect(desktopMessages[2].isError).toBeUndefined();
     expect(desktopMessages[2].content[0].text).toContain("合成当前状态");
     for (const source of ["startup", "resume", "clear", "compact", "unknown", undefined]) {
-      const hook = await run(ctx.dir, ["hook", "session-start", "--tool", "claude-code"], JSON.stringify({ cwd: "/synthetic", source }), env);
+      const hook = await run(ctx.dir, ["hook", "session-start", "--tool", "claude-code"], JSON.stringify({ cwd: "/synthetic", source, session_id: "合成会话" }), env);
       expect(hook.code).toBe(0); expect(hook.stderr).toBe(""); expect(JSON.parse(hook.stdout).hookSpecificOutput.additionalContext).toContain("合成摘要");
     }
     const audit = ctx.db.db.prepare("SELECT tool,kind,args FROM agent_reads").all() as any[];
     expect(audit.some(r => r.tool === "codex" && r.kind === "search" && JSON.parse(r.args).q_length === 6)).toBe(true);
     expect(audit.some(r => r.tool === "claude-desktop" && r.kind === "now")).toBe(true);
+    // 补记：检索词、会话和项目，用来统计利用率与命中情况。
+    const codexReads = audit.filter(r => r.tool === "codex" && r.kind !== "context").map(r => JSON.parse(r.args)).filter(a => a.session);
+    expect(codexReads.find(a => a.q_length === 6).q).toBe("needle");
+    expect(new Set(codexReads.map(a => a.session)).size).toBe(1); expect(codexReads[0].session).toMatch(/^[0-9a-f-]{36}$/);
+    expect(codexReads.every(a => typeof a.cwd === "string")).toBe(true);
+    expect(audit.filter(r => r.kind === "context").map(r => JSON.parse(r.args)).every(a => a.session === "合成会话" && a.project === "p")).toBe(true);
     expect(audit.filter(r => r.kind === "context").map(r => JSON.parse(r.args).event)).toEqual(["startup", "resume", "clear", "compact", "startup", "startup"]);
     ctx.db.db.prepare("DELETE FROM projects").run();
     const empty = await run(ctx.dir, ["hook", "session-start", "--tool", "codex"], '{"cwd":"/synthetic"}', env);

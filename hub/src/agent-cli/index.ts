@@ -40,7 +40,10 @@ async function sessionStart(args: string[]): Promise<void> {
       }
       const source = "source" in input ? input.source : undefined;
       const event = typeof source === "string" && ["startup", "resume", "clear", "compact"].includes(source) ? source : "startup";
-      const result = await readHub("context", new URLSearchParams({ cwd: input.cwd, event, tool }), controller.signal);
+      const query = new URLSearchParams({ cwd: input.cwd, event, tool });
+      const session = "session_id" in input ? input.session_id : undefined;
+      if (typeof session === "string" && session && session.length <= 128) query.set("session", session);
+      const result = await readHub("context", query, controller.signal);
       if (!result || typeof result !== "object" || !("text" in result) || typeof result.text !== "string") throw new AgentError("hub 上下文格式无效");
       if (!controller.signal.aborted && result.text.trim()) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: result.text } }) + "\n");
     })()]);

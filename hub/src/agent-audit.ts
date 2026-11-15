@@ -63,7 +63,7 @@ function retry(hub: HubDB, queue: Queue) {
     queue.timer = setInterval(() => flushAgentAudit(hub), 2000); queue.timer.unref();
   }
 }
-/** 使用独立派生密钥加密，不把返回正文或检索原文写入文件；打开数据库即恢复未入库审计。 */
+/** 使用独立派生密钥加密，不把返回正文写入文件；检索词只以脱敏截断后的形式随参数保存。打开数据库即恢复未入库审计。 */
 export function registerAgentAudit(hub: HubDB, databaseKey: string) {
   const queue: Queue = { key: createHash("sha256").update("record-anything:agent-audit:v1\0").update(databaseKey).digest(),
     directory: hub.db.name === ":memory:" ? null : `${hub.db.name}.audit-pending`, rows: new Map(), errorLogged: false };
@@ -93,6 +93,15 @@ export function flushAgentAudit(hub: HubDB): void {
 export function enqueueAgentAudit(hub: HubDB, row: AuditRow): void {
   const queue = queues.get(hub); if (!queue) throw new Error("审计未初始化");
   persist(queue, row); queue.rows.set(row[0], row); flushAgentAudit(hub); retry(hub, queue);
+}
+/** 删除原始记录时，尚未入库的审计也去掉检索词。 */
+export function eraseQueuedAuditQueries(hub: HubDB): void {
+  const queue = queues.get(hub); if (!queue) return;
+  for (const row of queue.rows.values()) {
+    const args = JSON.parse(row[4]);
+    if (!("q" in args)) continue;
+    delete args.q; row[4] = JSON.stringify(args); persist(queue, row);
+  }
 }
 export function stopAgentAudit(hub: HubDB): void {
   flushAgentAudit(hub);
