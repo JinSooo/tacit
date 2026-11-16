@@ -209,25 +209,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let now = Date()
     lastScreen = now
     let ocrOn = enabled("ocr")
-    // 开了微信对话就由它读微信，通用 OCR 不再重复读；没开时通用 OCR 也去掉左侧会话列表，
-    // 别的群的消息预览会把内容带偏（2026-11-10：九院的对话被归进交开投的线程）。
-    let isWeChat = bundle == WeChatCollector.bundleID
-    let wechatOn = enabled("wechat")
+    let keepText = ScreenTextPolicy.keepsText(bundleID: bundle)
 
     captureQueue.async { [self] in
       if CapturePolicy.shouldSkip(bundleID: bundle, window: "") {
         stats["skippedPolicy", default: 0] += 1
         emit(segmenter.flush()); return
       }
-      let snap = ax.snapshot(pid: pid, skipEditable: ScreenTextPolicy.skipsEditable(bundleID: bundle))
+      let snap = ax.snapshot(pid: pid, includeText: keepText)
       let window = snap?.window ?? ""
       if CapturePolicy.shouldSkip(bundleID: bundle, window: window) {
         stats["skippedPolicy", default: 0] += 1
         emit(segmenter.flush()); return
       }
-      let keepText = ScreenTextPolicy.keepsText(bundleID: bundle, wechatOn: wechatOn)
       let o = Observation(time: now, bundleID: bundle, appName: name, window: window, url: snap?.url,
-                          lines: keepText ? snap?.lines ?? [] : [], editable: keepText ? snap?.editable ?? [:] : [:],
+                          lines: snap?.lines ?? [], editable: snap?.editable ?? [:],
                           method: snap == nil ? "none" : "ax")
       stats["ticks", default: 0] += 1
       if let s = snap {
@@ -243,8 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lastOCR[key] = now
         if lastOCR.count > 500 { lastOCR = lastOCR.filter { now.timeIntervalSince($0.value) < 600 } }
         ocr.recognizeLines(pid: pid, frame: snap?.frame) { [self] found, size, ms in
-          let readable = isWeChat ? WeChatLayout.chatAreaLines(found, width: size.width) : found
-          let lines = readable.filter { line in
+          let lines = found.filter { line in
             !ScreenTextPolicy.isEditableOCRPoint(CGPoint(x: line.midX, y: line.y + line.height / 2),
                                                  window: size, frame: snap?.frame, editableFrames: snap?.editableFrames ?? [])
           }.map(\.text)

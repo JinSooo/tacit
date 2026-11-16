@@ -89,14 +89,11 @@ public final class OutboundQueue {
 
 /// 屏幕文字里哪些不该读。
 public enum ScreenTextPolicy {
-  public static let wechat = "com.tencent.xinWeChat"
+  private static let dedicatedSources: Set<String> = [
+    "com.anthropic.claudefordesktop", "com.openai.codex", "com.tencent.xinwechat",
+  ]
 
-  /// 聊天软件的输入框是还没发出去的草稿：每打几个字就多一行，发出后又在聊天区重复一遍，
-  /// 记下来只有噪声（2026-11-12 实测：微信一段里存了"我发现好事 / 我发现好像是做了 / 我下载了他们…"）。
-  public static func skipsEditable(bundleID: String) -> Bool { bundleID == wechat }
-
-  /// 开了微信对话就由它按会话拆消息；屏幕记录只留微信的使用时段，不再带微信窗口的文字。
-  public static func keepsText(bundleID: String, wechatOn: Bool) -> Bool { !(bundleID == wechat && wechatOn) }
+  public static func keepsText(bundleID: String) -> Bool { !dedicatedSources.contains(bundleID.lowercased()) }
 
   /// OCR 行中心是窗口内的点，辅助功能编辑区是全局坐标。已读到的编辑区由 AX 保留最后一个版本。
   public static func isEditableOCRPoint(_ point: CGPoint, window: CGSize, frame: CGRect?,

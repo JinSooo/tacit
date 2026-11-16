@@ -42,8 +42,6 @@ final class AXReader {
     var editable: [[Int]: [String]] = [:]
     var editableFrames: [CGRect] = []
     var url: String?
-    /// 聊天软件的输入框（草稿）不读。
-    var skipEditable = false
   }
 
   struct Node { var el: AXUIElement; var role: String; var kids: [AXUIElement]; var frame: CGRect? }
@@ -55,20 +53,19 @@ final class AXReader {
     manualEnabled.insert(pid)
   }
 
-  func snapshot(pid: pid_t, skipEditable: Bool = false) -> AXSnapshot? {
+  func snapshot(pid: pid_t, includeText: Bool = true) -> AXSnapshot? {
     let started = Date()
     prepare(pid: pid)
     let app = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(app, 0.25)
     guard let win = element(app, kAXFocusedWindowAttribute) else { return nil }
     let title = string(win, kAXTitleAttribute) ?? ""
-    let frame = frameOf(win)
-    if CapturePolicy.shouldSkip(bundleID: "", window: title) {
-      return AXSnapshot(window: title, url: nil, lines: [], editable: [:], editableFrames: [], frame: frame,
-                        chars: 0, elements: 0, calls: 4, truncated: false, ms: Int(Date().timeIntervalSince(started) * 1000))
+    if !includeText || CapturePolicy.shouldSkip(bundleID: "", window: title) {
+      return AXSnapshot(window: title, url: nil, lines: [], editable: [:], editableFrames: [], frame: nil,
+                        chars: 0, elements: 0, calls: 2, truncated: false, ms: Int(Date().timeIntervalSince(started) * 1000))
     }
+    let frame = frameOf(win)
     var w = Walk(deadline: started.addingTimeInterval(budget))
-    w.skipEditable = skipEditable
     w.calls = 4
     if let root = info(win, &w) { visitFast(root, visible: frame, depth: 0, path: [], &w) }
     // 按文档顺序输出并去重。
@@ -106,10 +103,7 @@ final class AXReader {
 
   private func visitFast(_ n: Node, visible: CGRect?, depth: Int, path: [Int], _ w: inout Walk) {
     if n.role == "AXSecureTextField" { return }
-    if editableRoles.contains(n.role) {
-      if w.skipEditable { return }
-      if collectEditable(n, path: path, &w) { return }
-    }
+    if editableRoles.contains(n.role), collectEditable(n, path: path, &w) { return }
     collectText(n.el, role: n.role, path: path, &w)
     if depth >= maxDepth { w.truncated = true; return }
 

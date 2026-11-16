@@ -30,7 +30,7 @@ public final class Segmenter {
     public var maxSpan: TimeInterval = 3600
     public var maxBody = 100_000
     /// 快速切换时短于这个时长的前窗不写入。手动结束时仍可保留有内容的短段。
-    public var minSpan: TimeInterval = 5
+    public var minSpan: TimeInterval = 15
     public init() {}
   }
 
@@ -59,7 +59,13 @@ public final class Segmenter {
 
   public var currentKey: String? { current?.key }
 
-  public func observe(_ o: Observation) -> [Record] {
+  public func observe(_ observation: Observation) -> [Record] {
+    var o = observation
+    if !ScreenTextPolicy.keepsText(bundleID: o.bundleID) {
+      o.url = nil
+      o.lines = []
+      o.editable = [:]
+    }
     var out: [Record] = []
     if let c = current {
       let stale = o.time.timeIntervalSince(c.last) > config.idleLimit
@@ -78,7 +84,7 @@ public final class Segmenter {
 
   /// OCR 是异步的：结果回来时如果已经换了窗口，就丢弃，避免把旧窗口的文字记到新段里。
   public func appendIfCurrent(key: String, lines: [String], method: String, time: Date) -> [Record] {
-    guard let c = current, c.key == key else { return [] }
+    guard let c = current, c.key == key, ScreenTextPolicy.keepsText(bundleID: c.bundleID) else { return [] }
     let o = Observation(time: time, bundleID: c.bundleID, appName: c.appName, window: c.window,
                         url: c.url, lines: lines, method: method)
     return append(lines, method: method, from: o)
