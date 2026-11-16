@@ -96,8 +96,9 @@ private struct ReviewDayContent: View {
     } else if case .some(let state) = now.value {
       VStack(alignment: .leading, spacing: 8) {
         if let brief = state?.activitySummary {
+          let size = brief.count > 50 ? TextSize.title : TextSize.heading
           Text(brief)
-            .font(.serif(TextSize.display)).lineSpacing(TextSize.serifLineSpacing(TextSize.display))
+            .font(.serif(size)).lineSpacing(TextSize.serifLineSpacing(size))
             .foregroundStyle(Palette.ink).textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
         } else if state?.activityNotice == nil {

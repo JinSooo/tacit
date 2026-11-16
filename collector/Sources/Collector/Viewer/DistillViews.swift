@@ -22,7 +22,7 @@ struct ThreadCard: View {
         Spacer(minLength: 0)
         Text(ViewerFormat.relative(thread.last)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
       }
-      Text(thread.title).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink).lineLimit(2).multilineTextAlignment(.leading)
+      Text(thread.title).font(.system(size: TextSize.title, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(2).multilineTextAlignment(.leading)
         .lineSpacing(3)
         .fixedSize(horizontal: false, vertical: true)
       if let brief = thread.cardSummary {
@@ -122,7 +122,7 @@ struct ThreadPage: View {
             Text(s).font(.system(size: TextSize.caption, weight: .medium)).foregroundStyle(Palette.muted)
           }
         }
-        Text(d.title ?? "").font(.serif(TextSize.heading, .semibold)).foregroundStyle(Palette.ink).textSelection(.enabled)
+        Text(d.title ?? "").font(.system(size: TextSize.heading, weight: .semibold)).foregroundStyle(Palette.ink).textSelection(.enabled)
           .lineSpacing(TextSize.serifLineSpacing(TextSize.heading) / 2)
           .fixedSize(horizontal: false, vertical: true)
         Picker("层级", selection: $depth) {
