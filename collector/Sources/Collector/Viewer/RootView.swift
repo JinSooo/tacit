@@ -49,6 +49,7 @@ struct RootView: View {
 
   @ViewBuilder var page: some View {
     switch store.section {
+    case .review: ReviewPage()
     case .now: NowPage()
     case .history: HistoryPage()
     case .pending: PendingPage()
@@ -66,6 +67,7 @@ struct Sidebar: View {
     @Bindable var store = store
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
       Section {
+        SidebarLabel(title: "回顾", icon: "sun-horizon").tag(Page.review)
         SidebarLabel(title: "此刻", icon: "sun-horizon").tag(Page.now)
         SidebarLabel(title: "历史记录", icon: "clock-counter-clockwise").tag(Page.history)
         // badge 必须在 tag 之前：放在 tag 之后，这一行在 macOS 侧栏里选不中。

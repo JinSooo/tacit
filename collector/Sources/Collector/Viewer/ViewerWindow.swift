@@ -16,7 +16,8 @@ import CollectorCore
   }
 
   func show(_ page: Page? = nil) {
-    if let page { store.section = page }
+    if page == .review || (page == nil && window?.isVisible != true) { store.showReview() }
+    else if let page { store.section = page }
     if window == nil { window = makeWindow() }
     NSApp.setActivationPolicy(.regular)
     NSApp.applicationIconImage = AppIconArt.image(size: 512)
@@ -79,7 +80,7 @@ import CollectorCore
       item("粘贴", #selector(NSText.paste(_:)), "v"), item("全选", #selector(NSText.selectAll(_:)), "a"),
     ])
     submenu("前往", [
-      item("此刻", #selector(go(_:)), "1", target: self, tag: 0), item("历史记录", #selector(go(_:)), "2", target: self, tag: 1),
+      item("回顾", #selector(go(_:)), "1", target: self, tag: 0), item("历史记录", #selector(go(_:)), "2", target: self, tag: 1),
       item("待确认", #selector(go(_:)), "3", target: self, tag: 2), item("运行记录", #selector(go(_:)), "4", target: self, tag: 3),
     ])
     submenu("窗口", [
@@ -90,7 +91,8 @@ import CollectorCore
   }
 
   @objc func go(_ sender: NSMenuItem) {
-    store.section = [Page.now, .history, .pending, .audit, .now, .settings][sender.tag]
+    if sender.tag == 0 { store.showReview(); return }
+    store.section = [Page.review, .history, .pending, .audit, .review, .settings][sender.tag]
   }
   @objc func closeWindow() { window?.performClose(nil) }
 

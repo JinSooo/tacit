@@ -252,6 +252,12 @@ public struct DayDiary: Decodable, Sendable {
   public let brief: String?
   public let detail: Body?
   public let updatedAt: String?
+  public let needsRegen: FlexBool?
+
+  public var summary: String? {
+    [detail?.summary, brief].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .first { !$0.isEmpty }
+  }
 }
 
 public enum HubJSON {

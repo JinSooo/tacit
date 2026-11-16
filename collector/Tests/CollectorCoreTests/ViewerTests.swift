@@ -30,6 +30,26 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(q.to == "2026-11-09T23:59:59.999+09:00")
 }
 
+@Test func reviewKeepsDatedEvidenceWhileAwaitingAnUpdate() throws {
+  let review = try decode(DayDiary.self, """
+    {"date":"2026-11-16","brief":"简略版","needs_regen":1,"updated_at":"2026-11-16T22:00:00+09:00",
+     "detail":{"summary":"当天摘要","cutoff":"2026-11-16T21:30:00+09:00","sections":{
+       "progress":[{"text":"决定保留依据","evidence":[{"id":"record","at":"2026-11-16T21:00:00+09:00"}]}],
+       "blockers":[],"authored":[],"suggestions":[]}}}
+    """)
+  #expect(review.needsRegen?.value == true)
+  #expect(review.summary == "当天摘要")
+  #expect(review.detail?.sections?.progress.first?.evidence.first?.id == "record")
+  #expect(review.detail?.sections?.progress.first?.evidence.first?.at == "2026-11-16T21:00:00+09:00")
+  #expect(review.detail?.sections?.blockers.isEmpty == true)
+}
+
+@Test func reviewCanOpenALegacyDayWithoutFourSections() throws {
+  let review = try decode(DayDiary.self, #"{"date":"2026-11-09","brief":"  早期回顾  ","detail":{"summary":" "}}"#)
+  #expect(review.summary == "早期回顾")
+  #expect(review.detail?.sections == nil)
+}
+
 @Test func decodesHubRecordWithNestedContextAndMixedBooleans() throws {
   let r = try decode(HistoryRecord.self, """
     {"id":"01M6Z55ER9BPCTVCYA6ZANFBVM","schema":1,"device":"mac","source":"mac.git","kind":"event",

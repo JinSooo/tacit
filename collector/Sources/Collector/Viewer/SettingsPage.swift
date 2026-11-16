@@ -372,7 +372,7 @@ struct MaintenanceSettingsView: View {
         }
         if let r = latest("backfill") { SettingsMessage(text: r.statusText, warning: r.status == "failed") }
         if let requestError { SettingsMessage(text: requestError) }
-        facts(what: "把所选日期里、开始整理之前就有的记录交给 AI，整理出事项、项目和日记。", sources: "已有的记录，不重新采集",
+        facts(what: "把所选日期里、开始整理之前就有的记录交给 AI，整理出事项、项目和每日回顾。", sources: "已有的记录，不重新采集",
               dedupe: "已经整理过的记录不会重复整理", distill: "会调用 AI 模型，同一段日期可以再整理一次")
       } header: {
         Text(MaintenanceTask.backfill.title)

@@ -50,7 +50,7 @@ protocol CaptureControlling: AnyObject {
 }
 
 enum Page: Hashable {
-  case now, history, pending, audit, settings, project(String)
+  case review, now, history, pending, audit, settings, project(String)
 }
 
 enum Route: Hashable {
@@ -64,7 +64,7 @@ enum Route: Hashable {
   let device: String
   weak var controls: CaptureControlling?
 
-  var section: Page = .now { didSet { if oldValue != section { path = [] } } }
+  var section: Page = .review { didSet { if oldValue != section { path = [] } } }
   var path: [Route] = []
   var projects: [Project] = []
   var pending: [PendingItem] = []
@@ -74,6 +74,8 @@ enum Route: Hashable {
   let preferences = SettingsPreferences()
   let extensions = ExtensionSettings()
 
+  /// nil 时跟随今天，手动选中以往日期时保留选择。
+  var reviewDay: Date?
   /// 历史记录当前看的那一天，以及要选中的记录（从证据、读取记录跳过来时用）。
   var historyDay = Calendar.current.startOfDay(for: Date())
   var historyFocus: String?
@@ -102,6 +104,12 @@ enum Route: Hashable {
   func perform(_ action: CaptureAction) { controls?.perform(action); refreshCapture() }
 
   func project(_ id: String?) -> Project? { id.flatMap { id in projects.first { $0.id == id } } }
+
+  func showReview(_ day: Date? = nil) {
+    reviewDay = day.flatMap { Calendar.current.isDateInToday($0) ? nil : Calendar.current.startOfDay(for: $0) }
+    path = []
+    section = .review
+  }
 
   func showRecord(_ id: String, at date: Date?) {
     if let date { historyDay = Calendar.current.startOfDay(for: date) }

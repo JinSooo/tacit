@@ -11,6 +11,7 @@ struct HistoryPage: View {
   @State private var segments: [HistorySegment] = []
   @State private var conversations: [ConversationRef] = []
   @State private var diary: DayDiary?
+  @State private var loadedDay: Date?
   @State private var loading = false
   @State private var error: String?
   @State private var selection: Selection?
@@ -19,7 +20,6 @@ struct HistoryPage: View {
   @State private var brush: ClosedRange<Date>?
   @State private var lane: Lane?
   @State private var device: String?
-  @AppStorage("historyDiaryExpanded") private var showDiary = false
   @State private var note = false
   @State private var picking = false
   // 搜索
@@ -144,12 +144,12 @@ struct HistoryPage: View {
   struct LoadKey: Equatable { let day: Date; let revision: Int }
 
   func consumeFocus() {
-    guard let id = store.historyFocus else { return }
+    guard let id = store.historyFocus, loadedDay == day, !loading else { return }
     if records.contains(where: { $0.id == id }) {
       lane = nil; brush = nil
       reveal(id)
       store.historyFocus = nil
-    } else if !loading, !records.isEmpty {
+    } else {
       // 不在当天列表里（例如修正记录），直接在检查器里打开。
       selection = .record(id); store.historyFocus = nil
     }
@@ -158,18 +158,29 @@ struct HistoryPage: View {
   // MARK: 读取
 
   func loadDay() async {
+    let requestedDay = day
     loading = true; error = nil
-    defer { loading = false }
+    defer {
+      if !Task.isCancelled, day == requestedDay {
+        loadedDay = requestedDay
+        loading = false
+        consumeFocus()
+      }
+    }
     do {
-      async let r = store.api.day(day)
-      async let s = store.api.segments(day)
-      async let d = store.api.diary(day)
+      async let r = store.api.day(requestedDay)
+      async let s = store.api.segments(requestedDay)
+      async let d = store.api.diary(requestedDay)
       let (rows, segs, diary) = try await (r, s, d)
+      guard !Task.isCancelled, day == requestedDay else { return }
       segments = segs.segments; conversations = segs.conversations
       records = rows.sorted { ($0.start, $0.id) > ($1.start, $1.id) }
       self.diary = diary
     } catch is CancellationError {
-    } catch { self.error = error.localizedDescription; records = []; segments = []; conversations = []; diary = nil }
+    } catch {
+      guard !Task.isCancelled, day == requestedDay else { return }
+      self.error = error.localizedDescription; records = []; segments = []; conversations = []; diary = nil
+    }
   }
 
   func search(reset: Bool) async {
@@ -227,58 +238,17 @@ struct HistoryPage: View {
           if !records.isEmpty { stats }
         }
       }
-      if let summary = diary?.detail?.summary ?? diary?.brief, !summary.isEmpty {
-        VStack(alignment: .leading, spacing: 8) {
-          if showDiary, let sections = diary?.detail?.sections {
-            dailyReview(sections)
-          } else {
-            Text(summary)
-              .font(.serif(TextSize.title))
-              .lineSpacing(TextSize.serifLineSpacing(TextSize.title))
-              .foregroundStyle(Palette.ink)
-              .lineLimit(showDiary ? nil : 2)
-              .textSelection(.enabled)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-          Button(showDiary ? "收起日记" : "展开日记") { withAnimation(.easeOut(duration: 0.2)) { showDiary.toggle() } }
-            .buttonStyle(.accentLink).font(.system(size: TextSize.body))
-        }
-        .frame(maxWidth: 760, alignment: .leading)
+      if loadedDay == day, let summary = diary?.summary {
+        Text(summary)
+          .font(.serif(TextSize.title))
+          .lineSpacing(TextSize.serifLineSpacing(TextSize.title))
+          .foregroundStyle(Palette.ink)
+          .lineLimit(2)
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: 760, alignment: .leading)
       }
-    }
-  }
-
-  func dailyReview(_ sections: DayDiary.Sections) -> some View {
-    VStack(alignment: .leading, spacing: 20) {
-      if let cutoff = diary?.detail?.cutoff.flatMap(ViewerTime.parse) {
-        Text("截至 \(ViewerFormat.clock(cutoff))").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-      }
-      reviewSection("进展与决定", sections.progress)
-      reviewSection("未完成与阻塞", sections.blockers)
-      reviewSection("自己留下了什么", sections.authored)
-      reviewSection("明日建议", sections.suggestions)
-    }
-  }
-
-  func reviewSection(_ title: String, _ entries: [DayDiary.Entry]) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text(title).sectionTitle().accessibilityAddTraits(.isHeader)
-      if entries.isEmpty {
-        Text("未观察到").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
-      }
-      ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
-        VStack(alignment: .leading, spacing: 4) {
-          Text(entry.text).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink).textSelection(.enabled)
-          HStack(spacing: 12) {
-            ForEach(Array(entry.evidence.enumerated()), id: \.offset) { index, reference in
-              Button(entry.evidence.count == 1 ? "查看依据" : "依据 \(index + 1)") {
-                store.showRecord(reference.id, at: ViewerTime.parse(reference.at))
-              }
-              .buttonStyle(.accentLink).font(.system(size: TextSize.caption))
-            }
-          }
-        }
-      }
+      Button("查看当天回顾") { store.showReview(day) }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
     }
   }
 
@@ -440,25 +410,8 @@ struct HistoryPage: View {
   // MARK: 工具栏
 
   @ToolbarContentBuilder var toolbar: some ToolbarContent {
-    ToolbarItemGroup(placement: .navigation) {
-      if !isSearch {
-        ControlGroup {
-          Button { shift(-1) } label: { PhIcon("caret-left", size: PhIcon.toolbar) }.help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
-          Button("今天") { store.historyDay = Calendar.current.startOfDay(for: Date()) }
-            .disabled(Calendar.current.isDateInToday(day)).keyboardShortcut("t", modifiers: .command)
-          Button { shift(1) } label: { PhIcon("caret-right", size: PhIcon.toolbar) }.help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command)
-            .disabled(Calendar.current.isDateInToday(day))
-        }
-        Button { picking = true } label: { PhIcon("calendar-blank", size: PhIcon.toolbar) }
-          .help("跳到日期").accessibilityLabel("跳到日期")
-          .popover(isPresented: $picking, arrowEdge: .bottom) {
-            DatePicker("", selection: Binding(get: { day }, set: { store.historyDay = Calendar.current.startOfDay(for: $0); picking = false }),
-                       in: ...Date(), displayedComponents: .date)
-              .datePickerStyle(.graphical).labelsHidden().padding(12)
-              // 应用没声明中文本地化（会让中文标点变宽），日历的月份、星期在这里单独指定中文。
-              .environment(\.locale, Locale(identifier: "zh_CN")).environment(\.calendar, ViewerCalendar.chinese)
-          }
-      }
+    if !isSearch {
+      DayNavigation(day: Binding(get: { day }, set: { store.historyDay = $0 }), picking: $picking)
     }
     ToolbarItemGroup(placement: .primaryAction) {
       if !isSearch {
@@ -484,11 +437,6 @@ struct HistoryPage: View {
       Button { note = true } label: { PhIcon("note-pencil", size: PhIcon.toolbar) }
         .help("补写一条记录").accessibilityLabel("补写一条记录").keyboardShortcut("n", modifiers: .command)
     }
-  }
-
-  func shift(_ days: Int) {
-    guard let d = Calendar.current.date(byAdding: .day, value: days, to: day), d <= Date() else { return }
-    store.historyDay = Calendar.current.startOfDay(for: d)
   }
 }
 
