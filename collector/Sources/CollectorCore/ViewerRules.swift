@@ -30,3 +30,22 @@ public enum PendingArchive {
     return "继续使用后会自动归档"
   }
 }
+
+/// 回顾的活动条跟随实时采集开关；历史记录仍显示已经采集的内容。
+public enum ReviewActivity {
+  public static func visibleRecords(_ records: [HistoryRecord], sources: [DataSourceStatus]) -> [HistoryRecord] {
+    let enabled = Set(sources.filter { $0.enabled && DataSourceCatalog.isVisible($0.id) }.map(\.id))
+    return records.filter { record in
+      guard let id = collectorID[record.source] else { return true }
+      return enabled.contains(id)
+    }
+  }
+
+  // 来源名是记录协议，开关是采集器 ID。截图识字与辅助功能共用屏幕记录，两种 AI 会话共用一个开关。
+  private static let collectorID = [
+    "mac.screen": "screen", "mac.app": "screen", "mac.browser": "browser",
+    "claude_code.session": "agent-sessions", "codex.session": "agent-sessions",
+    "mac.audio": "audio", "mac.calendar": "calendar", "mac.wechat": "wechat",
+    "mac.shell": "shell", "mac.git": "git", "mac.file": "files", "mac.clipboard": "clipboard",
+  ]
+}

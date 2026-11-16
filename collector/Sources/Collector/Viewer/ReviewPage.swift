@@ -118,10 +118,11 @@ private struct ReviewDayContent: View {
   }
 
   private var activity: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    let visible = records.value.map { ReviewActivity.visibleRecords($0, sources: store.capture.sources) }
+    return VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text("活动").sectionTitle()
-        if let rows = records.value, !rows.isEmpty {
+        if let rows = visible, !rows.isEmpty {
           Text("\(Fmt.count(rows.count)) 条记录").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
         }
         Spacer()
@@ -137,9 +138,10 @@ private struct ReviewDayContent: View {
       }
       if let error = records.error {
         Text(error).font(.system(size: TextSize.body)).foregroundStyle(Palette.attention)
-      } else if let rows = records.value {
+      } else if let rows = visible {
         if rows.isEmpty {
-          Text("今天还没有记录").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+          Text(records.value?.isEmpty == false ? "已启用的数据源今天还没有记录" : "今天还没有记录")
+            .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
         } else {
           DayStrata(records: rows, chapters: DayStrata.chapters(from: diary.value ?? nil, on: day), day: day,
                     selected: nil, brush: $brush, lane: $lane) { r in
@@ -153,6 +155,9 @@ private struct ReviewDayContent: View {
     .padding(16)
     .card()
     .zIndex(1)
+    .onChange(of: store.capture.sources.filter(\.enabled).map(\.id)) {
+      lane = nil
+    }
   }
 
   private var ongoing: some View {

@@ -61,6 +61,24 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(cards[2].cardSummary == nil && cards[2].needsRegen == nil)
 }
 
+@Test func reviewActivityFollowsCaptureSwitchesEvenWithOldRecordsFromFrozenSources() throws {
+  let rows = try ["mac.browser", "mac.shell", "mac.git", "mac.file", "mac.clipboard", "mac.wechat", "mac.audio",
+                  "claude_code.session", "codex.session", "manual.note"].enumerated().map { index, source in
+    try record(String(index), source, "活动", "2026-11-17T01:00:00+09:00")
+  }
+  var sources = DataSourceCatalog.all.map { desc in
+    DataSourceStatus(id: desc.id, title: desc.title, kind: desc.kind, enabled: desc.id != "audio",
+                     permission: .granted, permissionName: nil, lastRun: nil, detail: "", ok: true, canRunNow: true)
+  }
+  let visible = ReviewActivity.visibleRecords(rows, sources: sources)
+  #expect(visible.map(\.source) == ["mac.browser", "mac.wechat", "claude_code.session", "codex.session", "manual.note"])
+  #expect(Set(visible.map { Lane.of($0.source) }) == [.browser, .voice, .agent, .other])
+
+  sources[sources.firstIndex { $0.id == "browser" }!].enabled = false
+  #expect(!ReviewActivity.visibleRecords(rows, sources: sources).contains { Lane.of($0.source) == .browser })
+  #expect(rows.contains { Lane.of($0.source) == .browser })
+}
+
 @Test func decodesHubRecordWithNestedContextAndMixedBooleans() throws {
   let r = try decode(HistoryRecord.self, """
     {"id":"01M6Z55ER9BPCTVCYA6ZANFBVM","schema":1,"device":"mac","source":"mac.git","kind":"event",
