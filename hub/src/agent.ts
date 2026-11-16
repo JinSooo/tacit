@@ -189,7 +189,7 @@ export class AgentReads {
     const rp = new URLSearchParams({ q,limit: String(limit) });
     for (const key of ["from","to"]) if (params.has(key)) rp.set(key,params.get(key)!);
     if (cursor.records) rp.set("cursor",encode(cursor.records));
-    const records = this.hub.list(rp);
+    const records = this.hub.list(rp, { collapseScreenMatches: true });
     for (const r of records.records) candidates.push({ kind: "records", ms: Date.parse(r.t_start!),id: r.id!,item: { ...r,...(r.sensitivity === "private" ? { private: true } : {}) } });
     let more = records.next_cursor !== null;
     for (const kind of ["threads","projects"] as const) {

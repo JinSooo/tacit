@@ -200,8 +200,52 @@ test("search 跨种类统一分页、时间范围及私密标记，timeline 无 
   expect((await read("/v1/agent/timeline?tool=codex&device=other")).records.map((r: any) => r.id)).toEqual([records[1]!.id]);
 });
 
+test("Agent 搜索为同一屏幕上下文选代表，翻页不会重新出现短片段", async () => {
+  project("p", "/synthetic", "needle 项目");
+  thread("t", { brief: "needle 事项" });
+  const base = Date.parse("2026-11-08T10:00:00+09:00");
+  const window = { app: "synthetic.screen", window: "合成文档", url: "https://example.invalid/one" };
+  const screen = (start: number, duration: number, overrides: Parameters<typeof fixture>[0] = {}) => fixture({
+    kind: "span", title: "needle 文档", body: "合成原文",
+    t_start: new Date(base + start * 1000).toISOString(),
+    t_end: new Date(base + (start + duration) * 1000).toISOString(),
+    context: window, ...overrides,
+  });
+  const sustained = screen(0, 12);
+  const flashes = Array.from({ length: 6 }, (_, index) => screen(20 + index, 1));
+  const otherPage = screen(26, 2, { context: { ...window, url: "https://example.invalid/two" } });
+  const privatePage = screen(27, 2, { sensitivity: "private" });
+  const session = screen(28, 1, { source: "codex.session", source_ref: "synthetic-search-session#snapshot" });
+  const records = [sustained, ...flashes, otherPage, privatePage, session];
+  expect(ctx.db.ingest(records).accepted).toBe(records.length);
+
+  const expected = ["t", "p", session.id, privatePage.id, otherPage.id, flashes.at(-1)!.id];
+  const ids: string[] = [];
+  let cursor: string | null = null;
+  do {
+    const params = new URLSearchParams({ tool: "codex", q: "needle", limit: "1" });
+    if (cursor) params.set("cursor", cursor);
+    const page = await read(`/v1/agent/search?${params}`);
+    const results = [...page.threads, ...page.projects, ...page.records];
+    expect(results).toHaveLength(1);
+    ids.push(results[0].id);
+    cursor = page.next_cursor;
+  } while (cursor && ids.length <= expected.length);
+  expect(ids).toEqual(expected);
+  expect(cursor).toBeNull();
+
+  const params = new URLSearchParams({
+    tool: "codex", q: "needle", from: sustained.t_start, to: sustained.t_start,
+  });
+  const narrow = await read(`/v1/agent/search?${params}`);
+  expect(narrow.records.map((record: { id: string }) => record.id)).toEqual([sustained.id]);
+  expect((await read("/v1/records?q=needle")).records).toHaveLength(records.length);
+  expect((await read("/v1/agent/timeline?tool=codex")).records).toHaveLength(records.length);
+  expect((await read(`/v1/agent/get?tool=codex&level=detail&id=${flashes[0]!.id}`)).item.body).toBe("合成原文");
+});
+
 test("默认分页 20，上限 100，审计按工具过滤和稳定游标翻页", async () => {
-  const records = Array.from({ length: 23 },() => fixture({ title: "needle" })); ctx.db.ingest(records);
+  const records = Array.from({ length: 23 },() => fixture({ title: "needle", source: "manual.note" })); ctx.db.ingest(records);
   expect((await read("/v1/agent/timeline?tool=codex")).records).toHaveLength(20);
   expect((await read("/v1/agent/search?tool=codex&q=needle")).records).toHaveLength(20);
   await read("/v1/agent/now?tool=claude-code");

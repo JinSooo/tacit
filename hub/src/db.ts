@@ -187,7 +187,7 @@ export class HubDB {
     })();
   }
 
-  list(params: URLSearchParams): { records: Partial<StoredRecord>[]; next_cursor: string | null } {
+  list(params: URLSearchParams, { collapseScreenMatches = false } = {}): { records: Partial<StoredRecord>[]; next_cursor: string | null } {
     const where: string[] = [];
     const args: unknown[] = [];
     for (const field of ["device", "source"]) if (params.has(field)) { where.push(`r.${field}=?`); args.push(params.get(field)); }
@@ -210,14 +210,38 @@ export class HubDB {
     const limit = Number(params.get("limit") ?? 50);
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new InputError("limit 必须是 1–500 的整数");
     const cursor = params.get("cursor");
+    let position: [number, string] | undefined;
     if (cursor) {
       try {
         const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
         if (!Array.isArray(parsed) || parsed.length !== 2 || !Number.isSafeInteger(parsed[0]) || typeof parsed[1] !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(parsed[1])) throw new Error();
-        where.push("(r.t_start_ms < ? OR (r.t_start_ms = ? AND r.id < ?))"); args.push(parsed[0], parsed[0], parsed[1]);
+        position = [parsed[0], parsed[1]];
       } catch { throw new InputError("cursor 无效"); }
     }
-    const rows = this.db.prepare<unknown[], Row>(`SELECT r.rowid,r.* FROM records r ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY r.t_start_ms DESC,r.id DESC LIMIT ?`).all(...args, limit + 1);
+    if (position && !collapseScreenMatches) {
+      where.push("(r.t_start_ms < ? OR (r.t_start_ms = ? AND r.id < ?))");
+      args.push(position[0], position[0], position[1]);
+    }
+    const sql = `SELECT r.rowid,r.* FROM records r ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY r.t_start_ms DESC,r.id DESC`;
+    let rows: Row[];
+    if (collapseScreenMatches) {
+      rows = [];
+      const seen = new Set<string>();
+      // 只读到够填满本页。经过游标前的匹配时也记下代表，下一页不会补出已折叠的旧片段。
+      for (const row of this.db.prepare<unknown[], Row>(sql).iterate(...args)) {
+        if (row.source === "mac.screen") {
+          const context = typeof row.context === "string" ? JSON.parse(row.context) as RecordV1["context"] : null;
+          const key = JSON.stringify([row.device, row.title, context?.app, context?.window, context?.url, row.sensitivity === "private"]);
+          if (seen.has(key)) continue;
+          seen.add(key);
+        }
+        if (position && (row.t_start_ms > position[0] || (row.t_start_ms === position[0] && String(row.id) >= position[1]))) continue;
+        rows.push(row);
+        if (rows.length > limit) break;
+      }
+    } else {
+      rows = this.db.prepare<unknown[], Row>(`${sql} LIMIT ?`).all(...args, limit + 1);
+    }
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
     const last = page.at(-1);
