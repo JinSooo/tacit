@@ -60,6 +60,7 @@ test("说话人按现在的状态叫：确认的写名字，并走的跟过去�
   const label = (id: string) => audio.speaker(id)!.label;
   const [a, b, c, d] = ids as [string, string, string, string];
   audio.resolve(a, "rename", "李家辰");
+  audio.sync("mac");
   audio.resolve(b, "merge_into", undefined, a);
   const name = speakerNamer(ctx.db)();
   expect([label(a), label(b), label(d), label(c), "我", "未知说话人", "刘朝刚"].map(l => name(l))).toEqual(["李家辰", "李家辰", "对方 1", "对方 2", "我", "其他人", "刘朝刚"]);

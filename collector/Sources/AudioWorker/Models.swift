@@ -8,7 +8,11 @@ final class Strings {
   func c(_ value: String) -> UnsafePointer<CChar> { let p = strdup(value)!; pointers.append(p); return UnsafePointer(p) }
   deinit { pointers.forEach { free($0) } }
 }
-struct Recognition { let text: String; let confidence: Double? }
+struct Recognition {
+  let text: String
+  let confidence: Double?
+  var language: String? = nil
+}
 protocol Inference {
   func embedding(_ samples: [Float]) throws -> [Float]
   func transcribe(_ samples: [Float]) throws -> Recognition
@@ -77,6 +81,9 @@ final class Models: Inference {
         confidence = scores.reduce(0.0) { $0 + exp(Double($1)) } / Double(scores.count)
       }
     }
-    return Recognition(text: String(cString: value.text).split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces), confidence: confidence)
+    let detected = value.lang.map { String(cString: $0).trimmingCharacters(in: CharacterSet(charactersIn: "<|>")).lowercased() }
+    let language = detected.flatMap { ["zh", "yue", "en", "ja", "ko"].contains($0) ? $0 : nil }
+    return Recognition(text: String(cString: value.text).split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces),
+      confidence: confidence, language: language)
   }
 }

@@ -2,6 +2,22 @@ import Testing
 import Foundation
 @testable import CollectorCore
 
+@Test func transcriptKeepsShortRepliesAndCompleteForeignSpeech() {
+  let start = Date()
+  func line(_ text: String, _ language: String, _ seconds: Double) -> TranscriptLine {
+    TranscriptLine(segment: AudioSegment(file: "mic-0001.enc", track: .mic, start: start,
+      end: start.addingTimeInterval(seconds), dbfs: -20), local: "S1", text: text, language: language, clipSeconds: seconds)
+  }
+  let speech = line("这里是合成对话的主要内容", "zh", 18)
+  let reply = line("好", "zh", 0.6)
+  let dialect = line("可以", "yue", 0.8)
+  let sentence = line("I can read the full sentence.", "en", 3)
+  let noisy = [line("。", "en", 1), line("あ", "ja", 0.6), line("okay", "en", 0.9)]
+  let mixed = WorkerLogic.cleanTranscript([speech, reply] + noisy + [sentence, dialect])
+  #expect(mixed.map(\.text) == [speech, reply, sentence, dialect].map(\.text))
+  #expect(WorkerLogic.cleanTranscript([sentence, line("OK", "en", 0.8)]).map(\.text) == [sentence.text, "OK"])
+}
+
 @Test func meetingBleedRequiresTextCoverage() {
   func line(_ track: AudioTrack, _ start: String, _ end: String, _ text: String) -> TranscriptLine {
     TranscriptLine(segment: AudioSegment(file: "\(track.rawValue)-\(start).enc", track: track,

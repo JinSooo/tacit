@@ -145,8 +145,13 @@ func fixture(_ samples: [[Float]], meetings: [String] = [], encode: ([Float]) th
     defer { try? FileManager.default.removeItem(at: root) }
     let hub = FakeHub(), models = FakeModels()
     let worker = Worker(store: store, hub: hub, device: "mac-test", decode: { _ in synthetic }) { models }
+    hub.voice = false
+    #expect(try await worker.run() == 0)
+    #expect(try store.conversations().first?.status == .waiting_me)
+    hub.voice = true
     #expect(try await worker.run() == 0)
     #expect(try store.conversations().first?.status == .done)
+    #expect(hub.uploads.count == 1)
     let tracks = (hub.uploads.last?["speakers"] as? [[String: Any]])?.compactMap { $0["track"] as? String }
     let body = hub.records.first?["body"] as? String ?? ""
     let lines = body.split(separator: "\n").count
@@ -176,6 +181,20 @@ func fixture(_ samples: [[Float]], meetings: [String] = [], encode: ([Float]) th
   #expect(try await worker.run() == 0)
   #expect(try store.conversations().allSatisfy { $0.status == .failed && $0.attempts == 3 && $0.error == "音频处理失败" })
   #expect(models.transcriptions == 0)
+}
+
+@Test func workerUsesTwoRolesWithAnExistingVoiceprint() async throws {
+  let synthetic: [Float] = Array(repeating: 0.2, count: 48000)
+  let (root, store, _) = try fixture([synthetic, synthetic], meetings: ["us.zoom.xos"], encode: { _ in Data([1]) })
+  defer { try? FileManager.default.removeItem(at: root) }
+  let hub = FakeHub()
+  let worker = Worker(store: store, hub: hub, device: "mac-test", decode: { _ in synthetic }) { FakeModels() }
+  #expect(try await worker.run() == 0)
+  let record = try #require(hub.records.first)
+  let body = try #require(record["body"] as? String)
+  #expect(body.contains(" 我：")); #expect(body.contains(" 对方："))
+  #expect(hub.uploads.isEmpty)
+  #expect((record["people"] as? [String]) == [])
 }
 
 @Test(.enabled(if: ProcessInfo.processInfo.environment["RA_WORKER_SMOKE_MODELS"] != nil, "用 collector/scripts/worker-smoke.sh 运行真实模型集成测试"))

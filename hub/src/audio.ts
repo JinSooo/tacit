@@ -102,7 +102,7 @@ export class AudioStore {
   sync(value: unknown) {
     const device = deviceName(value);
     tryWriteWithoutWaiting(this.hub, () => {
-      // 门槛调整后，已达新门槛但没有新上传的说话人也要进待确认。
+      // 尚未建立本人声纹时，已有的样本也可以排进首次确认。
       for (const s of this.sql.prepare("SELECT id FROM speakers WHERE status='new'").all() as { id: string }[]) this.ask(s.id);
       this.expireSampleRequests();
       this.pruneOrphans();
@@ -231,6 +231,10 @@ export class AudioStore {
     if (s.status !== "new") return;
     const limit = ASK[s.mic ? "mic" : "sys"];
     if (s.seconds < limit.seconds && (s.conversations < limit.conversations || s.seconds < limit.minSeconds)) return;
+    // 确认用于建立本人声纹。旧的确认项和已确认人物仍可按原流程处理。
+    if (this.sql.prepare("SELECT 1 FROM speakers WHERE is_me=1 AND status!='merged' LIMIT 1").get()
+      || this.sql.prepare(`SELECT 1 FROM pending p JOIN speakers s ON s.id=json_extract(p.payload,'$.speaker_id')
+         WHERE p.kind='voice' AND p.resolved_at IS NULL AND s.status='asked' LIMIT 1`).get()) return;
     const now = new Date().toISOString();
     this.sql.prepare("INSERT INTO pending(id,kind,payload,created_at) VALUES(?,'voice',?,?)").run(ulid(),JSON.stringify({ speaker_id: id }),now);
     this.sql.prepare("UPDATE speakers SET status='asked',updated_at=? WHERE id=?").run(now,id);

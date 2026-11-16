@@ -21,8 +21,11 @@ public struct TranscriptLine {
   public var local: String
   public var text: String
   public var confidence: Double?
-  public init(segment: AudioSegment, local: String, text: String, confidence: Double? = nil) {
+  public var language: String?
+  public var clipSeconds: Double?
+  public init(segment: AudioSegment, local: String, text: String, confidence: Double? = nil, language: String? = nil, clipSeconds: Double? = nil) {
     self.segment = segment; self.local = local; self.text = text; self.confidence = confidence
+    self.language = language; self.clipSeconds = clipSeconds
   }
 }
 public enum WorkerLogic {
@@ -220,7 +223,33 @@ public enum WorkerLogic {
   }
   public static func decision(speakers: [LocalSpeaker], voiceprint: [Float]?, threshold: Double, meetings: [String]) -> AudioStatus {
     guard let voiceprint else { return .waiting_me }
-    return !meetings.isEmpty || speakers.contains { $0.track == .mic && cosine($0.centroid, voiceprint) >= threshold } ? .done : .skipped
+    return !meetings.isEmpty || speakers.contains { isSelf($0, voiceprint: voiceprint, threshold: threshold) } ? .done : .skipped
+  }
+  public static func isSelf(_ speaker: LocalSpeaker, voiceprint: [Float], threshold: Double) -> Bool {
+    speaker.track == .mic && cosine(speaker.centroid, voiceprint) >= threshold
+  }
+  public static func cleanTranscript(_ lines: [TranscriptLine]) -> [TranscriptLine] {
+    let speech = lines.compactMap { line -> (line: TranscriptLine, words: String, language: String?)? in
+      let words = line.text.filter { $0.isLetter || $0.isNumber }
+      guard !words.isEmpty else { return nil }
+      // 普通话和粤语都有汉字片段，不把方言识别当成外语噪声。
+      return (line, words, line.language == "yue" ? "zh" : line.language)
+    }
+    var seconds: [String: Double] = [:]
+    for entry in speech {
+      if let language = entry.language, let duration = entry.line.clipSeconds {
+        seconds[language, default: 0] += duration
+      }
+    }
+    guard let main = seconds.max(by: { $0.value < $1.value }),
+          main.value >= max(5, seconds.values.reduce(0, +) * 0.75) else { return speech.map(\.line) }
+    return speech.compactMap { entry in
+      guard let language = entry.language, language != main.key,
+            let duration = entry.line.clipSeconds, duration < 2 else { return entry.line }
+      // 只收掉极短的异语言碎片，保留主语言里的短回应和可用的外语句子。
+      let shortWord = entry.words.range(of: "^[A-Za-z]{1,5}$", options: .regularExpression) != nil
+      return entry.words.count <= 2 || shortWord ? nil : entry.line
+    }
   }
   public static func similarity(_ lhs: String, _ rhs: String) -> Double {
     let a = Array(lhs), b = Array(rhs)

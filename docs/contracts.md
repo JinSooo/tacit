@@ -329,8 +329,8 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 | 进程 | 做什么 | 不做什么 |
 |---|---|---|
 | 采集端 Record Anything.app | 常驻录两路（麦克风 `mic`：AVAudioEngine；系统声音 `sys`：Core Audio process tap，全局混音），重采样到 16kHz 单声道，Silero VAD 只留人声段，按"两路人声间隔 ≥ 60 秒"切成对话，加密写盘；按保留天数清理；和 hub 同步（5.4）；调度转写进程 | 不加载 SenseVoice 和声纹模型（内存要 < 300MB） |
-| 转写进程 `ra-audio-worker`（同一个 app 包里的第二个可执行文件） | 由采集端按批启动、处理完退出：算声纹 → 对话内说话人区分 → 上传声纹 → 判断有没有"我" → 转写 → 写 History；截取试听样本 | 不常驻 |
-| hub | 收声纹、跨对话聚类成说话人、"新声音"待确认、存试听样本、下发"我"的声纹、保留天数设置和一键清理 | 不收原始音频（试听样本除外） |
+| 转写进程 `ra-audio-worker`（同一个 app 包里的第二个可执行文件） | 由采集端按批启动、处理完退出。在本机判断有没有“我”、转写、写 History。初次确认本人时上传用于确认的声纹并截取试听样本 | 不常驻 |
+| hub | 建立和下发“我”的声纹、保留既有的说话人和试听样本，提供保留天数设置和一键清理 | 不收原始音频（试听样本除外） |
 
 暂停记录时两路都停。录音开关在采集端菜单里，默认开。
 
@@ -408,7 +408,7 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 ```
 
 - **聚类**（规则，不调模型）：上传的每个说话人中心和已有说话人（`status` 不是 `merged`）比余弦，最高的 ≥ `match_threshold`（起始 0.5）就归入并更新中心，否则新建 `new` 说话人。阈值是实验 2-C 的起始值，要用真实录音再调。
-- **进待确认**：`status=new` 的说话人，录到过麦克风这路的（累计 ≥ 2 段对话且 ≥ 15 秒）或累计 ≥ 45 秒、只在系统声音这路的（累计 ≥ 3 段对话且 ≥ 30 秒）或累计 ≥ 120 秒（2026-11-12 确认），就建 `pending(kind="voice", payload={ speaker_id })`，改成 `asked`，同时按秒数最长的 3 段对话建样本请求。除了上传 embeddings 时检查，`/v1/audio/sync` 也会重查一遍 `new` 说话人（门槛调整后不必等新上传）。
+- **首次确认本人**：尚无本人声纹时，每次最多排一个确认项。候选沿用现有时长门槛，麦克风累计 2 段且达 15 秒或累计 45 秒，单有系统声音则累计 3 段且达 30 秒或累计 120 秒。确认项请求声音最足的 3 段试听样本。上传 embeddings 和 `/v1/audio/sync` 都会检查。已有待确认项仍可处理。
 - 来源由 `speakers.mic` 持久记录：每次上传 `track="mic"` 置 1，逐条声纹被跳过、删除或保留期清理后不重置；合并说话人时保留任一方的麦克风来源。数据库 v10 在 `BEGIN IMMEDIATE` 事务内先查列再添加，按现有 `voice_embeddings` 的麦克风行回填，可重复打开。
 - 待确认操作（`POST /v1/pending/:id`）：`me`（就是我：`is_me=1`、`name="我"`）、`rename`（填名字）、`merge_into`（和某人是同一人，`target` 是说话人 id）、`ignore`。处理后删掉这个说话人的试听样本。`GET /v1/pending` 里 voice 项的 payload 补 `{ speaker_id, label, conversations, seconds, samples: [{ id, mime }], samples_pending: bool }`。
 - 标了"我"或起了已有的名字：确认后立即和已确认的同名说话人（"我"按 `is_me`）合并，不留多个"我"。
@@ -420,7 +420,7 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 
 每段 `closed`（和"我"的声纹变化后的 `waiting_me`）对话：
 
-1. 解密各段，每路按 3 秒窗口算声纹，对话内聚类成本地说话人 `S1`、`S2`…（起始阈值 0.6，可调），算中心，上传 5.4 的 embeddings，拿回说话人 id 和标签。`meeting_apps` 为空时只上传麦克风这路的说话人。
+1. 解密各段，每路按 3 秒窗口算声纹，在对话内聚类并计算中心。没有本人声纹时上传 5.4 的 embeddings 供首次确认，非会议只上传麦克风这一路。有本人声纹后，新对话的声纹比对在本机完成。
 2. 判断要不要转写：
    - 没有 `voiceprint` → `waiting_me`，不转写；
    - 麦克风这路有本地说话人中心和 voiceprint 的余弦 ≥ threshold，或 `meeting_apps` 非空 → 转写；
@@ -429,12 +429,13 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
    会议中（`meeting_apps` 非空）隐藏麦克风段必须同时满足声纹相似度 ≥ 0.55、文字被邻近系统转写覆盖 ≥ 0.6（沿用 `removeEcho` 的 coverage，时间前后各放宽 3 秒、按时间拼接系统文字），不按说话人扩大隐藏范围；非会议维持原有声纹隐藏规则，保留期内旧录音由 v4 缓存触发重认并重新上传逐行标记。
 4. 写一条记录，经 `POST /v1/ingest`：
    - `source: "mac.audio"`，`source_ref: conversation_id`，`kind: "span"`，`t_start`、`t_end` 取对话首尾。
-   - `title`：`对话 · HH:MM–HH:MM · 我、说话人 B`（规则生成）。
+   - `title` 由时间段和出现的角色生成，例如 `对话 · HH:MM–HH:MM · 我、对方`。
    - `body`：每段一行 `[HH:MM:SS] 标签：文字`，按时间排序。
-   - `people`：说话人 id 数组。`capture: { method: "asr", confidence }`（各段平均）。
+   - 麦克风声纹中心达到本人阈值的段标记为“我”，其余标记为“对方”，新记录的 `people` 为空数组。
+   - 去掉仅符号的识别结果。对话有明显主语言时，去掉时长不足 2 秒且只有一两个字或一个短英文词的异语言片段。`capture.confidence` 在模型提供时保留各段均值。
    - `context: { app: 第一个会议软件或 null, extra: { speech_seconds, mic_dbfs, sys_dbfs, tracks } }`。
    - `media: [{ path: "audio/<日期>/<id>", kind: "audio", expires: t_end + 保留天数（不自动清除时为 null） }]`。
-   - 记录写入后不改；之后说话人改名，网页按 `people` 的 id 显示新名字。
+   - 旧转写及说话人身份仍可按原有 ID 查询。改名和归并通过已有的说话人关系显示。
 5. 处理样本请求：每个请求只取对应本地说话人最长的一段连续人声，不超过 10 秒，上传 `/v1/audio/samples`。对话已经被清理的，请求留着，网页显示"样本待取"。
 
 - 采集端启动转写进程的时机：有 `closed` 对话且距上次运行 ≥ 10 分钟，或收到新的 voiceprint，或 hub 有未完成的样本请求（同样间隔 ≥ 10 分钟）；同一时刻只跑一个；低优先级（`taskpolicy -b` 或 `setpriority`）。

@@ -132,9 +132,11 @@ final class Worker {
       // 非会议的系统转写只辅助去回声，不写进记录。
       if meta.meeting_apps.isEmpty && segment.track == .sys && !WorkerLogic.overlapsMic(segment, meta.segments) { continue }
       if skipping.contains(i) { continue }
-      let recognition = try inference().transcribe(audio(segment, meta))
+      let samples = try audio(segment, meta)
+      let recognition = try inference().transcribe(samples)
       if !recognition.text.isEmpty {
-        lines.append(TranscriptLine(segment: segment, local: WorkerLogic.majority(windows.filter { $0.segment == i }), text: recognition.text, confidence: recognition.confidence))
+        lines.append(TranscriptLine(segment: segment, local: WorkerLogic.majority(windows.filter { $0.segment == i }),
+          text: recognition.text, confidence: recognition.confidence, language: recognition.language, clipSeconds: Double(samples.count) / 16000))
       }
     }
     return lines
@@ -176,28 +178,33 @@ final class Worker {
           return a == b ? $0.file < $1.file : a < b
         }
         var cache = try clustered(meta)
-        // 不开会时系统声音不转写，它的说话人也不上传，不进待确认列表。
         let meeting = !meta.meeting_apps.isEmpty
-        let uploaded = cache.speakers.filter { meeting || $0.track == .mic }
-        // 每段都不足 1.5 秒时算不出声纹：不上传，按"没有可识别说话人"走后面的判定。
-        if uploaded.isEmpty { cache.hub = [] } else {
-          let response = try await post("/v1/audio/embeddings", ["device": device, "conversation_ref": meta.id, "t_start": meta.t_start,
-            "t_end": meta.t_end!, "speakers": uploaded.map { ["local": $0.local, "track": $0.track.rawValue, "seconds": $0.seconds, "centroid": $0.centroid] as [String: Any] }])
-          cache.hub = try JSONDecoder().decode(EmbeddingsResponse.self, from: response).speakers
+        // 还需要建立本人声纹时沿用待确认入口。已有本人声纹后，新对话只在本机划分角色。
+        if sync.voiceprint == nil {
+          let uploaded = cache.speakers.filter { meeting || $0.track == .mic }
+          // 极短片段没有声纹可上传。
+          if uploaded.isEmpty { cache.hub = [] } else {
+            let response = try await post("/v1/audio/embeddings", ["device": device, "conversation_ref": meta.id, "t_start": meta.t_start,
+              "t_end": meta.t_end!, "speakers": uploaded.map { ["local": $0.local, "track": $0.track.rawValue, "seconds": $0.seconds, "centroid": $0.centroid] as [String: Any] }])
+            cache.hub = try JSONDecoder().decode(EmbeddingsResponse.self, from: response).speakers
+          }
+          guard Set(cache.hub.map(\.local)) == Set(uploaded.map(\.local)), Set(cache.hub.map(\.local)).count == cache.hub.count else { throw WorkerError.response }
+          try save(cache, meta)
         }
-        guard Set(cache.hub.map(\.local)) == Set(uploaded.map(\.local)), Set(cache.hub.map(\.local)).count == cache.hub.count else { throw WorkerError.response }
-        try save(cache, meta)
         let next = WorkerLogic.decision(speakers: cache.speakers, voiceprint: sync.voiceprint?.vector, threshold: sync.voiceprint?.threshold ?? 1, meetings: meta.meeting_apps)
         if next == .skipped { _ = try await post("/v1/audio/conversations/\(meta.id)/skipped", [:]) }
-        if next == .done {
+        if next == .done, let voiceprint = sync.voiceprint {
           let candidates = try bleedSegments(meta, windows: cache.windows)
           let lines = try transcribe(meta, windows: cache.windows, skipping: meeting ? [] : candidates)
           let bleed = WorkerLogic.confirmedBleed(candidates, segments: meta.segments, lines: lines, meeting: meeting)
           let hiddenFiles = Set(bleed.map { meta.segments[$0].file })
           let kept = meeting ? lines.filter { !hiddenFiles.contains($0.segment.file) } : WorkerLogic.removeEcho(lines)
-          let labels = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.is_me ? "我" : $0.label) })
-          let ids = Dictionary(uniqueKeysWithValues: cache.hub.map { ($0.local, $0.speaker_id) })
-          let record = WorkerLogic.record(meta: meta, device: device, lines: kept.filter { meeting || $0.segment.track == .mic }, labels: labels, ids: ids, retention: sync.retention_days)
+          var labels = ["": "对方"]
+          for speaker in cache.speakers {
+            labels[speaker.local] = WorkerLogic.isSelf(speaker, voiceprint: voiceprint.vector, threshold: voiceprint.threshold) ? "我" : "对方"
+          }
+          let speech = WorkerLogic.cleanTranscript(kept.filter { meeting || $0.segment.track == .mic })
+          let record = WorkerLogic.record(meta: meta, device: device, lines: speech, labels: labels, ids: [:], retention: sync.retention_days)
           guard (record["body"] as! String).unicodeScalars.count <= 200000 else { throw WorkerError.recordTooLarge }
           let response = try await post("/v1/ingest", ["device": device, "records": [record]])
           guard let receipt = DeliveryReceipt.decode(response, batchCount: 1), receipt.rejected.isEmpty else { throw WorkerError.response }

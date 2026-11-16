@@ -4,6 +4,7 @@ import { HubDB } from "../src/db.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { frameKey, sliceFrames } from "../src/distill/frames.ts";
 import { createHandler } from "../src/server.ts";
+import { ulid } from "../../packages/record/index.ts";
 import { fixture, setup } from "./helpers.ts";
 
 let ctx: ReturnType<typeof setup>;
@@ -25,10 +26,18 @@ function body(ref: string, seconds = 40, axis = 0, device = "mac", track = "mic"
 }
 function upload(ref: string, seconds = 40, axis = 0, device = "mac", track = "mic") { return audio.embeddings(body(ref,seconds,axis,device,track)).speakers[0]!; }
 function pending() { return new DistillStore(ctx.db).pending().filter(p => p.kind === "voice"); }
+// 模拟升级前已积累的确认项，继续覆盖旧数据的确认、重命名与归并。
+function legacyQuestion(speakerId: string) {
+  const existing = pending().find(p => p.payload.speaker_id === speakerId);
+  if (existing) return existing.id;
+  const id = ulid();
+  ctx.db.db.prepare("UPDATE speakers SET status='asked' WHERE id=? AND status='new'").run(speakerId);
+  new DistillStore(ctx.db).createPending({ id, kind: "voice", payload: { speaker_id: speakerId }, created_at: new Date().toISOString() });
+  return id;
+}
 function resolve(action: string, axis = 0, name?: string, target?: string) {
   const s = upload(`resolve-${axis}`,120,axis);
-  const p = pending().find(p => p.payload.speaker_id === s.speaker_id)!;
-  new DistillStore(ctx.db).resolvePending(p.id,action,name,target);
+  new DistillStore(ctx.db).resolvePending(legacyQuestion(s.speaker_id),action,name,target);
   return s;
 }
 function call(path: string, method = "GET", data?: unknown) {
@@ -73,22 +82,41 @@ test("系统声音 3 段且至少 30 秒或 120 秒只提问一次，同对话�
   const requests = audio.sync("mac").sample_requests as { conversation_ref: string }[];
   expect(requests.map(r => r.conversation_ref).sort()).toEqual(["one","three","two"]);
   expect(pending()[0]!.payload).toMatchObject({ label: "说话人 A", conversations: 4, seconds: 80, samples: [], samples_pending: true });
-  sys("long",120,2);
-  expect(pending()).toHaveLength(2);
+  const long = sys("long",120,2);
+  expect(pending()).toHaveLength(1);
+  new DistillStore(ctx.db).resolvePending(pending()[0]!.id,"ignore");
   expect(audio.sync("mac").voiceprint).toBeNull();
+  expect(pending().map(p => p.payload.speaker_id)).toEqual([long.speaker_id]);
 });
 
 test("麦克风说话人 2 段且至少 15 秒或 45 秒提问；同步时补问", () => {
   upload("m1",10); expect(pending()).toHaveLength(0);
   upload("m2",10); expect(pending()).toHaveLength(1);
-  upload("long-mic",45,2); expect(pending()).toHaveLength(2);
+  const long = upload("long-mic",45,2); expect(pending()).toHaveLength(1);
+  const store = new DistillStore(ctx.db);
+  store.resolvePending(pending()[0]!.id,"ignore");
+  audio.sync("mac");
+  expect(pending().map(p => p.payload.speaker_id)).toEqual([long.speaker_id]);
+  store.resolvePending(pending()[0]!.id,"ignore");
   // 模拟旧门槛下已累计到 2 段、但一直没被问的麦克风说话人。
   const old = upload("old-1",15,3);
-  ctx.db.db.prepare("DELETE FROM pending WHERE payload LIKE ?").run(`%${old.speaker_id}%`);
-  ctx.db.db.prepare("UPDATE speakers SET status='new',conversations=2 WHERE id=?").run(old.speaker_id);
+  ctx.db.db.prepare("UPDATE speakers SET conversations=2 WHERE id=?").run(old.speaker_id);
   expect(pending().some(p => p.payload.speaker_id === old.speaker_id)).toBe(false);
   audio.sync("mac");
   expect(pending().some(p => p.payload.speaker_id === old.speaker_id)).toBe(true);
+});
+
+test("只排队一次本人确认，已有本人声纹时不再产生新声音确认", () => {
+  const me = upload("initial-self", 45);
+  const other = upload("another-eligible", 45, 2);
+  expect(pending().map(p => p.payload.speaker_id)).toEqual([me.speaker_id]);
+  const queue = new DistillStore(ctx.db);
+  queue.resolvePending(pending()[0]!.id, "me");
+  upload("eligible-after-me", 45, 3);
+  expect(audio.sync("mac").voiceprint).not.toBeNull();
+  expect(pending()).toEqual([]);
+  expect(audio.speaker(other.speaker_id)?.status).toBe("new");
+  expect(audio.speaker(me.speaker_id)?.status).toBe("confirmed");
 });
 
 test.each([
@@ -114,6 +142,7 @@ test("skipped 清掉全部逐条声纹后，同步及系统声音上传仍按麦
   ctx.db.db.prepare("UPDATE speakers SET conversations=2 WHERE id=?").run(a.speaker_id);
   audio.sync("mac");
   expect(pending().some(p => p.payload.speaker_id === a.speaker_id)).toBe(true);
+  new DistillStore(ctx.db).resolvePending(pending()[0]!.id,"ignore");
 
   const b = upload("mic-before-sys",14,2);
   audio.skipped("mic-before-sys");
@@ -163,10 +192,10 @@ test("me、rename、ignore 实际落库，标出我才下发 voiceprint，阈值
 test("merge_into 重指向逐条声纹、按秒数加权中心并隐藏来源", () => {
   const a = resolve("me");
   const b = upload("merge-source",240,2);
-  const p = pending()[0]!;
+  const id = legacyQuestion(b.speaker_id);
   const store = new DistillStore(ctx.db);
-  for (const target of [b.speaker_id,"missing"]) expect(() => store.resolvePending(p.id,"merge_into",undefined,target)).toThrow();
-  store.resolvePending(p.id,"merge_into",undefined,a.speaker_id);
+  for (const target of [b.speaker_id,"missing"]) expect(() => store.resolvePending(id,"merge_into",undefined,target)).toThrow();
+  store.resolvePending(id,"merge_into",undefined,a.speaker_id);
   expect(audio.speaker(b.speaker_id)).toMatchObject({ status: "merged", merged_into: a.speaker_id });
   expect(audio.speaker(a.speaker_id)).toMatchObject({ seconds: 360, conversations: 2, is_me: 1 });
   const center = audio.sync("mac").voiceprint!.vector;
@@ -361,8 +390,7 @@ test("一段对话里拆碎的说话人并回确认过的人；确认过的不�
   // 先有两个确认过的人
   const [me, li] = conv("seed", [{ local: "S1", seconds: 200, centroid: v(1) }, { local: "S2", seconds: 200, centroid: v(0, 1) }]);
   for (const [s, name] of [[me!, "我"], [li!, "李家辰"]] as const) {
-    const p = pending().find(p => p.payload.speaker_id === s.speaker_id)!;
-    new DistillStore(ctx.db).resolvePending(p.id, name === "我" ? "me" : "rename", name === "我" ? undefined : name);
+    new DistillStore(ctx.db).resolvePending(legacyQuestion(s.speaker_id), name === "我" ? "me" : "rename", name === "我" ? undefined : name);
   }
   // 新的一段：一个长的"我"、一个长的李家辰（中心偏一点，没对上），加几个短窗口
   const out = conv("talk", [
@@ -382,7 +410,7 @@ test("一段对话里拆碎的说话人并回确认过的人；确认过的不�
 test("同名的已确认说话人并成一个，“我”按 is_me 并", () => {
   const vec = (axis: number) => { const a = Array<number>(512).fill(0); a[axis] = 1; return a; };
   const ids = [3, 4, 5, 6].map(axis => audio.embeddings({ device: "mac", conversation_ref: `n${axis}`, t_start: "2026-11-11T01:00:00Z", t_end: "2026-11-11T01:10:00Z", speakers: [{ local: "S1", track: "mic", seconds: 60 * axis, centroid: vec(axis) }] }).speakers[0]!.speaker_id);
-  const decide = (id: string, action: string, name?: string) => new DistillStore(ctx.db).resolvePending(pending().find(p => p.payload.speaker_id === id)!.id, action, name);
+  const decide = (id: string, action: string, name?: string) => new DistillStore(ctx.db).resolvePending(legacyQuestion(id), action, name);
   decide(ids[0]!, "rename", "刘朝刚"); decide(ids[1]!, "rename", " 刘朝刚 "); decide(ids[2]!, "me"); decide(ids[3]!, "me");
   // 确认时就已并好，再整理一遍没有可并的。
   expect(audio.mergeSameNames()).toBe(0);
