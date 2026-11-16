@@ -21,6 +21,7 @@ import { gitMaterialKey, materialBody, uniqueMaterials } from "./material.ts";
 import { evidenceTime } from "./evidence-time.ts";
 import { resolveRepoRoot } from "./repos.ts";
 import { readGeneral } from "../general-settings.ts";
+import { nowSummary } from "../now-status.ts";
 import { redactString } from "../redact.ts";
 import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
 
@@ -610,17 +611,9 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
 // ---------------- 5. 当前状态（确定性，不调模型） ----------------
 
 export function nowStep(store: DistillStore, now: number) {
-  // 线程 2 小时不动就转为暂停，但"现在"仍应显示最近在做的事，所以 24 小时内暂停的也算。
-  const threads = store.hub.db.prepare("SELECT * FROM threads WHERE status IN ('active','paused') AND last_ms>? AND brief IS NOT NULL ORDER BY last_ms DESC LIMIT 5").all(now - DAY) as (Thread & { last_ms: number })[];
-  const names = new Map(store.projects().map(p => [p.id, p.name]));
-  const items = threads.map(t => ({ thread_id: t.id, title: t.title, brief: t.brief, project: t.project_id ? names.get(t.project_id) ?? null : null, last: toLocalIso(t.last_ms) }));
-  const top = items[0];
-  // 简略版本身已说清在做什么，只在它没提到项目名时补上项目名。
-  const brief = top ? (top.project && !top.brief!.includes(top.project) ? `${top.project}：${top.brief}` : top.brief!) : "最近 24 小时没有活跃的线程。";
-  // 这是正文的生成时间，不是本轮轮询时间。旧数据缺时间时不伪造“刚更新”。
-  const updated = threads[0]?.updated_at;
-  store.setState("now", { brief, detail: { threads: items }, updated_at: top ? (updated && Number.isFinite(Date.parse(updated)) ? updated : null) : toLocalIso(now) });
-  return { threads: items.length };
+  const summary = nowSummary(store, now);
+  store.setState("now", summary);
+  return { threads: summary.detail.threads.length };
 }
 
 // ---------------- 6. 线程生命周期 ----------------

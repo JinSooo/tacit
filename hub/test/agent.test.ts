@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { AgentReads, estimateTokens } from "../src/agent.ts";
 import { stopAgentAudit } from "../src/agent-audit.ts";
 import { HubDB } from "../src/db.ts";
+import { nowStep } from "../src/distill/run.ts";
 import { DistillStore, type Thread } from "../src/distill/store.ts";
 import { createHandler } from "../src/server.ts";
 import { toLocalIso, ulid } from "../../packages/record/index.ts";
@@ -156,6 +157,42 @@ test("get 各层、日记、now 以及五种读取和 404 均审计，bytes 为 
   const er = audit.reads.find((r: any) => r.args.level === "evidence");
   expect(er.result_ids).toContain(evidence.item.records[0].id);
   expect(er.bytes).toBe(Buffer.byteLength(JSON.stringify(evidence)));
+});
+
+test("空的此刻缓存显示整理进度，新摘要写好后两条读取路径立即可见", async () => {
+  const clock = Date.now(), at = clock - 20 * 60_000;
+  thread("old", { last_ms: clock - 2 * 86_400_000 });
+  const record = fixture({ t_start: toLocalIso(at) });
+  expect(ctx.db.ingest([record]).accepted).toBe(1);
+  expect(nowStep(store, clock).threads).toBe(0);
+  const cached = store.getState("now");
+  const status = () => read("/v1/agent/now?tool=codex").then(response => response.now);
+  const pending = { brief: "有新活动待整理。", updated_at: null, detail: { threads: [] } };
+  expect((await read("/v1/now")).now).toMatchObject(pending);
+  expect(await status()).toMatchObject(pending);
+
+  store.createFrame({ id: "fresh-frame", key: "app:test", record_ids: [record.id], t_start_ms: at, t_end_ms: at,
+    chars: 1, private: 0, status: "new" });
+  expect(await status()).toMatchObject(pending);
+  thread("fresh", { brief: null, last_ms: at, needs_regen: 1 });
+  store.assign("fresh-frame", "fresh", "rule", 1);
+  expect(await status()).toMatchObject(pending);
+
+  const updated = toLocalIso(clock);
+  store.upsertThread({ ...store.thread("fresh")!, brief: "合成新摘要", updated_at: updated, needs_regen: 0 });
+  expect(await status()).toMatchObject({ brief: "合成新摘要", updated_at: updated, detail: { threads: [{ thread_id: "fresh" }] } });
+  expect((await read("/v1/now")).now.brief).toBe("合成新摘要");
+  expect(store.getState("now")).toEqual(cached);
+});
+
+test("明确忽略的公开活动和仅私密活动不触发此刻待整理", async () => {
+  const clock = Date.now(), at = clock - 20 * 60_000;
+  const ignored = fixture({ t_start: toLocalIso(at) });
+  expect(ctx.db.ingest([ignored, fixture({ t_start: toLocalIso(at), sensitivity: "private" })]).accepted).toBe(2);
+  store.createFrame({ id: "ignored", key: "app:test", record_ids: [ignored.id], t_start_ms: at, t_end_ms: at,
+    chars: 1, private: 0, status: "ignored" });
+  nowStep(store, clock);
+  expect((await read("/v1/now")).now).toMatchObject({ brief: "最近 24 小时没有活跃的线程。", feedback: null });
 });
 
 test("非参数错误失败仍写审计，参数错误不写，鉴权和 Host 生效", async () => {
