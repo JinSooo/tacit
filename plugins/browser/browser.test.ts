@@ -98,6 +98,57 @@ test("同站连续访问跨插件轮次合并，保留各地址与最后页标�
   } finally { hub.close(); }
 });
 
+test("同页再次访问延后站内片段关闭，随后同站页面跨轮仍合并", async () => {
+  const chrome = BROWSERS[0]!, f = fixture(chrome);
+  const first = "https://example.org/start", last = "https://example.org/next";
+  f.add(1, NOW - 35_000, first, "首访");
+  f.add(2, NOW - 10_000, first, "再次访问");
+  const open = await collect(f.home, [chrome], undefined, undefined, NOW);
+  f.add(3, NOW + 10_000, last, "站内最后一页");
+
+  const verify = async (state?: BrowserState) => {
+    const closed = await collect(f.home, [chrome], state, undefined, NOW + 41_000);
+    expect(closed.records).toHaveLength(1);
+    const [record] = closed.records;
+    expect(record).toMatchObject({ title: "站内最后一页", source_ref: "Chrome:Default:1", kind: "span",
+      context: { url: last }, body: `站内最后一页\n${first}\n${last}` });
+    expect(Date.parse(record!.t_start)).toBe(NOW - 35_000);
+    expect(Date.parse(record!.t_end!)).toBe(NOW + 10_000);
+  };
+  await verify();
+  expect(open.records).toEqual([]);
+  await verify(open.state);
+});
+
+test("重导保留已入库的站内片段边界，迟到的页面仍能单独找到", async () => {
+  const chrome = BROWSERS[0]!, f = fixture(chrome);
+  f.add(1, NOW, "https://example.org/first", "已入库的第一页");
+  const first = await collect(f.home, [chrome], undefined, undefined, NOW + 40_000);
+  expect(first.records.map(r => r.source_ref)).toEqual(["Chrome:Default:1"]);
+  f.add(2, NOW + 20_000, "https://example.org/late", "迟到的同站页面");
+  const second = await collect(f.home, [chrome], first.state, undefined, NOW + 60_000);
+  expect(second.records.map(r => r.source_ref)).toEqual(["Chrome:Default:2"]);
+
+  const replay = await collect(f.home, [chrome], second.state, new Date(NOW), NOW + 60_000);
+  const fields = ({ source_ref, t_start, t_end, title, body }: RecordV1) => ({ source_ref, t_start, t_end, title, body });
+  expect(replay.records.map(fields)).toEqual([...first.records, ...second.records].map(fields));
+});
+
+test("迟到访问跨过待写片段的游标时，等到能完整提交再写入", async () => {
+  const chrome = BROWSERS[0]!, f = fixture(chrome);
+  f.add(1, NOW + 40_000, "https://other.example/active", "尚未结束的页面");
+  f.add(2, NOW, "https://example.org/first", "迟到的第一页");
+  const open = await collect(f.home, [chrome], undefined, undefined, NOW + 50_000);
+  f.add(3, NOW + 20_000, "https://example.org/late", "迟到的第二页");
+  const closed = await collect(f.home, [chrome], open.state, undefined, NOW + 75_000);
+
+  expect(open.records).toEqual([]);
+  expect(closed.records.map(r => r.source_ref)).toEqual(["Chrome:Default:2", "Chrome:Default:1"]);
+  expect(closed.records[0]?.body).toBe("迟到的第二页\nhttps://example.org/first\nhttps://example.org/late");
+  const replay = await collect(f.home, [chrome], closed.state, new Date(NOW), NOW + 80_000);
+  expect(replay.records.map(r => r.source_ref)).toEqual(closed.records.map(r => r.source_ref));
+});
+
 test("重导对夹在新访问中的旧行保持原记录键，往返页面使用最后看到的标题", async () => {
   const chrome = BROWSERS[0]!;
   const f = fixture(chrome);

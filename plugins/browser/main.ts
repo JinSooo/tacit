@@ -30,6 +30,7 @@ interface ProfileState {
   recent: [string, number][];
   groupedAfter?: number;
   groupedSince?: number;
+  closedThrough?: number[];
 }
 export interface BrowserState {
   version: 1;
@@ -41,6 +42,7 @@ interface Visit {
   url: string | null;
   title: string | null;
   transition: number | null;
+  legacy: 0 | 1;
 }
 interface Page {
   id: number;
@@ -53,6 +55,16 @@ interface Page {
 const CONTINUOUS_GAP_MS = 30_000;
 const MAX_GROUP_MS = 5 * 60_000;
 const MAX_GROUP_URL_CHARS = 199_799; // 给换行和最长 200 字的标题留出空间。
+
+function replayBatch(visitId: number, closedThrough: number[]): number {
+  let first = 0, end = closedThrough.length;
+  while (first < end) {
+    const middle = Math.floor((first + end) / 2);
+    if (visitId <= closedThrough[middle]!) end = middle;
+    else first = middle + 1;
+  }
+  return first;
+}
 
 const ENGINES = {
   chromium: {
@@ -144,23 +156,38 @@ export async function collectBrowserHistory(options: CollectOptions): Promise<{ 
       // 启用合并前已经读过的访问沿用旧的 source_ref 和逐条重放方式。
       const groupedAfter = previous?.groupedAfter ?? previous?.lastId ?? 0;
       const groupedSince = previous ? previous.groupedSince : cutoff;
+      const closedThrough = previous?.closedThrough ?? [];
       let next: ProfileState;
       try {
         next = withDatabaseCopy(join(home, relativePath), (db) => {
           const engine = ENGINES[browser.engine];
           const groupingStart = groupedSince === undefined ? null : (groupedSince - engine.epoch) / engine.scale;
-          const rows = db.query<Visit, [number, number, number | null]>(
+          const rows = db.query<Visit, [number, number | null, number]>(
             `SELECT v.id, ${engine.time} AS time, ${engine.url} AS url,
-             ${engine.title} AS title, ${engine.transition} AS transition
+             ${engine.title} AS title, ${engine.transition} AS transition,
+             CASE WHEN v.id <= ? OR ${engine.time} < ? THEN 1 ELSE 0 END AS legacy
              FROM ${engine.from} WHERE v.id > ?
-             ORDER BY CASE WHEN v.id <= ? OR ${engine.time} < ? THEN 0 ELSE 1 END, ${engine.time}, v.id`,
+             ORDER BY legacy DESC, ${engine.time}, v.id`,
           // 重导时先重放旧访问，已入库的旧访问不打断合并启用后的访问序列。
-          ).all(options.since ? 0 : previous?.lastId ?? 0, groupedAfter, groupingStart);
-          let lastId = previous?.lastId ?? 0;
+          ).all(groupedAfter, groupingStart, options.since ? 0 : previous?.lastId ?? 0);
+          const replaying = options.since && closedThrough.length > 0;
+          const visits = rows.map(row => ({ row, batch: row.legacy ? -1 : replaying ? replayBatch(row.id, closedThrough) : 0 }));
+          if (replaying) visits.sort((a, b) => a.batch - b.batch || a.row.time - b.row.time || a.row.id - b.row.id);
+          const previousLastId = previous?.lastId ?? 0;
+          let highestVisitId = previousLastId;
+          const outOfOrder = visits.some(({ row }) => {
+            if (row.id <= previousLastId) return false;
+            const reordered = row.id < highestVisitId;
+            highestVisitId = row.id;
+            return reordered;
+          });
+          const buffered: RecordV1[] = [];
+          let lastId = previousLastId;
           const recent = new Map(options.since ? [] : previous?.recent ?? []);
           let latest = Math.max(-Infinity, ...recent.values());
           let pages: Page[] = [];
           let lastPage: Page | undefined;
+          let minOpenId = Infinity, maxIdBeforeOpen = 0;
           const openRecent = new Map<string, number>();
           let urlChars = 0;
           const close = () => {
@@ -179,51 +206,75 @@ export async function collectBrowserHistory(options: CollectOptions): Promise<{ 
                 capture: { method: "db" }, sensitivity: "normal",
               };
               if (!validateRecord(record).ok) throw new Error("浏览记录不符合记录契约");
-              options.onRecord(record);
+              if (outOfOrder) buffered.push(record);
+              else options.onRecord(record);
             }
             for (const [hash, time] of openRecent) recent.set(hash, time);
             latest = Math.max(latest, last.time);
             openRecent.clear();
             pages = [];
             lastPage = undefined;
+            minOpenId = Infinity;
             urlChars = 0;
           };
-          for (const row of rows) {
+          let lastBatch = visits[0]?.batch ?? 0;
+          for (const { row, batch } of visits) {
+            if (batch !== lastBatch) {
+              // 按上次成功 checkpoint 的范围重放，避免迟到访问并入已经写入的记录。
+              close();
+              if (lastBatch !== -1) for (const [hash, time] of recent) {
+                if (time < latest - CONTINUOUS_GAP_MS) recent.delete(hash);
+              }
+              lastBatch = batch;
+            }
+            const maxIdBeforeVisit = lastId;
             lastId = Math.max(lastId, row.id);
             const time = row.time * engine.scale + engine.epoch;
             if (!Number.isFinite(time) || Math.abs(time) > 8.64e15) continue;
             if (!previous && time < cutoff) continue;
-            const oldVisit = row.id <= groupedAfter || (groupedSince !== undefined && time < groupedSince);
+            const oldVisit = row.legacy === 1;
             const cleaned = cleanUrl(row.url);
             if (!cleaned) continue;
             const hash = createHash("sha256").update(cleaned.url).digest("hex");
             const title = clampTitle(row.title?.trim() || cleaned.hostname);
             const host = cleaned.hostname.toLowerCase().replace(/\.$/, "");
-            const last = pages.at(-1), chars = cleaned.url.length + 1;
+            const last = lastPage, chars = cleaned.url.length + 1;
             if (last && (oldVisit || host !== last.host || time - last.time > CONTINUOUS_GAP_MS
               || time - pages[0]!.time >= MAX_GROUP_MS)) close();
             const page = { id: row.id, time, url: cleaned.url, host, title, transition: row.transition };
             const first = openRecent.get(hash) ?? recent.get(hash);
             if (first !== undefined && Math.abs(time - first) <= CONTINUOUS_GAP_MS) {
               // 30 秒内的同页去重保留，回到这组已读过的一页时仍使用最后看到的标题和地址。
-              if (openRecent.has(hash)) lastPage = page;
+              if (openRecent.has(hash)) {
+                lastPage = page;
+                minOpenId = Math.min(minOpenId, row.id);
+              }
               continue;
             }
             if (urlChars + chars > MAX_GROUP_URL_CHARS) close();
+            if (!lastPage) maxIdBeforeOpen = maxIdBeforeVisit;
             pages.push(page);
             lastPage = page;
+            minOpenId = Math.min(minOpenId, row.id);
             openRecent.set(hash, time);
             urlChars += chars;
             if (oldVisit) close();
           }
-          const first = pages[0], last = pages.at(-1);
+          const first = pages[0], last = lastPage;
           if (first && last) {
-            if (now >= Math.min(last.time + CONTINUOUS_GAP_MS, first.time + MAX_GROUP_MS)) close();
-            // 还在访问的最后一段下轮从浏览器库重读，checkpoint 里只留游标和哈希。
-            else lastId = Math.max(previous?.lastId ?? 0, Math.min(...pages.map(page => page.id)) - 1);
+            if (now >= Math.min(last.time + CONTINUOUS_GAP_MS, first.time + MAX_GROUP_MS)
+              || (replaying && lastBatch < closedThrough.length)) close();
+            else {
+              lastId = Math.max(previousLastId, minOpenId - 1);
+              // 时间早但 ID 较晚的访问跨过游标时，等片段关闭再一起提交。
+              if (maxIdBeforeOpen > lastId) return previous ?? { lastId: previousLastId, recent: [], groupedAfter, groupedSince };
+            }
           }
+          for (const record of buffered) options.onRecord(record);
+          const updatedBoundaries = lastId > (closedThrough.at(-1) ?? groupedAfter) ? [...closedThrough, lastId] : closedThrough;
           return {
             lastId, groupedAfter, ...(groupedSince === undefined ? {} : { groupedSince }),
+            ...(updatedBoundaries.length ? { closedThrough: updatedBoundaries } : {}),
             recent: [...recent].filter(([, time]) => time >= latest - CONTINUOUS_GAP_MS),
           };
         });
@@ -252,6 +303,8 @@ function loadState(file: string | null): BrowserState | undefined {
     if (!entry || !Number.isSafeInteger(entry.lastId) || entry.lastId < 0 || !Array.isArray(entry.recent)
       || (entry.groupedAfter !== undefined && (!Number.isSafeInteger(entry.groupedAfter) || entry.groupedAfter < 0 || entry.groupedAfter > entry.lastId))
       || (entry.groupedSince !== undefined && !Number.isFinite(entry.groupedSince))
+      || (entry.closedThrough !== undefined && (!Array.isArray(entry.closedThrough) || !entry.closedThrough.every((id, index, ids) =>
+        Number.isSafeInteger(id) && id > (ids[index - 1] ?? entry.groupedAfter ?? 0) && id <= entry.lastId)))
       || !entry.recent.every((pair) => Array.isArray(pair) && pair.length === 2
         && typeof pair[0] === "string" && /^[a-f0-9]{64}$/.test(pair[0]) && Number.isFinite(pair[1]))) {
       throw new Error("浏览器 checkpoint 进度无效");
