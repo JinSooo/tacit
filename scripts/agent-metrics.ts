@@ -19,7 +19,8 @@ type Hits = { calls: number; hits: number; empty: number; errors: number };
 const DAYS = 7;
 const MATCH_WINDOW_MINUTES = 120;
 const activeReads = new Set(["search", "get", "now", "timeline"]);
-const usage = "bun scripts/agent-metrics.ts [--exclude-project <项目 ID>]...";
+const defaultExcludedTools = new Set(["accuracy-eval", "release-check", "qa-readonly", "test"]);
+const usage = "bun scripts/agent-metrics.ts [--exclude-project <项目 ID>]... [--exclude-tool <工具名>]... [--include-test-tools]";
 const ratio = (count: number, total: number) => total ? count / total : null;
 
 async function readAudit(from: number, to: number): Promise<AuditRead[]> {
@@ -46,7 +47,7 @@ async function readAudit(from: number, to: number): Promise<AuditRead[]> {
   }
 }
 
-function summarize(reads: AuditRead[], excluded: Set<string>) {
+export function summarize(reads: AuditRead[], excludedProjects: ReadonlySet<string>, excludedTools: ReadonlySet<string> = defaultExcludedTools) {
   const anchors = new Map<string, { at: number; session: Session }>();
   const sessions = new Map<string, Session>();
   const seenReaders = new Set<string>();
@@ -57,11 +58,17 @@ function summarize(reads: AuditRead[], excluded: Set<string>) {
   };
   const emptyTerms = new Map<string, number>();
   let emptyWithoutTerm = 0;
+  const excludedRows = new Map([...excludedTools].map(tool => [tool, 0]));
 
   // 接口按时间倒序分页。全部页拼接后，从最早的带入向后看查询。
   for (const read of reads.toReversed()) {
     const { args, kind } = read;
-    if (args.project && excluded.has(args.project)) continue;
+    if (args.project && excludedProjects.has(args.project)) continue;
+    const excludedCount = excludedRows.get(read.tool);
+    if (excludedCount !== undefined) {
+      excludedRows.set(read.tool, excludedCount + 1);
+      continue;
+    }
     const scope = args.cwd ? JSON.stringify([read.tool, args.cwd]) : null;
     const at = Date.parse(read.at);
     const empty = read.result_ids.length === 0;
@@ -112,6 +119,7 @@ function summarize(reads: AuditRead[], excluded: Set<string>) {
     ...counts, hit_rate: ratio(counts.hits, counts.calls), empty_rate: ratio(counts.empty, counts.calls),
   });
   return {
+    excluded_tools: [...excludedRows].map(([tool, reads]) => ({ tool, reads })),
     utilization: {
       overall: utilization({ injected: sessions.size, queried }),
       projects: [...projects].map(([project, counts]) => ({ project, ...utilization(counts) })),
@@ -128,23 +136,30 @@ function summarize(reads: AuditRead[], excluded: Set<string>) {
 
 async function main(args: string[]) {
   if (args.length === 1 && args[0] === "--help") { console.log(usage); return; }
-  const excluded = new Set<string>();
-  for (let i = 0; i < args.length; i += 2) {
-    const project = args[i + 1];
-    if (args[i] !== "--exclude-project" || !project || project.startsWith("--")) throw new Error(usage);
-    excluded.add(project);
+  const excludedProjects = new Set<string>(), excludedTools = new Set<string>();
+  let includeTestTools = false;
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (flag === "--include-test-tools") { includeTestTools = true; continue; }
+    if (flag !== "--exclude-project" && flag !== "--exclude-tool") throw new Error(usage);
+    const value = args[++i];
+    if (!value || value.startsWith("--")) throw new Error(usage);
+    (flag === "--exclude-project" ? excludedProjects : excludedTools).add(value);
   }
+  if (!includeTestTools) for (const tool of defaultExcludedTools) excludedTools.add(tool);
   const to = Date.now(), from = to - DAYS * 86_400_000;
   const reads = await readAudit(from, to);
   console.log(JSON.stringify({
     from: new Date(from).toISOString(),
     to: new Date(to).toISOString(),
-    excluded_projects: [...excluded],
+    excluded_projects: [...excludedProjects],
     association: `近似统计。MCP 进程的首次主动查询匹配同一工具、同一工作目录在前 ${MATCH_WINDOW_MINUTES} 分钟内最近的带入，按钩子会话去重。同目录并行会话可能误配。旧审计缺少会话或目录时无法配对，项目未识别的行也无法按项目排除。`,
     retrieval_definition: "空结果指 result_ids 为空，包含失败调用。现有审计无法区分 get 的 404 和其他失败。搜索词列表仅展示成功但无结果的查询，按审计中尚未清除的脱敏词汇总。",
-    ...summarize(reads, excluded),
+    ...summarize(reads, excludedProjects, excludedTools),
   }, null, 2));
 }
 
-try { await main(process.argv.slice(2)); }
-catch (error) { console.error(error instanceof Error ? error.message : "无法统计本机 Agent 审计"); process.exitCode = 1; }
+if (import.meta.main) {
+  try { await main(process.argv.slice(2)); }
+  catch (error) { console.error(error instanceof Error ? error.message : "无法统计本机 Agent 审计"); process.exitCode = 1; }
+}
