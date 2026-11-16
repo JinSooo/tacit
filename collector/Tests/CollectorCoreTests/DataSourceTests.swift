@@ -42,6 +42,17 @@ import Testing
   #expect(!reloaded.isEnabled("unknown"))
 }
 
+@Test func cleanInstallEnablesPrimarySourcesAndHidesFrozenEntries() {
+  let toggles = SourceToggles(store: MemorySettings())
+  #expect(DataSourceCatalog.all.filter { toggles.isEnabled($0.id) }.map(\.id) == [
+    "screen", "audio", "calendar", "agent-sessions", "browser",
+  ])
+  #expect(DataSourceCatalog.all.filter { DataSourceCatalog.isVisible($0.id) }.map(\.id) == [
+    "screen", "ocr", "audio", "calendar", "wechat", "agent-sessions", "browser",
+  ])
+  #expect(!DataSourceCatalog.isVisible("ext-example"))
+}
+
 /// 记录每个数据源被调用了什么，验证停用的不启动、不申请权限。
 private final class Probe {
   var events: [String] = []

@@ -28,17 +28,19 @@ public enum DataSourceCatalog {
   public static let all: [DataSourceDescriptor] = [
     .init(id: "screen", title: "屏幕文字"),
     .init(id: "ocr", title: "截图识字", defaultsKey: "ocrEnabled", defaultEnabled: false),
-    .init(id: "clipboard", title: "剪贴板"),
+    .init(id: "clipboard", title: "剪贴板", defaultEnabled: false),
     .init(id: "audio", title: "录音", defaultsKey: "recordingEnabled"),
-    .init(id: "files", title: "文件"),
+    .init(id: "files", title: "文件", defaultEnabled: false),
     .init(id: "calendar", title: "日历"),
     // 读微信窗口的聊天区拆成消息，默认关闭（AGENTS.md 2026-11-10）。
     .init(id: "wechat", title: "微信对话", defaultEnabled: false),
     .init(id: "agent-sessions", title: "AI 会话", kind: .plugin),
     .init(id: "browser", title: "浏览器", kind: .plugin),
-    .init(id: "shell", title: "终端命令", kind: .plugin),
-    .init(id: "git", title: "Git 提交", kind: .plugin),
+    .init(id: "shell", title: "终端命令", defaultEnabled: false, kind: .plugin),
+    .init(id: "git", title: "Git 提交", defaultEnabled: false, kind: .plugin),
   ]
+  private static let frozen = Set(["clipboard", "files", "shell", "git"])
+  public static func isVisible(_ id: String) -> Bool { !frozen.contains(id) && !id.hasPrefix("ext-") }
   public static var plugins: [DataSourceDescriptor] { all.filter { $0.kind == .plugin } }
   public static func descriptor(_ id: String) -> DataSourceDescriptor? { all.first { $0.id == id } }
 }

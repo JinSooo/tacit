@@ -21,6 +21,7 @@ struct ModelSettingsView: View {
   enum TestState: Equatable { case running, ok(Double?), failed(String) }
 
   static let tiers = ["minute", "hour", "day"]
+  private static let showsLocalModelOptions = false
   /// 本机模型服务走 OpenAI 兼容接口，不需要 key。
   static let presets: [(id: String, label: String, url: String)] = [
     ("ollama", "本机 Ollama", "http://127.0.0.1:11434/v1"),
@@ -82,16 +83,19 @@ struct ModelSettingsView: View {
     let c = config.wrappedValue
     let provider = info.providers.first { $0.id == c.provider }
     let local = Self.isLoopback(c.baseUrl)
+    let localOptions = Self.showsLocalModelOptions && local
     Section {
       Picker("提供商", selection: Binding(get: { choice(c) }, set: { apply($0, to: config, info: info) })) {
         ForEach(info.providers, id: \.id) { Text($0.label).tag($0.id) }
-        Divider()
-        ForEach(Self.presets, id: \.id) { Text($0.label).tag($0.id) }
+        if Self.showsLocalModelOptions {
+          Divider()
+          ForEach(Self.presets, id: \.id) { Text($0.label).tag($0.id) }
+        }
       }
       SettingsRow("模型") {
         HStack(spacing: 6) {
           TextField("模型", text: config.model, prompt: Text(placeholder(c.provider))).labelsHidden()
-          if local, let models = localModels[c.baseUrl ?? ""], !models.isEmpty {
+          if localOptions, let models = localModels[c.baseUrl ?? ""], !models.isEmpty {
             Menu("本机模型") { ForEach(models, id: \.self) { m in Button(m) { config.wrappedValue.model = m } } }
               .fixedSize()
           }
@@ -107,7 +111,7 @@ struct ModelSettingsView: View {
         if let url = c.baseUrl, !url.isEmpty, !local {
           SettingsMessage(text: "整理时，记录会发到这个地址。")
         }
-        if local, c.provider == "openai-compatible", let url = c.baseUrl {
+        if localOptions, c.provider == "openai-compatible", let url = c.baseUrl {
           HStack {
             if localModelLoading.contains(url) { Text("正在读取本机模型…").foregroundStyle(Palette.muted) }
             else if let error = localModelErrors[url] { SettingsMessage(text: error) }
@@ -141,7 +145,7 @@ struct ModelSettingsView: View {
     } footer: {
       if let d = info.tierInfo[tier]?.description { Note(d) }
     }
-    .task(id: c.baseUrl) { if local, c.provider == "openai-compatible", let url = c.baseUrl { await loadLocalModels(url) } }
+    .task(id: c.baseUrl) { if localOptions, c.provider == "openai-compatible", let url = c.baseUrl { await loadLocalModels(url) } }
     .onChange(of: c) { _, _ in tests[tier] = nil }
   }
 
@@ -196,7 +200,7 @@ struct ModelSettingsView: View {
   }
 
   func choice(_ c: ModelTierConfig) -> String {
-    if c.provider == "openai-compatible", let p = Self.presets.first(where: { $0.url == c.baseUrl }) { return p.id }
+    if Self.showsLocalModelOptions, c.provider == "openai-compatible", let p = Self.presets.first(where: { $0.url == c.baseUrl }) { return p.id }
     return c.provider
   }
 

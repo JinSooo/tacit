@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { saveConnectionPlan } from "./agents-install.ts";
 
 const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
@@ -26,7 +26,33 @@ const owns = (entry: any, tool: string) => entry && typeof entry.command === "st
   && entry.args.length === 4 && typeof entry.args[0] === "string" && entry.args[0].endsWith("/hub/src/cli.ts")
   && entry.args.slice(1).join("\n") === `mcp\n--tool\n${tool}`;
 
-/** 仅迁移已经存在且由本应用拥有的连接，不开启未连接的工具或终端采集。全部预检后才写入。 */
+function withoutShellHook(text: string): string {
+  const kept: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    const command = trimmed.replace(/^\[\[?\s+-f\s+.*\s+\]\]?\s*&&\s*/, "");
+    const parts = words(command);
+    const isHook = parts?.length === 2 && ["source", "."].includes(parts[0]!)
+      && parts[1]!.endsWith("/plugins/shell/hook.zsh");
+    if (isHook) {
+      if (kept.at(-1)?.trim() === "# record-anything：记录终端命令") kept.pop();
+    } else kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+function freezeShellBuffer(file: string) {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  // 已经打开的终端仍持有旧的钩子，追加时会重新打开此路径。保留积压内容，阻止继续写入。
+  const fd = openSync(file, constants.O_RDONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o400);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid?.()) throw new Error("终端记录缓冲不是本机用户拥有的普通文件");
+    fchmodSync(fd, 0o400);
+  } finally { closeSync(fd); }
+}
+
+/** 仅迁移本应用已有的 AI 连接。升级时停用终端记录。全部预检后才写入。 */
 export function relocateInstall(runtime: string, bun: string, home = homedir()) {
   const cli = join(resolve(runtime), "hub/src/cli.ts"), plans: Parameters<typeof saveConnectionPlan>[0][] = [];
   const add = (file: string, before: string, after: string) => { if (before !== after) plans.push({ file, existed: true, before, after }); };
@@ -76,18 +102,16 @@ export function relocateInstall(runtime: string, bun: string, home = homedir()) 
     }
   }
   const zshrc = join(home, ".zshrc");
+  const shellBuffer = join(home, "Library/Application Support/record-anything/buffer/shell.jsonl");
+  let hadShellHook = false;
   if (existsSync(zshrc)) {
-    const before = readFileSync(zshrc, "utf8");
-    const after = before.split("\n").map(line => {
-      const trimmed = line.trim(); if (trimmed.startsWith("#") || !trimmed.includes("plugins/shell/hook.zsh")) return line;
-      const command = trimmed.includes("&& source ") ? trimmed.slice(trimmed.lastIndexOf("&& source ") + 3) : trimmed;
-      const parts = words(command);
-      if (parts?.length !== 2 || !["source", "."].includes(parts[0]!) || !parts[1]!.endsWith("/plugins/shell/hook.zsh")) return line;
-      const wanted = join(runtime, "plugins/shell/hook.zsh");
-      return parts[1] === wanted ? line : `source ${quote(wanted)}`;
-    }).join("\n");
-    add(zshrc, before, after);
+    const shellConfig = realpathSync(zshrc);
+    const before = readFileSync(shellConfig, "utf8");
+    const after = withoutShellHook(before);
+    hadShellHook = before !== after;
+    add(shellConfig, before, after);
   }
+  if (hadShellHook || existsSync(shellBuffer)) freezeShellBuffer(shellBuffer);
   for (const plan of plans) saveConnectionPlan(plan);
   return plans.map(p => p.file);
 }

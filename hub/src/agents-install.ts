@@ -194,7 +194,7 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}) {
   // 会让 claude 把全局配置写到 ~/.claude/.claude.json，而不是平时用的 ~/.claude.json。
   const run = env.run ?? ((command, args, home) => spawnSync(command, args, { encoding: "utf8", env: home === resolve(homedir()) ? process.env : { ...process.env, HOME: home, CODEX_HOME: resolve(home, ".codex"), CLAUDE_CONFIG_DIR: resolve(home, ".claude") }, timeout: 30000 }));
   const tools: AgentTool[] = selected ? [selected] : ["claude-code", "codex"];
-  if (!selected && (action === "install" ? desktopInstalled(home, env) : existsSync(desktopConfig(home)))) tools.push("claude-desktop");
+  if (!selected && action === "uninstall" && existsSync(desktopConfig(home))) tools.push("claude-desktop");
   if (action === "install" && tools.includes("claude-desktop") && !desktopInstalled(home, env)) throw new Error("这台 Mac 上没找到 Claude Desktop，安装后再连接");
   // 全部解析成功后才可能写入，防止第二份 JSON 无效时已改第一份。
   const desktopPlan = tools.includes("claude-desktop") ? desktopFile(home, action === "install", cli, bun) : undefined;

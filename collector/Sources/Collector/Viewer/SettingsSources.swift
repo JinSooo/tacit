@@ -6,12 +6,11 @@ import CollectorCore
 struct SourcesSettingsView: View {
   @Environment(ViewerStore.self) private var store
   @State private var selected: String?
-  @State private var install = false
   @State private var filter = SourceFilter.all
   private var paused: Bool { if case .paused = store.capture.state { return true }; return false }
 
   var body: some View {
-    let sources = store.capture.sources
+    let sources = store.capture.sources.filter { DataSourceCatalog.isVisible($0.id) }
     VStack(alignment: .leading, spacing: 0) {
       if let id = selected, let source = sources.first(where: { $0.id == id }) {
         HStack {
@@ -26,7 +25,6 @@ struct SourcesSettingsView: View {
             HStack {
               Text("已启用 \(sources.filter(\.enabled).count) 个，共 \(sources.count) 个")
               Spacer()
-              Button("安装数据源…") { store.extensions.preview = nil; store.extensions.error = nil; install = true }.disabled(store.extensions.busy)
               if paused { Text("记录已暂停").foregroundStyle(Palette.muted) }
             }
             Picker("显示", selection: $filter) {
@@ -47,8 +45,6 @@ struct SourcesSettingsView: View {
         }
       }
     }
-    .task { _ = await store.extensions.send(PluginRequest(action: "list"), store: store) }
-    .sheet(isPresented: $install) { ExtensionInstallView(updating: nil).environment(store) }
   }
 
   func sourceRow(_ s: DataSourceStatus) -> some View {

@@ -365,7 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         grant.representedObject = s.id; target.addItem(grant)
       }
     }
-    let statuses = sources.statuses()
+    let statuses = sources.statuses().filter { DataSourceCatalog.isVisible($0.id) }
     for s in statuses where s.kind == .builtin {
       sourceItems(s, into: menu)
       if s.id == "audio" {
@@ -443,7 +443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     guard let setting = sender.representedObject as? String else { return }
     audio.selectMicrophone(setting)
   }
-  @objc func runPlugins() { plugins.run(plugins.plugins, since: nil) }
+  @objc func runPlugins() { plugins.run(plugins.plugins.filter(DataSourceCatalog.isVisible), since: nil) }
   @objc func openHistory() { MainActor.assumeIsolated { viewer.show() } }
   @objc func quit() { NSApp.terminate(nil) }
 

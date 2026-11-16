@@ -27,13 +27,13 @@ struct DistillHealth: Decodable, Equatable {
 extension HubAPI {
   func agentTools() async throws -> [AgentToolState] {
     struct R: Decodable { let tools: [AgentToolState] }
-    return try await get(R.self, "/v1/settings/agents").tools
+    return try await get(R.self, "/v1/settings/agents").tools.filter { $0.id != "claude-desktop" }
   }
   /// 连接要调用 claude / codex 的命令行登记，给足时间。
   func setAgent(_ id: String, connected: Bool) async throws -> (tools: [AgentToolState], note: String?) {
     struct R: Decodable { let tools: [AgentToolState]; let note: String? }
     let r = try await call(R.self, "PUT", "/v1/settings/agents/\(id)", ["connected": connected], timeout: 120)
-    return (r.tools, r.note)
+    return (r.tools.filter { $0.id != "claude-desktop" }, r.note)
   }
   func distillHealth() async throws -> DistillHealth {
     struct R: Decodable { let distill: DistillHealth }
@@ -73,7 +73,7 @@ struct AgentSettingsView: View {
         if let note { SettingsMessage(text: note, warning: false) }
         if let error { SettingsMessage(text: error) }
       } header: { Text("已连接的工具") } footer: {
-        Note("连接后，AI 可以查询你的历史记录，每次读取都记在“运行记录”里。Claude Code、Codex 还会自动带入当前项目进展。Claude Desktop 的连接或断开需要完全退出并重新打开应用后生效。")
+        Note("连接后，AI 可以查询你的历史记录，每次读取都记在“运行记录”里。Claude Code、Codex 还会自动带入当前项目进展。")
       }
       GeneralPreferencesSection(context: true)
     }
@@ -110,7 +110,7 @@ struct SetupChecklist: View {
   @State private var health: DistillHealth?
 
   var body: some View {
-    let missing = store.capture.sources.filter(\.needsPermission)
+    let missing = store.capture.sources.filter { DataSourceCatalog.isVisible($0.id) && $0.needsPermission }
     Group {
       if let tools, let health {
         let modelReady = health.state == .working

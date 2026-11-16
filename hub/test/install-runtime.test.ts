@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -12,7 +12,7 @@ afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, f
 function temp() { const d = mkdtempSync(join(tmpdir(), "ra-runtime-")); dirs.push(d); return d; }
 function write(file: string, data: unknown) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, typeof data === "string" ? data : JSON.stringify(data)); }
 
-test("已连接工具与 zsh 迁移固定路径：保留用户配置、权限选择，幂等且不新建连接", () => {
+test("已连接工具迁移固定路径：保留用户配置、权限选择，幂等且不新建连接", () => {
   const home = temp(), runtime = join(home, "Tacit runtime's"), bun = process.execPath, old = "/old/repo/hub/src/cli.ts";
   const mcp = (tool: string) => ({ command: "/old/bun", args: [old, "mcp", "--tool", tool], disabled: true });
   const hook = (tool: string) => ({ type: "command", command: `/old/bun ${old} hook session-start --tool ${tool}`, timeout: 5 });
@@ -21,8 +21,7 @@ test("已连接工具与 zsh 迁移固定路径：保留用户配置、权限选
   write(join(home, ".codex/hooks.json"), { hooks: { SessionStart: [{ hooks: [hook("codex")] }] } });
   write(join(home, ".codex/config.toml"), `# keep comment\nmodel = "synthetic"\n[mcp_servers.record-anything]\ncommand = "/old/bun"\nargs = [\n "${old}",\n "mcp", "--tool", "codex"\n]\nenabled = false\n[mcp_servers.record-anything.tools.history_append]\napproval_mode = "prompt"\n[mcp_servers.other]\ncommand = "untouched"\n`);
   write(join(home, "Library/Application Support/Claude/claude_desktop_config.json"), { preferences: { theme: "dark" }, mcpServers: { "record-anything": mcp("claude-desktop") } });
-  write(join(home, ".zshrc"), '# my config\nsource "/old/repo/plugins/shell/hook.zsh"\nexport OTHER=1\n');
-  expect(relocateInstall(runtime, bun, home)).toHaveLength(6);
+  expect(relocateInstall(runtime, bun, home)).toHaveLength(5);
   const toml = readFileSync(join(home, ".codex/config.toml"), "utf8");
   expect(toml).toStartWith('# keep comment\nmodel = "synthetic"');
   const parsed = Bun.TOML.parse(toml) as any;
@@ -31,9 +30,33 @@ test("已连接工具与 zsh 迁移固定路径：保留用户配置、权限选
   expect(parsed.mcp_servers["record-anything"].tools.history_append.approval_mode).toBe("prompt");
   expect(parsed.mcp_servers.other.command).toBe("untouched");
   expect(JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers["record-anything"].disabled).toBe(true);
-  expect(readFileSync(join(home, ".zshrc"), "utf8")).toContain("export OTHER=1");
   expect(relocateInstall(runtime, bun, home)).toEqual([]);
   const empty = temp(); expect(relocateInstall(runtime, bun, empty)).toEqual([]); expect(readdirSync(empty)).toEqual([]);
+});
+
+test("升级停用旧终端钩子，保留配置链接和缓冲过的历史，旧进程无法继续追加", () => {
+  const home = temp(), config = join(home, "dotfiles/zshrc"), link = join(home, ".zshrc");
+  const before = '# keep\n# record-anything：记录终端命令\nsource "/old/repo/plugins/shell/hook.zsh"\n'
+    + '[ -f "/old/repo/plugins/shell/hook.zsh" ] && . "/old/repo/plugins/shell/hook.zsh"\n'
+    + 'source "/user/plugin.zsh"\nexport OTHER=1\n';
+  write(config, before);
+  symlinkSync(config, link);
+  const buffer = join(home, "Library/Application Support/record-anything/buffer/shell.jsonl");
+  write(buffer, "synthetic-pending\n");
+  expect(relocateInstall("/runtime", process.execPath, home)).toEqual([realpathSync(config)]);
+  expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(readFileSync(link, "utf8")).toBe('# keep\nsource "/user/plugin.zsh"\nexport OTHER=1\n');
+  expect(statSync(buffer).mode & 0o777).toBe(0o400);
+  expect(readdirSync(dirname(config)).some(name =>
+    name.startsWith("zshrc.ra-backup-") && readFileSync(join(dirname(config), name), "utf8") === before)).toBe(true);
+  if (process.getuid?.() !== 0) {
+    const hook = resolve(import.meta.dir, "../../plugins/shell/hook.zsh");
+    const stale = spawnSync("/bin/zsh", ["-f", "-c", 'source "$1"; _ra_shell_preexec "synthetic"; _ra_shell_precmd', "tacit-test", hook],
+      { env: { ...process.env, RA_SHELL_LOG: buffer }, encoding: "utf8" });
+    expect(stale.status).toBe(0);
+  }
+  expect(readFileSync(buffer, "utf8")).toBe("synthetic-pending\n");
+  expect(relocateInstall("/runtime", process.execPath, home)).toEqual([]);
 });
 
 test("配置预检失败时不迁移任何文件；不覆盖同名非本应用 MCP", () => {

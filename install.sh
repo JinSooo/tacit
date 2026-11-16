@@ -201,8 +201,11 @@ with os.fdopen(fd, "w") as f:
     f.write(json.dumps(conf, ensure_ascii=False, indent=2) + "\n")
 PY
 
-step "更新已连接 AI 工具和终端记录的运行路径"
+step "更新已连接 AI 工具的运行路径并停用冻结来源"
 "$BUN" "$RUNTIME/hub/src/relocate-install.ts" "$RUNTIME" "$BUN"
+for source in git shell files clipboard; do
+  /usr/bin/defaults write dev.record-anything.collector "source.$source.enabled" -bool false
+done
 
 step "更新启动配置（保留登录启动选择）"
 mkdir -p "$AGENTS"
@@ -265,7 +268,7 @@ launchctl bootstrap "$DOMAIN" "$AGENTS/dev.record-anything.collector.plist"
 step "装好了"
 cat <<MSG
 1. 屏幕右上角的菜单栏里出现了 Tacit 图标。第一次运行时，macOS 会请你在“辅助功能”里允许它，打开后才能记录屏幕上的文字。
-2. 点这个图标，从面板里打开主窗口。“此刻”页会列出还差的几步：打开系统权限、确认 AI 能整理记录、接入 Claude Desktop、Claude Code 或 Codex，跟着点就行。
+2. 点这个图标，从面板里打开主窗口。“此刻”页会列出还差的几步：打开系统权限、确认 AI 能整理记录、接入 Claude Code 或 Codex，跟着点就行。
 3. 建议备份密钥：设置 → 维护 → 密钥备份。记录都加了密，密钥丢了就打不开。
 
 数据存在 $DATA

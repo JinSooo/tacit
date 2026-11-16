@@ -22,15 +22,17 @@ const tokenKey = "record-anything-token";
 function storeToken(token: string) {
   try { sessionStorage.setItem(tokenKey, token); } catch { /* 浏览器可能禁用了存储。 */ }
 }
+function forgetToken() {
+  try { sessionStorage.removeItem(tokenKey); } catch { /* 浏览器可能禁用了存储。 */ }
+}
 // 当前页写在 #/now 这类片段里；旧写法 #token=…（可带 &status）读完立刻换成页面片段，token 不留在地址栏。
 const startPage = initialPage(location.hash, location.search);
-function readToken(): string {
+function readToken(page: Page): string {
   const supplied = parseHash(location.hash).token;
-  if (location.hash && !location.hash.startsWith("#/")) history.replaceState(null, "", location.pathname + location.search + pageHash(startPage));
+  if (location.hash && location.hash !== pageHash(page)) history.replaceState(null, "", location.pathname + location.search + pageHash(page));
   if (supplied !== null) storeToken(supplied);
   try { return supplied ?? sessionStorage.getItem(tokenKey) ?? ""; } catch { return supplied ?? ""; }
 }
-const initialToken = readToken();
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 const message = (error: unknown) => error instanceof Error ? error.message : "请求失败，请重试";
 
@@ -143,8 +145,8 @@ function NoteDialog({ api, onSaved, onClose }: { api: Api; onSaved: () => void; 
     <div className="actions"><button className="primary" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存"}</button><button type="button" onClick={onClose}>取消</button></div>
   </form></dialog>;
 }
-function App() {
-  const [token, setToken] = useState(initialToken);
+export function App() {
+  const [token, setToken] = useState(() => readToken(startPage));
   const [view, setView] = useState<Page>(startPage);
   useEffect(() => {
     // 前进后退、手改地址栏，以及已打开的页面再收到 #token=… 时同步。其他片段（如锚点）不切页。
@@ -193,7 +195,7 @@ function App() {
   const generation = useRef(0);
   const loading = useRef(false);
   const api = useMemo(() => createApi(token, () => {
-    try { sessionStorage.removeItem(tokenKey); } catch { /* 浏览器可能禁用了存储。 */ }
+    forgetToken();
     setToken("");
   }), [token]);
   const audioApi = useMemo(() => createAudioApi(api), [api]);
@@ -293,4 +295,19 @@ function App() {
     {notice && <div className="toasts"><div className="toast" role="status" key={notice.at}>{notice.text}</div></div>}
   </main></>;
 }
-createRoot(document.getElementById("root")!).render(<App />);
+function StatusApp() {
+  const [token, setToken] = useState(() => readToken("status"));
+  useEffect(() => {
+    const sync = () => setToken(readToken("status"));
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+  const api = useMemo(() => createApi(token, () => {
+    forgetToken();
+    setToken("");
+  }), [token]);
+  if (!token) return <div className="token-prompt"><strong>请从 Tacit 打开状态页</strong><p className="muted">在 Mac 客户端的“设置 → 后台服务”中打开。</p></div>;
+  return <main><header><div className="heading-row"><h1>Tacit</h1></div></header><StatusView api={api} /></main>;
+}
+
+createRoot(document.getElementById("root")!).render(<StatusApp />);

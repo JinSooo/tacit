@@ -83,13 +83,15 @@ test("Desktop 损坏配置和同名冲突不覆盖；路径过期可重新连接
   expect(connectAgent("claude-desktop", true, ctx.env).states.find(t => t.id === "claude-desktop")).toMatchObject({ connected: true, partial: false });
 });
 
-test("Desktop 未安装不创建配置；默认卸载包含卸载应用后留下的 Desktop 配置", () => {
+test("默认安装不连接 Desktop；默认卸载包含卸载应用后留下的 Desktop 配置", () => {
   const ctx = setup();
   expect(() => connectAgent("claude-desktop", true, ctx.env)).toThrow("没找到 Claude Desktop");
   connectAgent("claude-desktop", false, ctx.env);
   expect(readdirSync(ctx.home)).toEqual([]);
   ctx.env.appExists = () => true;
   runAgents(["install", "--yes"], ctx.env);
+  expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")?.connected).toBe(false);
+  connectAgent("claude-desktop", true, ctx.env);
   expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")?.connected).toBe(true);
   ctx.env.appExists = () => false;
   runAgents(["uninstall", "--yes"], ctx.env);
