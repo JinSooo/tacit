@@ -45,8 +45,8 @@ export function redactString(input: string): { text: string; count: number } {
       const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(r => r.test(value)).length;
       return classes >= 2 || /^\d+$/.test(value) ? label + quote + replace("密码") + quote : whole;
     });
-  // 登录地址后直接粘贴“用户名 密码”，包括 OCR 把 https: 拆成多行的情况。
-  text = text.replace(/(https?\\?[ \t\r\n]*:[ \t\r\n]*\/\/[^\s]+[ \t\r\n]+)([^\s]{1,64})([ \t\r\n]+)([A-Za-z0-9_+/.=~%!@#$^&*?:-]{8,128})/gi,
+  // 登录地址后直接粘贴“用户名 密码”，包括 OCR 把 https: 拆成多行的情况；连续网址是访问列表。
+  text = text.replace(/(https?\\?[ \t\r\n]*:[ \t\r\n]*\/\/[^\s]+[ \t\r\n]+)((?!https?:\/\/)[^\s]{1,64})([ \t\r\n]+)((?!https?:\/\/)[A-Za-z0-9_+/.=~%!@#$^&*?:-]{8,128})/gi,
     (whole, url: string, user: string, space: string, value: string) => {
       const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(r => r.test(value)).length;
       return classes >= 3 ? url + user + space + replace("密码") : whole;

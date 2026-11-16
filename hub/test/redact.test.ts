@@ -44,6 +44,14 @@ test("普通 SHA、UUID、中文、单词和低熵赋值不误伤", () => {
   ]) expect(redactString(text)).toEqual({ text, count: 0 });
 });
 
+test("连续网址保留，最后一个地址后的合成凭据仍然拦截", () => {
+  const links = ["https://example.invalid/path-1", "https://example.invalid/path-2", "https://example.invalid/login-3"];
+  const list = links.join("\n");
+  expect(redactString(list)).toEqual({ text: list, count: 0 });
+  const account = "fixture-user", password = "Fixture9-Only-Pass";
+  expect(redactString([list, account, password].join("\n"))).toEqual({ text: [list, account, "[已脱敏:密码]"].join("\n"), count: 1 });
+});
+
 test("递归处理 context 的字符串，累加数量且 private 不降级", () => {
   const key = examples[2]![1];
   const r = fixture({ title: key, body: key, context: { window: key, extra: { nested: [key, { value: key }] } }, redactions: 2 });

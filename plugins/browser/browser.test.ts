@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { HubDB } from "../../hub/src/db.ts";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { BROWSERS, cleanUrl, collectBrowserHistory, withDatabaseCopy, type Browser, type BrowserState } from "./main.ts";
 
@@ -52,27 +53,80 @@ function fixture(browser: Browser, profile = "Default", home?: string) {
   return { home, file, db, add };
 }
 
-async function collect(home: string, browsers: readonly Browser[], state?: BrowserState, since?: Date) {
+async function collect(home: string, browsers: readonly Browser[], state?: BrowserState, since?: Date, now = NOW + 120_000) {
   const records: RecordV1[] = [];
   const logs: string[] = [];
   const result = await collectBrowserHistory({
-    home, browsers, device: "test-mac", state, since, now: NOW,
+    home, browsers, device: "test-mac", state, since, now,
     onRecord: (record) => { expect(validateRecord(record)).toEqual({ ok: true }); records.push(record); },
     log: (message) => logs.push(message),
   });
   return { ...result, records, logs };
 }
 
+test("同站连续访问跨插件轮次合并，保留各地址与最后页标题", async () => {
+  const chrome = BROWSERS[0]!;
+  const f = fixture(chrome);
+  const legacy: BrowserState = { version: 1, profiles: { "Chrome:Default": { lastId: 1, recent: [] } } };
+  f.add(1, NOW - 21_000, "https://example.org/old", "已入库的旧页");
+  f.add(2, NOW - 11_000, "https://example.org/new-1", "站内第一页");
+  f.add(3, NOW - 4_000, "https://example.org/new-2", "站内第二页");
+  const open = await collect(f.home, [chrome], legacy, undefined, NOW);
+  expect(open.records).toEqual([]);
+  expect(JSON.stringify(open.state)).not.toContain("example.org");
+
+  f.add(4, NOW + 4_000, "https://example.org/new-3", "站内最后一页");
+  f.add(5, NOW + 7_000, "https://example.net/final", "另一个站点");
+  const closed = await collect(f.home, [chrome], open.state, undefined, NOW + 40_000);
+  expect(closed.records.map(r => r.title)).toEqual(["站内最后一页", "另一个站点"]);
+  expect(closed.records[0]).toMatchObject({
+    source_ref: "Chrome:Default:2", kind: "span", context: { url: "https://example.org/new-3" },
+  });
+  expect(closed.records[0]?.body).toBe("站内最后一页\nhttps://example.org/new-1\nhttps://example.org/new-2\nhttps://example.org/new-3");
+  const replay = await collect(f.home, [chrome], closed.state, new Date(NOW - 30_000), NOW + 40_000);
+  expect(replay.records.map(r => r.source_ref)).toEqual(["Chrome:Default:1", "Chrome:Default:2", "Chrome:Default:5"]);
+  expect((await collect(f.home, [chrome], closed.state, undefined, NOW + 50_000)).records).toEqual([]);
+  const hub = new HubDB(join(f.home, "tacit-validation.sqlite"), "synthetic");
+  try {
+    expect(hub.ingest([replay.records[0]!, ...closed.records])).toMatchObject({ accepted: 3, rejected: [] });
+    expect(hub.ingest(replay.records)).toMatchObject({ duplicates: 3, rejected: [] });
+    for (const path of ["new-1", "new-2", "new-3"]) {
+      const matches = hub.list(new URLSearchParams({ q: `https://example.org/${path}` })).records;
+      expect(matches.map(record => record.id)).toEqual([closed.records[0]?.id]);
+    }
+    expect(hub.get(replay.records[0]!.id)?.body).toBe("已入库的旧页\nhttps://example.org/old");
+  } finally { hub.close(); }
+});
+
+test("重导对夹在新访问中的旧行保持原记录键，往返页面使用最后看到的标题", async () => {
+  const chrome = BROWSERS[0]!;
+  const f = fixture(chrome);
+  const legacy: BrowserState = { version: 1, profiles: { "Chrome:Default": { lastId: 1, recent: [] } } };
+  f.add(1, NOW - 20_000, "https://third.example/old", "浏览器已有的旧记录");
+  f.add(2, NOW - 25_000, "https://site.example/step-one", "起始页");
+  f.add(3, NOW - 15_000, "https://site.example/step-two", "中间页");
+  f.add(4, NOW - 13_000, "https://site.example/step-one", "返回到的最后一页");
+  const current = await collect(f.home, [chrome], legacy);
+  const replay = await collect(f.home, [chrome], current.state, new Date(NOW - 31_000));
+  expect(current.records.map(r => r.source_ref)).toEqual(["Chrome:Default:2"]);
+  expect(replay.records.map(r => r.source_ref)).toEqual(["Chrome:Default:1", "Chrome:Default:2"]);
+  expect(replay.records[1]).toMatchObject({
+    title: "返回到的最后一页",
+    body: "返回到的最后一页\nhttps://site.example/step-one\nhttps://site.example/step-two",
+    context: { url: "https://site.example/step-one" },
+  });
+});
+
 describe.each([BROWSERS[0]!, BROWSERS[3]!, BROWSERS[4]!])("$name 引擎", (browser) => {
   test("时间、默认七天、字段和显式回溯", async () => {
     const f = fixture(browser);
     f.add(1, NOW - 8 * 86400_000);
     f.add(2, NOW - 7 * 86400_000);
-    f.add(3, NOW - 2000, "https://name:password@example.org/path?token=synthetic%2f&x=1+2", "多行\n合成标题");
-    f.add(4, NOW - 1000, "https://example.net/empty", null);
-    const first = await collect(f.home, [browser]);
+    f.add(3, NOW - 51_000, "https://name:password@example.org/path?token=synthetic%2f&x=1+2", "多行\n合成标题");
+    f.add(4, NOW - 50_000, "https://example.net/empty", null);
+    const first = await collect(f.home, [browser], undefined, undefined, NOW);
     expect(first.failed).toBe(false);
-    expect(first.records.map((r) => Date.parse(r.t_start))).toEqual([NOW - 7 * 86400_000, NOW - 2000, NOW - 1000]);
+    expect(first.records.map((r) => Date.parse(r.t_start))).toEqual([NOW - 7 * 86400_000, NOW - 51_000, NOW - 50_000]);
     const record = first.records[1]!;
     const profile = browser.engine === "safari" ? "Safari" : "Default";
     expect(record.source_ref).toBe(`${browser.name}:${profile}:3`);
@@ -206,7 +260,7 @@ async function cli(home: string, args: string[]) {
 
 test("CLI 输出 JSONL 和末尾单个 checkpoint，state 只读，环境变量替换 home", async () => {
   const f = fixture(BROWSERS[0]!);
-  f.add(1, Date.now());
+  f.add(1, Date.now() - 60_000);
   const first = await cli(f.home, ["--device", "test-mac"]);
   expect(first.code).toBe(0);
   const lines = first.stdout.trim().split("\n").map((line) => JSON.parse(line));
