@@ -70,11 +70,7 @@ struct HistoryPage: View {
   }
 
   var chapters: [DayStrata.Chapter] {
-    (diary?.detail?.timeline ?? []).enumerated().compactMap { i, c in
-      guard let s = ViewerTime.clockOnDay(c.start, day: day), var e = ViewerTime.clockOnDay(c.end, day: day) else { return nil }
-      if e <= s { e = ViewerTime.dayBounds(day).end }
-      return .init(id: i, start: s, end: e, text: c.text)
-    }
+    DayStrata.chapters(from: diary, on: day)
   }
 
   var body: some View {

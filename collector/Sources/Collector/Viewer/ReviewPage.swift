@@ -34,31 +34,176 @@ struct ReviewPage: View {
 private struct ReviewDayContent: View {
   @Environment(ViewerStore.self) private var store
   @State private var diary = Loader<DayDiary?>()
+  @State private var now = Loader<NowState?>()
+  @State private var records = Loader<[HistoryRecord]>()
+  @State private var active = Loader<[HubThread]>()
+  @State private var paused = Loader<[HubThread]>()
+  @State private var brush: ClosedRange<Date>?
+  @State private var lane: Lane?
   let day: Date
   let isToday: Bool
   let refresh: Int
 
   var body: some View {
     VStack(alignment: .leading, spacing: 24) {
+      if isToday { SetupChecklist() }
       HStack(alignment: .firstTextBaseline, spacing: 12) {
         Text(Fmt.date(day)).font(.serif(TextSize.heading, .semibold)).foregroundStyle(Palette.ink)
           .accessibilityAddTraits(.isHeader)
         Text(ViewerFormat.weekday(day)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
       }
+      if isToday {
+        currentSummary
+        activity
+      }
       review.frame(maxWidth: 760, alignment: .leading)
+      if isToday {
+        ongoing
+        if let paused = paused.value {
+          let recent = paused.filter { ($0.last ?? .distantPast) > Date().addingTimeInterval(-3 * 86_400) }
+          if !recent.isEmpty { recentlyPaused(recent) }
+        }
+      }
     }
     .task(id: refresh) {
       repeat {
-        await diary.run { try await store.api.diary(day) }
+        await load()
         if !isToday { break }
         try? await Task.sleep(for: .seconds(60))
       } while !Task.isCancelled
     }
   }
 
+  private func load() async {
+    async let review: Void = loadReview()
+    if isToday {
+      async let summary: Void = now.run { try await store.api.now() }
+      async let activity: Void = records.run { try await store.api.day(day) }
+      async let current: Void = active.run { try await store.api.threads(status: "active").sorted { ($0.lastMs ?? 0) > ($1.lastMs ?? 0) } }
+      async let recent: Void = paused.run { try await store.api.threads(status: "paused").sorted { ($0.lastMs ?? 0) > ($1.lastMs ?? 0) } }
+      _ = await (summary, activity, current, recent)
+    }
+    await review
+  }
+
+  private func loadReview() async { await diary.run { try await store.api.diary(day) } }
+
+  @ViewBuilder private var currentSummary: some View {
+    if let error = now.error {
+      Placeholder(kind: .error(error) { Task { await load() } })
+    } else if case .some(let state) = now.value {
+      let brief = state?.brief?.trimmingCharacters(in: .whitespacesAndNewlines)
+      VStack(alignment: .leading, spacing: 8) {
+        if let brief, !brief.isEmpty {
+          Text(brief == "最近 24 小时没有活跃的线程。" ? "最近 24 小时没有活跃的事项。" : brief)
+            .font(.serif(TextSize.display)).lineSpacing(TextSize.serifLineSpacing(TextSize.display))
+            .foregroundStyle(Palette.ink).textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+          Text("还没有此刻的摘要").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        }
+        if let updated = state?.updatedAt.flatMap(ViewerTime.parse) {
+          TimelineView(.everyMinute) { _ in
+            Text(Fmt.updated(updated)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+          }
+        }
+        if let feedback = state?.feedback {
+          Text(feedback).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+        }
+      }
+      .frame(maxWidth: 860, alignment: .leading)
+    } else {
+      ProgressView().controlSize(.small)
+    }
+  }
+
+  private var activity: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text("活动").sectionTitle()
+        if let rows = records.value, !rows.isEmpty {
+          Text("\(Fmt.count(rows.count)) 条记录").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+        }
+        Spacer()
+        Button {
+          store.historyDay = day
+          store.historySearch = ""
+          store.historyFocus = nil
+          store.section = .history
+        } label: {
+          HStack(spacing: 4) { Text("打开历史记录"); PhIcon("arrow-right", size: 12) }
+        }
+        .buttonStyle(.accentLink).font(.system(size: TextSize.body))
+      }
+      if let error = records.error {
+        Text(error).font(.system(size: TextSize.body)).foregroundStyle(Palette.attention)
+      } else if let rows = records.value {
+        if rows.isEmpty {
+          Text("今天还没有记录").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        } else {
+          DayStrata(records: rows, chapters: DayStrata.chapters(from: diary.value ?? nil, on: day), day: day,
+                    selected: nil, brush: $brush, lane: $lane) { r in
+            store.showRecord(r.id, at: r.start)
+          }
+        }
+      } else {
+        ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 64)
+      }
+    }
+    .padding(16)
+    .card()
+    .zIndex(1)
+  }
+
+  private var ongoing: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text("进行中").font(.system(size: TextSize.title, weight: .semibold)).foregroundStyle(Palette.ink)
+          .accessibilityAddTraits(.isHeader)
+        if let n = active.value?.count, n > 0 {
+          Text("\(n) 件").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+        }
+      }
+      if let error = active.error {
+        Placeholder(kind: .error(error) { Task { await load() } })
+      } else if let rows = active.value {
+        if rows.isEmpty {
+          Text("现在没有进行中的事项").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        } else {
+          let summary = now.value??.brief?.trimmingCharacters(in: .whitespacesAndNewlines)
+          LazyVGrid(columns: [GridItem(.adaptive(minimum: 290, maximum: 520), spacing: 12)], spacing: 12) {
+            ForEach(rows) { t in
+              Button { store.path.append(.thread(t.id)) } label: {
+                ThreadCard(thread: t, project: store.project(t.projectId),
+                           showBrief: summary == nil || t.brief?.trimmingCharacters(in: .whitespacesAndNewlines) != summary)
+              }
+              .buttonStyle(.plain)
+            }
+          }
+        }
+      } else {
+        ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 64)
+      }
+    }
+  }
+
+  private func recentlyPaused(_ rows: [HubThread]) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("最近暂停").sectionTitle().accessibilityAddTraits(.isHeader)
+      VStack(spacing: 0) {
+        ForEach(rows) { t in
+          Button { store.path.append(.thread(t.id)) } label: { ThreadLine(thread: t, project: store.project(t.projectId)) }
+            .buttonStyle(.plain)
+          if t.id != rows.last?.id { Divider().padding(.leading, 16) }
+        }
+      }
+      .card()
+    }
+  }
+
   @ViewBuilder private var review: some View {
     if let error = diary.error {
-      Placeholder(kind: .error(error) { Task { await diary.run { try await store.api.diary(day) } } })
+      Placeholder(kind: .error(error) { Task { await loadReview() } })
     } else if case .some(let result) = diary.value {
       VStack(alignment: .leading, spacing: 20) {
         if result?.needsRegen?.value == true {

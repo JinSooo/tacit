@@ -134,7 +134,7 @@ struct MenuBarPanel: View {
   // MARK: 此刻
 
   @ViewBuilder var nowText: some View {
-    Button { open(.now) } label: {
+    Button { open(.review) } label: {
       VStack(alignment: .leading, spacing: 4) {
         if let state = now.value {
           if let feedback = state?.feedback { Text(feedback).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true) }
@@ -232,7 +232,7 @@ struct MenuBarPanel: View {
       Spacer()
       Button { open(.settings) } label: { PhIcon("gear-six", size: 16) }
         .buttonStyle(PanelButtonStyle()).help("设置").accessibilityLabel("设置")
-      Button { open(.now) } label: { PhIcon("app-window", size: 16) }
+      Button { open(.review) } label: { PhIcon("app-window", size: 16) }
         .buttonStyle(PanelButtonStyle()).keyboardShortcut("o").help("打开 Tacit").accessibilityLabel("打开 Tacit")
     }
     .font(.system(size: TextSize.body))

@@ -1,7 +1,7 @@
 import SwiftUI
 import CollectorCore
 
-// 新用户不靠命令行也能走完主链路（AGENTS.md 2026-11-10）：设置里接入 AI 工具，"此刻"页在没准备好时给出清单。
+// 新用户不靠命令行也能走完主链路：设置里接入 AI 工具，今天的回顾在没准备好时给出清单。
 
 struct AgentToolState: Decodable, Identifiable, Equatable {
   let id: String
@@ -100,7 +100,7 @@ struct AgentSettingsView: View {
   }
 }
 
-// MARK: 此刻 → 准备清单
+// MARK: 回顾 → 准备清单
 
 /// 三件事都好了就不显示：系统权限、AI 模型能整理、至少接入一个 AI 工具。
 /// 后台服务读不到时不显示，页面其他部分已经会报错。

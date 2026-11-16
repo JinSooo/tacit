@@ -50,7 +50,7 @@ protocol CaptureControlling: AnyObject {
 }
 
 enum Page: Hashable {
-  case review, now, history, pending, audit, settings, project(String)
+  case review, history, pending, audit, settings, project(String)
 }
 
 enum Route: Hashable {

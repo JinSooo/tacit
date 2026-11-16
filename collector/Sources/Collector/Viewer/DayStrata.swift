@@ -6,6 +6,14 @@ import CollectorCore
 struct DayStrata: View {
   struct Chapter: Identifiable, Hashable { let id: Int; let start: Date; let end: Date; let text: String }
 
+  static func chapters(from diary: DayDiary?, on day: Date) -> [Chapter] {
+    (diary?.detail?.timeline ?? []).enumerated().compactMap { i, chapter in
+      guard let start = ViewerTime.clockOnDay(chapter.start, day: day),
+            let end = ViewerTime.clockOnDay(chapter.end, day: day) else { return nil }
+      return Chapter(id: i, start: start, end: end <= start ? ViewerTime.dayBounds(day).end : end, text: chapter.text)
+    }
+  }
+
   let records: [HistoryRecord]
   let chapters: [Chapter]
   let day: Date
