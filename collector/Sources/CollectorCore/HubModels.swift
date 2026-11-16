@@ -139,8 +139,13 @@ public struct HubThread: Decodable, Identifiable, Hashable, Sendable {
   public let activeMinutes: Int?
   public let sessions: Int?
   public let domain: String?
+  public let needsRegen: FlexBool?
   public var last: Date? { lastMs.map { Date(timeIntervalSince1970: $0 / 1000) } }
   public var first: Date? { firstMs.map { Date(timeIntervalSince1970: $0 / 1000) } }
+  public var cardSummary: String? {
+    let text = brief?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return text.isEmpty ? nil : text
+  }
 }
 
 public struct Project: Decodable, Identifiable, Hashable, Sendable {

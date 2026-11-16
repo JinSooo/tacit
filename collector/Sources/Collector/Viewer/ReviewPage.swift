@@ -170,12 +170,10 @@ private struct ReviewDayContent: View {
         if rows.isEmpty {
           Text("现在没有进行中的事项").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
         } else {
-          let summary = now.value??.brief?.trimmingCharacters(in: .whitespacesAndNewlines)
           LazyVGrid(columns: [GridItem(.adaptive(minimum: 290, maximum: 520), spacing: 12)], spacing: 12) {
             ForEach(rows) { t in
               Button { store.path.append(.thread(t.id)) } label: {
-                ThreadCard(thread: t, project: store.project(t.projectId),
-                           showBrief: summary == nil || t.brief?.trimmingCharacters(in: .whitespacesAndNewlines) != summary)
+                ThreadCard(thread: t, project: store.project(t.projectId))
               }
               .buttonStyle(.plain)
             }

@@ -10,7 +10,6 @@ let threadStatus: [String: String] = [
 struct ThreadCard: View {
   let thread: HubThread
   let project: Project?
-  var showBrief = true
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -20,15 +19,17 @@ struct ThreadCard: View {
           HStack(spacing: 4) { PhIcon("leaf", size: 12); Text("生活") }
             .font(.system(size: TextSize.caption, weight: .medium)).foregroundStyle(Palette.muted)
         }
-        Spacer()
-        Text(ViewerFormat.relative(thread.last)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+        Spacer(minLength: 0)
+        Text(ViewerFormat.relative(thread.last)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
       }
       Text(thread.title).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink).lineLimit(2).multilineTextAlignment(.leading)
         .lineSpacing(3)
         .fixedSize(horizontal: false, vertical: true)
-      if showBrief, let brief = thread.brief {
+      if let brief = thread.cardSummary {
         Text(brief).font(.system(size: TextSize.body)).lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.muted).lineLimit(3)
           .fixedSize(horizontal: false, vertical: true)
+      } else if thread.needsRegen?.value == true {
+        Text("正在整理").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
       }
       Spacer(minLength: 0)
       if let span = ThreadSpan.text(thread) {
@@ -37,7 +38,7 @@ struct ThreadCard: View {
       }
     }
     .padding(16)
-    .frame(maxWidth: .infinity, minHeight: 172, alignment: .topLeading)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .card(hover: true)
     .contentShape(Rectangle())
   }

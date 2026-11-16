@@ -50,6 +50,17 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(review.detail?.sections == nil)
 }
 
+@Test func threadCardCanDistinguishAPendingBriefFromBlankText() throws {
+  let cards = try decode([HubThread].self, """
+    [{"id":"a","title":"修复设置入口","status":"active","brief":"  核对默认页和跳转 "},
+     {"id":"b","title":"验证数据源","status":"active","brief":"   ","needs_regen":1},
+     {"id":"c","title":"检查时间范围","status":"active","brief":null}]
+    """)
+  #expect(cards[0].cardSummary == "核对默认页和跳转")
+  #expect(cards[1].cardSummary == nil && cards[1].needsRegen?.value == true)
+  #expect(cards[2].cardSummary == nil && cards[2].needsRegen == nil)
+}
+
 @Test func decodesHubRecordWithNestedContextAndMixedBooleans() throws {
   let r = try decode(HistoryRecord.self, """
     {"id":"01M6Z55ER9BPCTVCYA6ZANFBVM","schema":1,"device":"mac","source":"mac.git","kind":"event",
