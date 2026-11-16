@@ -305,7 +305,8 @@ function threadFrames(store: DistillStore, threadId: string): Frame[] {
 }
 
 async function makeBrief(d: Deps, task: string, title: string, detail: unknown): Promise<{ text: string; call_id?: string } | null> {
-  const r = await complete<P.BriefOutput>(d, { tier: "minute", task, system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail), schema: P.BRIEF_SCHEMA });
+  const system = task === "day_brief" ? P.DAY_BRIEF_SYSTEM : P.BRIEF_SYSTEM;
+  const r = await complete<P.BriefOutput>(d, { tier: "minute", task, system, prompt: P.briefPrompt(title, detail), schema: P.BRIEF_SCHEMA });
   return r.ok ? { text: r.data.brief.trim(), call_id: r.call_id } : null;
 }
 

@@ -30,7 +30,7 @@ function retryModel() {
   const calls: LLMRequest[] = [], failed = new Set<string>();
   const llm: LLM = { async complete<T>(req: LLMRequest) {
     calls.push(req);
-    if (req.system === P.BRIEF_SYSTEM && !failed.has(req.prompt)) {
+    if ((req.task === "project_brief" || req.task === "day_brief") && !failed.has(req.prompt)) {
       failed.add(req.prompt); return { ok: false, error: "合成短暂故障", ms: 1 };
     }
     const data = req.system === P.PROJECT_SYSTEM ? projectDetail : req.system === P.DAY_SYSTEM ? emptyDayOutput : { brief: "最终简略版" };
@@ -60,7 +60,7 @@ for (const kind of ["project", "day"] as const) {
       await distillRound({ db: reopened, llm: fake.llm, now: () => now }, { slow: true, days: "all" });
     } finally { reopened.close(); }
     expect(fake.calls.filter(c => c.system === (kind === "project" ? P.PROJECT_SYSTEM : P.DAY_SYSTEM))).toHaveLength(1);
-    expect(fake.calls.filter(c => c.system === P.BRIEF_SYSTEM)).toHaveLength(2);
+    expect(fake.calls.filter(c => c.system === (kind === "project" ? P.BRIEF_SYSTEM : P.DAY_BRIEF_SYSTEM))).toHaveLength(2);
     expect(read().detail).toEqual(kind === "project" ? projectDetail : dayDetail);
     expect(read().brief).toBe("最终简略版");
     expect(store.getState(key)).toBeNull();
@@ -120,11 +120,12 @@ for (const kind of ["project", "day"] as const) {
   test(`${kind} 生成简略版期间的新失效标记不被成功回写覆盖`, async () => {
     seed();
     const llm: LLM = { async complete<T>(req: LLMRequest) {
-      if (req.system === P.BRIEF_SYSTEM) {
+      const brief = req.task === `${kind}_brief`;
+      if (brief) {
         if (kind === "project") store.upsertProject({ ...store.project("p")!, needs_regen: 1 });
         else store.upsertDay({ date, needs_regen: 1 });
       }
-      return { ok: true, data: (req.system === P.BRIEF_SYSTEM ? { brief: "合成简略" } : kind === "project" ? projectDetail : emptyDayOutput) as T, ms: 1 };
+      return { ok: true, data: (brief ? { brief: "合成简略" } : kind === "project" ? projectDetail : emptyDayOutput) as T, ms: 1 };
     } };
     if (kind === "project") await projectStep({ db: ctx.db, llm }, store, now);
     else await dayStep({ db: ctx.db, llm }, store, date, now);

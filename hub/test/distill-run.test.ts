@@ -44,7 +44,8 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
   const calls: Call[] = [];
   const llm: LLM = {
     async complete<T>(req: LLMRequest) {
-      const kind = req.system === P.ASSIGN_SYSTEM ? "assign" : req.system === P.THREAD_SYSTEM ? "thread" : req.system === P.BRIEF_SYSTEM ? "brief"
+      const kind = req.system === P.ASSIGN_SYSTEM ? "assign" : req.system === P.THREAD_SYSTEM ? "thread"
+        : req.system === P.BRIEF_SYSTEM || req.system === P.DAY_BRIEF_SYSTEM ? "brief"
         : req.system === P.CLASSIFY_SYSTEM ? "classify" : req.system === P.CONVERSATION_SYSTEM ? "conversation" : req.system === P.PROJECT_SYSTEM ? "project" : req.system === P.DAY_SYSTEM ? "day" : req.system === P.DEDUP_SYSTEM ? "dedup" : "unknown";
       calls.push({ kind, req });
       const ok = (data: unknown) => ({ ok: true as const, data: data as T, ms: 1 });
