@@ -1,5 +1,32 @@
 import Foundation
 
+/// Mac 回顾和准备清单共用的后台整理状态。
+public struct DistillHealth: Decodable, Equatable, Sendable {
+  private struct LastError: Decodable, Equatable, Sendable { let error: String; let recovered: Bool }
+  public let lastOkAt: String?
+  private let lastError: LastError?
+  private let lastRoundAt: String?
+  private let heartbeatAt: String?
+
+  public enum State: Equatable { case working, waiting, failing(String) }
+  public var state: State {
+    if let error = lastError, !error.recovered { return .failing(error.error) }
+    return lastOkAt == nil ? .waiting : .working
+  }
+
+  public func isResponding(at now: Date) -> Bool {
+    guard let heartbeat = heartbeatAt.flatMap(ViewerTime.parse) else { return false }
+    return (0...90).contains(now.timeIntervalSince(heartbeat))
+  }
+
+  /// 常驻后台按上一轮开始时间加 15 分钟调度。长任务可能让这一轮延后。
+  public func nextRound(after now: Date) -> Date? {
+    guard isResponding(at: now), let last = lastRoundAt.flatMap(ViewerTime.parse), last <= now else { return nil }
+    let next = last.addingTimeInterval(15 * 60)
+    return next > now ? next : nil
+  }
+}
+
 public struct ModelCall: Decodable, Identifiable, Sendable {
   public let id: String
   public let at: String

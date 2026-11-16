@@ -235,6 +235,26 @@ public struct NowState: Decodable, Sendable {
   public let feedback: String?
   public let brief: String?
   public let updatedAt: String?
+
+  public enum Notice: Equatable, Sendable {
+    case pending(String), failed(String)
+  }
+
+  public var activitySummary: String? {
+    let text = brief?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    // /v1/now 为没有真实摘要的情况返回占位文字。
+    return text.isEmpty || text == Self.pendingBrief || text == Self.emptyBrief ? nil : text
+  }
+
+  public var activityNotice: Notice? {
+    if let feedback {
+      return feedback.hasPrefix("最近一次整理失败") ? .failed(feedback) : .pending(feedback)
+    }
+    return brief == Self.pendingBrief ? .pending(Self.pendingBrief) : nil
+  }
+
+  private static let pendingBrief = "有新活动待整理。"
+  private static let emptyBrief = "最近 24 小时没有活跃的线程。"
 }
 
 public struct DayDiary: Decodable, Sendable {

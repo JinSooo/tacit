@@ -79,6 +79,24 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(rows.contains { Lane.of($0.source) == .browser })
 }
 
+@Test func reviewDoesNotPresentAnOverdueOrOfflineRoundAsScheduled() throws {
+  let now = try #require(ViewerTime.parse("2026-11-17T00:52:00+09:00"))
+  let healthy = try decode(DistillHealth.self, #"{"heartbeat_at":"2026-11-17T00:51:45+09:00","last_round_at":"2026-11-17T00:45:00+09:00","last_ok_at":"2026-11-17T00:47:00+09:00"}"#)
+  #expect(healthy.nextRound(after: now) == ViewerTime.parse("2026-11-17T01:00:00+09:00"))
+  #expect(healthy.nextRound(after: now.addingTimeInterval(120)) == nil)
+  let busy = try decode(DistillHealth.self, #"{"heartbeat_at":"2026-11-17T00:51:45+09:00","last_round_at":"2026-11-17T00:30:00+09:00"}"#)
+  #expect(busy.isResponding(at: now) && busy.nextRound(after: now) == nil)
+}
+
+@Test func reviewDisplaysStaleAndFailedStatesWithoutAPlaceholderSummary() throws {
+  let pending = try decode(NowState.self, #"{"brief":"有新活动待整理。","updated_at":null}"#)
+  #expect(pending.activitySummary == nil)
+  #expect(pending.activityNotice == .pending("有新活动待整理。"))
+  let failed = try decode(NowState.self, #"{"brief":"已有摘要","feedback":"最近一次整理失败，请检查 AI 模型。"}"#)
+  #expect(failed.activitySummary == "已有摘要")
+  #expect(failed.activityNotice == .failed("最近一次整理失败，请检查 AI 模型。"))
+}
+
 @Test func decodesHubRecordWithNestedContextAndMixedBooleans() throws {
   let r = try decode(HistoryRecord.self, """
     {"id":"01M6Z55ER9BPCTVCYA6ZANFBVM","schema":1,"device":"mac","source":"mac.git","kind":"event",

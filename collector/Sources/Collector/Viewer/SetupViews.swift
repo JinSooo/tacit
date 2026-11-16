@@ -11,19 +11,6 @@ struct AgentToolState: Decodable, Identifiable, Equatable {
   let partial: Bool
 }
 
-/// /v1/status 里判断整理是否正常需要的几项。
-struct DistillHealth: Decodable, Equatable {
-  struct LastError: Decodable, Equatable { let at: String; let error: String; let recovered: Bool }
-  let lastOkAt: String?
-  let lastError: LastError?
-
-  enum State: Equatable { case working, waiting, failing(String) }
-  var state: State {
-    if let e = lastError, !e.recovered { return .failing(e.error) }
-    return lastOkAt == nil ? .waiting : .working
-  }
-}
-
 extension HubAPI {
   func agentTools() async throws -> [AgentToolState] {
     struct R: Decodable { let tools: [AgentToolState] }
@@ -105,9 +92,9 @@ struct AgentSettingsView: View {
 /// 三件事都好了就不显示：系统权限、AI 模型能整理、至少接入一个 AI 工具。
 /// 后台服务读不到时不显示，页面其他部分已经会报错。
 struct SetupChecklist: View {
+  let health: DistillHealth?
   @Environment(ViewerStore.self) private var store
   @State private var tools: [AgentToolState]?
-  @State private var health: DistillHealth?
 
   var body: some View {
     let missing = store.capture.sources.filter { DataSourceCatalog.isVisible($0.id) && $0.needsPermission }
@@ -139,9 +126,7 @@ struct SetupChecklist: View {
     .animation(.easeOut(duration: 0.2), value: tools == nil || health == nil)
     .task {
       while !Task.isCancelled {
-        async let t = try? store.api.agentTools()
-        async let h = try? store.api.distillHealth()
-        (tools, health) = await (t, h)
+        tools = try? await store.api.agentTools()
         try? await Task.sleep(for: .seconds(30))
       }
     }

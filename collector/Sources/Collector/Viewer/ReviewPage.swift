@@ -35,6 +35,7 @@ private struct ReviewDayContent: View {
   @Environment(ViewerStore.self) private var store
   @State private var diary = Loader<DayDiary?>()
   @State private var now = Loader<NowState?>()
+  @State private var health = Loader<DistillHealth>()
   @State private var records = Loader<[HistoryRecord]>()
   @State private var active = Loader<[HubThread]>()
   @State private var paused = Loader<[HubThread]>()
@@ -46,7 +47,7 @@ private struct ReviewDayContent: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 24) {
-      if isToday { SetupChecklist() }
+      if isToday { SetupChecklist(health: health.error == nil ? health.value : nil) }
       HStack(alignment: .firstTextBaseline, spacing: 12) {
         Text(Fmt.date(day)).font(.serif(TextSize.heading, .semibold)).foregroundStyle(Palette.ink)
           .accessibilityAddTraits(.isHeader)
@@ -78,10 +79,11 @@ private struct ReviewDayContent: View {
     async let review: Void = loadReview()
     if isToday {
       async let summary: Void = now.run { try await store.api.now() }
+      async let timing: Void = health.run { try await store.api.distillHealth() }
       async let activity: Void = records.run { try await store.api.day(day) }
       async let current: Void = active.run { try await store.api.threads(status: "active").sorted { ($0.lastMs ?? 0) > ($1.lastMs ?? 0) } }
       async let recent: Void = paused.run { try await store.api.threads(status: "paused").sorted { ($0.lastMs ?? 0) > ($1.lastMs ?? 0) } }
-      _ = await (summary, activity, current, recent)
+      _ = await (summary, timing, activity, current, recent)
     }
     await review
   }
@@ -92,29 +94,47 @@ private struct ReviewDayContent: View {
     if let error = now.error {
       Placeholder(kind: .error(error) { Task { await load() } })
     } else if case .some(let state) = now.value {
-      let brief = state?.brief?.trimmingCharacters(in: .whitespacesAndNewlines)
       VStack(alignment: .leading, spacing: 8) {
-        if let brief, !brief.isEmpty {
-          Text(brief == "最近 24 小时没有活跃的线程。" ? "最近 24 小时没有活跃的事项。" : brief)
+        if let brief = state?.activitySummary {
+          Text(brief)
             .font(.serif(TextSize.display)).lineSpacing(TextSize.serifLineSpacing(TextSize.display))
             .foregroundStyle(Palette.ink).textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-        } else {
+        } else if state?.activityNotice == nil {
           Text("还没有此刻的摘要").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
         }
-        if let updated = state?.updatedAt.flatMap(ViewerTime.parse) {
-          TimelineView(.everyMinute) { _ in
-            Text(Fmt.updated(updated)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-          }
-        }
-        if let feedback = state?.feedback {
-          Text(feedback).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+        if state?.activitySummary != nil || state?.activityNotice != nil {
+          TimelineView(.everyMinute) { _ in summaryStatus(state) }
         }
       }
       .frame(maxWidth: 860, alignment: .leading)
     } else {
       ProgressView().controlSize(.small)
     }
+  }
+
+  private func summaryStatus(_ state: NowState?) -> some View {
+    let status: String
+    let warning: Bool
+    switch state?.activityNotice {
+    case .failed(let message): status = message; warning = true
+    case .pending(let message): status = message; warning = false
+    case nil: status = nextRoundNotice(at: Date()); warning = false
+    }
+    let updated = state?.activitySummary == nil ? nil : state?.updatedAt.flatMap(ViewerTime.parse)
+    let message = [updated.map { Fmt.updated($0) }, status].compactMap { $0 }.joined(separator: "，")
+    return Text(message).font(.system(size: TextSize.caption)).foregroundStyle(warning ? Palette.attention : Palette.muted)
+      .fixedSize(horizontal: false, vertical: true)
+  }
+
+  private func nextRoundNotice(at now: Date) -> String {
+    guard health.error == nil, let state = health.value, state.isResponding(at: now) else {
+      return "暂时无法确定下次整理时间"
+    }
+    if let next = state.nextRound(after: now) {
+      return "预计 \(ViewerFormat.clock(next)) 左右开始下一轮整理"
+    }
+    return "等待下一轮整理"
   }
 
   private var activity: some View {
