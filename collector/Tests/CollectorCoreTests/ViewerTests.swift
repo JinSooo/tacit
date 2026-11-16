@@ -63,7 +63,7 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
 
 @Test func reviewActivityFollowsCaptureSwitchesEvenWithOldRecordsFromFrozenSources() throws {
   let rows = try ["mac.browser", "mac.shell", "mac.git", "mac.file", "mac.clipboard", "mac.wechat", "mac.audio",
-                  "claude_code.session", "codex.session", "manual.note"].enumerated().map { index, source in
+                  "claude_code.session", "codex.session", "manual.note", "plugin.ext_text_file"].enumerated().map { index, source in
     try record(String(index), source, "活动", "2026-11-17T01:00:00+09:00")
   }
   var sources = DataSourceCatalog.all.map { desc in
@@ -77,6 +77,10 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   sources[sources.firstIndex { $0.id == "browser" }!].enabled = false
   #expect(!ReviewActivity.visibleRecords(rows, sources: sources).contains { Lane.of($0.source) == .browser })
   #expect(rows.contains { Lane.of($0.source) == .browser })
+
+  sources.append(.init(id: "ext-text-file", title: "已安装的测试插件", kind: .plugin, enabled: true,
+                       permission: .granted, permissionName: nil, lastRun: nil, detail: "", ok: true, canRunNow: false))
+  #expect(ReviewActivity.visibleRecords(rows, sources: sources).contains { $0.source == "plugin.ext_text_file" })
 }
 
 @Test func reviewDoesNotPresentAnOverdueOrOfflineRoundAsScheduled() throws {

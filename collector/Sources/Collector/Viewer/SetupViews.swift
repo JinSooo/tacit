@@ -92,43 +92,31 @@ struct AgentSettingsView: View {
 /// 三件事都好了就不显示：系统权限、AI 模型能整理、至少接入一个 AI 工具。
 /// 后台服务读不到时不显示，页面其他部分已经会报错。
 struct SetupChecklist: View {
-  let health: DistillHealth?
+  let health: DistillHealth
+  let tools: [AgentToolState]
   @Environment(ViewerStore.self) private var store
-  @State private var tools: [AgentToolState]?
 
-  var body: some View {
+  @ViewBuilder var body: some View {
     let missing = store.capture.sources.filter { DataSourceCatalog.isVisible($0.id) && $0.needsPermission }
-    Group {
-      if let tools, let health {
-        let modelReady = health.state == .working
-        let agentsReady = tools.contains(where: \.connected)
-        if !(missing.isEmpty && modelReady && agentsReady) {
-          VStack(alignment: .leading, spacing: 0) {
-            Text("还差几步").sectionTitle().padding(.bottom, 4)
-            step(done: missing.isEmpty, title: "打开系统权限", detail: permissionDetail(missing)) {
-              if let first = missing.first { Button("授权…") { store.perform(.requestPermission(first.id)) } }
-            }
-            Divider()
-            step(done: modelReady, title: "让 AI 整理你的记录", detail: modelDetail(health.state)) {
-              Button("检查 AI 模型…") { open(.models) }
-            }
-            Divider()
-            step(done: agentsReady, title: "连接你使用的 AI 工具", detail: agentsReady ? nil : agentDetail(tools)) {
-              if tools.contains(where: \.installed) { Button("连接…") { open(.agents) } }
-            }
-          }
-          .padding(.horizontal, 20).padding(.vertical, 16)
-          .card()
-          .transition(.opacity)
+    let modelReady = health.state == .working
+    let agentsReady = tools.contains(where: \.connected)
+    if !(missing.isEmpty && modelReady && agentsReady) {
+      VStack(alignment: .leading, spacing: 0) {
+        Text("还差几步").sectionTitle().padding(.bottom, 4)
+        step(done: missing.isEmpty, title: "打开系统权限", detail: permissionDetail(missing)) {
+          if let first = missing.first { Button("授权…") { store.perform(.requestPermission(first.id)) } }
+        }
+        Divider()
+        step(done: modelReady, title: "让 AI 整理你的记录", detail: modelDetail(health.state)) {
+          Button("检查 AI 模型…") { open(.models) }
+        }
+        Divider()
+        step(done: agentsReady, title: "连接你使用的 AI 工具", detail: agentsReady ? nil : agentDetail(tools)) {
+          if tools.contains(where: \.installed) { Button("连接…") { open(.agents) } }
         }
       }
-    }
-    .animation(.easeOut(duration: 0.2), value: tools == nil || health == nil)
-    .task {
-      while !Task.isCancelled {
-        tools = try? await store.api.agentTools()
-        try? await Task.sleep(for: .seconds(30))
-      }
+      .padding(.horizontal, 20).padding(.vertical, 16)
+      .card()
     }
   }
 
@@ -154,7 +142,7 @@ struct SetupChecklist: View {
 
   func open(_ group: SettingsGroup) {
     UserDefaults.standard.set(group.rawValue, forKey: "settings.group")
-    store.section = .settings
+    store.showSettings()
   }
 
   func step<Action: View>(done: Bool, title: String, detail: String?, @ViewBuilder action: () -> Action) -> some View {

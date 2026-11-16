@@ -17,6 +17,7 @@ import CollectorCore
 
   func show(_ page: Page? = nil) {
     if page == .review || (page == nil && window?.isVisible != true) { store.showReview() }
+    else if page == .settings { store.showSettings() }
     else if let page { store.section = page }
     if window == nil { window = makeWindow() }
     NSApp.setActivationPolicy(.regular)
@@ -95,7 +96,7 @@ import CollectorCore
     case 0: store.showReview()
     case 1: store.section = .history
     case 2: store.section = .pending
-    case 3: store.section = .settings
+    case 3: store.showSettings()
     default: break
     }
   }

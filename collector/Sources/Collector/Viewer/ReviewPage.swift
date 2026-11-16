@@ -13,11 +13,12 @@ struct ReviewPage: View {
       let day = Binding(get: { store.reviewDay ?? today }, set: { store.reviewDay = $0 == today ? nil : $0 })
       ScrollView {
         ReviewDayContent(day: day.wrappedValue, isToday: day.wrappedValue == today, refresh: refresh)
-          .id(day.wrappedValue).id(store.revision)
+          .id(store.revision)
           .frame(maxWidth: 1080, alignment: .leading)
           .padding(.horizontal, 40).padding(.vertical, 32)
           .frame(maxWidth: .infinity)
       }
+      .id(day.wrappedValue)
       .background(Palette.paper)
       .navigationTitle("回顾")
       .toolbar {
@@ -36,6 +37,7 @@ private struct ReviewDayContent: View {
   @State private var diary = Loader<DayDiary?>()
   @State private var now = Loader<NowState?>()
   @State private var health = Loader<DistillHealth>()
+  @State private var agents = Loader<[AgentToolState]>()
   @State private var records = Loader<[HistoryRecord]>()
   @State private var active = Loader<[HubThread]>()
   @State private var paused = Loader<[HubThread]>()
@@ -47,7 +49,9 @@ private struct ReviewDayContent: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 24) {
-      if isToday { SetupChecklist(health: health.error == nil ? health.value : nil) }
+      if isToday, health.error == nil, agents.error == nil, let status = health.value, let tools = agents.value {
+        SetupChecklist(health: status, tools: tools)
+      }
       HStack(alignment: .firstTextBaseline, spacing: 12) {
         Text(Fmt.date(day)).font(.serif(TextSize.heading, .semibold)).foregroundStyle(Palette.ink)
           .accessibilityAddTraits(.isHeader)
@@ -80,10 +84,11 @@ private struct ReviewDayContent: View {
     if isToday {
       async let summary: Void = now.run { try await store.api.now() }
       async let timing: Void = health.run { try await store.api.distillHealth() }
+      async let connections: Void = agents.run { try await store.api.agentTools() }
       async let activity: Void = records.run { try await store.api.day(day) }
       async let current: Void = active.run { try await store.api.threads(status: "active").sorted { ($0.lastMs ?? 0) > ($1.lastMs ?? 0) } }
       async let recent: Void = paused.run { try await store.api.threads(status: "paused").sorted { ($0.lastMs ?? 0) > ($1.lastMs ?? 0) } }
-      _ = await (summary, timing, activity, current, recent)
+      _ = await (summary, timing, connections, activity, current, recent)
     }
     await review
   }

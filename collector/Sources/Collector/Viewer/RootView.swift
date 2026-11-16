@@ -7,13 +7,14 @@ struct RootView: View {
 
   var body: some View {
     @Bindable var store = store
+    let section = store.section
     NavigationSplitView {
       Sidebar()
         .navigationSplitViewColumnWidth(min: 200, ideal: 228, max: 300)
     } detail: {
       NavigationStack(path: $store.path) {
-        page
-          .toolbar { if needsAnchor { ToolbarAnchor() } }
+        page(section)
+          .toolbar { if needsAnchor(section) { ToolbarAnchor() } }
           .navigationDestination(for: Route.self) { route in
             switch route {
             case .thread(let id): ThreadPage(id: id)
@@ -41,15 +42,15 @@ struct RootView: View {
   }
 
   /// 只有本身没有工具栏项的页面才放占位：占位项也占一格间距，放在别的页面上会把标题和按钮推开 8pt。
-  var needsAnchor: Bool {
-    switch store.section {
+  private func needsAnchor(_ section: Page) -> Bool {
+    switch section {
     case .settings, .project: return true
     default: return false
     }
   }
 
-  @ViewBuilder var page: some View {
-    switch store.section {
+  @ViewBuilder private func page(_ section: Page) -> some View {
+    switch section {
     case .review: ReviewPage()
     case .history: HistoryPage()
     case .pending: PendingPage()
@@ -68,12 +69,6 @@ struct Sidebar: View {
         SidebarLabel(title: "回顾", icon: "sun-horizon").tag(Page.review)
         SidebarLabel(title: "历史记录", icon: "clock-counter-clockwise").tag(Page.history)
       }
-      Section {
-        // badge 必须在 tag 之前，这一行在 macOS 侧栏里才选得中。
-        SidebarLabel(title: "待确认", icon: "tray")
-          .badge(store.pending.isEmpty ? nil : Text(Fmt.count(store.pending.count)))
-          .tag(Page.pending)
-      }
       if !store.projects.isEmpty {
         Section("项目") {
           // 还没确认的项目用虚线文件夹，和待确认里"新项目"同一个图标。
@@ -83,6 +78,12 @@ struct Sidebar: View {
               .tag(Page.project(p.id))
           }
         }
+      }
+      Section {
+        // badge 必须在 tag 之前，这一行在 macOS 侧栏里才选得中。
+        SidebarLabel(title: "待确认", icon: "tray")
+          .badge(store.pending.isEmpty ? nil : Text(Fmt.count(store.pending.count)))
+          .tag(Page.pending)
       }
     }
     .listStyle(.sidebar)
@@ -137,7 +138,7 @@ struct CaptureFooter: View {
       }
       Spacer(minLength: 0)
       control
-      Button { store.section = .settings } label: { PhIcon("gear-six", size: 16).frame(width: 28, height: 28).contentShape(Rectangle()) }
+      Button { store.showSettings() } label: { PhIcon("gear-six", size: 16).frame(width: 28, height: 28).contentShape(Rectangle()) }
         .buttonStyle(.plain)
         .foregroundStyle(store.section == .settings ? Palette.accent : Palette.muted)
         .help("设置").accessibilityLabel("设置")

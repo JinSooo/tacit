@@ -34,10 +34,17 @@ public enum PendingArchive {
 /// 回顾的活动条跟随实时采集开关；历史记录仍显示已经采集的内容。
 public enum ReviewActivity {
   public static func visibleRecords(_ records: [HistoryRecord], sources: [DataSourceStatus]) -> [HistoryRecord] {
-    let enabled = Set(sources.filter { $0.enabled && DataSourceCatalog.isVisible($0.id) }.map(\.id))
+    let enabled = Set(sources.lazy.filter(\.enabled).map(\.id))
     return records.filter { record in
-      guard let id = collectorID[record.source] else { return true }
-      return enabled.contains(id)
+      if let id = collectorID[record.source] {
+        return DataSourceCatalog.isVisible(id) && enabled.contains(id)
+      }
+      // 已安装的插件与旧记录用 plugin.ext_... 命名，开关用 ext-...。
+      if record.source.hasPrefix("plugin.ext_") {
+        let id = record.source.dropFirst("plugin.".count).replacingOccurrences(of: "_", with: "-")
+        return enabled.contains(id)
+      }
+      return true
     }
   }
 

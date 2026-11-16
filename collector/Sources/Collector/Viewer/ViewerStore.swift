@@ -112,6 +112,11 @@ enum Route: Hashable {
     section = .review
   }
 
+  func showSettings() {
+    path = []
+    section = .settings
+  }
+
   func showRecord(_ id: String, at date: Date?) {
     if let date { historyDay = Calendar.current.startOfDay(for: date) }
     historySearch = ""
