@@ -174,8 +174,9 @@ struct GeneralPreferencesSection: View {
           Text("调大可带入更多背景，也会占用更多 AI 上下文。超出时先舍弃较旧事项，不影响历史记录的保存和主动查询。")
             .foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
         } else {
-          row("事项多久没动静就问“做完了吗”", value: d.askDoneDays, key: "ask_done_days", unit: "天")
-          row("问了多久没回答就归档", value: d.archiveDays, key: "archive_days", unit: "天")
+          row("没有新活动多久后归档", value: d.archiveDays, key: "archive_days", unit: "使用天")
+          Text("从最后活动的次日起，只计有记录的日期。归档后仍可搜索和查看。")
+            .foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
         }
         HStack {
           Button("恢复默认") { p.restore(context: context) }.disabled(p.busy)

@@ -10,17 +10,17 @@ import SwiftUI
 
   func changed(context: Bool) -> Bool {
     guard let d = draft, let s = saved else { return false }
-    return context ? d.injectTokens != s.injectTokens : d.askDoneDays != s.askDoneDays || d.archiveDays != s.archiveDays
+    return context ? d.injectTokens != s.injectTokens : d.archiveDays != s.archiveDays
   }
   func restore(context: Bool) {
     if context { draft?.injectTokens = 800 }
-    else { draft?.askDoneDays = 3; draft?.archiveDays = 7 }
+    else { draft?.archiveDays = 7 }
     message = nil
   }
   func revert(context: Bool) {
     guard let saved else { return }
     if context { draft?.injectTokens = saved.injectTokens }
-    else { draft?.askDoneDays = saved.askDoneDays; draft?.archiveDays = saved.archiveDays }
+    else { draft?.archiveDays = saved.archiveDays }
     error = nil; message = nil
   }
   func load(api: HubAPI) async {
@@ -33,7 +33,7 @@ import SwiftUI
     busy = true; error = nil; message = nil
     defer { busy = false }
     do {
-      let values = context ? ["inject_tokens": d.injectTokens] : ["ask_done_days": d.askDoneDays, "archive_days": d.archiveDays]
+      let values = context ? ["inject_tokens": d.injectTokens] : ["archive_days": d.archiveDays]
       for (key, value) in values {
         if let range = d.ranges[key], !(range[0]...range[1]).contains(value) {
           error = "请输入 \(range[0])–\(range[1]) 之间的整数。"; return
@@ -42,7 +42,7 @@ import SwiftUI
       let g = try await api.saveGeneral(values)
       // 另一个分组可能也有尚未保存的草稿。
       var next = g
-      if context && changed(context: false) { next.askDoneDays = d.askDoneDays; next.archiveDays = d.archiveDays }
+      if context && changed(context: false) { next.archiveDays = d.archiveDays }
       if !context && changed(context: true) { next.injectTokens = d.injectTokens }
       saved = g; draft = next
       message = context ? "已保存，下次带入项目进展时生效。" : "已保存，下次整理时生效。"

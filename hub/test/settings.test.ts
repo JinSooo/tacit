@@ -234,18 +234,15 @@ test("general：默认值、范围、只改给出的字段；注入上限和提�
   const small = await inject();
   expect(small.text).not.toContain("合成线程new"); expect(small.tokens_est).toBeLessThanOrEqual(200);
 
-  // 生命周期现读：问"做完了吗"和归档的使用天数。
+  // 生命周期现读最新的归档天数，旧提问天数已退出日常整理。
   const now = Date.parse("2026-11-08T12:00:00+08:00"), DAY = 86_400_000;
   for (const id of ["new", "old"]) store.upsertThread({ ...store.thread(id)!, status: "done" });
   store.upsertThread({ id: "quiet", project_id: "p", title: "合成安静线程", brief: "合成", status: "paused", last_ms: now - 2 * DAY });
   expect(ctx.db.ingest([fixture({ t_start: new Date(now).toISOString() })]).accepted).toBe(1);
-  await call(h, "PUT", "/v1/settings/general", { ask_done_days: 3 });
-  expect(lifecycleStep(store, now).asked).toBe(0);
-  await call(h, "PUT", "/v1/settings/general", { ask_done_days: 1, archive_days: 1 });
-  expect(lifecycleStep(store, now).asked).toBe(1);
-  expect(lifecycleStep(store, now + DAY - 1).archived).toBe(0);
-  expect(ctx.db.ingest([fixture({ t_start: new Date(now + DAY).toISOString() })]).accepted).toBe(1);
-  expect(lifecycleStep(store, now + DAY + 1).archived).toBe(1);
+  await call(h, "PUT", "/v1/settings/general", { archive_days: 2 });
+  expect(lifecycleStep(store, now)).toMatchObject({ archived: 0, asked: 0 });
+  await call(h, "PUT", "/v1/settings/general", { archive_days: 1 });
+  expect(lifecycleStep(store, now)).toMatchObject({ archived: 1, asked: 0 });
   expect(store.thread("quiet")?.status).toBe("archived");
 });
 

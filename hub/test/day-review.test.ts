@@ -67,7 +67,7 @@ test("每日回顾按角色取材、严格引用当日原文，浏览器和屏�
   } finally { ctx.cleanup(); }
 });
 
-test("跨天后暂停事项可以接续，定时整理保留旧确认数据且不创建提问或自动归档", async () => {
+test("定时整理关闭旧问题、按使用天归档，暂停事项跨天仍可接续", async () => {
   const ctx = setup(), store = new DistillStore(ctx.db);
   const start = new Date("2026-11-01T10:00:00").getTime(), day = 86_400_000, now = start + 12 * day;
   try {
@@ -77,21 +77,22 @@ test("跨天后暂停事项可以接续，定时整理保留旧确认数据且�
     store.setState("last_rowid", days.length);
     store.setState("cursor_ms", now);
     store.upsertThread({ id: "older", title: "合成事项", status: "active", last_ms: start, needs_regen: 0, domain: "work" });
-    store.upsertThread({ id: "other", title: "合成事项乙", status: "active", last_ms: start, needs_regen: 0, domain: "work" });
+    store.upsertThread({ id: "other", title: "合成事项乙", status: "active", last_ms: start + 3 * day, needs_regen: 0, domain: "work" });
     store.createPending({ id: "old-question", kind: "thread_done", payload: { thread_id: "older" }, created_at: toLocalIso(start) });
     const llm: LLM = { async complete() { throw new Error("这轮没有新片段"); } };
     const round = await distillRound({ db: ctx.db, llm, now: () => now });
-    expect(round.lifecycle).toEqual({ paused: 2, asked: 0, archived: 0 });
-    expect(store.pending().map(item => item.id)).toEqual(["old-question"]);
-    expect(store.thread("older")?.status).toBe("paused");
+    expect(round.lifecycle).toEqual({ paused: 1, asked: 0, archived: 1, expired: 1 });
+    expect(store.pending()).toEqual([]);
+    expect(store.thread("older")?.status).toBe("archived");
+    expect(store.thread("other")?.status).toBe("paused");
 
     const followup = fixture({ t_start: toLocalIso(now) });
     expect(ctx.db.ingest([followup]).accepted).toBe(1);
     const frame = { id: "later", key: "app:test", record_ids: [followup.id], chars: 5, private: 0,
       status: "new" as const, t_start_ms: now, t_end_ms: now + 60_000 };
     store.createFrame(frame);
-    store.assign(frame.id, "older", "rule", 1);
-    touchThread(store, "older", frame);
-    expect(store.thread("older")).toMatchObject({ status: "active", last_ms: frame.t_end_ms });
+    store.assign(frame.id, "other", "rule", 1);
+    touchThread(store, "other", frame);
+    expect(store.thread("other")).toMatchObject({ status: "active", last_ms: frame.t_end_ms });
   } finally { ctx.cleanup(); }
 });

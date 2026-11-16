@@ -531,15 +531,6 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
   return { calls, updated, failed, facts, dropped_ungrounded: dropped, dropped_invalid_inference: invalidInference };
 }
 
-/** 放进待确认问\"做完了吗\"；同一线程有未处理的、或在最后活动之后已经问过的，不再问。 */
-function askDone(store: DistillStore, threadId: string, now: number) {
-  const t = store.thread(threadId);
-  if (!t || t.status === "done" || t.status === "abandoned" || t.status === "archived") return;
-  const asked = (store.hub.db.prepare("SELECT created_at,resolved_at FROM pending WHERE kind='thread_done' AND json_extract(payload,'$.thread_id')=?").all(threadId) as { created_at: string; resolved_at: string | null }[])
-    .some(p => !p.resolved_at || Date.parse(p.created_at) >= (t.last_ms ?? 0));
-  if (!asked) store.createPending({ id: ulid(now), kind: "thread_done", payload: { thread_id: threadId }, created_at: new Date(now).toISOString() });
-}
-
 // ---------------- 合并重复线程（每天一次） ----------------
 
 /**
@@ -622,47 +613,35 @@ export function nowStep(store: DistillStore, now: number) {
 
 // ---------------- 6. 线程生命周期 ----------------
 
-function localDayBoundary(ms: number, offset = 0): number {
+function localDayBoundary(ms: number): number {
   const date = new Date(ms);
   date.setHours(0, 0, 0, 0);
-  date.setDate(date.getDate() + offset);
   return date.getTime();
 }
 
-/** after 所在日不算；任意来源、设备的记录按中枢本地自然日去重，now 之后的记录不算。 */
-export function usageDaysSince(store: DistillStore, after: number, now: number): number {
-  const start = localDayBoundary(after, 1);
-  if (start > now) return 0;
-  return (store.hub.db.prepare(`SELECT count(DISTINCT date(t_start_ms / 1000.0, 'unixepoch', 'localtime')) AS days
-    FROM records WHERE t_start_ms>=? AND t_start_ms<=?`).get(start, now) as { days: number }).days;
+/** 用记录时间索引跳过同一天的其余记录。最后活动所在日不计入等待天数。 */
+function usageDayCutoff(store: DistillStore, now: number, days: number): number | null {
+  const latest = store.hub.db.prepare("SELECT MAX(t_start_ms) AS last FROM records WHERE t_start_ms<?");
+  let before = now + 1;
+  for (let day = 0; day < days; day++) {
+    const { last } = latest.get(before) as { last: number | null };
+    if (last === null) return null;
+    before = localDayBoundary(last);
+  }
+  return before;
 }
 
-function pauseInactiveThreads(store: DistillStore, now: number) {
-  return store.hub.db.prepare("UPDATE threads SET status='paused' WHERE status='active' AND last_ms<?").run(now - LIMITS.pauseAfter).changes;
-}
-
-/** 旧的提问和归档实现保留供回滚。日常整理只更新暂停状态。 */
 export function lifecycleStep(store: DistillStore, now: number) {
-  const settings = readGeneral(store.hub);
-  // 先按本地日期粗筛；不用 N * DAY，跨午夜和夏令时都不一定经过整 24 小时。
-  const askBefore = localDayBoundary(now, 1 - settings.ask_done_days);
-  const archiveBefore = localDayBoundary(now, 1 - settings.archive_days);
-  return store.hub.db.transaction(() => {
-    let archived = 0;
-    const expired = (store.hub.db.prepare("SELECT id,payload,created_at FROM pending WHERE kind='thread_done' AND resolved_at IS NULL").all() as { id: string; payload: string; created_at: string }[])
-      // RFC 3339 可以带不同时区，比较时间戳而非字符串。
-      .filter(p => Date.parse(p.created_at) < archiveBefore)
-      .filter(p => usageDaysSince(store, Date.parse(p.created_at), now) >= settings.archive_days);
-    for (const p of expired) {
-      const payload = JSON.parse(p.payload) as { thread_id?: string };
-      archived += store.hub.db.prepare("UPDATE threads SET status='archived' WHERE id=? AND status IN ('active','paused')").run(payload.thread_id ?? null).changes;
-      store.hub.db.prepare("UPDATE pending SET resolved_at=?,resolution='expired' WHERE id=?").run(new Date(now).toISOString(), p.id);
-    }
-    const paused = pauseInactiveThreads(store, now);
-    const stale = (store.hub.db.prepare("SELECT id,last_ms FROM threads WHERE status IN ('active','paused') AND last_ms<?").all(askBefore) as { id: string; last_ms: number }[])
-      .filter(t => usageDaysSince(store, t.last_ms, now) >= settings.ask_done_days);
-    for (const t of stale) askDone(store, t.id, now);
-    return { paused, asked: stale.length, archived };
+  const sql = store.hub.db;
+  return sql.transaction(() => {
+    const cutoff = usageDayCutoff(store, now, readGeneral(store.hub).archive_days);
+    const archived = cutoff === null ? 0 : sql.prepare(`UPDATE threads SET status='archived'
+      WHERE status IN ('active','paused') AND last_ms<?`).run(cutoff).changes;
+    const expired = sql.prepare(`UPDATE pending SET resolved_at=?,resolution='expired'
+      WHERE kind='thread_done' AND resolved_at IS NULL`).run(new Date(now).toISOString()).changes;
+    const paused = sql.prepare("UPDATE threads SET status='paused' WHERE status='active' AND last_ms<?")
+      .run(now - LIMITS.pauseAfter).changes;
+    return { paused, asked: 0, archived, expired };
   })();
 }
 
@@ -781,7 +760,7 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
     out.digest = await digestStep(d, store, now);
     out.projects = await projectStep(d, store, now);
   }
-  out.lifecycle = { paused: pauseInactiveThreads(store, now), asked: 0, archived: 0 };
+  out.lifecycle = lifecycleStep(store, now);
   out.now = nowStep(store, now);
   store.setState("last_round_at", toLocalIso(now));
   if (opts.slow && opts.days !== "none") {

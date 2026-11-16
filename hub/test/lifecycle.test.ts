@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { DistillStore, type Thread } from "../src/distill/store.ts";
-import { lifecycleStep, usageDaysSince } from "../src/distill/run.ts";
+import { lifecycleStep } from "../src/distill/run.ts";
 import { updateGeneral } from "../src/general-settings.ts";
 import { createHandler } from "../src/server.ts";
 import { fixture, setup } from "./helpers.ts";
@@ -35,59 +35,46 @@ test("使用天按本地自然日去重，排除起始当天、未来记录和�
   if (runInLocalTimezones("使用天按本地")) return;
   const after = new Date(2026, 10, 1, 0, 30).getTime();
   const end = new Date(2026, 10, 4, 0, 30).getTime();
-  recordAt(after - DAY);
-  recordAt(after + 1000); // 起始当天虽晚于 after，仍不计。
+  updateGeneral(ctx.db, { archive_days: 3 });
+  store.upsertThread({ id: "daily", title: "合成线程", status: "paused", last_ms: after });
+  recordAt(after);
+  recordAt(after + 1000);
   recordAt(new Date(2026, 10, 2, 0, 0).getTime());
   recordAt(new Date(2026, 10, 2, 23, 59).getTime());
   const other = fixture({ device: "phone", source: "manual.note", sensitivity: "private", t_start: new Date(2026, 10, 3, 0, 0).toISOString() });
   expect(ctx.db.ingest([other]).accepted).toBe(1);
   recordAt(end + 1000); // now 之后，即使是同一天也不计。
-  expect(usageDaysSince(store, after, end)).toBe(2);
+  expect(lifecycleStep(store, end).archived).toBe(0);
   expect(ctx.db.delete(other.id)).toBe(true);
-  expect(ctx.db.db.prepare("SELECT count(*) n FROM tombstones").get()).toEqual({ n: 1 });
-  expect(usageDaysSince(store, after, end)).toBe(1);
   recordAt(end);
-  expect(usageDaysSince(store, after, end)).toBe(2);
-  expect(usageDaysSince(store, end, end)).toBe(0);
-  expect(usageDaysSince(store, end + DAY, end)).toBe(0);
+  expect(lifecycleStep(store, end).archived).toBe(0);
+  expect(ctx.db.ingest([fixture({ ...other, id: fixture().id })]).accepted).toBe(1);
+  expect(lifecycleStep(store, end)).toMatchObject({ asked: 0, archived: 1, expired: 0 });
 });
 
-test("自然日粗筛不过滤跨午夜尚不足 24 小时的提问和归档", () => {
-  if (runInLocalTimezones("自然日粗筛")) return;
-  updateGeneral(ctx.db, { ask_done_days: 1, archive_days: 1 });
+test("自然日边界按有记录的日期，跨午夜尚不足 24 小时可归档", () => {
+  if (runInLocalTimezones("自然日边界")) return;
+  updateGeneral(ctx.db, { archive_days: 1 });
   const last = new Date(2026, 10, 1, 23, 59).getTime();
-  const askedAt = new Date(2026, 10, 2, 0, 1).getTime();
+  const current = new Date(2026, 10, 2, 0, 1).getTime();
   store.upsertThread({ id: "midnight", title: "合成线程", status: "active", last_ms: last });
-  recordAt(askedAt);
-  expect(lifecycleStep(store, askedAt).asked).toBe(1);
-  const archiveAt = new Date(2026, 10, 3, 0, 0).getTime();
-  recordAt(archiveAt);
-  expect(lifecycleStep(store, archiveAt).archived).toBe(1);
+  recordAt(last);
+  expect(lifecycleStep(store, current).archived).toBe(0);
+  recordAt(current);
+  expect(lifecycleStep(store, current)).toEqual({ paused: 0, asked: 0, archived: 1, expired: 0 });
   expect(store.thread("midnight")?.status).toBe("archived");
 });
 
-test("使用天数：离开十天但只有两天有记录不提问，第三个使用天才问", () => {
+test("事项没有提问也可归档，六个使用天时只暂停，到第七个才归档", () => {
   store.upsertThread({ id: "quiet", title: "合成线程", status: "active", last_ms: now - 10 * DAY });
-  recordAt(now - 8 * DAY);
-  recordAt(now - 4 * DAY);
-  recordAt(now - 4 * DAY + 1000); // 同一天多条也只算一天。
-  expect(lifecycleStep(store, now)).toMatchObject({ asked: 0, paused: 1 });
-  expect(store.pending()).toEqual([]);
-  recordAt(now - DAY);
-  expect(lifecycleStep(store, now).asked).toBe(1);
-  expect(store.pending().map(p => p.kind)).toEqual(["thread_done"]);
-});
-
-test("使用天数：提问十天但只有六天有记录不归档，第七个使用天才归档", () => {
-  pending("holiday", "paused", 10 * DAY);
   for (let days = 1; days <= 6; days++) recordAt(now - days * DAY);
-  expect(lifecycleStep(store, now).archived).toBe(0);
-  expect(store.thread("holiday")?.status).toBe("paused");
-  expect(resolution("holiday")).toEqual({ resolved_at: null, resolution: null });
+  recordAt(now - DAY + 1000); // 同一天重复记录仍算一天。
+  expect(lifecycleStep(store, now)).toEqual({ asked: 0, paused: 1, archived: 0, expired: 0 });
+  expect(store.thread("quiet")?.status).toBe("paused");
   recordAt(now);
-  expect(lifecycleStep(store, now).archived).toBe(1);
-  expect(store.thread("holiday")?.status).toBe("archived");
-  expect(resolution("holiday")).toEqual({ resolved_at: new Date(now).toISOString(), resolution: "expired" });
+  expect(lifecycleStep(store, now)).toEqual({ asked: 0, paused: 0, archived: 1, expired: 0 });
+  expect(store.thread("quiet")?.status).toBe("archived");
+  expect(store.pending()).toEqual([]);
 });
 
 function pending(id: string, status: Thread["status"], age: number, createdAt = new Date(now - age).toISOString()) {
@@ -106,45 +93,27 @@ async function read(path: string) {
   return response.json();
 }
 
-test("满 7 个使用天的完成确认自动归档，6 个使用天不动；重复运行不再提问", async () => {
+test("旧问题立即过期，已处理问题和其它待确认保留，事项内容不改", async () => {
   dailyRecords();
-  pending("old-active", "active", 7 * DAY + 1);
-  pending("old-paused", "paused", 7 * DAY + 1);
-  pending("six-days", "paused", 6 * DAY);
-  pending("boundary", "paused", 7 * DAY);
-  // 不同时区的时间也按实际时刻比较，不能用 RFC 3339 字符串排序。
-  pending("offset", "paused", 0, "2026-11-01T12:59:59+09:00");
-  store.createPending({ id: "unrelated", kind: "project", payload: { project_id: "p" }, created_at: new Date(now - 20 * DAY).toISOString() });
-  store.upsertProject({ id: "p", name: "合成项目", keys: { repos: [], hosts: [], chats: [] } });
-  expect(lifecycleStep(store, now).archived).toBe(4);
-  for (const id of ["old-active", "old-paused", "offset", "boundary"]) {
-    expect(store.thread(id)?.status).toBe("archived");
-    expect(resolution(id)).toEqual({ resolved_at: new Date(now).toISOString(), resolution: "expired" });
-  }
-  for (const id of ["six-days"]) {
-    expect(store.thread(id)?.status).toBe("paused");
-    expect(resolution(id)).toEqual({ resolved_at: null, resolution: null });
-  }
-  expect((await read("/v1/pending")).pending.map((p: { id: string }) => p.id)).toEqual(["unrelated"]);
-  expect(store.pending().some(p => p.id === "pending-six-days")).toBe(true);
-  expect(lifecycleStep(store, now).archived).toBe(0);
-  expect(ctx.db.db.prepare("SELECT count(*) n FROM pending WHERE kind='thread_done'").get()).toEqual({ n: 5 });
-});
-
-test("已结束线程只结待确认，已处理的确认不参与归档", () => {
-  dailyRecords();
+  pending("old-active", "active", 1);
+  pending("recent", "paused", 0);
+  store.upsertThread({ ...store.thread("recent")!, last_ms: now - 2 * DAY });
   for (const status of ["done", "abandoned", "archived"] as const) pending(status, status, 8 * DAY);
   pending("resolved", "paused", 8 * DAY);
+  store.upsertThread({ ...store.thread("resolved")!, last_ms: now - 2 * DAY });
   ctx.db.db.prepare("UPDATE pending SET resolved_at=?,resolution='continue' WHERE id='pending-resolved'").run(new Date(now - DAY).toISOString());
-  // 已问过的时间晚于最后活动，继续处理也不重复询问。
-  expect(lifecycleStep(store, now).archived).toBe(0);
-  for (const status of ["done", "abandoned", "archived"] as const) {
-    expect(store.thread(status)?.status).toBe(status);
-    expect(resolution(status)).toEqual({ resolved_at: new Date(now).toISOString(), resolution: "expired" });
-  }
-  expect(store.thread("resolved")?.status).toBe("paused");
+  store.createPending({ id: "unrelated", kind: "project", payload: { project_id: "p" }, created_at: new Date(now - 20 * DAY).toISOString() });
+  store.upsertProject({ id: "p", name: "合成项目", keys: { repos: [], hosts: [], chats: [] } });
+  const prior=store.thread("old-active")!;
+  expect(lifecycleStep(store, now)).toMatchObject({ archived: 1, asked: 0, expired: 5 });
+  expect(store.thread("old-active")).toEqual({ ...prior, status: "archived" });
+  expect(store.thread("recent")?.status).toBe("paused");
+  for (const status of ["done", "abandoned", "archived"] as const) expect(store.thread(status)?.status).toBe(status);
+  for (const id of ["old-active", "recent", "done", "abandoned", "archived"])
+    expect(resolution(id)).toEqual({ resolved_at: new Date(now).toISOString(), resolution: "expired" });
   expect(resolution("resolved")).toEqual({ resolved_at: new Date(now - DAY).toISOString(), resolution: "continue" });
-  expect(store.pending()).toEqual([]);
+  expect((await read("/v1/pending")).pending.map((p: { id: string }) => p.id)).toEqual(["unrelated"]);
+  expect(lifecycleStep(store, now)).toEqual({ paused: 0, asked: 0, archived: 0, expired: 0 });
 });
 
 test("归档与结待确认在同一事务，结项失败时线程状态回滚", () => {

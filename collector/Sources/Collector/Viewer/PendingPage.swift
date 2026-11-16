@@ -70,7 +70,7 @@ struct PendingPage: View {
   }
 
   var groups: [(kind: String, title: String, symbol: String, items: [PendingItem])] {
-    [("voice", "这是谁的声音", "waveform"), ("project", "新项目", "folder-dashed"), ("thread_done", "这件事做完了吗", "flag-checkered"),
+    [("voice", "这是谁的声音", "waveform"), ("project", "新项目", "folder-dashed"),
      ("merge", "是同一个项目吗", "git-merge")]
       .map { g in (g.0, g.1, g.2, items.filter { $0.kind == g.0 }) }
       .filter { !$0.3.isEmpty }
