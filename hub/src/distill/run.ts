@@ -70,6 +70,25 @@ export function loadFrames(store: DistillStore, where: string, ...args: unknown[
 
 interface Candidate { id: string; title: string; frame_ids: string[]; minutes: number; last_ms: number; project_id: string | null }
 
+function markFrameReviewDays(store: DistillStore, frames: Frame[], before: number) {
+  if (!frames.length) return;
+  const dates = new Set(frames.map(f => localDate(f.t_start_ms)));
+  const audio = store.hub.db.prepare(`SELECT DISTINCT r.t_start_ms,r.t_end FROM frame_records fr JOIN records r ON r.id=fr.record_id
+    WHERE fr.frame_id IN (SELECT value FROM json_each(?)) AND r.source='mac.audio' AND r.sensitivity<>'private' AND r.t_end IS NOT NULL`)
+    .all(JSON.stringify(frames.map(f => f.id))) as { t_start_ms: number; t_end: string }[];
+  for (const record of audio) {
+    const day = new Date(startOfDay(record.t_start_ms));
+    // 转写的钟点至多从录音开始向后滚动 24 小时。补整理仍以请求的日期范围为准。
+    const last = Math.min(Date.parse(record.t_end), record.t_start_ms + DAY, before - 1);
+    day.setDate(day.getDate() + 1);
+    while (day.getTime() <= last) {
+      dates.add(localDate(day.getTime()));
+      day.setDate(day.getDate() + 1);
+    }
+  }
+  for (const date of dates) store.upsertDay({ date, needs_regen: 1 });
+}
+
 // ---------------- 1. 切片 + 规则归属（确定性，一个事务） ----------------
 
 /** enabledDefault：首次运行时增量处理的起点。用户 2026-11-08 选定\"今天之后\"，CLI 传当天 0 点；测试传 now。 */
@@ -102,7 +121,7 @@ export function sliceStep(db: HubDB, backfill = false, now = Date.now(), enabled
     const result = persistFrames(db, cursor, now);
     created += result.frames.length; touched.push(...result.frames);
     store.setState("cursor_ms", result.cursor_ms);
-    for (const f of touched) store.upsertDay({ date: localDate(f.t_start_ms), needs_regen: 1 });
+    markFrameReviewDays(store, touched, now + 1);
     for (const frame of store.frames().filter(f => f.status === "new")) {
       rules.projectForFrame(frame);
       const r = rules.assign(frame);
@@ -792,7 +811,7 @@ export function backfillRange(db: HubDB, from: string, to: string, opts: { enabl
   days.forEach((day, i) => {
     const next = new Date(day); next.setDate(next.getDate() + 1);
     const r = persistFrames(db, Math.max(day, start) - 1, Number.MAX_SAFE_INTEGER, Math.min(next.getTime(), stop));
-    for (const f of r.frames) store.upsertDay({ date: localDate(f.t_start_ms), needs_regen: 1 });
+    markFrameReviewDays(store, r.frames, stop);
     frames += r.frames.length;
     opts.onProgress?.(i + 1, days.length);
   });

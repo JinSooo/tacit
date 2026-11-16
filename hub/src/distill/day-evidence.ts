@@ -15,7 +15,6 @@ function spoken(record: RecordV1, original: RecordV1, end: number): Spoken[] {
   const at = original.t_start;
   if (record.source === "manual.correction" || original.source === "manual.note") return [{ role: "user", text: body, at }];
   if (original.source === "mac.audio") return parseTranscript(body, at)
-    .filter(line => line.at_ms < end)
     .map(line => ({ role: line.label === "我" ? "user" : "other", text: line.text, at: toLocalIso(line.at_ms) }));
   if (original.source === "codex.session" || original.source === "claude_code.session") {
     // 既有会话记录没有逐条消息时间。截止点穿过整条记录时，无法安全分出最后一段。
@@ -30,16 +29,20 @@ function spoken(record: RecordV1, original: RecordV1, end: number): Spoken[] {
 }
 
 export function dayEvidence(hub: HubDB, start: number, end: number): DayEvidence[] {
-  const rows = hub.db.prepare(`SELECT id FROM records WHERE t_start_ms>=? AND t_start_ms<? AND sensitivity!='private'
+  const rows = hub.db.prepare(`SELECT id,t_start_ms FROM records WHERE t_start_ms>=? AND t_start_ms<? AND sensitivity!='private'
     AND (source IN ('mac.audio','mac.wechat','codex.session','claude_code.session','manual.note')
       OR (source NOT IN ('mac.screen','mac.browser','mac.shell','mac.git','mac.file','mac.clipboard','manual.correction','manual.agent')
         AND json_type(context,'$.chat')='text' AND json_extract(context,'$.extra.from_me') IN (0,1)))
-    ORDER BY t_start_ms,id`).all(start, end) as { id: string }[];
+    UNION ALL SELECT id,t_start_ms FROM records WHERE t_start_ms<? AND source='mac.audio' AND sensitivity!='private'
+      AND julianday(t_end)>=julianday(?)
+    ORDER BY t_start_ms,id`).all(start, end, start, new Date(start).toISOString()) as { id: string }[];
   const groups = new Map<string, Omit<DayEvidence, "key">[]>();
   for (const { id } of rows) {
     const original = hub.get(id), latest = hub.effective(id);
     if (!original || !latest || latest.sensitivity === "private") continue;
     for (const entry of spoken(latest, original, end)) {
+      const at = Date.parse(entry.at);
+      if (!(at >= start && at < end)) continue;
       const text = entry.text.trim();
       if (!text) continue;
       const bucket = JSON.stringify([original.source, entry.role]);

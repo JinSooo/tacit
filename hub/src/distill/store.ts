@@ -349,6 +349,13 @@ export class DistillStore {
     }
   }
 
+  /** 引用可来自同一录音的另一自然日，直接按依据 ID 撤下涉及的回顾。 */
+  private clearReviewEvidence(recordIds: string[]) {
+    this.sql.prepare(`UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE EXISTS (
+      SELECT 1 FROM json_tree(days.detail,'$.sections') ref WHERE ref.key='id'
+        AND ref.value IN (SELECT value FROM json_each(?)))`).run(JSON.stringify(recordIds));
+  }
+
   /** 修正不另起一段活动；已有整理必须回到原活动，用新正文重建。 */
   correctRecord(id: string) {
     const original = this.hub.get(id);
@@ -358,6 +365,7 @@ export class DistillStore {
     const affected = this.sql.prepare(`SELECT DISTINCT a.thread_id FROM assignments a JOIN frame_records r ON r.frame_id=a.frame_id WHERE r.record_id IN (${placeholders})
       UNION SELECT thread_id FROM facts WHERE thread_id IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (${placeholders}))`).all(...ids, ...ids) as { thread_id: string }[];
     this.sql.prepare(`UPDATE facts SET invalid_at=? WHERE origin='llm' AND invalid_at IS NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (${placeholders}))`).run(new Date().toISOString(), ...ids);
+    this.clearReviewEvidence(ids);
     this.clearDerived(new Set(affected.map(r => r.thread_id)), new Set(), [original.t_start]);
     removeSummariesOf(this.hub, id);
     this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=date(?, 'localtime')").run(original.t_start);
@@ -404,6 +412,7 @@ export class DistillStore {
       this.sql.prepare("DELETE FROM facts WHERE id=?").run(f.id);
     }
     for (const tid of affected) this.sql.prepare("UPDATE threads SET active_minutes=? WHERE id=?").run(this.activeMinutes(tid),tid);
+    this.clearReviewEvidence([...removed]);
     this.clearDerived(affected, projects, records.map(r=>r.time));
     const candidates = this.getState<{ frame_ids: string[] }[]>("candidates");
     if (candidates) this.setState("candidates", candidates.filter(c => !c.frame_ids.some(id => changedFrames.has(id))));

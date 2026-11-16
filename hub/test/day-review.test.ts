@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { toLocalIso } from "../../packages/record/index.ts";
-import { dayStep, distillRound, frameView, touchThread, type LLM } from "../src/distill/run.ts";
+import { dayStep, distillRound, frameView, sliceStep, touchThread, type LLM } from "../src/distill/run.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { createHandler } from "../src/server.ts";
 import { emptyDayOutput, fixture, setup } from "./helpers.ts";
@@ -64,6 +64,36 @@ test("每日回顾按角色取材、严格引用当日原文，浏览器和屏�
     expect(diary.detail.cutoff).toBe(toLocalIso(now));
     expect((await read(`/v1/records/${sections.progress[0].evidence[0].id}`)).status).toBe(200);
     expect(ctx.db.get(screen.id)?.body).toBe(screen.body);
+  } finally { ctx.cleanup(); }
+});
+
+test.each(["删除", "修正为私密"])("跨午夜录音按转写行归当天，%s 时撤下两天的回顾", async action => {
+  const ctx = setup(), store = new DistillStore(ctx.db);
+  const earlier = "2026-11-16", later = "2026-11-17";
+  const midnight = new Date(`${later}T00:00:00`).getTime(), now = midnight + 20 * 60_000;
+  const audio = fixture({ source: "mac.audio", source_ref: "synthetic-midnight-audio", kind: "span",
+    t_start: toLocalIso(midnight - 2 * 60_000), t_end: toLocalIso(midnight + 2 * 60_000),
+    body: "[23:59:55] 我：合成的前一天发言。\n[00:00:00] 对方：合成的零点说明。\n[00:01:30] 我：合成的第二天决定。" });
+  try {
+    expect(ctx.db.ingest([audio]).accepted).toBe(1);
+    sliceStep(ctx.db, false, now, new Date(`${earlier}T00:00:00`).getTime());
+    for (const date of [earlier, later]) expect(store.day(date)?.needs_regen, date).toBe(1);
+    const llm: LLM = { async complete<T>(req: import("../src/llm/index.ts").LLMRequest) {
+      if (req.task !== "day") return { ok: true, data: { brief: "合成简略版" } as T, ms: 1 };
+      const { evidence } = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!);
+      return { ok: true, data: { ...emptyDayOutput, progress: evidence.map((row: { key: string; text: string }) =>
+        ({ text: row.text, refs: [row.key] })) } as T, ms: 1 };
+    } };
+    const reference = { id: audio.id, at: audio.t_start };
+    const expected = [["合成的前一天发言。"], ["合成的零点说明。", "合成的第二天决定。"]];
+    for (const [i, date] of [earlier, later].entries()) {
+      expect(await dayStep({ db: ctx.db, llm }, store, date, now)).toEqual({ ok: true, calls: 2 });
+      expect(store.day(date)?.detail.sections.progress).toEqual(expected[i]!.map(text => ({ text, evidence: [reference] })));
+    }
+    if (action === "删除") expect(ctx.db.delete(audio.id)).toBe(true);
+    else expect(ctx.db.ingest([fixture({ source: "manual.correction", corrects: audio.id, sensitivity: "private",
+      t_start: toLocalIso(now), body: "合成的私密修正。" })]).accepted).toBe(1);
+    for (const date of [earlier, later]) expect(store.day(date)).toMatchObject({ detail: null, brief: null, needs_regen: 1 });
   } finally { ctx.cleanup(); }
 });
 
