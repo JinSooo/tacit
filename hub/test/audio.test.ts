@@ -9,12 +9,19 @@ import { fixture, setup } from "./helpers.ts";
 let ctx: ReturnType<typeof setup>;
 let audio: AudioStore;
 let handler: ReturnType<typeof createHandler>;
-beforeEach(() => { ctx = setup(); audio = new AudioStore(ctx.db); handler = createHandler({ db: ctx.db, token: ctx.config.token }); });
+let sampleStart: string;
+let sampleEnd: string;
+beforeEach(() => {
+  ctx = setup(); audio = new AudioStore(ctx.db); handler = createHandler({ db: ctx.db, token: ctx.config.token });
+  const recordedAt = Date.now() - 3_600_000;
+  sampleStart = new Date(recordedAt).toISOString();
+  sampleEnd = new Date(recordedAt + 180_000).toISOString();
+});
 afterEach(() => ctx.cleanup());
 // 仅用坐标轴上的合成向量和文本字节，不读取用户音频。
 function vector(axis = 0, other = 0) { const v = Array<number>(512).fill(0); v[axis] = 1; if (other) v[1] = other; return v; }
 function body(ref: string, seconds = 40, axis = 0, device = "mac", track = "mic") {
-  return { device, conversation_ref: ref, t_start: "2026-11-09T01:00:00Z", t_end: "2026-11-09T01:03:00Z", speakers: [{ local: "S1", track, seconds, centroid: vector(axis) }] };
+  return { device, conversation_ref: ref, t_start: sampleStart, t_end: sampleEnd, speakers: [{ local: "S1", track, seconds, centroid: vector(axis) }] };
 }
 function upload(ref: string, seconds = 40, axis = 0, device = "mac", track = "mic") { return audio.embeddings(body(ref,seconds,axis,device,track)).speakers[0]!; }
 function pending() { return new DistillStore(ctx.db).pending().filter(p => p.kind === "voice"); }
@@ -184,13 +191,13 @@ test("多个我按秒数合并下发，已处理 pending 不可重用，非法�
 test("样本带上录到的时间和这个人当时说的话", async () => {
   // 用户报告：只有一段模糊录音时认不出是谁，需要时间和当时说的话来对照。
   const s = upload("context-ref",120);
-  ctx.db.ingest([fixture({ source: "mac.audio", source_ref: "context-ref", t_start: "2026-11-09T01:00:00Z",
+  ctx.db.ingest([fixture({ source: "mac.audio", source_ref: "context-ref", t_start: sampleStart,
     title: "对话 · 10:00–10:03 · 说话人 A、我",
     body: "[10:00:02] 我：先过一下进度\n[10:00:09] 说话人 A：这个方案下周再定，我先把数据补齐" })]);
   const request = (audio.sync("mac").sample_requests as { id: string }[])[0]!;
   audio.uploadSamples({ request_id: request.id, clips: [{ mime: "audio/wav", data: Buffer.from("x").toString("base64") }] });
   const sample = (pending()[0]!.payload.samples as { at?: string; said?: string }[])[0]!;
-  expect(sample.at).toBe("2026-11-09T01:00:00Z");
+  expect(sample.at).toBe(sampleStart);
   expect(sample.said).toBe("这个方案下周再定，我先把数据补齐");
   // 对话记录里的说话人写法是转写当时的标签，填了名字后也认得出来。
   audio.resolve(s.speaker_id, "rename", "刘朝刚");
@@ -388,7 +395,7 @@ test("录音过了保留期的试听请求删掉，不再显示还在路上", ()
   upload("old-ref", 120);
   const before = (audio.sync("mac").sample_requests as unknown[]).length;
   expect(before).toBe(1);
-  audio.expireSampleRequests(Date.parse("2026-11-09T01:03:00Z") + 8 * 86_400_000);
+  audio.expireSampleRequests(Date.parse(sampleEnd) + 8 * 86_400_000);
   expect(audio.sync("mac").sample_requests).toHaveLength(0);
   expect(pending()[0]!.payload.samples_pending).toBe(false);
 });
@@ -420,12 +427,13 @@ test("再标一次我、或起了已有的名字，并到已确认的那个人",
 test("不自动清除通过 HTTP 保存并同步，旧录音试听请求仍可获取，手动清理仍生效", async () => {
   expect(await (await call("/v1/audio/settings", "PUT", { retention_days: 0 })).json()).toEqual({ retention_days: 0 });
   const speaker = upload("unlimited-old", 120);
-  audio.expireSampleRequests(Date.parse("2030-01-01T00:00:00Z"));
+  const afterRetention = Date.parse(sampleEnd) + 8 * 86_400_000;
+  audio.expireSampleRequests(afterRetention);
   expect(audio.pendingPayload(speaker.speaker_id)?.samples_pending).toBe(true);
   expect(audio.sync("mac").retention_days).toBe(0);
   const purge = await (await call("/v1/audio/purge", "POST")).json();
   expect(audio.sync("mac").purge_before).toBe(purge.purge_before);
   audio.updateSettings({ retention_days: 7 });
-  audio.expireSampleRequests(Date.parse("2030-01-01T00:00:00Z"));
+  audio.expireSampleRequests(afterRetention);
   expect(audio.pendingPayload(speaker.speaker_id)?.samples_pending).toBe(false);
 });

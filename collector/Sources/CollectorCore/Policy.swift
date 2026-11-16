@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// 采集前的黑名单：命中的应用和窗口完全不采，只是结束当前段。
@@ -96,4 +97,13 @@ public enum ScreenTextPolicy {
 
   /// 开了微信对话就由它按会话拆消息；屏幕记录只留微信的使用时段，不再带微信窗口的文字。
   public static func keepsText(bundleID: String, wechatOn: Bool) -> Bool { !(bundleID == wechat && wechatOn) }
+
+  /// OCR 行中心是窗口内的点，辅助功能编辑区是全局坐标。已读到的编辑区由 AX 保留最后一个版本。
+  public static func isEditableOCRPoint(_ point: CGPoint, window: CGSize, frame: CGRect?,
+                                       editableFrames: [CGRect]) -> Bool {
+    guard !editableFrames.isEmpty, let frame, !frame.isEmpty, window.width > 0, window.height > 0 else { return false }
+    let global = CGPoint(x: frame.minX + point.x * frame.width / window.width,
+                         y: frame.minY + point.y * frame.height / window.height)
+    return editableFrames.contains { $0.contains(global) }
+  }
 }

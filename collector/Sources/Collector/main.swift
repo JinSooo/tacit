@@ -227,7 +227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
       let keepText = ScreenTextPolicy.keepsText(bundleID: bundle, wechatOn: wechatOn)
       let o = Observation(time: now, bundleID: bundle, appName: name, window: window, url: snap?.url,
-                          lines: keepText ? snap?.lines ?? [] : [], method: snap == nil ? "none" : "ax")
+                          lines: keepText ? snap?.lines ?? [] : [], editable: keepText ? snap?.editable ?? [:] : [:],
+                          method: snap == nil ? "none" : "ax")
       stats["ticks", default: 0] += 1
       if let s = snap {
         stats["scanMsTotal", default: 0] += s.ms
@@ -242,7 +243,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lastOCR[key] = now
         if lastOCR.count > 500 { lastOCR = lastOCR.filter { now.timeIntervalSince($0.value) < 600 } }
         ocr.recognizeLines(pid: pid, frame: snap?.frame) { [self] found, size, ms in
-          let lines = (isWeChat ? WeChatLayout.chatAreaLines(found, width: size.width) : found).map(\.text)
+          let readable = isWeChat ? WeChatLayout.chatAreaLines(found, width: size.width) : found
+          let lines = readable.filter { line in
+            !ScreenTextPolicy.isEditableOCRPoint(CGPoint(x: line.midX, y: line.y + line.height / 2),
+                                                 window: size, frame: snap?.frame, editableFrames: snap?.editableFrames ?? [])
+          }.map(\.text)
           DispatchQueue.main.async { [self] in lastOCRRun = Date() }
           captureQueue.async { [self] in
             stats["ocrRuns", default: 0] += 1

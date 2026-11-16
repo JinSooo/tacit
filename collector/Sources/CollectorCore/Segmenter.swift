@@ -8,12 +8,14 @@ public struct Observation {
   public var window: String
   public var url: String?
   public var lines: [String]
+  /// 同一窗口中同一辅助功能位置的可编辑文字。
+  public var editable: [[Int]: [String]]
   public var method: String   // "ax" | "ocr" | "none"
 
   public init(time: Date, bundleID: String, appName: String, window: String, url: String? = nil,
-              lines: [String] = [], method: String = "ax") {
+              lines: [String] = [], editable: [[Int]: [String]] = [:], method: String = "ax") {
     self.time = time; self.bundleID = bundleID; self.appName = appName; self.window = window
-    self.url = url; self.lines = lines; self.method = method
+    self.url = url; self.lines = lines; self.editable = editable; self.method = method
   }
 
   /// 同一应用、同一窗口标题、同一 URL 算同一段。
@@ -27,7 +29,7 @@ public final class Segmenter {
     public var idleLimit: TimeInterval = 120
     public var maxSpan: TimeInterval = 3600
     public var maxBody = 100_000
-    /// 短于这个时长且没有正文的段丢掉（快速切换窗口时的噪声）。
+    /// 快速切换时短于这个时长的前窗不写入。手动结束时仍可保留有内容的短段。
     public var minSpan: TimeInterval = 5
     public init() {}
   }
@@ -42,6 +44,7 @@ public final class Segmenter {
     var url: String?
     var lines: [String] = []
     var seen: Set<String> = []
+    var editable: [[Int]: [String]] = [:]
     var chars = 0
     var methods: Set<String> = []
   }
@@ -61,12 +64,15 @@ public final class Segmenter {
     if let c = current {
       let stale = o.time.timeIntervalSince(c.last) > config.idleLimit
       if c.key != o.key || stale || o.time.timeIntervalSince(c.start) >= config.maxSpan {
-        out += close()
+        out += close(switching: c.key != o.key)
       }
     }
     if current == nil { current = begin(o) }
     current!.last = o.time
     out += append(o.lines, method: o.method, from: o)
+    for (position, lines) in o.editable {
+      current!.editable[position] = lines.isEmpty ? nil : lines
+    }
     return out
   }
 
@@ -91,8 +97,12 @@ public final class Segmenter {
     var added = false
     for line in lines where !current!.seen.contains(line) {
       if current!.chars + line.count + 1 > config.maxBody && !current!.lines.isEmpty {
+        // 正文容量切片时继续等待编辑完成，避免在上一片写出旧稿。
+        let editable = current!.editable
+        current!.editable.removeAll()
         out += close()
         current = begin(o)
+        current!.editable = editable
       }
       current!.seen.insert(line)
       current!.lines.append(line)
@@ -103,21 +113,36 @@ public final class Segmenter {
     return out
   }
 
-  func close() -> [Record] {
+  func close(switching: Bool = false) -> [Record] {
     guard let c = current else { return [] }
     current = nil
     let duration = c.last.timeIntervalSince(c.start)
-    if c.lines.isEmpty && duration < config.minSpan { return [] }
+    if duration < config.minSpan && (switching || (c.lines.isEmpty && c.editable.isEmpty)) { return [] }
+    var bodies: [String] = []
+    var lines = c.lines, seen = c.seen, chars = c.chars
+    for position in c.editable.keys.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
+      for line in c.editable[position] ?? [] where seen.insert(line).inserted {
+        if chars + line.count + 1 > config.maxBody && !lines.isEmpty {
+          bodies.append(lines.joined(separator: "\n"))
+          lines.removeAll(keepingCapacity: true)
+          chars = 0
+        }
+        lines.append(line)
+        chars += line.count + 1
+      }
+    }
+    bodies.append(lines.joined(separator: "\n"))
     // 只要有 OCR 参与就标 ocr：这段文字可能有识别错误，下游要知道。
     let usedOCR = c.methods.contains("ocr")
     let windowName = c.window.isEmpty ? "无标题" : c.window
-    return [Record(
-      device: device, source: "mac.screen", kind: "span", start: c.start, end: c.last,
-      context: RecordContext(app: c.bundleID, window: c.window.isEmpty ? nil : c.window, url: c.url),
-      // 时长由起止时间表达，网页单独显示，不重复写进标题。
-      title: "\(c.appName) · \(windowName)",
-      body: c.lines.joined(separator: "\n"),
-      capture: Capture(method: usedOCR ? "ocr" : "ax", confidence: usedOCR ? 0.7 : nil)
-    )]
+    return bodies.map { body in
+      Record(
+        device: device, source: "mac.screen", kind: "span", start: c.start, end: c.last,
+        context: RecordContext(app: c.bundleID, window: c.window.isEmpty ? nil : c.window, url: c.url),
+        // 时长由起止时间表达，网页单独显示，不重复写进标题。
+        title: "\(c.appName) · \(windowName)", body: body,
+        capture: Capture(method: usedOCR ? "ocr" : "ax", confidence: usedOCR ? 0.7 : nil)
+      )
+    }
   }
 }

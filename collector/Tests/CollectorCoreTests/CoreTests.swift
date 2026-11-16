@@ -4,9 +4,10 @@ import Testing
 
 let t0 = Date(timeIntervalSince1970: 1_794_000_000)
 func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerworks.Typora",
-         lines: [String] = [], url: String? = nil, method: String = "ax") -> Observation {
+         lines: [String] = [], url: String? = nil, method: String = "ax",
+         editable: [[Int]: [String]] = [:]) -> Observation {
   Observation(time: t0.addingTimeInterval(dt), bundleID: app, appName: "Typora", window: window,
-              url: url, lines: lines, method: method)
+              url: url, lines: lines, editable: editable, method: method)
 }
 
 @Test func ulidFormatAndOrder() {
@@ -30,8 +31,8 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
 @Test func switchingWindowClosesSegmentAndDedupesLines() {
   let s = Segmenter(device: "mac")
   #expect(s.observe(obs(0, lines: ["第一行", "第二行"])).isEmpty)
-  #expect(s.observe(obs(3, lines: ["第二行", "第三行"])).isEmpty)
-  let out = s.observe(obs(6, "other.md", lines: ["新窗口"]))
+  #expect(s.observe(obs(6, lines: ["第二行", "第三行"])).isEmpty)
+  let out = s.observe(obs(7, "other.md", lines: ["新窗口"]))
   #expect(out.count == 1)
   let r = out[0]
   #expect(r.source == "mac.screen" && r.kind == "span")
@@ -39,6 +40,48 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
   #expect(r.title == "Typora · doc.md")
   #expect(r.context?.window == "doc.md")
   #expect(r.capture.method == "ax")
+}
+
+@Test func editingOneFieldKeepsOnlyItsLatestValueAndDropsErasedDrafts() {
+  let s = Segmenter(device: "mac")
+  _ = s.observe(obs(0, lines: ["第一处可搜索正文"], editable: [[0]: ["输入中"], [1]: ["稍后清空"]]))
+  _ = s.observe(obs(3, lines: ["第二处可搜索正文"], editable: [[0]: ["输入中的扩写"], [2]: ["另外的编辑区"]]))
+  _ = s.observe(obs(6, editable: [[0]: ["重新写的最终稿"], [1]: []]))
+  let records = s.flush()
+  #expect(records.map(\.body) == ["第一处可搜索正文\n第二处可搜索正文\n重新写的最终稿\n另外的编辑区"])
+}
+
+@Test func quickWindowSwitchesDropEvenWhenAXSawText() {
+  let s = Segmenter(device: "mac")
+  let observations = [
+    obs(0, "初始文档", lines: ["可用文字"]), obs(6, "初始文档"),
+    obs(7, "闪过的窗口", lines: ["一次快照"]),
+    obs(8, "三秒的窗口", lines: ["三秒的文字"]), obs(11, "三秒的窗口"),
+    obs(12, "四秒的窗口", lines: ["四秒的文字"]), obs(16, "四秒的窗口"),
+    obs(17, "确认后的文档", lines: ["继续工作"]), obs(22, "确认后的文档"),
+  ]
+  let results = observations.flatMap { s.observe($0) } + s.flush()
+  #expect(results.compactMap { $0.context?.window } == ["初始文档", "确认后的文档"])
+  #expect(results.map(\.body) == ["可用文字", "继续工作"])
+}
+
+@Test func capacitySplitDoesNotEmitAnIntermediateEdit() {
+  var config = Segmenter.Config()
+  config.maxBody = 18
+  let s = Segmenter(device: "mac", config: config)
+  #expect(s.observe(obs(0, lines: ["aaaaaaaaaa"], editable: [[0]: ["旧草稿"]])).isEmpty)
+  let split = s.observe(obs(6, lines: ["bbbbbbbbbb"], editable: [[0]: ["最终稿"]]))
+  #expect(split.map(\.body) == ["aaaaaaaaaa"])
+  #expect(s.flush().map(\.body) == ["bbbbbbbbbb\n最终稿"])
+}
+
+@Test func ocrFallbackDoesNotAddTextFromAnAlreadyReadEditableArea() {
+  let frame = CGRect(x: 300, y: 50, width: 600, height: 300)
+  let editor = CGRect(x: 325, y: 100, width: 400, height: 160)
+  let window = CGSize(width: 300, height: 150)
+  #expect(ScreenTextPolicy.isEditableOCRPoint(CGPoint(x: 80, y: 40), window: window, frame: frame, editableFrames: [editor]))
+  #expect(!ScreenTextPolicy.isEditableOCRPoint(CGPoint(x: 220, y: 40), window: window, frame: frame, editableFrames: [editor]))
+  #expect(!ScreenTextPolicy.isEditableOCRPoint(CGPoint(x: 80, y: 40), window: window, frame: nil, editableFrames: [editor]))
 }
 
 @Test func idleGapClosesSegment() {
@@ -99,7 +142,8 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
 @Test func urlChangeIsNewSegment() {
   let s = Segmenter(device: "mac")
   _ = s.observe(obs(0, "Zen", app: "app.zen-browser.zen", lines: ["x"], url: "https://a.example/1"))
-  let out = s.observe(obs(3, "Zen", app: "app.zen-browser.zen", lines: ["y"], url: "https://a.example/2"))
+  _ = s.observe(obs(6, "Zen", app: "app.zen-browser.zen", url: "https://a.example/1"))
+  let out = s.observe(obs(7, "Zen", app: "app.zen-browser.zen", lines: ["y"], url: "https://a.example/2"))
   #expect(out.count == 1 && out[0].context?.url == "https://a.example/1")
 }
 

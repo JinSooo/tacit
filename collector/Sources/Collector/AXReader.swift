@@ -6,6 +6,8 @@ struct AXSnapshot {
   var window: String
   var url: String?
   var lines: [String]
+  var editable: [[Int]: [String]]
+  var editableFrames: [CGRect]
   var frame: CGRect?
   var chars: Int
   var elements: Int
@@ -28,6 +30,7 @@ final class AXReader {
   private var manualEnabled = Set<pid_t>()
 
   private let textRoles: Set<String> = ["AXStaticText", "AXTextField", "AXHeading", "AXComboBox"]
+  private let editableRoles: Set<String> = ["AXTextArea", "AXTextField", "AXComboBox"]
   private let batchAttributes = [kAXRoleAttribute, kAXChildrenAttribute, kAXPositionAttribute, kAXSizeAttribute] as CFArray
 
   struct Walk {
@@ -36,6 +39,8 @@ final class AXReader {
     var calls = 0
     var truncated = false
     var pieces: [(path: [Int], text: String)] = []
+    var editable: [[Int]: [String]] = [:]
+    var editableFrames: [CGRect] = []
     var url: String?
     /// 聊天软件的输入框（草稿）不读。
     var skipEditable = false
@@ -59,7 +64,8 @@ final class AXReader {
     let title = string(win, kAXTitleAttribute) ?? ""
     let frame = frameOf(win)
     if CapturePolicy.shouldSkip(bundleID: "", window: title) {
-      return AXSnapshot(window: title, url: nil, lines: [], frame: frame, chars: 0, elements: 0, calls: 4, truncated: false, ms: Int(Date().timeIntervalSince(started) * 1000))
+      return AXSnapshot(window: title, url: nil, lines: [], editable: [:], editableFrames: [], frame: frame,
+                        chars: 0, elements: 0, calls: 4, truncated: false, ms: Int(Date().timeIntervalSince(started) * 1000))
     }
     var w = Walk(deadline: started.addingTimeInterval(budget))
     w.skipEditable = skipEditable
@@ -74,7 +80,9 @@ final class AXReader {
         seen.insert(t); lines.append(t); chars += t.count
       }
     }
-    return AXSnapshot(window: title, url: w.url, lines: lines, frame: frame, chars: chars, elements: w.elements,
+    for line in w.editable.values.joined() where seen.insert(line).inserted { chars += line.count }
+    return AXSnapshot(window: title, url: w.url, lines: lines, editable: w.editable, editableFrames: w.editableFrames,
+                      frame: frame, chars: chars, elements: w.elements,
                       calls: w.calls, truncated: w.truncated, ms: Int(Date().timeIntervalSince(started) * 1000))
   }
 
@@ -98,6 +106,10 @@ final class AXReader {
 
   private func visitFast(_ n: Node, visible: CGRect?, depth: Int, path: [Int], _ w: inout Walk) {
     if n.role == "AXSecureTextField" { return }
+    if editableRoles.contains(n.role) {
+      if w.skipEditable { return }
+      if collectEditable(n, path: path, &w) { return }
+    }
     collectText(n.el, role: n.role, path: path, &w)
     if depth >= maxDepth { w.truncated = true; return }
 
@@ -128,15 +140,37 @@ final class AXReader {
 
   // MARK: 文本
 
+  private func collectEditable(_ n: Node, path: [Int], _ w: inout Walk) -> Bool {
+    var writable: DarwinBoolean = false
+    w.calls += 1
+    guard AXUIElementIsAttributeSettable(n.el, kAXValueAttribute as CFString, &writable) == .success,
+          writable.boolValue else { return false }
+    let text: String?
+    var position = path
+    if n.role == "AXTextArea" {
+      w.calls += 2
+      let value = visibleText(n.el)
+      text = value.text
+      // 同一个可见范围上的改写互相替换，滚到不同位置可保留那一处的文字。
+      if let offset = value.offset { position += [-1, offset] }
+    } else {
+      w.calls += 1
+      text = string(n.el, kAXValueAttribute)
+    }
+    guard let text else { return false }
+    w.editable[position] = Text.lines(Text.capturePrefix(text, limit: 5000))
+    if let frame = n.frame, !frame.isEmpty { w.editableFrames.append(frame) }
+    // 编辑器内容已经从它的值读取，子节点中的副本不能再次成为普通正文。
+    return true
+  }
+
   private func collectText(_ el: AXUIElement, role: String, path: [Int], _ w: inout Walk) {
-    if w.skipEditable, role == "AXTextArea" || role == "AXTextField" || role == "AXComboBox" { return }
     if textRoles.contains(role) {
       w.calls += 1
       if let s = string(el, kAXValueAttribute), !s.isEmpty { w.pieces.append((path, s)) }
     } else if role == "AXTextArea" {
       w.calls += 2
-      let s = visibleText(el)
-      if !s.isEmpty { w.pieces.append((path, s)) }
+      if let s = visibleText(el).text, !s.isEmpty { w.pieces.append((path, s)) }
     } else if role == "AXWebArea", w.url == nil {
       w.calls += 1
       w.url = url(el)
@@ -144,14 +178,19 @@ final class AXReader {
   }
 
   /// 终端这类文本区只取可见范围，不读整个回滚缓冲。
-  private func visibleText(_ el: AXUIElement) -> String {
+  private func visibleText(_ el: AXUIElement) -> (text: String?, offset: Int?) {
     var range: CFTypeRef?
     if AXUIElementCopyAttributeValue(el, kAXVisibleCharacterRangeAttribute as CFString, &range) == .success, let range {
       var out: CFTypeRef?
       if AXUIElementCopyParameterizedAttributeValue(el, kAXStringForRangeParameterizedAttribute as CFString, range, &out) == .success,
-         let s = out as? String { return s }
+         let s = out as? String {
+        var visible = CFRange()
+        let offset = CFGetTypeID(range) == AXValueGetTypeID()
+          && AXValueGetValue(range as! AXValue, .cfRange, &visible) ? visible.location : nil
+        return (s, offset)
+      }
     }
-    return Text.captureSuffix(string(el, kAXValueAttribute) ?? "", limit: 5000)
+    return (string(el, kAXValueAttribute).map { Text.captureSuffix($0, limit: 5000) }, nil)
   }
 
   // MARK: AX helpers

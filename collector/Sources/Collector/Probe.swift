@@ -17,7 +17,8 @@ func runProbe() {
     let r = AXReader()
     r.budget = budget; r.maxElements = maxElements
     guard let s = r.snapshot(pid: pid) else { return ["error": "no focused window"] }
-    return ["chars": s.chars, "lines": s.lines.count, "elements": s.elements, "calls": s.calls,
+    return ["chars": s.chars, "lines": s.lines.count + s.editable.values.reduce(0) { $0 + $1.count },
+            "elements": s.elements, "calls": s.calls,
             "ms": s.ms, "truncated": s.truncated]
   }
   var report: [String: Any] = ["bundle": app.bundleIdentifier ?? "?"]
