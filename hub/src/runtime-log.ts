@@ -2,7 +2,7 @@ import { constants, openSync, closeSync, fstatSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { InputError, type HubDB } from "./db.ts";
 import { redactString } from "./redact.ts";
-import { eraseQueuedAuditQueries } from "./agent-audit.ts";
+import { eraseAuditQueries, expireAuditQueries } from "./agent-audit.ts";
 import type { LLMRequest, ModelConfig, UsageRow, CallObserver } from "./llm/types.ts";
 
 export const SNAPSHOT_DAYS = 7;
@@ -28,16 +28,13 @@ export function contentRevision(hub: HubDB): number {
 export function expireSnapshots(hub: HubDB, now = Date.now()) {
   hub.db.prepare(`UPDATE runtime_calls SET request_json=NULL,response_text=NULL,content_state='expired'
     WHERE at_ms<=? AND content_state='available'`).run(now - RETENTION);
-  // 审计 at 统一是 UTC Z 写法，可按字符串比较。
-  hub.db.prepare(`UPDATE agent_reads SET args=json_remove(args,'$.q') WHERE kind='search' AND at<=? AND json_extract(args,'$.q') IS NOT NULL`)
-    .run(new Date(now - RETENTION).toISOString());
+  expireAuditQueries(hub, now);
 }
 /** 与记录删除共用事务。暂不假设摘要具备完整来源链，保守清除所有正文。 */
 export function eraseSnapshots(hub: HubDB) {
   hub.db.prepare(`UPDATE runtime_calls SET request_json=NULL,response_text=NULL,content_state='deleted'
     WHERE content_state='available'`).run();
-  hub.db.prepare("UPDATE agent_reads SET args=json_remove(args,'$.q') WHERE kind='search' AND json_extract(args,'$.q') IS NOT NULL").run();
-  eraseQueuedAuditQueries(hub);
+  eraseAuditQueries(hub);
 }
 
 export class RuntimeLog {

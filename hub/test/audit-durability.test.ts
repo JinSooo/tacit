@@ -1,8 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HubDB } from "../src/db.ts";
 import { createHandler } from "../src/server.ts";
+import { AgentReads } from "../src/agent.ts";
 import { setup, fixture } from "./helpers.ts";
 
 test("真实子进程在写锁期间返回读取后退出，重开数据库仍能恢复加密审计且不重复", async () => {
@@ -47,4 +48,65 @@ test("加密审计也不能写入时，不向 Agent 返回未经审计的内容"
     const response = await handler(new Request("http://127.0.0.1:47823/v1/agent/timeline?tool=codex", { headers: { host: "127.0.0.1:47823", authorization: `Bearer ${ctx.config.token}` } }));
     expect(response.status).toBe(500); expect(await response.text()).not.toContain(r.body);
   } finally { ctx.cleanup(); }
+});
+
+test("检索词横跨审计长度边界时，落盘前应先识别完整凭据", async () => {
+  const ctx = setup(), reads = new AgentReads(ctx.db);
+  try {
+    const syntheticToken = "A1b2".repeat(6);
+    const prefix = "测".repeat(180) + " Bearer ";
+    const q = prefix + syntheticToken + " 额外搜索文字";
+    expect((await reads.handle("search", new URLSearchParams({ tool: "codex", q }))).status).toBe(200);
+    const args = reads.audit(new URLSearchParams()).reads[0]!.args;
+    expect(args).toEqual({ q_length: q.length, q: prefix + "[已脱敏:Bearer]" });
+  } finally { ctx.cleanup(); }
+});
+
+test("审计接口到期即隐藏检索词，保留参数和未到期的检索词", async () => {
+  const ctx = setup(), reads = new AgentReads(ctx.db);
+  try {
+    for (const tool of ["old", "fresh"]) {
+      const query = new URLSearchParams({ tool, q: "合成检索", session: "synthetic-session" });
+      expect((await reads.handle("search", query)).status).toBe(200);
+    }
+    const now = Date.now();
+    ctx.db.db.prepare("UPDATE agent_reads SET at=? WHERE tool='old'")
+      .run(new Date(now - 7 * 86_400_000).toISOString());
+    const time = spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const handler = createHandler({ db: ctx.db, token: ctx.config.token });
+      const response = await handler(new Request("http://127.0.0.1:47823/v1/audit", {
+        headers: { host: "127.0.0.1:47823", authorization: `Bearer ${ctx.config.token}` },
+      }));
+      expect(response.status).toBe(200);
+      const audit = (await response.json()).reads;
+      expect(audit.find((row: { tool: string }) => row.tool === "old").args)
+        .toEqual({ q_length: 4, session: "synthetic-session" });
+      expect(audit.find((row: { tool: string }) => row.tool === "fresh").args)
+        .toEqual({ q_length: 4, session: "synthetic-session", q: "合成检索" });
+    } finally { time.mockRestore(); }
+  } finally { ctx.cleanup(); }
+});
+
+test("另一个后台连接重放已缓存的待写审计时，不恢复真删前的检索词", async () => {
+  const ctx = setup(), r = fixture(); ctx.db.ingest([r]);
+  const output = spyOn(console, "error").mockImplementation(() => {});
+  let other: HubDB | undefined;
+  try {
+    ctx.db.db.exec("CREATE TRIGGER reject_audit BEFORE INSERT ON agent_reads BEGIN SELECT RAISE(ABORT,'synthetic'); END");
+    const reads = new AgentReads(ctx.db);
+    const search = new URLSearchParams({ tool: "codex", q: "合成检索", session: "synthetic-session" });
+    expect((await reads.handle("search", search)).status).toBe(200);
+    expect(readdirSync(`${ctx.file}.audit-pending`).filter(f => f.endsWith(".enc"))).toHaveLength(1);
+    other = new HubDB(ctx.file, ctx.config.dbKey);
+    expect(ctx.db.delete(r.id)).toBe(true);
+    ctx.db.db.exec("DROP TRIGGER reject_audit");
+    const audit = new AgentReads(other).audit(new URLSearchParams()).reads;
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.args).toEqual({ q_length: 4, session: "synthetic-session" });
+  } finally {
+    other?.close();
+    ctx.cleanup();
+    output.mockRestore();
+  }
 });

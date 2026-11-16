@@ -8,6 +8,20 @@ type AuditRow = [string, string, string, string, string, string, number, number]
 type Queue = { key: Buffer; directory: string | null; rows: Map<string, AuditRow>; errorLogged: boolean; timer?: ReturnType<typeof setInterval> };
 const queues = new WeakMap<HubDB, Queue>();
 const missing = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "ENOENT";
+const QUERY_RETENTION_MS = 7 * 86_400_000;
+
+export function auditQueryExpiry(now = Date.now()): string {
+  return new Date(now - QUERY_RETENTION_MS).toISOString();
+}
+
+function withoutQuery(row: AuditRow): AuditRow {
+  const args = JSON.parse(row[4]);
+  if (!Object.hasOwn(args, "q")) return row;
+  delete args.q;
+  const clean: AuditRow = [...row];
+  clean[4] = JSON.stringify(args);
+  return clean;
+}
 
 function directory(queue: Queue, create = false): boolean {
   if (!queue.directory) return false;
@@ -78,7 +92,20 @@ export function flushAgentAudit(hub: HubDB): void {
     if (!queue.rows.size) return;
     if (tryWriteWithoutWaiting(hub, () => {
       const insert = hub.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING");
-      for (const row of queue.rows.values()) insert.run(...row);
+      let cutoff: string | undefined;
+      for (const row of queue.rows.values()) {
+        let safe = row;
+        if (row[3] === "search") {
+          if (cutoff === undefined) {
+            // 另一个连接可能已从磁盘恢复旧暂存。持有写锁时重查删除时间。
+            const erased = hub.db.prepare("SELECT json_extract(v, '$') AS at FROM distill_state WHERE k='audit_query_erased_at'").get() as { at: string } | undefined;
+            const expired = auditQueryExpiry();
+            cutoff = erased && erased.at > expired ? erased.at : expired;
+          }
+          if (row[1] <= cutoff) safe = withoutQuery(row);
+        }
+        insert.run(...safe);
+      }
     })) {
       for (const id of queue.rows.keys()) if (queue.directory) {
         try { unlinkSync(join(queue.directory, `${id}.enc`)); } catch (e) { if (!missing(e)) throw e; }
@@ -94,13 +121,24 @@ export function enqueueAgentAudit(hub: HubDB, row: AuditRow): void {
   const queue = queues.get(hub); if (!queue) throw new Error("审计未初始化");
   persist(queue, row); queue.rows.set(row[0], row); flushAgentAudit(hub); retry(hub, queue);
 }
-/** 删除原始记录时，尚未入库的审计也去掉检索词。 */
-export function eraseQueuedAuditQueries(hub: HubDB): void {
+export function expireAuditQueries(hub: HubDB, now: number): void {
+  // 审计时间统一使用 UTC ISO 字符串。
+  hub.db.prepare("UPDATE agent_reads SET args=json_remove(args,'$.q') WHERE kind='search' AND at<=? AND json_type(args,'$.q') IS NOT NULL")
+    .run(auditQueryExpiry(now));
+}
+
+/** 与原始记录删除共用数据库事务，清理加密暂存并阻止其他连接重放旧词。 */
+export function eraseAuditQueries(hub: HubDB): void {
+  hub.db.prepare("UPDATE agent_reads SET args=json_remove(args,'$.q') WHERE kind='search' AND json_type(args,'$.q') IS NOT NULL").run();
+  hub.db.prepare(`INSERT INTO distill_state(k,v) VALUES ('audit_query_erased_at',json_quote(?))
+    ON CONFLICT(k) DO UPDATE SET v=excluded.v`).run(new Date().toISOString());
   const queue = queues.get(hub); if (!queue) return;
+  restore(queue);
   for (const row of queue.rows.values()) {
-    const args = JSON.parse(row[4]);
-    if (!("q" in args)) continue;
-    delete args.q; row[4] = JSON.stringify(args); persist(queue, row);
+    const clean = withoutQuery(row);
+    if (clean === row) continue;
+    persist(queue, clean);
+    queue.rows.set(clean[0], clean);
   }
 }
 export function stopAgentAudit(hub: HubDB): void {

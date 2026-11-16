@@ -9,7 +9,7 @@ import { redactString } from "./redact.ts";
 import { DistillStore, type Thread } from "./distill/store.ts";
 import { projectForPath, resolveRepoRoot } from "./distill/repos.ts";
 import { readGeneral } from "./general-settings.ts";
-import { enqueueAgentAudit, flushAgentAudit } from "./agent-audit.ts";
+import { auditQueryExpiry, enqueueAgentAudit, flushAgentAudit } from "./agent-audit.ts";
 import { RuntimeLog, contentRevision } from "./runtime-log.ts";
 
 const QUERY_AUDIT_CHARS = 200;
@@ -233,7 +233,11 @@ export class AgentReads {
       if (params.get(key)!.length > (key === "cwd" || key === "cursor" ? 4096 : 128)) throw new InputError(`${key} 过长`);
       args[key] = params.get(key);
     }
-    if (params.has("q")) { args.q_length = params.get("q")!.length; args.q = redactString(params.get("q")!.trim().slice(0, QUERY_AUDIT_CHARS)).text; }
+    const q = params.get("q");
+    if (kind === "search" && q !== null) {
+      args.q_length = q.length;
+      args.q = Array.from(redactString(q.trim()).text).slice(0, QUERY_AUDIT_CHARS).join("");
+    }
     if (typeof args.cwd === "string" && isAbsolute(args.cwd)) {
       try { const project = this.projectAt(args.cwd); if (project) args.project = project.id; } catch { /* 项目只是统计口径，查不到不影响读取 */ }
     }
@@ -357,6 +361,12 @@ export class AgentReads {
     }
     const rows = this.hub.db.prepare(`SELECT * FROM agent_reads ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY at DESC,id DESC LIMIT ?`).all(...args,limit+1) as Item[];
     const page = rows.slice(0,limit), last = page.at(-1);
-    return { reads: page.map(r => ({ ...r,args: JSON.parse(r.args),result_ids: JSON.parse(r.result_ids) })),next_cursor: rows.length > limit && last ? encode([last.at,last.id]) : null };
+    const expiredBefore = auditQueryExpiry();
+    const reads = page.map(r => {
+      const args = JSON.parse(r.args);
+      if (r.kind === "search" && r.at <= expiredBefore) delete args.q;
+      return { ...r, args, result_ids: JSON.parse(r.result_ids) };
+    });
+    return { reads, next_cursor: rows.length > limit && last ? encode([last.at, last.id]) : null };
   }
 }
