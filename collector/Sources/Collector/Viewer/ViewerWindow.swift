@@ -67,7 +67,7 @@ import CollectorCore
     submenu("Tacit", [
       item("关于 Tacit", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp),
       .separator(),
-      item("设置…", #selector(go(_:)), ",", target: self, tag: 5),
+      item("设置…", #selector(go(_:)), ",", target: self, tag: 3),
       .separator(),
       item("隐藏 Tacit", #selector(NSApplication.hide(_:)), "h", target: NSApp),
       .separator(),
@@ -81,7 +81,7 @@ import CollectorCore
     ])
     submenu("前往", [
       item("回顾", #selector(go(_:)), "1", target: self, tag: 0), item("历史记录", #selector(go(_:)), "2", target: self, tag: 1),
-      item("待确认", #selector(go(_:)), "3", target: self, tag: 2), item("运行记录", #selector(go(_:)), "4", target: self, tag: 3),
+      item("待确认", #selector(go(_:)), "3", target: self, tag: 2),
     ])
     submenu("窗口", [
       item("最小化", #selector(NSWindow.performMiniaturize(_:)), "m"), item("缩放", #selector(NSWindow.performZoom(_:))),
@@ -91,8 +91,13 @@ import CollectorCore
   }
 
   @objc func go(_ sender: NSMenuItem) {
-    if sender.tag == 0 { store.showReview(); return }
-    store.section = [Page.review, .history, .pending, .audit, .review, .settings][sender.tag]
+    switch sender.tag {
+    case 0: store.showReview()
+    case 1: store.section = .history
+    case 2: store.section = .pending
+    case 3: store.section = .settings
+    default: break
+    }
   }
   @objc func closeWindow() { window?.performClose(nil) }
 

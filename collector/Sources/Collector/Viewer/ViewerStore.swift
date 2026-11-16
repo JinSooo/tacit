@@ -50,12 +50,13 @@ protocol CaptureControlling: AnyObject {
 }
 
 enum Page: Hashable {
-  case review, history, pending, audit, settings, project(String)
+  case review, history, pending, settings, project(String)
 }
 
 enum Route: Hashable {
   case thread(String)
   case project(String)
+  case runtime
 }
 
 @MainActor @Observable final class ViewerStore {

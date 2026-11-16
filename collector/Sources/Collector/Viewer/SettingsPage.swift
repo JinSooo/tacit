@@ -343,6 +343,11 @@ struct MaintenanceSettingsView: View {
   var body: some View {
     let c = store.capture
     SettingsForm {
+      Section {
+        SettingsRow("运行记录") {
+          Button("打开运行记录") { store.path.append(.runtime) }
+        }
+      }
       if !c.pluginsAvailable {
         SettingsMessage(text: "找不到 bun 或安装目录，插件类数据源暂时不能运行。重新运行一次 install.sh 就能修好。")
       }

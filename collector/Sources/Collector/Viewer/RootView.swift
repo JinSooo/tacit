@@ -18,6 +18,7 @@ struct RootView: View {
             switch route {
             case .thread(let id): ThreadPage(id: id)
             case .project(let id): ProjectPage(id: id)
+            case .runtime: RuntimePage().toolbar { BackButton() }
             }
           }
       }
@@ -52,7 +53,6 @@ struct RootView: View {
     case .review: ReviewPage()
     case .history: HistoryPage()
     case .pending: PendingPage()
-    case .audit: RuntimePage()
     case .settings: SettingsPage()
     case .project(let id): ProjectPage(id: id).id(id)
     }
@@ -63,16 +63,16 @@ struct Sidebar: View {
   @Environment(ViewerStore.self) private var store
 
   var body: some View {
-    @Bindable var store = store
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
       Section {
         SidebarLabel(title: "回顾", icon: "sun-horizon").tag(Page.review)
         SidebarLabel(title: "历史记录", icon: "clock-counter-clockwise").tag(Page.history)
-        // badge 必须在 tag 之前：放在 tag 之后，这一行在 macOS 侧栏里选不中。
+      }
+      Section {
+        // badge 必须在 tag 之前，这一行在 macOS 侧栏里才选得中。
         SidebarLabel(title: "待确认", icon: "tray")
-          .badge(store.pending.count)
+          .badge(store.pending.isEmpty ? nil : Text(Fmt.count(store.pending.count)))
           .tag(Page.pending)
-        SidebarLabel(title: "运行记录", icon: "eye").tag(Page.audit)
       }
       if !store.projects.isEmpty {
         Section("项目") {
