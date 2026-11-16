@@ -133,7 +133,7 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       if (method === "GET" && url.pathname === "/v1/now") return Response.json({ now: currentNow(db) });
       if (method === "GET" && url.pathname === "/v1/threads") return Response.json(store.threads(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/projects") return Response.json({ projects: store.projectSummaries() });
-      if (method === "GET" && url.pathname === "/v1/pending") return Response.json({ pending: store.pending() });
+      if (method === "GET" && url.pathname === "/v1/pending") return Response.json({ pending: store.pending().filter(item => item.kind !== "thread_done") });
       const entity = /^\/v1\/(threads|projects)\/([^/]+)$/.exec(url.pathname);
       if (method === "GET" && entity) return respond(store.view(entity[1] as "threads" | "projects",entity[2]!,url.searchParams.get("level") ?? "brief"));
       const day = /^\/v1\/days\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);

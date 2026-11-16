@@ -234,7 +234,20 @@ public struct NowState: Decodable, Sendable {
 
 public struct DayDiary: Decodable, Sendable {
   public struct Chapter: Decodable, Hashable, Sendable { public let start: String; public let end: String; public let text: String }
-  public struct Body: Decodable, Sendable { public let summary: String?; public let timeline: [Chapter]? }
+  public struct Reference: Decodable, Hashable, Sendable { public let id: String; public let at: String }
+  public struct Entry: Decodable, Hashable, Sendable { public let text: String; public let evidence: [Reference] }
+  public struct Sections: Decodable, Sendable {
+    public let progress: [Entry]
+    public let blockers: [Entry]
+    public let authored: [Entry]
+    public let suggestions: [Entry]
+  }
+  public struct Body: Decodable, Sendable {
+    public let summary: String?
+    public let timeline: [Chapter]?
+    public let sections: Sections?
+    public let cutoff: String?
+  }
   public let date: String
   public let brief: String?
   public let detail: Body?

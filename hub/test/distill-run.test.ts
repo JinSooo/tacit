@@ -6,7 +6,7 @@ import { DistillStore } from "../src/distill/store.ts";
 import * as P from "../src/distill/prompts.ts";
 import { assignStep, classifyStep, digestStep, touchThread, projectStep, dayStep, LIMITS, distillRound, type LLM } from "../src/distill/run.ts";
 import { createLLM, type LLMRequest } from "../src/llm/index.ts";
-import { fixture, setup } from "./helpers.ts";
+import { emptyDayOutput, fixture, setup } from "./helpers.ts";
 import { AgentReads } from "../src/agent.ts";
 import { HubDB } from "../src/db.ts";
 import type { RecordV1 } from "../../packages/record/index.ts";
@@ -75,7 +75,7 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
       if (kind === "conversation") return ok({ title: "合成对话", summary: "合成总结", points: [] });
       if (kind === "brief") return ok({ brief: "合成简略" });
       if (kind === "project") return ok({ goal: "合成项目目标", status: "合成项目进展", people: [], resolutions: [] });
-      if (kind === "day") return ok({ summary: "合成日记", timeline: [{ start: "10:00", end: "11:00", text: "合成" }] });
+      if (kind === "day") return ok({ ...emptyDayOutput, timeline: [{ start: "10:00", end: "11:00", text: "合成" }] });
       throw new Error("未知调用");
     },
   };
@@ -130,7 +130,7 @@ test("完整一轮：建线程与项目、事实有依据、private 不外发、
 
   const project = store.projects()[0]!;
   expect(t.project_id).toBe(project.id); expect(project.brief).toBe("合成简略");
-  expect(store.pending().map(p => p.kind).sort()).toEqual(["project", "thread_done"]);
+  expect(store.pending().map(p => p.kind).sort()).toEqual(["project"]);
   expect(ctx.db.db.prepare("SELECT status FROM frames WHERE key LIKE 'url:%'").get()).toEqual({ status: "ignored" });
   expect(store.day("2026-11-08")?.brief).toBe("合成简略");
   // 当前状态用线程的简略版，简略版没提到项目名时补上项目名，不重复拼标题。

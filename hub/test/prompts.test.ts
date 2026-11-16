@@ -60,7 +60,7 @@ test("线程输出必须有领域和项目判断，classify 拒绝未知领域�
   expect(thread({ ...out, domain: "work", in_project: true })).toBe(true);
 });
 
-test("日记线程字典：同线程十段活动只发送一次标题和简略版，所有时间块引用短编号", async () => {
+test("日记线程字典只发送一次标题，旧简略版不进当日回顾", async () => {
   const { dayPrompt, DAY_SYSTEM } = await import("../src/distill/prompts.ts");
   const brief = "这一条完整简略版只应出现一次。".repeat(15);
   const blocks = Array.from({ length: 10 }, (_, i) => ({ start: `${String(i + 8).padStart(2, "0")}:00`, end: `${String(i + 8).padStart(2, "0")}:20`, minutes: 20,
@@ -68,10 +68,10 @@ test("日记线程字典：同线程十段活动只发送一次标题和简略�
   const misc = { start: "20:00", end: "20:05", minutes: 5, kind: "misc" as const, label: "浏览网站", brief: null };
   const prompt = dayPrompt("2026-11-08", [...blocks, misc]);
   const data = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(prompt)![1]!);
-  expect(prompt.split(brief)).toHaveLength(2);
+  expect(prompt).not.toContain(brief);
   expect(prompt.split("重复出现的线程")).toHaveLength(2);
   expect(prompt).not.toContain("01MTHREADULID");
-  expect(data.threads).toEqual([{ id: "t1", title: blocks[0]!.label, brief }]);
+  expect(data.threads).toEqual([{ id: "t1", title: blocks[0]!.label }]);
   expect(data.blocks.slice(0, 10)).toEqual(blocks.map(({ start, end, minutes, kind }) => ({ start, end, minutes, kind, thread: "t1" })));
   expect(data.blocks[10]).toEqual({ start: "20:00", end: "20:05", minutes: 5, kind: "misc", label: "浏览网站" });
   const oldBlocks = [...blocks, misc].map(({ start, end, minutes, label, brief, kind }) => ({ start, end, minutes, label, brief, kind }));
@@ -81,7 +81,7 @@ test("日记线程字典：同线程十段活动只发送一次标题和简略�
   expect((DAY_SYSTEM + prompt).length).toBeLessThan((oldSystem + before).length);
 });
 
-test("日记字典按线程身份区分同名线程，空简略版保留", async () => {
+test("日记字典按线程身份区分同名线程", async () => {
   const { dayPrompt } = await import("../src/distill/prompts.ts");
   const prompt = dayPrompt("2026-11-08", ["a", "b"].map(thread_id => ({ start: "10:00", end: "10:20", minutes: 20, label: "同名线程", brief: null, kind: "thread", thread_id })));
   const data = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(prompt)![1]!);

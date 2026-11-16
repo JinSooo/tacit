@@ -125,7 +125,8 @@ test("满 7 个使用天的完成确认自动归档，6 个使用天不动；重
     expect(store.thread(id)?.status).toBe("paused");
     expect(resolution(id)).toEqual({ resolved_at: null, resolution: null });
   }
-  expect((await read("/v1/pending")).pending.map((p: { id: string }) => p.id).sort()).toEqual(["pending-six-days", "unrelated"]);
+  expect((await read("/v1/pending")).pending.map((p: { id: string }) => p.id)).toEqual(["unrelated"]);
+  expect(store.pending().some(p => p.id === "pending-six-days")).toBe(true);
   expect(lifecycleStep(store, now).archived).toBe(0);
   expect(ctx.db.db.prepare("SELECT count(*) n FROM pending WHERE kind='thread_done'").get()).toEqual({ n: 5 });
 });

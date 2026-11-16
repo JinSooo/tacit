@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { ulid, type RecordV1 } from "../../packages/record/index.ts";
 import { loadConfig } from "../src/config.ts";
 import { HubDB } from "../src/db.ts";
+import type { DayOutput } from "../src/distill/prompts.ts";
+
+export const emptyDayOutput: DayOutput = { progress: [], decisions: [], blockers: [], authored: [], suggestions: [], timeline: [] };
 
 export function fixture(overrides: Partial<RecordV1> = {}): RecordV1 {
   return { id: ulid(), schema: 1, device: "mac", source: "mac.screen", kind: "event", t_start: "2026-11-08T10:00:00+08:00", title: "合成活动", body: "这是合成的测试内容", capture: { method: "ax" }, sensitivity: "normal", ...overrides };

@@ -291,12 +291,12 @@ test("pending 读取补展示字段但不改 payload，失效项标 stale，项�
   ];
   for (const item of items) store.createPending({ ...item,created_at: new Date(base).toISOString() });
   const response = await (await api()("pending")).json();
-  expect(response.pending).toHaveLength(2);
+  expect(response.pending).toHaveLength(1);
   const p = response.pending.find((p: any) => p.id === "project-pending");
   expect(p.payload.name).toBe("合成项目"); expect(p.payload.keys).toEqual(store.project("p")?.keys);
   expect(p.payload.threads.map((t: any) => t.id)).toEqual([6,5,4,3,2].map(i => `thread-${i}`));
   expect(Object.keys(p.payload.threads[0]).sort()).toEqual(["brief","id","title"]);
-  expect(response.pending.find((p: any) => p.id === "thread-pending").payload).toEqual({ thread_id: "thread-0",title: "合成线程",brief: "合成摘要0" });
+  expect(store.pending().find(p => p.id === "thread-pending")?.payload).toEqual({ thread_id: "thread-0",title: "合成线程",brief: "合成摘要0" });
   for (const item of items.slice(0,2)) {
     const row = ctx.db.db.prepare("SELECT payload FROM pending WHERE id=?").get(item.id) as { payload: string };
     expect(JSON.parse(row.payload)).toEqual(item.payload);

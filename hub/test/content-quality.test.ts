@@ -5,7 +5,7 @@ import { DistillStore } from "../src/distill/store.ts";
 import { DistillRules } from "../src/distill/rules.ts";
 import { frameView, LIMITS } from "../src/distill/run.ts";
 import { cleanUserText } from "../../plugins/agent-sessions/filters.ts";
-import { uniqueMaterials } from "../src/distill/material.ts";
+import { materialBody, uniqueMaterials } from "../src/distill/material.ts";
 
 const start = Date.parse("2026-11-13T08:00:00Z");
 const at = (n: number) => new Date(start + n * 60000).toISOString();
@@ -43,7 +43,7 @@ test("仅同仓库且只有一个活跃事项，不足以自动把新工作归�
   } finally { ctx.cleanup(); }
 });
 
-test("归属输入去掉明确的 Codex 侧栏包装，保留原文、有效发言和普通应用文本", () => {
+test("屏幕归属输入只含时间和标题，保留原文和既有文本清理能力", () => {
   const ctx = setup();
   try {
     const store = new DistillStore(ctx.db);
@@ -51,13 +51,15 @@ test("归属输入去掉明确的 Codex 侧栏包装，保留原文、有效发�
     const r = fixture({ t_start: at(0), body, context: { app: "com.openai.codex", window: "设置修复", url: "app://-/index.html" } }); ctx.db.ingest([r]);
     const f = { ...split([r])[0]!, id: "f" }; store.createFrame(f);
     const view = frameView(store, f, { maxRecords: 10, excerpt: () => 240 });
-    expect(view.records[0]!.excerpt).not.toContain("不相关项目侧栏");
-    expect(view.records[0]!.excerpt).toContain("请修复名字输入。");
-    expect(view.records[0]!.excerpt).toContain("已确认焦点正常。");
+    expect(view.records[0]).toMatchObject({ title: r.title, recorded_at: r.t_start, excerpt: "" });
+    expect(materialBody(r)).not.toContain("不相关项目侧栏");
+    expect(materialBody(r)).toContain("请修复名字输入。");
+    expect(materialBody(r)).toContain("已确认焦点正常。");
     expect(ctx.db.get(r.id)!.body).toBe(body);
     const ordinary = fixture({ t_start: at(1), body, context: { app: "synthetic.editor" } }); ctx.db.ingest([ordinary]);
     const of = { ...split([ordinary])[0]!, id: "of" }; store.createFrame(of);
-    expect(frameView(store, of, { maxRecords: 10, excerpt: () => 240 }).records[0]!.excerpt).toContain("不相关项目侧栏");
+    expect(frameView(store, of, { maxRecords: 10, excerpt: () => 240 }).records[0]!.excerpt).toBe("");
+    expect(materialBody(ordinary)).toContain("不相关项目侧栏");
   } finally { ctx.cleanup(); }
 });
 
@@ -103,14 +105,14 @@ test("请求日期与采集时间分别进入整理输入，不能把查询范�
   const ctx = setup();
   try {
     const body = 'Request URL: https://example.test/progress?startDate=2026-11-20&endDate=2026-12-22\nStatus Code: 200 OK';
-    const r = fixture({ t_start: '2026-11-13T18:50:30+09:00', t_end: '2026-11-13T18:51:00+09:00', body, context: { app: 'browser' } });
+    const r = fixture({ source: "manual.note", t_start: '2026-11-13T18:50:30+09:00', t_end: '2026-11-13T18:51:00+09:00', body });
     ctx.db.ingest([r]);
     const frame = { ...sliceFrames([r], 0, Date.parse('2026-11-14T00:00:00+09:00')).frames[0]!, id: 'dated' };
     const view = frameView(new DistillStore(ctx.db), frame, { maxRecords: 10, excerpt: () => Infinity });
     expect(view.records[0]).toMatchObject({ recorded_at: r.t_start, recorded_until: r.t_end,
       query_dates: [{ parameter: 'startDate', value: '2026-11-20' }, { parameter: 'endDate', value: '2026-12-22' }], excerpt: body });
     expect(ctx.db.get(r.id)!.body).toBe(body);
-    const planned = fixture({ t_start: r.t_start, body: '已确认2026-11-20上线，12月22日复查。', context: { url: 'https://example.test/?date=unrelated' } });
+    const planned = fixture({ source: "manual.note", t_start: r.t_start, body: '已确认2026-11-20上线，12月22日复查。', context: { url: 'https://example.test/?date=unrelated' } });
     ctx.db.ingest([planned]);
     const pf = { ...sliceFrames([planned], 0, Date.parse('2026-11-14T00:00:00+09:00')).frames[0]!, id: 'planned' };
     const p = frameView(new DistillStore(ctx.db), pf, { maxRecords: 10, excerpt: () => Infinity }).records[0]!;

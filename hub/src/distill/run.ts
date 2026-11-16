@@ -22,6 +22,7 @@ import { evidenceTime } from "./evidence-time.ts";
 import { resolveRepoRoot } from "./repos.ts";
 import { readGeneral } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
+import { dayEvidence, groundedDay } from "./day-evidence.ts";
 import { redactString } from "../redact.ts";
 import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
 
@@ -158,9 +159,14 @@ export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: num
     const original = store.hub.get(id);
     if (!original || original.source === "manual.correction") return [];
     const originalEffective = store.hub.effective(id)!;
-    const r = { ...originalEffective, body: materialBody(originalEffective) };
     // private 记录的标题和正文都不发给模型；同一片段里的其他记录照常发送。
-    if (r.sensitivity === "private") { hidden++; return []; }
+    if (originalEffective.sensitivity === "private") { hidden++; return []; }
+    if (originalEffective.source !== "manual.correction" && (original.source === "mac.screen" || original.source === "mac.browser")) {
+      // 屏幕与浏览器只提供活动时间和标题，正文留给 History 和主动查询。
+      return [{ id, source: original.source, title: originalEffective.title, recorded_at: original.t_start,
+        ...(original.t_end ? { recorded_until: original.t_end } : {}), excerpt: "" }];
+    }
+    const r = { ...originalEffective, body: materialBody(originalEffective) };
     // 对话开头常是寒暄和噪声，总结另附一次，不挤占每条原文的截断预算。
     if (r.source === "mac.audio") {
       const g = conversationsIn(store.hub, Date.parse(r.t_start), Date.parse(r.t_start)).find(g => g.record_ids.includes(r.id));
@@ -454,7 +460,7 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
     if (detail && typeof detail === "object" && "quotes" in detail && Array.isArray(detail.quotes)) {
       detail = { ...detail, quotes: detail.quotes.filter(q => typeof q?.text === "string" && typeof q.record_id === "string" && groundedQuote(store.hub.get(q.record_id), q.text)) };
     }
-    let title = thread.title, ok = true, doneHint = false;
+    let title = thread.title, ok = true;
     const presentParts = new Set(pieces.map(p => p.key));
     const doneParts = new Set((rebuild ? [] : mark!.parts ?? []).filter(key => presentParts.has(key)));
     const userFacts = () => store.facts("thread_id", id).filter(f => f.origin === "user").map(f => f.id).sort();
@@ -500,7 +506,6 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
         const allowed = new Set([...known, ...prevQuotes]);
         detail = { ...out.detail, quotes: out.detail.quotes.filter(q => allowed.has(q.record_id) && groundedQuote(store.hub.get(q.record_id), q.text)) };
         title = out.title.trim() || title;
-        if (out.status_hint === "done_candidate") doneHint = true;
         store.upsertThread({ ...store.thread(id)!, title, detail });
         for (const piece of chunk) doneParts.add(piece.key);
         for (const frame of fresh) {
@@ -519,7 +524,6 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
       store.upsertThread({ ...store.thread(id)!, brief: brief.text, needs_regen: Number(JSON.stringify(userFacts()) !== JSON.stringify(factIds)), updated_at: toLocalIso(now) });
       const projectId = store.thread(id)!.project_id;
       if (projectId) store.hub.db.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(projectId);
-      if (doneHint) askDone(store, id, now);
       appliedCall(d.db,brief.call_id);
     })();
     updated++;
@@ -633,7 +637,11 @@ export function usageDaysSince(store: DistillStore, after: number, now: number):
     FROM records WHERE t_start_ms>=? AND t_start_ms<=?`).get(start, now) as { days: number }).days;
 }
 
-/** 多久问"做完了吗"、问后多久归档由通用设置决定（默认 3、7 个使用天），每轮现读。 */
+function pauseInactiveThreads(store: DistillStore, now: number) {
+  return store.hub.db.prepare("UPDATE threads SET status='paused' WHERE status='active' AND last_ms<?").run(now - LIMITS.pauseAfter).changes;
+}
+
+/** 旧的提问和归档实现保留供回滚。日常整理只更新暂停状态。 */
 export function lifecycleStep(store: DistillStore, now: number) {
   const settings = readGeneral(store.hub);
   // 先按本地日期粗筛；不用 N * DAY，跨午夜和夏令时都不一定经过整 24 小时。
@@ -650,7 +658,7 @@ export function lifecycleStep(store: DistillStore, now: number) {
       archived += store.hub.db.prepare("UPDATE threads SET status='archived' WHERE id=? AND status IN ('active','paused')").run(payload.thread_id ?? null).changes;
       store.hub.db.prepare("UPDATE pending SET resolved_at=?,resolution='expired' WHERE id=?").run(new Date(now).toISOString(), p.id);
     }
-    const paused = store.hub.db.prepare("UPDATE threads SET status='paused' WHERE status='active' AND last_ms<?").run(now - LIMITS.pauseAfter).changes;
+    const paused = pauseInactiveThreads(store, now);
     const stale = (store.hub.db.prepare("SELECT id,last_ms FROM threads WHERE status IN ('active','paused') AND last_ms<?").all(askBefore) as { id: string; last_ms: number }[])
       .filter(t => usageDaysSince(store, t.last_ms, now) >= settings.ask_done_days);
     for (const t of stale) askDone(store, t.id, now);
@@ -666,9 +674,11 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
   if (day?.needs_regen || !store.getState<boolean>(pendingKey) || detail == null) {
     const start = new Date(`${date}T00:00:00`).getTime(), next = new Date(start);
     next.setDate(next.getDate() + 1); // 中枢本地自然日，不能假定夏令时切换日恰好 24 小时。
-    const end = next.getTime();
+    const end = Math.min(next.getTime(), now + 1);
+    const at = toLocalIso(Math.min(next.getTime(), now));
     const frames = loadFrames(store, "WHERE t_start_ms<? AND t_end_ms>=? ORDER BY t_start_ms,id", end, start);
-    if (!frames.length) { store.setState(pendingKey, null); store.upsertDay({ date, needs_regen: 0, updated_at: toLocalIso(now) }); return { calls: 0, ok: true }; }
+    const evidence = dayEvidence(store.hub, start, end);
+    if (!frames.length && !evidence.length) { store.setState(pendingKey, null); store.upsertDay({ date, needs_regen: 0, updated_at: toLocalIso(now) }); return { calls: 0, ok: true }; }
     const owner = new Map((store.hub.db.prepare("SELECT frame_id,thread_id FROM assignments").all() as { frame_id: string; thread_id: string }[]).map(r => [r.frame_id, r.thread_id]));
     type Block = { start: number; end: number; label: string; thread: Thread | null; spans: [number,number][] };
     const blocks: Block[] = [], open = new Map<string,Block>();
@@ -686,13 +696,22 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
       }
       block.end = Math.max(block.end,last); block.label = label; block.spans.push(...spans);
     }
-    const input: P.DayBlock[] = blocks.sort((a,b) => a.start-b.start).map(b => ({ start: hhmm(b.start), end: b.end === end ? "24:00" : hhmm(b.end),
-      minutes: Math.round(unionSeconds(b.spans)/60), label: b.label, brief: b.thread?.brief ?? null,
+    const input: P.DayBlock[] = blocks.sort((a,b) => a.start-b.start).map(b => ({ start: hhmm(b.start), end: b.end === next.getTime() ? "24:00" : hhmm(b.end),
+      minutes: Math.round(unionSeconds(b.spans)/60), label: b.label,
       ...(b.thread ? { kind: "thread" as const, thread_id: b.thread.id } : { kind: "misc" as const }) }));
     const active = Math.round(unionSeconds(blocks.flatMap(b => b.spans))/60);
-    const r = await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM, prompt: P.dayPrompt(date, input.slice(0, 300), active), schema: P.DAY_SCHEMA });
+    const r = await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM,
+      prompt: P.dayPrompt(date, input.slice(0, 300), active, evidence.map(({ reference: _reference, ...item }) => item), at), schema: P.DAY_SCHEMA });
     if (!r.ok) return { calls: 1, ok: false };
-    detail = r.data; calls++;
+    const byKey = new Map(evidence.map(item => [item.key, item]));
+    const sections = {
+      progress: [...groundedDay(r.data.progress, byKey), ...groundedDay(r.data.decisions, byKey, "has-user")],
+      blockers: groundedDay(r.data.blockers, byKey),
+      authored: groundedDay(r.data.authored, byKey, "user-only"),
+      suggestions: groundedDay(r.data.suggestions, byKey).slice(0, 3),
+    };
+    const summary = [...sections.progress, ...sections.blockers, ...sections.authored].slice(0, 3).map(item => item.text).join("\n") || "未观察到";
+    detail = { summary, timeline: r.data.timeline, sections, cutoff: at }; calls++;
     store.hub.db.transaction(() => {
       store.upsertDay({ date, detail, needs_regen: 0, updated_at: toLocalIso(now) });
       store.setState(pendingKey, true);
@@ -762,7 +781,7 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
     out.digest = await digestStep(d, store, now);
     out.projects = await projectStep(d, store, now);
   }
-  out.lifecycle = lifecycleStep(store, now);
+  out.lifecycle = { paused: pauseInactiveThreads(store, now), asked: 0, archived: 0 };
   out.now = nowStep(store, now);
   store.setState("last_round_at", toLocalIso(now));
   if (opts.slow && opts.days !== "none") {

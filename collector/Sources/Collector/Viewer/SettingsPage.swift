@@ -124,7 +124,6 @@ struct GeneralSettingsView: View {
   var body: some View {
     SettingsForm {
       LoginStartupSection()
-      GeneralPreferencesSection(context: false)
       Section("关于") {
         SettingsRow("Tacit", value: "版本 " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版"))
         SettingsRow("构建", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "本地")

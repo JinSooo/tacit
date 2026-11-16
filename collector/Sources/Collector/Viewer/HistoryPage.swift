@@ -229,17 +229,55 @@ struct HistoryPage: View {
       }
       if let summary = diary?.detail?.summary ?? diary?.brief, !summary.isEmpty {
         VStack(alignment: .leading, spacing: 8) {
-          Text(summary)
-            .font(.serif(TextSize.title))
-            .lineSpacing(TextSize.serifLineSpacing(TextSize.title))
-            .foregroundStyle(Palette.ink)
-            .lineLimit(showDiary ? nil : 2)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+          if showDiary, let sections = diary?.detail?.sections {
+            dailyReview(sections)
+          } else {
+            Text(summary)
+              .font(.serif(TextSize.title))
+              .lineSpacing(TextSize.serifLineSpacing(TextSize.title))
+              .foregroundStyle(Palette.ink)
+              .lineLimit(showDiary ? nil : 2)
+              .textSelection(.enabled)
+              .fixedSize(horizontal: false, vertical: true)
+          }
           Button(showDiary ? "收起日记" : "展开日记") { withAnimation(.easeOut(duration: 0.2)) { showDiary.toggle() } }
             .buttonStyle(.accentLink).font(.system(size: TextSize.body))
         }
         .frame(maxWidth: 760, alignment: .leading)
+      }
+    }
+  }
+
+  func dailyReview(_ sections: DayDiary.Sections) -> some View {
+    VStack(alignment: .leading, spacing: 20) {
+      if let cutoff = diary?.detail?.cutoff.flatMap(ViewerTime.parse) {
+        Text("截至 \(ViewerFormat.clock(cutoff))").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+      }
+      reviewSection("进展与决定", sections.progress)
+      reviewSection("未完成与阻塞", sections.blockers)
+      reviewSection("自己留下了什么", sections.authored)
+      reviewSection("明日建议", sections.suggestions)
+    }
+  }
+
+  func reviewSection(_ title: String, _ entries: [DayDiary.Entry]) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(title).sectionTitle().accessibilityAddTraits(.isHeader)
+      if entries.isEmpty {
+        Text("未观察到").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+      }
+      ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+        VStack(alignment: .leading, spacing: 4) {
+          Text(entry.text).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink).textSelection(.enabled)
+          HStack(spacing: 12) {
+            ForEach(Array(entry.evidence.enumerated()), id: \.offset) { index, reference in
+              Button(entry.evidence.count == 1 ? "查看依据" : "依据 \(index + 1)") {
+                store.showRecord(reference.id, at: ViewerTime.parse(reference.at))
+              }
+              .buttonStyle(.accentLink).font(.system(size: TextSize.caption))
+            }
+          }
+        }
       }
     }
   }

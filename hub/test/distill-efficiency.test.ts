@@ -6,7 +6,8 @@ import * as P from "../src/distill/prompts.ts";
 import { conversationsIn, saveSummary } from "../src/conversations.ts";
 import { hubStatus } from "../src/status.ts";
 import type { LLMRequest } from "../src/llm/index.ts";
-import { fixture, setup } from "./helpers.ts";
+import { toLocalIso } from "../../packages/record/index.ts";
+import { emptyDayOutput, fixture, setup } from "./helpers.ts";
 
 let ctx: ReturnType<typeof setup>, store: DistillStore;
 beforeEach(() => { ctx = setup(); store = new DistillStore(ctx.db); });
@@ -14,7 +15,7 @@ afterEach(() => ctx.cleanup());
 const now = new Date("2026-11-08T18:00:00").getTime(), date = "2026-11-08";
 const base = new Date(`${date}T10:00:00`).getTime(), MIN = 60_000;
 const projectDetail = { goal: "目标", status: "项目进展", people: [] };
-const dayDetail = { summary: "日记进展", timeline: [] };
+const dayDetail = { summary: "未观察到", timeline: [], sections: { progress: [], blockers: [], authored: [], suggestions: [] }, cutoff: toLocalIso(now) };
 
 function seed() {
   const record = fixture({ t_start: new Date(base).toISOString(), body: "合成活动证据" });
@@ -32,7 +33,7 @@ function retryModel() {
     if (req.system === P.BRIEF_SYSTEM && !failed.has(req.prompt)) {
       failed.add(req.prompt); return { ok: false, error: "合成短暂故障", ms: 1 };
     }
-    const data = req.system === P.PROJECT_SYSTEM ? projectDetail : req.system === P.DAY_SYSTEM ? dayDetail : { brief: "最终简略版" };
+    const data = req.system === P.PROJECT_SYSTEM ? projectDetail : req.system === P.DAY_SYSTEM ? emptyDayOutput : { brief: "最终简略版" };
     return { ok: true, data: data as T, ms: 1 };
   } };
   return { llm, calls };
@@ -71,7 +72,10 @@ for (const kind of ["project", "day"] as const) {
     await run();
     store.upsertThread({ ...store.thread("t")!, brief: "新的输入内容" });
     if (kind === "project") store.upsertProject({ ...store.project("p")!, needs_regen: 1 });
-    else store.upsertDay({ date, needs_regen: 1 });
+    else {
+      ctx.db.ingest([fixture({ source: "manual.note", t_start: toLocalIso(base + MIN), body: "新的输入内容" })]);
+      store.upsertDay({ date, needs_regen: 1 });
+    }
     await run();
     const calls = fake.calls.filter(c => c.system === (kind === "project" ? P.PROJECT_SYSTEM : P.DAY_SYSTEM));
     expect(calls).toHaveLength(2);
@@ -120,7 +124,7 @@ for (const kind of ["project", "day"] as const) {
         if (kind === "project") store.upsertProject({ ...store.project("p")!, needs_regen: 1 });
         else store.upsertDay({ date, needs_regen: 1 });
       }
-      return { ok: true, data: (req.system === P.BRIEF_SYSTEM ? { brief: "合成简略" } : kind === "project" ? projectDetail : dayDetail) as T, ms: 1 };
+      return { ok: true, data: (req.system === P.BRIEF_SYSTEM ? { brief: "合成简略" } : kind === "project" ? projectDetail : emptyDayOutput) as T, ms: 1 };
     } };
     if (kind === "project") await projectStep({ db: ctx.db, llm }, store, now);
     else await dayStep({ db: ctx.db, llm }, store, date, now);

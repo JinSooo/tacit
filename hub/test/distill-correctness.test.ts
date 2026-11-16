@@ -4,7 +4,7 @@ import { assignStep, dayStep, digestStep, distillRound, nowStep, projectStep, to
 import { hubStatus } from "../src/status.ts";
 import * as P from "../src/distill/prompts.ts";
 import type { LLMRequest } from "../src/llm/index.ts";
-import { fixture, setup } from "./helpers.ts";
+import { emptyDayOutput, fixture, setup } from "./helpers.ts";
 
 let ctx: ReturnType<typeof setup>, store: DistillStore;
 beforeEach(() => { ctx = setup(); store = new DistillStore(ctx.db); });
@@ -26,7 +26,7 @@ function model() {
   const calls: LLMRequest[] = [];
   const llm: LLM = { async complete<T>(req: LLMRequest) {
     calls.push(req);
-    const data = req.task === "day" ? { summary: "当天进展", timeline: [] } : req.task === "project" ? { goal: "目标", status: "最新项目进展", people: [] }
+    const data = req.task === "day" ? emptyDayOutput : req.task === "project" ? { goal: "目标", status: "最新项目进展", people: [] }
       : req.task === "thread_digest" ? { title: "同名事项", domain: "work", in_project: true, detail: { ...detail, progress: "用户确认已完成" }, new_facts: [], invalidate: [], status_hint: "active" }
       : { brief: "最新简略版" };
     return { ok: true, data: data as T, ms: 1 };
