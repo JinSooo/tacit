@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "status": "synthetic",
+  "as_of": "2026-01-01T16:00:00+09:00",
+  "utc_offset": "+09:00",
+  "example_record": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "schema": 1,
+    "device": "synthetic",
+    "source": "manual.note",
+    "kind": "event",
+    "t_start": "2026-01-01T09:00:00+09:00",
+    "title": "合成评测铅笔",
+    "body": "合成评测铅笔为蓝色，归入文具组。",
+    "capture": { "method": "manual" },
+    "sensitivity": "normal"
+  },
+  "questions": [
+    {
+      "id": "q-example",
+      "date": "2026-01-01",
+      "category": "progress",
+      "prompt": "合成评测铅笔是什么颜色，归入哪一组？",
+      "lookup": "timeline",
+      "facts": { "颜色": ["蓝色", "蓝"], "分组": ["文具组", "文具"] },
+      "evidence_ids": ["01ARZ3NDEKTSV4RRFFQ69G5FAV"]
+    }
+  ]
+}
