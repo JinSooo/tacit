@@ -9,6 +9,9 @@ struct ProjectPage: View {
   @State private var expanded: String?
   @State private var loadingMore = false
   @State private var moreError: String?
+  @State private var loadedRevision: Int?
+
+  private var current: Bool { loadedRevision == store.revision }
 
   var body: some View {
     ScrollView {
@@ -34,7 +37,7 @@ struct ProjectPage: View {
         Button("新会话会带入的内容") { store.path.append(.projectContext(id)) }
           .buttonStyle(.accentLink).font(.system(size: TextSize.caption)).fixedSize()
       }
-      if let goal = detail.value?.detail?.goal?.split(whereSeparator: { "。！？!?\n".contains($0) }).first,
+      if current, let goal = detail.value?.detail?.goal?.split(whereSeparator: { "。！？!?\n".contains($0) }).first,
          !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         let line = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         Text(line.count > 40 ? String(line.prefix(39)) + "…" : line)
@@ -44,9 +47,9 @@ struct ProjectPage: View {
   }
 
   @ViewBuilder private var results: some View {
-    if let error = timeline.error ?? detail.error {
+    if current, let error = timeline.error ?? detail.error {
       Placeholder(kind: .error(error) { Task { await load() } })
-    } else if let page = timeline.value {
+    } else if current, let page = timeline.value {
       if page.days.isEmpty {
         Text("这个项目还没有整理成时间线的日期。")
           .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
@@ -86,14 +89,23 @@ struct ProjectPage: View {
   private func load() async {
     moreError = nil
     let revision = store.revision
-    async let a: Void = detail.run { try await store.api.project(id, level: "detail") }
-    async let b: Void = timeline.run {
+    if !current {
+      timeline.value = nil
+      detail.value = nil
+    }
+    async let a: Void = detail.run {
+      let value = try await store.api.project(id, level: "detail")
+      try Task.checkCancellation()
+      return value
+    }
+    await timeline.run {
       let page = try await store.api.timeline(projectId: id)
       try Task.checkCancellation()
       guard revision == store.revision else { throw CancellationError() }
       return page
     }
-    _ = await (a, b)
+    await a
+    if !Task.isCancelled, revision == store.revision { loadedRevision = revision }
   }
 
   private func loadMore(before: String) async {

@@ -50,6 +50,7 @@ private struct ReviewDayContent: View {
   @Environment(ViewerStore.self) private var store
   @State private var diary = Loader<DayDiary?>()
   @State private var records = Loader<[HistoryRecord]>()
+  @State private var loadedRevision: Int?
   @State private var brush: ClosedRange<Date>?
   @State private var expanded: String?
   @State private var picking = false
@@ -63,10 +64,14 @@ private struct ReviewDayContent: View {
     let revision: Int
   }
 
-  private var review: DayDiary? { diary.value ?? nil }
+  private var current: Bool { loadedRevision == store.revision }
+  private var review: DayDiary? { current ? diary.value ?? nil : nil }
   private var failed: Bool { review?.failed?.value == true }
   private var isToday: Bool { day == today }
   private var hasSegments: Bool { review?.detail?.items?.allSatisfy { $0.recordIds != nil } == true }
+  private var visibleRecords: [HistoryRecord] {
+    ReviewActivity.visibleRecords(records.value ?? [], sources: store.capture.sources)
+  }
   private var items: [DayDiary.Item] {
     guard hasSegments else { return [] }
     return (review?.detail?.items ?? []).sorted { ($0.tStart, $0.id) > ($1.tStart, $1.id) }
@@ -79,12 +84,12 @@ private struct ReviewDayContent: View {
           dateLine
           headline
           if !items.isEmpty {
-            let rows = ReviewActivity.visibleRecords(records.value ?? [], sources: store.capture.sources)
-            DayStrata(records: rows, segments: items, day: day, now: isToday ? now : nil, selected: expanded, brush: $brush) { id in
+            DayStrata(records: visibleRecords, segments: items, day: day, now: isToday ? now : nil, selected: expanded, brush: $brush) { id in
               open(id, in: proxy)
             }
             .zIndex(1)
           }
+          if !store.pending.isEmpty { TimelinePendingLine() }
           LazyVStack(spacing: 0) {
             ForEach(items.filter { item in brush.map { item.intersects($0) } ?? true }) { item in
               TimelineSegmentRow(day: day, item: item, records: records.value, expanded: expanded == item.id) {
@@ -145,11 +150,11 @@ private struct ReviewDayContent: View {
       ReviewHeadline(text: summary, size: TextSize.display)
         .foregroundStyle(Palette.ink).lineSpacing(TextSize.serifLineSpacing(TextSize.display))
         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled).accessibilityAddTraits(.isHeader)
-    } else if let error = diary.error ?? records.error {
+    } else if current, let error = diary.error ?? records.error {
       Placeholder(kind: .error(error) { Task { await load() } })
     } else if failed && !hasSegments {
       status("最近一次整理失败", color: Palette.attention)
-    } else if diary.value == nil || records.value == nil {
+    } else if !current || diary.value == nil || records.value == nil {
       ProgressView().controlSize(.small).accessibilityLabel("正在读取时间线")
     } else if records.value?.isEmpty == true && review?.detail == nil {
       status("这一天没有记录")
@@ -167,7 +172,7 @@ private struct ReviewDayContent: View {
   private var footer: some View {
     HStack(alignment: .firstTextBaseline, spacing: 16) {
       if hasSegments, let at = review?.detail?.cutoff.flatMap(ViewerTime.parse) {
-        let pending = review?.needsRegen?.value == true || (records.value ?? []).contains {
+        let pending = review?.needsRegen?.value == true || visibleRecords.contains {
           $0.sensitivity != "private" && ($0.end ?? $0.start) > at
         }
         let suffix = failed ? "，最近一次整理失败" : pending ? "，有新活动待整理" : ""
@@ -185,9 +190,13 @@ private struct ReviewDayContent: View {
   }
 
   private func reveal(_ proxy: ScrollViewProxy) {
-    guard let id = store.timelineFocus, items.contains(where: { $0.id == id }) else { return }
+    guard current, let target = store.timelineFocus, diary.value != nil, diary.error == nil else { return }
     store.timelineFocus = nil
-    open(id, in: proxy)
+    if items.contains(where: { $0.id == target.segment }) {
+      open(target.segment, in: proxy)
+    } else if let record = target.record {
+      store.showDayRecords(day, record: record)
+    }
   }
 
   private func open(_ id: String, in proxy: ScrollViewProxy) {
@@ -200,9 +209,23 @@ private struct ReviewDayContent: View {
   }
 
   private func load() async {
-    async let review: Void = diary.run { try await store.api.diary(day) }
-    async let activity: Void = records.run { try await store.api.day(day) }
+    let revision = store.revision
+    if !current {
+      diary.value = nil
+      records.value = nil
+    }
+    async let review: Void = diary.run {
+      let value = try await store.api.diary(day)
+      try Task.checkCancellation()
+      return value
+    }
+    async let activity: Void = records.run {
+      let value = try await store.api.day(day)
+      try Task.checkCancellation()
+      return value
+    }
     _ = await (review, activity)
+    if !Task.isCancelled, revision == store.revision { loadedRevision = revision }
   }
 }
 

@@ -292,6 +292,7 @@ public struct DayDiary: Decodable, Sendable {
     public let summary: String?
     public let timeline: [Chapter]?
     public let items: [Item]?
+    public let omittedRecordIds: [String]?
     public let cutoff: String?
   }
   public let date: String

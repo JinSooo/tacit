@@ -40,6 +40,7 @@ struct SegmentRow: View {
   var conversation: String? = nil
   let selected: Bool
   let expanded: Bool
+  var includesOmissions = false
   let action: () -> Void
   @State private var hovering = false
 
@@ -68,11 +69,10 @@ struct SegmentRow: View {
               .fixedSize(horizontal: false, vertical: true)
               .layoutPriority(1)
             if let p = segment.thread?.projectName { ProjectTag(name: p) }
+            if includesOmissions { TimelineOmissionLabel() }
             if segment.privateCount > 0 { PhIcon("lock", size: 12).foregroundStyle(Palette.muted).help("含私密记录") }
           }
-          if let brief = segment.thread?.brief, !brief.isEmpty {
-            Text(brief).font(.system(size: TextSize.body)).lineSpacing(3).foregroundStyle(Palette.muted).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-          } else if segment.thread == nil, let w = conversation ?? SegmentText.windows(block) {
+          if segment.thread == nil, let w = conversation ?? SegmentText.windows(block) {
             Text(w).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).lineLimit(1)
           }
           if segment.thread != nil || segment.apps.count > 1 { apps }
@@ -138,7 +138,6 @@ struct SegmentRow: View {
 struct SegmentInspector: View {
   let block: SegmentBlock
   @Environment(ViewerStore.self) private var store
-  @State private var detail = Loader<EntityDetail>()
 
   var segment: HistorySegment { block.segment }
 
@@ -146,19 +145,13 @@ struct SegmentInspector: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 24) {
         header
-        if let t = segment.thread { doing(t) }
-        else { undistilled }
+        if segment.thread == nil { undistilled }
         if !segment.apps.isEmpty { appList }
       }
       .padding(20)
     }
     .background(Palette.paper)
-    .task(id: LoadKey(thread: segment.thread?.id, revision: store.revision)) {
-      if let id = segment.thread?.id { await detail.run { try await store.api.thread(id, level: "detail") } }
-    }
   }
-
-  struct LoadKey: Equatable { let thread: String?; let revision: Int }
 
   var header: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -194,27 +187,6 @@ struct SegmentInspector: View {
     return s
   }
 
-  @ViewBuilder func doing(_ t: HistorySegment.ThreadRef) -> some View {
-    VStack(alignment: .leading, spacing: 24) {
-      if let brief = detail.value?.brief ?? t.brief, !brief.isEmpty {
-        Text(brief)
-          .font(.system(size: TextSize.body)).lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
-          .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-      }
-      if let d = detail.value {
-        DetailBody(detail: d, progressLabel: "进展", progress: d.detail?.progress)
-      } else if detail.loading {
-        ProgressView().controlSize(.small)
-      } else if let e = detail.error {
-        Text(e).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-      }
-      Button { store.path.append(.thread(t.id)) } label: {
-        HStack(spacing: 4) { Text("打开这件事项"); PhIcon("arrow-right", size: 12) }
-      }
-        .buttonStyle(.accentLink).font(.system(size: TextSize.body))
-    }
-  }
-
   /// 没提炼的段没有摘要，用窗口标题说明在看什么。
   var undistilled: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -248,6 +220,7 @@ struct SegmentInspector: View {
 struct MinorSegmentsRow: View {
   let blocks: [SegmentBlock]
   let expanded: Bool
+  var includesOmissions = false
   let action: () -> Void
   @State private var hovering = false
 
@@ -284,6 +257,7 @@ struct MinorSegmentsRow: View {
           .foregroundStyle(Palette.muted)
           .lineLimit(1)
         Spacer(minLength: 8)
+        if includesOmissions { TimelineOmissionLabel() }
         HStack(spacing: 4) {
           Text("\(blocks.count) 段零碎活动").monospacedDigit()
           PhIcon("caret-right", size: 10).rotationEffect(.degrees(expanded ? 90 : 0))
@@ -303,5 +277,13 @@ struct MinorSegmentsRow: View {
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
     .help("每段不到 2 分钟、还没整理的活动，折在一起")
+  }
+}
+
+struct TimelineOmissionLabel: View {
+  var body: some View {
+    Text("未入时间线")
+      .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
+      .help("包含因当天活动段数达到上限而留在原始列表里的记录")
   }
 }

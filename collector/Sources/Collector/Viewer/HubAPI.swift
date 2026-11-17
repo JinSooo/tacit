@@ -104,6 +104,17 @@ final class HubAPI: @unchecked Sendable {
 
   func record(_ id: String) async throws -> RecordDetail { try await get(RecordDetail.self, "/v1/records/\(id)") }
 
+  /// 列表按开始日期读取；结束于次日的成员需要按编号补齐。
+  func missingRecords(_ ids: [String], from available: [HistoryRecord]) async throws -> [HistoryRecord] {
+    let needed = Set(ids).subtracting(available.map(\.id))
+    var missing: [HistoryRecord] = []
+    for id in needed {
+      do { missing.append(try await record(id).record) }
+      catch let error as HubError where error.status == 404 { continue }
+    }
+    return missing
+  }
+
   /// 一天的活动段（hub 按线程或应用聚合，不调用模型）。
   /// 同时返回这一天的对话分场：被静音切开的几条对话记录在列表里合成一行。
   func segments(_ day: Date, device: String? = nil) async throws -> (segments: [HistorySegment], conversations: [ConversationRef]) {
@@ -150,6 +161,15 @@ final class HubAPI: @unchecked Sendable {
 
   func timeline(projectId: String? = nil, query: String? = nil, before: String? = nil) async throws -> TimelineResult {
     try await get(TimelineResult.self, "/v1/timeline", ["project_id": projectId, "q": query, "before": before])
+  }
+
+  struct TimelineLocation: Decodable, Sendable {
+    let date: String
+    let segmentId: String?
+  }
+
+  func timelineLocation(record id: String) async throws -> TimelineLocation {
+    try await get(TimelineLocation.self, "/v1/timeline/record/\(id)")
   }
 
   // MARK: 提炼

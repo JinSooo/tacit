@@ -50,7 +50,12 @@ protocol CaptureControlling: AnyObject {
 }
 
 enum Page: Hashable {
-  case review, history, pending, settings, project(String)
+  case review, search, settings, project(String)
+}
+
+enum ViewerEntry {
+  case timeline, settings, pending
+  case record(String, Date)
 }
 
 enum Route: Hashable {
@@ -81,7 +86,14 @@ enum Route: Hashable {
 
   /// nil 时跟随今天，手动选中以往日期时保留选择。
   var reviewDay: Date?
-  var timelineFocus: String?
+  struct TimelineFocus: Equatable {
+    let segment: String
+    let record: String?
+  }
+  var timelineFocus: TimelineFocus?
+  var timelineSearch = ""
+  var timelinePendingExpanded = false
+  @ObservationIgnored private var sharedRequest = 0
   /// 历史记录当前看的那一天，以及要选中的记录（从证据、读取记录跳过来时用）。
   var historyDay = Calendar.current.startOfDay(for: Date())
   var historyFocus: String?
@@ -96,14 +108,29 @@ enum Route: Hashable {
   }
 
   func refreshShared() async {
+    sharedRequest += 1
+    let request = sharedRequest
     do {
       async let p = api.projects()
       async let q = api.pending()
       async let s = api.speakers()
-      (projects, pending, speakers) = try await (p, q, s)
+      let latest = try await (p, q, s)
+      try Task.checkCancellation()
+      guard request == sharedRequest else { return }
+      (projects, pending, speakers) = latest
       sharedError = nil
     } catch is CancellationError {
-    } catch { sharedError = error.localizedDescription }
+    } catch {
+      guard request == sharedRequest else { return }
+      sharedError = error.localizedDescription
+    }
+  }
+
+  func didResolvePending(_ id: String) {
+    sharedRequest += 1
+    pending.removeAll { $0.id == id }
+    if pending.isEmpty { timelinePendingExpanded = false }
+    Task { await refreshShared() }
   }
 
   func refreshCapture() { if let c = controls?.captureSnapshot(), c != capture { capture = c } }
@@ -111,11 +138,17 @@ enum Route: Hashable {
 
   func project(_ id: String?) -> Project? { id.flatMap { id in projects.first { $0.id == id } } }
 
-  func showReview(_ day: Date? = nil, segment: String? = nil) {
+  func showReview(_ day: Date? = nil, segment: String? = nil, record: String? = nil) {
     reviewDay = day.flatMap { Calendar.current.isDateInToday($0) ? nil : Calendar.current.startOfDay(for: $0) }
     path = []
     section = .review
-    timelineFocus = segment
+    timelinePendingExpanded = false
+    timelineFocus = segment.map { TimelineFocus(segment: $0, record: record) }
+  }
+
+  func showPending() {
+    showReview()
+    timelinePendingExpanded = !pending.isEmpty
   }
 
   func showDayRecords(_ day: Date, record: String? = nil) {
@@ -128,19 +161,6 @@ enum Route: Hashable {
   func showSettings() {
     path = []
     section = .settings
-  }
-
-  func showRecord(_ id: String, at date: Date?) {
-    if let date { historyDay = Calendar.current.startOfDay(for: date) }
-    historySearch = ""
-    historyFocus = id
-    section = .history
-  }
-
-  func searchHistory(_ text: String) {
-    historySearch = text
-    historyFocus = nil
-    section = .history
   }
 
   func speakerNames(_ ids: [String]) -> [String] {

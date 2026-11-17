@@ -12,7 +12,7 @@ struct MenuBarPanel: View {
   static let lookback: TimeInterval = 6 * 3600
 
   @Environment(ViewerStore.self) private var store
-  let open: (Page) -> Void
+  let open: (ViewerEntry) -> Void
   /// 内容高度变化时通知面板窗口跟着调整。
   let onSize: (CGSize) -> Void
   @State private var now = Loader<NowState?>()
@@ -134,7 +134,7 @@ struct MenuBarPanel: View {
   // MARK: 此刻
 
   @ViewBuilder var nowText: some View {
-    Button { open(.review) } label: {
+    Button { open(.timeline) } label: {
       VStack(alignment: .leading, spacing: 4) {
         if let state = now.value {
           if let feedback = state?.feedback { Text(feedback).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true) }
@@ -197,8 +197,7 @@ struct MenuBarPanel: View {
           ForEach(RecentRuns.group(rows), id: \.first!.id) { run in
             let row = RecentRow(run: run)
             RecentRow(run: run) {
-              store.showRecord(row.record.id, at: row.record.start)
-              open(.history)
+              open(.record(row.record.id, row.record.start))
             }
           }
         }
@@ -232,7 +231,7 @@ struct MenuBarPanel: View {
       Spacer()
       Button { open(.settings) } label: { PhIcon("gear-six", size: 16) }
         .buttonStyle(PanelButtonStyle()).help("设置").accessibilityLabel("设置")
-      Button { open(.review) } label: { PhIcon("app-window", size: 16) }
+      Button { open(.timeline) } label: { PhIcon("app-window", size: 16) }
         .buttonStyle(PanelButtonStyle()).keyboardShortcut("o").help("打开 Tacit").accessibilityLabel("打开 Tacit")
     }
     .font(.system(size: TextSize.body))
@@ -383,7 +382,7 @@ struct PanelButtonStyle: ButtonStyle {
   }
 
   private let store: ViewerStore
-  private let open: (Page) -> Void
+  private let open: (ViewerEntry) -> Void
   private var panel: Panel?
   private weak var button: NSStatusBarButton?
   private var monitors: [Any] = []
@@ -394,7 +393,7 @@ struct PanelButtonStyle: ButtonStyle {
   /// 菜单栏图标在屏幕上的位置。点在这里的鼠标事件交给图标自己（开关面板），不当成"点了面板外"。
   private var anchor: CGRect = .zero
 
-  init(store: ViewerStore, open: @escaping (Page) -> Void) {
+  init(store: ViewerStore, open: @escaping (ViewerEntry) -> Void) {
     self.store = store
     self.open = open
   }

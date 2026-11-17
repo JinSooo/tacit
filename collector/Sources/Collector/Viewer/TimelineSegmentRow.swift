@@ -5,7 +5,7 @@ struct TimelineSegmentRow: View {
   let day: Date
   let item: DayDiary.Item
   var records: [HistoryRecord]? = nil
-  let expanded: Bool
+  let expanded: Bool?
   let onToggle: () -> Void
 
   var body: some View {
@@ -24,7 +24,7 @@ struct TimelineSegmentRow: View {
           }
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
-          PhIcon(expanded ? "caret-down" : "caret-right", size: 11)
+          PhIcon(expanded == true ? "caret-down" : "caret-right", size: 11)
             .foregroundStyle(Palette.muted).accessibilityHidden(true)
         }
         .multilineTextAlignment(.leading)
@@ -32,8 +32,9 @@ struct TimelineSegmentRow: View {
         .contentShape(Rectangle())
       }
       .buttonStyle(TimelineRowStyle())
-      .accessibilityValue(expanded ? "已展开" : "已折叠")
-      if expanded {
+      .accessibilityValue(expanded.map { $0 ? "已展开" : "已折叠" } ?? "")
+      .accessibilityHint(expanded == nil ? "转到时间线" : "")
+      if expanded == true {
         TimelineSegmentRecords(day: day, item: item, dayRecords: records)
           .padding(.bottom, 16)
       }
@@ -124,14 +125,9 @@ private struct TimelineSegmentRecords: View {
       let source: [HistoryRecord]
       if let dayRecords { source = dayRecords }
       else { source = try await store.api.day(day) }
-      var found = source.filter { idSet.contains($0.id) }
-      let available = Set(found.map(\.id))
-      // 一条跨午夜记录的开始时刻可能在前一天，不在当天按时刻读取的范围内。
-      for id in ids where !available.contains(id) {
-        do { found.append(try await store.api.record(id).record) }
-        catch let error as HubError where error.status == 404 { continue }
-      }
-      return found.sorted { ($0.start, $0.id) > ($1.start, $1.id) }
+      let found = source.filter { idSet.contains($0.id) }
+      let missing = try await store.api.missingRecords(ids, from: found)
+      return (found + missing).sorted { ($0.start, $0.id) > ($1.start, $1.id) }
     }
   }
 

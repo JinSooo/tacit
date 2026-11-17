@@ -15,10 +15,17 @@ import CollectorCore
     UserDefaults.standard.register(defaults: ["NSDisabledDictationMenuItem": true])
   }
 
-  func show(_ page: Page? = nil) {
-    if page == .review || (page == nil && window?.isVisible != true) { store.showReview() }
-    else if page == .settings { store.showSettings() }
-    else if let page { store.section = page }
+  func show(_ entry: ViewerEntry? = nil) {
+    switch entry {
+    case .timeline: store.showReview()
+    case .settings: store.showSettings()
+    case .pending: store.showPending()
+    case .record(let id, let date):
+      store.showReview(date)
+      store.showDayRecords(date, record: id)
+    case nil:
+      if window?.isVisible != true { store.showReview() }
+    }
     if window == nil { window = makeWindow() }
     NSApp.setActivationPolicy(.regular)
     NSApp.applicationIconImage = AppIconArt.image(size: 512)
@@ -81,8 +88,8 @@ import CollectorCore
       item("粘贴", #selector(NSText.paste(_:)), "v"), item("全选", #selector(NSText.selectAll(_:)), "a"),
     ])
     submenu("前往", [
-      item("回顾", #selector(go(_:)), "1", target: self, tag: 0), item("历史记录", #selector(go(_:)), "2", target: self, tag: 1),
-      item("待确认", #selector(go(_:)), "3", target: self, tag: 2),
+      item("时间线", #selector(go(_:)), "1", target: self, tag: 0),
+      item("搜索", #selector(go(_:)), "2", target: self, tag: 1),
     ])
     submenu("窗口", [
       item("最小化", #selector(NSWindow.performMiniaturize(_:)), "m"), item("缩放", #selector(NSWindow.performZoom(_:))),
@@ -94,8 +101,7 @@ import CollectorCore
   @objc func go(_ sender: NSMenuItem) {
     switch sender.tag {
     case 0: store.showReview()
-    case 1: store.section = .history
-    case 2: store.section = .pending
+    case 1: store.section = .search
     case 3: store.showSettings()
     default: break
     }

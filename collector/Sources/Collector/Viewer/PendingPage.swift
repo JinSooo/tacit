@@ -77,6 +77,32 @@ struct PendingPage: View {
   }
 }
 
+struct TimelinePendingLine: View {
+  @Environment(ViewerStore.self) private var store
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Button { store.timelinePendingExpanded.toggle() } label: {
+        HStack(spacing: 8) {
+          PhIcon("tray", size: 14)
+          Text("\(Fmt.count(store.pending.count)) 个问题待确认")
+          Spacer()
+          PhIcon(store.timelinePendingExpanded ? "caret-down" : "caret-right", size: 11).accessibilityHidden(true)
+        }
+        .padding(.vertical, 4)
+      }
+      .buttonStyle(.accentLink)
+      .font(.system(size: TextSize.body))
+      .accessibilityValue(store.timelinePendingExpanded ? "已展开" : "已折叠")
+      if store.timelinePendingExpanded {
+        ForEach(store.pending) { item in
+          PendingCard(item: item) { store.didResolvePending(item.id) }
+        }
+      }
+    }
+  }
+}
+
 struct PendingCard: View {
   let item: PendingItem
   let onResolved: () -> Void

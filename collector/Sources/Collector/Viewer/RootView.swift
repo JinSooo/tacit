@@ -27,7 +27,7 @@ struct RootView: View {
               }
               .navigationTitle("历史记录")
               .toolbar { BackButton() }
-            case .dayRecords: HistoryPage().toolbar { BackButton() }
+            case .dayRecords: HistoryPage().toolbar { BackButton(shortcut: nil) }
             case .runtime: RuntimePage().toolbar { BackButton() }
             }
           }
@@ -61,8 +61,7 @@ struct RootView: View {
   @ViewBuilder private func page(_ section: Page) -> some View {
     switch section {
     case .review: ReviewPage()
-    case .history: HistoryPage()
-    case .pending: PendingPage()
+    case .search: TimelineSearchPage()
     case .settings: SettingsPage()
     case .project(let id): ProjectPage(id: id).id(id)
     }
@@ -76,6 +75,7 @@ struct Sidebar: View {
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
       Section {
         SidebarLabel(title: "时间线", icon: "clock-counter-clockwise").tag(Page.review)
+        SidebarLabel(title: "搜索", icon: "magnifying-glass").tag(Page.search)
       }
       if !store.projects.isEmpty {
         Section("项目") {

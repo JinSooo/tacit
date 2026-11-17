@@ -42,6 +42,8 @@ struct HistoryPage: View {
   var blocks: [SegmentBlock] {
     lane == nil && device == nil && brush == nil ? allBlocks : SegmentBlocks.join(segments, records: records, visible: Set(visible.map(\.id)))
   }
+  private var omittedIds: Set<String> { Set(diary?.detail?.omittedRecordIds ?? []) }
+
   var selectedRecord: String? { if case .record(let id)? = selection { return id }; return nil }
   /// 选中项在列表里那一行的 id：合并显示的几条记录用这一行第一条的 id。
   func rowID(for s: Selection?) -> String? {
@@ -168,9 +170,10 @@ struct HistoryPage: View {
       async let s = store.api.segments(requestedDay)
       async let d = store.api.diary(requestedDay)
       let (rows, segs, diary) = try await (r, s, d)
+      let missing = try await store.api.missingRecords(diary?.detail?.omittedRecordIds ?? [], from: rows)
       guard !Task.isCancelled, day == requestedDay else { return }
       segments = segs.segments; conversations = segs.conversations
-      records = rows.sorted { ($0.start, $0.id) > ($1.start, $1.id) }
+      records = (rows + missing).sorted { ($0.start, $0.id) > ($1.start, $1.id) }
       self.diary = diary
     } catch is CancellationError {
     } catch {
@@ -234,15 +237,7 @@ struct HistoryPage: View {
           if !records.isEmpty { stats }
         }
       }
-      if loadedDay == day, let summary = diary?.summary {
-        ReviewHeadline(text: summary, size: TextSize.title)
-          .lineSpacing(TextSize.serifLineSpacing(TextSize.title))
-          .foregroundStyle(Palette.ink)
-          .textSelection(.enabled)
-          .fixedSize(horizontal: false, vertical: true)
-          .frame(maxWidth: 760, alignment: .leading)
-      }
-      Button("查看当天回顾") { store.showReview(day) }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
+      Button("查看当天时间线") { store.showReview(day) }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
     }
   }
 
@@ -315,6 +310,7 @@ struct HistoryPage: View {
   @ViewBuilder func segmentRows(_ blocks: [SegmentBlock]) -> some View {
     let cal = Calendar.current
     let items = SegmentFold.fold(blocks)
+    let omitted = omittedIds
     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
       let hour = cal.component(.hour, from: item.start)
       if i == 0 || cal.component(.hour, from: items[i - 1].start) != hour {
@@ -322,22 +318,25 @@ struct HistoryPage: View {
       }
       switch item {
       case .single(let block):
-        segmentRow(block)
+        segmentRow(block, omitted: omitted)
       case .minor(let group):
-        MinorSegmentsRow(blocks: group, expanded: expanded.contains(item.id)) {
+        let includesOmissions = group.contains { block in block.records.contains { omitted.contains($0.id) } }
+        MinorSegmentsRow(blocks: group, expanded: expanded.contains(item.id), includesOmissions: includesOmissions) {
           withAnimation(.easeOut(duration: 0.2)) { if expanded.contains(item.id) { expanded.remove(item.id) } else { expanded.insert(item.id) } }
         }
         .padding(.horizontal, 20)
         .id(item.id)
         if expanded.contains(item.id) {
-          ForEach(group) { block in segmentRow(block) }
+          ForEach(group) { block in segmentRow(block, omitted: omitted) }
         }
       }
     }
   }
 
-  @ViewBuilder func segmentRow(_ block: SegmentBlock) -> some View {
-    SegmentRow(block: block, conversation: conversationNote(block), selected: selection == .segment(block.id), expanded: expanded.contains(block.id)) {
+  @ViewBuilder func segmentRow(_ block: SegmentBlock, omitted: Set<String>) -> some View {
+    let hasOmission = block.records.contains { omitted.contains($0.id) }
+    SegmentRow(block: block, conversation: conversationNote(block), selected: selection == .segment(block.id),
+               expanded: expanded.contains(block.id), includesOmissions: hasOmission) {
       withAnimation(.easeOut(duration: 0.2)) { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
       selection = .segment(block.id)
     }
@@ -345,7 +344,9 @@ struct HistoryPage: View {
     .id(block.id)
     if expanded.contains(block.id) {
       ForEach(RecordRuns.collapse(block.records, conversations: conversations)) { run in
-        RecordRow(record: run.newest, run: run, selected: run.records.contains { $0.id == selectedRecord }, expanded: false, nested: true) {
+        let hasOmission = run.records.contains { omitted.contains($0.id) }
+        RecordRow(record: run.newest, run: run, selected: run.records.contains { $0.id == selectedRecord },
+                  expanded: false, nested: true, includesOmissions: hasOmission) {
           selection = .record(run.newest.id)
         }
         .padding(.horizontal, 20)
@@ -364,9 +365,10 @@ struct HistoryPage: View {
   }
 
   func searchRows(_ rows: [HistoryRecord]) -> some View {
-    ForEach(rows) { r in
+    let omitted = omittedIds
+    return ForEach(rows) { r in
       RecordRow(record: r, run: nil, selected: selectedRecord == r.id, expanded: false,
-                snippet: SearchSnippet.make(r.body ?? "", query: store.historySearch)) { selection = .record(r.id) }
+                snippet: SearchSnippet.make(r.body ?? "", query: store.historySearch), includesOmissions: omitted.contains(r.id)) { selection = .record(r.id) }
         .padding(.horizontal, 20)
         .id(r.id)
     }
@@ -454,6 +456,7 @@ struct RecordRow: View {
   let expanded: Bool
   var snippet: SearchSnippet? = nil
   var nested = false
+  var includesOmissions = false
   let action: () -> Void
   @State private var hovering = false
 
@@ -511,6 +514,7 @@ struct RecordRow: View {
   }
 
   @ViewBuilder var badges: some View {
+    if includesOmissions { TimelineOmissionLabel() }
     if record.capture?.method == "ocr" { badge("截图识字") }
     if record.sensitivity == "redacted" || (record.redactions ?? 0) > 0 { badge("已隐去密钥") }
     if record.sensitivity == "private" { PhIcon("lock", size: 12).foregroundStyle(Palette.muted).help("私密：不交给 AI 整理") }

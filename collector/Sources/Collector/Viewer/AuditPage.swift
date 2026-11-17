@@ -172,24 +172,23 @@ struct AuditRow: View {
     case .some(.none):
       Text("这一项已经删除").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4).help(id)
     case .some(.some(let t)):
-      Button {
-        switch t.kind {
-        case "thread": store.path.append(.thread(id))
-        case "project": store.section = .project(id)
-        default: store.showRecord(id, at: nil)
-        }
-      } label: {
-        HStack(spacing: 8) {
-          PhIcon(t.kind == "thread" ? "list-bullets" : t.kind == "project" ? "folder" : "file-text", size: 14)
-            .foregroundStyle(Palette.muted).frame(width: 16)
-            .help(["thread": "事项", "project": "项目", "record": "记录"][t.kind] ?? "")
-          Text(t.title).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink).lineLimit(1)
-          Spacer()
-        }
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
+      let label = HStack(spacing: 8) {
+        PhIcon(t.kind == "thread" ? "list-bullets" : t.kind == "project" ? "folder" : "file-text", size: 14)
+          .foregroundStyle(Palette.muted).frame(width: 16)
+          .help(["thread": "事项", "project": "项目", "record": "记录"][t.kind] ?? "")
+        Text(t.title).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink).lineLimit(1)
+        Spacer()
       }
-      .buttonStyle(.plain)
+      .padding(.vertical, 4)
+      .contentShape(Rectangle())
+      if t.kind == "thread" { label }
+      else {
+        Button {
+          if t.kind == "project" { store.section = .project(id) }
+          else { store.path.append(.reviewRecord(id)) }
+        } label: { label }
+        .buttonStyle(.plain)
+      }
     }
   }
 

@@ -38,7 +38,7 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
        "t_start":"2026-11-16T21:00:00+09:00","t_end":"2026-11-16T21:20:00+09:00","active_seconds":960,
        "sources":["mac.screen","codex.session"],"record_ids":["record","screen"],
        "apps":[{"source":"mac.screen","app":"com.example.Designer"}],"project_id":"project",
-       "evidence":[{"id":"record","at":"2026-11-16T21:00:00+09:00","source":"codex.session","title":"讨论展板尺寸"}]}]}}
+       "evidence":[{"id":"record","at":"2026-11-16T21:00:00+09:00","source":"codex.session","title":"讨论展板尺寸"}]}],"omitted_record_ids":["extra"]}}
     """)
   let item = try #require(review.detail?.items?.first)
   #expect(review.needsRegen?.value == true && review.failed?.value == true)
@@ -50,6 +50,7 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(item.recordIds == ["record", "screen"])
   #expect(item.apps?.first?.app == "com.example.Designer")
   #expect(item.projectId == "project")
+  #expect(review.detail?.omittedRecordIds == ["extra"])
   if let start = item.start, let end = item.end {
     #expect(item.intersects(start...start))
     #expect(!item.intersects(end...end))

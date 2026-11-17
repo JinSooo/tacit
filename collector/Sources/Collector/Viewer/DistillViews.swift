@@ -497,12 +497,13 @@ struct FlowLayout: Layout {
 
 /// 推入的线程/项目页不一定带系统返回按钮（分栏 + 导航栈桥接到 NSToolbar 时会丢），自己放一个。
 struct BackButton: ToolbarContent {
+  var shortcut: KeyboardShortcut? = KeyboardShortcut("[", modifiers: .command)
   @Environment(ViewerStore.self) private var store
   var body: some ToolbarContent {
     ToolbarItem(placement: .navigation) {
       if !store.path.isEmpty {
         Button { store.path.removeLast() } label: { PhIcon("caret-left", size: PhIcon.toolbar) }
-          .help("返回").accessibilityLabel("返回").keyboardShortcut("[", modifiers: .command)
+          .help("返回").accessibilityLabel("返回").keyboardShortcut(shortcut)
       }
     }
   }
