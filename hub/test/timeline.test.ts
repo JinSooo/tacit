@@ -98,3 +98,73 @@ test("项目带入预览沿用会话带入筛选，读取预览不写 Agent 审�
     expect(ctx.db.db.prepare("SELECT count(*) AS n FROM agent_reads").get()).toEqual({ n: 0 });
   } finally { await ctx.cleanup(); }
 });
+
+test("旧回顾隐藏采集占位，来源和事项归属取自实际引用，省略记录仍能定位到原文", async () => {
+  const ctx = timelineFixture();
+  try {
+    const raw = fixture({ source: "codex.session", source_ref: "synthetic-route", t_start: at(10), body: "[我] 入口改到北门。",
+      context: { app: "org.example.writer" } });
+    const window = fixture({ t_start: at(20), title: "合成窗口", context: { app: "org.example.music" } });
+    expect(ctx.db.ingest([raw, window]).accepted).toBe(2);
+    ctx.store.upsertProject({ id: "trail", name: "合成步道", keys: { repos: [], hosts: [], chats: [] } });
+    ctx.store.upsertThread({ id: "route-thread", title: "入口路线", status: "active", project_id: "trail" });
+    ctx.store.createFrame({ id: "route-frame", key: "route", record_ids: [raw.id], t_start_ms: Date.parse(raw.t_start),
+      t_end_ms: Date.parse(raw.t_start), chars: 1, private: 0, status: "new" });
+    ctx.store.assign("route-frame", "route-thread", "user", 1);
+    const actual = { ...segment("route", [raw.id, window.id], "trail", 10),
+      evidence: [{ id: raw.id, at: raw.t_start, source: raw.source, title: raw.title }],
+      apps: [{ source: "mac.screen", app: "org.example.music" }], sources: ["mac.screen"] };
+    const capture = { ...segment("capture", [window.id], "trail", 20), title: "Codex 会话", description: "有 Codex 会话记录。" };
+    ctx.store.upsertDay({ date: day, brief: capture.title, detail: { summary: capture.title, items: [actual, capture] } });
+    const projected = await (await ctx.send(`/v1/days/${day}`)).json();
+    expect(projected.detail.summary).toBe(actual.title);
+    expect(projected.detail.items).toHaveLength(1);
+    expect(projected.detail.items[0]).toMatchObject({ thread_id: "route-thread",
+      sources: [raw.source], apps: [{ source: raw.source, app: "org.example.writer" }] });
+    expect(projected.detail.omitted_record_ids).toEqual([]); // 原文已由另一条可见段包含，不能标成遗漏。
+    expect((await (await ctx.send("/v1/timeline?project_id=trail")).json()).days[0].items).toHaveLength(1);
+    expect((await (await ctx.send(`/v1/records/${window.id}`)).json()).id).toBe(window.id);
+
+    ctx.store.upsertDay({ date: day, detail: { summary: "Codex 会话", items: [capture] } });
+    const onlyCapture = await (await ctx.send(`/v1/days/${day}`)).json();
+    expect(onlyCapture.detail).toMatchObject({ summary: null, items: [], omitted_record_ids: [window.id] });
+    expect(await (await ctx.send(`/v1/timeline/record/${window.id}`)).json()).toEqual({ date: day, segment_id: null });
+    expect(await (await ctx.send("/v1/timeline?q=Codex")).json()).toEqual({ days: [], next_cursor: null });
+    // 用户对描述的有效修正优先；无需重写正式历史。
+    expect((await ctx.send(`/v1/days/${day}/segments/capture`, "PATCH", { description: "决定保留北门的绕行路线。" })).status).toBe(200);
+    expect((await (await ctx.send(`/v1/days/${day}`)).json()).detail.items[0].description).toBe("决定保留北门的绕行路线。");
+    expect(ctx.store.day(day)?.detail.items[0].description).toBe(capture.description);
+  } finally { await ctx.cleanup(); }
+});
+
+test("阅读投影保留本地午夜 24:00 的时间轴结束边界", async () => {
+  const ctx = timelineFixture();
+  try {
+    const item = { ...segment("midnight", [], "trail", 23 * 60 + 50), t_end: at(24 * 60) };
+    ctx.store.upsertDay({ date: day, detail: { items: [item] } });
+    const response = await (await ctx.send(`/v1/days/${day}`)).json();
+    expect(response.detail.timeline).toEqual([{ start: "23:50", end: "24:00", text: item.title }]);
+  } finally { await ctx.cleanup(); }
+});
+
+test("旧窗口占位不出现在当天、项目或搜索正文，原文仍在全天记录中", async () => {
+  const ctx = timelineFixture();
+  try {
+    const rows = ["远程工具 · 无标题", "会话工具 · No"].map((title, i) =>
+      fixture({ title, t_start: at(12 * 60 + i), context: { app: `org.example.capture${i}` } }));
+    expect(ctx.db.ingest(rows).accepted).toBe(2);
+    const items = rows.map((raw, i) => ({ ...segment(`window-${i}`, [raw.id], "trail", 12 * 60 + i),
+      title: raw.title, description: "有前台窗口记录。", sources: [raw.source],
+      evidence: [{ id: raw.id, at: raw.t_start, source: raw.source, title: raw.title }] }));
+    ctx.store.upsertDay({ date: day, detail: { summary: items[0]!.title, items } });
+    const result = await (await ctx.send(`/v1/days/${day}`)).json();
+    expect(result.detail).toMatchObject({ summary: null, items: [] });
+    expect(result.detail.omitted_record_ids).toEqual(rows.map(row => row.id));
+    for (const suffix of ["project_id=trail", `q=${encodeURIComponent("窗口")}`])
+      expect((await (await ctx.send(`/v1/timeline?${suffix}`)).json()).days).toEqual([]);
+    for (const row of rows) {
+      expect((await (await ctx.send(`/v1/records/${row.id}`)).json()).id).toBe(row.id);
+      expect(await (await ctx.send(`/v1/timeline/record/${row.id}`)).json()).toEqual({ date: day, segment_id: null });
+    }
+  } finally { await ctx.cleanup(); }
+});

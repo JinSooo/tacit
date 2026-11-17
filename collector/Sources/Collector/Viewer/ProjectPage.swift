@@ -39,8 +39,7 @@ struct ProjectPage: View {
       }
       if current, let goal = detail.value?.detail?.goal?.split(whereSeparator: { "。！？!?\n".contains($0) }).first,
          !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        let line = goal.trimmingCharacters(in: .whitespacesAndNewlines)
-        Text(line.count > 40 ? String(line.prefix(39)) + "…" : line)
+        Text(goal.trimmingCharacters(in: .whitespacesAndNewlines))
           .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
       }
     }
@@ -51,28 +50,17 @@ struct ProjectPage: View {
       Placeholder(kind: .error(error) { Task { await load() } })
     } else if current, let page = timeline.value {
       if page.days.isEmpty {
-        Text("这个项目还没有整理成时间线的日期。")
+        Text("这个项目还没有可展示的整理结果。")
           .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
       } else {
-        LazyVStack(alignment: .leading, spacing: 20) {
-          ForEach(page.days) { group in
-            if let day = TimelineDay.date(group.date) {
-              VStack(alignment: .leading, spacing: 0) {
-                Text("\(Fmt.date(day)) \(ViewerFormat.weekday(day))")
-                  .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-                  .padding(.bottom, 8).accessibilityAddTraits(.isHeader)
-                ForEach(group.items) { item in
-                  let key = "\(group.date)/\(item.id)"
-                  TimelineSegmentRow(day: day, item: item, expanded: expanded == key) {
-                    expanded = expanded == key ? nil : key
-                  }
-                }
-              }
+        let updates = page.days.flatMap { day in day.items.map { ProjectUpdate(day: day.date, item: $0) } }
+        LazyVStack(alignment: .leading, spacing: 0) {
+          ForEach(ProjectReading.stories(updates)) { story in
+            ProjectStoryRow(story: story, expanded: expanded == story.id) {
+              expanded = expanded == story.id ? nil : story.id
             }
           }
         }
-        Text("这里只显示已经整理成时间线的日期。")
-          .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
         if let next = page.nextCursor {
           Button("加载更早的日期") { Task { await loadMore(before: next) } }.buttonStyle(.accentLink)
             .font(.system(size: TextSize.caption)).disabled(loadingMore)
@@ -82,7 +70,7 @@ struct ProjectPage: View {
         }
       }
     } else {
-      ProgressView().controlSize(.small).accessibilityLabel("正在读取项目时间线")
+      ProgressView().controlSize(.small).accessibilityLabel("正在读取项目进展")
     }
   }
 
@@ -122,6 +110,62 @@ struct ProjectPage: View {
     } catch {
       guard revision == store.revision else { return }
       moreError = error.localizedDescription
+    }
+  }
+}
+
+private struct ProjectStoryRow: View {
+  let story: ProjectStory
+  let expanded: Bool
+  let onToggle: () -> Void
+  @State private var expandedRecord: String?
+
+  private var latest: ProjectUpdate { story.latest }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Rectangle().fill(Palette.hairline).frame(height: 1).accessibilityHidden(true)
+      Button(action: onToggle) {
+        VStack(alignment: .leading, spacing: 10) {
+          HStack(alignment: .firstTextBaseline, spacing: 16) {
+            Text(latest.item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
+              .frame(maxWidth: .infinity, alignment: .leading)
+            if let day = TimelineDay.date(latest.day) {
+              Text(Fmt.date(day)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
+            }
+            PhIcon(expanded ? "caret-down" : "caret-right", size: 11).foregroundStyle(Palette.muted)
+              .accessibilityHidden(true)
+          }
+          if !expanded || story.updates.count == 1 {
+            Text(latest.item.description).font(.system(size: TextSize.body))
+              .lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
+          }
+        }
+        .multilineTextAlignment(.leading).padding(.vertical, 20).contentShape(Rectangle())
+      }
+      .buttonStyle(TimelineRowStyle())
+      .accessibilityValue(expanded ? "已展开" : "已折叠")
+      .accessibilityHint(story.updates.count > 1 ? "展开这件事的经过" : "展开原始记录")
+      if expanded {
+        if story.updates.count == 1, let day = TimelineDay.date(latest.day) {
+          TimelineSegmentRecords(day: day, item: latest.item, dayRecords: nil).padding(.bottom, 20)
+        } else {
+          let updates = Array(story.updates.reversed())
+          ForEach(updates.indices, id: \.self) { index in
+            let update = updates[index]
+            if let day = TimelineDay.date(update.day) {
+              if index == 0 || updates[index - 1].day != update.day {
+                Text("\(Fmt.date(day)) \(ViewerFormat.weekday(day))")
+                  .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+                  .padding(.top, 12).padding(.bottom, 6)
+              }
+              TimelineSegmentRow(day: day, item: update.item, showsTitle: false, expanded: expandedRecord == update.id) {
+                expandedRecord = expandedRecord == update.id ? nil : update.id
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

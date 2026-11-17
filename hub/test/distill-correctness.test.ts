@@ -55,7 +55,7 @@ test("时间线按原记录并集计时，同名事项不混合且中途切换�
   thread(); thread("other");
   frame("long", [[0,20], [40,60]]); frame("nested", [[5,15]]);
   frame("other", [[25,35]], "other"); frame("tail", [[65,75]]);
-  noteFor("t",0); noteFor("other",25);
+  noteFor("t",0); noteFor("other",25); noteFor("t",40);
   await dayStep({ db: ctx.db, llm: reviewModel }, store, date, base + 3 * 3600_000);
   const items = store.day(date)!.detail.items;
   expect(items).toHaveLength(3);
@@ -150,7 +150,7 @@ test("回顾跨本地午夜裁剪时长，不把前一天或次日的时间算�
   thread();
   frame("start", [[-610,-590]]); // 当天 00:00 前后各十分钟
   frame("end", [[830,850]]); // 当天 24:00 前后各十分钟
-  noteFor("t",830);
+  noteFor("t",-600); noteFor("t",830);
   await dayStep({ db: ctx.db, llm: reviewModel }, store, date, base + 16 * 3600_000);
   const { items, timeline } = store.day(date)!.detail;
   expect(items).toHaveLength(2);

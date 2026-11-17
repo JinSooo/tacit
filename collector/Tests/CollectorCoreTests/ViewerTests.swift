@@ -69,6 +69,31 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(review.detail?.timeline?.first?.text == "旧标签")
 }
 
+@Test func projectReadingConnectsOnlyAssignedUpdatesAndKeepsTheirOwnTimes() throws {
+  func update(_ id: String, day: String, thread: String? = nil, project: String = "exhibit") throws -> ProjectUpdate {
+    var data: [String: Any] = ["id": id, "title": "入口展板", "description": "核对展板的位置。",
+      "t_start": "\(day)T10:00:00+09:00", "t_end": "\(day)T10:15:00+09:00", "active_seconds": 900,
+      "sources": ["manual.note"], "evidence": [], "record_ids": [id], "project_id": project]
+    if let thread { data["thread_id"] = thread }
+    let item = try HubJSON.decoder().decode(DayDiary.Item.self, from: JSONSerialization.data(withJSONObject: data))
+    return ProjectUpdate(day: day, item: item)
+  }
+  let early = try update("first", day: "2026-06-16", thread: "poster")
+  let late = try update("last", day: "2026-06-18", thread: "poster")
+  let unassigned = try update("unassigned", day: "2026-06-17")
+  let sameTitle = try update("same-title", day: "2026-06-16")
+  let otherProject = try update("other", day: "2026-06-15", thread: "poster", project: "library")
+  let stories = ProjectReading.stories([early, unassigned, late, sameTitle, otherProject])
+  #expect(stories.count == 4)
+  #expect(stories.first?.latest.id == late.id)
+  let connected = try #require(stories.first { $0.updates.count == 2 })
+  #expect(connected.updates.map(\.id) == [late.id, early.id])
+  #expect(connected.updates.map { $0.item.activeSeconds } == [900, 900])
+  #expect(connected.updates.last?.item.recordIds == ["first"])
+  #expect(connected.updates.last?.item.end == early.item.end)
+  #expect(ProjectReading.stories([]).isEmpty)
+}
+
 @Test func threadCardCanDistinguishAPendingBriefFromBlankText() throws {
   let cards = try decode([HubThread].self, """
     [{"id":"a","title":"修复设置入口","status":"active","brief":"  核对默认页和跳转 "},

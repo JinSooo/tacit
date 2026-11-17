@@ -75,10 +75,10 @@ struct DayStrata: View {
   var laneGap: CGFloat { isTimeline ? 6 : 5 }
   var lanePitch: CGFloat { laneHeight + laneGap }
 
-  var lanes: [Lane] { Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } } }
-  var chapterTop: CGFloat { Self.axisHeight + 4 }
+  var lanes: [Lane] { isTimeline ? [] : Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } } }
+  var chapterTop: CGFloat { Self.axisHeight + (isTimeline ? 12 : 4) }
   var lanesTop: CGFloat { chapterTop + (chapters.isEmpty ? 0 : Self.chapterHeight + 8) }
-  var height: CGFloat { lanesTop + CGFloat(lanes.count) * lanePitch + 2 }
+  var height: CGFloat { lanesTop + CGFloat(lanes.count) * lanePitch + (isTimeline ? 10 : 2) }
 
   /// 时间轴只覆盖有活动的小时，前后各留一点；今天会延伸到此刻。
   var fullDomain: ClosedRange<Date> {
@@ -305,7 +305,7 @@ struct DayStrata: View {
       let offset = t.timeIntervalSince(dayStart)
       let isMajor = abs(offset.remainder(dividingBy: major)) < 1
       var line = Path(); line.move(to: CGPoint(x: px, y: Self.axisHeight)); line.addLine(to: CGPoint(x: px, y: bottom))
-      ctx.stroke(line, with: .color(Palette.ink.opacity(isMajor ? 0.08 : 0.035)), lineWidth: 1)
+      ctx.stroke(line, with: .color(Palette.ink.opacity(isTimeline ? (isMajor ? 0.055 : 0.025) : (isMajor ? 0.08 : 0.035))), lineWidth: 1)
       if isMajor {
         let label = major >= 3600 ? String(format: "%02d", cal.component(.hour, from: t)) : ViewerFormat.clock(t)
         let text = labels.resolve(Text(label).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted))
@@ -313,6 +313,13 @@ struct DayStrata: View {
         labels.draw(text, at: CGPoint(x: min(px, plot.maxX - halfWidth), y: 8), anchor: .center)
       }
       t = t.addingTimeInterval(step)
+    }
+
+    if isTimeline {
+      var baseline = Path()
+      baseline.move(to: CGPoint(x: plot.minX, y: chapterTop + Self.chapterHeight / 2))
+      baseline.addLine(to: CGPoint(x: plot.maxX, y: chapterTop + Self.chapterHeight / 2))
+      ctx.stroke(baseline, with: .color(Palette.hairline), lineWidth: 1)
     }
 
     for (i, slot) in chapterSlots(plot: plot, domain: d).enumerated() {
@@ -326,11 +333,11 @@ struct DayStrata: View {
       case .chapter: active = brush == c.start...c.end
       }
       let label = slot.labelWidth.flatMap { fitted(c.text, width: $0, ctx: ctx) }
-      let rect = label == nil ? CGRect(x: full.minX, y: full.midY - 3, width: full.width, height: 6) : full
+      let rect = label == nil ? CGRect(x: full.minX, y: full.midY - (isTimeline ? 4 : 3), width: full.width, height: isTimeline ? 8 : 6) : full
       let outsideBrush = isTimeline && (brush.map { c.end < $0.lowerBound || c.start > $0.upperBound } ?? false)
-      let alpha = outsideBrush ? 0.06 : label == nil ? 0.16 : (i % 2 == 0 ? 0.08 : 0.05)
+      let alpha = outsideBrush ? 0.06 : isTimeline ? (label == nil ? 0.42 : 0.15) : label == nil ? 0.16 : (i % 2 == 0 ? 0.08 : 0.05)
       ctx.fill(Path(roundedRect: rect, cornerRadius: min(Radius.control, rect.height / 2)),
-               with: active ? .color(Palette.accent.opacity(0.25)) : .color(Palette.ink.opacity(alpha)))
+               with: .color((isTimeline || active ? Palette.accent : Palette.ink).opacity(active ? 0.3 : alpha)))
       if let label { ctx.draw(label, at: CGPoint(x: rect.minX + 6, y: rect.midY), anchor: .leading) }
     }
 

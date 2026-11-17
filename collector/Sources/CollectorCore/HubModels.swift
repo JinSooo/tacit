@@ -266,6 +266,7 @@ public struct DayDiary: Decodable, Sendable {
     public struct App: Decodable, Hashable, Sendable {
       public let source: String
       public let app: String?
+      public init(source: String, app: String?) { self.source = source; self.app = app }
     }
 
     public let id: String
@@ -279,6 +280,7 @@ public struct DayDiary: Decodable, Sendable {
     public let apps: [App]?
     public let recordIds: [String]?
     public let projectId: String?
+    public let threadId: String?
 
     public var start: Date? { ViewerTime.parse(tStart) }
     public var end: Date? { ViewerTime.parse(tEnd) }

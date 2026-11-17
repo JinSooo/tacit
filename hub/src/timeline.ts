@@ -32,7 +32,7 @@ export function timelineDays(hub: HubDB, params: URLSearchParams) {
     const detail = JSON.parse(row.detail) as { items?: StoredReviewItem[] };
     if (!Array.isArray(detail.items)) continue;
     const corrections = row.corrections ? JSON.parse(row.corrections) as TimelineCorrections : null;
-    const items = applyTimelineCorrections(detail.items, corrections).filter(isTimelineItem).filter(item => {
+    const items = new DistillStore(hub).readingItems(applyTimelineCorrections(detail.items, corrections)).filter(isTimelineItem).filter(item => {
       if (project) return item.project_id === project;
       const target = normalized(`${item.title}\n${item.description}`);
       return words.every(word => target.includes(word));
@@ -53,12 +53,20 @@ export function timelineRecord(hub: HubDB, id: string) {
   const from = toLocalIso(record.t_start_ms).slice(0,10);
   const end = Date.parse(record.t_end ?? "");
   const to = Number.isFinite(end) ? toLocalIso(Math.max(record.t_start_ms,end)).slice(0,10) : from;
-  return hub.db.prepare<[string,string,string], { date: string; segment_id: string }>(`
-    SELECT d.date,json_extract(i.value,'$.id') segment_id
+  const days = hub.db.prepare<[string,string,string], { date: string }>(`
+    SELECT DISTINCT d.date
     FROM days d JOIN json_each(d.detail,'$.items') i
     WHERE d.date BETWEEN ? AND ?
       AND EXISTS (SELECT 1 FROM json_each(i.value,'$.record_ids') r WHERE r.value=?)
-    ORDER BY d.date,julianday(json_extract(i.value,'$.t_start')),segment_id LIMIT 1`).get(from,to,record.id) ?? { date: from, segment_id: null };
+    ORDER BY d.date`).all(from,to,record.id);
+  const store = new DistillStore(hub);
+  for (const { date } of days) {
+    const items = store.dayView(date)?.detail?.items as ReviewItem[] | undefined;
+    const item = items?.filter(isTimelineItem).sort((a, b) => Date.parse(a.t_start) - Date.parse(b.t_start) || a.id.localeCompare(b.id))
+      .find(item => item.record_ids.includes(record.id));
+    if (item) return { date, segment_id: item.id };
+  }
+  return { date: from, segment_id: null };
 }
 
 function findSegment(store: DistillStore, date: string, id: string): ReviewItem | null {

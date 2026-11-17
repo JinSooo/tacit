@@ -6,7 +6,7 @@ import { frameRecordsSchema, frameRejectionsSchema } from "./schema.ts";
 import { HubDB, InputError } from "../db.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { recordSpans, unionSeconds } from "../durations.ts";
-import type { ReviewItem } from "./day-review.ts";
+import { isReadableReviewItem, type ReviewItem } from "./day-review.ts";
 
 export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" | "candidate" | "candidate_expired" }
 export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[] }
@@ -93,19 +93,54 @@ export class DistillStore {
   project(id: string): Project | null { const r = this.sql.prepare("SELECT * FROM projects WHERE id=?").get(id); return r ? decode(r as Row) : null; }
   thread(id: string): Thread | null { const r = this.sql.prepare("SELECT * FROM threads WHERE id=?").get(id); return r ? decode(r as Row) : null; }
   day(date: string): Row | null { const r = this.sql.prepare("SELECT * FROM days WHERE date=?").get(date); return r ? decode(r as Row) : null; }
+  /** 给人看的投影。按引用原文的现有归属串联事项，不按相似标题猜测。 */
+  readingItems(items: StoredReviewItem[]) {
+    const readable = items.filter(item => isReadableReviewItem(item) && Array.isArray(item.evidence));
+    const ids = [...new Set(readable.flatMap(item => item.evidence.map(ref => ref.id)))];
+    const rows = this.sql.prepare<[string], { id: string; source: string; app: string | null; thread_id: string | null; project_id: string | null }>(`
+      SELECT r.id,r.source,json_extract(r.context,'$.app') app,a.thread_id,t.project_id FROM records r
+      LEFT JOIN frame_records fr ON fr.record_id=r.id
+      LEFT JOIN assignments a ON a.frame_id=fr.frame_id LEFT JOIN threads t ON t.id=a.thread_id
+      WHERE r.id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids));
+    const records = new Map(rows.map(row => [row.id, row]));
+    return readable.map(item => {
+      const cited = item.evidence.map(ref => records.get(ref.id));
+      const assigned = cited.filter((row): row is NonNullable<typeof row> => !!row?.thread_id);
+      const threads = new Set(assigned.map(row => row.thread_id));
+      const thread = threads.size === 1 && assigned.every(row => row.project_id === item.project_id)
+        ? assigned[0]!.thread_id : null;
+      const apps = [...new Map(item.evidence.map(ref => {
+        const row = records.get(ref.id), source = ref.source, app = row?.app ?? null;
+        return [JSON.stringify([source, app]), { source, app }];
+      })).values()];
+      return { ...item, ...(thread ? { thread_id: thread } : {}),
+        ...(apps.length ? { apps, sources: [...new Set(apps.map(app => app.source))] } : {}) };
+    });
+  }
   dayView(date: string, { agent = false } = {}): Row | null {
     const row = this.day(date);
     if (!row) return null;
     // 旧库仍可读取日期和时间条，接口只返回当前契约里的字段。
     const { summary, timeline, items, cutoff, omitted_record_ids } = row.detail ?? {};
     const adjusted = Array.isArray(items) ? applyTimelineCorrections(items, this.getState<TimelineCorrections>(timelineCorrectionKey(date))) : undefined;
+    const reading = !agent && adjusted ? this.readingItems(adjusted) : undefined;
     const visible = agent ? adjusted?.map(item => {
       if (!isTimelineItem(item)) return item;
       const { apps: _apps, record_ids: _ids, project_id: _project, ...existing } = item;
       return existing;
-    }) : adjusted;
-    return { ...row, detail: row.detail ? { summary, timeline, items: visible, cutoff,
-      ...(!agent && Array.isArray(omitted_record_ids) ? { omitted_record_ids } : {}) } : null,
+    }) : reading;
+    const visibleIds = new Set(reading?.flatMap(item => item.record_ids ?? []) ?? []);
+    const hiddenIds = !agent ? adjusted?.filter(item => !reading?.some(shown => shown.id === item.id))
+      .flatMap(item => item.record_ids ?? []) ?? [] : [];
+    const omitted = [...new Set([...(omitted_record_ids ?? []), ...hiddenIds])].filter(id => !visibleIds.has(id));
+    const hiddenHeading = !agent && adjusted?.some(item => !isReadableReviewItem(item) && summary === item.title);
+    const leading = reading && [...reading].sort((a, b) => b.active_seconds - a.active_seconds)[0];
+    const heading = !agent && adjusted?.length && !visible?.length ? null : hiddenHeading ? leading?.title ?? null : summary;
+    const chapters = !agent && adjusted?.every(isTimelineItem) ? reading?.map(item => ({
+      start: item.t_start.slice(11, 16), end: item.t_end.slice(0, 10) > date ? "24:00" : item.t_end.slice(11, 16), text: item.title,
+    })).filter(item => item.start !== item.end) : timeline;
+    return { ...row, ...(!agent && Array.isArray(items) ? { brief: heading ?? null } : {}), detail: row.detail ? { summary: heading, timeline: chapters, items: visible, cutoff,
+      ...(!agent && (Array.isArray(omitted_record_ids) || hiddenIds.length) ? { omitted_record_ids: omitted } : {}) } : null,
       ...(this.getState<boolean>(`day_failed:${date}`) ? { failed: true } : {}) };
   }
   facts(field: "thread_id" | "project_id", id: string): Fact[] { return this.sql.prepare(`SELECT * FROM facts WHERE ${field}=? AND invalid_at IS NULL ORDER BY created_at,id`).all(id).map(r => decode<Fact>(r as Row)); }

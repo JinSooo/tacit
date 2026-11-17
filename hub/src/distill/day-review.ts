@@ -41,6 +41,17 @@ export interface ReviewDetail {
   omitted_record_ids: string[];
 }
 
+// 采集成功不等于有值得阅读的内容。旧回顾在读取时也使用同一个筛选规则。
+const CAPTURE_ONLY = new Set([
+  "有 Codex 会话记录", "有 Claude Code 会话记录", "有浏览记录", "有前台窗口记录",
+  "有应用使用记录", "有录音记录", "写了一条记录", "有聊天消息",
+]);
+export function isReadableReviewItem(item: { title?: unknown; description?: unknown }) {
+  if (typeof item.title !== "string" || typeof item.description !== "string") return false;
+  const text = item.description.trim().replace(/[。.!！]+$/u, "");
+  return !!item.title.trim() && !!text && !CAPTURE_ONLY.has(text);
+}
+
 function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
   type RawRow = {
     id: string; source: string; source_ref: string | null; title: string; t_start: string; t_start_ms: number; t_end: string | null;
@@ -327,8 +338,10 @@ function longerConversationBudget(segments: Candidate[]) {
 export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 30) {
   const rows = loadRecords(hub, start, end);
   const gap = gapMinutes * MINUTE;
-  const candidates = splitOverlaps(groupRecords(rows, gap));
-  const candidateCount = candidates.length;
+  const allCandidates = splitOverlaps(groupRecords(rows, gap));
+  const candidates = allCandidates.filter(a => a.primary.some(r =>
+    r.evidence.some(entry => evidenceInPiece(entry, r, a))));
+  const candidateCount = allCandidates.length, evidenceCount = candidates.length;
   const activitySeconds = new Map<string, number>();
   for (const c of candidates) activitySeconds.set(c.activity.key, (activitySeconds.get(c.activity.key) ?? 0) + c.seconds);
   const leadingActivity = [...activitySeconds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
@@ -358,12 +371,15 @@ export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 
     return { ...a, id, kind: a.activity.kind, key: `a${i + 1}`, records, apps, evidence };
   });
   const selectedSet = new Set(selected), visibleIds = new Set(segments.flatMap(s => s.records.map(r => r.id)));
-  const omitted = candidates.filter(a => !selectedSet.has(a));
+  const withoutEvidence = allCandidates.filter(a => !a.primary.some(r =>
+    r.evidence.some(entry => evidenceInPiece(entry, r, a))));
+  const omitted = [...withoutEvidence, ...candidates.filter(a => !selectedSet.has(a))]
+    .sort((a, b) => a.start - b.start);
   const omittedRecordIds = [...new Set(omitted.flatMap(a => recordMembership(a, rows.filter(r => inPiece(r, a)))
     .flatMap(r => visibleIds.has(r.id) ? [] : [r.id])))];
   return {
     segments, omittedRecordIds, dependencyRecordIds: [...dependencyRecordIds],
-    diagnostics: { candidateCount, mergedCount: candidateCount - candidates.length, omittedCount: omitted.length,
+    diagnostics: { candidateCount, mergedCount: evidenceCount - candidates.length, omittedCount: omitted.length,
       longestActivityRetained: !leadingActivity || selected.some(c => c.activity.key === leadingActivity),
       fallbackCount: segments.filter(s => !s.evidence.length).length },
   };
@@ -375,12 +391,17 @@ export function reviewInput(hub: HubDB, start: number, end: number, gapMinutes =
 
 type ReviewSegment = ReturnType<typeof reviewInput>[number];
 export function reviewMaterial(segments: ReviewSegment[]) {
-  return segments.filter(a => a.evidence.length).map(a => ({
-    key: a.key, kind: a.kind, start: toLocalIso(a.start).slice(11, 16),
-    active_minutes: Math.round(a.seconds / 60),
-    evidence: a.evidence.map(({ reference: _reference, position, ...entry }) =>
-      position === "within_batch" ? { ...entry, at: undefined } : entry),
-  }));
+  const previous = new Map<string, string>();
+  return segments.filter(a => a.evidence.length).map(a => {
+    const continues = previous.get(a.activity.key);
+    previous.set(a.activity.key, a.key);
+    return {
+      key: a.key, kind: a.kind, start: toLocalIso(a.start).slice(11, 16), continues,
+      active_minutes: Math.round(a.seconds / 60),
+      evidence: a.evidence.map(({ reference: _reference, position, ...entry }) =>
+        ({ ...entry, key: `${a.key}:${entry.key}`, ...(position === "within_batch" ? { at: undefined } : {}) })),
+    };
+  });
 }
 
 const singleLine = (text: string, limit: number) => {
@@ -392,53 +413,29 @@ function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | und
   if (!candidate) return null;
   const title = singleLine(redactString(candidate.title).text, 20);
   const description = singleLine(redactString(candidate.description).text, 160);
-  if (!title || !description || !candidate.refs.length) return null;
-  const references = candidate.refs.map(key => a.evidence.find(entry => entry.key === key));
+  if (!title || !description || !candidate.refs.length || !isReadableReviewItem({ title, description })) return null;
+  const references = candidate.refs.map(key => a.evidence.find(entry => `${a.key}:${entry.key}` === key));
   if (references.some(entry => !entry) || !references.some(entry => entry && !entry.secondary)) return null;
   const evidence = [...new Map(references.map(entry => [entry!.reference.id, entry!.reference])).values()]
     .sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
   return { title, description, evidence };
 }
 
-function fallbackItem(a: ReviewSegment) {
-  const groups = new Map<string, ReviewRecord[]>();
-  for (const row of a.primary) {
-    const key = JSON.stringify([row.source, row.app]);
-    const records = groups.get(key) ?? [];
-    records.push(row);
-    groups.set(key, records);
-  }
-  const coverage = (rows: ReviewRecord[]) =>
-    unionSeconds(rows.map(r => [Math.max(a.start, r.start), Math.min(a.end, r.end)]));
-  const supported = [...groups.values()].map(records => ({ records, seconds: coverage(records) }))
-    .sort((a, b) => b.seconds - a.seconds || b.records.length - a.records.length)[0]!.records;
-  const primary = [...supported].sort((a, b) => coverage([b]) - coverage([a]))[0]!;
-  const source = primary.source;
-  const provider = source === "codex.session" ? "Codex" : source === "claude_code.session" ? "Claude Code" : null;
-  const description = provider ? `有 ${provider} 会话记录。`
-    : source === "mac.browser" ? "有浏览记录。" : source === "mac.screen" ? "有前台窗口记录。"
-    : source === "mac.app" ? "有应用使用记录。" : source === "mac.audio" ? "有录音记录。"
-    : source === "manual.note" ? "写了一条记录。" : "有聊天消息。";
-  const clippedSession = provider && (a.start > primary.start || a.end < primary.end);
-  const title = clippedSession ? `${provider} 会话` : terse(primary.chat ?? primary.title, 20);
-  const last = supported.at(-1)!;
-  const reference = ({ id, source, title, at }: ReviewRecord): DayReference => ({ id, source, title, at });
-  const evidence = (primary === last ? [primary] : [primary, last]).map(reference);
-  return { title, description, evidence };
-}
-
 export function composeReview(segments: ReviewSegment[], output: DayOutput, dayEnd: number, cutoff: string,
   omitted: string[], dependencies: string[]): ReviewDetail | null {
   const written = new Map(output.items.map(item => [item.activity, item]));
-  const result = segments.map(a => {
+  const result = segments.flatMap(a => {
     const model = modelItem(a, written.get(a.key));
-    const item = model ?? fallbackItem(a);
+    if (!model) return [];
+    const cited = new Set(model.evidence.map(r => r.id));
+    const apps = [...new Map(a.records.filter(r => cited.has(r.id))
+      .map(({ source, app }) => [JSON.stringify([source, app]), { source, app }])).values()];
     const segment: ReviewItem = {
-      id: a.id, title: item.title, description: item.description, t_start: toLocalIso(a.start), t_end: toLocalIso(a.end),
-      active_seconds: a.seconds, sources: [...new Set(a.apps.map(r => r.source))], evidence: item.evidence,
-      apps: a.apps, record_ids: a.records.map(r => r.id), project_id: a.activity.projectId,
+      id: a.id, title: model.title, description: model.description, t_start: toLocalIso(a.start), t_end: toLocalIso(a.end),
+      active_seconds: a.seconds, sources: [...new Set(apps.map(r => r.source))], evidence: model.evidence,
+      apps, record_ids: a.records.map(r => r.id), project_id: a.activity.projectId,
     };
-    return { a, segment, model };
+    return [{ a, segment, model }];
   });
   if (output.items.length && !result.some(r => r.model)) return null;
   const main = output.highlight && result.find(({ a, model }) => model && a.key === output.highlight?.activity);
@@ -448,6 +445,9 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
     start: toLocalIso(a.start).slice(11, 16), end: a.end === dayEnd ? "24:00" : toLocalIso(a.end).slice(11, 16), text: segment.title,
   })).filter(chapter => chapter.start !== chapter.end);
   const items = result.map(({ segment }) => segment);
-  const record_ids = [...new Set([...dependencies, ...omitted])];
-  return { summary, timeline, items, cutoff, record_ids, omitted_record_ids: omitted };
+  const visible = new Set(items.flatMap(item => item.record_ids));
+  const omitted_record_ids = [...new Set([...omitted, ...segments.flatMap(a => a.records.map(r => r.id))])]
+    .filter(id => !visible.has(id));
+  const record_ids = [...new Set([...dependencies, ...omitted_record_ids])];
+  return { summary, timeline, items, cutoff, record_ids, omitted_record_ids };
 }

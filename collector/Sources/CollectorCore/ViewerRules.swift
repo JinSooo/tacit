@@ -56,3 +56,36 @@ public enum ReviewActivity {
     "mac.shell": "shell", "mac.git": "git", "mac.file": "files", "mac.clipboard": "clipboard",
   ]
 }
+
+/// 项目页先读最近进展，展开后沿用每段各自的时间和原文。
+public struct ProjectUpdate: Identifiable, Sendable {
+  public let day: String
+  public let item: DayDiary.Item
+  public var id: String { "\(day)/\(item.id)" }
+  public init(day: String, item: DayDiary.Item) { self.day = day; self.item = item }
+}
+
+public struct ProjectStory: Identifiable, Sendable {
+  public let id: String
+  public let updates: [ProjectUpdate]
+  public var latest: ProjectUpdate { updates[0] }
+}
+
+public enum ProjectReading {
+  public static func stories(_ updates: [ProjectUpdate]) -> [ProjectStory] {
+    let ordered = updates.sorted {
+      let a = $0.item.start ?? .distantPast, b = $1.item.start ?? .distantPast
+      return a == b ? $0.id < $1.id : a > b
+    }
+    var groups: [String: [ProjectUpdate]] = [:]
+    for update in ordered {
+      let key = update.item.threadId.map { "\(update.item.projectId ?? "")/thread:\($0)" }
+        ?? "segment:\(update.id)"
+      groups[key, default: []].append(update)
+    }
+    return groups.map { ProjectStory(id: $0.key, updates: $0.value) }.sorted {
+      let a = $0.latest.item.start ?? .distantPast, b = $1.latest.item.start ?? .distantPast
+      return a == b ? $0.id < $1.id : a > b
+    }
+  }
+}

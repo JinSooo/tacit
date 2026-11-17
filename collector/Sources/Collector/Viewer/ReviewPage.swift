@@ -81,8 +81,10 @@ private struct ReviewDayContent: View {
     ScrollViewReader { proxy in
       ScrollView {
         VStack(alignment: .leading, spacing: 22) {
-          dateLine
-          headline
+          VStack(alignment: .leading, spacing: 12) {
+            dateLine
+            headline
+          }
           if !items.isEmpty {
             DayStrata(records: visibleRecords, segments: items, day: day, now: isToday ? now : nil, selected: expanded, brush: $brush) { id in
               open(id, in: proxy)
@@ -115,10 +117,13 @@ private struct ReviewDayContent: View {
   }
 
   private var dateLine: some View {
-    HStack {
+    HStack(alignment: .firstTextBaseline, spacing: 16) {
       Button { picking = true } label: {
-        Text("\(Fmt.date(day)) \(ViewerFormat.weekday(day))")
-          .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+          Text(Fmt.date(day)).font(.serif(TextSize.display)).foregroundStyle(Palette.ink)
+          Text(ViewerFormat.weekday(day)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        }
+        .padding(.vertical, 4).contentShape(Rectangle())
       }
       .buttonStyle(.plain).help("跳到日期").popover(isPresented: $picking) {
         DatePicker("选择日期", selection: Binding(get: { day }, set: {
@@ -129,14 +134,15 @@ private struct ReviewDayContent: View {
           .environment(\.locale, Locale(identifier: "zh_CN")).environment(\.calendar, ViewerCalendar.chinese)
       }
       Spacer()
-      ControlGroup {
+      HStack(spacing: 0) {
         Button { shift(-1) } label: { PhIcon("caret-left", size: 14) }
           .help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
         Button("今天") { day = today }.disabled(isToday).keyboardShortcut("t", modifiers: .command)
         Button { shift(1) } label: { PhIcon("caret-right", size: 14) }
           .help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command).disabled(isToday)
       }
-      .font(.system(size: TextSize.caption)).fixedSize()
+      .buttonStyle(ReviewDateButtonStyle())
+      .font(.system(size: TextSize.body)).fixedSize()
     }
   }
 
@@ -147,8 +153,8 @@ private struct ReviewDayContent: View {
 
   @ViewBuilder private var headline: some View {
     if hasSegments, let summary = review?.summary {
-      ReviewHeadline(text: summary, size: TextSize.display)
-        .foregroundStyle(Palette.ink).lineSpacing(TextSize.serifLineSpacing(TextSize.display))
+      ReviewHeadline(text: summary, size: TextSize.title)
+        .foregroundStyle(Palette.ink).lineSpacing(TextSize.serifLineSpacing(TextSize.title))
         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled).accessibilityAddTraits(.isHeader)
     } else if current, let error = diary.error ?? records.error {
       Placeholder(kind: .error(error) { Task { await load() } })
@@ -158,8 +164,10 @@ private struct ReviewDayContent: View {
       ProgressView().controlSize(.small).accessibilityLabel("正在读取时间线")
     } else if records.value?.isEmpty == true && review?.detail == nil {
       status("这一天没有记录")
+    } else if hasSegments && !items.isEmpty {
+      status("这一天的活动")
     } else if hasSegments {
-      status("这一天没有整理出活动段")
+      status("这一天的记录还没有可展示的整理结果")
     } else if review?.detail != nil {
       status("这一天有原始记录")
     } else if !isToday && review?.needsRegen?.value != true {
@@ -186,7 +194,7 @@ private struct ReviewDayContent: View {
   }
 
   private func status(_ text: String, color: Color = Palette.muted) -> some View {
-    Text(text).font(.serif(TextSize.display)).foregroundStyle(color).accessibilityAddTraits(.isHeader)
+    Text(text).font(.serif(TextSize.title)).foregroundStyle(color).accessibilityAddTraits(.isHeader)
   }
 
   private func reveal(_ proxy: ScrollViewProxy) {
@@ -243,7 +251,17 @@ struct ReviewHeadline: View {
   }
 }
 
-private enum ReviewTime {
+private struct ReviewDateButtonStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var enabled
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .frame(minWidth: 40, minHeight: 40)
+      .foregroundStyle(Palette.muted).opacity(enabled ? 1 : 0.45)
+      .background(configuration.isPressed ? Palette.fill : Color.clear, in: RoundedRectangle(cornerRadius: Radius.control))
+  }
+}
+
+enum ReviewTime {
   static func clock(_ date: Date, on day: Date) -> String {
     date == ViewerTime.dayBounds(day).end ? "24:00" : ViewerFormat.clock(date)
   }

@@ -1,34 +1,53 @@
 import SwiftUI
 import CollectorCore
 
+enum TimelineReadingLayout {
+  // 与原始记录行共用时间列和轴心，展开后仍是同一条时间线。
+  static let edge: CGFloat = 8
+  static let timeWidth = RecordRow.timeWidth
+  static let markerWidth: CGFloat = 26
+  static let gap: CGFloat = 12
+  static let gutter = gap + markerWidth + gap
+  static let axis = edge + timeWidth + gap + (markerWidth - 1) / 2
+  static let contentInset = edge + timeWidth + gutter
+  static let rowPadding: CGFloat = 18
+}
+
 struct TimelineSegmentRow: View {
   let day: Date
   let item: DayDiary.Item
   var records: [HistoryRecord]? = nil
+  var showsTitle = true
   let expanded: Bool?
   let onToggle: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Rectangle().fill(Palette.hairline).frame(height: 1).accessibilityHidden(true)
       Button(action: onToggle) {
-        HStack(alignment: .firstTextBaseline, spacing: 16) {
-          Text(item.start.map { ViewerFormat.clock($0) } ?? "")
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+          Text(ReviewTime.range(item, on: day))
             .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
-            .frame(width: 44, alignment: .leading)
-          VStack(alignment: .leading, spacing: 4) {
-            Text(item.title).font(.system(size: TextSize.title, weight: .semibold)).foregroundStyle(Palette.ink)
+            .frame(width: TimelineReadingLayout.timeWidth, alignment: .trailing)
+            .padding(.trailing, TimelineReadingLayout.gutter)
+          VStack(alignment: .leading, spacing: 8) {
+            if showsTitle {
+              HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                TimelineSourceIcons(item: item).fixedSize()
+              }
+            }
             Text(item.description).font(.system(size: TextSize.body))
               .lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
-            glyphs.padding(.top, 4)
           }
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           PhIcon(expanded == true ? "caret-down" : "caret-right", size: 11)
-            .foregroundStyle(Palette.muted).accessibilityHidden(true)
+            .foregroundStyle(Palette.muted).padding(.leading, 16).accessibilityHidden(true)
         }
         .multilineTextAlignment(.leading)
-        .padding(.vertical, 12)
+        .padding(.horizontal, TimelineReadingLayout.edge)
+        .padding(.vertical, TimelineReadingLayout.rowPadding)
         .contentShape(Rectangle())
       }
       .buttonStyle(TimelineRowStyle())
@@ -39,22 +58,45 @@ struct TimelineSegmentRow: View {
           .padding(.bottom, 16)
       }
     }
+    .background(alignment: .leading) {
+      Rectangle().fill(Palette.hairline).frame(width: 1)
+        .offset(x: TimelineReadingLayout.axis)
+        .accessibilityHidden(true).allowsHitTesting(false)
+    }
+    .overlay(alignment: .topLeading) {
+      Circle().fill(expanded == true ? Palette.accent : Palette.muted)
+        .frame(width: 5, height: 5)
+        .offset(x: TimelineReadingLayout.axis - 2,
+                y: TimelineReadingLayout.rowPadding + 7)
+        .accessibilityHidden(true).allowsHitTesting(false)
+    }
   }
 
-  private var glyphs: some View {
+}
+
+struct TimelineSourceIcons: View {
+  let item: DayDiary.Item
+
+  private var icons: [DayDiary.Item.App] {
     let apps = (item.apps ?? []).filter { $0.app?.isEmpty == false }
     let appSources = Set(apps.map(\.source))
-    return HStack(spacing: 8) {
-      ForEach(apps, id: \.self) { app in
+    let candidates = apps + item.sources.filter { !appSources.contains($0) }
+      .map { DayDiary.Item.App(source: $0, app: nil) }
+    var seen = Set<String>()
+    return candidates.filter {
+      seen.insert(AppIcons.name($0.app)?.lowercased() ?? $0.app?.lowercased() ?? $0.source).inserted
+    }
+  }
+
+  var body: some View {
+    HStack(spacing: 6) {
+      ForEach(Array(icons.prefix(3)), id: \.self) { app in
         let label = AppIcons.name(app.app) ?? SourceInfo.name(app.source)
-        SourceGlyph(source: app.source, app: app.app, size: 16)
+        SourceGlyph(source: app.source, app: app.app, size: 12)
           .help(label).accessibilityLabel(label)
       }
-      ForEach(item.sources.filter { !appSources.contains($0) }, id: \.self) { source in
-        SourceGlyph(source: source, size: 16)
-          .help(SourceInfo.name(source)).accessibilityLabel(SourceInfo.name(source))
-      }
     }
+    .help(icons.map { AppIcons.name($0.app) ?? SourceInfo.name($0.source) }.joined(separator: "、"))
   }
 }
 
@@ -64,7 +106,7 @@ struct TimelineRowStyle: ButtonStyle {
   }
 }
 
-private struct TimelineSegmentRecords: View {
+struct TimelineSegmentRecords: View {
   let day: Date
   let item: DayDiary.Item
   let dayRecords: [HistoryRecord]?
@@ -80,7 +122,7 @@ private struct TimelineSegmentRecords: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("时长 \(Fmt.duration(item.activeSeconds))")
-        .padding(.leading, 60).monospacedDigit().foregroundStyle(Palette.muted)
+        .padding(.leading, TimelineReadingLayout.contentInset).monospacedDigit().foregroundStyle(Palette.muted)
       if let rows = records.value {
         ForEach(rows) { record in
           RecordRow(record: record, run: nil, selected: false, expanded: false, nested: true) {
@@ -88,10 +130,10 @@ private struct TimelineSegmentRecords: View {
           }
         }
       } else if let error = records.error {
-        Text(error).foregroundStyle(Palette.attention).padding(.leading, 60)
-        Button("重试") { Task { await load() } }.buttonStyle(.accentLink).padding(.leading, 60)
+        Text(error).foregroundStyle(Palette.attention).padding(.leading, TimelineReadingLayout.contentInset)
+        Button("重试") { Task { await load() } }.buttonStyle(.accentLink).padding(.leading, TimelineReadingLayout.contentInset)
       } else {
-        ProgressView().controlSize(.small).padding(.leading, 60).accessibilityLabel("正在读取原始记录")
+        ProgressView().controlSize(.small).padding(.leading, TimelineReadingLayout.contentInset).accessibilityLabel("正在读取原始记录")
       }
       HStack(spacing: 16) {
         Button("这段写得不对") { correcting = true }.buttonStyle(.accentLink)
@@ -102,9 +144,9 @@ private struct TimelineSegmentRecords: View {
         }
         .buttonStyle(.accentLink).disabled(deleting || item.recordIds?.isEmpty != false)
       }
-      .padding(.leading, 60)
+      .padding(.leading, TimelineReadingLayout.contentInset)
       if let deleteError {
-        Text(deleteError).padding(.leading, 60).foregroundStyle(Palette.attention)
+        Text(deleteError).padding(.leading, TimelineReadingLayout.contentInset).foregroundStyle(Palette.attention)
       }
     }
     .font(.system(size: TextSize.caption))
