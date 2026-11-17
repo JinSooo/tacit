@@ -1,3 +1,4 @@
+import { DEFAULT_EXCLUDED_TOOLS } from "../hub/src/distill/session-purpose.ts";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { dataDirOf, resolvePort } from "../hub/src/hub-json.ts";
@@ -19,7 +20,7 @@ type Hits = { calls: number; hits: number; empty: number; errors: number };
 const DAYS = 7;
 const MATCH_WINDOW_MINUTES = 120;
 const activeReads = new Set(["search", "get", "now", "timeline"]);
-const defaultExcludedTools = new Set(["accuracy-eval", "release-check", "qa-readonly", "test"]);
+const defaultExcludedTools = DEFAULT_EXCLUDED_TOOLS;
 const usage = "bun scripts/agent-metrics.ts [--exclude-project <项目 ID>]... [--exclude-tool <工具名>]... [--include-test-tools]";
 const ratio = (count: number, total: number) => total ? count / total : null;
 

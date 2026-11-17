@@ -174,6 +174,7 @@ function prompt(question: Question, dataset: Dataset) {
     timeline: "先按题目提到的日期和时间查 timeline，必要时用 search 定位。",
   };
   return [
+    "[tacit-tool-session:accuracy-eval]",
     question.prompt,
     `历史截止 ${dataset.as_of}，时区 ${dataset.utc_offset}。`,
     hints[question.lookup],

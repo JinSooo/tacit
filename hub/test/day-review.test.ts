@@ -52,7 +52,7 @@ test("段保留连续活动的实际时长、全部原文和模型引用，排�
       expect(req.task).toBe("day");
       expect(req.prompt).not.toContain("屏幕正文应排除");
       const { activities: [thread, audio] } = parse(req.prompt);
-      expect(thread?.active_minutes).toBe(7);
+      expect(thread?.active_minutes).toBe(10);
       expect(thread?.evidence.map(e => e.role)).toEqual(["user", "user", "assistant"]);
       expect(thread?.evidence.map(e => e.at)).toEqual([point(0), undefined, point(10)]);
       expect(audio?.evidence.map(e => e.role)).toEqual(["user", "other"]);
@@ -68,7 +68,7 @@ test("段保留连续活动的实际时长、全部原文和模型引用，排�
     expect(review.detail.cutoff).toBe(toLocalIso(now));
     const [a,b] = review.detail.items;
     expect(review.detail.items).toHaveLength(2);
-    expect(a).toMatchObject({ id: first.id, title: "排定导览图", active_seconds: 7 * 60, t_start: point(-2), t_end: point(5),
+    expect(a).toMatchObject({ id: first.id, title: "排定导览图", active_seconds: 10 * 60, t_start: point(0), t_end: point(10),
       sources: ["codex.session"], apps: [{ source: "codex.session", app: null }],
       record_ids: [first.id, screen.id, browser.id, followup.id], project_id: "museum",
       evidence: [{ id: first.id, at: first.t_start, source: first.source, title: first.title }, { id: followup.id }] });
@@ -78,7 +78,7 @@ test("段保留连续活动的实际时长、全部原文和模型引用，排�
     expect(review.detail.items.flatMap((item: { record_ids: string[] }) => item.record_ids)).not.toContain(privateNote.id);
     expect(review.detail.items.flatMap((item: { record_ids: string[] }) => item.record_ids)).not.toContain(noise.id);
     expect(Object.keys(a.evidence[0]).sort()).toEqual(["at", "id", "source", "title"]);
-    expect(review.detail.timeline[0]).toEqual({ start: "09:58", end: "10:05", text: "排定导览图" });
+    expect(review.detail.timeline[0]).toEqual({ start: "10:00", end: "10:10", text: "排定导览图" });
     expect((await request(ctx, `/v1/records/${a.evidence[0].id}`)).status).toBe(200);
     expect(ctx.db.get(screen.id)?.body).toBe(screen.body);
   } finally { ctx.cleanup(); }
@@ -136,7 +136,7 @@ test("时间完全交叠时用户作主段，其他来源和记录仍在同一�
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       id: wrote.id, title: "活动表放在入口", description: "决定将活动表放在入口。",
-      t_start: point(-2), t_end: point(2), active_seconds: 4 * 60,
+      t_start: point(0), t_end: point(20), active_seconds: 20 * 60,
       apps: [{ source: "codex.session", app: "codex" }],
       record_ids: [read.id, received.id, wrote.id],
     });
@@ -162,14 +162,15 @@ test("长 AI 会话中部让位给有时间戳的对话，项目时长与原文�
     }
     const segments = reviewInput(ctx.db, base, base + 50 * min);
     expect(segments.map(s => [s.id, s.start, s.end, s.seconds, s.activity.projectId, s.records.map(r => r.id)])).toEqual([
-      [background.id, base, base + 2 * min, 2 * 60, "project-0", [background.id]],
-      [dialogue.id, base + 14 * min, base + 23 * min, 9 * 60, "project-1", [dialogue.id]],
+      [background.id, base, base + 14 * min, 14 * 60, "project-0", [background.id]],
+      [dialogue.id, base + 14 * min, base + 18 * min, 4 * 60, "project-1", [dialogue.id]],
+      [`${background.id}:${base + 18 * min}`, base + 18 * min, base + 30 * min, 12 * 60, "project-0", [background.id]],
     ]);
-    expect(segments[1]!.apps).toEqual([{ source: "mac.audio", app: "org.example.call" }]);
+    expect(segments[1]!.apps).toEqual([{ source: "codex.session", app: "codex" }, { source: "mac.audio", app: "org.example.call" }]);
     expect(segments[1]!.evidence.map(e => e.reference.id)).toEqual([dialogue.id]);
     expect(segments[0]!.evidence.map(e => e.role)).toEqual(["user", "assistant", "assistant"]);
     const material = reviewMaterial(segments);
-    expect(material).toHaveLength(2);
+    expect(material).toHaveLength(3);
     expect(material[1]!.continues).toBeUndefined();
     expect(reviewPlan(ctx.db, base, base + 50 * min).omittedRecordIds).toContain(next.id);
   } finally { ctx.cleanup(); }
@@ -229,7 +230,7 @@ test("超过 30 段时为项目保留代表，余段按实际覆盖选取，原�
     expect(plan.diagnostics).toEqual({ candidateCount: 32, mergedCount: 0, omittedCount: 2, longestActivityRetained: true, fallbackCount: 0 });
     expect(plan.segments).toHaveLength(30);
     expect(plan.segments[0]!.id).toBe(representative.id);
-    expect(plan.omittedRecordIds).toEqual([records[30]!.id, records[31]!.id]);
+    expect(plan.omittedRecordIds).toEqual([records[1]!.id, records[31]!.id]);
     const llm: LLM = { async complete<T>(req: import("../src/llm/index.ts").LLMRequest) {
       expect(parse(req.prompt).activities).toHaveLength(30);
       return { ok: true, data: emptyDayOutput as T, ms: 1 };
@@ -445,7 +446,7 @@ test("续跑产出并回同日用户发起段，不拉长时间；摘要选有�
     ctx.db.ingest([initiated, continued]);
     const plan = reviewPlan(ctx.db, base, base + 200 * min), material = reviewMaterial(plan.segments);
     expect(plan.segments).toHaveLength(1);
-    expect(plan.segments[0]).toMatchObject({ start: base + 8 * min, end: base + 12 * min, seconds: 240 });
+    expect(plan.segments[0]).toMatchObject({ start: base + 10 * min, end: base + 30 * min, seconds: 1200 });
     expect(plan.segments[0]!.records.map(r => r.id)).toEqual([initiated.id, continued.id]);
     expect(material[0]!.evidence.some(e => e.text.includes("图例修复"))).toBe(true);
     expect(material[0]!.evidence.some(e => e.text.includes("Continue"))).toBe(false);
@@ -474,18 +475,74 @@ test("结构化判断排除纯请求与空录音，保留后续结果和用户�
   } finally { ctx.cleanup(); }
 });
 
-test("同批首尾用户窗口合并时两条发言都保留，分开时段 ID 唯一", () => {
+test("同批跨度在输入预算内保留实际区间与全部发言", () => {
   const ctx = setup();
   try {
     const near = span(10, 13, { source: "claude_code.session", source_ref: "synthetic-near", body: "[我] 图例改用深色。\n\n[AI] 已改。\n\n[我] 认为对比度足够。" });
     const far = span(60, 120, { source: "claude_code.session", source_ref: "synthetic-far", body: "[我] 检查导览图。\n\n[AI] 已检查。\n\n[我] 决定保留北门入口。" });
     ctx.db.ingest([near,far]);
     const plan = reviewPlan(ctx.db, base, base + 130 * min);
-    expect(plan.segments).toHaveLength(3);
+    expect(plan.segments).toHaveLength(2);
     expect(plan.segments[0]!.evidence.filter(e => e.role === "user").map(e => e.text)).toEqual(["图例改用深色。","认为对比度足够。"]);
-    expect(new Set(plan.segments.map(s => s.id)).size).toBe(3);
+    expect(new Set(plan.segments.map(s => s.id)).size).toBe(2);
     const material = reviewMaterial(plan.segments);
     const detail = composeReview(plan.segments, {highlight:null, items:material.map(s => ({activity:s.key,title:"导览图完成调整",description:"导览图完成调整。",refs:[s.evidence[0]!.key],content:"result"}))},base+86400000,point(130),[],[])!;
     expect(detail.items.every(i => i.record_ids.length === 1)).toBe(true);
   } finally { ctx.cleanup(); }
+});
+
+test("批次计时保留实际起止，单输入截到三十分钟，多输入按总预算", () => {
+  const ctx = setup();
+  try {
+    ctx.db.ingest([
+      span(0, 45, { source: "codex.session", source_ref: "cap-one", body: "[我] 调整展板。\n\n[AI] 展板已调整。" }),
+      span(90, 140, { source: "codex.session", source_ref: "cap-two", body: "[我] 调整入口。\n\n[我] 补齐图例。\n\n[AI] 完成。" }),
+    ]);
+    expect(reviewInput(ctx.db, base, base + 150 * min).map(s => [s.start, s.end, s.seconds])).toEqual([
+      [base, base + 30 * min, 1800], [base + 90 * min, base + 140 * min, 3000],
+    ]);
+  } finally { ctx.cleanup(); }
+});
+
+test("晚间真实输入按实际覆盖参与预算，不被早间统一四分钟窗口挤掉", () => {
+  const ctx = setup();
+  try {
+    const early = Array.from({length:30}, (_,i) => span(i*4,i*4+1, {source:"codex.session", source_ref:`morning-${i}`,body:"[我] 核对图例。\n\n[AI] 图例已核对。"}));
+    const late = span(600,620,{source:"codex.session",source_ref:"evening",body:"[我] 修好展板。\n\n[AI] 展板已修复。"});
+    ctx.db.ingest([...early,late]);
+    const plan=reviewPlan(ctx.db,base,base+700*min);
+    expect(plan.segments).toHaveLength(30);
+    expect(plan.segments.some(s=>s.id===late.id && s.seconds===1200)).toBe(true);
+  } finally {ctx.cleanup();}
+});
+
+test("评测协议排除整个会话及续跑，正常讨论工具仍保留且原文可搜索", () => {
+  const ctx=setup();
+  try {
+    const records=[
+      span(0,5,{source:"claude_code.session",source_ref:"eval#0",body:"[我] <pasted_content id=synthetic>\n答案字段为 标签，evidence_ids 填依据。\n# MCP Server Instructions\n## tacit_eval\n仅查询数据。\n</pasted_content>\n\n[AI] 结构化输出失败。"}),
+      span(8,10,{source:"claude_code.session",source_ref:"eval#1",body:"[AI] 检索完成。"}),
+      span(15,20,{source:"codex.session",source_ref:"release",body:"[我] [tacit-tool-session:release-check]\n检查发布。"}),
+      span(30,35,{source:"codex.session",source_ref:"normal",body:"[我] 修复 mcp__tacit_eval__ 工具报错。\n\n[AI] 已修复。"}),
+    ];
+    ctx.db.ingest(records);
+    const plan=reviewPlan(ctx.db,base,base+40*min);
+    expect(plan.segments.map(s=>s.id)).toEqual([records[3]!.id]);
+    expect(ctx.db.get(records[0]!.id)?.body).toContain("结构化输出失败");
+  }finally{ctx.cleanup();}
+});
+
+test("单纯授权不能被模型当决定，后续同活动结果仍归发起段", () => {
+  const ctx=setup();
+  try{
+    const records=[span(0,1,{source:"codex.session",source_ref:"approve",body:"[我] 同意现在更新正式库"}),
+      span(10,11,{source:"codex.session",source_ref:"install#0",body:"[我] 安装吧"}),
+      span(20,30,{source:"codex.session",source_ref:"install#1",body:"[AI] 新版安装完成。"})];
+    ctx.db.ingest(records);
+    const plan=reviewPlan(ctx.db,base,base+40*min), material=reviewMaterial(plan.segments);
+    const detail=composeReview(plan.segments,{highlight:null,items:material.map(s=>({activity:s.key,title:"新版已安装",description:"新版安装完成。",content:"result",refs:[s.evidence[0]!.key]}))},base+86400000,point(40),[],[])!;
+    expect(detail.items).toHaveLength(1);
+    expect(detail.items[0]!.record_ids).toContain(records[2]!.id);
+    expect(detail.omitted_record_ids).toContain(records[0]!.id);
+  }finally{ctx.cleanup();}
 });
