@@ -100,7 +100,13 @@ function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
 function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: number): ReviewRecord[] {
   const result: ReviewRecord[] = [];
   for (const record of records) {
-    if (!SESSION_SOURCES.has(record.source)) { result.push(record); continue; }
+    if (!SESSION_SOURCES.has(record.source)) {
+      // 聊天点先扩为在场窗口，统一用于裁决、覆盖率、排序与最终计时。
+      const point = record.chat && !SKELETON_SOURCES.has(record.source) && record.source !== "mac.audio" && record.start === record.end;
+      result.push(point ? { ...record, start: Math.max(dayStart, record.start - EVIDENCE_WINDOW),
+        end: Math.min(dayEnd, record.end + EVIDENCE_WINDOW) } : record);
+      continue;
+    }
     const users = record.evidence.filter(e => e.role === "user");
     if (!users.length) {
       const initiator = result.findLast(r => SESSION_SOURCES.has(r.source) &&
@@ -159,12 +165,7 @@ function groupRecords(rows: ReviewRecord[], gap: number): Activity[] {
 
 function hasCoverage(records: ReviewRecord[], start: number, end: number) {
   if (end === start) return true;
-  const support: Span[] = records.map(r => {
-    // 消息没有时长。带时间的聊天事件可支持相邻消息的连续性，界面仍按原始时长计。
-    const point = r.end === r.start && r.chat && r.evidence.length;
-    return [Math.max(start, r.start - (point ? EVIDENCE_WINDOW : 0)),
-      Math.min(end, r.end + (point ? EVIDENCE_WINDOW : 0))];
-  });
+  const support: Span[] = records.map(r => [Math.max(start, r.start), Math.min(end, r.end)]);
   return unionSeconds(support) * 1000 >= 0.6 * (end - start);
 }
 

@@ -601,3 +601,32 @@ test("无效省略缺文字在运行记录留下警告且保留全天原文", as
     expect(ctx.db.db.prepare("SELECT error FROM runtime_calls WHERE id=?").get("synthetic-day-warning")).toMatchObject({error:expect.stringContaining("无效省略 1 段")});
   } finally {ctx.cleanup();}
 });
+
+test("逐条聊天消息按前后两分钟并集计时，候选与最终段均为五分钟", () => {
+  const ctx = setup();
+  try {
+    ctx.db.ingest([10, 11].map(n => fixture({ source: "mac.wechat", t_start: point(n),
+      context: { chat: "合成展览群", extra: { from_me: 1 } }, body: "图例已经核对。" })));
+    const plan = reviewPlan(ctx.db, base, base + 30 * min);
+    expect(plan.segments).toHaveLength(1);
+    expect(plan.segments[0]).toMatchObject({ start: base + 8 * min, end: base + 13 * min, seconds: 300 });
+    const a = reviewMaterial(plan.segments)[0]!;
+    const detail = composeReview(plan.segments, { highlight: null, items: [{ activity: a.key,
+      title: "核对图例", description: "图例已经核对。", refs: [a.evidence[0]!.key], content: "result" }] },
+      base + 30 * min, point(30), [], [])!;
+    expect(detail.items[0]!.active_seconds).toBe(300);
+  } finally { ctx.cleanup(); }
+});
+
+test("聊天窗口裁在当天边界内，高优先级录音占用时间不重复计", () => {
+  const ctx = setup();
+  try {
+    ctx.db.ingest([0, 1, 10, 11].map(n => fixture({ source: "mac.wechat", t_start: point(n),
+      context: { chat: "合成展览群", extra: { from_me: 0 } }, body: "图例已经核对。" })));
+    ctx.db.ingest([span(9, 12, { source: "mac.audio", body: "[10:10:00] 我：已经核对展板。" })]);
+    const segments = reviewInput(ctx.db, base, base + 12 * min);
+    expect(segments.every(s => s.start >= base && s.end <= base + 12 * min)).toBe(true);
+    expect(segments.filter(s => s.activity.kind === "chat")[0]!.seconds).toBe(180);
+    expect(segments.every((s,i) => !i || segments[i-1]!.end <= s.start)).toBe(true);
+  } finally { ctx.cleanup(); }
+});
