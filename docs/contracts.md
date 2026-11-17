@@ -332,7 +332,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 
 | 进程 | 做什么 | 不做什么 |
 |---|---|---|
-| 采集端 Record Anything.app | 常驻录两路（麦克风 `mic`：AVAudioEngine；系统声音 `sys`：Core Audio process tap，全局混音），重采样到 16kHz 单声道，Silero VAD 只留人声段，按"两路人声间隔 ≥ 60 秒"切成对话，加密写盘；按保留天数清理；和 hub 同步（5.4）；调度转写进程 | 不加载 SenseVoice 和声纹模型（内存要 < 300MB） |
+| 采集端 Tacit.app | 常驻录两路（麦克风 `mic`：AVAudioEngine；系统声音 `sys`：Core Audio process tap，全局混音），重采样到 16kHz 单声道，Silero VAD 只留人声段，按"两路人声间隔 ≥ 60 秒"切成对话，加密写盘；按保留天数清理；和 hub 同步（5.4）；调度转写进程 | 不加载 SenseVoice 和声纹模型（内存要 < 300MB） |
 | 转写进程 `ra-audio-worker`（同一个 app 包里的第二个可执行文件） | 由采集端按批启动、处理完退出。在本机判断有没有“我”、转写、写 History。初次确认本人时上传用于确认的声纹并截取试听样本 | 不常驻 |
 | hub | 建立和下发“我”的声纹、保留既有的说话人和试听样本，提供保留天数设置和一键清理 | 不收原始音频（试听样本除外） |
 

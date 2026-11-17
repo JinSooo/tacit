@@ -1,17 +1,30 @@
 #!/bin/sh
 # 卸载 record-anything：停止并移除 hub、提炼与采集端的开机自启、采集端应用和系统权限。数据默认保留。
 set -eu
+. "$(dirname "$0")/scripts/mac-app.sh"
 DATA="$HOME/Library/Application Support/record-anything"
 AGENTS="$HOME/Library/LaunchAgents"
 DOMAIN="gui/$(id -u)"
+launchctl bootout "$DOMAIN/dev.record-anything.collector" 2>/dev/null || true
+for root in /Applications "$HOME/Applications"; do
+  app="$root/Tacit.app"
+  if tacit_owns_bundle "$app"; then
+    tacit_stop_processes "$(tacit_processes "$app/Contents/MacOS/Tacit" "$app/Contents/MacOS/ra-audio-worker")"
+  fi
+  legacy="$root/Record Anything.app"
+  if tacit_owns_bundle "$legacy"; then
+    tacit_stop_processes "$(tacit_processes "$legacy/Contents/MacOS/Collector" "$legacy/Contents/MacOS/ra-audio-worker")"
+  fi
+done
+for l in distill hub; do launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/dev/null || true; done
 for l in collector distill hub; do
-  launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/dev/null || true
   rm -f "$AGENTS/dev.record-anything.$l.plist"
   rm -f "$DATA/launch-agents/dev.record-anything.$l.plist"
 done
-pkill -f 'Record Anything.app/Contents/MacOS/Collector' 2>/dev/null || true
-pkill -f 'Record Anything.app/Contents/MacOS/ra-audio-worker' 2>/dev/null || true
-rm -rf "/Applications/Record Anything.app" "$HOME/Applications/Record Anything.app"
+for app in "/Applications/Tacit.app" "$HOME/Applications/Tacit.app" \
+           "/Applications/Record Anything.app" "$HOME/Applications/Record Anything.app"; do
+  if tacit_owns_bundle "$app"; then rm -rf "$app"; fi
+done
 tccutil reset All dev.record-anything.collector >/dev/null 2>&1 || true
 echo "已移除自启、采集端应用和它的系统权限。"
 

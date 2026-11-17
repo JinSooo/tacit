@@ -7,6 +7,10 @@
 LaunchAgent 在用户登录时启动；提炼每 15 分钟处理一轮，异常退出后由 launchd
 重新拉起，重启间隔至少 60 秒，并以后台、低优先级 I/O 和 Nice 10 运行。
 
+应用包和主进程均叫 Tacit，通常装在 `/Applications/Tacit.app`，也支持
+`~/Applications/Tacit.app`。从旧名称升级时先校验签名，并在数据目录的
+`install-rollback` 保存原应用包、启动项和采集端配置。AI 工具连接迁移仍在原配置旁各保留一份回滚备份。
+
 不希望提炼自动运行时，执行：
 
 ```sh

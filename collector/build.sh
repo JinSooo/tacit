@@ -1,12 +1,12 @@
 #!/bin/sh
-# 构建并签名采集端：collector/build/Record Anything.app
+# 构建并签名采集端：collector/build/Tacit.app
 set -e
 cd "$(dirname "$0")"
 ./swift.sh build -c release
 BIN="$(./swift.sh build -c release --show-bin-path)"
-APP="build/Record Anything.app"
+APP="build/Tacit.app"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"
-cp "$BIN/Collector" "$APP/Contents/MacOS/Collector"
+cp "$BIN/Collector" "$APP/Contents/MacOS/Tacit"
 VERSION="$(git -C .. rev-parse --short HEAD 2>/dev/null || echo dev)"
 # 不声明 CFBundleLocalizations=zh-Hans：声明后中文正文按全宽标点排版，"、""，"后多出半个字的空隙
 # （宋体正是为避免这个才选的），应用名也会被系统换成中文、和记录标题对不上。系统菜单和对话框的中文在代码里补。
@@ -16,7 +16,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>dev.record-anything.collector</string>
   <key>CFBundleName</key><string>Tacit</string>
-  <key>CFBundleExecutable</key><string>Collector</string>
+  <key>CFBundleDisplayName</key><string>Tacit</string>
+  <key>CFBundleExecutable</key><string>Tacit</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSAccentColorName</key><string>AccentColor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -43,7 +44,7 @@ cp -R Resources/Phosphor "$APP/Contents/Resources/Phosphor"
 xcrun actool Resources/Assets.xcassets --compile "$APP/Contents/Resources" --platform macosx \
   --minimum-deployment-target 14.0 --output-partial-info-plist build/assets-info.plist >/dev/null
 rm -rf build/AppIcon.iconset
-"$APP/Contents/MacOS/Collector" --render-icon build/AppIcon.iconset
+"$APP/Contents/MacOS/Tacit" --render-icon build/AppIcon.iconset
 iconutil -c icns build/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf build/AppIcon.iconset
 # 第二个可执行文件由转写任务提供；不存在时采集端照常构建。
