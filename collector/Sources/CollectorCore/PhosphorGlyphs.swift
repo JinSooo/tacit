@@ -15,6 +15,8 @@ public enum PhosphorGlyphs {
     ("asterisk", 0xE0AA),
     ("browser", 0xE0F4),
     ("calendar-blank", 0xE10A),
+    ("caret-down", 0xE136),
+    ("caret-up", 0xE13C),
     ("caret-left", 0xE138),
     ("caret-right", 0xE13A),
     ("chat-circle", 0xE168),

@@ -377,6 +377,11 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
     let ink = try #require(PhosphorGlyphs.path("record", font: font)).boundingBoxOfPath
     #expect(abs(ink.midY - 50) < 0.5, "\(file)：墨迹中心 y=\(ink.midY)")
     #expect(abs(ink.midX - 50) < 0.5, "\(file)：墨迹中心 x=\(ink.midX)")
+    let down = try #require(PhosphorGlyphs.path("caret-down", font: font))
+    let up = try #require(PhosphorGlyphs.path("caret-up", font: font))
+    #expect(down.boundingBoxOfPath.width > 0 && down.boundingBoxOfPath.height > 0)
+    #expect(up.boundingBoxOfPath.width > 0 && up.boundingBoxOfPath.height > 0)
+    #expect(PhosphorGlyphs.character("caret-down") != PhosphorGlyphs.character("caret-up"))
     #expect(PhosphorGlyphs.path("no-such-icon", font: font) == nil)
   }
 }

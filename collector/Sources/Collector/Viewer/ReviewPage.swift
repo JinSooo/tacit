@@ -16,7 +16,8 @@ struct ReviewPage: View {
         .id(day.wrappedValue)
     }
     .background(Palette.paper)
-    .navigationTitle("时间线")
+    .navigationTitle("")
+    .modifier(QuietPageTitle())
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Button { refresh += 1 } label: { PhIcon("arrow-clockwise", size: PhIcon.toolbar) }
@@ -94,7 +95,7 @@ private struct ReviewDayContent: View {
           if !store.pending.isEmpty { TimelinePendingLine() }
           LazyVStack(spacing: 0) {
             ForEach(items.filter { item in brush.map { item.intersects($0) } ?? true }) { item in
-              TimelineSegmentRow(day: day, item: item, records: records.value, expanded: expanded == item.id) {
+              TimelineSegmentRow(day: day, item: item, records: records.value, projectName: TimelineProjectLabels.showsNames(in: items) ? store.project(item.projectId)?.name : nil, expanded: expanded == item.id) {
                 expanded = expanded == item.id ? nil : item.id
               }
               .id(item.id)

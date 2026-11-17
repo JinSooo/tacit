@@ -22,7 +22,8 @@ struct ProjectPage: View {
       .modifier(ReviewWidth())
     }
     .background(Palette.paper)
-    .navigationTitle(detail.value?.name ?? store.project(id)?.name ?? "项目")
+    .navigationTitle("")
+    .modifier(QuietPageTitle())
     .toolbar { BackButton() }
     .task(id: store.revision) { await load() }
   }
@@ -30,9 +31,11 @@ struct ProjectPage: View {
   private var header: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(alignment: .firstTextBaseline, spacing: 16) {
-        Text(detail.value?.name ?? store.project(id)?.name ?? "项目")
-          .font(.system(size: TextSize.heading, weight: .semibold)).foregroundStyle(Palette.ink)
-          .accessibilityAddTraits(.isHeader)
+        if store.section != .project(id) {
+          Text(detail.value?.name ?? store.project(id)?.name ?? "项目")
+            .font(.system(size: TextSize.heading, weight: .semibold)).foregroundStyle(Palette.ink)
+            .accessibilityAddTraits(.isHeader)
+        }
         Spacer(minLength: 0)
         Button("新会话会带入的内容") { store.path.append(.projectContext(id)) }
           .buttonStyle(.accentLink).font(.system(size: TextSize.caption)).fixedSize()
@@ -133,9 +136,10 @@ private struct ProjectStoryRow: View {
             if let day = TimelineDay.date(latest.day) {
               Text(Fmt.date(day)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
             }
-            PhIcon(expanded ? "caret-down" : "caret-right", size: 11).foregroundStyle(Palette.muted)
+            PhIcon(expanded ? "caret-up" : "caret-down", size: 11).foregroundStyle(Palette.muted)
               .accessibilityHidden(true)
           }
+          TimelineSourceIcons(item: latest.item)
           if !expanded || story.updates.count == 1 {
             Text(latest.item.description).font(.system(size: TextSize.body))
               .lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
