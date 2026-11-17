@@ -6,7 +6,7 @@ import { performance } from "node:perf_hooks";
 import { createHandler } from "../src/server.ts";
 import { connectAgent } from "../src/agents-install.ts";
 import { DistillStore } from "../src/distill/store.ts";
-import { fixture, networkDenied, setup } from "./helpers.ts";
+import { fixture, networkDenied, reviewEvidence, setup } from "./helpers.ts";
 
 const cli = resolve(import.meta.dir, "../src/cli.ts");
 const token = "synthetic-agent-cli-secret";
@@ -176,6 +176,10 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     handler = createHandler({ db: ctx.db, token, port: server.port });
     const store = new DistillStore(ctx.db);
     store.upsertProject({ id: "p", name: "合成项目", confirmed: 1, keys: { repos: ["/synthetic"], hosts: [], chats: [] }, brief: "合成摘要", last_ms: 1000 });
+    store.upsertThread({ id: "t", title: "合成事项", project_id: "p", domain: "work", status: "active" });
+    const evidence = reviewEvidence(store,"t");
+    store.upsertDay({ date: evidence.at.slice(0,10), detail: { cutoff: evidence.at,
+      sections: { progress: [{ text: "合成当日回顾", evidence: [evidence] }], blockers: [] } } });
     store.setState("now", { brief: "合成当前状态" }); ctx.db.ingest([fixture({ title: "needle 合成活动" })]);
     const env = { RA_PORT: String(server.port) };
     const inputs = [call(1, "now"), call(2, "get", { id: "p" }), call(3, "search", { query: "needle" }), call(4, "timeline"), call(5, "get", { id: "missing" })];
@@ -207,7 +211,7 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     expect(desktopMessages[2].content[0].text).toContain("合成当前状态");
     for (const source of ["startup", "resume", "clear", "compact", "unknown", undefined]) {
       const hook = await run(ctx.dir, ["hook", "session-start", "--tool", "claude-code"], JSON.stringify({ cwd: "/synthetic", source, session_id: "合成会话" }), env);
-      expect(hook.code).toBe(0); expect(hook.stderr).toBe(""); expect(JSON.parse(hook.stdout).hookSpecificOutput.additionalContext).toContain("合成摘要");
+      expect(hook.code).toBe(0); expect(hook.stderr).toBe(""); expect(JSON.parse(hook.stdout).hookSpecificOutput.additionalContext).toContain("合成当日回顾");
     }
     const audit = ctx.db.db.prepare("SELECT tool,kind,args FROM agent_reads").all() as any[];
     expect(audit.some(r => r.tool === "codex" && r.kind === "search" && JSON.parse(r.args).q_length === 6)).toBe(true);
@@ -219,8 +223,9 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     expect(codexReads.every(a => typeof a.cwd === "string")).toBe(true);
     expect(audit.filter(r => r.kind === "context").map(r => JSON.parse(r.args)).every(a => a.session === "合成会话" && a.project === "p")).toBe(true);
     expect(audit.filter(r => r.kind === "context").map(r => JSON.parse(r.args).event)).toEqual(["startup", "resume", "clear", "compact", "startup", "startup"]);
-    ctx.db.db.prepare("DELETE FROM projects").run();
-    const empty = await run(ctx.dir, ["hook", "session-start", "--tool", "codex"], '{"cwd":"/synthetic"}', env);
-    expect(empty.stdout).toBe(""); expect(empty.stderr).toBe(""); expect(empty.code).toBe(0);
+    for (const tool of ["codex", "claude-code"]) {
+      const empty = await run(ctx.dir, ["hook", "session-start", "--tool", tool], '{"cwd":"/synthetic-other"}', env);
+      expect(empty.stdout).toBe(""); expect(empty.stderr).toBe(""); expect(empty.code).toBe(0);
+    }
   } finally { await server.stop(true); ctx.cleanup(); }
 });

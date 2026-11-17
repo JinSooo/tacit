@@ -9,7 +9,7 @@ import { HubDB } from "../src/db.ts";
 import { createHandler } from "../src/server.ts";
 import { AgentReads } from "../src/agent.ts";
 import { ulid } from "../../packages/record/index.ts";
-import { fixture, setup } from "./helpers.ts";
+import { fixture, reviewEvidence, setup } from "./helpers.ts";
 
 let ctx: ReturnType<typeof setup>, log: RuntimeLog;
 const req: LLMRequest = { tier: "minute", task: "synthetic", system: "只返回 JSON", prompt: "合成私人内容，仅供回归", schema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } }, additionalProperties: false } };
@@ -171,10 +171,15 @@ test("后台日志只读固定文件的结构化状态，不暴露错误原文�
 
 test("自动带入保存实际返回快照，锁冲突不阻塞查询且留下缺失标记", async () => {
   const store = new DistillStore(ctx.db);
-  store.upsertProject({id:"p",name:"合成项目",keys:{repos:["/synthetic/runtime"],hosts:[],chats:[]},brief:"合成旧进展",updated_at:"2026-11-13T10:00:00Z",needs_regen:1});
+  store.upsertProject({id:"p",name:"合成项目",keys:{repos:["/synthetic/runtime"],hosts:[],chats:[]}});
+  store.upsertThread({id:"t",title:"合成事项",project_id:"p",domain:"work",status:"active"});
+  const evidence = reviewEvidence(store,"t");
+  store.upsertDay({ date: evidence.at.slice(0,10), needs_regen: 1, detail: { cutoff: evidence.at,
+    sections: { progress: [{ text: "合成旧进展", evidence: [evidence] }], blockers: [] } } });
   const response = await new AgentReads(ctx.db).handle("context",new URLSearchParams({tool:"codex",cwd:"/synthetic/runtime",event:"startup"}));
   const body = await response.json();
   expect(body.text).toContain("有新活动待整理");
+  expect(body.text).toContain("合成旧进展");
   const audit = new AgentReads(ctx.db).audit(new URLSearchParams()).reads[0];
   expect(log.detail(audit.id)!.request.text).toBe(body.text);
   const other = new HubDB(ctx.file,ctx.config.dbKey);

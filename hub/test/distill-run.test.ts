@@ -9,7 +9,7 @@ import { createLLM, type LLMRequest } from "../src/llm/index.ts";
 import { emptyDayOutput, fixture, setup } from "./helpers.ts";
 import { AgentReads } from "../src/agent.ts";
 import { HubDB } from "../src/db.ts";
-import type { RecordV1 } from "../../packages/record/index.ts";
+import { toLocalIso, type RecordV1 } from "../../packages/record/index.ts";
 
 // 全部用合成数据和假模型，不调用任何真实模型。
 let ctx: ReturnType<typeof setup>, store: DistillStore, repo: string;
@@ -216,8 +216,14 @@ async function contextText() {
   return (await (await new AgentReads(ctx.db).handle("context", new URLSearchParams({ cwd: repo, event: "startup", tool: "codex" }))).json()).text as string;
 }
 
+function reviewWith(record: RecordV1) {
+  const cutoff = toLocalIso(Date.now());
+  store.upsertDay({ date: cutoff.slice(0,10), detail: { cutoff,
+    sections: { progress: [{ text: "合成当日回顾", evidence: [{ id: record.id, at: record.t_start }] }], blockers: [] } } });
+}
+
 test("回归：cwd 的生活线程只提名项目，digest 后不挂项目也不注入", async () => {
-  ctx.db.ingest([session(0, 20, "合成周复盘")]);
+  const record = session(0, 20, "合成周复盘"); ctx.db.ingest([record]);
   await round(fakeLLM().llm, base + 30 * MIN, false);
   const t = (ctx.db.db.prepare("SELECT id FROM threads").get() as { id: string });
   expect(store.thread(t.id)!.project_id).toBeNull();
@@ -226,12 +232,13 @@ test("回归：cwd 的生活线程只提名项目，digest 后不挂项目也不
   await digestStep({ db: ctx.db, llm: model.llm }, store, base + 30 * MIN);
   expect(store.thread(t.id)!.domain).toBe("life");
   expect(store.thread(t.id)!.project_id).toBeNull();
-  expect(await contextText()).not.toContain("合成线程");
+  reviewWith(record);
+  expect(await contextText()).not.toContain("合成当日回顾");
   expect(model.calls.find(c => c.kind === "thread")!.req.prompt).toContain("synthetic-repo");
 });
 
 test("digest 工作归属由 in_project 和候选共同决定", async () => {
-  ctx.db.ingest([session(0, 20, "合成开发")]);
+  const record = session(0, 20, "合成开发"); ctx.db.ingest([record]);
   await round(fakeLLM().llm, base + 30 * MIN, false);
   const id = (ctx.db.db.prepare("SELECT id FROM threads").get() as { id: string }).id;
   const project = store.projects()[0]!;
@@ -239,7 +246,8 @@ test("digest 工作归属由 in_project 和候选共同决定", async () => {
   await digestStep({ db: ctx.db, llm: model.llm }, store, base + 30 * MIN);
   expect(store.thread(id)!.project_id).toBe(project.id);
   expect(store.facts("thread_id", id).every(f => f.project_id === project.id)).toBe(true);
-  expect(await contextText()).toContain("合成线程");
+  reviewWith(record);
+  expect(await contextText()).toContain("合成当日回顾");
   // 强制重建同一合成片段，验证工作线程也可以判定不属于候选项目。
   store.setState(`digest:${id}`, null); store.upsertThread({ ...store.thread(id)!, needs_regen: 1 });
   await digestStep({ db: ctx.db, llm: fakeLLM({ classification: { domain: "work", in_project: false } }).llm }, store, base);

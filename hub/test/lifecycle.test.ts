@@ -4,7 +4,7 @@ import { DistillStore, type Thread } from "../src/distill/store.ts";
 import { lifecycleStep } from "../src/distill/run.ts";
 import { updateGeneral } from "../src/general-settings.ts";
 import { createHandler } from "../src/server.ts";
-import { fixture, setup } from "./helpers.ts";
+import { fixture, reviewEvidence, setup } from "./helpers.ts";
 
 const now = Date.parse("2026-11-08T12:00:00+08:00"), DAY = 24 * 60 * 60_000;
 let ctx: ReturnType<typeof setup>, store: DistillStore;
@@ -131,13 +131,16 @@ test("归档线程不进 context，但仍可通过 get、search 和状态列表�
   try {
     store.upsertProject({ id: "p", name: "合成项目", brief: "合成项目摘要", keys: { repos: ["/synthetic/archive"], hosts: [], chats: [] } });
     pending("history", "active", 8 * DAY);
+    store.upsertThread({ ...store.thread("history")!, domain: "work", project_id: "p" });
+    const evidence = reviewEvidence(store,"history",now);
+    store.upsertDay({ date: evidence.at.slice(0,10), detail: { cutoff: evidence.at,
+      sections: { progress: [{ text: "合成待归档回顾", evidence: [evidence] }], blockers: [] } } });
+    const path = "/v1/agent/context?tool=codex&event=startup&cwd=/synthetic/archive";
+    expect((await read(path)).text).toContain("合成待归档回顾");
     lifecycleStep(store, now);
-    // 归档后有最近活动时间也不能注入，避免只靠暂停线程的时间过滤通过测试。
+    // 归档后即使回顾仍有这条依据，带入也要排除。
     ctx.db.db.prepare("UPDATE threads SET last_ms=? WHERE id='history'").run(now);
-    const context = await read("/v1/agent/context?tool=codex&event=startup&cwd=/synthetic/archive");
-    expect(context.project_id).toBe("p");
-    expect(context.text).toContain("合成项目摘要");
-    expect(context.text).not.toContain("合成归档线程history");
+    expect(await read(path)).toEqual({ project_id: "p", text: "", tokens_est: 0 });
     expect((await read("/v1/agent/get?tool=codex&id=history")).item.status).toBe("archived");
     expect((await read("/v1/agent/search?tool=codex&q=合成归档线程")).threads.map((t: { id: string }) => t.id)).toEqual(["history"]);
     expect((await read("/v1/threads?status=archived")).threads.map((t: { id: string }) => t.id)).toEqual(["history"]);
