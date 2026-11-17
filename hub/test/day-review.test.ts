@@ -564,7 +564,7 @@ test("无效或缺失省略类别恢复模型结果，无文字时报警且原�
   } finally {ctx.cleanup();}
 });
 
-test("五十候选的结果最多三十段，先合并连续同项目再按覆盖取舍", () => {
+test("五十候选的结果最多三十段，同项目不同事项不合并", () => {
   const ctx=setup(), store=new DistillStore(ctx.db);
   try {
     const records=Array.from({length:50},(_,i)=>span(i*3,i*3+2,{source:"codex.session",source_ref:`synthetic-limit-${i}`,body:"[我] 检查展板。\n\n[AI] 图例位置已修正。"}));
@@ -579,11 +579,12 @@ test("五十候选的结果最多三十段，先合并连续同项目再按覆�
     expect(material).toHaveLength(50);
     const detail=composeReview(plan.segments,{highlight:{activity:material[1]!.key,text:"合成图例完成修正"},items:material.map((a,i)=>({activity:a.key,content:"result",title:"图例位置修正",description:`第 ${i} 张图例位置已修正。`,refs:[a.evidence[1]!.key]}))},base+86400000,point(151),[],[])!;
     expect(detail.items).toHaveLength(30);
-    expect(detail.items[0]!.record_ids).toEqual(records.slice(0,2).map(r=>r.id));
-    expect(detail.items[0]!.description).toContain("第 1 张");
+    expect(detail.items[0]!.record_ids).toEqual([records[0]!.id]);
+    expect(detail.items[1]!.record_ids).toEqual([records[1]!.id]);
+    expect(detail.items[0]!.description).toContain("第 0 张");
     expect(detail.summary).toBe("合成图例完成修正");
-    expect(detail.items[0]!.active_seconds).toBe(240);
-    expect(detail.omitted_record_ids).toHaveLength(19);
+    expect(detail.items[0]!.active_seconds).toBe(120);
+    expect(detail.omitted_record_ids).toHaveLength(20);
   } finally {ctx.cleanup();}
 });
 
@@ -628,5 +629,75 @@ test("聊天窗口裁在当天边界内，高优先级录音占用时间不重�
     expect(segments.every(s => s.start >= base && s.end <= base + 12 * min)).toBe(true);
     expect(segments.filter(s => s.activity.kind === "chat")[0]!.seconds).toBe(180);
     expect(segments.every((s,i) => !i || segments[i-1]!.end <= s.start)).toBe(true);
+  } finally { ctx.cleanup(); }
+});
+
+function assignSyntheticThread(ctx: ReturnType<typeof setup>, records: ReturnType<typeof fixture>[]) {
+  const store = new DistillStore(ctx.db);
+  store.upsertThread({ id: "synthetic-joined", title: "合成展板", status: "active" });
+  records.forEach((r,i) => {
+    const id = `synthetic-joined-${i}`;
+    store.createFrame({ id, key: id, record_ids: [r.id], t_start_ms: Date.parse(r.t_start),
+      t_end_ms: Date.parse(r.t_end!), chars: 1, private: 0, status: "new" });
+    store.assign(id, "synthetic-joined", "rule", 1);
+  });
+}
+
+test("候选覆盖率先切开后恢复六成时，同事项相邻段在预算内也合并", () => {
+  const ctx = setup();
+  try {
+    const records = [[0,5],[15,20],[20,40]].map(([s,e],i) => span(s!,e!, {
+      source: "codex.session", source_ref: `synthetic-coverage-${i}`, body: "[我] 图例已核对。" }));
+    ctx.db.ingest(records);
+    assignSyntheticThread(ctx, records);
+    const plan = reviewPlan(ctx.db, base, base + 45 * min);
+    expect(plan.segments).toHaveLength(1);
+    expect(plan.diagnostics.mergedCount).toBe(1);
+    expect(plan.segments[0]!.seconds).toBe(1800);
+  } finally { ctx.cleanup(); }
+});
+
+for (const scenario of ["ten", "interrupted", "forty", "sparse"] as const) {
+  test(`同事项输出合并边界：${scenario}`, () => {
+    const ctx = setup();
+    try {
+      const gap = scenario === "forty" ? 40 : 10, duration = scenario === "sparse" ? 5 : 20;
+      const records = [span(0,duration, { source: "codex.session", source_ref: "synthetic-left", body: "[我] 图例已核对。" }),
+        span(duration+gap,duration+gap+25, { source: "codex.session", source_ref: "synthetic-right", body: "[我] 展板已经试排。" })];
+      if (scenario === "sparse") records[1] = span(15,20, { source: "codex.session", source_ref: "synthetic-right", body: "[我] 展板已经试排。" });
+      ctx.db.ingest(records); assignSyntheticThread(ctx, records);
+      // 单独读每段，模拟模型省略了中间候选后剩下的两个输出。
+      const segments = records.map(r => reviewInput(ctx.db, Date.parse(r.t_start), Date.parse(r.t_end!)+1)[0]!);
+      if (scenario === "interrupted") {
+        const middle = span(21,29, { source: "codex.session", source_ref: "synthetic-middle", body: "[我] 另一展厅已经核对。" });
+        ctx.db.ingest([middle]);
+        segments.splice(1,0,reviewInput(ctx.db,base+21*min,base+29*min+1)[0]!);
+      }
+      segments.forEach((s,i) => s.key = `a${i+1}`);
+      const material = reviewMaterial(segments);
+      const detail = composeReview(segments, { highlight: null, items: material.map((s,i) => ({ activity:s.key,
+        title:`合成结果${i}`, description:i===0?"图例已经核对。余下文字。":"展板已经试排。第二句。",
+        refs:[s.evidence[0]!.key], content:"result" })) },base+120*min,point(120),[],[])!;
+      expect(detail.items).toHaveLength(scenario === "ten" ? 1 : segments.length);
+      if (scenario === "ten") {
+        expect(detail.items[0]).toMatchObject({title:"合成结果1", active_seconds:2700,
+          description:"展板已经试排。 图例已经核对。"});
+        expect(detail.items[0]!.record_ids).toEqual(records.map(r=>r.id));
+        expect(detail.items[0]!.evidence).toHaveLength(2);
+      }
+    } finally { ctx.cleanup(); }
+  });
+}
+
+test("未归属线程的 AI 段按真实会话识别，不沿用旧帧的共享应用键", () => {
+  const ctx = setup(), store = new DistillStore(ctx.db);
+  try {
+    const records = [0, 1].map(i => span(i*10,i*10+10, { source: "codex.session",
+      source_ref: `synthetic-distinct-${i}`, body: "[我] 已经核对图例。" }));
+    ctx.db.ingest(records);
+    records.forEach((r,i) => store.createFrame({ id: `synthetic-legacy-${i}`, key: "app:synthetic-shared",
+      record_ids: [r.id], t_start_ms: Date.parse(r.t_start), t_end_ms: Date.parse(r.t_end!),
+      chars: 1, private: 0, status: "new" }));
+    expect(reviewInput(ctx.db,base,base+21*min)).toHaveLength(2);
   } finally { ctx.cleanup(); }
 });

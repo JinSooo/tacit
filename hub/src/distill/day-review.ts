@@ -26,7 +26,7 @@ type Activity = {
   start: number; end: number; records: ReviewRecord[];
 };
 type Piece = { activity: Activity; start: number; end: number };
-type Candidate = Piece & { primary: ReviewRecord[]; seconds: number };
+type Candidate = Piece & { primary: ReviewRecord[]; seconds: number; spans: Span[] };
 export interface ReviewItem {
   id: string; title: string; description: string; t_start: string; t_end: string;
   active_seconds: number; sources: string[]; evidence: DayReference[];
@@ -150,7 +150,8 @@ function groupRecords(rows: ReviewRecord[], gap: number): Activity[] {
     const kind = thread ? "thread" : voice ? "speech" : SESSION_SOURCES.has(row.source) ? "session"
       : row.chat && !SKELETON_SOURCES.has(row.source) ? "chat" : "misc";
     const key = row.key.startsWith("autonomous:") ? row.key : thread ? `thread:${thread}` : voice ? `speech:${voice.id}`
-      : kind === "chat" ? `${row.source}:${chatKey(row.chat!)}` : row.key;
+      : kind === "chat" ? `${row.source}:${chatKey(row.chat!)}`
+      : kind === "session" ? (row.session ? `session:${row.session}` : `record:${row.id}`) : row.key;
     let group = open.get(key);
     if (!group || (row.start > group.end && (row.start > group.end + gap ||
       !hasCoverage([...group.records, row], group.start, row.end)))) {
@@ -183,7 +184,7 @@ function makeCandidate(piece: Piece): Candidate | null {
   if (!primary.length) return null;
   const spans: Span[] = primary.map(r => [Math.max(r.start, piece.start), Math.min(r.end, piece.end)]);
   const end = spans.reduce((latest, s) => Math.max(latest, s[1]), piece.start);
-  return { ...piece, primary, seconds: unionSeconds(spans), start: spans[0]![0], end };
+  return { ...piece, primary, spans, seconds: unionSeconds(spans), start: spans[0]![0], end };
 }
 
 function candidatesIn(piece: Piece): Candidate[] {
@@ -303,22 +304,40 @@ function splitOverlaps(activities: Activity[]): Candidate[] {
   return candidates.sort((a, b) => a.start - b.start);
 }
 
-function mergeAdjacent(candidates: Candidate[], gap: number, limit = MAX_REVIEW_CANDIDATES) {
-  while (candidates.length > limit) {
+function sameActivity(a: Candidate, b: Candidate) {
+  return a.activity.key === b.activity.key && ["thread", "session", "chat"].includes(a.activity.kind);
+}
+
+function canMerge(a: Candidate, b: Candidate, gap: number) {
+  return sameActivity(a, b) && b.start - a.end <= gap &&
+    unionSeconds([...a.spans, ...b.spans]) * 1000 >= 0.6 * (b.end - a.start);
+}
+
+function mergedCandidate(a: Candidate, b: Candidate): Candidate {
+  const primary = [...new Set([...a.primary, ...b.primary])], spans = [...a.spans, ...b.spans];
+  return { ...a, end: b.end, primary, spans, seconds: unionSeconds(spans),
+    activity: { ...a.activity, start: a.start, end: b.end, records: primary } };
+}
+
+function mergeAdjacent(candidates: Candidate[], gap: number) {
+  // 每次优先合并最短的一对，合并后重新检查两侧，直到没有合规的相邻段。
+  for (;;) {
     let merge = -1, shortest = Infinity;
     for (let i = 0; i + 1 < candidates.length; i++) {
       const a = candidates[i]!, b = candidates[i + 1]!;
-      if (a.activity.key !== b.activity.key || a.seconds + b.seconds >= shortest) continue;
-      if (b.start - a.end > gap || !hasCoverage([...a.primary, ...b.primary], a.start, b.end)) continue;
+      if (a.seconds + b.seconds >= shortest || !canMerge(a, b, gap)) continue;
       merge = i; shortest = a.seconds + b.seconds;
     }
     if (merge < 0) break;
-    const a = candidates[merge]!, b = candidates[merge + 1]!;
-    const activity = { ...a.activity, start: a.start, end: b.end,
-      records: [...new Set([...a.primary, ...b.primary])] };
-    candidates.splice(merge, 2, makeCandidate({ activity, start: a.start, end: b.end })!);
+    candidates.splice(merge, 2, mergedCandidate(candidates[merge]!, candidates[merge + 1]!));
   }
   return candidates;
+}
+
+function mergedDescription(preferred: string, other: string) {
+  const sentences = (text: string) => text.split(/(?<=[。！？!?])|(?<=\.)\s+/u).map(s => s.trim()).filter(Boolean);
+  return (preferred === other ? sentences(preferred).slice(0, 2)
+    : [sentences(preferred)[0], sentences(other)[0]]).filter(Boolean).join(" ");
 }
 
 function limitCandidates<T extends Candidate>(candidates: T[], leadingActivity: string | undefined, limit = MAX_REVIEW_CANDIDATES) {
@@ -482,26 +501,24 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
     return [{ a, segment, model, keys: [a.key] }];
   });
   if (output.items.some(item => item.content !== "request_only" && item.content !== "empty") && !result.length) return null;
-  // 合并只发生在输出超限时；不跨中断，不凭标题猜事项，不截掉合并后的结果文字。
-  while (result.length > MAX_REVIEW_SEGMENTS) {
-    let merge = -1, shortest = Infinity;
-    for (let i = 0; i + 1 < result.length; i++) {
-      const x = result[i]!, y = result[i + 1]!;
-      if (!x.segment.project_id || x.segment.project_id !== y.segment.project_id) continue;
-      if (y.a.start - x.a.end > 30 * MINUTE || !hasCoverage([...x.a.primary, ...y.a.primary], x.a.start, y.a.end)) continue;
-      if (Array.from(x.segment.description + " " + y.segment.description).length > 160) continue;
-      if (x.a.seconds + y.a.seconds < shortest) { merge = i; shortest = x.a.seconds + y.a.seconds; }
-    }
-    if (merge < 0) break;
-    const x = result[merge]!, y = result[merge + 1]!;
-    x.a = { ...x.a, end: y.a.end, seconds: x.a.seconds + y.a.seconds, primary: [...x.a.primary, ...y.a.primary] };
+  // 模型省略中间候选后可能产生新的相邻段；同事项按相同规则兜底，不凭项目猜事项。
+  for (let i = 0; i + 1 < result.length;) {
+    const x = result[i]!, y = result[i + 1]!;
+    if (!canMerge(x.a, y.a, 30 * MINUTE)) { i++; continue; }
+    const preferred = x.a.seconds >= y.a.seconds ? x.segment : y.segment;
+    const other = preferred === x.segment ? y.segment : x.segment;
+    x.a = { ...x.a, ...mergedCandidate(x.a, y.a) };
     const apps = [...new Map([...x.segment.apps, ...y.segment.apps].map(a => [JSON.stringify(a), a])).values()];
-    x.segment = { ...x.segment, description: x.segment.description + " " + y.segment.description,
-      t_end: y.segment.t_end, active_seconds: x.a.seconds, apps, sources: [...new Set(apps.map(a => a.source))],
+    x.segment = { ...x.segment, title: preferred.title,
+      description: mergedDescription(preferred.description, other.description),
+      t_end: y.segment.t_end, active_seconds: x.a.seconds, apps,
+      sources: [...new Set([...x.segment.sources, ...y.segment.sources])],
       record_ids: [...new Set([...x.segment.record_ids, ...y.segment.record_ids])],
       evidence: [...new Map([...x.segment.evidence, ...y.segment.evidence].map(e => [e.id, e])).values()] };
     x.keys.push(...y.keys);
-    result.splice(merge + 1, 1);
+    result.splice(i + 1, 1);
+    // 合并后的覆盖率可能让前一对也满足条件。
+    i = Math.max(0, i - 1);
   }
   const activitySeconds = new Map<string, number>();
   for (const { a } of result) activitySeconds.set(a.activity.key, (activitySeconds.get(a.activity.key) ?? 0) + a.seconds);
