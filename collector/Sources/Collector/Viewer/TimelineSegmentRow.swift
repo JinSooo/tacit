@@ -126,11 +126,9 @@ struct TimelineSegmentRecords: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("时长 \(Fmt.duration(item.activeSeconds))")
-        .padding(.leading, TimelineReadingLayout.contentInset).monospacedDigit().foregroundStyle(Palette.muted)
       if let rows = records.value {
         ForEach(rows) { record in
-          RecordRow(record: record, run: nil, selected: false, expanded: false, nested: true) {
+          RecordRow(record: record, run: nil, selected: false, expanded: false, nested: true, titleOverride: sourceTitle(for: record, count: rows.count)) {
             store.path.append(.reviewRecord(record.id))
           }
         }
@@ -163,6 +161,13 @@ struct TimelineSegmentRecords: View {
     } message: { members in
       Text("这段包含的 \(Fmt.count(members.count)) 条记录会永久删除。")
     }
+  }
+
+  private func sourceTitle(for record: HistoryRecord, count: Int) -> String? {
+    guard TimelinePresence.repeatsTitle(recordCount: item.recordIds?.count ?? count,
+      recordTitle: record.title, segmentTitle: item.title) else { return nil }
+    let bundle = SourceApplication.bundle(app: record.contextText("app"), source: record.source)
+    return AppIcons.name(bundle) ?? record.contextText("app") ?? SourceInfo.name(record.source)
   }
 
   private func load() async {

@@ -170,18 +170,16 @@ struct CaptureFooter: View {
   }
 
   var dot: Color {
+    if store.capture.sources.allSatisfy({ !$0.enabled }) { return Palette.faint }
     switch store.capture.state {
     case .recording, .noPermission: return Palette.attention
     case .paused: return Palette.faint
     }
   }
   var title: String {
-    switch store.capture.state {
-    case .recording: return "正在记录"
-    case .paused(let until): return "已暂停到 \(ViewerFormat.clock(until))"
-    case .noPermission: return "需要辅助功能权限"
-    }
+    store.capture.statusTitle
   }
+
   var subtitle: String? {
     let c = store.capture
     if c.hubError != nil { return "连不上后台服务" }
@@ -192,13 +190,17 @@ struct CaptureFooter: View {
   }
 }
 
-/// Remove the native title item; macOS 14 retains the generic window name.
+/// Preserve the principal layout slot so primary actions stay trailing, including macOS 14.
 struct QuietPageTitle: ViewModifier {
+  private var titleSlot: some View { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
   func body(content: Content) -> some View {
-    if #available(macOS 15.0, *) {
-      content.toolbar(removing: .title)
-    } else {
-      content.navigationTitle("")
-    }
+    content.navigationTitle("")
+      .toolbar {
+        if #available(macOS 26.0, *) {
+          ToolbarItem(placement: .principal) { titleSlot }.sharedBackgroundVisibility(.hidden)
+        } else {
+          ToolbarItem(placement: .principal) { titleSlot }
+        }
+      }
   }
 }

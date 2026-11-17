@@ -456,6 +456,7 @@ struct RecordRow: View {
   let expanded: Bool
   var snippet: SearchSnippet? = nil
   var nested = false
+  var titleOverride: String? = nil
   var includesOmissions = false
   let action: () -> Void
   @State private var hovering = false
@@ -475,7 +476,7 @@ struct RecordRow: View {
         .frame(width: 26)
         VStack(alignment: .leading, spacing: 2) {
           HStack(spacing: 8) {
-            Text(run?.conversation.map(ConversationText.title) ?? RecordText.title(record, appShown: !nested))
+            Text(titleOverride ?? run?.conversation.map(ConversationText.title) ?? RecordText.title(record, appShown: !nested))
               .font(.system(size: TextSize.body, weight: nested ? .regular : .medium))
               .foregroundStyle(nested ? Palette.muted : Palette.ink)
               .lineLimit(1)

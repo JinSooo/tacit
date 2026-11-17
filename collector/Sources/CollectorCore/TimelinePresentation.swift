@@ -30,3 +30,32 @@ public enum SourceApplication {
     "slack": "com.tinyspeck.slackmacgap", "discord": "com.hnc.Discord",
   ]
 }
+
+/// A generated result can have a wall-clock range without any user presence.
+public enum TimelinePresence {
+  public static func hasDuration(activeSeconds: Double, start: Date, end: Date) -> Bool {
+    activeSeconds > 0 && end > start
+  }
+  public static func repeatsTitle(recordCount: Int, recordTitle: String, segmentTitle: String) -> Bool {
+    recordCount == 1 && recordTitle.trimmingCharacters(in: .whitespacesAndNewlines) == segmentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+}
+
+public enum TimelineSetup {
+  /// Unknown backend state must not be mistaken for unfinished setup.
+  public static func shouldShow(permissionsReady: Bool, modelReady: Bool?, agentReady: Bool?) -> Bool {
+    guard let modelReady, let agentReady else { return false }
+    return !permissionsReady || !modelReady || !agentReady
+  }
+}
+
+public enum CaptureFooterStatus {
+  public enum State { case recording, paused(Date), noPermission }
+  public static func title(state: State, enabledSources: Int) -> String {
+    switch state {
+    case .paused(let until): return "已暂停到 \(ViewerFormat.clock(until))"
+    case .recording: return enabledSources == 0 ? "未在记录" : "正在记录"
+    case .noPermission: return enabledSources == 0 ? "未在记录" : "需要辅助功能权限"
+    }
+  }
+}

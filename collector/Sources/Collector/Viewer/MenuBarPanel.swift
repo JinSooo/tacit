@@ -109,19 +109,14 @@ struct MenuBarPanel: View {
   }
 
   var dot: Color {
+    if store.capture.sources.allSatisfy({ !$0.enabled }) { return Palette.faint }
     switch store.capture.state {
     case .recording: return Palette.attention
     case .paused: return Color(nsColor: .tertiaryLabelColor)
     case .noPermission: return Palette.attention
     }
   }
-  var title: String {
-    switch store.capture.state {
-    case .recording: return "正在记录"
-    case .paused(let until): return "已暂停到 \(ViewerFormat.clock(until))"
-    case .noPermission: return "需要辅助功能权限"
-    }
-  }
+  var title: String { store.capture.statusTitle }
   /// 只说发送异常和录音状态。
   var subtitle: String? {
     let c = store.capture
