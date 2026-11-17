@@ -266,12 +266,13 @@ export interface ProjectOutput { goal: string; status: string; people: string[] 
 
 export const DAY_SYSTEM = `${DATA_RULES}
 
-任务：按当天实际发生的几件事，写给本人看。activities 每项是一件事，带这个事项自己的 evidence。user 是本人，assistant 是 AI，other 是对方。
-- items 用 activity 返回给定的编号，同一编号只写一次。title 不超过 20 个字；description 写发生了什么、结果如何，最多两句。没做完就直接写做到哪，例如“展板排好版，还没印”。用“你”或省略主语，不写“用户”“AI 报告”“助手报告”。
-- 只写该事项依据里能支持的当日行动、确定结果和本人明确做的决定。AI 的建议、提问、对旧材料的转述当不了今天的新成果；如果只知道做了一个检查，可以说做了检查，不替本人下结论。没证实的成果直接略过。
+任务：按当天实际发生的活动段，写给本人看。activities 每项是一段，有这段自己的 evidence。同一件事中断后再做会有两个编号。user 是本人，assistant 是 AI，other 是对方。
+- items 用 activity 返回给定的编号，同一编号只写一次。title 不超过 20 个字；description 用一两句写你做了什么、结果如何。没做完就直接写做到哪，例如“展板排好版，还没印”。用“你”或省略主语，不写“用户”“AI 报告”“助手报告”。
+- 只写本段依据里能支持的行动、确定结果和本人明确做的决定。AI 的建议、提问、对旧材料的转述当不了今天的新成果；如果只知道做了一个检查，可以说做了检查，不替本人下结论。没证实的成果直接略过。
+- 标题和描述都限于这段里发生的事。记录里提到更早的时间或之前已完成的工作，只用来理解上下文。没有逐条时间的会话内容只能归到这一批记录，不据此写具体发生时刻。
 - 不固定分类，不给建议，不写核实状态。不写测试条数、提交号、任务编号、用量等过程数字。数字本身是事情的结论时才写。
-- refs 只填该 activity 里实际支持描述的编号，不拿另一件事的编号凑数。没有可写事实时可以省掉这件事。时间和时长仅用于理解顺序和分量，不是结论依据。
-- highlight 选 items 中最主要的一件，写一句话概括它，不超过 30 个字，不加项目名前缀。没有可概括的内容返回 null。
+- secondary=true 是同一时段的其他来源，只能在描述里补充，标题取主活动。refs 只填实际支持描述的编号，其中至少一条来自主活动。没有可写事实时可以省掉这段。时间和时长仅用于理解顺序和分量。
+- highlight 选 items 中最主要的一段，写一句话概括它，不超过 30 个字，不加项目名前缀。没有可概括的内容返回 null。
 - ${STATUS_FIDELITY}
 输出用中文，专有名词保持原文。`;
 
@@ -284,12 +285,13 @@ export interface DayOutput {
   items: { activity: string; title: string; description: string; refs: string[] }[];
 }
 
+export const MAX_REVIEW_SEGMENTS = 30;
 export const DAY_SCHEMA = {
   type: "object", additionalProperties: false, required: ["highlight", "items"],
   properties: {
     highlight: { type: ["object", "null"], additionalProperties: false, required: ["activity", "text"],
       properties: { activity: { type: "string" }, text: { type: "string", maxLength: 30 } } },
-    items: { type: "array", maxItems: 20, items: {
+    items: { type: "array", maxItems: MAX_REVIEW_SEGMENTS, items: {
       type: "object", additionalProperties: false, required: ["activity", "title", "description", "refs"],
       properties: {
         activity: { type: "string" }, title: { type: "string", maxLength: 20 }, description: { type: "string", maxLength: 160 },

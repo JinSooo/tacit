@@ -51,18 +51,23 @@ const reviewModel: LLM = { async complete<T>(req: LLMRequest) {
   })) } as T };
 } };
 
-test("回顾按原记录并集计时：重叠不重计、空档不计、结束不回退，同名事项不混合", async () => {
+test("时间线按原记录并集计时，同名事项不混合且中途切换另起一段", async () => {
   thread(); thread("other");
   frame("long", [[0,20], [40,60]]); frame("nested", [[5,15]]);
   frame("other", [[25,35]], "other"); frame("tail", [[65,75]]);
   noteFor("t",0); noteFor("other",25);
   await dayStep({ db: ctx.db, llm: reviewModel }, store, date, base + 3 * 3600_000);
   const items = store.day(date)!.detail.items;
-  expect(items).toHaveLength(2);
-  expect(items[0]).toMatchObject({ id: "thread:t", active_seconds: 50 * 60 });
+  expect(items).toHaveLength(3);
+  expect(items[0].active_seconds).toBe(20 * 60);
   expect(Date.parse(items[0].t_start)).toBe(base);
-  expect(Date.parse(items[0].t_end)).toBe(base + 75 * MIN);
-  expect(items[1]).toMatchObject({ id: "thread:other", active_seconds: 10 * 60 });
+  expect(Date.parse(items[0].t_end)).toBe(base + 20 * MIN);
+  expect(items[1].active_seconds).toBe(10 * 60);
+  expect(Date.parse(items[1].t_start)).toBe(base + 25 * MIN);
+  expect(Date.parse(items[1].t_end)).toBe(base + 35 * MIN);
+  expect(items[2].active_seconds).toBe(30 * 60);
+  expect(Date.parse(items[2].t_start)).toBe(base + 40 * MIN);
+  expect(Date.parse(items[2].t_end)).toBe(base + 75 * MIN);
 });
 
 test("此刻时间来自被展示摘要；轮询和新活动都不能把旧摘要变新", () => {
@@ -148,8 +153,8 @@ test("回顾跨本地午夜裁剪时长，不把前一天或次日的时间算�
   noteFor("t",830);
   await dayStep({ db: ctx.db, llm: reviewModel }, store, date, base + 16 * 3600_000);
   const { items, timeline } = store.day(date)!.detail;
-  expect(items).toHaveLength(1);
-  expect(items[0].active_seconds).toBe(20 * 60);
+  expect(items).toHaveLength(2);
+  expect(items.map((segment: { active_seconds: number }) => segment.active_seconds)).toEqual([10 * 60, 10 * 60]);
   expect(timeline.map((c: { start: string; end: string }) => [c.start,c.end])).toEqual([["00:00","00:10"],["23:50","24:00"]]);
 });
 

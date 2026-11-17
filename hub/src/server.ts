@@ -17,6 +17,7 @@ import { hubStatus } from "./status.ts";
 import { DEFAULT_PORT, dataDirOf } from "./hub-json.ts";
 import { createSettings, type SettingsDeps } from "./settings.ts";
 import { RuntimeLog, backgroundLog } from "./runtime-log.ts";
+import { correctTimelineSegment, deleteTimelineSegment, timelineDays, timelineRecord } from "./timeline.ts";
 
 const defaultWebDir = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'";
@@ -134,10 +135,28 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       if (method === "GET" && url.pathname === "/v1/threads") return Response.json(store.threads(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/projects") return Response.json({ projects: store.projectSummaries() });
       if (method === "GET" && url.pathname === "/v1/pending") return Response.json({ pending: store.pending().filter(item => item.kind !== "thread_done") });
+      if (method === "GET" && url.pathname === "/v1/timeline") return Response.json(timelineDays(db,url.searchParams));
+      const timelineMember = /^\/v1\/timeline\/record\/([0-9A-HJKMNP-TV-Z]{26})$/.exec(url.pathname);
+      if (method === "GET" && timelineMember) return respond(timelineRecord(db,timelineMember[1]!));
+      const projectContext = /^\/v1\/projects\/([\w-]{1,128})\/context$/.exec(url.pathname);
+      if (method === "GET" && projectContext) {
+        const project = store.project(projectContext[1]!);
+        if (!project) return respond(null);
+        const { threads } = new AgentReads(db).projectContext(project);
+        return Response.json({ threads: threads.map(({ detail: _detail, ...brief }) => brief) });
+      }
       const entity = /^\/v1\/(threads|projects)\/([^/]+)$/.exec(url.pathname);
       if (method === "GET" && entity) return respond(store.view(entity[1] as "threads" | "projects",entity[2]!,url.searchParams.get("level") ?? "brief"));
       const day = /^\/v1\/days\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
       if (method === "GET" && day) return respond(store.dayView(day[1]!));
+      const segment = /^\/v1\/days\/(\d{4}-\d{2}-\d{2})\/segments\/([\w:%.-]{1,200})$/.exec(url.pathname);
+      if (segment && (method === "PATCH" || method === "DELETE")) {
+        let id: string;
+        try { id = decodeURIComponent(segment[2]!); } catch { throw new InputError("段编号无效"); }
+        if (method === "PATCH") return respond(correctTimelineSegment(store,segment[1]!,id,await readJSON()));
+        const deleted = deleteTimelineSegment(store,segment[1]!,id,await readJSON());
+        return deleted?.changed ? Response.json({ error: "这段记录已更新，请刷新后再确认删除" }, { status: 409 }) : respond(deleted);
+      }
       const pending = /^\/v1\/pending\/([^/]+)$/.exec(url.pathname);
       if (method === "POST" && pending) {
         const body = await readJSON() as Record<string,unknown> | null;

@@ -21,7 +21,7 @@ import { evidenceTime } from "./evidence-time.ts";
 import { resolveRepoRoot } from "./repos.ts";
 import { readGeneral } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
-import { composeReview, reviewInput, reviewMaterial } from "./day-review.ts";
+import { composeReview, reviewPlan, reviewMaterial } from "./day-review.ts";
 import { redactString } from "../redact.ts";
 import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
 
@@ -671,29 +671,35 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
   const next = new Date(start);
   next.setDate(next.getDate() + 1);
   const end = Math.min(next.getTime(), now + 1), cutoff = toLocalIso(Math.min(next.getTime(), now));
-  const activities = reviewInput(d.db, start, end), material = reviewMaterial(activities);
-  const result = material.length ? await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM,
-    prompt: P.dayPrompt(date, material, cutoff), schema: P.DAY_SCHEMA }) : null;
-  const failed = (discarded = false) => {
+  const revision = contentRevision(d.db);
+  const { segments, omittedRecordIds, dependencyRecordIds } = reviewPlan(d.db, start, end), material = reviewMaterial(segments);
+  const failed = (calls: number, discarded = false) => {
     store.hub.db.transaction(() => {
       store.upsertDay({ date, needs_regen: 1 });
       store.setState(`day_failed:${date}`, discarded ? null : true);
     })();
-    return { calls: 1, ok: false };
+    return { calls, ok: false };
   };
-  if (result?.ok === false) return failed(result.error === "记录已变化，等待重新整理");
-  const detail = composeReview(activities, result?.data ?? { highlight: null, items: [] }, start, next.getTime(), cutoff);
-  if (result?.ok && result.data.items.length && !detail.items.some(item => item.evidence.some(ref =>
-    !["mac.screen", "mac.browser", "mac.app"].includes(ref.source)))) {
-    discardedCall(d.db, result.call_id);
-    return failed();
+  const result = material.length ? await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM,
+    prompt: P.dayPrompt(date, material, cutoff), schema: P.DAY_SCHEMA }) : null;
+  const calls = Number(!!result);
+  if (result?.ok === false) return failed(calls, result.error === "记录已变化，等待重新整理");
+  const detail = composeReview(segments, result?.data ?? { highlight: null, items: [] },
+    next.getTime(), cutoff, omittedRecordIds, dependencyRecordIds);
+  if (!detail) {
+    discardedCall(d.db, result?.call_id);
+    return failed(calls);
   }
-  store.hub.db.transaction(() => {
+  return store.hub.db.transaction(() => {
+    if (revision !== contentRevision(d.db)) {
+      discardedCall(d.db, result?.call_id);
+      return failed(calls, true);
+    }
     store.upsertDay({ date, detail, brief: detail.summary, needs_regen: 0, updated_at: toLocalIso(now) });
     store.setState(`day_failed:${date}`, null);
     if (result?.ok) appliedCall(d.db, result.call_id);
-  })();
-  return { calls: Number(!!result), ok: true };
+    return { calls, ok: true };
+  }).immediate();
 }
 
 // ---------------- 一轮 ----------------

@@ -6,7 +6,7 @@ import { isAbsolute, resolve } from "node:path";
 import { toLocalIso, ulid, type RecordV1 } from "../../packages/record/index.ts";
 import { HubDB, InputError } from "./db.ts";
 import { redactString } from "./redact.ts";
-import { DistillStore, type Thread } from "./distill/store.ts";
+import { DistillStore, type Project, type Thread } from "./distill/store.ts";
 import { projectForPath, resolveRepoRoot } from "./distill/repos.ts";
 import { readGeneral } from "./general-settings.ts";
 import { auditQueryExpiry, enqueueAgentAudit, flushAgentAudit } from "./agent-audit.ts";
@@ -76,8 +76,11 @@ export class AgentReads {
     if (!isAbsolute(cwd)) throw new InputError("cwd 必须是绝对路径");
     if (!["startup", "resume", "clear", "compact"].includes(params.get("event") ?? "")) throw new InputError("event 无效");
     const project = this.projectAt(cwd);
-    const empty = { value: { text: "", project_id: project?.id ?? null, tokens_est: 0 }, ids: [] as string[] };
-    if (!project) return empty;
+    return project ? this.projectContext(project) : { value: { text: "", project_id: null, tokens_est: 0 }, ids: [] };
+  }
+
+  projectContext(project: Project) {
+    const empty = { value: { text: "", project_id: project.id, tokens_est: 0 }, ids: [], threads: [] };
     // 带入已整理的公开事项；有其他来源且最新修正为私密时，也不能把它误作公开依据。
     const threads = this.hub.db.prepare(`SELECT t.* FROM threads t WHERE t.project_id=? AND (t.domain IS NULL OR t.domain='work')
       AND (t.status='active' OR (t.status='paused' AND t.last_ms>=?)) AND COALESCE(trim(t.brief),'')<>''
@@ -86,7 +89,7 @@ export class AgentReads {
           WHERE a.thread_id=t.id AND r.sensitivity<>'private' AND COALESCE((SELECT c.sensitivity FROM records c
             WHERE c.corrects=r.id AND c.source='manual.correction' ORDER BY c.t_start_ms DESC,c.id DESC LIMIT 1),'normal')<>'private'))
       ORDER BY COALESCE(t.last_ms,0) DESC,t.id DESC`).all(project.id, Date.now() - PAUSED_CONTEXT_MS) as Thread[];
-    const entries = threads.map(t => ({ id: t.id,
+    const entries = threads.map(t => ({ thread: t,
       text: `事项 ${line(t.title)} [${t.id}]（${t.status === "active" ? "进行中" : "已暂停"}，${freshness(t)}）：${line(t.brief!)}` }));
     const render = () => [intro,`项目：${line(project.name)}`,...entries.map(e => e.text),hint].join("\n");
     // 预算不足先舍弃最旧的事项；没有可带入的事项时，连标题也不发。
@@ -94,7 +97,7 @@ export class AgentReads {
     while (entries.length && estimateTokens(render()) > limit) entries.pop();
     if (!entries.length) return empty;
     const text = render();
-    return { value: { text, project_id: project.id, tokens_est: estimateTokens(text) }, ids: entries.map(e => e.id) };
+    return { value: { text, project_id: project.id, tokens_est: estimateTokens(text) }, ids: entries.map(e => e.thread.id), threads: entries.map(e => e.thread) };
   }
 
   private now() {
@@ -107,7 +110,7 @@ export class AgentReads {
     const id = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? asked : this.store.threadId(asked);
     if (!["brief","detail","evidence"].includes(level)) throw new InputError("level 无效");
     const kind = /^\d{4}-\d{2}-\d{2}$/.test(id) ? "day" : this.store.thread(id) ? "thread" : "project";
-    let item: Item | null = kind === "day" ? this.store.dayView(id) : this.store.view(kind === "thread" ? "threads" : "projects",id,level);
+    let item: Item | null = kind === "day" ? this.store.dayView(id, { agent: true }) : this.store.view(kind === "thread" ? "threads" : "projects",id,level);
     if (!item) return this.record(asked, level, params);
     if (params.has("cursor")) throw new InputError("cursor 只用于原始记录续读");
     if (kind === "day" && level === "brief") { item = { ...item }; delete item.detail; }

@@ -6,6 +6,7 @@ import { frameRecordsSchema, frameRejectionsSchema } from "./schema.ts";
 import { HubDB, InputError } from "../db.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { recordSpans, unionSeconds } from "../durations.ts";
+import type { ReviewItem } from "./day-review.ts";
 
 export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" | "candidate" | "candidate_expired" }
 export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[] }
@@ -13,6 +14,26 @@ export interface Project { id: string; name: string; confirmed?: number; keys: P
 export interface Thread { id: string; domain?: "work" | "life" | null; project_hint?: string | null; project_id?: string | null; status: "active" | "paused" | "done" | "abandoned" | "archived"; title: string; brief?: string | null; detail?: unknown; first_ms?: number; last_ms?: number; active_minutes?: number; sessions?: number; needs_regen?: number; updated_at?: string }
 export interface Fact { id: string; thread_id?: string | null; project_id?: string | null; kind: "decision" | "rejected" | "open" | "next" | "inference"; text: string; reason?: string; evidence: string[]; confidence?: number; origin: "llm" | "user"; valid_at: string; invalid_at?: string | null; superseded_by?: string | null; created_at: string }
 export interface Pending { id: string; kind: "project" | "merge" | "thread_done" | "voice"; payload: Record<string, unknown>; created_at: string; resolved_at?: string | null; resolution?: string | null }
+type TimelineFields = "apps" | "record_ids" | "project_id";
+export type StoredReviewItem = Omit<ReviewItem, TimelineFields> & Partial<Pick<ReviewItem, TimelineFields>>;
+type TimelineCorrection = { record_ids: string[]; description: string };
+export type TimelineCorrections = Record<string, TimelineCorrection>;
+export const timelineCorrectionKey = (date: string) => `timeline_corrections:${date}`;
+
+export function isTimelineItem(item: StoredReviewItem): item is ReviewItem {
+  return Array.isArray(item.record_ids);
+}
+
+export function applyTimelineCorrections(items: StoredReviewItem[], corrections: TimelineCorrections | null) {
+  if (!corrections) return items;
+  return items.map(item => {
+    const correction = Object.hasOwn(corrections, item.id) ? corrections[item.id] : undefined;
+    if (!correction || !isTimelineItem(item)) return item;
+    const members = new Set(item.record_ids);
+    // 新记录可并入原段。旧段被拆成别的活动时，不把原修正套到剩余的一部分。
+    return correction.record_ids.every(id => members.has(id)) ? { ...item, description: correction.description } : item;
+  });
+}
 type Row = Record<string, any>;
 const jsonColumns = new Set(["record_ids", "keys", "detail", "evidence", "payload"]);
 function decode<T>(row: Row): T {
@@ -72,12 +93,19 @@ export class DistillStore {
   project(id: string): Project | null { const r = this.sql.prepare("SELECT * FROM projects WHERE id=?").get(id); return r ? decode(r as Row) : null; }
   thread(id: string): Thread | null { const r = this.sql.prepare("SELECT * FROM threads WHERE id=?").get(id); return r ? decode(r as Row) : null; }
   day(date: string): Row | null { const r = this.sql.prepare("SELECT * FROM days WHERE date=?").get(date); return r ? decode(r as Row) : null; }
-  dayView(date: string): Row | null {
+  dayView(date: string, { agent = false } = {}): Row | null {
     const row = this.day(date);
     if (!row) return null;
     // 旧库仍可读取日期和时间条，接口只返回当前契约里的字段。
-    const { summary, timeline, items, cutoff } = row.detail ?? {};
-    return { ...row, detail: row.detail ? { summary, timeline, items, cutoff } : null,
+    const { summary, timeline, items, cutoff, omitted_record_ids } = row.detail ?? {};
+    const adjusted = Array.isArray(items) ? applyTimelineCorrections(items, this.getState<TimelineCorrections>(timelineCorrectionKey(date))) : undefined;
+    const visible = agent ? adjusted?.map(item => {
+      if (!isTimelineItem(item)) return item;
+      const { apps: _apps, record_ids: _ids, project_id: _project, ...existing } = item;
+      return existing;
+    }) : adjusted;
+    return { ...row, detail: row.detail ? { summary, timeline, items: visible, cutoff,
+      ...(!agent && Array.isArray(omitted_record_ids) ? { omitted_record_ids } : {}) } : null,
       ...(this.getState<boolean>(`day_failed:${date}`) ? { failed: true } : {}) };
   }
   facts(field: "thread_id" | "project_id", id: string): Fact[] { return this.sql.prepare(`SELECT * FROM facts WHERE ${field}=? AND invalid_at IS NULL ORDER BY created_at,id`).all(id).map(r => decode<Fact>(r as Row)); }
@@ -359,9 +387,25 @@ export class DistillStore {
 
   /** 引用可来自同一录音的另一自然日，直接按依据 ID 撤下涉及的回顾。 */
   private clearReviewEvidence(recordIds: string[]) {
-    this.sql.prepare(`UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE EXISTS (
-      SELECT 1 FROM json_tree(days.detail) ref WHERE (ref.key='id' OR ref.path='$.record_ids')
-        AND ref.value IN (SELECT value FROM json_each(?)))`).run(JSON.stringify(recordIds));
+    this.sql.prepare(`WITH removed(id) AS (SELECT value FROM json_each(?))
+      UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE
+        EXISTS (SELECT 1 FROM json_tree(days.detail) ref JOIN removed ON removed.id=ref.value WHERE ref.key='id')
+        OR EXISTS (SELECT 1 FROM json_each(days.detail,'$.record_ids') ref JOIN removed ON removed.id=ref.value)
+        OR EXISTS (SELECT 1 FROM json_each(days.detail,'$.items') item
+          JOIN json_each(item.value,'$.record_ids') ref JOIN removed ON removed.id=ref.value)`).run(JSON.stringify(recordIds));
+  }
+
+  private clearTimelineCorrections(recordIds: string[]) {
+    const rows = this.sql.prepare(`SELECT k,v FROM distill_state WHERE k LIKE 'timeline_corrections:%' AND EXISTS (
+      SELECT 1 FROM json_each(distill_state.v) correction JOIN json_each(correction.value,'$.record_ids') record
+        WHERE record.value IN (SELECT value FROM json_each(?)))`).all(JSON.stringify(recordIds)) as { k: string; v: string }[];
+    const affected = new Set(recordIds);
+    for (const { k, v } of rows) {
+      const remaining = Object.entries(JSON.parse(v) as TimelineCorrections)
+        .filter(([, correction]) => !correction.record_ids.some(id => affected.has(id)));
+      if (remaining.length) this.setState(k, Object.fromEntries(remaining));
+      else this.sql.prepare("DELETE FROM distill_state WHERE k=?").run(k);
+    }
   }
 
   /** 修正不另起一段活动；已有整理必须回到原活动，用新正文重建。 */
@@ -374,6 +418,7 @@ export class DistillStore {
       UNION SELECT thread_id FROM facts WHERE thread_id IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (${placeholders}))`).all(...ids, ...ids) as { thread_id: string }[];
     this.sql.prepare(`UPDATE facts SET invalid_at=? WHERE origin='llm' AND invalid_at IS NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (${placeholders}))`).run(new Date().toISOString(), ...ids);
     this.clearReviewEvidence(ids);
+    if (original.sensitivity === "private" || original.corrections.at(-1)?.sensitivity === "private") this.clearTimelineCorrections(ids);
     this.clearDerived(new Set(affected.map(r => r.thread_id)), new Set(), [original.t_start]);
     removeSummariesOf(this.hub, id);
     this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=date(?, 'localtime')").run(original.t_start);
@@ -421,6 +466,7 @@ export class DistillStore {
     }
     for (const tid of affected) this.sql.prepare("UPDATE threads SET active_minutes=? WHERE id=?").run(this.activeMinutes(tid),tid);
     this.clearReviewEvidence([...removed]);
+    this.clearTimelineCorrections([...removed]);
     this.clearDerived(affected, projects, records.map(r=>r.time));
     const candidates = this.getState<{ frame_ids: string[] }[]>("candidates");
     if (candidates) this.setState("candidates", candidates.filter(c => !c.frame_ids.some(id => changedFrames.has(id))));
