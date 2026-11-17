@@ -308,7 +308,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 - **仓库归一**：用 `git rev-parse --git-common-dir` 找主仓库，worktree 和子目录都归到主仓库的项目，worktree 路径作为别名追加进 `keys.repos`。目录已删除、git 探测失败时，按已登记的 `keys.repos` 做路径边界最长匹配。家目录本身不算仓库。git 探测带 500ms 超时和 60 秒缓存。
 - **合并重复线程**：慢轮次每天最多一次，把最近 60 条有简略版的线程（进行中、暂停、14 天内完成的）交给 hour 档找"其实是同一件事"的分组，模型把握 ≥ 0.8、同一 `domain`、不分属两个项目才并。片段最多的那条留下：片段、事实、"不属于这里"记录都转过去，被并线程未处理的"做完了吗"结项为 `merged`，状态取最近活动的那条，整条重写详细版。被并线程的 id 写进 `distill_state.thread_redirect:<旧 id>`，Agent `get` 用旧 id 也能查到。
 - **按名字提名项目**：`project_hint` 和 `project_id` 都为空的线程，标题或简略版里恰好写了一个已有项目名（不少于 4 个字符，不分大小写）时，把它写进 `project_hint` 并清空 `domain`，下一次判断归属时由模型决定是否挂上。
-- **线程状态**：2 小时没新记录 → `paused`（仍按日历时间）；最后活动后满 `ask_done_days` 个使用天（默认 3），或有完成信号 → 进 `pending(kind=thread_done)`。这条待确认在提问后满 `archive_days` 个使用天（默认 **7**）没人处理：线程改为 `archived`，待确认结项为 `resolution=expired`，同一事务。使用天是 `records` 表中至少有一条记录的中枢本地自然日，按 `t_start_ms` 分日，不限来源和设备、不算墓碑；最后活动当天和提问当天分别不计入对应门槛，只算截至当前时刻的记录。用户点"完成 / 继续 / 放弃"对应 `done` / `active` / `abandoned`。`archived` 和 `done` 分开，用来区分到期结掉和用户确认。`archived` 线程不再提问、不进注入、不参与归线程候选，`/v1/threads?status=archived`、`get`、`search` 仍能查到。
+- **线程状态**。2 小时没新活动时暂停为 `paused`。进行中或已暂停的事项最后活动后满 `archive_days` 个使用天（默认 7）时进入 `archived`。使用天是 `records` 表中至少有一条记录的本地自然日，按 `t_start_ms` 分日，覆盖所有设备及来源，最后活动当天不计入，只算截至当前时刻的记录。日常整理关闭未回答的旧 `thread_done` 提问，标为 `resolution=expired`，与归档一并提交。归档事项仍可通过 `/v1/threads?status=archived`、`get`、`search` 查看。
 
 ### 4.8 提炼请求队列（`user_version` 6）
 
