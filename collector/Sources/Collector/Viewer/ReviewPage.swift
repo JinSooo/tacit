@@ -3,36 +3,46 @@ import CollectorCore
 
 struct ReviewPage: View {
   @Environment(ViewerStore.self) private var store
-  @State private var picking = false
   @State private var refresh = 0
 
   var body: some View {
     TimelineView(.everyMinute) { clock in
       let today = Calendar.current.startOfDay(for: clock.date)
-      let day = Binding(get: { store.reviewDay ?? today }, set: { store.reviewDay = $0 == today ? nil : $0 })
-      ScrollView {
-        ReviewDayContent(day: day.wrappedValue, isToday: day.wrappedValue == today, refresh: refresh)
-          .id(store.revision)
-          .modifier(ReviewWidth())
-      }
-      .id(day.wrappedValue)
-      .background(Palette.paper)
-      .navigationTitle("回顾")
-      .toolbar {
-        DayNavigation(day: day, picking: $picking, today: today)
-        ToolbarItem(placement: .primaryAction) {
-          Button { refresh += 1 } label: { PhIcon("arrow-clockwise", size: PhIcon.toolbar) }
-            .help("刷新").accessibilityLabel("刷新").keyboardShortcut("r", modifiers: .command)
-        }
+      let day = Binding(get: { store.reviewDay ?? today }, set: {
+        store.reviewDay = $0 == today ? nil : $0
+        store.timelineFocus = nil
+      })
+      ReviewDayContent(day: day, today: today, now: clock.date, refresh: refresh)
+        .id(day.wrappedValue)
+    }
+    .background(Palette.paper)
+    .navigationTitle("时间线")
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        Button { refresh += 1 } label: { PhIcon("arrow-clockwise", size: PhIcon.toolbar) }
+          .help("刷新").accessibilityLabel("刷新").keyboardShortcut("r", modifiers: .command)
       }
     }
   }
 }
 
-private struct ReviewWidth: ViewModifier {
+struct ReviewWidth: ViewModifier {
   func body(content: Content) -> some View {
     content.frame(maxWidth: 680, alignment: .leading)
-      .padding(.horizontal, 32).padding(.vertical, 32).frame(maxWidth: .infinity, alignment: .top)
+      .padding(.horizontal, 32).padding(.vertical, 28).frame(maxWidth: .infinity, alignment: .top)
+  }
+}
+
+enum TimelineDay {
+  static func key(_ day: Date) -> String {
+    let c = Calendar.current.dateComponents([.year, .month, .day], from: day)
+    return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
+  }
+
+  static func date(_ key: String) -> Date? {
+    let values = key.split(separator: "-").compactMap { Int($0) }
+    guard values.count == 3 else { return nil }
+    return Calendar.current.date(from: DateComponents(year: values[0], month: values[1], day: values[2]))
   }
 }
 
@@ -41,96 +51,152 @@ private struct ReviewDayContent: View {
   @State private var diary = Loader<DayDiary?>()
   @State private var records = Loader<[HistoryRecord]>()
   @State private var brush: ClosedRange<Date>?
-  @State private var lane: Lane?
-  let day: Date
-  let isToday: Bool
+  @State private var expanded: String?
+  @State private var picking = false
+  @Binding var day: Date
+  let today: Date
+  let now: Date
   let refresh: Int
+
+  private struct LoadKey: Equatable {
+    let refresh: Int
+    let revision: Int
+  }
 
   private var review: DayDiary? { diary.value ?? nil }
   private var failed: Bool { review?.failed?.value == true }
-  private var items: [DayDiary.Item] { review?.detail?.items ?? [] }
+  private var isToday: Bool { day == today }
+  private var hasSegments: Bool { review?.detail?.items?.allSatisfy { $0.recordIds != nil } == true }
+  private var items: [DayDiary.Item] {
+    guard hasSegments else { return [] }
+    return (review?.detail?.items ?? []).sorted { ($0.tStart, $0.id) > ($1.tStart, $1.id) }
+  }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 24) {
-      VStack(alignment: .leading, spacing: 8) {
+    ScrollViewReader { proxy in
+      ScrollView {
+        VStack(alignment: .leading, spacing: 22) {
+          dateLine
+          headline
+          if !items.isEmpty {
+            let rows = ReviewActivity.visibleRecords(records.value ?? [], sources: store.capture.sources)
+            DayStrata(records: rows, segments: items, day: day, now: isToday ? now : nil, selected: expanded, brush: $brush) { id in
+              open(id, in: proxy)
+            }
+            .zIndex(1)
+          }
+          LazyVStack(spacing: 0) {
+            ForEach(items.filter { item in brush.map { item.intersects($0) } ?? true }) { item in
+              TimelineSegmentRow(day: day, item: item, records: records.value, expanded: expanded == item.id) {
+                expanded = expanded == item.id ? nil : item.id
+              }
+              .id(item.id)
+            }
+          }
+          footer
+        }
+        .modifier(ReviewWidth())
+      }
+      .task(id: LoadKey(refresh: refresh, revision: store.revision)) {
+        repeat {
+          await load()
+          reveal(proxy)
+          if !isToday { break }
+          try? await Task.sleep(for: .seconds(60))
+        } while !Task.isCancelled
+      }
+      .onChange(of: store.timelineFocus) { reveal(proxy) }
+    }
+  }
+
+  private var dateLine: some View {
+    HStack {
+      Button { picking = true } label: {
         Text("\(Fmt.date(day)) \(ViewerFormat.weekday(day))")
           .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-        headline
       }
-      let rows = ReviewActivity.visibleRecords(records.value ?? [], sources: store.capture.sources)
-      let chapters = DayStrata.chapters(from: review, on: day)
-      if !rows.isEmpty || !chapters.isEmpty {
-        DayStrata(records: rows, chapters: chapters, day: day, selected: nil, brush: $brush, lane: $lane) { record in
-          store.showRecord(record.id, at: record.start)
-        }
-        .zIndex(1)
+      .buttonStyle(.plain).help("跳到日期").popover(isPresented: $picking) {
+        DatePicker("选择日期", selection: Binding(get: { day }, set: {
+          day = Calendar.current.startOfDay(for: $0)
+          picking = false
+        }), in: ...now, displayedComponents: .date)
+          .datePickerStyle(.graphical).labelsHidden().padding(12)
+          .environment(\.locale, Locale(identifier: "zh_CN")).environment(\.calendar, ViewerCalendar.chinese)
       }
-      if !items.isEmpty {
-        VStack(spacing: 0) {
-          ForEach(items) { item in
-            Rectangle().fill(Palette.hairline).frame(height: 1).accessibilityHidden(true)
-            Button { store.path.append(.reviewItem(day, item.id)) } label: {
-              HStack(alignment: .firstTextBaseline, spacing: 16) {
-                Text(ReviewTime.range(item, on: day))
-                  .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
-                  .frame(width: 84, alignment: .leading)
-                VStack(alignment: .leading, spacing: 4) {
-                  Text(item.title).font(.system(size: TextSize.title, weight: .semibold)).foregroundStyle(Palette.ink)
-                  Text(item.description).font(.system(size: TextSize.body)).lineSpacing(TextSize.lineSpacing(TextSize.body))
-                    .foregroundStyle(Palette.ink)
-                  ReviewMetadata(item: item)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                PhIcon("caret-right", size: 12).foregroundStyle(Palette.muted).accessibilityHidden(true)
-              }
-              .padding(.vertical, 12).contentShape(Rectangle())
-            }
-            .buttonStyle(ReviewRowStyle())
-          }
-        }
+      Spacer()
+      ControlGroup {
+        Button { shift(-1) } label: { PhIcon("caret-left", size: 14) }
+          .help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
+        Button("今天") { day = today }.disabled(isToday).keyboardShortcut("t", modifiers: .command)
+        Button { shift(1) } label: { PhIcon("caret-right", size: 14) }
+          .help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command).disabled(isToday)
       }
-      if review?.detail?.items != nil, let at = review?.detail?.cutoff.flatMap(ViewerTime.parse) {
-        let pending = review?.needsRegen?.value == true || rows.contains { $0.sensitivity != "private" && ($0.end ?? $0.start) > at }
-        let suffix = failed ? "，最近一次整理失败" : pending ? "，有新活动待整理" : ""
-        Text("内容截至 \(ReviewTime.clock(at, on: day))\(suffix)")
-          .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(failed ? Palette.attention : Palette.muted)
-      }
+      .font(.system(size: TextSize.caption)).fixedSize()
     }
-    .task(id: refresh) {
-      repeat {
-        await load()
-        if !isToday { break }
-        try? await Task.sleep(for: .seconds(60))
-      } while !Task.isCancelled
-    }
-    .onChange(of: store.capture.sources.filter(\.enabled).map(\.id)) { lane = nil }
+  }
+
+  private func shift(_ delta: Int) {
+    guard let next = Calendar.current.date(byAdding: .day, value: delta, to: day), next <= today else { return }
+    day = next
   }
 
   @ViewBuilder private var headline: some View {
-    if let summary = review?.summary {
+    if hasSegments, let summary = review?.summary {
       ReviewHeadline(text: summary, size: TextSize.display)
         .foregroundStyle(Palette.ink).lineSpacing(TextSize.serifLineSpacing(TextSize.display))
         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled).accessibilityAddTraits(.isHeader)
     } else if let error = diary.error ?? records.error {
       Placeholder(kind: .error(error) { Task { await load() } })
-    } else if failed && review?.detail?.items == nil {
+    } else if failed && !hasSegments {
       status("最近一次整理失败", color: Palette.attention)
     } else if diary.value == nil || records.value == nil {
-      ProgressView().controlSize(.small).accessibilityLabel("正在读取回顾")
-    } else if records.value?.isEmpty == true && review?.detail?.timeline?.isEmpty != false {
+      ProgressView().controlSize(.small).accessibilityLabel("正在读取时间线")
+    } else if records.value?.isEmpty == true && review?.detail == nil {
       status("这一天没有记录")
-    } else if review?.detail?.items != nil {
-      status("这一天没有形成事项")
+    } else if hasSegments {
+      status("这一天没有整理出活动段")
+    } else if review?.detail != nil {
+      status("这一天有原始记录")
     } else if !isToday && review?.needsRegen?.value != true {
-      status("这一天的回顾待整理")
+      status("这一天还没有时间线")
     } else {
       status("正在整理")
     }
   }
 
+  private var footer: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 16) {
+      if hasSegments, let at = review?.detail?.cutoff.flatMap(ViewerTime.parse) {
+        let pending = review?.needsRegen?.value == true || (records.value ?? []).contains {
+          $0.sensitivity != "private" && ($0.end ?? $0.start) > at
+        }
+        let suffix = failed ? "，最近一次整理失败" : pending ? "，有新活动待整理" : ""
+        Text("内容截至 \(ReviewTime.clock(at, on: day))\(suffix)")
+          .monospacedDigit().foregroundStyle(failed ? Palette.attention : Palette.muted)
+      }
+      Spacer(minLength: 0)
+      Button("这一天的全部记录") { store.showDayRecords(day) }.buttonStyle(.accentLink)
+    }
+    .font(.system(size: TextSize.caption))
+  }
+
   private func status(_ text: String, color: Color = Palette.muted) -> some View {
     Text(text).font(.serif(TextSize.display)).foregroundStyle(color).accessibilityAddTraits(.isHeader)
+  }
+
+  private func reveal(_ proxy: ScrollViewProxy) {
+    guard let id = store.timelineFocus, items.contains(where: { $0.id == id }) else { return }
+    store.timelineFocus = nil
+    open(id, in: proxy)
+  }
+
+  private func open(_ id: String, in proxy: ScrollViewProxy) {
+    brush = nil
+    expanded = id
+    Task { @MainActor in
+      await Task.yield()
+      proxy.scrollTo(id, anchor: .top)
+    }
   }
 
   private func load() async {

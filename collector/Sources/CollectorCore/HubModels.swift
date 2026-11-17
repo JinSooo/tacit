@@ -263,6 +263,11 @@ public struct DayDiary: Decodable, Sendable {
     public let id: String; public let at: String; public let source: String; public let title: String
   }
   public struct Item: Decodable, Identifiable, Hashable, Sendable {
+    public struct App: Decodable, Hashable, Sendable {
+      public let source: String
+      public let app: String?
+    }
+
     public let id: String
     public let title: String
     public let description: String
@@ -271,6 +276,17 @@ public struct DayDiary: Decodable, Sendable {
     public let activeSeconds: TimeInterval
     public let sources: [String]
     public let evidence: [Reference]
+    public let apps: [App]?
+    public let recordIds: [String]?
+    public let projectId: String?
+
+    public var start: Date? { ViewerTime.parse(tStart) }
+    public var end: Date? { ViewerTime.parse(tEnd) }
+
+    public func intersects(_ range: ClosedRange<Date>) -> Bool {
+      guard let start, let end else { return false }
+      return start <= range.upperBound && (end > range.lowerBound || (end == start && start == range.lowerBound))
+    }
   }
   public struct Body: Decodable, Sendable {
     public let summary: String?

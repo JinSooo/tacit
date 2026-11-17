@@ -58,6 +58,7 @@ enum Route: Hashable {
   case project(String)
   case reviewItem(Date, String)
   case reviewRecord(String)
+  case dayRecords
   case runtime
 }
 
@@ -79,6 +80,7 @@ enum Route: Hashable {
 
   /// nil 时跟随今天，手动选中以往日期时保留选择。
   var reviewDay: Date?
+  var timelineFocus: String?
   /// 历史记录当前看的那一天，以及要选中的记录（从证据、读取记录跳过来时用）。
   var historyDay = Calendar.current.startOfDay(for: Date())
   var historyFocus: String?
@@ -108,10 +110,18 @@ enum Route: Hashable {
 
   func project(_ id: String?) -> Project? { id.flatMap { id in projects.first { $0.id == id } } }
 
-  func showReview(_ day: Date? = nil) {
+  func showReview(_ day: Date? = nil, segment: String? = nil) {
     reviewDay = day.flatMap { Calendar.current.isDateInToday($0) ? nil : Calendar.current.startOfDay(for: $0) }
     path = []
     section = .review
+    timelineFocus = segment
+  }
+
+  func showDayRecords(_ day: Date, record: String? = nil) {
+    historyDay = Calendar.current.startOfDay(for: day)
+    historySearch = ""
+    historyFocus = record
+    path.append(.dayRecords)
   }
 
   func showSettings() {

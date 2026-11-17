@@ -26,6 +26,7 @@ struct RootView: View {
               }
               .navigationTitle("历史记录")
               .toolbar { BackButton() }
+            case .dayRecords: HistoryPage().toolbar { BackButton() }
             case .runtime: RuntimePage().toolbar { BackButton() }
             }
           }
@@ -73,8 +74,7 @@ struct Sidebar: View {
   var body: some View {
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
       Section {
-        SidebarLabel(title: "回顾", icon: "sun-horizon").tag(Page.review)
-        SidebarLabel(title: "历史记录", icon: "clock-counter-clockwise").tag(Page.history)
+        SidebarLabel(title: "时间线", icon: "clock-counter-clockwise").tag(Page.review)
       }
       if !store.projects.isEmpty {
         Section("项目") {
@@ -85,12 +85,6 @@ struct Sidebar: View {
               .tag(Page.project(p.id))
           }
         }
-      }
-      Section {
-        // badge 必须在 tag 之前，这一行在 macOS 侧栏里才选得中。
-        SidebarLabel(title: "待确认", icon: "tray")
-          .badge(store.pending.isEmpty ? nil : Text(Fmt.count(store.pending.count)))
-          .tag(Page.pending)
       }
     }
     .listStyle(.sidebar)

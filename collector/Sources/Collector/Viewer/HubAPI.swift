@@ -126,10 +126,16 @@ final class HubAPI: @unchecked Sendable {
   }
 
   func diary(_ day: Date) async throws -> DayDiary? {
-    let c = Calendar.current.dateComponents([.year, .month, .day], from: day)
-    let key = String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
-    do { return try await get(DayDiary.self, "/v1/days/\(key)") }
+    do { return try await get(DayDiary.self, "/v1/days/\(TimelineDay.key(day))") }
     catch let e as HubError where e.status == 404 { return nil }
+  }
+
+  func correctSegment(day: Date, id: String, description: String) async throws {
+    try await send("PATCH", "/v1/days/\(TimelineDay.key(day))/segments/\(id)", ["description": description])
+  }
+
+  func deleteSegment(day: Date, id: String, recordIds: [String]) async throws {
+    try await send("DELETE", "/v1/days/\(TimelineDay.key(day))/segments/\(id)", ["record_ids": recordIds])
   }
 
   // MARK: 提炼

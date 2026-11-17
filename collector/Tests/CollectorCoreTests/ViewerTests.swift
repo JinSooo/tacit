@@ -36,7 +36,8 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
      "detail":{"summary":"定下展板尺寸","cutoff":"2026-11-16T21:30:00+09:00","items":[{
        "id":"activity","title":"排定展板","description":"定下展板尺寸。",
        "t_start":"2026-11-16T21:00:00+09:00","t_end":"2026-11-16T21:20:00+09:00","active_seconds":960,
-       "sources":["mac.screen","codex.session"],
+       "sources":["mac.screen","codex.session"],"record_ids":["record","screen"],
+       "apps":[{"source":"mac.screen","app":"com.example.Designer"}],"project_id":"project",
        "evidence":[{"id":"record","at":"2026-11-16T21:00:00+09:00","source":"codex.session","title":"讨论展板尺寸"}]}]}}
     """)
   let item = try #require(review.detail?.items?.first)
@@ -46,6 +47,15 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(item.sources == ["mac.screen","codex.session"])
   #expect(item.evidence.first?.id == "record")
   #expect(item.evidence.first?.at == "2026-11-16T21:00:00+09:00")
+  #expect(item.recordIds == ["record", "screen"])
+  #expect(item.apps?.first?.app == "com.example.Designer")
+  #expect(item.projectId == "project")
+  if let start = item.start, let end = item.end {
+    #expect(item.intersects(start...start))
+    #expect(!item.intersects(end...end))
+  } else {
+    Issue.record("活动段时间无法读取")
+  }
 }
 
 @Test func reviewKeepsLegacyTimelineButDoesNotDisplayLegacySummary() throws {
