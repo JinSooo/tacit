@@ -3,35 +3,31 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
-test("评测沿用 Claude Code 的模型及提供方，保持工具隔离", async () => {
+test("评测用 Codex 作答，沿用默认模型且不加载用户其他配置", async () => {
   const dir = mkdtempSync(join(tmpdir(), "tacit-accuracy-config-"));
   try {
-    const model = "synthetic/claude-model";
-    const route = "https://evaluation.example.invalid";
-    const token = "synthetic-provider-token";
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({
-      model, env: { ANTHROPIC_BASE_URL: route, ANTHROPIC_AUTH_TOKEN: token, SYNTHETIC_HOOK_ENV: "ignored" },
-    }));
-    writeFileSync(join(dir, "claude"), `#!${process.execPath}
+    const model = "synthetic-codex-model";
+    writeFileSync(join(dir, "config.toml"), `model = "${model}"\nmodel_reasoning_effort = "low"\n\n[mcp_servers.personal]\ncommand = "ignored"\n`);
+    writeFileSync(join(dir, "codex"), `#!${process.execPath}
 const args = process.argv.slice(2);
 const value = flag => args[args.indexOf(flag) + 1];
-if (value("--model") !== ${JSON.stringify(model)} || process.env.ANTHROPIC_BASE_URL !== ${JSON.stringify(route)}
-    || process.env.ANTHROPIC_AUTH_TOKEN !== ${JSON.stringify(token)} || process.env.SYNTHETIC_HOOK_ENV
-    || args.includes(process.env.ANTHROPIC_AUTH_TOKEN) || !args.includes("--restricted") || !args.includes("--strict-mcp-config")
-    || value("--setting-sources") !== "" || value("--tools") !== "") process.exit(2);
-console.log(JSON.stringify({ type: "system", subtype: "init", model: value("--model"), tools: value("--allowedTools").split(",") }));
-console.log(JSON.stringify({ type: "result", subtype: "success", structured_output: { facts: {}, evidence_ids: [] } }));
+const configs = args.flatMap((arg, i) => arg === "-c" ? [args[i + 1]] : []);
+if (args[0] !== "exec" || value("-m") !== ${JSON.stringify(model)} || !args.includes("--ignore-user-config")
+    || !args.includes("--ephemeral") || value("-s") !== "read-only" || value("--disable") !== "shell_tool"
+    || !configs.includes('model_reasoning_effort="low"') || !configs.some(c => c.startsWith("mcp_servers.tacit_eval.enabled_tools="))
+    || configs.some(c => c.includes("personal"))) process.exit(2);
+const emit = item => console.log(JSON.stringify({ type: "item.completed", item }));
+emit({ id: "i1", type: "mcp_tool_call", server: "tacit_eval", tool: "now", arguments: {}, result: { content: [{ type: "text", text: "{}" }] }, error: null });
+emit({ id: "i2", type: "agent_message", text: JSON.stringify({ facts: {}, evidence_ids: [] }) });
 `, { mode: 0o700 });
 
     const child = Bun.spawn([process.execPath, join(import.meta.dir, "agent-accuracy.ts"),
       join(import.meta.dir, "fixtures/agent-accuracy.example.json")], {
-      env: { ...process.env, PATH: dir + delimiter + process.env.PATH, CLAUDE_CONFIG_DIR: dir, RA_PORT: "47823",
-        ANTHROPIC_MODEL: undefined, SYNTHETIC_HOOK_ENV: undefined },
+      env: { ...process.env, PATH: dir + delimiter + process.env.PATH, CODEX_HOME: dir, RA_PORT: "47823" },
       stdout: "pipe",
     });
     const [output, status] = await Promise.all([new Response(child.stdout).text(), child.exited]);
     expect(status).toBe(0);
-    expect(output).not.toContain(token);
     expect(JSON.parse(output.split("\n")[0]!)).toMatchObject({ id: "q-example", model, error: null });
   } finally {
     rmSync(dir, { recursive: true, force: true });
