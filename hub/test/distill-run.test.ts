@@ -294,7 +294,7 @@ test("v3 加密库真实升级 v5：旧归属保留并复制成 hint，domain �
   ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; DROP TABLE runtime_calls; PRAGMA user_version=3;");
   const db = new HubDB(ctx.file, ctx.config.dbKey);
   try {
-    expect(db.db.pragma("user_version", { simple: true })).toBe(11);
+    expect(db.db.pragma("user_version", { simple: true })).toBe(12);
     const t = new DistillStore(db).thread("legacy")!;
     expect(t.project_id).toBe("p"); expect(t.project_hint).toBe("p"); expect(t.domain).toBeNull();
   } finally { db.close(); }

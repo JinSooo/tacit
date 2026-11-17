@@ -325,7 +325,7 @@ test("已有 v2 加密库迁移到 v5，保留记录和提炼数据，重开幂�
   ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; DROP TABLE agent_reads; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; DROP TABLE runtime_calls; PRAGMA user_version=2;");
   const upgraded = new HubDB(ctx.file,ctx.config.dbKey);
   try {
-    expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(11);
+    expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(12);
     expect(upgraded.get(r.id)?.body).toBe(r.body); expect(new DistillStore(upgraded).project("p")?.name).toBe("合成项目p");
     expect(new AgentReads(upgraded).audit(new URLSearchParams()).reads).toEqual([]);
   } finally { upgraded.close(); }

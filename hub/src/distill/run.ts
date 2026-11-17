@@ -9,7 +9,7 @@ import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { DistillStore, type Frame, type Thread } from "./store.ts";
 import { persistFrames } from "./frames.ts";
 import { DistillRules, projectByName } from "./rules.ts";
-import { DistillRequests, localDayStart } from "./requests.ts";
+import { DistillRequests, localDayStart, localDateString } from "./requests.ts";
 import * as P from "./prompts.ts";
 import { digestPieces, digestFrameSize } from "./digest-input.ts";
 import { threadRequest, type ThreadModelOutput } from "./thread-request.ts";
@@ -812,7 +812,30 @@ export async function distillTick(d: Deps, state: LoopState, now = d.now?.() ?? 
   if (req) {
     let error: string | undefined;
     try {
-      if (req.kind === "backfill") {
+      if (req.kind === "regen_days") {
+        const start = localDayStart(req.from!), last = localDayStart(req.to!);
+        if (start === null || last === null || start > last) throw new Error("日期范围无效");
+        const end = new Date(last); end.setDate(end.getDate() + 1);
+        const rows = d.db.db.prepare("SELECT t_start_ms FROM records WHERE t_start_ms>=? AND t_start_ms<? ORDER BY t_start_ms").all(start, end.getTime()) as { t_start_ms: number }[];
+        const dates = [...new Set(rows.map(r => localDateString(r.t_start_ms)))];
+        d.db.db.transaction(() => { for (const date of dates) store.upsertDay({ date, needs_regen: 1 }); })();
+        requests.progress(req.id, 0, dates.length);
+        const failed: string[] = [];
+        let calls = 0;
+        for (const [i, date] of dates.entries()) {
+          try {
+            const result = await dayStep(d, store, date, d.now?.() ?? now);
+            calls += result.calls;
+            if (!result.ok) failed.push(date);
+          } catch {
+            store.upsertDay({ date, needs_regen: 1 });
+            failed.push(date);
+          }
+          requests.progress(req.id, i + 1, dates.length);
+        }
+        if (failed.length) error = `整理失败日期：${failed.join(", ")}`;
+        log(JSON.stringify({ request: req.id, regen_days: { days: dates.length, calls, failed } }));
+      } else if (req.kind === "backfill") {
         const r = backfillRange(d.db, req.from!, req.to!, { enabledDefault: state.enabledDefault, onProgress: (done, total) => requests.progress(req.id, done, total) });
         log(JSON.stringify({ request: req.id, backfill: r }));
         // 切好的片段接着归线程、写线程和日记；一轮处理不完的由后续常规轮次继续。

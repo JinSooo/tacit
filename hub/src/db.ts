@@ -6,7 +6,7 @@ import { copyFileSync, constants, chmodSync, unlinkSync, openSync, closeSync, fs
 import { basename, dirname, join } from "node:path";
 import { audioSchema } from "./audio.ts";
 import { distillSchema, usageTaskSchema } from "./distill/schema.ts";
-import { requestsSchema } from "./distill/requests.ts";
+import { requestsSchema, regenDaysRequestsSchema } from "./distill/requests.ts";
 import { conversationSchema, lineSchema } from "./conversations.ts";
 import { DistillStore } from "./distill/store.ts";
 import { createHash } from "node:crypto";
@@ -57,15 +57,15 @@ export class HubDB {
       this.db.pragma(`key='${key.replaceAll("'", "''")}'`);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 11) throw new Error("数据库版本比当前 hub 新");
+      if (version > 12) throw new Error("数据库版本比当前 hub 新");
       this.db.pragma("secure_delete=ON");
       // 保留回滚日志模式；加密 WAL 也可能保留已删除内容的旧加密页。
       this.db.pragma("journal_mode=DELETE");
       // 必须先拿写锁再读取版本，等待另一进程迁移完成后才能决定迁移步骤。
       this.db.transaction(() => {
         const version = this.db.pragma("user_version", { simple: true }) as number;
-        if (version > 11) throw new Error("数据库版本比当前 hub 新");
-        if (version > 0 && version < 11 && file !== ":memory:") {
+        if (version > 12) throw new Error("数据库版本比当前 hub 新");
+        if (version > 0 && version < 12 && file !== ":memory:") {
           migrationBackup = `${file}.migration-v${version}.bak`;
           // 已持有写锁，尚未写入迁移页，复制的是完整的旧版本；失败重试保留原副本。
           try { copyFileSync(file, migrationBackup, constants.COPYFILE_EXCL); }
@@ -130,9 +130,10 @@ export class HubDB {
           this.db.pragma("user_version=10");
         }
         if (version < 11) this.db.exec(runtimeSchema);
+        if (version < 12) this.db.exec(regenDaysRequestsSchema);
       }).immediate();
       const backups = file === ":memory:" ? [] : readdirSync(dirname(file)).filter(name =>
-        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|10)\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
+        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|10|11)\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
       if (backups.length) {
         if (this.db.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("迁移后完整性检查失败，已保留备份");
         for (const backup of backups) {

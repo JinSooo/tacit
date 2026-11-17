@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { DistillStore } from "../src/distill/store.ts";
-import { DistillRequests, defaultBackfillRange, localDayStart } from "../src/distill/requests.ts";
+import { requestsSchema, DistillRequests, defaultBackfillRange, localDayStart } from "../src/distill/requests.ts";
 import { backfillRange, distillTick, sliceStep, tickSafely, type LLM, type LoopState } from "../src/distill/run.ts";
 import { HubDB } from "../src/db.ts";
 import { createHandler } from "../src/server.ts";
@@ -191,4 +191,67 @@ test("请求做完后写结束状态时库忙，下一次补写原来的结果",
   expect(done.status).toBe("done"); expect(done.error).toBeUndefined();
   expect(state.unfinished).toBeUndefined();
   expect(requests.create({ kind: "round" }, now + 6000).created).toBe(true);
+});
+
+test("regen_days 范围必填、合法且至多 31 个日历日", async () => {
+  const call = api();
+  for (const range of [{}, { from: "2026-11-01" }, { from: "2026-02-30", to: "2026-03-01" },
+    { from: "2026-11-02", to: "2026-11-01" }, { from: "2026-10-01", to: "2026-11-01" }]) {
+    expect((await call("POST", { kind: "regen_days", ...range })).status).toBe(400);
+  }
+  expect((await call("POST", { kind: "regen_days", from: "2026-10-01", to: "2026-10-31" })).status).toBe(202);
+});
+
+test("regen_days 只写范围内有记录的 days，失败继续、进度完成并保留重试标记", async () => {
+  const now = day("2026-11-09", 12);
+  for (const date of ["2026-11-01", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-08"]) {
+    ctx.db.ingest([fixture({ source: "codex.session", source_ref: date, t_start: new Date(day(date)).toISOString(), body: "[我] 确认虚构展板尺寸为两米。" })]);
+  }
+  store.upsertDay({ date: "2026-11-01", brief: "范围外", needs_regen: 1 });
+  store.upsertDay({ date: "2026-11-03", brief: "旧摘要", needs_regen: 0 });
+  store.upsertDay({ date: "2026-11-06", brief: "无记录", needs_regen: 0 });
+  const snapshot = () => ["records", "frames", "threads", "projects"].map(table => ctx.db.db.prepare(`SELECT * FROM ${table} ORDER BY id`).all());
+  const before = snapshot(), outside = store.day("2026-11-01"), empty = store.day("2026-11-06");
+  let calls = 0;
+  const llm: LLM = { async complete(req) {
+    expect(req.task).toBe("day");
+    calls++;
+    if (calls === 1) throw new Error("合成异常");
+    if (calls === 2) return { ok: false, error: "合成失败", ms: 1 };
+    return { ok: true, data: { highlight: null, items: [] } as any, ms: 1 };
+  } };
+  const { request } = requests.create({ kind: "regen_days", from: "2026-11-03", to: "2026-11-07" }, now);
+  await distillTick({ ...deps(now), llm }, { lastRound: now, enabledDefault: now }, now);
+  expect(calls).toBe(3);
+  expect(requests.get(request.id)).toMatchObject({ status: "failed", progress: { done: 3, total: 3 }, error: "整理失败日期：2026-11-03, 2026-11-04" });
+  expect(store.day("2026-11-03")!.needs_regen).toBe(1);
+  expect(store.day("2026-11-04")!.needs_regen).toBe(1);
+  expect(store.day("2026-11-05")!.needs_regen).toBe(0);
+  expect(store.day("2026-11-01")).toEqual(outside);
+  expect(store.day("2026-11-06")).toEqual(empty);
+  expect(store.day("2026-11-08")).toBeNull();
+  expect(snapshot()).toEqual(before);
+  expect(store.getState("cursor_ms")).toBeNull();
+  expect(store.getState("last_round_at")).toBeNull();
+});
+
+test("v11 请求队列迁移保留状态、日期和进度", () => {
+  const { request } = requests.create({ kind: "backfill", from: "2026-11-01", to: "2026-11-02" });
+  requests.claim(); requests.progress(request.id, 1, 2);
+  const before = requests.get(request.id);
+  ctx.db.db.exec("ALTER TABLE distill_requests RENAME TO requests_saved; DROP INDEX distill_requests_status;");
+  ctx.db.db.exec(requestsSchema);
+  ctx.db.db.exec("INSERT INTO distill_requests SELECT * FROM requests_saved; DROP TABLE requests_saved; PRAGMA user_version=11"); ctx.db.close();
+  ctx.db = new HubDB(ctx.file, ctx.config.dbKey);
+  expect(new DistillRequests(ctx.db).get(request.id)).toEqual(before);
+  expect(new DistillRequests(ctx.db).create({ kind: "regen_days", from: "2026-11-01", to: "2026-11-01" }).created).toBe(true);
+});
+
+test("regen_days 空范围成功结束且无模型调用", async () => {
+  const now = day("2026-11-09", 12);
+  const { request } = requests.create({ kind: "regen_days", from: "2026-11-03", to: "2026-11-03" }, now);
+  const llm: LLM = { async complete() { throw new Error("不应调用模型"); } };
+  await distillTick({ ...deps(now), llm }, { lastRound: now, enabledDefault: now }, now);
+  expect(requests.get(request.id)).toMatchObject({ status: "done", progress: { done: 0, total: 0 } });
+  expect(store.day("2026-11-03")).toBeNull();
 });

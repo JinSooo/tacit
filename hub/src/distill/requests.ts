@@ -9,7 +9,7 @@ CREATE INDEX IF NOT EXISTS distill_requests_status ON distill_requests(status,cr
 PRAGMA user_version=6;
 `;
 
-export type RequestKind = "round" | "backfill";
+export type RequestKind = "round" | "backfill" | "regen_days";
 export type RequestStatus = "queued" | "running" | "done" | "failed";
 export interface DistillRequest {
   id: string; kind: RequestKind; from?: string; to?: string; status: RequestStatus;
@@ -56,16 +56,21 @@ export class DistillRequests {
   create(body: unknown, now = Date.now()): { request: DistillRequest; created: boolean } {
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new InputError("请求体必须是对象");
     const b = body as Record<string, unknown>;
-    if (b.kind !== "round" && b.kind !== "backfill") throw new InputError("kind 必须是 round 或 backfill");
+    if (b.kind !== "round" && b.kind !== "backfill" && b.kind !== "regen_days") throw new InputError("kind 必须是 round、backfill 或 regen_days");
     let from: string | null = null, to: string | null = null;
     if (b.kind === "round") {
       if (b.from !== undefined || b.to !== undefined) throw new InputError("round 不接受日期范围");
     } else {
+      if (b.kind === "regen_days" && (b.from === undefined || b.to === undefined)) throw new InputError("regen_days 必须提供 from 和 to");
       if ((b.from === undefined) !== (b.to === undefined)) throw new InputError("from 和 to 要同时提供或同时省略");
       if (b.from === undefined) ({ from, to } = defaultBackfillRange(now));
       else {
         if (typeof b.from !== "string" || typeof b.to !== "string" || localDayStart(b.from) === null || localDayStart(b.to) === null) throw new InputError("日期必须是 YYYY-MM-DD");
         if (b.from > b.to) throw new InputError("from 不能晚于 to");
+        if (b.kind === "regen_days") {
+          const calendarDay = (date: string) => Date.parse(`${date}T00:00:00Z`);
+          if ((calendarDay(b.to) - calendarDay(b.from)) / 86_400_000 >= 31) throw new InputError("regen_days 最多 31 天");
+        }
         from = b.from; to = b.to;
       }
     }
@@ -112,3 +117,13 @@ export class DistillRequests {
     return this.sql.prepare("UPDATE distill_requests SET status='failed',finished_at=?,error='整理进程中断了' WHERE status='running'").run(new Date(now).toISOString()).changes;
   }
 }
+
+/** v12：保留原请求、状态、进度，重建带有新种类约束的队列表。 */
+export const regenDaysRequestsSchema = `
+ALTER TABLE distill_requests RENAME TO distill_requests_v11;
+CREATE TABLE distill_requests(id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('round','backfill','regen_days')),date_from TEXT,date_to TEXT,status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed')),created_at TEXT NOT NULL,started_at TEXT,finished_at TEXT,error TEXT,progress_done INTEGER,progress_total INTEGER);
+INSERT INTO distill_requests SELECT * FROM distill_requests_v11;
+DROP TABLE distill_requests_v11;
+CREATE INDEX distill_requests_status ON distill_requests(status,created_at);
+PRAGMA user_version=12;
+`;
