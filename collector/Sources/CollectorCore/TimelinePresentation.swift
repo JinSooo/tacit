@@ -23,7 +23,7 @@ public enum SourceApplication {
   }
 
   private static let aliases = [
-    "claude": "com.anthropic.claudefordesktop", "claude code": "com.anthropic.claudefordesktop",
+    "claude": "com.anthropic.claudefordesktop", "claude code": "com.anthropic.claudefordesktop", "claude-code": "com.anthropic.claudefordesktop",
     "codex": "com.openai.codex", "wechat": "com.tencent.xinWeChat", "微信": "com.tencent.xinWeChat",
     "zoom": "us.zoom.xos", "腾讯会议": "com.tencent.meeting", "voov meeting": "com.tencent.meeting",
     "microsoft teams": "com.microsoft.teams2", "钉钉": "com.alibaba.DingTalkMac",

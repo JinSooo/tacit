@@ -23,6 +23,9 @@ private func segment(_ id: String, project: String?) throws -> DayDiary.Item {
   #expect(SourceApplication.bundle(app: nil, source: "codex.session") == "com.openai.codex")
   #expect(SourceApplication.bundle(app: "Claude", source: "claude_code.session") == "com.anthropic.claudefordesktop")
   #expect(SourceApplication.bundle(app: nil, source: "mac.wechat") == "com.tencent.xinWeChat")
+  // 采集端实际写入的应用名是 claude-code / codex（2026-11-17 真实数据）
+  #expect(SourceApplication.bundle(app: "claude-code", source: "claude_code.session") == "com.anthropic.claudefordesktop")
+  #expect(SourceApplication.bundle(app: "codex", source: "codex.session") == "com.openai.codex")
   #expect(SourceApplication.bundle(app: "腾讯会议", source: "mac.audio") == "com.tencent.meeting")
   #expect(SourceApplication.bundle(app: "org.example.unknown", source: "codex.session") == "org.example.unknown")
   #expect(SourceApplication.bundle(app: nil, source: "mac.audio") == nil)
