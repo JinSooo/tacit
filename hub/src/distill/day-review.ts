@@ -16,7 +16,7 @@ const terse = (text: string, max: number) => Array.from(text.replace(/\s+/g, " "
 
 type ReviewRecord = DayReference & {
   start: number; end: number; key: string; thread: string | null; projectId: string | null; session: string | null;
-  app: string | null; chat: string | null; evidence: UnnumberedEvidence[];
+  related?: ReviewRecord[]; app: string | null; chat: string | null; evidence: UnnumberedEvidence[];
 };
 type Kind = "thread" | "speech" | "chat" | "session" | "misc";
 type Span = [number, number];
@@ -72,7 +72,7 @@ function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
         OR (r.source NOT IN ('mac.shell','mac.git','mac.file','mac.clipboard','manual.agent','manual.correction')
           AND json_type(r.context,'$.chat')='text' AND json_extract(r.context,'$.extra.from_me') IN (0,1)))
     ORDER BY r.t_start_ms,r.id`).iterate(end, start, new Date(start).toISOString());
-  const records: ReviewRecord[] = [], automated = new Set<string>(), human = new Set<string>();
+  const records: ReviewRecord[] = [];
   for (const row of rows) {
     const context = row.context ? JSON.parse(row.context) as Parameters<typeof frameKey>[0]["context"] : undefined;
     const key = row.key ?? frameKey({ id: row.id, source: row.source, source_ref: row.source_ref, context } as Parameters<typeof frameKey>[0]);
@@ -82,11 +82,7 @@ function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
       row.body, !!row.corrected, start, end);
     const session = SESSION_SOURCES.has(row.source) && row.source_ref
       ? JSON.stringify([row.source, row.source_ref.split("#", 1)[0]]) : null;
-    if (!evidence) {
-      if (session) automated.add(session);
-      continue;
-    }
-    if (session && evidence.some(e => e.role === "user")) human.add(session);
+    if (!evidence) continue;
     records.push({
       ...reference,
       start: Math.max(start, row.t_start_ms), end: Math.min(end, Math.max(row.t_start_ms, Date.parse(row.t_end ?? "") || row.t_start_ms)),
@@ -94,7 +90,38 @@ function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
       app: context?.app ? redactString(context.app).text : null, chat: context?.chat ? redactString(context.chat).text : null,
     });
   }
-  return records.filter(({ session }) => !session || !automated.has(session) || human.has(session));
+  return presenceRecords(records, start, end);
+}
+
+/** Imported batches lack individual timestamps. Only surviving user-message anchors support presence.
+ * Assistant/goal continuation contributes evidence, never wall-clock duration. */
+function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: number): ReviewRecord[] {
+  const result: ReviewRecord[] = [];
+  for (const record of records) {
+    if (!SESSION_SOURCES.has(record.source)) { result.push(record); continue; }
+    const users = record.evidence.filter(e => e.role === "user");
+    if (!users.length) {
+      const initiator = result.findLast(r => SESSION_SOURCES.has(r.source) &&
+        r.evidence.some(e => e.role === "user") &&
+        (r.session && r.session === record.session || r.thread && r.thread === record.thread));
+      if (initiator) {
+        initiator.evidence.push(...record.evidence);
+        (initiator.related ??= []).push(record);
+      } else result.push({ ...record, key: `autonomous:${record.id}`, end: record.start });
+      continue;
+    }
+    const anchors = [...new Set(users.map(e => Date.parse(e.at)))].sort((a,b) => a-b);
+    for (const [i, at] of anchors.entries()) {
+      const next = anchors[i + 1] ?? Infinity;
+      const evidence = record.evidence.filter(e => {
+        const time = Date.parse(e.at);
+        return i === 0 ? time < next : time >= at && time < next;
+      });
+      result.push({ ...record, start: Math.max(dayStart, at - EVIDENCE_WINDOW),
+        end: Math.min(dayEnd, at + EVIDENCE_WINDOW), evidence });
+    }
+  }
+  return result.sort((a,b) => a.start-b.start);
 }
 
 function groupRecords(rows: ReviewRecord[], gap: number): Activity[] {
@@ -113,7 +140,7 @@ function groupRecords(rows: ReviewRecord[], gap: number): Activity[] {
     const voice = voices.get(row.id), thread = voice ? voice.thread : row.thread;
     const kind = thread ? "thread" : voice ? "speech" : SESSION_SOURCES.has(row.source) ? "session"
       : row.chat && !SKELETON_SOURCES.has(row.source) ? "chat" : "misc";
-    const key = thread ? `thread:${thread}` : voice ? `speech:${voice.id}`
+    const key = row.key.startsWith("autonomous:") ? row.key : thread ? `thread:${thread}` : voice ? `speech:${voice.id}`
       : kind === "chat" ? `${row.source}:${chatKey(row.chat!)}` : row.key;
     let group = open.get(key);
     if (!group || (row.start > group.end && (row.start > group.end + gap ||
@@ -185,7 +212,7 @@ const byImportance = (a: { seconds: number; start: number }, b: { seconds: numbe
 function rankWindows(r: ReviewRecord, activity: Activity): { span: Span; rank: number }[] {
   if (SKELETON_SOURCES.has(r.source)) return [{ span: [r.start, r.end], rank: 0 }];
   if (SESSION_SOURCES.has(r.source)) {
-    // 导入的会话批次没有逐条发言时间，中部不能一直按用户正在输入来计。
+    // r 已裁成用户在场窗口；机器产出只提供文字依据。
     const windows: { span: Span; rank: number }[] = [
       { span: [r.start, r.end], rank: r.evidence.some(e => e.role === "assistant") ? 1 : 0 },
     ];
@@ -315,6 +342,7 @@ function limitCandidates(candidates: Candidate[], leadingActivity: string | unde
 
 function evidenceInPiece(entry: UnnumberedEvidence, record: ReviewRecord, segment: Candidate) {
   const at = Date.parse(entry.at), { start, end } = segment;
+  if (SESSION_SOURCES.has(record.source)) return true;
   if (entry.position === "within_batch" && (record.start < start || record.end > end)) return false;
   // 末消息正好等于切分点时只归给结束在该处的一段，下一段使用自己的开始依据。
   if (entry.position === "last" && record.start !== record.end) return at > start && at <= end;
@@ -338,7 +366,9 @@ function longerConversationBudget(segments: Candidate[]) {
 export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 30) {
   const rows = loadRecords(hub, start, end);
   const gap = gapMinutes * MINUTE;
-  const allCandidates = splitOverlaps(groupRecords(rows, gap));
+  const sessionThreads = new Set(rows.filter(r => SESSION_SOURCES.has(r.source)).flatMap(r => r.thread ?? []));
+  const allCandidates = splitOverlaps(groupRecords(rows.filter(r =>
+    !SKELETON_SOURCES.has(r.source) || !r.thread || !sessionThreads.has(r.thread)), gap));
   const candidates = allCandidates.filter(a => a.primary.some(r =>
     r.evidence.some(entry => evidenceInPiece(entry, r, a))));
   const candidateCount = allCandidates.length, evidenceCount = candidates.length;
@@ -355,15 +385,17 @@ export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 
   const segments = selected.map((a, i) => {
     const limit = baseLimit + (extraEvidence.get(a) ?? 0);
     const primary = a.primary[0]!, anchor = primary.id;
-    const id = a.start > primary.start ? `${anchor}:${a.start}` : anchor;
-    const overlapping = rows.filter(r => inPiece(r, a));
+    const id = a.start > Date.parse(primary.at) ? `${anchor}:${a.start}` : anchor;
+    const overlapping = [...new Set(rows.filter(r => inPiece(r, a))
+      .flatMap(r => [r, ...(r.related ?? [])]))].sort((x,y) => Date.parse(x.at)-Date.parse(y.at) || x.id.localeCompare(y.id));
     for (const r of overlapping) dependencyRecordIds.add(r.id);
     const apps = [...new Map(overlapping.map(({ source, app }) => [JSON.stringify([source, app]), { source, app }])).values()];
     const records = recordMembership(a, overlapping);
     const primaryIds = new Set(a.primary.map(r => r.id));
-    const entries = records.flatMap(r => r.evidence.filter(entry => evidenceInPiece(entry, r, a)));
-    const direct = entries.filter(e => primaryIds.has(e.reference.id));
-    const secondary = direct.length ? sampleDayEvidence(entries.filter(e => !primaryIds.has(e.reference.id)),
+    const entries = [...new Map(records.flatMap(r => r.evidence.filter(entry => evidenceInPiece(entry, r, a))).map(e => [JSON.stringify([e.reference.id,e.at,e.role,e.text]),e])).values()];
+    const direct = entries.filter(e => primaryIds.has(e.reference.id) || a.primary.some(r => r.related?.some(related => related.id === e.reference.id)));
+    const directEntries = new Set(direct);
+    const secondary = direct.length ? sampleDayEvidence(entries.filter(e => !directEntries.has(e)),
       Math.min(2, Math.floor(limit / 3))).map(e => ({ ...e, secondary: true as const })) : [];
     const evidence = [...sampleDayEvidence(direct, limit - secondary.length), ...secondary]
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
@@ -375,8 +407,8 @@ export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 
     r.evidence.some(entry => evidenceInPiece(entry, r, a))));
   const omitted = [...withoutEvidence, ...candidates.filter(a => !selectedSet.has(a))]
     .sort((a, b) => a.start - b.start);
-  const omittedRecordIds = [...new Set(omitted.flatMap(a => recordMembership(a, rows.filter(r => inPiece(r, a)))
-    .flatMap(r => visibleIds.has(r.id) ? [] : [r.id])))];
+  const omittedRecordIds = [...new Set([...rows.filter(r => !visibleIds.has(r.id)).map(r => r.id), ...omitted.flatMap(a => recordMembership(a, rows.filter(r => inPiece(r, a)))
+    .flatMap(r => visibleIds.has(r.id) ? [] : [r.id]))])];
   return {
     segments, omittedRecordIds, dependencyRecordIds: [...dependencyRecordIds],
     diagnostics: { candidateCount, mergedCount: evidenceCount - candidates.length, omittedCount: omitted.length,
@@ -397,7 +429,8 @@ export function reviewMaterial(segments: ReviewSegment[]) {
     previous.set(a.activity.key, a.key);
     return {
       key: a.key, kind: a.kind, start: toLocalIso(a.start).slice(11, 16), continues,
-      active_minutes: Math.round(a.seconds / 60),
+      project: a.activity.projectId, active_minutes: Math.round(a.seconds / 60),
+      summary_eligible: a.seconds > 0,
       evidence: a.evidence.map(({ reference: _reference, position, ...entry }) =>
         ({ ...entry, key: `${a.key}:${entry.key}`, ...(position === "within_batch" ? { at: undefined } : {}) })),
     };
@@ -410,7 +443,7 @@ const singleLine = (text: string, limit: number) => {
 };
 
 function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | undefined) {
-  if (!candidate) return null;
+  if (!candidate || candidate.content === "request_only" || candidate.content === "empty") return null;
   const title = singleLine(redactString(candidate.title).text, 20);
   const description = singleLine(redactString(candidate.description).text, 160);
   if (!title || !description || !candidate.refs.length || !isReadableReviewItem({ title, description })) return null;
@@ -433,13 +466,20 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
     const segment: ReviewItem = {
       id: a.id, title: model.title, description: model.description, t_start: toLocalIso(a.start), t_end: toLocalIso(a.end),
       active_seconds: a.seconds, sources: [...new Set(apps.map(r => r.source))], evidence: model.evidence,
-      apps, record_ids: a.records.map(r => r.id), project_id: a.activity.projectId,
+      apps, record_ids: [...new Set(a.records.map(r => r.id))], project_id: a.activity.projectId,
     };
     return [{ a, segment, model }];
   });
-  if (output.items.length && !result.some(r => r.model)) return null;
-  const main = output.highlight && result.find(({ a, model }) => model && a.key === output.highlight?.activity);
-  const longest = [...result].sort((a, b) => byImportance(a.a, b.a))[0]?.segment;
+  if (output.items.some(item => item.content !== "request_only" && item.content !== "empty") && !result.length) return null;
+  const main = output.highlight && result.find(({ a, model }) => model && a.seconds > 0 && a.key === output.highlight?.activity);
+  const projectSeconds = new Map<string, number>();
+  for (const { a } of result) {
+    const key = a.activity.projectId ?? a.activity.key;
+    projectSeconds.set(key, (projectSeconds.get(key) ?? 0) + a.seconds);
+  }
+  const longest = result.filter(r => r.a.seconds > 0).sort((x,y) =>
+    (projectSeconds.get(y.a.activity.projectId ?? y.a.activity.key) ?? 0) -
+    (projectSeconds.get(x.a.activity.projectId ?? x.a.activity.key) ?? 0) || byImportance(x.a,y.a))[0]?.segment;
   const summary = (main && singleLine(redactString(output.highlight!.text).text, 30)) || longest?.title || null;
   const timeline = result.map(({ a, segment }) => ({
     start: toLocalIso(a.start).slice(11, 16), end: a.end === dayEnd ? "24:00" : toLocalIso(a.end).slice(11, 16), text: segment.title,

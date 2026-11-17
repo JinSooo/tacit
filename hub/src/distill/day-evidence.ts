@@ -19,12 +19,14 @@ function spoken(record: Pick<RecordV1, "source" | "body" | "context">, original:
   if (record.source === "codex.session" || record.source === "claude_code.session") {
     const finish = original.t_end ?? at;
     const messages = [...record.body.matchAll(/(?:^|\n\n)\[(我|AI)\] ([\s\S]*?)(?=\n\n\[(?:我|AI)\] |$)/g)];
-    if (messages.some(message => message[1] === "我" && /^Automation: .+\nAutomation ID:/m.test(message[2]!))) return null;
+
     if (Date.parse(finish) >= end) return [];
     return messages.map((message, i) => {
       // 清理包装前记下首末位置。被清理掉的消息不能把批次时间借给下一条。
       const prefix = `[${message[1]}] `;
-      const text = materialBody({ ...record, body: prefix + message[2]! });
+      // Only protocol prefixes are automatic; discussing them inside a message is still user input.
+      const automatic = message[1] === "我" && /^(?:<codex_internal_context\s|Context handoff \(manual_context\):|Automation: .+\nAutomation ID:)/.test(message[2]!.trim());
+      const text = automatic ? "" : materialBody({ ...record, body: prefix + message[2]! });
       const position = messages.length === 1 && at !== finish ? "within_batch"
         : i === 0 ? "first" : i === messages.length - 1 ? "last" : "within_batch";
       return { role: message[1] === "我" ? "user" : "assistant", text: text.startsWith(prefix) ? text.slice(prefix.length) : "",
