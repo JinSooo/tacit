@@ -269,14 +269,17 @@ export const DAY_SYSTEM = `${DATA_RULES}
 任务：按当天实际发生的活动段，写给本人看。activities 每项是一段，有这段自己的 evidence。同一件事中断后再做会有两个编号。user 是本人，assistant 是 AI，other 是对方。
 - items 用 activity 返回给定的编号，同一编号只写一次。title 不超过 20 个字；description 用一两句写你做了什么、结果如何。没做完就直接写做到哪，例如“展板排好版，还没印”。用“你”或省略主语，不写“用户”“AI 报告”“助手报告”。
 - 先选内容，再写文字。只有打开应用、存在会话、催促继续、安排检查、安排提交等操作痕迹，没有具体对象的新变化时省略。不要写“有会话记录”“提出要求”“安排任务”来凑一条。明确的决定、范围调整、尝试中发现的问题仍值得保留，不要求每段都已经完成。
-- 标题写事情本身和变化，例如“入口改到北门”“展板完成试排”。描述补充结果或停在哪，避免再复述标题。不能把“要求改入口”改写成“入口已改”；只有要求时，写清具体决定，如“决定把入口移到北门，版式还没改”。
+- 每项 content 必须结构化判断为 result（具体行动、结果、发现或阻碍）、judgment（本人明确判断或决定）、request_only（仅提出要求，无后续变化）、empty（无具体内容）。request_only 和 empty 不返回 items。不能把一个请求擅自改写为“决定”。录音里的孤立点单、含糊提及，没有具体行动、结果或判断也省略。
+- 同一活动只有请求的前段，后面有结果时，把请求作为理解结果的上下文，只输出后面的结果段；没有后续结果就省略。明确判断本身值得成段，例如“认为图例的对比度不足”，不要写“提出设计优化诉求”。
+- AI 自动续跑结果可描述，但不意味着本人一直在场。active_minutes 是用户在场时间；summary_eligible=false 的段不能入选 highlight。
+- 标题写事情本身和变化，例如“入口改到北门”“展板完成试排”。描述补充结果或停在哪，避免再复述标题。不能把“要求改入口”改写成“入口已改”；只有本人明确作出决定才写决定，如“决定把入口移到北门，版式还没改”；仅提出实施请求不当作决定。
 - 只写本段依据里能支持的行动、确定结果和本人明确做的决定。AI 的建议、提问、对旧材料的转述当不了今天的新成果；如果只知道做了一个检查，可以说做了检查，不替本人下结论。没证实的成果直接略过。
 - 标题和描述都限于这段里发生的事。记录里提到更早的时间或之前已完成的工作，只用来理解上下文。没有逐条时间的会话内容只能归到这一批记录，不据此写具体发生时刻。
 - 不固定分类，不给建议，不写核实状态。不写测试条数、提交号、任务编号、用量等过程数字。数字本身是事情的结论时才写。
 - secondary=true 是同一时段的其他来源，只能在描述里补充，标题取主活动。refs 只填实际支持描述的编号，其中至少一条来自主活动。没有可写事实时可以省掉这段。时间和时长仅用于理解顺序和分量。
 - continues 指向同一事项的前一段。联系它理解进展，但本段只写新发生的变化；单纯重复、催促或重述之前的决定可以省略，不能搬用前一段的依据。
 - refs 原样复制本段 evidence.key（如 a3:r2），不要拆开、补写或引用其他段的编号。
-- highlight 选 items 中最能代表当天实际进展或重要决定的一段，写一句话概括它，不超过 30 个字，不加项目名前缀。读完应知道今天有什么变化，不复述一次给 AI 的操作指令。没有可概括的内容返回 null。
+- highlight 按用户在场时间和结果内容选当天主线，可概括同一 project 多段的进展；只选 summary_eligible=true 且有结果或明确判断的 items。不要按原始会话跨度选最长段。选其中最能代表主线的一段，写一句话概括它，不超过 30 个字，不加项目名前缀。读完应知道今天有什么变化，不复述一次给 AI 的操作指令。没有可概括的内容返回 null。
 - ${STATUS_FIDELITY}
 输出用中文，专有名词保持原文。`;
 
@@ -286,7 +289,7 @@ export function dayPrompt(date: string, activities: unknown, cutoff: string): st
 
 export interface DayOutput {
   highlight: { activity: string; text: string } | null;
-  items: { activity: string; title: string; description: string; refs: string[] }[];
+  items: { activity: string; title: string; description: string; refs: string[]; content?: "result" | "judgment" | "request_only" | "empty" }[];
 }
 
 export const MAX_REVIEW_SEGMENTS = 30;
@@ -296,8 +299,9 @@ export const DAY_SCHEMA = {
     highlight: { type: ["object", "null"], additionalProperties: false, required: ["activity", "text"],
       properties: { activity: { type: "string" }, text: { type: "string", maxLength: 30 } } },
     items: { type: "array", maxItems: MAX_REVIEW_SEGMENTS, items: {
-      type: "object", additionalProperties: false, required: ["activity", "title", "description", "refs"],
+      type: "object", additionalProperties: false, required: ["activity", "title", "description", "refs", "content"],
       properties: {
+        content: { enum: ["result", "judgment", "request_only", "empty"] },
         activity: { type: "string" }, title: { type: "string", maxLength: 20 }, description: { type: "string", maxLength: 160 },
         refs: { type: "array", minItems: 1, maxItems: 6, items: { type: "string" } },
       },

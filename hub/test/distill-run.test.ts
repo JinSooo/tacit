@@ -79,7 +79,7 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
       if (kind === "day") {
         const first = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!).activities[0];
         return ok(first ? { highlight: { activity: first.key, text: "合成回顾" },
-          items: [{ activity: first.key, title: "合成事项", description: "更新了合成展板。", refs: [first.evidence[0].key] }] } : emptyDayOutput);
+          items: [{ content: "result", activity: first.key, title: "合成事项", description: "更新了合成展板。", refs: [first.evidence[0].key] }] } : emptyDayOutput);
       }
       throw new Error("未知调用");
     },
