@@ -62,7 +62,7 @@ export class DistillStore {
   }
   upsertThread(thread: Thread) { this.put("threads", "id", thread); }
   upsertProject(project: Project) { this.put("projects", "id", project); }
-  upsertDay(day: { date: string; brief?: string; detail?: unknown; needs_regen?: number; updated_at?: string }) { this.put("days", "date", day); }
+  upsertDay(day: { date: string; brief?: string | null; detail?: unknown; needs_regen?: number; updated_at?: string }) { this.put("days", "date", day); }
   projects(): Project[] { return this.sql.prepare("SELECT * FROM projects ORDER BY last_ms DESC,id DESC").all().map(r => decode<Project>(r as Row)); }
   projectSummaries() {
     return this.sql.prepare("SELECT p.*,(SELECT count(*) FROM threads t WHERE t.project_id=p.id) AS thread_count FROM projects p ORDER BY p.last_ms DESC,p.id DESC").all().map(r => {
@@ -72,6 +72,14 @@ export class DistillStore {
   project(id: string): Project | null { const r = this.sql.prepare("SELECT * FROM projects WHERE id=?").get(id); return r ? decode(r as Row) : null; }
   thread(id: string): Thread | null { const r = this.sql.prepare("SELECT * FROM threads WHERE id=?").get(id); return r ? decode(r as Row) : null; }
   day(date: string): Row | null { const r = this.sql.prepare("SELECT * FROM days WHERE date=?").get(date); return r ? decode(r as Row) : null; }
+  dayView(date: string): Row | null {
+    const row = this.day(date);
+    if (!row) return null;
+    // 旧库仍可读取日期和时间条，接口只返回当前契约里的字段。
+    const { summary, timeline, items, cutoff } = row.detail ?? {};
+    return { ...row, detail: row.detail ? { summary, timeline, items, cutoff } : null,
+      ...(this.getState<boolean>(`day_failed:${date}`) ? { failed: true } : {}) };
+  }
   facts(field: "thread_id" | "project_id", id: string): Fact[] { return this.sql.prepare(`SELECT * FROM facts WHERE ${field}=? AND invalid_at IS NULL ORDER BY created_at,id`).all(id).map(r => decode<Fact>(r as Row)); }
   writeFact(fact: Fact, supersedes?: string) {
     this.sql.transaction(() => {
@@ -329,7 +337,7 @@ export class DistillStore {
     for (const id of threads) {
       const t = this.thread(id);
       if (t?.project_id) projects.add(t.project_id);
-      // 日记会复用事项摘要，清理事项覆盖日期，而不只清理被删记录当天。
+    // 事项归属会影响回顾分组，清理事项覆盖日期，而不只清理被删记录当天。
       if (t?.first_ms != null && t?.last_ms != null) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date BETWEEN date(? / 1000.0,'unixepoch','localtime') AND date(? / 1000.0,'unixepoch','localtime')").run(t.first_ms,t.last_ms);
       this.sql.prepare("UPDATE threads SET title='正在重新整理',brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE id=?").run(id);
       this.setState(`digest:${id}`, null);
@@ -352,7 +360,7 @@ export class DistillStore {
   /** 引用可来自同一录音的另一自然日，直接按依据 ID 撤下涉及的回顾。 */
   private clearReviewEvidence(recordIds: string[]) {
     this.sql.prepare(`UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE EXISTS (
-      SELECT 1 FROM json_tree(days.detail,'$.sections') ref WHERE ref.key='id'
+      SELECT 1 FROM json_tree(days.detail) ref WHERE (ref.key='id' OR ref.path='$.record_ids')
         AND ref.value IN (SELECT value FROM json_each(?)))`).run(JSON.stringify(recordIds));
   }
 

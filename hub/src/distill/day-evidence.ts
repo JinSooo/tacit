@@ -5,10 +5,10 @@ import { materialBody } from "./material.ts";
 import { excerpt } from "./prompts.ts";
 
 export type DayRole = "user" | "assistant" | "other";
-export interface DayEvidenceInput { key: string; source: string; role: DayRole; at: string; text: string }
-export interface DayReference { id: string; at: string }
+export interface DayEvidenceInput { key: string; role: DayRole; source: string; at: string; text: string }
+export interface DayReference { id: string; at: string; source: string; title: string }
 interface DayEvidence extends DayEvidenceInput { reference: DayReference }
-interface Spoken { role: DayRole; text: string; at: string }
+type Spoken = Pick<DayEvidenceInput, "at" | "role" | "text">;
 
 function spoken(record: RecordV1, original: RecordV1, end: number): Spoken[] {
   const body = materialBody(record);
@@ -17,7 +17,7 @@ function spoken(record: RecordV1, original: RecordV1, end: number): Spoken[] {
   if (original.source === "mac.audio") return parseTranscript(body, at)
     .map(line => ({ role: line.label === "我" ? "user" : "other", text: line.text, at: toLocalIso(line.at_ms) }));
   if (original.source === "codex.session" || original.source === "claude_code.session") {
-    // 既有会话记录没有逐条消息时间。截止点穿过整条记录时，无法安全分出最后一段。
+    // 会话导入没有逐条消息时间，不能截出还未发生或跨到下一日的部分。
     if (Date.parse(original.t_end ?? at) >= end) return [];
     const messages = [...body.matchAll(/(?:^|\n\n)\[(我|AI)\] ([\s\S]*?)(?=\n\n\[(?:我|AI)\] |$)/g)];
     if (messages.some(message => message[1] === "我" && /^Automation: .+\nAutomation ID:/m.test(message[2]!))) return [];
@@ -28,47 +28,28 @@ function spoken(record: RecordV1, original: RecordV1, end: number): Spoken[] {
   return [];
 }
 
-export function dayEvidence(hub: HubDB, start: number, end: number): DayEvidence[] {
-  const rows = hub.db.prepare(`SELECT id,t_start_ms FROM records WHERE t_start_ms>=? AND t_start_ms<? AND sensitivity!='private'
-    AND (source IN ('mac.audio','mac.wechat','codex.session','claude_code.session','manual.note')
-      OR (source NOT IN ('mac.screen','mac.browser','mac.shell','mac.git','mac.file','mac.clipboard','manual.correction','manual.agent')
-        AND json_type(context,'$.chat')='text' AND json_extract(context,'$.extra.from_me') IN (0,1)))
-    UNION ALL SELECT id,t_start_ms FROM records WHERE t_start_ms<? AND source='mac.audio' AND sensitivity!='private'
-      AND julianday(t_end)>=julianday(?)
-    ORDER BY t_start_ms,id`).all(start, end, start, new Date(start).toISOString()) as { id: string }[];
-  const groups = new Map<string, Omit<DayEvidence, "key">[]>();
-  for (const { id } of rows) {
-    const original = hub.get(id), latest = hub.effective(id);
-    if (!original || !latest || latest.sensitivity === "private") continue;
+/** 只从当前这件事取正文。屏幕、浏览器即使有补写修正，也只提供时间骨架。 */
+export function dayEvidence(hub: HubDB, refs: DayReference[], start: number, end: number, limit: number): DayEvidence[] {
+  const buckets = new Map<string, Omit<DayEvidence, "key">[]>();
+  for (const reference of refs) {
+    if (["mac.screen", "mac.browser", "mac.app"].includes(reference.source)) continue;
+    const original = hub.get(reference.id), latest = hub.effective(reference.id);
+    if (!original || !latest || original.sensitivity === "private" || latest.sensitivity === "private") continue;
     for (const entry of spoken(latest, original, end)) {
-      const at = Date.parse(entry.at);
-      if (!(at >= start && at < end)) continue;
-      const text = entry.text.trim();
-      if (!text) continue;
-      const bucket = JSON.stringify([original.source, entry.role]);
-      const group = groups.get(bucket) ?? [];
-      group.push({ ...entry, source: original.source, text: excerpt(text, entry.role === "user" ? 600 : 350),
-        reference: { id, at: original.t_start } });
-      groups.set(bucket, group);
+      const at = Date.parse(entry.at), text = entry.text.trim();
+      if (!(at >= start && at < end) || !text) continue;
+      const key = JSON.stringify([entry.role, original.source]);
+      const bucket = buckets.get(key) ?? [];
+      bucket.push({ ...entry, source: original.source, text: excerpt(text, entry.role === "user" ? 600 : 350), reference });
+      buckets.set(key, bucket);
     }
   }
-  // 按来源和角色均匀取样，少量自己的笔记或录音不会被全天 AI 会话挤掉。
-  const each = Math.max(1, Math.floor(120 / Math.max(1, groups.size)));
-  const selected = [...groups.values()].flatMap(group => group.length <= each ? group
-    : Array.from({ length: each }, (_, i) => group[Math.round(i * (group.length - 1) / Math.max(1, each - 1))]!));
-  return selected.sort((a,b) => Date.parse(a.at) - Date.parse(b.at)).map((item,i) => ({ ...item, key: `r${i+1}` }));
-}
-
-export interface DayCandidate { text: string; refs: string[] }
-export interface DayEntry { text: string; evidence: DayReference[] }
-
-export function groundedDay(entries: DayCandidate[], evidence: Map<string, DayEvidence>, role: "any" | "has-user" | "user-only" = "any"): DayEntry[] {
-  return entries.flatMap(entry => {
-    const text = entry.text.trim(), linked = entry.refs.map(key => evidence.get(key));
-    if (!text || !linked.length || linked.some(item => !item)) return [];
-    const present = linked.filter(item => item !== undefined);
-    if (role === "has-user" && !present.some(item => item.role === "user")) return [];
-    if (role === "user-only" && present.some(item => item.role !== "user")) return [];
-    return [{ text, evidence: [...new Map(present.map(item => [item.reference.id, item.reference])).values()] }];
+  // 每件事保留双方和较少见的来源，不让长会话挤掉较短的发言。
+  const each = Math.max(1, Math.floor(limit / Math.max(1, buckets.size)));
+  const sample = [...buckets.values()].flatMap(group => {
+    if (group.length <= each) return group;
+    if (each === 1) return [group.at(-1)!];
+    return Array.from({ length: each }, (_, i) => group[Math.round(i * (group.length - 1) / (each - 1))]!);
   });
+  return sample.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).map((entry, i) => ({ ...entry, key: `r${i + 1}` }));
 }

@@ -90,7 +90,7 @@ test("JSON 编解码、事实不可覆盖、用户优先、失败替代回滚、
   const replacement = fact([r.id],{ origin: "user" }); store.writeFact(replacement,first.id);
   expect(store.facts("thread_id","t").map(f => f.id)).toEqual([replacement.id]);
   store.setState("now",{ detail: { goal: "合成目标" } }); expect(store.getState("now")).toEqual({ detail: { goal: "合成目标" } });
-  store.upsertDay({ date: "2026-11-08",detail: { sections: [] } }); expect(store.day("2026-11-08")?.detail).toEqual({ sections: [] });
+  store.upsertDay({ date: "2026-11-08",detail: { items: [] } }); expect(store.day("2026-11-08")?.detail).toEqual({ items: [] });
   store.writeUsage({ tier: "minute",provider: "synthetic",model: "synthetic",ms: 1,ok: 1 });
   expect(ctx.db.db.prepare("SELECT count(*) n FROM llm_usage").get()).toEqual({ n: 1 });
 });

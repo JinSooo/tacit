@@ -137,7 +137,7 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       const entity = /^\/v1\/(threads|projects)\/([^/]+)$/.exec(url.pathname);
       if (method === "GET" && entity) return respond(store.view(entity[1] as "threads" | "projects",entity[2]!,url.searchParams.get("level") ?? "brief"));
       const day = /^\/v1\/days\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
-      if (method === "GET" && day) return respond(store.day(day[1]!));
+      if (method === "GET" && day) return respond(store.dayView(day[1]!));
       const pending = /^\/v1\/pending\/([^/]+)$/.exec(url.pathname);
       if (method === "POST" && pending) {
         const body = await readJSON() as Record<string,unknown> | null;

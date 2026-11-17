@@ -107,7 +107,7 @@ export class AgentReads {
     const id = /^\d{4}-\d{2}-\d{2}$/.test(asked) ? asked : this.store.threadId(asked);
     if (!["brief","detail","evidence"].includes(level)) throw new InputError("level 无效");
     const kind = /^\d{4}-\d{2}-\d{2}$/.test(id) ? "day" : this.store.thread(id) ? "thread" : "project";
-    let item: Item | null = kind === "day" ? this.store.day(id) : this.store.view(kind === "thread" ? "threads" : "projects",id,level);
+    let item: Item | null = kind === "day" ? this.store.dayView(id) : this.store.view(kind === "thread" ? "threads" : "projects",id,level);
     if (!item) return this.record(asked, level, params);
     if (params.has("cursor")) throw new InputError("cursor 只用于原始记录续读");
     if (kind === "day" && level === "brief") { item = { ...item }; delete item.detail; }

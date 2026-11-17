@@ -1,4 +1,3 @@
-import type { DayCandidate, DayEvidenceInput } from "./day-evidence.ts";
 
 // 提炼层的提示词与输出 schema。契约：docs/contracts.md 第 4 节。
 // 原则：
@@ -216,12 +215,6 @@ export const BRIEF_SYSTEM = `任务：把事项或项目详细版压缩成一句
 - ${STATUS_FIDELITY}
 - 推测（inference）不写进简略版。`;
 
-export const DAY_BRIEF_SYSTEM = `任务：把一条线程（或项目）的详细版压缩成简略版，给人和 AI 助手快速扫一眼。
-- 一到两句，不超过 80 个汉字：在做什么、做到哪、卡在哪或下一步。
-- 只能使用下面给出的详细版，不得补充其中没有的内容。
-- ${STATUS_FIDELITY}
-- 推测（inference）不写进简略版。`;
-
 export function briefPrompt(title: string, detail: unknown): string {
   // 简略版只概括状态正文。参考链接和历史原话可能提到未采用的候选，不能成为新的进展来源。
   if (detail && typeof detail === "object" && !Array.isArray(detail)) {
@@ -269,58 +262,42 @@ export const PROJECT_SCHEMA = {
 
 export interface ProjectOutput { goal: string; status: string; people: string[] }
 
-// ---------- 5. 每日回顾（时间块提供活动骨架，结论引用当天的原始表达） ----------
-
-export type DayBlock = { start: string; end: string; minutes: number; label: string } &
-  ({ kind: "thread"; thread_id: string } | { kind: "misc"; thread_id?: never });
+// ---------- 5. 每日回顾 ----------
 
 export const DAY_SYSTEM = `${DATA_RULES}
 
-任务：写给本人的每日回顾。evidence 是当天可用的对话和笔记，每项带编号和角色。user 是本人，assistant 是 AI，other 是对方。threads 和 blocks 只提供活动名称、时间和记录覆盖时长，不能作为结论依据。
-- progress 写当天确有记录的进展。区分 AI 的建议、AI 报告已执行、本人亲手实践，以及实现、测试、提交、推送、部署和验收。AI 自报用“AI 报告”限定，旧上下文不算今天的新成果。
-- decisions 只写本人明确确认的决定。blockers 写当天实际出现的未完成项及阻塞。不要把历史遗留事项全改写成明日承诺。
-- authored 只写本人实际表达的解释、实验发现、感受和留下的笔记。不要推断掌握程度、感受、精力、生活安排或睡眠。
-- suggestions 最多 3 条，明确写成建议，引用支持建议的实际观察。没有观察到的内容让对应列表为空。
-- 每个条目写 text 和 refs。refs 只填真正支持这一条的 evidence 编号。决定至少引用一条本人表达，authored 只能引用本人表达。
+任务：按当天实际发生的几件事，写给本人看。activities 每项是一件事，带这个事项自己的 evidence。user 是本人，assistant 是 AI，other 是对方。
+- items 用 activity 返回给定的编号，同一编号只写一次。title 不超过 20 个字；description 写发生了什么、结果如何，最多两句。没做完就直接写做到哪，例如“展板排好版，还没印”。用“你”或省略主语，不写“用户”“AI 报告”“助手报告”。
+- 只写该事项依据里能支持的当日行动、确定结果和本人明确做的决定。AI 的建议、提问、对旧材料的转述当不了今天的新成果；如果只知道做了一个检查，可以说做了检查，不替本人下结论。没证实的成果直接略过。
+- 不固定分类，不给建议，不写核实状态。不写测试条数、提交号、任务编号、用量等过程数字。数字本身是事情的结论时才写。
+- refs 只填该 activity 里实际支持描述的编号，不拿另一件事的编号凑数。没有可写事实时可以省掉这件事。时间和时长仅用于理解顺序和分量，不是结论依据。
+- highlight 选 items 中最主要的一件，写一句话概括它，不超过 30 个字，不加项目名前缀。没有可概括的内容返回 null。
 - ${STATUS_FIDELITY}
-- minutes 已按原记录区间去重，不含空档；不同事项可能重叠，不可相加当作全天用时，也不可用时间块起止相减重新计算。全天去重时长是 active_minutes。
-- timeline 只从 blocks 概括应用、页面或活动标题和对应时间，按顺序合并至多 12 段。不要从标题推断完成了什么。
-- 时间写成 HH:MM，时长只用给出的记录覆盖时长。正文不用内部字段名。`;
+输出用中文，专有名词保持原文。`;
 
-export function dayPrompt(date: string, blocks: DayBlock[], activeMinutes?: number, evidence: DayEvidenceInput[] = [], cutoff?: string): string {
-  const threads: { id: string; title: string }[] = [];
-  const ids = new Map<string, string>();
-  const timeline = blocks.map(({ start, end, minutes, label, kind, thread_id }) => {
-    if (kind === "misc") return { start, end, minutes, kind, label };
-    const key = thread_id;
-    let id = ids.get(key);
-    if (!id) { id = `t${ids.size + 1}`; ids.set(key, id); threads.push({ id, title: label }); }
-    return { start, end, minutes, kind, thread: id };
-  });
-  return `日期：${date}\n\n<data>\n${json({ threads, blocks: timeline, active_minutes: activeMinutes, evidence, cutoff })}\n</data>`;
+export function dayPrompt(date: string, activities: unknown, cutoff: string): string {
+  return `日期：${date}\n\n<data>\n${json({ activities, cutoff })}\n</data>`;
 }
-
-const dayItems = {
-  type: "array", maxItems: 8,
-  items: { type: "object", required: ["text", "refs"], additionalProperties: false,
-    properties: { text: { type: "string", maxLength: 240 }, refs: { type: "array", minItems: 1, maxItems: 4, items: { type: "string" } } } },
-} as const;
-export const DAY_SCHEMA = {
-  type: "object", additionalProperties: false, required: ["progress", "decisions", "blockers", "authored", "suggestions", "timeline"],
-  properties: {
-    progress: dayItems, decisions: dayItems, blockers: dayItems, authored: dayItems, suggestions: { ...dayItems, maxItems: 3 },
-    timeline: {
-      type: "array", maxItems: 12,
-      items: { type: "object", additionalProperties: false, required: ["start", "end", "text"],
-               properties: { start: { type: "string" }, end: { type: "string" }, text: { type: "string" } } },
-    },
-  },
-} as const;
 
 export interface DayOutput {
-  progress: DayCandidate[]; decisions: DayCandidate[]; blockers: DayCandidate[]; authored: DayCandidate[]; suggestions: DayCandidate[];
-  timeline: { start: string; end: string; text: string }[];
+  highlight: { activity: string; text: string } | null;
+  items: { activity: string; title: string; description: string; refs: string[] }[];
 }
+
+export const DAY_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["highlight", "items"],
+  properties: {
+    highlight: { type: ["object", "null"], additionalProperties: false, required: ["activity", "text"],
+      properties: { activity: { type: "string" }, text: { type: "string", maxLength: 30 } } },
+    items: { type: "array", maxItems: 20, items: {
+      type: "object", additionalProperties: false, required: ["activity", "title", "description", "refs"],
+      properties: {
+        activity: { type: "string" }, title: { type: "string", maxLength: 20 }, description: { type: "string", maxLength: 160 },
+        refs: { type: "array", minItems: 1, maxItems: 6, items: { type: "string" } },
+      },
+    } },
+  },
+} as const;
 
 // ---------- 对话总结（minute 档） ----------
 

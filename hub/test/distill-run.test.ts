@@ -45,7 +45,7 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
   const llm: LLM = {
     async complete<T>(req: LLMRequest) {
       const kind = req.system === P.ASSIGN_SYSTEM ? "assign" : req.system === P.THREAD_SYSTEM ? "thread"
-        : req.system === P.BRIEF_SYSTEM || req.system === P.DAY_BRIEF_SYSTEM ? "brief"
+        : req.system === P.BRIEF_SYSTEM ? "brief"
         : req.system === P.CLASSIFY_SYSTEM ? "classify" : req.system === P.CONVERSATION_SYSTEM ? "conversation" : req.system === P.PROJECT_SYSTEM ? "project" : req.system === P.DAY_SYSTEM ? "day" : req.system === P.DEDUP_SYSTEM ? "dedup" : "unknown";
       calls.push({ kind, req });
       const ok = (data: unknown) => ({ ok: true as const, data: data as T, ms: 1 });
@@ -76,7 +76,11 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
       if (kind === "conversation") return ok({ title: "合成对话", summary: "合成总结", points: [] });
       if (kind === "brief") return ok({ brief: "合成简略" });
       if (kind === "project") return ok({ goal: "合成项目目标", status: "合成项目进展", people: [], resolutions: [] });
-      if (kind === "day") return ok({ ...emptyDayOutput, timeline: [{ start: "10:00", end: "11:00", text: "合成" }] });
+      if (kind === "day") {
+        const first = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!).activities[0];
+        return ok(first ? { highlight: { activity: first.key, text: "合成回顾" },
+          items: [{ activity: first.key, title: "合成事项", description: "更新了合成展板。", refs: [first.evidence[0].key] }] } : emptyDayOutput);
+      }
       throw new Error("未知调用");
     },
   };
@@ -133,7 +137,7 @@ test("完整一轮：建线程与项目、事实有依据、private 不外发、
   expect(t.project_id).toBe(project.id); expect(project.brief).toBe("合成简略");
   expect(store.pending().map(p => p.kind).sort()).toEqual(["project"]);
   expect(ctx.db.db.prepare("SELECT status FROM frames WHERE key LIKE 'url:%'").get()).toEqual({ status: "ignored" });
-  expect(store.day("2026-11-08")?.brief).toBe("合成简略");
+  expect(store.day("2026-11-08")?.brief).toBe("合成回顾");
   // 当前状态用线程的简略版，简略版没提到项目名时补上项目名，不重复拼标题。
   expect((store.getState<{ brief: string }>("now"))!.brief).toBe("synthetic-repo：合成简略");
 
@@ -437,10 +441,10 @@ test("判断规则改过后，之前判成生活、有候选项目的线程只�
   expect(reclassifyAfterRuleChange(store)).toBe(0);
 });
 
-test("日记合并带空白的旧微信片段，显示最新记录原名", async () => {
+test("回顾把同一聊天的历史空格变体合成一件事", async () => {
   const app = "com.tencent.xinWeChat";
-  const names = ["C童文科", "C 童文科"];
-  const records = names.map((chat, i) => fixture({ source: "mac.wechat", t_start: iso(base + i * MIN), context: { app, chat } }));
+  const names = ["C蓝舟", "C 蓝舟"];
+  const records = names.map((chat, i) => fixture({ source: "mac.wechat", t_start: iso(base + i * MIN), context: { app, chat, extra: { from_me: i } } }));
   ctx.db.ingest(records);
   for (const [i, record] of records.entries()) {
     store.createFrame({ id: `wechat-${i}`, key: `chat:${app}:${names[i]}`, record_ids: [record.id], t_start_ms: base + i * MIN, t_end_ms: base + i * MIN, chars: 1, private: 0, status: "new" });
@@ -448,13 +452,13 @@ test("日记合并带空白的旧微信片段，显示最新记录原名", async
   const fake = fakeLLM();
   await dayStep({ db: ctx.db, llm: fake.llm }, store, "2026-11-08", base + 3600000);
   const prompt = fake.calls.find(c => c.kind === "day")!.req.prompt;
-  const { blocks } = framesIn(prompt) as unknown as { blocks: { label: string }[] };
-  expect(blocks).toHaveLength(1);
-  expect(blocks[0]!.label).toBe(`${app}:C 童文科`);
+  const { activities } = framesIn(prompt) as unknown as { activities: { kind: string; evidence: unknown[] }[] };
+  expect(activities).toHaveLength(1);
+  expect(activities[0]).toMatchObject({ kind: "chat", evidence: [{ role: "other" }, { role: "user" }] });
 });
 
 
-test("假模型完整一轮经真实适配器写用量，十类任务均正确且不存正文", async () => {
+test("假模型完整一轮经真实适配器写用量，九类任务均正确且不存正文", async () => {
   ctx.db.ingest([session(0, 20, "合成开发会话"), fixture({ source: "mac.audio", source_ref: "usage-audio", kind: "span",
     t_start: iso(base + 30 * MIN), t_end: iso(base + 35 * MIN), body: `[10:30:00] 我：${"这是本轮的合成对话内容。".repeat(30)}`, capture: { method: "asr" } })]);
   for (const id of ["old-a", "old-b"]) store.upsertThread({ id, title: "旧线程", status: "active", brief: "旧简略", detail: {}, last_ms: base, needs_regen: 0 });
@@ -474,11 +478,11 @@ test("假模型完整一轮经真实适配器写用量，十类任务均正确�
   } finally { globalThis.fetch = originalFetch; }
   const rows = ctx.db.db.prepare("SELECT * FROM llm_usage ORDER BY rowid").all() as { task: string; tier: string; ok: number }[];
   expect(rows.every(r => r.ok === 1)).toBe(true);
-  expect([...new Set(rows.map(r => r.task))].sort()).toEqual(["assign", "thread_digest", "thread_brief", "project", "project_brief", "classify", "conversation_summary", "day", "day_brief", "dedupe"].sort());
+  expect([...new Set(rows.map(r => r.task))].sort()).toEqual(["assign", "thread_digest", "thread_brief", "project", "project_brief", "classify", "conversation_summary", "day", "dedupe"].sort());
   expect(rows.map(r => [r.task, r.tier])).toEqual([
     ["conversation_summary", "minute"], ["assign", "minute"], ["classify", "minute"], ["classify", "minute"],
     ["dedupe", "hour"], ["thread_digest", "hour"], ["thread_brief", "minute"],
-    ["project", "hour"], ["project_brief", "minute"], ["day", "day"], ["day_brief", "minute"],
+    ["project", "hour"], ["project_brief", "minute"], ["day", "day"],
   ]);
   expect(JSON.stringify(rows)).not.toContain("合成");
 });

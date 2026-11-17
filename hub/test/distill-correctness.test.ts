@@ -34,15 +34,35 @@ function model() {
   return { calls, llm };
 }
 
-test("日记按原记录并集计时：重叠不重计、空档不计、结束不回退，同名事项不混合", async () => {
+function noteFor(owner: string, offset: number) {
+  const ms = base + offset * MIN, id = `note-${owner}-${offset}`;
+  const r = fixture({ source: "manual.note", t_start: iso(ms), body: "确认展板尺寸。" });
+  ctx.db.ingest([r]);
+  store.createFrame({ id, key: "manual:note", record_ids: [r.id], t_start_ms: ms, t_end_ms: ms,
+    chars: r.body.length, private: 0, status: "new" });
+  store.assign(id, owner, "user", 1);
+}
+const reviewModel: LLM = { async complete<T>(req: LLMRequest) {
+  const { activities } = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!) as {
+    activities: { key: string; evidence: { key: string }[] }[];
+  };
+  return { ok: true, ms: 1, data: { highlight: null, items: activities.map(a => ({
+    activity: a.key, title: "同名事项", description: "确认展板尺寸。", refs: [a.evidence[0]!.key],
+  })) } as T };
+} };
+
+test("回顾按原记录并集计时：重叠不重计、空档不计、结束不回退，同名事项不混合", async () => {
   thread(); thread("other");
   frame("long", [[0,20], [40,60]]); frame("nested", [[5,15]]);
   frame("other", [[25,35]], "other"); frame("tail", [[65,75]]);
-  const m = model(); await dayStep({ db: ctx.db, llm: m.llm }, store, date, base + 3 * 3600_000);
-  const data = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(m.calls.find(c => c.task === "day")!.prompt)![1]!);
-  expect(data.threads).toHaveLength(2);
-  expect(data.blocks.filter((b: any) => b.thread === "t1")).toEqual([{ start: "10:00", end: "11:15", minutes: 50, kind: "thread", thread: "t1" }]);
-  expect(data.blocks.find((b: any) => b.thread === "t2").minutes).toBe(10);
+  noteFor("t",0); noteFor("other",25);
+  await dayStep({ db: ctx.db, llm: reviewModel }, store, date, base + 3 * 3600_000);
+  const items = store.day(date)!.detail.items;
+  expect(items).toHaveLength(2);
+  expect(items[0]).toMatchObject({ id: "thread:t", active_seconds: 50 * 60 });
+  expect(Date.parse(items[0].t_start)).toBe(base);
+  expect(Date.parse(items[0].t_end)).toBe(base + 75 * MIN);
+  expect(items[1]).toMatchObject({ id: "thread:other", active_seconds: 10 * 60 });
 });
 
 test("此刻时间来自被展示摘要；轮询和新活动都不能把旧摘要变新", () => {
@@ -121,14 +141,16 @@ test("旧派生结果只失效一次，修正此刻时间且保留原文和增�
   expect(store.thread("t")!.needs_regen).toBe(0); expect(store.day(date)!.needs_regen).toBe(0);
 });
 
-test("日记跨本地午夜裁剪时长，不把前一天或次日的时间算进来", async () => {
+test("回顾跨本地午夜裁剪时长，不把前一天或次日的时间算进来", async () => {
   thread();
   frame("start", [[-610,-590]]); // 当天 00:00 前后各十分钟
   frame("end", [[830,850]]); // 当天 24:00 前后各十分钟
-  const m = model(); await dayStep({ db: ctx.db, llm: m.llm },store,date,base+16*3600_000);
-  const data = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(m.calls[0]!.prompt)![1]!);
-  expect(data.blocks.map((b: any) => [b.start,b.end,b.minutes])).toEqual([["00:00","00:10",10],["23:50","24:00",10]]);
-  expect(data.active_minutes).toBe(20);
+  noteFor("t",830);
+  await dayStep({ db: ctx.db, llm: reviewModel }, store, date, base + 16 * 3600_000);
+  const { items, timeline } = store.day(date)!.detail;
+  expect(items).toHaveLength(1);
+  expect(items[0].active_seconds).toBe(20 * 60);
+  expect(timeline.map((c: { start: string; end: string }) => [c.start,c.end])).toEqual([["00:00","00:10"],["23:50","24:00"]]);
 });
 
 test("生成简略版期间用户再次纠错，保留待更新标记供下轮处理", async () => {

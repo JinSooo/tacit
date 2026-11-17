@@ -146,7 +146,7 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
       needs_regen: {
         threads: scalar<number>("SELECT COUNT(*) FROM threads WHERE needs_regen=1 AND status!='abandoned'"),
         projects: scalar<number>("SELECT COUNT(*) FROM projects WHERE needs_regen=1 OR EXISTS(SELECT 1 FROM distill_state WHERE k='project_brief:'||projects.id AND v='true')"),
-        days: scalar<number>("SELECT COUNT(*) FROM days WHERE needs_regen=1 OR EXISTS(SELECT 1 FROM distill_state WHERE k='day_brief:'||days.date AND v='true')"),
+        days: scalar<number>("SELECT COUNT(*) FROM days WHERE needs_regen=1"),
       },
       pending_open: counts("SELECT kind AS k,COUNT(*) AS n FROM pending WHERE resolved_at IS NULL GROUP BY kind"),
       requests,

@@ -18,8 +18,10 @@ const rec = (ms: number) => fixture({ t_start: new Date(ms).toISOString(), conte
 const failingLLM: LLM = { async complete() { return { ok: false as const, error: "合成失败", ms: 1 }; } };
 const deps = (now: number) => ({ db: ctx.db, llm: failingLLM, now: () => now, log: () => {} });
 
-test("当天日记失败不推进慢速检查点，十五分钟重试且不在轮询时连发", async () => {
-  const now = day("2026-11-09", 12), r = rec(now - HOUR);
+test("当天回顾失败不推进慢速检查点，十五分钟重试且不在轮询时连发", async () => {
+  const now = day("2026-11-09", 12);
+  const r = fixture({ source: "codex.session", source_ref: "review-retry", t_start: new Date(now - HOUR).toISOString(),
+    body: "[我] 确认展板尺寸。" });
   ctx.db.ingest([r]);
   store.createFrame({ id: "retry", key: "app:synthetic.app", record_ids: [r.id], t_start_ms: now - HOUR, t_end_ms: now - HOUR, chars: r.body.length, private: 0, status: "ignored" });
   store.upsertDay({ date: "2026-11-09", needs_regen: 1 });

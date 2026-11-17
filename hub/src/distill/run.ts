@@ -4,7 +4,6 @@ import { contentRevision, appliedCall, discardedCall } from "../runtime-log.ts";
 // 日志只写计数，不写任何记录内容或标题。
 import type { HubDB } from "../db.ts";
 import { chatKey } from "../chat.ts";
-import { recordSpans, unionSeconds } from "../durations.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { DistillStore, type Frame, type Thread } from "./store.ts";
@@ -22,7 +21,7 @@ import { evidenceTime } from "./evidence-time.ts";
 import { resolveRepoRoot } from "./repos.ts";
 import { readGeneral } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
-import { dayEvidence, groundedDay } from "./day-evidence.ts";
+import { composeReview, reviewInput, reviewMaterial } from "./day-review.ts";
 import { redactString } from "../redact.ts";
 import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
 
@@ -324,8 +323,7 @@ function threadFrames(store: DistillStore, threadId: string): Frame[] {
 }
 
 async function makeBrief(d: Deps, task: string, title: string, detail: unknown): Promise<{ text: string; call_id?: string } | null> {
-  const system = task === "day_brief" ? P.DAY_BRIEF_SYSTEM : P.BRIEF_SYSTEM;
-  const r = await complete<P.BriefOutput>(d, { tier: "minute", task, system, prompt: P.briefPrompt(title, detail), schema: P.BRIEF_SCHEMA });
+  const r = await complete<P.BriefOutput>(d, { tier: "minute", task, system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail), schema: P.BRIEF_SCHEMA });
   return r.ok ? { text: r.data.brief.trim(), call_id: r.call_id } : null;
 }
 
@@ -668,64 +666,34 @@ export function lifecycleStep(store: DistillStore, now: number) {
 // ---------------- 7. 日记 ----------------
 
 export async function dayStep(d: Deps, store: DistillStore, date: string, now: number) {
-  const pendingKey = `day_brief:${date}`, day = store.day(date);
-  let detail = day?.detail, calls = 0;
-  if (day?.needs_regen || !store.getState<boolean>(pendingKey) || detail == null) {
-    const start = new Date(`${date}T00:00:00`).getTime(), next = new Date(start);
-    next.setDate(next.getDate() + 1); // 中枢本地自然日，不能假定夏令时切换日恰好 24 小时。
-    const end = Math.min(next.getTime(), now + 1);
-    const at = toLocalIso(Math.min(next.getTime(), now));
-    const frames = loadFrames(store, "WHERE t_start_ms<? AND t_end_ms>=? ORDER BY t_start_ms,id", end, start);
-    const evidence = dayEvidence(store.hub, start, end);
-    if (!frames.length && !evidence.length) { store.setState(pendingKey, null); store.upsertDay({ date, needs_regen: 0, updated_at: toLocalIso(now) }); return { calls: 0, ok: true }; }
-    const owner = new Map((store.hub.db.prepare("SELECT frame_id,thread_id FROM assignments").all() as { frame_id: string; thread_id: string }[]).map(r => [r.frame_id, r.thread_id]));
-    type Block = { start: number; end: number; label: string; thread: Thread | null; spans: [number,number][] };
-    const blocks: Block[] = [], open = new Map<string,Block>();
-    for (const f of frames) {
-      const t = owner.get(f.id) ? store.thread(owner.get(f.id)!) : null;
-      const label = t ? t.title : displayFrameKey(store, f).replace(/^(app|host|repo|chat):/, "");
-      const key = t ? `thread:${t.id}` : f.key.startsWith("chat:") ? chatKey(f.key) : f.key;
-      const spans = recordSpans(store.hub, f.record_ids, start, end);
-      if (!spans.length) continue;
-      const first = Math.min(...spans.map(s => s[0])), last = Math.max(...spans.map(s => s[1]));
-      let block = open.get(key);
-      if (!block || first > block.end + 15 * MIN) {
-        block = { start: first, end: last, label, thread: t, spans: [] };
-        blocks.push(block); open.set(key, block);
-      }
-      block.end = Math.max(block.end,last); block.label = label; block.spans.push(...spans);
-    }
-    const input: P.DayBlock[] = blocks.sort((a,b) => a.start-b.start).map(b => ({ start: hhmm(b.start), end: b.end === next.getTime() ? "24:00" : hhmm(b.end),
-      minutes: Math.round(unionSeconds(b.spans)/60), label: b.label,
-      ...(b.thread ? { kind: "thread" as const, thread_id: b.thread.id } : { kind: "misc" as const }) }));
-    const active = Math.round(unionSeconds(blocks.flatMap(b => b.spans))/60);
-    const r = await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM,
-      prompt: P.dayPrompt(date, input.slice(0, 300), active, evidence.map(({ reference: _reference, ...item }) => item), at), schema: P.DAY_SCHEMA });
-    if (!r.ok) return { calls: 1, ok: false };
-    const byKey = new Map(evidence.map(item => [item.key, item]));
-    const sections = {
-      progress: [...groundedDay(r.data.progress, byKey), ...groundedDay(r.data.decisions, byKey, "has-user")],
-      blockers: groundedDay(r.data.blockers, byKey),
-      authored: groundedDay(r.data.authored, byKey, "user-only"),
-      suggestions: groundedDay(r.data.suggestions, byKey).slice(0, 3),
-    };
-    const summary = [...sections.progress, ...sections.blockers, ...sections.authored].slice(0, 3).map(item => item.text).join("\n") || "未观察到";
-    detail = { summary, timeline: r.data.timeline, sections, cutoff: at }; calls++;
+  const start = localDayStart(date);
+  if (start === null || start > now) return { calls: 0, ok: false };
+  const next = new Date(start);
+  next.setDate(next.getDate() + 1);
+  const end = Math.min(next.getTime(), now + 1), cutoff = toLocalIso(Math.min(next.getTime(), now));
+  const activities = reviewInput(d.db, start, end), material = reviewMaterial(activities);
+  const result = material.length ? await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM,
+    prompt: P.dayPrompt(date, material, cutoff), schema: P.DAY_SCHEMA }) : null;
+  const failed = (discarded = false) => {
     store.hub.db.transaction(() => {
-      store.upsertDay({ date, detail, needs_regen: 0, updated_at: toLocalIso(now) });
-      store.setState(pendingKey, true);
-      appliedCall(d.db,r.call_id);
+      store.upsertDay({ date, needs_regen: 1 });
+      store.setState(`day_failed:${date}`, discarded ? null : true);
     })();
+    return { calls: 1, ok: false };
+  };
+  if (result?.ok === false) return failed(result.error === "记录已变化，等待重新整理");
+  const detail = composeReview(activities, result?.data ?? { highlight: null, items: [] }, start, next.getTime(), cutoff);
+  if (result?.ok && result.data.items.length && !detail.items.some(item => item.evidence.some(ref =>
+    !["mac.screen", "mac.browser", "mac.app"].includes(ref.source)))) {
+    discardedCall(d.db, result.call_id);
+    return failed();
   }
-  calls++;
-  const brief = await makeBrief(d, "day_brief", date, detail);
-  if (brief === null) return { calls, ok: false };
   store.hub.db.transaction(() => {
-    store.upsertDay({ date, brief: brief.text, updated_at: toLocalIso(now) });
-    store.setState(pendingKey, null);
-    appliedCall(d.db,brief.call_id);
+    store.upsertDay({ date, detail, brief: detail.summary, needs_regen: 0, updated_at: toLocalIso(now) });
+    store.setState(`day_failed:${date}`, null);
+    if (result?.ok) appliedCall(d.db, result.call_id);
   })();
-  return { calls, ok: true };
+  return { calls: Number(!!result), ok: true };
 }
 
 // ---------------- 一轮 ----------------
@@ -785,7 +753,7 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
   store.setState("last_round_at", toLocalIso(now));
   if (opts.slow && opts.days !== "none") {
     const today = localDate(now);
-    const days = (d.db.db.prepare("SELECT date FROM days WHERE needs_regen=1 OR EXISTS(SELECT 1 FROM distill_state WHERE k='day_brief:'||days.date AND v='true') ORDER BY date").all() as { date: string }[])
+    const days = (d.db.db.prepare("SELECT date FROM days WHERE needs_regen=1 ORDER BY date").all() as { date: string }[])
       .map(r => r.date).filter(date => opts.days === "all" || date < today);
     let calls = 0, done = 0;
     for (const date of days) { const r = await dayStep(d, store, date, now); calls += r.calls; if (r.ok) done++; }

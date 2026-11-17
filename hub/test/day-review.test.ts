@@ -1,99 +1,136 @@
 import { expect, test } from "bun:test";
 import { toLocalIso } from "../../packages/record/index.ts";
-import { dayStep, distillRound, frameView, sliceStep, touchThread, type LLM } from "../src/distill/run.ts";
+import { dayStep, distillRound, sliceStep, touchThread, type LLM } from "../src/distill/run.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { createHandler } from "../src/server.ts";
 import { emptyDayOutput, fixture, setup } from "./helpers.ts";
 
-test("每日回顾按角色取材、严格引用当日原文，浏览器和屏幕正文留在可搜索历史", async () => {
-  const ctx = setup(), store = new DistillStore(ctx.db);
-  const date = "2026-11-16", base = new Date(date + "T10:00:00").getTime(), now = base + 3600_000;
-  const record = (offset: number, overrides: Parameters<typeof fixture>[0]) =>
-    fixture({ t_start: toLocalIso(base + offset * 60_000), ...overrides });
-  const session = record(0, { source: "codex.session", source_ref: "synthetic-session",
-    body: "[我] 合成的本人决定。\n\n[AI] 合成的 AI 提案。" });
-  const chat = record(5, { source: "mac.wechat", body: "合成的对方说明。",
-    context: { chat: "合成群", extra: { from_me: 0 } } });
-  const audio = record(10, { source: "mac.audio", source_ref: "synthetic-audio",
-    body: "[10:10:05] 我：合成的本人发言。\n[10:10:08] 对方：合成的对方录音。" });
-  const note = record(15, { source: "manual.note", body: "合成的本人笔记。" });
-  const screen = record(20, { body: "合成屏幕正文应排除" });
-  const browser = record(25, { source: "mac.browser", source_ref: "synthetic-browser", body: "合成浏览器正文应排除" });
-  const privateNote = record(30, { source: "manual.note", sensitivity: "private", body: "合成私密笔记应排除" });
-  const crossing = record(50, { source: "claude_code.session", source_ref: "synthetic-late",
-    t_end: toLocalIso(now + 60_000), body: "[我] 合成的跨截止点内容应排除。" });
+type ReviewInput = { activities: { key: string; kind: string; active_minutes: number;
+  evidence: { key: string; source: string; role: string; text: string }[] }[] };
+const parse = (prompt: string) => JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(prompt)![1]!) as ReviewInput;
+const day = "2026-11-16", base = Date.parse(day + "T10:00:00"), min = 60_000;
+const point = (offset: number) => toLocalIso(base + offset * min);
+const span = (from: number, to: number, overrides: Parameters<typeof fixture>[0] = {}) => fixture({
+  kind: "span", t_start: point(from), t_end: point(to), ...overrides,
+});
+const request = (ctx: ReturnType<typeof setup>, route: string, method = "GET") =>
+  createHandler({ db: ctx.db, token: ctx.config.token })(new Request("http://127.0.0.1:47823" + route, {
+    method, headers: { host: "127.0.0.1:47823", authorization: `Bearer ${ctx.config.token}` },
+  }));
+
+test("回顾按同一事项聚合跨时段活动，保留实际时长和来源，保留可点回的原文", async () => {
+  const ctx = setup(), store = new DistillStore(ctx.db), now = base + 110 * min;
+  const first = span(0, 10, { source: "codex.session", source_ref: "demo#0", title: "核对导览图", body: "[我] 入口改到北门。\n\n[AI] 请补齐图例。" });
+  const screen = span(5, 15, { title: "展板编辑", body: "屏幕正文应排除" });
+  const browser = span(8, 12, { source: "mac.browser", source_ref: "map-preview", title: "地图预览", body: "浏览器正文应排除" });
+  const followup = span(40, 45, { source: "codex.session", source_ref: "demo#40", body: "[我] 已补齐图例，明天才印刷。" });
+  const conversation = span(50, 52, { source: "mac.audio", body: "[10:50:05] 我：周六九点集合。" });
+  const conversationEnd = span(55, 57, { source: "mac.audio", body: "[10:55:05] 对方：周六九点在车站见。" });
+  const noise = span(60, 63, { title: "短窗口应排除", context: { window: "临时查阅" }, body: "短窗口正文应排除" });
+  const misc = span(70, 77, { title: "志愿者工作表", context: { window: "志愿者工作表" }, body: "工作表正文应排除" });
+  const privateNote = fixture({ source: "manual.note", t_start: point(80), sensitivity: "private", body: "私密正文应排除" });
+  const lateSession = span(100, 120, { source: "claude_code.session", source_ref: "late-session", body: "[我] 跨截止点内容应排除。" });
   try {
-    const all = [session, chat, audio, note, screen, browser, privateNote, crossing];
-    expect(ctx.db.ingest(all).accepted).toBe(all.length);
-    store.createFrame({ id: "skeleton", key: "app:synthetic", record_ids: [screen.id,browser.id],
-      t_start_ms: base + 20 * 60_000, t_end_ms: base + 25 * 60_000, chars: 10, private: 0, status: "new" });
-    const view = frameView(store, store.frames()[0]!, { maxRecords: 10, excerpt: () => 600 });
-    expect(view.records.map(row => row.excerpt)).toEqual(["", ""]);
-    expect(view.records.map(row => row.id)).toEqual([screen.id,browser.id]);
+    const records = [first, screen, browser, followup, conversation, conversationEnd, noise, misc, privateNote, lateSession];
+    expect(ctx.db.ingest(records).accepted).toBe(records.length);
+    store.upsertThread({ id: "map", title: "展板", status: "active" });
+    for (const [i, record] of [first, screen, browser, followup].entries()) {
+      const id = `f${i}`;
+      store.createFrame({ id, key: "app:demo", record_ids: [record.id], t_start_ms: Date.parse(record.t_start),
+        t_end_ms: Date.parse(record.t_end!), chars: 1, private: 0, status: "new" });
+      store.assign(id, "map", "rule", 1);
+    }
     const llm: LLM = { async complete<T>(req: import("../src/llm/index.ts").LLMRequest) {
-      if (req.task !== "day") return { ok: true, data: { brief: "合成简略版" } as T, ms: 1 };
-      const { evidence, blocks } = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!);
-      expect(blocks).toHaveLength(1);
+      expect(req.task).toBe("day");
       expect(req.prompt).not.toContain("应排除");
-      expect(evidence.map((entry: { source: string; role: string }) => [entry.source,entry.role])).toEqual([
-        ["codex.session","user"], ["codex.session","assistant"], ["mac.wechat","other"],
-        ["mac.audio","user"], ["mac.audio","other"], ["manual.note","user"],
-      ]);
-      const [me, ai, incoming, spoken, , notes] = evidence.map((entry: { key: string }) => entry.key);
-      const out = {
-        ...emptyDayOutput,
-        decisions: [{ text: "本人已确认", refs: [me] }, { text: "把提案误作决定", refs: [ai] }],
-        blockers: [{ text: "对方提到一处未完成", refs: [incoming] }, { text: "无依据条目", refs: ["r999"] }],
-        authored: [{ text: "本人写下笔记", refs: [notes, spoken] }, { text: "把对方叙述写成本人感受", refs: [incoming] }],
-        suggestions: Array.from({ length: 4 }, (_, i) => ({ text: `合成建议 ${i+1}`, refs: [me] })),
-      };
-      return { ok: true, data: out as T, ms: 1 };
+      const { activities: [thread, audio] } = parse(req.prompt);
+      expect(thread?.active_minutes).toBe(20);
+      expect(thread?.evidence.map(e => e.role)).toEqual(["user", "assistant", "user"]);
+      expect(audio?.evidence.map(e => e.role)).toEqual(["user", "other"]);
+      return { ok: true, data: { highlight: { activity: thread!.key, text: "定下导览入口并补齐图例" }, items: [
+        { activity: audio!.key, title: "约定车站集合", description: "周六九点在车站见。", refs: ["r2"] },
+        { activity: thread!.key, title: "排定导览图", description: "入口改到北门，图例已补齐。展板还没印。", refs: ["r1","r3"] },
+        { activity: "outside", title: "虚构事项", description: "不会出现在结果里。", refs: ["r1"] },
+      ] } as T, ms: 1 };
     } };
-    expect(await dayStep({ db: ctx.db, llm }, store, date, now)).toEqual({ ok: true, calls: 2 });
-    const handler = createHandler({ db: ctx.db, token: ctx.config.token });
-    const read = (route: string) => handler(new Request("http://127.0.0.1:47823" + route, {
-      headers: { host: "127.0.0.1:47823", authorization: `Bearer ${ctx.config.token}` },
-    }));
-    const diary = await (await read(`/v1/days/${date}`)).json();
-    const sections = diary.detail.sections;
-    expect(sections.progress).toEqual([{ text: "本人已确认", evidence: [{ id: session.id, at: session.t_start }] }]);
-    expect(sections.blockers.map((entry: { text: string }) => entry.text)).toEqual(["对方提到一处未完成"]);
-    expect(sections.authored[0].evidence.map((e: {id:string}) => e.id)).toEqual([note.id,audio.id]);
-    expect(sections.authored).toHaveLength(1);
-    expect(sections.suggestions).toHaveLength(3);
-    expect(diary.detail.cutoff).toBe(toLocalIso(now));
-    expect((await read(`/v1/records/${sections.progress[0].evidence[0].id}`)).status).toBe(200);
+    expect(await dayStep({ db: ctx.db, llm }, store, day, now)).toEqual({ ok: true, calls: 1 });
+    const review = await (await request(ctx, `/v1/days/${day}`)).json();
+    expect(review.brief).toBe("定下导览入口并补齐图例");
+    expect(review.detail.cutoff).toBe(toLocalIso(now));
+    const [a,b,c] = review.detail.items;
+    expect(review.detail.items).toHaveLength(3);
+    expect(a).toMatchObject({ id: "thread:map", title: "排定导览图", active_seconds: 20 * 60, t_start: point(0), t_end: point(45),
+      sources: ["codex.session","mac.screen","mac.browser"],
+      evidence: [{ id: first.id, at: first.t_start, source: first.source, title: first.title }, { id: followup.id }] });
+    expect(b).toMatchObject({ title: "约定车站集合", active_seconds: 4 * 60, t_start: point(50), t_end: point(57) });
+    expect(c).toMatchObject({ title: "志愿者工作表", active_seconds: 7 * 60, evidence: [{ id: misc.id }] });
+    expect(review.detail.timeline.filter((chapter: {text:string}) => chapter.text === "排定导览图")).toEqual([
+      {start:"10:00",end:"10:15",text:"排定导览图"}, {start:"10:40",end:"10:45",text:"排定导览图"},
+    ]);
+    expect((await request(ctx, `/v1/records/${a.evidence[0].id}`)).status).toBe(200);
     expect(ctx.db.get(screen.id)?.body).toBe(screen.body);
+  } finally { ctx.cleanup(); }
+});
+
+test("模型给错依据时不覆盖已有回顾，重试成功时同时更新事项和页首", async () => {
+  const ctx = setup(), store = new DistillStore(ctx.db);
+  const record = span(0, 12, { source: "codex.session", source_ref: "poster-session", body: "[我] 新展板已摆好。" });
+  const now = base + 30 * min;
+  try {
+    ctx.db.ingest([record]);
+    store.upsertDay({ date: day, brief: "已有摘要", detail: { summary: "已有摘要", items: [], timeline: [] }, needs_regen: 1 });
+    const model = (ref: string): LLM => ({ async complete<T>(req: import("../src/llm/index.ts").LLMRequest) {
+      const a = parse(req.prompt).activities[0]!.key;
+      return { ok: true, data: { highlight: { activity: a, text: "展板已摆好" },
+        items: [{ activity: a, title: "摆放展板", description: "新展板已摆好。", refs: [ref] }] } as T, ms: 1 };
+    } });
+    expect((await dayStep({ db: ctx.db, llm: model("absent") }, store, day, now)).ok).toBe(false);
+    expect((await (await request(ctx, `/v1/days/${day}`)).json())).toMatchObject({ brief: "已有摘要", needs_regen: 1, failed: true });
+    expect((await dayStep({ db: ctx.db, llm: model("r1") }, store, day, now)).ok).toBe(true);
+    const result = await (await request(ctx, `/v1/days/${day}`)).json();
+    expect(result).toMatchObject({ brief: "展板已摆好", needs_regen: 0,
+      detail: { summary: "展板已摆好", items: [{ title: "摆放展板" }] } });
+    expect(result.failed).toBeUndefined();
+  } finally { ctx.cleanup(); }
+});
+
+test("历史回顾通过旧库读取，但接口只暴露已约定字段", async () => {
+  const ctx = setup(), store = new DistillStore(ctx.db);
+  const detail = { summary: "旧摘要", timeline: [{ start: "10:00", end: "11:00", text: "旧标签" }], sections: { old: "旧内容" } };
+  try {
+    store.upsertDay({ date: day, detail, needs_regen: 0 });
+    expect((await (await request(ctx, `/v1/days/${day}`)).json()).detail).toEqual({ summary: detail.summary, timeline: detail.timeline });
+    expect((await (await request(ctx, `/v1/agent/get?tool=codex&id=${day}&level=detail`)).json()).item.detail).not.toHaveProperty("sections");
+    expect(store.day(day)?.detail).toEqual(detail);
   } finally { ctx.cleanup(); }
 });
 
 test.each(["删除", "修正为私密"])("跨午夜录音按转写行归当天，%s 时撤下两天的回顾", async action => {
   const ctx = setup(), store = new DistillStore(ctx.db);
   const earlier = "2026-11-16", later = "2026-11-17";
-  const midnight = new Date(`${later}T00:00:00`).getTime(), now = midnight + 20 * 60_000;
+  const midnight = Date.parse(later + "T00:00:00"), now = midnight + 20 * min;
   const audio = fixture({ source: "mac.audio", source_ref: "synthetic-midnight-audio", kind: "span",
-    t_start: toLocalIso(midnight - 2 * 60_000), t_end: toLocalIso(midnight + 2 * 60_000),
+    t_start: toLocalIso(midnight - 2 * min), t_end: toLocalIso(midnight + 2 * min),
     body: "[23:59:55] 我：合成的前一天发言。\n[00:00:00] 对方：合成的零点说明。\n[00:01:30] 我：合成的第二天决定。" });
   try {
     expect(ctx.db.ingest([audio]).accepted).toBe(1);
-    sliceStep(ctx.db, false, now, new Date(`${earlier}T00:00:00`).getTime());
-    for (const date of [earlier, later]) expect(store.day(date)?.needs_regen, date).toBe(1);
-    const llm: LLM = { async complete<T>(req: import("../src/llm/index.ts").LLMRequest) {
-      if (req.task !== "day") return { ok: true, data: { brief: "合成简略版" } as T, ms: 1 };
-      const { evidence } = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!);
-      return { ok: true, data: { ...emptyDayOutput, progress: evidence.map((row: { key: string; text: string }) =>
-        ({ text: row.text, refs: [row.key] })) } as T, ms: 1 };
-    } };
-    const reference = { id: audio.id, at: audio.t_start };
-    const expected = [["合成的前一天发言。"], ["合成的零点说明。", "合成的第二天决定。"]];
-    for (const [i, date] of [earlier, later].entries()) {
-      expect(await dayStep({ db: ctx.db, llm }, store, date, now)).toEqual({ ok: true, calls: 2 });
-      expect(store.day(date)?.detail.sections.progress).toEqual(expected[i]!.map(text => ({ text, evidence: [reference] })));
+    sliceStep(ctx.db, false, now, Date.parse(earlier + "T00:00:00"));
+    const expected = [["合成的前一天发言。"], ["合成的零点说明。","合成的第二天决定。"]];
+    for (const [i, date] of [earlier,later].entries()) {
+      expect(store.day(date)?.needs_regen).toBe(1);
+      const llm: LLM = { async complete<T>(req: import("../src/llm/index.ts").LLMRequest) {
+        const a = parse(req.prompt).activities[0]!;
+        expect(a.evidence.map(e => e.text)).toEqual(expected[i]!);
+        return { ok: true, data: { ...emptyDayOutput, items: [{ activity: a.key, title: "商量周末路线", description: a.evidence.map(e => e.text).join(""), refs: a.evidence.map(e => e.key) }] } as T, ms: 1 };
+      } };
+      expect(await dayStep({ db: ctx.db, llm }, store, date, now)).toEqual({ ok: true, calls: 1 });
+      expect(store.day(date)?.detail.items[0]).toMatchObject({ active_seconds: 120,
+        evidence: [{ id: audio.id, at: audio.t_start }] });
     }
-    if (action === "删除") expect(ctx.db.delete(audio.id)).toBe(true);
+    if (action === "删除") expect((await request(ctx, "/v1/records/" + audio.id, "DELETE")).status).toBe(200);
     else expect(ctx.db.ingest([fixture({ source: "manual.correction", corrects: audio.id, sensitivity: "private",
       t_start: toLocalIso(now), body: "合成的私密修正。" })]).accepted).toBe(1);
-    for (const date of [earlier, later]) expect(store.day(date)).toMatchObject({ detail: null, brief: null, needs_regen: 1 });
+    for (const date of [earlier,later]) expect(store.day(date)).toMatchObject({ detail: null, brief: null, needs_regen: 1 });
   } finally { ctx.cleanup(); }
 });
 
