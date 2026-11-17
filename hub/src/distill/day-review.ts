@@ -7,7 +7,7 @@ import { redactString } from "../redact.ts";
 import { readDayEvidence, sampleDayEvidence, SKELETON_SOURCES, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
 import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
-import { MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
+import { MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
 
 const MINUTE = 60_000;
 const MISC_SECONDS = 5 * 60;
@@ -302,8 +302,8 @@ function splitOverlaps(activities: Activity[]): Candidate[] {
   return candidates.sort((a, b) => a.start - b.start);
 }
 
-function mergeAdjacent(candidates: Candidate[], gap: number) {
-  while (candidates.length > MAX_REVIEW_SEGMENTS) {
+function mergeAdjacent(candidates: Candidate[], gap: number, limit = MAX_REVIEW_CANDIDATES) {
+  while (candidates.length > limit) {
     let merge = -1, shortest = Infinity;
     for (let i = 0; i + 1 < candidates.length; i++) {
       const a = candidates[i]!, b = candidates[i + 1]!;
@@ -320,10 +320,10 @@ function mergeAdjacent(candidates: Candidate[], gap: number) {
   return candidates;
 }
 
-function limitCandidates(candidates: Candidate[], leadingActivity: string | undefined) {
-  if (candidates.length <= MAX_REVIEW_SEGMENTS) return candidates;
+function limitCandidates<T extends Candidate>(candidates: T[], leadingActivity: string | undefined, limit = MAX_REVIEW_CANDIDATES) {
+  if (candidates.length <= limit) return candidates;
   const ranked = [...candidates].sort(byImportance);
-  const projects = new Set<string>(), selected = new Set<Candidate>();
+  const projects = new Set<string>(), selected = new Set<T>();
   for (const seed of [ranked[0], ranked.find(c => c.activity.key === leadingActivity)]) {
     if (!seed) continue;
     selected.add(seed);
@@ -334,11 +334,11 @@ function limitCandidates(candidates: Candidate[], leadingActivity: string | unde
     if (!project || projects.has(project)) continue;
     projects.add(project);
     selected.add(candidate);
-    if (selected.size === MAX_REVIEW_SEGMENTS) return candidates.filter(c => selected.has(c));
+    if (selected.size === limit) return candidates.filter(c => selected.has(c));
   }
   for (const candidate of ranked) {
     selected.add(candidate);
-    if (selected.size === MAX_REVIEW_SEGMENTS) break;
+    if (selected.size === limit) break;
   }
   return candidates.filter(c => selected.has(c));
 }
@@ -447,7 +447,7 @@ const singleLine = (text: string, limit: number) => {
 
 function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | undefined) {
   if (a.evidence.length && a.evidence.every(e => e.role === "user" && requestOnly(e.text))) return null;
-  if (!candidate || candidate.content === "request_only" || candidate.content === "empty") return null;
+  if (!candidate) return null;
   const title = singleLine(redactString(candidate.title).text, 20);
   const description = singleLine(redactString(candidate.description).text, 160);
   if (!title || !description || !candidate.refs.length || !isReadableReviewItem({ title, description })) return null;
@@ -459,10 +459,16 @@ function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | und
 }
 
 export function composeReview(segments: ReviewSegment[], output: DayOutput, dayEnd: number, cutoff: string,
-  omitted: string[], dependencies: string[]): ReviewDetail | null {
+  omitted: string[], dependencies: string[], warn: (activity: string) => void = () => {}): ReviewDetail | null {
   const written = new Map(output.items.map(item => [item.activity, item]));
-  const result = segments.flatMap(a => {
-    const model = modelItem(a, written.get(a.key));
+  const omissions = new Map((output.omissions ?? []).map(item => [item.activity, item]));
+  let result = segments.flatMap(a => {
+    const item = written.get(a.key), omission = omissions.get(a.key);
+    const excluded = !item || item.content === "request_only" || item.content === "empty";
+    if (excluded && omission && ["request_only", "empty", "excluded_session"].includes(omission.reason)) return [];
+    // 未说明、未知理由或旧 content 标签均不能静默丢弃。有文字则按结果校验，否则报警并保留原文。
+    if (excluded) warn(a.key);
+    const model = modelItem(a, item ?? (omission ? { ...omission, content: "result" } : undefined));
     if (!model) return [];
     const cited = new Set(model.evidence.map(r => r.id));
     const apps = [...new Map(a.records.filter(r => cited.has(r.id))
@@ -472,10 +478,36 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
       active_seconds: a.seconds, sources: [...new Set(apps.map(r => r.source))], evidence: model.evidence,
       apps, record_ids: [...new Set(a.records.map(r => r.id))], project_id: a.activity.projectId,
     };
-    return [{ a, segment, model }];
+    return [{ a, segment, model, keys: [a.key] }];
   });
   if (output.items.some(item => item.content !== "request_only" && item.content !== "empty") && !result.length) return null;
-  const main = output.highlight && result.find(({ a, model }) => model && a.seconds > 0 && a.key === output.highlight?.activity);
+  // 合并只发生在输出超限时；不跨中断，不凭标题猜事项，不截掉合并后的结果文字。
+  while (result.length > MAX_REVIEW_SEGMENTS) {
+    let merge = -1, shortest = Infinity;
+    for (let i = 0; i + 1 < result.length; i++) {
+      const x = result[i]!, y = result[i + 1]!;
+      if (!x.segment.project_id || x.segment.project_id !== y.segment.project_id) continue;
+      if (y.a.start - x.a.end > 30 * MINUTE || !hasCoverage([...x.a.primary, ...y.a.primary], x.a.start, y.a.end)) continue;
+      if (Array.from(x.segment.description + " " + y.segment.description).length > 160) continue;
+      if (x.a.seconds + y.a.seconds < shortest) { merge = i; shortest = x.a.seconds + y.a.seconds; }
+    }
+    if (merge < 0) break;
+    const x = result[merge]!, y = result[merge + 1]!;
+    x.a = { ...x.a, end: y.a.end, seconds: x.a.seconds + y.a.seconds, primary: [...x.a.primary, ...y.a.primary] };
+    const apps = [...new Map([...x.segment.apps, ...y.segment.apps].map(a => [JSON.stringify(a), a])).values()];
+    x.segment = { ...x.segment, description: x.segment.description + " " + y.segment.description,
+      t_end: y.segment.t_end, active_seconds: x.a.seconds, apps, sources: [...new Set(apps.map(a => a.source))],
+      record_ids: [...new Set([...x.segment.record_ids, ...y.segment.record_ids])],
+      evidence: [...new Map([...x.segment.evidence, ...y.segment.evidence].map(e => [e.id, e])).values()] };
+    x.keys.push(...y.keys);
+    result.splice(merge + 1, 1);
+  }
+  const activitySeconds = new Map<string, number>();
+  for (const { a } of result) activitySeconds.set(a.activity.key, (activitySeconds.get(a.activity.key) ?? 0) + a.seconds);
+  const leadingActivity = [...activitySeconds.entries()].sort((a,b) => b[1]-a[1])[0]?.[0];
+  const selected = new Set(limitCandidates(result.map(r => ({ ...r.a, result: r })), leadingActivity, MAX_REVIEW_SEGMENTS).map(r => r.result));
+  result = result.filter(r => selected.has(r));
+  const main = output.highlight && result.find(({ a, model, keys }) => model && a.seconds > 0 && keys.includes(output.highlight!.activity));
   const projectSeconds = new Map<string, number>();
   for (const { a } of result) {
     const key = a.activity.projectId ?? a.activity.key;

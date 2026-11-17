@@ -213,29 +213,29 @@ test("只有时间骨架时不编造一条回顾，不调用模型，原文仍�
   } finally { ctx.cleanup(); }
 });
 
-test("超过 30 段时为项目保留代表，余段按实际覆盖选取，原始记录仍可查询", async () => {
+test("超过 50 个输入候选时为项目保留代表，余段按实际覆盖选取，原始记录仍可查询", async () => {
   const ctx = setup(), store = new DistillStore(ctx.db);
   try {
-    const records = Array.from({ length: 32 }, (_, i) => span(6 * i, 6 * i + (i < 2 ? 1 : 2), {
+    const records = Array.from({ length: 52 }, (_, i) => span(6 * i, 6 * i + (i < 2 ? 1 : 2), {
       source: "codex.session", source_ref: "synthetic-cap-" + i + "#0", body: "[我] 调整合成展板。",
     }));
-    expect(ctx.db.ingest(records).accepted).toBe(32);
+    expect(ctx.db.ingest(records).accepted).toBe(52);
     const representative = records[0]!;
     store.upsertProject({ id: "reserved", name: "合成冷门项目", keys: { repos: [], hosts: [], chats: [] } });
     store.upsertThread({ id: "reserved-thread", title: "冷门事项", status: "active", project_id: "reserved" });
     store.createFrame({ id: "reserved-frame", key: "synthetic-cap", record_ids: [representative.id],
       t_start_ms: base, t_end_ms: base + min, chars: 1, private: 0, status: "new" });
     store.assign("reserved-frame", "reserved-thread", "rule", 1);
-    const plan = reviewPlan(ctx.db, base, base + 210 * min);
-    expect(plan.diagnostics).toEqual({ candidateCount: 32, mergedCount: 0, omittedCount: 2, longestActivityRetained: true, fallbackCount: 0 });
-    expect(plan.segments).toHaveLength(30);
+    const plan = reviewPlan(ctx.db, base, base + 330 * min);
+    expect(plan.diagnostics).toEqual({ candidateCount: 52, mergedCount: 0, omittedCount: 2, longestActivityRetained: true, fallbackCount: 0 });
+    expect(plan.segments).toHaveLength(50);
     expect(plan.segments[0]!.id).toBe(representative.id);
-    expect(plan.omittedRecordIds).toEqual([records[1]!.id, records[31]!.id]);
+    expect(plan.omittedRecordIds).toEqual([records[1]!.id, records[51]!.id]);
     const llm: LLM = { async complete<T>(req: import("../src/llm/index.ts").LLMRequest) {
-      expect(parse(req.prompt).activities).toHaveLength(30);
+      expect(parse(req.prompt).activities).toHaveLength(50);
       return { ok: true, data: emptyDayOutput as T, ms: 1 };
     } };
-    expect(await dayStep({ db: ctx.db, llm }, store, day, base + 210 * min)).toEqual({ ok: true, calls: 1 });
+    expect(await dayStep({ db: ctx.db, llm }, store, day, base + 330 * min)).toEqual({ ok: true, calls: 1 });
     const detail = store.day(day)!.detail;
     expect(detail.items).toHaveLength(0);
     expect(new Set(detail.omitted_record_ids)).toEqual(new Set(records.map(r => r.id)));
@@ -243,7 +243,7 @@ test("超过 30 段时为项目保留代表，余段按实际覆盖选取，原�
   } finally { ctx.cleanup(); }
 });
 
-test("项目数超过上限时，仍保留最长单段和累计用时最长活动的一段", () => {
+test("项目数在五十候选预算内时，保留最长单段和累计用时最长活动", () => {
   const ctx = setup(), store = new DistillStore(ctx.db);
   try {
     const projects = Array.from({ length: 32 }, (_, i) => span(i * 3, i * 3 + 2, {
@@ -263,8 +263,8 @@ test("项目数超过上限时，仍保留最长单段和累计用时最长活�
       store.assign(id, id, "rule", 1);
     }
     const plan = reviewPlan(ctx.db, base, base + 240 * min);
-    expect(plan.segments).toHaveLength(30);
-    expect(plan.segments.filter(s => s.activity.projectId)).toHaveLength(28);
+    expect(plan.segments).toHaveLength(37);
+    expect(plan.segments.filter(s => s.activity.projectId)).toHaveLength(32);
     expect(plan.segments.map(s => s.id)).toContain(longest.id);
     expect(plan.segments.map(s => s.id)).toContain(dominant[0]!.id);
     expect(plan.diagnostics.longestActivityRetained).toBe(true);
@@ -464,14 +464,14 @@ test("结构化判断排除纯请求与空录音，保留后续结果和用户�
     ctx.db.ingest(records);
     const plan = reviewPlan(ctx.db, base, base + 100 * min), material = reviewMaterial(plan.segments);
     expect(material[1]!.continues).toBe(material[0]!.key);
-    const output = { highlight: null, items: material.map((s,i) => ({ activity: s.key,
+    const output = { highlight: null, omissions: [0,2].map(i => ({activity: material[i]!.key, reason:i===0?"request_only":"empty", title:"",description:"",refs:[]})), items: material.map((s,i) => ({ activity: s.key,
       content: (["request_only", "judgment", "empty"] as const)[i]!,
       title: i === 1 ? "认为图例对比度足够" : "要求调整展板", description: "展板已调整，认为图例对比度足够。", refs: [s.evidence[0]!.key] })) };
     const detail = composeReview(plan.segments, output, base + 86400000, point(100), [], [])!;
     expect(detail.items.map(i => i.title)).toEqual(["认为图例对比度足够"]);
     expect(detail.omitted_record_ids).toEqual([records[0]!.id,records[2]!.id]);
     output.items[1]!.content = "request_only";
-    expect(composeReview(plan.segments, output, base + 86400000, point(100), [], [])!.items).toEqual([]);
+    expect(composeReview(plan.segments, output, base + 86400000, point(100), [], [])!.items).toHaveLength(1);
   } finally { ctx.cleanup(); }
 });
 
@@ -511,7 +511,7 @@ test("晚间真实输入按实际覆盖参与预算，不被早间统一四分�
     const late = span(600,620,{source:"codex.session",source_ref:"evening",body:"[我] 修好展板。\n\n[AI] 展板已修复。"});
     ctx.db.ingest([...early,late]);
     const plan=reviewPlan(ctx.db,base,base+700*min);
-    expect(plan.segments).toHaveLength(30);
+    expect(plan.segments).toHaveLength(31);
     expect(plan.segments.some(s=>s.id===late.id && s.seconds===1200)).toBe(true);
   } finally {ctx.cleanup();}
 });
@@ -545,4 +545,59 @@ test("单纯授权不能被模型当决定，后续同活动结果仍归发起�
     expect(detail.items[0]!.record_ids).toContain(records[2]!.id);
     expect(detail.omitted_record_ids).toContain(records[0]!.id);
   }finally{ctx.cleanup();}
+});
+
+
+test("无效或缺失省略类别恢复模型结果，无文字时报警且原文未入时间线", () => {
+  const ctx = setup();
+  try {
+    const records = [0,10,20,30].map((n,i) => span(n,n+5,{source:"codex.session",source_ref:`synthetic-result-${i}`,
+      body:"[我] 检查展板。\n\n[AI] 已复现图例重叠，原因是宽度没有更新。"}));
+    ctx.db.ingest(records);
+    const plan=reviewPlan(ctx.db,base,base+40*min), material=reviewMaterial(plan.segments), warnings:string[]=[];
+    const detail=composeReview(plan.segments,{highlight:null,items:[{activity:material[0]!.key,content:"empty",title:"图例重叠已复现",description:"定位到宽度没有更新。",refs:[material[0]!.evidence[1]!.key]}],
+      omissions:[{activity:material[1]!.key,reason:"not_important",title:"图例重叠已复现",description:"定位到宽度没有更新。",refs:[material[1]!.evidence[1]!.key]},
+        {activity:material[2]!.key,reason:"unfinished",title:"",description:"",refs:[]}]},base+86400000,point(40),[],[],a=>warnings.push(a))!;
+    expect(detail.items).toHaveLength(2);
+    expect(warnings).toHaveLength(4);
+    expect(detail.omitted_record_ids).toEqual(records.slice(2).map(r=>r.id));
+  } finally {ctx.cleanup();}
+});
+
+test("五十候选的结果最多三十段，先合并连续同项目再按覆盖取舍", () => {
+  const ctx=setup(), store=new DistillStore(ctx.db);
+  try {
+    const records=Array.from({length:50},(_,i)=>span(i*3,i*3+2,{source:"codex.session",source_ref:`synthetic-limit-${i}`,body:"[我] 检查展板。\n\n[AI] 图例位置已修正。"}));
+    ctx.db.ingest(records);
+    store.upsertProject({id:"exhibit",name:"合成展览",keys:{repos:[],hosts:[],chats:[]}});
+    records.slice(0,2).forEach((r,i)=>{
+      const id=`synthetic-thread-${i}`;
+      store.upsertThread({id,title:id,status:"active",project_id:"exhibit"});
+      store.createFrame({id,key:id,record_ids:[r.id],t_start_ms:Date.parse(r.t_start),t_end_ms:Date.parse(r.t_end!),chars:1,private:0,status:"new"});store.assign(id,id,"rule",1);
+    });
+    const plan=reviewPlan(ctx.db,base,base+151*min), material=reviewMaterial(plan.segments);
+    expect(material).toHaveLength(50);
+    const detail=composeReview(plan.segments,{highlight:{activity:material[1]!.key,text:"合成图例完成修正"},items:material.map((a,i)=>({activity:a.key,content:"result",title:"图例位置修正",description:`第 ${i} 张图例位置已修正。`,refs:[a.evidence[1]!.key]}))},base+86400000,point(151),[],[])!;
+    expect(detail.items).toHaveLength(30);
+    expect(detail.items[0]!.record_ids).toEqual(records.slice(0,2).map(r=>r.id));
+    expect(detail.items[0]!.description).toContain("第 1 张");
+    expect(detail.summary).toBe("合成图例完成修正");
+    expect(detail.items[0]!.active_seconds).toBe(240);
+    expect(detail.omitted_record_ids).toHaveLength(19);
+  } finally {ctx.cleanup();}
+});
+
+test("无效省略缺文字在运行记录留下警告且保留全天原文", async () => {
+  const ctx=setup(),store=new DistillStore(ctx.db);
+  try {
+    const record=span(0,5,{source:"codex.session",source_ref:"synthetic-warning",body:"[我] 核对展板。\n\n[AI] 发现图例重叠。"});
+    ctx.db.ingest([record]);
+    const llm:LLM={async complete<T>() {
+      ctx.db.db.prepare("INSERT INTO runtime_calls(id,at,at_ms,kind,revision) VALUES(?,?,?,?,?)").run("synthetic-day-warning",point(6),base+6*min,"model",0);
+      return {ok:true,data:{highlight:null,items:[],omissions:[]} as T,ms:1,call_id:"synthetic-day-warning"};
+    }};
+    expect(await dayStep({db:ctx.db,llm},store,day,base+6*min)).toEqual({ok:true,calls:1});
+    expect(store.day(day)!.detail.omitted_record_ids).toContain(record.id);
+    expect(ctx.db.db.prepare("SELECT error FROM runtime_calls WHERE id=?").get("synthetic-day-warning")).toMatchObject({error:expect.stringContaining("无效省略 1 段")});
+  } finally {ctx.cleanup();}
 });

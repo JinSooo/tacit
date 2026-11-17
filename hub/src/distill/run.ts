@@ -684,8 +684,9 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
     prompt: P.dayPrompt(date, material, cutoff), schema: P.DAY_SCHEMA }) : null;
   const calls = Number(!!result);
   if (result?.ok === false) return failed(calls, result.error === "记录已变化，等待重新整理");
+  const warnings: string[] = [];
   const detail = composeReview(segments, result?.data ?? { highlight: null, items: [] },
-    next.getTime(), cutoff, omittedRecordIds, dependencyRecordIds);
+    next.getTime(), cutoff, omittedRecordIds, dependencyRecordIds, activity => warnings.push(activity));
   if (!detail) {
     discardedCall(d.db, result?.call_id);
     return failed(calls);
@@ -697,7 +698,14 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
     }
     store.upsertDay({ date, detail, brief: detail.summary, needs_regen: 0, updated_at: toLocalIso(now) });
     store.setState(`day_failed:${date}`, null);
-    if (result?.ok) appliedCall(d.db, result.call_id);
+    if (result?.ok) {
+      appliedCall(d.db, result.call_id);
+      if (warnings.length) {
+        const warning = `每日整理无效省略 ${warnings.length} 段：已恢复可用文字，其余原文未入时间线`;
+        if (result.call_id) d.db.db.prepare("UPDATE runtime_calls SET error=? WHERE id=?").run(warning, result.call_id);
+        d.log?.(JSON.stringify({ step: "day", warning: "invalid_omission", count: warnings.length }));
+      }
+    }
     return { calls, ok: true };
   }).immediate();
 }
