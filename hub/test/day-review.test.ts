@@ -330,6 +330,20 @@ test("模型给错依据时不覆盖已有回顾，重试成功时同时更新�
   } finally { ctx.cleanup(); }
 });
 
+test("个别引用编号写坏时保留该段，只丢坏引用", () => {
+  const ctx = setup();
+  try {
+    ctx.db.ingest([span(0, 12, { source: "codex.session", source_ref: "poster-refs", body: "[我] 新展板已摆好。" })]);
+    const plan = reviewPlan(ctx.db, base, base + 86400000);
+    const a = reviewMaterial(plan.segments)[0]!;
+    const detail = composeReview(plan.segments, { highlight: { activity: a.key, text: "展板已摆好" },
+      items: [{ activity: a.key, content: "result", title: "摆放展板", description: "新展板已摆好。",
+        refs: [a.evidence[0]!.key, `${a.evidence[0]!.key}冒`] }] }, base + 86400000, point(12), [], [])!;
+    expect(detail.items.map(i => i.title)).toEqual(["摆放展板"]);
+    expect(detail.summary).toBe("展板已摆好");
+  } finally { ctx.cleanup(); }
+});
+
 test("整理中途原文改为私密，已返回的模型段也不能重新写回", async () => {
   const ctx = setup(), store = new DistillStore(ctx.db);
   const record = span(0, 5, { source: "codex.session", source_ref: "synthetic-inflight", body: "[我] 核对合成图例。" });

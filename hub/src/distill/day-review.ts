@@ -471,9 +471,10 @@ function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | und
   const title = singleLine(redactString(candidate.title).text, 20);
   const description = singleLine(redactString(candidate.description).text, 160);
   if (!title || !description || !candidate.refs.length || !isReadableReviewItem({ title, description })) return null;
-  const references = candidate.refs.map(key => a.evidence.find(entry => `${a.key}:${entry.key}` === key));
-  if (references.some(entry => !entry) || !references.some(entry => entry && !entry.secondary)) return null;
-  const evidence = [...new Map(references.map(entry => [entry!.reference.id, entry!.reference])).values()]
+  // 个别引用编号写坏时只丢那个引用；没有一条可用的直接依据才整段不收。
+  const references = candidate.refs.flatMap(key => a.evidence.find(entry => `${a.key}:${entry.key}` === key) ?? []);
+  if (!references.some(entry => !entry.secondary)) return null;
+  const evidence = [...new Map(references.map(entry => [entry.reference.id, entry.reference])).values()]
     .sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
   return { title, description, evidence };
 }
