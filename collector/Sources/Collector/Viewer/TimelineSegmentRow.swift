@@ -18,7 +18,8 @@ struct TimelineSegmentRow: View {
   let item: DayDiary.Item
   var records: [HistoryRecord]? = nil
   var showsTitle = true
-  let expanded: Bool?
+  var projectName: String? = nil
+  let expanded: Bool
   let onToggle: () -> Void
 
   var body: some View {
@@ -31,18 +32,22 @@ struct TimelineSegmentRow: View {
             .padding(.trailing, TimelineReadingLayout.gutter)
           VStack(alignment: .leading, spacing: 8) {
             if showsTitle {
-              HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
-                  .frame(maxWidth: .infinity, alignment: .leading)
-                TimelineSourceIcons(item: item).fixedSize()
+              Text(item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: 12) {
+              if let projectName {
+                Text(projectName).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+                  .fixedSize(horizontal: false, vertical: true)
               }
+              TimelineSourceIcons(item: item).fixedSize()
             }
             Text(item.description).font(.system(size: TextSize.body))
               .lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
           }
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
-          PhIcon(expanded == true ? "caret-down" : "caret-right", size: 11)
+          PhIcon(expanded ? "caret-up" : "caret-down", size: 11)
             .foregroundStyle(Palette.muted).padding(.leading, 16).accessibilityHidden(true)
         }
         .multilineTextAlignment(.leading)
@@ -51,9 +56,9 @@ struct TimelineSegmentRow: View {
         .contentShape(Rectangle())
       }
       .buttonStyle(TimelineRowStyle())
-      .accessibilityValue(expanded.map { $0 ? "已展开" : "已折叠" } ?? "")
-      .accessibilityHint(expanded == nil ? "转到时间线" : "")
-      if expanded == true {
+      .accessibilityValue(expanded ? "已展开" : "已折叠")
+      .accessibilityHint(expanded ? "收起原始记录" : "展开原始记录")
+      if expanded {
         TimelineSegmentRecords(day: day, item: item, dayRecords: records)
           .padding(.bottom, 16)
       }
@@ -64,7 +69,7 @@ struct TimelineSegmentRow: View {
         .accessibilityHidden(true).allowsHitTesting(false)
     }
     .overlay(alignment: .topLeading) {
-      Circle().fill(expanded == true ? Palette.accent : Palette.muted)
+      Circle().fill(expanded ? Palette.accent : Palette.muted)
         .frame(width: 5, height: 5)
         .offset(x: TimelineReadingLayout.axis - 2,
                 y: TimelineReadingLayout.rowPadding + 7)
@@ -84,19 +89,19 @@ struct TimelineSourceIcons: View {
       .map { DayDiary.Item.App(source: $0, app: nil) }
     var seen = Set<String>()
     return candidates.filter {
-      seen.insert(AppIcons.name($0.app)?.lowercased() ?? $0.app?.lowercased() ?? $0.source).inserted
+      seen.insert(SourceApplication.bundle(app: $0.app, source: $0.source)?.lowercased() ?? $0.source).inserted
     }
   }
 
   var body: some View {
     HStack(spacing: 6) {
       ForEach(Array(icons.prefix(3)), id: \.self) { app in
-        let label = AppIcons.name(app.app) ?? SourceInfo.name(app.source)
-        SourceGlyph(source: app.source, app: app.app, size: 12)
+        let label = AppIcons.name(SourceApplication.bundle(app: app.app, source: app.source)) ?? app.app ?? SourceInfo.name(app.source)
+        SourceGlyph(source: app.source, app: SourceApplication.bundle(app: app.app, source: app.source), size: 16)
           .help(label).accessibilityLabel(label)
       }
     }
-    .help(icons.map { AppIcons.name($0.app) ?? SourceInfo.name($0.source) }.joined(separator: "、"))
+    .help(icons.map { AppIcons.name(SourceApplication.bundle(app: $0.app, source: $0.source)) ?? $0.app ?? SourceInfo.name($0.source) }.joined(separator: "、"))
   }
 }
 

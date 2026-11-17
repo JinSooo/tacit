@@ -7,6 +7,7 @@ struct TimelineSearchPage: View {
   @State private var result: Results?
   @State private var request = UUID()
   @State private var retry = 0
+  @State private var expanded: String?
   @State private var loading = false
   @State private var loadError: String?
   @State private var openingRecord: String?
@@ -21,6 +22,7 @@ struct TimelineSearchPage: View {
   private struct Results {
     let query: String
     let segments: [HubAPI.TimelineResult.Day]
+    let labeledProjectDays: Set<String>
     let records: [HistoryRecord]
     let segmentCursor: String?
     let recordCursor: String?
@@ -54,7 +56,8 @@ struct TimelineSearchPage: View {
       .modifier(ReviewWidth())
     }
     .background(Palette.paper)
-    .navigationTitle("搜索")
+    .navigationTitle("")
+    .modifier(QuietPageTitle())
     .onAppear { focused = true }
     .task(id: key) { await reset(key) }
     .onDisappear { request = UUID() }
@@ -80,8 +83,11 @@ struct TimelineSearchPage: View {
                 .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
                 .padding(.bottom, 8).accessibilityAddTraits(.isHeader)
               ForEach(segments[date] ?? []) { item in
-                TimelineSegmentRow(day: day, item: item, expanded: nil) {
-                  store.showReview(day, segment: item.id, record: item.recordIds?.first)
+                let key = "\(date)/\(item.id)"
+                TimelineSegmentRow(day: day, item: item,
+                                   projectName: result.labeledProjectDays.contains(date) ? store.project(item.projectId)?.name : nil,
+                                   expanded: expanded == key) {
+                  expanded = expanded == key ? nil : key
                 }
               }
               ForEach(records[date] ?? []) { record in
@@ -114,6 +120,7 @@ struct TimelineSearchPage: View {
     let id = UUID()
     request = id
     result = nil
+    expanded = nil
     loadError = nil
     openError = nil
     openingRecord = nil
@@ -133,13 +140,19 @@ struct TimelineSearchPage: View {
       async let segments = segmentPage(text, more: previous != nil, cursor: previous?.segmentCursor)
       async let records = recordPage(text, more: previous != nil, cursor: previous?.recordCursor)
       let (foundSegments, foundRecords) = try await (segments, records)
+      var labeledDays = previous?.labeledProjectDays ?? []
+      for day in foundSegments?.days ?? [] {
+        guard let date = TimelineDay.date(day.date) else { continue }
+        let allItems = try await store.api.diary(date)?.detail?.items ?? day.items
+        if TimelineProjectLabels.showsNames(in: allItems) { labeledDays.insert(day.date) }
+      }
       try Task.checkCancellation()
       guard id == request, query == text else { return }
       let priorSegments = previous?.segments ?? []
       let priorRecords = previous?.records ?? []
       let knownDays = Set(priorSegments.map(\.date)), knownRecords = Set(priorRecords.map(\.id))
       result = Results(query: text, segments: priorSegments + (foundSegments?.days ?? []).filter { !knownDays.contains($0.date) },
-                       records: priorRecords + (foundRecords?.records ?? []).filter { !knownRecords.contains($0.id) },
+                       labeledProjectDays: labeledDays, records: priorRecords + (foundRecords?.records ?? []).filter { !knownRecords.contains($0.id) },
                        segmentCursor: foundSegments?.nextCursor,
                        recordCursor: foundRecords?.nextCursor)
     } catch is CancellationError {

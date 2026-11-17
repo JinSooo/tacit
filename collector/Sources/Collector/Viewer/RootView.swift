@@ -191,3 +191,14 @@ struct CaptureFooter: View {
     return n == 0 ? "所有数据源都已关闭" : "\(n) 个数据源"
   }
 }
+
+/// Remove the native title item; macOS 14 retains the generic window name.
+struct QuietPageTitle: ViewModifier {
+  func body(content: Content) -> some View {
+    if #available(macOS 15.0, *) {
+      content.toolbar(removing: .title)
+    } else {
+      content.navigationTitle("")
+    }
+  }
+}
