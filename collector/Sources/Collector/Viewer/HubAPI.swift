@@ -138,6 +138,20 @@ final class HubAPI: @unchecked Sendable {
     try await send("DELETE", "/v1/days/\(TimelineDay.key(day))/segments/\(id)", ["record_ids": recordIds])
   }
 
+  struct TimelineResult: Decodable, Sendable {
+    struct Day: Decodable, Identifiable, Sendable {
+      let date: String
+      let items: [DayDiary.Item]
+      var id: String { date }
+    }
+    let days: [Day]
+    let nextCursor: String?
+  }
+
+  func timeline(projectId: String? = nil, query: String? = nil, before: String? = nil) async throws -> TimelineResult {
+    try await get(TimelineResult.self, "/v1/timeline", ["project_id": projectId, "q": query, "before": before])
+  }
+
   // MARK: 提炼
 
   func now() async throws -> NowState? {
@@ -165,6 +179,11 @@ final class HubAPI: @unchecked Sendable {
 
   func thread(_ id: String, level: String) async throws -> EntityDetail { try await get(EntityDetail.self, "/v1/threads/\(id)", ["level": level]) }
   func project(_ id: String, level: String) async throws -> EntityDetail { try await get(EntityDetail.self, "/v1/projects/\(id)", ["level": level]) }
+
+  func projectContext(_ id: String) async throws -> [HubThread] {
+    struct Result: Decodable { let threads: [HubThread] }
+    return try await get(Result.self, "/v1/projects/\(id)/context").threads
+  }
 
   func pending() async throws -> [PendingItem] {
     struct R: Decodable { let pending: [PendingItem] }

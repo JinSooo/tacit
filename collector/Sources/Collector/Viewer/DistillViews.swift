@@ -349,7 +349,7 @@ struct FactRow: View {
         let hits = rows.filter { fact.evidence.contains($0.id) }
         if hits.isEmpty { Text("找不到依据记录，可能已经删除").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(8) }
         ForEach(hits) { e in
-          EvidenceRow(evidence: e) { showEvidence = false; store.showRecord(e.id, at: e.start) }
+          EvidenceRow(evidence: e) { showEvidence = false; store.path.append(.reviewRecord(e.id)) }
         }
       } else if let e = evidence.error {
         Text(e).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(8)
@@ -415,7 +415,7 @@ struct EvidenceList: View {
           // 外层圆角 10、内边距 4，行的悬停底色圆角 6，同心。
           VStack(spacing: 0) {
             ForEach(rows.sorted { ($0.start ?? .distantPast) > ($1.start ?? .distantPast) }) { e in
-              EvidenceRow(evidence: e) { store.showRecord(e.id, at: e.start) }
+              EvidenceRow(evidence: e) { store.path.append(.reviewRecord(e.id)) }
             }
           }
           .padding(4)
@@ -466,96 +466,6 @@ struct FactCorrectionSheet: View {
     }
     .padding(24).frame(width: 500)
     .onAppear { text = fact.text }
-  }
-}
-
-// MARK: 项目
-
-struct ProjectPage: View {
-  let id: String
-  @Environment(ViewerStore.self) private var store
-  @State private var detail = Loader<EntityDetail>()
-  @State private var threads = Loader<[HubThread]>()
-
-  var body: some View {
-    ScrollView {
-      Group {
-        if let d = detail.value { content(d) }
-        else if let e = detail.error { Placeholder(kind: .error(e) { Task { await load() } }).frame(height: 400) }
-        else { Placeholder(kind: .loading).frame(height: 400) }
-      }
-      .frame(maxWidth: 860, alignment: .leading)
-      .padding(.horizontal, 40).padding(.vertical, 32)
-      .frame(maxWidth: .infinity)
-    }
-    .background(Palette.paper)
-    .navigationTitle(detail.value?.name ?? "项目")
-    .toolbar { BackButton() }
-    .task(id: store.revision) { await load() }
-  }
-
-  func load() async {
-    async let a: Void = detail.run { try await store.api.project(id, level: "detail") }
-    async let b: Void = threads.run { try await store.api.threads(project: id) }
-    _ = await (a, b)
-  }
-
-  func content(_ d: EntityDetail) -> some View {
-    let p = store.project(id)
-    return VStack(alignment: .leading, spacing: 32) {
-      VStack(alignment: .leading, spacing: 12) {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-          PhIcon(p?.confirmed.value == false ? "folder-dashed" : "folder", size: 20).foregroundStyle(Palette.muted)
-          Text(d.name ?? "").font(.system(size: TextSize.heading, weight: .semibold)).foregroundStyle(Palette.ink)
-          if p?.confirmed.value == false {
-            Text("未确认").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-          }
-        }
-        if let b = d.brief {
-          Text(b).font(.serif(TextSize.title)).lineSpacing(TextSize.serifLineSpacing(TextSize.title)).foregroundStyle(Palette.ink)
-            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-        }
-      }
-      DetailBody(detail: d, progressLabel: "状态", progress: d.detail?.status)
-      threadList
-      FactsView(facts: d.facts ?? [], loadEvidence: { try await store.api.project(id, level: "evidence").records ?? [] }) { Task { await load() } }
-    }
-  }
-
-  @ViewBuilder var threadList: some View {
-    if let rows = threads.value, !rows.isEmpty {
-      let order = ["active", "paused", "done", "abandoned", "archived"]
-      VStack(alignment: .leading, spacing: 24) {
-        ForEach(order, id: \.self) { status in
-          let group = rows.filter { $0.status == status }
-          if !group.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-              HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(threadStatus[status] ?? status).sectionTitle()
-                Text("\(group.count) 件").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-              }
-              if status == "active" {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 12)], spacing: 12) {
-                  ForEach(group) { t in
-                    Button { store.path.append(.thread(t.id)) } label: { ThreadCard(thread: t, project: store.project(id)) }.buttonStyle(.plain)
-                  }
-                }
-              } else {
-                VStack(spacing: 0) {
-                  ForEach(Array(group.enumerated()), id: \.element.id) { i, t in
-                    Button { store.path.append(.thread(t.id)) } label: { ThreadLine(thread: t, project: store.project(id)) }.buttonStyle(.plain)
-                    if i < group.count - 1 { Divider().padding(.leading, 16) }
-                  }
-                }
-                .card()
-              }
-            }
-          }
-        }
-      }
-    } else if let e = threads.error {
-      Text(e).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
-    }
   }
 }
 
