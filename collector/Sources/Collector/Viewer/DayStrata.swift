@@ -295,10 +295,20 @@ struct DayStrata: View {
     }
   }
 
-  /// 放不下完整标题时只画线，悬停仍能读到全部文字。
+  /// 章节标题按宽度截断，末尾加省略号；连两个字都放不下就不画。
   func fitted(_ text: String, width: CGFloat, ctx: GraphicsContext) -> GraphicsContext.ResolvedText? {
-    let label = ctx.resolve(Text(text).font(.system(size: TextSize.caption)).foregroundStyle(Palette.ink))
-    return label.measure(in: CGSize(width: .greatestFiniteMagnitude, height: Self.chapterHeight)).width <= width ? label : nil
+    func resolve(_ s: String) -> GraphicsContext.ResolvedText {
+      ctx.resolve(Text(s).font(.system(size: TextSize.caption)).foregroundStyle(Palette.ink))
+    }
+    let full = resolve(text)
+    if full.measure(in: CGSize(width: 10_000, height: 20)).width <= width { return full }
+    var chars = Array(text)
+    while chars.count > 2 {
+      chars.removeLast(max(1, chars.count / 8))
+      let r = resolve(String(chars) + "…")
+      if r.measure(in: CGSize(width: 10_000, height: 20)).width <= width { return r }
+    }
+    return nil
   }
 
   func overlaps(_ r: HistoryRecord, _ b: ClosedRange<Date>) -> Bool {
@@ -319,7 +329,7 @@ struct DayStrata: View {
           .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
           Text(conversationTitles[r.id] ?? RecordText.title(r, appShown: false)).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink).lineLimit(2)
         } else if let c {
-          // 章节条上的标题可能放不下，或被后一段盖住，悬停时把这一刻所在的章节都写全。
+          // 章节条上的字可能被截断，或被后一段盖住，悬停时把这一刻所在的章节都写全。
           let t = self.time(h.x, plot, d)
           let all = [c] + chapters.filter { $0 != c && $0.start <= t && t <= $0.end }.prefix(2)
           ForEach(all) { c in

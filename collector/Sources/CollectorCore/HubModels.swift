@@ -259,29 +259,34 @@ public struct NowState: Decodable, Sendable {
 
 public struct DayDiary: Decodable, Sendable {
   public struct Chapter: Decodable, Hashable, Sendable { public let start: String; public let end: String; public let text: String }
-  public struct Reference: Decodable, Hashable, Sendable { public let id: String; public let at: String }
-  public struct Entry: Decodable, Hashable, Sendable { public let text: String; public let evidence: [Reference] }
-  public struct Sections: Decodable, Sendable {
-    public let progress: [Entry]
-    public let blockers: [Entry]
-    public let authored: [Entry]
-    public let suggestions: [Entry]
+  public struct Reference: Decodable, Identifiable, Hashable, Sendable {
+    public let id: String; public let at: String; public let source: String; public let title: String
+  }
+  public struct Item: Decodable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+    public let description: String
+    public let tStart: String
+    public let tEnd: String
+    public let activeSeconds: TimeInterval
+    public let sources: [String]
+    public let evidence: [Reference]
   }
   public struct Body: Decodable, Sendable {
     public let summary: String?
     public let timeline: [Chapter]?
-    public let sections: Sections?
+    public let items: [Item]?
     public let cutoff: String?
   }
   public let date: String
-  public let brief: String?
   public let detail: Body?
-  public let updatedAt: String?
   public let needsRegen: FlexBool?
+  public let failed: FlexBool?
 
   public var summary: String? {
-    [detail?.summary, brief].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-      .first { !$0.isEmpty }
+    guard detail?.items != nil, let text = detail?.summary?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !text.isEmpty else { return nil }
+    return text
   }
 }
 

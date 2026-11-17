@@ -32,22 +32,30 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
 
 @Test func reviewKeepsDatedEvidenceWhileAwaitingAnUpdate() throws {
   let review = try decode(DayDiary.self, """
-    {"date":"2026-11-16","brief":"简略版","needs_regen":1,"updated_at":"2026-11-16T22:00:00+09:00",
-     "detail":{"summary":"当天摘要","cutoff":"2026-11-16T21:30:00+09:00","sections":{
-       "progress":[{"text":"决定保留依据","evidence":[{"id":"record","at":"2026-11-16T21:00:00+09:00"}]}],
-       "blockers":[],"authored":[],"suggestions":[]}}}
+    {"date":"2026-11-16","needs_regen":1,"failed":true,
+     "detail":{"summary":"定下展板尺寸","cutoff":"2026-11-16T21:30:00+09:00","items":[{
+       "id":"activity","title":"排定展板","description":"定下展板尺寸。",
+       "t_start":"2026-11-16T21:00:00+09:00","t_end":"2026-11-16T21:20:00+09:00","active_seconds":960,
+       "sources":["mac.screen","codex.session"],
+       "evidence":[{"id":"record","at":"2026-11-16T21:00:00+09:00","source":"codex.session","title":"讨论展板尺寸"}]}]}}
     """)
-  #expect(review.needsRegen?.value == true)
-  #expect(review.summary == "当天摘要")
-  #expect(review.detail?.sections?.progress.first?.evidence.first?.id == "record")
-  #expect(review.detail?.sections?.progress.first?.evidence.first?.at == "2026-11-16T21:00:00+09:00")
-  #expect(review.detail?.sections?.blockers.isEmpty == true)
+  let item = try #require(review.detail?.items?.first)
+  #expect(review.needsRegen?.value == true && review.failed?.value == true)
+  #expect(review.summary == "定下展板尺寸")
+  #expect(item.activeSeconds == 960)
+  #expect(item.sources == ["mac.screen","codex.session"])
+  #expect(item.evidence.first?.id == "record")
+  #expect(item.evidence.first?.at == "2026-11-16T21:00:00+09:00")
 }
 
-@Test func reviewCanOpenALegacyDayWithoutFourSections() throws {
-  let review = try decode(DayDiary.self, #"{"date":"2026-11-09","brief":"  早期回顾  ","detail":{"summary":" "}}"#)
-  #expect(review.summary == "早期回顾")
-  #expect(review.detail?.sections == nil)
+@Test func reviewKeepsLegacyTimelineButDoesNotDisplayLegacySummary() throws {
+  let review = try decode(DayDiary.self, """
+    {"date":"2026-11-09","brief":"旧回顾","detail":{
+      "summary":"几段旧文字","timeline":[{"start":"10:30","end":"12:00","text":"旧标签"}]}}
+    """)
+  #expect(review.summary == nil)
+  #expect(review.detail?.items == nil)
+  #expect(review.detail?.timeline?.first?.text == "旧标签")
 }
 
 @Test func threadCardCanDistinguishAPendingBriefFromBlankText() throws {

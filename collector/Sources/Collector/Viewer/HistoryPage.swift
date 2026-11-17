@@ -235,11 +235,9 @@ struct HistoryPage: View {
         }
       }
       if loadedDay == day, let summary = diary?.summary {
-        Text(summary)
-          .font(.serif(TextSize.title))
+        ReviewHeadline(text: summary, size: TextSize.title)
           .lineSpacing(TextSize.serifLineSpacing(TextSize.title))
           .foregroundStyle(Palette.ink)
-          .lineLimit(2)
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: 760, alignment: .leading)

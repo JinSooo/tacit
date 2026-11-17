@@ -56,6 +56,8 @@ enum Page: Hashable {
 enum Route: Hashable {
   case thread(String)
   case project(String)
+  case reviewItem(Date, String)
+  case reviewRecord(String)
   case runtime
 }
 

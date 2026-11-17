@@ -19,6 +19,13 @@ struct RootView: View {
             switch route {
             case .thread(let id): ThreadPage(id: id)
             case .project(let id): ProjectPage(id: id)
+            case .reviewItem(let day, let id): ReviewItemPage(day: day, id: id)
+            case .reviewRecord(let id):
+              RecordInspector(id: id) { _ in
+                if store.path.last == .reviewRecord(id) { store.path.removeLast() }
+              }
+              .navigationTitle("历史记录")
+              .toolbar { BackButton() }
             case .runtime: RuntimePage().toolbar { BackButton() }
             }
           }
