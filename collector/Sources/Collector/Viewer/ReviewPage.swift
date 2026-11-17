@@ -55,6 +55,7 @@ private struct ReviewDayContent: View {
   @State private var brush: ClosedRange<Date>?
   @State private var expanded: String?
   @State private var picking = false
+  @State private var setup: (health: DistillHealth, tools: [AgentToolState])?
   @Binding var day: Date
   let today: Date
   let now: Date
@@ -65,6 +66,12 @@ private struct ReviewDayContent: View {
     let revision: Int
   }
 
+  private var showsSetup: Bool {
+    TimelineSetup.shouldShow(
+      permissionsReady: !store.capture.sources.contains { DataSourceCatalog.isVisible($0.id) && $0.needsPermission },
+      modelReady: setup.map { $0.health.state == .working },
+      agentReady: setup.map { $0.tools.contains(where: \.connected) })
+  }
   private var current: Bool { loadedRevision == store.revision }
   private var review: DayDiary? { current ? diary.value ?? nil : nil }
   private var failed: Bool { review?.failed?.value == true }
@@ -92,7 +99,12 @@ private struct ReviewDayContent: View {
             }
             .zIndex(1)
           }
-          if !store.pending.isEmpty { TimelinePendingLine() }
+          if showsSetup || !store.pending.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+              if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools) }
+              if !store.pending.isEmpty { TimelinePendingLine() }
+            }
+          }
           LazyVStack(spacing: 0) {
             ForEach(items.filter { item in brush.map { item.intersects($0) } ?? true }) { item in
               TimelineSegmentRow(day: day, item: item, records: records.value, projectName: TimelineProjectLabels.showsNames(in: items) ? store.project(item.projectId)?.name : nil, expanded: expanded == item.id) {
@@ -217,6 +229,16 @@ private struct ReviewDayContent: View {
     }
   }
 
+  private func loadSetup() async {
+    do {
+      async let health = store.api.distillHealth()
+      async let tools = store.api.agentTools()
+      let value = try await (health, tools)
+      try Task.checkCancellation()
+      setup = value
+    } catch { setup = nil }
+  }
+
   private func load() async {
     let revision = store.revision
     if !current {
@@ -233,7 +255,8 @@ private struct ReviewDayContent: View {
       try Task.checkCancellation()
       return value
     }
-    _ = await (review, activity)
+    async let readiness: Void = loadSetup()
+    _ = await (review, activity, readiness)
     if !Task.isCancelled, revision == store.revision { loadedRevision = revision }
   }
 }
@@ -268,6 +291,7 @@ enum ReviewTime {
   }
   static func range(_ item: DayDiary.Item, on day: Date) -> String {
     guard let a = ViewerTime.parse(item.tStart), let b = ViewerTime.parse(item.tEnd) else { return "" }
+    guard TimelinePresence.hasDuration(activeSeconds: item.activeSeconds, start: a, end: b) else { return clock(a, on: day) }
     let start = clock(a, on: day), end = clock(b, on: day)
     return start == end ? start : "\(start)–\(end)"
   }

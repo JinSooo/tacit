@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 // 只引入用到的类型：CollectorCore 里有个叫 Observation 的结构体，会挡住 @Observable 宏展开要找的 Observation 模块。
+import enum CollectorCore.CaptureFooterStatus
 import struct CollectorCore.Project
 import struct CollectorCore.PendingItem
 import struct CollectorCore.Speaker
@@ -32,6 +33,15 @@ struct CaptureSnapshot: Equatable {
   var shellHookError: String?
 
   func source(_ id: String) -> DataSourceStatus? { sources.first { $0.id == id } }
+  var statusTitle: String {
+    let displayState: CaptureFooterStatus.State
+    switch state {
+    case .recording: displayState = .recording
+    case .paused(let until): displayState = .paused(until)
+    case .noPermission: displayState = .noPermission
+    }
+    return CaptureFooterStatus.title(state: displayState, enabledSources: sources.filter(\.enabled).count)
+  }
   var recordingEnabled: Bool { source("audio")?.enabled ?? false }
 }
 

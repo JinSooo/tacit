@@ -95,28 +95,38 @@ struct SetupChecklist: View {
   let health: DistillHealth
   let tools: [AgentToolState]
   @Environment(ViewerStore.self) private var store
+  @State private var expanded = false
 
   @ViewBuilder var body: some View {
     let missing = store.capture.sources.filter { DataSourceCatalog.isVisible($0.id) && $0.needsPermission }
     let modelReady = health.state == .working
     let agentsReady = tools.contains(where: \.connected)
-    if !(missing.isEmpty && modelReady && agentsReady) {
+    if TimelineSetup.shouldShow(permissionsReady: missing.isEmpty, modelReady: modelReady, agentReady: agentsReady) {
       VStack(alignment: .leading, spacing: 0) {
-        Text("还差几步").sectionTitle().padding(.bottom, 4)
-        step(done: missing.isEmpty, title: "打开系统权限", detail: permissionDetail(missing)) {
-          if let first = missing.first { Button("授权…") { store.perform(.requestPermission(first.id)) } }
+        Button { expanded.toggle() } label: {
+          HStack(spacing: 8) {
+            PhIcon("check-circle", size: 14)
+            Text("还差几步")
+            Spacer()
+            PhIcon(expanded ? "caret-down" : "caret-right", size: 11).accessibilityHidden(true)
+          }.padding(.vertical, 4)
         }
-        Divider()
-        step(done: modelReady, title: "让 AI 整理你的记录", detail: modelDetail(health.state)) {
-          Button("检查 AI 模型…") { open(.models) }
-        }
-        Divider()
-        step(done: agentsReady, title: "连接你使用的 AI 工具", detail: agentsReady ? nil : agentDetail(tools)) {
-          if tools.contains(where: \.installed) { Button("连接…") { open(.agents) } }
+        .buttonStyle(.accentLink).font(.system(size: TextSize.body))
+        .accessibilityValue(expanded ? "已展开" : "已折叠")
+        if expanded {
+          step(done: missing.isEmpty, title: "打开系统权限", detail: permissionDetail(missing)) {
+            if let first = missing.first { Button("授权…") { store.perform(.requestPermission(first.id)) } }
+          }
+          Divider()
+          step(done: modelReady, title: "让 AI 整理你的记录", detail: modelDetail(health.state)) {
+            Button("检查 AI 模型…") { open(.models) }
+          }
+          Divider()
+          step(done: agentsReady, title: "连接你使用的 AI 工具", detail: agentsReady ? nil : agentDetail(tools)) {
+            if tools.contains(where: \.installed) { Button("连接…") { open(.agents) } }
+          }
         }
       }
-      .padding(.horizontal, 20).padding(.vertical, 16)
-      .card()
     }
   }
 
@@ -129,7 +139,7 @@ struct SetupChecklist: View {
   func agentDetail(_ tools: [AgentToolState]) -> String {
     tools.contains(where: \.installed)
       ? "连接后，可以让 AI 查询你最近在做什么。"
-      : "这台 Mac 上没找到 Claude Desktop、Claude Code 或 Codex，装好并登录后再回来连接。"
+      : "这台 Mac 上没找到 Claude Code 或 Codex，装好并登录后再回来连接。"
   }
 
   func modelDetail(_ s: DistillHealth.State) -> String? {

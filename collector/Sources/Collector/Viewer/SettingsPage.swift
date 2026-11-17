@@ -310,7 +310,7 @@ struct PrivacySettingsView: View {
         case .paused(let until):
           SettingsRow("已暂停到 \(ViewerFormat.clock(until))") { Button("继续记录") { store.perform(.resume) } }
         default:
-          SettingsRow("正在记录") {
+          SettingsRow(c.statusTitle) {
             HStack {
               Button("暂停 1 小时") { store.perform(.pauseHour) }
               Button("暂停到明天") { store.perform(.pauseTomorrow) }

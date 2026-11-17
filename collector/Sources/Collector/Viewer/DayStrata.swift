@@ -50,7 +50,7 @@ struct DayStrata: View {
        brush: Binding<ClosedRange<Date>?>, onSegment: @escaping (String) -> Void) {
     self.records = records
     self.chapters = segments.compactMap { segment in
-      guard let start = ViewerTime.parse(segment.tStart), let end = ViewerTime.parse(segment.tEnd), end >= start else { return nil }
+      guard let start = ViewerTime.parse(segment.tStart), let end = ViewerTime.parse(segment.tEnd), TimelinePresence.hasDuration(activeSeconds: segment.activeSeconds, start: start, end: end) else { return nil }
       return Chapter(id: .segment(segment.id), start: start, end: end, text: segment.title)
     }.sorted { $0.start < $1.start }
     self.day = day
