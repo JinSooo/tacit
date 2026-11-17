@@ -85,14 +85,12 @@ test("子目录 repo key 归主项目，保存的是 worktree 根", () => {
 test("context 未见过的 worktree cwd 和子目录返回主项目，不写别名", async () => {
   active();
   store.upsertThread({ ...store.thread("thread")!, domain: "work" });
-  const evidence = reviewEvidence(store,"thread");
-  store.upsertDay({ date: evidence.at.slice(0,10), detail: { cutoff: evidence.at,
-    sections: { progress: [{ text: "合成主项目回顾", evidence: [evidence] }], blockers: [] } } });
+  reviewEvidence(store,"thread");
   const child = join(worktree, "src"); mkdirSync(child);
   for (const cwd of [worktree, child, join(repo, "src")]) {
     const started = performance.now(), result = await context(cwd);
     expect(result.project_id).toBe("main");
-    expect(result.text).toContain("合成主项目回顾");
+    expect(result.text).toContain("合成线程摘要");
     expect(performance.now() - started).toBeLessThan(2000);
   }
   expect(store.project("main")?.keys.repos).toEqual([repo]);

@@ -172,10 +172,8 @@ test("后台日志只读固定文件的结构化状态，不暴露错误原文�
 test("自动带入保存实际返回快照，锁冲突不阻塞查询且留下缺失标记", async () => {
   const store = new DistillStore(ctx.db);
   store.upsertProject({id:"p",name:"合成项目",keys:{repos:["/synthetic/runtime"],hosts:[],chats:[]}});
-  store.upsertThread({id:"t",title:"合成事项",project_id:"p",domain:"work",status:"active"});
-  const evidence = reviewEvidence(store,"t");
-  store.upsertDay({ date: evidence.at.slice(0,10), needs_regen: 1, detail: { cutoff: evidence.at,
-    sections: { progress: [{ text: "合成旧进展", evidence: [evidence] }], blockers: [] } } });
+  store.upsertThread({id:"t",title:"合成事项",brief:"合成旧进展",project_id:"p",domain:"work",status:"active",needs_regen:1});
+  reviewEvidence(store,"t");
   const response = await new AgentReads(ctx.db).handle("context",new URLSearchParams({tool:"codex",cwd:"/synthetic/runtime",event:"startup"}));
   const body = await response.json();
   expect(body.text).toContain("有新活动待整理");

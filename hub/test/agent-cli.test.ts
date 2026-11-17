@@ -176,10 +176,8 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     handler = createHandler({ db: ctx.db, token, port: server.port });
     const store = new DistillStore(ctx.db);
     store.upsertProject({ id: "p", name: "合成项目", confirmed: 1, keys: { repos: ["/synthetic"], hosts: [], chats: [] }, brief: "合成摘要", last_ms: 1000 });
-    store.upsertThread({ id: "t", title: "合成事项", project_id: "p", domain: "work", status: "active" });
-    const evidence = reviewEvidence(store,"t");
-    store.upsertDay({ date: evidence.at.slice(0,10), detail: { cutoff: evidence.at,
-      sections: { progress: [{ text: "合成当日回顾", evidence: [evidence] }], blockers: [] } } });
+    store.upsertThread({ id: "t", title: "合成事项", brief: "合成事项摘要", project_id: "p", domain: "work", status: "active" });
+    reviewEvidence(store,"t");
     store.setState("now", { brief: "合成当前状态" }); ctx.db.ingest([fixture({ title: "needle 合成活动" })]);
     const env = { RA_PORT: String(server.port) };
     const inputs = [call(1, "now"), call(2, "get", { id: "p" }), call(3, "search", { query: "needle" }), call(4, "timeline"), call(5, "get", { id: "missing" })];
@@ -211,7 +209,7 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     expect(desktopMessages[2].content[0].text).toContain("合成当前状态");
     for (const source of ["startup", "resume", "clear", "compact", "unknown", undefined]) {
       const hook = await run(ctx.dir, ["hook", "session-start", "--tool", "claude-code"], JSON.stringify({ cwd: "/synthetic", source, session_id: "合成会话" }), env);
-      expect(hook.code).toBe(0); expect(hook.stderr).toBe(""); expect(JSON.parse(hook.stdout).hookSpecificOutput.additionalContext).toContain("合成当日回顾");
+      expect(hook.code).toBe(0); expect(hook.stderr).toBe(""); expect(JSON.parse(hook.stdout).hookSpecificOutput.additionalContext).toContain("合成事项摘要");
     }
     const audit = ctx.db.db.prepare("SELECT tool,kind,args FROM agent_reads").all() as any[];
     expect(audit.some(r => r.tool === "codex" && r.kind === "search" && JSON.parse(r.args).q_length === 6)).toBe(true);

@@ -223,18 +223,17 @@ test("general：默认值、范围、只改给出的字段；注入上限和提�
   ctx.db.db.prepare("UPDATE distill_state SET v=? WHERE k='general_settings'").run(JSON.stringify({ inject_tokens: 99999, ask_done_days: 2 }));
   expect(readGeneral(ctx.db)).toEqual({ inject_tokens: 800, ask_done_days: 2, archive_days: 7 });
 
-  // 注入上限现读：800 时放得下两个回顾条目，200 时这两个条目都放不下。
+  // 带入上限现读：800 时放得下两项，200 时两项都放不下。
   const store = new DistillStore(ctx.db);
   store.upsertProject({ id: "p", name: "合成项目", confirmed: 1, keys: { repos: ["/synthetic/foo"], hosts: [], chats: [] }, brief: "合成项目摘要", last_ms: 1000 });
-  const reviewAt = Date.now(), entries = ["new", "old"].map(id => {
-    store.upsertThread({ id, project_id: "p", title: `合成线程${id}`, domain: "work", status: "active" });
-    return { text: `合成回顾${id}` + "简".repeat(150), evidence: [reviewEvidence(store,id,reviewAt)] };
-  });
-  const cutoff = entries[0]!.evidence[0]!.at;
-  store.upsertDay({ date: cutoff.slice(0,10), detail: { cutoff, sections: { progress: entries, blockers: [] } } });
+  for (const id of ["new", "old"]) {
+    store.upsertThread({ id, project_id: "p", title: `合成线程${id}`, domain: "work", status: "active",
+      brief: `合成事项${id}` + "简".repeat(150) });
+    reviewEvidence(store,id);
+  }
   const inject = async () => ((await new AgentReads(ctx.db).handle("context", new URLSearchParams({ tool: "codex", cwd: "/synthetic/foo", event: "startup" }))).json()) as Promise<{ text: string; tokens_est: number }>;
   await call(h, "PUT", "/v1/settings/general", { inject_tokens: 800 });
-  expect((await inject()).text).toContain("合成回顾old");
+  expect((await inject()).text).toContain("合成事项old");
   await call(h, "PUT", "/v1/settings/general", { inject_tokens: 200 });
   const small = await inject();
   expect(small).toMatchObject({ text: "", tokens_est: 0 });
