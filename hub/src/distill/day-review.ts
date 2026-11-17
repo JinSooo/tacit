@@ -5,6 +5,7 @@ import type { HubDB } from "../db.ts";
 import { unionSeconds } from "../durations.ts";
 import { redactString } from "../redact.ts";
 import { readDayEvidence, sampleDayEvidence, SKELETON_SOURCES, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
+import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
 import { MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
 
@@ -73,6 +74,7 @@ function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
           AND json_type(r.context,'$.chat')='text' AND json_extract(r.context,'$.extra.from_me') IN (0,1)))
     ORDER BY r.t_start_ms,r.id`).iterate(end, start, new Date(start).toISOString());
   const records: ReviewRecord[] = [];
+  const excluded = new Set<string>();
   for (const row of rows) {
     const context = row.context ? JSON.parse(row.context) as Parameters<typeof frameKey>[0]["context"] : undefined;
     const key = row.key ?? frameKey({ id: row.id, source: row.source, source_ref: row.source_ref, context } as Parameters<typeof frameKey>[0]);
@@ -82,6 +84,7 @@ function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
       row.body, !!row.corrected, start, end);
     const session = SESSION_SOURCES.has(row.source) && row.source_ref
       ? JSON.stringify([row.source, row.source_ref.split("#", 1)[0]]) : null;
+    if (SESSION_SOURCES.has(row.source) && excludedSession(row.body ?? "", context)) excluded.add(session ?? row.id);
     if (!evidence) continue;
     records.push({
       ...reference,
@@ -90,11 +93,10 @@ function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
       app: context?.app ? redactString(context.app).text : null, chat: context?.chat ? redactString(context.chat).text : null,
     });
   }
-  return presenceRecords(records, start, end);
+  return presenceRecords(records.filter(r => !excluded.has(r.session ?? r.id)), start, end);
 }
 
-/** Imported batches lack individual timestamps. Only surviving user-message anchors support presence.
- * Assistant/goal continuation contributes evidence, never wall-clock duration. */
+/** 批次只有首末时刻：按实际跨度计，每条真实输入最多支持 30 分钟。 */
 function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: number): ReviewRecord[] {
   const result: ReviewRecord[] = [];
   for (const record of records) {
@@ -110,16 +112,17 @@ function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: numb
       } else result.push({ ...record, key: `autonomous:${record.id}`, end: record.start });
       continue;
     }
-    const anchors = [...new Set(users.map(e => Date.parse(e.at)))].sort((a,b) => a-b);
-    for (const [i, at] of anchors.entries()) {
-      const next = anchors[i + 1] ?? Infinity;
-      const evidence = record.evidence.filter(e => {
-        const time = Date.parse(e.at);
-        return i === 0 ? time < next : time >= at && time < next;
-      });
-      result.push({ ...record, start: Math.max(dayStart, at - EVIDENCE_WINDOW),
-        end: Math.min(dayEnd, at + EVIDENCE_WINDOW), evidence });
+    // within_batch 没有逐条时刻，不把占位 at 当成输入时刻。已知末条输入可支持末端的零时长点。
+    const spans: Span[] = record.end - record.start <= users.length * 30 * MINUTE
+      ? [[record.start, record.end]] : [];
+    for (const user of spans.length ? [] : users) {
+      const at = user.position === "within_batch" ? record.start : Math.max(record.start, Date.parse(user.at));
+      const last = spans.at(-1);
+      if (last && at <= last[1]) last[1] = Math.min(record.end, last[1] + 30 * MINUTE);
+      else spans.push([at, Math.min(record.end, at + 30 * MINUTE)]);
     }
+    for (const [start, end] of spans) result.push({ ...record,
+      start: Math.max(dayStart, start), end: Math.min(dayEnd, end) });
   }
   return result.sort((a,b) => a.start-b.start);
 }
@@ -443,6 +446,7 @@ const singleLine = (text: string, limit: number) => {
 };
 
 function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | undefined) {
+  if (a.evidence.length && a.evidence.every(e => e.role === "user" && requestOnly(e.text))) return null;
   if (!candidate || candidate.content === "request_only" || candidate.content === "empty") return null;
   const title = singleLine(redactString(candidate.title).text, 20);
   const description = singleLine(redactString(candidate.description).text, 160);
