@@ -629,7 +629,8 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
       }
       calls++;
       const views: P.ThreadView[] = described.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: p.name, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" }));
-      const request = projectRequest(store, p.id, p.name, views);
+      const evidenceKey = `project_evidence_at:${id}`;
+      const request = projectRequest(store, p.id, p.name, views, store.getState<number>(evidenceKey) ?? now - 3 * DAY);
       const r = await complete<ProjectModelOutput>(d, { tier: "hour", task: "project", system: P.PROJECT_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
       if (!r.ok) { failed++; continue; }
       detail = { goal: r.data.goal, status: r.data.status, people: r.data.people };
@@ -637,6 +638,7 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
         const current = store.project(id);
         if (!current || revision !== contentRevision(d.db)) { discardedCall(d.db, r.call_id); return false; }
         request.apply(r.data, now);
+        store.setState(evidenceKey, now);
         store.upsertProject({ ...current, detail, last_ms: last, salience, needs_regen: 0, updated_at: toLocalIso(now) });
         store.setState(pendingKey, true);
         appliedCall(d.db,r.call_id);

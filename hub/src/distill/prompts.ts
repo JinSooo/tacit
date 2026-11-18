@@ -273,7 +273,7 @@ export const DAY_SYSTEM = `${DATA_RULES}
 - items 用 activity 返回给定的编号，同一编号只写一次。title 不超过 20 个字；description 用一两句写你做了什么、结果如何。没做完就直接写做到哪，例如“展板排好版，还没印”。用“你”或省略主语，不写“用户”“AI 报告”“助手报告”。
 - 先选内容，再写文字。只有打开应用、存在会话、催促继续、安排检查、安排提交等操作痕迹，没有具体对象的新变化时省略。不要写“有会话记录”“提出要求”“安排任务”来凑一条。明确的决定、范围调整、尝试中发现的问题仍值得保留，不要求每段都已经完成。
 - 每项 content 必须结构化判断为 result（具体行动、结果、发现或阻碍）、judgment（本人明确判断或决定）、request_only（仅提出要求、单纯同意、确认继续、催促、授权安装，无后续变化）、empty（无具体内容）。request_only 和 empty 写进 omissions，不返回 items。不能把一个请求擅自改写为“决定”。录音里的孤立点单、含糊提及，没有具体行动、结果或判断也省略。
-- 省略只允许三类：request_only（只有请求/同意/催促，且本段没有任何结果）、empty（没有具体内容，只证明采集存在）、excluded_session（评测/发布检查）。凡有完成的改动、定位到的原因或发现、测试/验证/复现结果、学习中答对或弄懂的具体点、本人明确判断或决定、明确阻碍，必须写成结果段或在相邻同活动结果段明确写出，不能判为 request_only/empty。每个未进入 items 的 activity 都必须在 omissions 给出 reason 类别；若并入别段，仍在 items 为本段写出自己的结果，由程序合并。不得用“不够重要”“尚未完成”等理由省略。items 尽量最多 30 段，结果较多时完整返回，由程序处理上限。
+- 省略只允许三类：request_only（只有请求/同意/催促，且本段没有任何结果）、empty（没有具体内容，只证明采集存在）、excluded_session（评测/发布检查）。凡有完成的改动、定位到的原因或发现、测试/验证/复现结果、学习中答对或弄懂的具体点、本人明确判断或决定、明确阻碍，必须写成结果段或在相邻同活动结果段明确写出，不能判为 request_only/empty。每个未进入 items 的 activity 都必须在 omissions 给出 reason 类别，reason 只写类别名本身；若并入别段，仍在 items 为本段写出自己的结果，由程序合并。不得用“不够重要”“尚未完成”等理由省略。items 尽量最多 30 段，结果较多时完整返回，由程序处理上限。
 - 同一活动只有请求的前段，后面有结果时，把请求作为理解结果的上下文；续跑结果已并入发起段时输出发起段，否则只输出后面的结果段；没有后续结果就省略。明确判断本身值得成段，例如“认为图例的对比度不足”，不要写“提出设计优化诉求”。
 - AI 自动续跑结果可描述，但不意味着本人一直在场。active_minutes 是用户在场时间；summary_eligible=false 的段不能入选 highlight。
 - 标题写事情本身和变化，例如“入口改到北门”“展板完成试排”。描述补充结果或停在哪，避免再复述标题。不能把“要求改入口”改写成“入口已改”；只有本人明确作出决定才写决定，如“决定把入口移到北门，版式还没改”；仅提出实施请求不当作决定。
@@ -299,6 +299,7 @@ export interface DayOutput {
   items: { activity: string; title: string; description: string; refs: string[]; content?: "result" | "judgment" | "request_only" | "empty" }[];
 }
 
+export const DAY_OMISSION_REASONS = ["request_only", "empty", "excluded_session"] as const;
 export const MAX_REVIEW_SEGMENTS = 30;
 export const MAX_REVIEW_CANDIDATES = 50;
 export const DAY_SCHEMA = {
@@ -309,7 +310,7 @@ export const DAY_SCHEMA = {
         text: { type: "string", maxLength: MAX_DAY_SUMMARY_CHARS } } },
     omissions: { type: "array", maxItems: MAX_REVIEW_CANDIDATES, items: {
       type: "object", additionalProperties: false, required: ["activity", "reason", "title", "description", "refs"],
-      properties: { activity: { type: "string" }, reason: { type: "string" },
+      properties: { activity: { type: "string" }, reason: { enum: DAY_OMISSION_REASONS },
         title: { type: "string", maxLength: 20 }, description: { type: "string", maxLength: 160 },
         refs: { type: "array", maxItems: 6, items: { type: "string" } } },
     } },
@@ -324,13 +325,31 @@ export const DAY_SCHEMA = {
   },
 } as const;
 
-/** 模型请求只使用新格式。本地校验前兼容仍返回单个编号的提供方。 */
+/**
+ * 模型请求只使用新格式。本地校验前兼容仍返回单个编号的提供方。
+ * 省略理由：模型常把类别和说明写在一起（“empty 仅收到食品推荐。”），按开头的类别名识别；
+ * 认不出类别的省略按结果处理（有文字就成段，没有文字由 composeReview 报警并留在未入时间线）。
+ */
 export function normalizeDayOutput(output: unknown): unknown {
   if (!output || typeof output !== "object" || !("highlight" in output)) return output;
-  const highlight = output.highlight;
-  if (!highlight || typeof highlight !== "object" || "activities" in highlight || !("activity" in highlight)) return output;
-  const { activity, ...fields } = highlight;
-  return { ...output, highlight: { ...fields, activities: [activity] } };
+  let result = output as Record<string, unknown>;
+  const highlight = result.highlight;
+  if (highlight && typeof highlight === "object" && !("activities" in highlight) && "activity" in highlight) {
+    const { activity, ...fields } = highlight as Record<string, unknown>;
+    result = { ...result, highlight: { ...fields, activities: [activity] } };
+  }
+  if (!Array.isArray(result.omissions) || !Array.isArray(result.items)) return result;
+  const omissions: unknown[] = [], items: unknown[] = [...result.items];
+  for (const omission of result.omissions) {
+    if (!omission || typeof omission !== "object" || typeof (omission as { reason?: unknown }).reason !== "string") { omissions.push(omission); continue; }
+    const { reason, ...fields } = omission as Record<string, unknown> & { reason: string };
+    const category = DAY_OMISSION_REASONS.find(c => new RegExp(`^\\s*${c}(?![a-z_])`).test(reason));
+    if (category) omissions.push({ ...fields, reason: category });
+    else if (typeof fields.title === "string" && fields.title.trim() && Array.isArray(fields.refs) && fields.refs.length
+      && !items.some(item => (item as { activity?: unknown })?.activity === fields.activity))
+      items.push({ ...fields, content: "result" });
+  }
+  return { ...result, omissions, items };
 }
 
 // ---------- 对话总结（minute 档） ----------

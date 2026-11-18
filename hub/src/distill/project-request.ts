@@ -7,8 +7,12 @@ import * as P from "./prompts.ts";
 interface Resolution { open_fact_id: string; by_fact_id: string; record_id: string; quote: string; reason: string }
 export type ProjectModelOutput = P.ProjectOutput & { resolutions?: Resolution[] };
 
-/** 复用项目汇总识别同一对象的后续证据。替换自动未决事实或补充旧摘要的依据，不修改用户事实或归属。 */
-export function projectRequest(store: DistillStore, projectId: string, name: string, threads: P.ThreadView[]) {
+/**
+ * 复用项目汇总识别同一对象的后续证据。替换自动未决事实或补充旧摘要的依据，不修改用户事实或归属。
+ * 只有 since 之后新写入的决定才作为完成依据：更早的依据上一次项目整理已经核对过，
+ * 每次都重送最近 30 条原文会让单次输入涨到十万 token 以上（2026-11-18）。
+ */
+export function projectRequest(store: DistillStore, projectId: string, name: string, threads: P.ThreadView[], since = Number.NEGATIVE_INFINITY) {
   const facts = store.facts("project_id", projectId);
   const byRef = new Map(facts.map((f, i) => [`f${i + 1}`, f]));
   const factRefs = new Map([...byRef].map(([ref, f]) => [f.id, ref]));
@@ -18,7 +22,8 @@ export function projectRequest(store: DistillStore, projectId: string, name: str
     return thread?.brief && thread.project_id === projectId ? [[`t${i + 1}`, thread] as const] : [];
   }));
   const records = new Map<string, { id: string; source: string; excerpt: string; at: string; end: string }>();
-  const sources = facts.filter(f => f.kind === "decision" && f.thread_id).sort((a, b) => Date.parse(b.valid_at) - Date.parse(a.valid_at));
+  const sources = facts.filter(f => f.kind === "decision" && f.thread_id && Date.parse(f.created_at) > since)
+    .sort((a, b) => Date.parse(b.valid_at) - Date.parse(a.valid_at));
   const evidence = new Map<string, string[]>();
   if (targets.length || summaries.size) for (const f of sources) {
     const refs: string[] = [];
@@ -34,7 +39,9 @@ export function projectRequest(store: DistillStore, projectId: string, name: str
     }
     if (refs.length) evidence.set(f.id, refs);
   }
-  const views = facts.map(f => ({ id: factRefs.get(f.id), kind: f.kind, text: redactString(f.text).text, origin: f.origin, at: f.valid_at,
+  // 详细版由线程简略版写成；事实只送待消解的未决、本次的新依据和用户写的事实。
+  const targetIds = new Set(targets.map(f => f.id));
+  const views = facts.filter(f => targetIds.has(f.id) || evidence.has(f.id) || f.origin === "user").map(f => ({ id: factRefs.get(f.id), kind: f.kind, text: redactString(f.text).text, origin: f.origin, at: f.valid_at,
     scope: { thread_id: f.thread_id ?? null, project_id: f.project_id ?? null }, evidence: evidence.get(f.id) ?? [] }));
   const options = [...targets.map(f => factRefs.get(f.id)!), ...summaries.keys()];
   const sourceOptions = sources.filter(f => evidence.has(f.id)).map(f => factRefs.get(f.id)!);

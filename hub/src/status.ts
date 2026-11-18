@@ -157,7 +157,10 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
     agent_reads_today: (sql.prepare("SELECT at FROM agent_reads WHERE at>=?").all(localDate(dayStart - 86_400_000)) as { at: string }[]).filter(r => Date.parse(r.at) >= dayStart).length,
     // 转写在各设备本地进行，中枢只收文字和声纹，没有转写队列可报。
     audio: {
-      speakers: counts("SELECT status AS k,COUNT(*) AS n FROM speakers GROUP BY status"),
+      // 提问被关闭（例如 F9 收尾）后说话人仍是 asked；只有还挂着未答提问的才算“已问”。
+      speakers: counts(`SELECT CASE WHEN s.status='asked' AND NOT EXISTS (SELECT 1 FROM pending p WHERE p.kind='voice'
+        AND p.resolved_at IS NULL AND json_extract(p.payload,'$.speaker_id')=s.id) THEN 'new' ELSE s.status END AS k,
+        COUNT(*) AS n FROM speakers s GROUP BY k`),
       voice_conversations: scalar<number>("SELECT COUNT(DISTINCT conversation_ref) FROM voice_embeddings"),
       sample_requests_open: scalar<number>("SELECT COUNT(*) FROM sample_requests WHERE fulfilled_at IS NULL"),
       deletes_pending: deletes,

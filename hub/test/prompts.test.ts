@@ -94,3 +94,17 @@ test("提示词里的 JSON 紧凑序列化：不带缩进换行，内容不变",
   expect(JSON.parse(list)).toEqual(threads);
   expect(prompt).not.toMatch(/\n {1,2}["{\[]/);
 });
+
+test("省略理由带说明时按类别识别，认不出的有文字按结果处理（2026-11-18 生产回归）", () => {
+  const valid = new Ajv2020({ strict: false }).compile(DAY_SCHEMA);
+  const omission = (activity: string, reason: string, title = "", refs: string[] = []) => ({ activity, reason, title, description: "", refs });
+  const raw = { highlight: null, items: [], omissions: [
+    omission("a1", "empty 仅收到食品推荐。"), omission("a2", "request_only：继续学习，无新结果"),
+    omission("a3", " excluded_session"), omission("a4", "不够重要", "图例重叠已复现", ["e1"]), omission("a5", "unfinished"),
+  ] };
+  expect(valid(raw)).toBe(false);
+  const out = normalizeDayOutput(raw) as { omissions: { activity: string; reason: string }[]; items: { activity: string; content: string }[] };
+  expect(out.omissions.map(o => [o.activity, o.reason])).toEqual([["a1", "empty"], ["a2", "request_only"], ["a3", "excluded_session"]]);
+  expect(out.items.map(i => [i.activity, i.content])).toEqual([["a4", "result"]]);
+  expect(valid(out)).toBe(true);
+});

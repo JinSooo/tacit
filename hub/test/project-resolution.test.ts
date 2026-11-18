@@ -122,3 +122,25 @@ test("跨时段会话按结束时间核对后续依据，多个独立引文都�
     expect(req.apply({ goal: "安装", status: "完成", people: [], resolutions }, at + 1400_000)).toBe(0);
   } finally { ctx.cleanup(); }
 });
+
+test("项目整理只重送上次之后的新依据，事实只带未决和用户事实（2026-11-18 成本回归）", async () => {
+  const ctx = seed();
+  try {
+    const prompts: any[] = [];
+    const llm: LLM = { async complete<T>(req: LLMRequest) {
+      if (req.task === "project") {
+        prompts.push(JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!));
+        return { ok: true, data: { goal: "固定目录安装", status: "进行中", people: [], resolutions: [] } as T, ms: 1 };
+      }
+      return { ok: true, data: { brief: "合成项目已更新" } as T, ms: 1 };
+    } };
+    ctx.store.writeFact({ id: "guess", thread_id: "new", project_id: "p", kind: "inference", text: "可能还要再装一次。", origin: "llm", evidence: [ctx.fresh.id], valid_at: ctx.fresh.t_start, created_at: ctx.fresh.t_start });
+    await projectStep({ db: ctx.db, llm }, ctx.store, at + 1);
+    expect(prompts[0].completion_evidence).toHaveLength(1);
+    expect(prompts[0].facts.map((f: any) => f.kind).sort()).toEqual(["decision", "open"]);
+    ctx.db.db.prepare("UPDATE projects SET needs_regen=1 WHERE id='p'").run();
+    await projectStep({ db: ctx.db, llm }, ctx.store, at + 2);
+    expect(prompts[1].completion_evidence).toHaveLength(0);
+    expect(prompts[1].facts.map((f: any) => f.kind)).toEqual(["open"]);
+  } finally { ctx.cleanup(); }
+});
