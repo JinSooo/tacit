@@ -108,3 +108,13 @@ test("省略理由带说明时按类别识别，认不出的有文字按结果�
   expect(out.items.map(i => [i.activity, i.content])).toEqual([["a4", "result"]]);
   expect(valid(out)).toBe(true);
 });
+
+test("当天概述超长时截到上限内最后一个整句，主线最多 4 条（2026-11-18 MiniMax 回归）", () => {
+  const sentence = "合成展板完成试排并定下入口位置。";
+  const text = sentence.repeat(12);
+  const out = normalizeDayOutput({ highlight: { activities: ["a1", "a2", "a3", "a4", "a5"], text }, items: [], omissions: [] }) as { highlight: { activities: string[]; text: string } };
+  expect(out.highlight.activities).toEqual(["a1", "a2", "a3", "a4"]);
+  expect(Array.from(out.highlight.text).length).toBeLessThanOrEqual(160);
+  expect(out.highlight.text.endsWith("。")).toBe(true);
+  expect(text.startsWith(out.highlight.text)).toBe(true);
+});

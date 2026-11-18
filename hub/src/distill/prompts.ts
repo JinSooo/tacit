@@ -338,6 +338,18 @@ export function normalizeDayOutput(output: unknown): unknown {
     const { activity, ...fields } = highlight as Record<string, unknown>;
     result = { ...result, highlight: { ...fields, activities: [activity] } };
   }
+  // 不强制 maxLength 的接口（MiniMax 等）数不准字数：概述超长时截到上限内最后一个整句，主线最多留 4 条（2026-11-18）。
+  const h = result.highlight as { text?: unknown; activities?: unknown } | null;
+  if (h && typeof h === "object") {
+    const fixed: Record<string, unknown> = { ...h };
+    if (Array.isArray(h.activities) && h.activities.length > MAX_DAY_SUMMARY_ACTIVITIES) fixed.activities = h.activities.slice(0, MAX_DAY_SUMMARY_ACTIVITIES);
+    if (typeof h.text === "string" && Array.from(h.text).length > MAX_DAY_SUMMARY_CHARS) {
+      const head = Array.from(h.text).slice(0, MAX_DAY_SUMMARY_CHARS).join("");
+      const end = Math.max(head.lastIndexOf("。"), head.lastIndexOf("！"), head.lastIndexOf("？"));
+      if (end > 0) fixed.text = head.slice(0, end + 1);
+    }
+    result = { ...result, highlight: fixed };
+  }
   if (!Array.isArray(result.omissions) || !Array.isArray(result.items)) return result;
   const omissions: unknown[] = [], items: unknown[] = [...result.items];
   for (const omission of result.omissions) {
