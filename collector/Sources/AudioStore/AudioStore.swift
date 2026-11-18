@@ -91,17 +91,41 @@ public final class AudioStore {
     return meta
   }
   public func conversations(readOnly: Bool = false) throws -> [AudioMetadata] {
-    var result: [AudioMetadata] = []
+    var result: [AudioMetadata] = [], seen: Set<String> = []
     for day in try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
       try rejectLink(day)
       guard try day.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
       for dir in try fm.contentsOfDirectory(at: day, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
         try rejectLink(dir)
         guard try dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
-        result.append(try readMetadata(at: dir, readOnly: readOnly))
+        guard readOnly else { result.append(try readMetadata(at: dir, readOnly: false)); continue }
+        result.append(try cachedMetadata(at: dir)); seen.insert(dir.standardizedFileURL.path)
       }
     }
+    if readOnly { cacheLock.lock(); metaCache = metaCache.filter { seen.contains($0.key) }; cacheLock.unlock() }
     return result
+  }
+  /// 采集端每 30 秒盘点一次全部对话。逐个解密上千份 meta.json 是空闲时的主要 CPU 开销（2026-11-18 实测），
+  /// 文件没换（inode、大小、修改时间都相同）就沿用上次解密校验过的结果；任何写入都是原子替换，会换 inode。
+  private struct FileStamp: Equatable { let inode: UInt64; let size: UInt64; let modified: Date }
+  private var metaCache: [String: (stamp: FileStamp, meta: AudioMetadata)] = [:]
+  private let cacheLock = NSLock()
+  private func stamp(_ url: URL) throws -> FileStamp {
+    let attributes = try fm.attributesOfItem(atPath: url.path)
+    if attributes[.type] as? FileAttributeType == .typeSymbolicLink { throw AudioError.invalidPath }
+    return FileStamp(inode: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0,
+                     size: (attributes[.size] as? NSNumber)?.uint64Value ?? 0,
+                     modified: attributes[.modificationDate] as? Date ?? .distantPast)
+  }
+  private func cachedMetadata(at dir: URL) throws -> AudioMetadata {
+    let key = dir.standardizedFileURL.path, file = dir.appendingPathComponent("meta.json")
+    let before = try stamp(file)
+    cacheLock.lock(); let hit = metaCache[key]; cacheLock.unlock()
+    if let hit, hit.stamp == before { return hit.meta }
+    let meta = try readMetadata(at: dir, readOnly: true)
+    // 读的同时被替换时不缓存，下次重读。
+    if (try? stamp(file)) == before { cacheLock.lock(); metaCache[key] = (before, meta); cacheLock.unlock() }
+    return meta
   }
   public func writeSegment(_ aac: Data, file: String, meta: AudioMetadata) throws {
     try validateFile(file)

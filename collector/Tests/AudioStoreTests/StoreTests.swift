@@ -134,3 +134,22 @@ func aacCodecRoundTripInMemory() throws {
   #expect(try store.conversations().isEmpty)
   #expect(!FileManager.default.fileExists(atPath: try store.directory(for: meta).appendingPathComponent("mic-0001.enc").path))
 }
+
+/// 盘点缓存（2026-11-18）：另一个进程改写、删除或换成链接后，下一次盘点必须看到。
+@Test func inventoryCacheSeesOtherWritersDeletesAndLinks() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let key = SymmetricKey(size: .bits256)
+  let collector = try AudioStore(dataDirectory: root, key: key), worker = try AudioStore(dataDirectory: root, key: key)
+  var first = AudioMetadata(start: Date(timeIntervalSince1970: 1_794_000_000)); try worker.writeMetadata(first)
+  let second = AudioMetadata(start: Date(timeIntervalSince1970: 1_794_000_100)); try worker.writeMetadata(second)
+  #expect(try collector.conversations(readOnly: true).allSatisfy { $0.status == .open })
+  first.t_end = LocalTime.iso(Date(timeIntervalSince1970: 1_794_000_050)); try first.transition(to: .closed, at: Date()); try worker.writeMetadata(first)
+  #expect(try collector.conversations(readOnly: true).first { $0.id == first.id }?.status == .closed)
+  try FileManager.default.removeItem(at: try worker.directory(for: second))
+  #expect(try collector.conversations(readOnly: true).map(\.id) == [first.id])
+  let file = try worker.directory(for: first).appendingPathComponent("meta.json")
+  let outside = root.appendingPathComponent("outside.json"); try FileManager.default.moveItem(at: file, to: outside)
+  try FileManager.default.createSymbolicLink(at: file, withDestinationURL: outside)
+  #expect(throws: (any Error).self) { try collector.conversations(readOnly: true) }
+}
