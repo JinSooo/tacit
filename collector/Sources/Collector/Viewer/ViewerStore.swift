@@ -74,7 +74,6 @@ enum Route: Hashable {
   case projectContext(String)
   case reviewItem(Date, String)
   case reviewRecord(String)
-  case dayRecords
   case runtime
 }
 
@@ -96,18 +95,15 @@ enum Route: Hashable {
 
   /// nil 时跟随今天，手动选中以往日期时保留选择。
   var reviewDay: Date?
-  struct TimelineFocus: Equatable {
-    let segment: String
-    let record: String?
+  var timelineDensity = UserDefaults.standard.string(forKey: TimelineDensity.preferenceKey)
+    .flatMap(TimelineDensity.init(rawValue:)) ?? .compact {
+    didSet { UserDefaults.standard.set(timelineDensity.rawValue, forKey: TimelineDensity.preferenceKey) }
   }
-  var timelineFocus: TimelineFocus?
   var timelineSearch = ""
   var timelinePendingExpanded = false
   @ObservationIgnored private var sharedRequest = 0
-  /// 历史记录当前看的那一天，以及要选中的记录（从证据、读取记录跳过来时用）。
-  var historyDay = Calendar.current.startOfDay(for: Date())
+  /// 进入详细时间线后要定位的原始记录。
   var historyFocus: String?
-  var historySearch = ""
   /// 记录被删除、补写或修正后递增，各页据此重新读取。
   var revision = 0
 
@@ -157,12 +153,12 @@ enum Route: Hashable {
     await refreshShared()
   }
 
-  func showReview(_ day: Date? = nil, segment: String? = nil, record: String? = nil) {
+  func showReview(_ day: Date? = nil) {
     reviewDay = day.flatMap { Calendar.current.isDateInToday($0) ? nil : Calendar.current.startOfDay(for: $0) }
     path = []
     section = .review
     timelinePendingExpanded = false
-    timelineFocus = segment.map { TimelineFocus(segment: $0, record: record) }
+    historyFocus = nil
   }
 
   func showPending() {
@@ -171,10 +167,9 @@ enum Route: Hashable {
   }
 
   func showDayRecords(_ day: Date, record: String? = nil) {
-    historyDay = Calendar.current.startOfDay(for: day)
-    historySearch = ""
+    showReview(day)
+    timelineDensity = .detailed
     historyFocus = record
-    path.append(.dayRecords)
   }
 
   func showSettings() {

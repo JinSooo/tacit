@@ -8,6 +8,7 @@ enum TimelineDensity: String {
 
 enum TimelineReadingLayout {
   // 与原始记录行共用时间列和轴心，展开后仍是同一条时间线。
+  static let width: CGFloat = 800
   static let edge: CGFloat = 8
   static let timeWidth = RecordRow.timeWidth
   static let markerWidth: CGFloat = 26
@@ -23,16 +24,13 @@ struct TimelineSegmentRow: View {
   var records: [HistoryRecord]? = nil
   var showsTitle = true
   var projectName: String? = nil
-  let density: TimelineDensity
   let expanded: Bool
   let onToggle: () -> Void
   @State private var hovering = false
 
-  private var compact: Bool { density == .compact }
-  private var rowPadding: CGFloat { compact ? 12 : (showsTitle ? 18 : 14) }
+  private var rowPadding: CGFloat { showsTitle ? 12 : 14 }
   private var time: String {
-    if compact { return ViewerTime.parse(item.tStart).map { ReviewTime.clock($0, on: day) } ?? "" }
-    return ReviewTime.range(item, on: day)
+    showsTitle ? item.start.map { ReviewTime.clock($0, on: day) } ?? "" : ReviewTime.range(item, on: day)
   }
 
   var body: some View {
@@ -41,30 +39,22 @@ struct TimelineSegmentRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
           Text(time)
             .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
-            .frame(width: TimelineReadingLayout.timeWidth, alignment: .trailing)
+            .frame(width: TimelineReadingLayout.timeWidth, alignment: showsTitle ? .leading : .trailing)
             .padding(.trailing, TimelineReadingLayout.gutter)
           VStack(alignment: .leading, spacing: 8) {
             if showsTitle {
               Text(item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
             }
-            if compact || !showsTitle {
-              description
-              HStack(spacing: 8) {
-                TimelineSourceIcons(item: item, size: 20).fixedSize()
-                projectLabel
-              }
-            } else {
-              HStack(spacing: 12) {
-                projectLabel
-                TimelineSourceIcons(item: item).fixedSize()
-              }
-              description
+            description
+            HStack(spacing: showsTitle ? 6 : 8) {
+              TimelineSourceIcons(item: item, size: showsTitle ? 14 : 20).fixedSize()
+              projectLabel
             }
           }
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           PhIcon(expanded ? "caret-up" : "caret-down", size: 11)
-            .opacity(compact && !hovering && !expanded ? 0 : 1)
+            .opacity(showsTitle && !hovering && !expanded ? 0 : 1)
             .foregroundStyle(Palette.muted).padding(.leading, 16).accessibilityHidden(true)
         }
         .multilineTextAlignment(.leading)
@@ -77,7 +67,7 @@ struct TimelineSegmentRow: View {
       .accessibilityValue(expanded ? "已展开" : "已折叠")
       .accessibilityHint(expanded ? "收起原始记录" : "展开原始记录")
       if expanded {
-        TimelineSegmentRecords(day: day, item: item, dayRecords: records)
+        TimelineSegmentRecords(day: day, item: item, dayRecords: records, alignsTimeLeading: showsTitle)
           .padding(.bottom, 16)
       }
     }
@@ -97,7 +87,7 @@ struct TimelineSegmentRow: View {
 
   private var description: some View {
     Text(item.description).font(.system(size: TextSize.body))
-      .lineSpacing(TextSize.lineSpacing(TextSize.body) + (compact || !showsTitle ? 2 : 0))
+      .lineSpacing(TextSize.lineSpacing(TextSize.body) + 2)
       .foregroundStyle(Palette.readingBody)
   }
 
@@ -128,7 +118,7 @@ struct TimelineSourceIcons: View {
     HStack(spacing: size == 20 ? 8 : 6) {
       ForEach(Array(icons.prefix(3)), id: \.self) { app in
         let label = AppIcons.name(SourceApplication.bundle(app: app.app, source: app.source)) ?? app.app ?? SourceInfo.name(app.source)
-        SourceGlyph(source: app.source, app: SourceApplication.bundle(app: app.app, source: app.source), size: size)
+        SourceGlyph(source: app.source, app: SourceApplication.bundle(app: app.app, source: app.source), size: size, showsTile: true)
           .help(label).accessibilityLabel(label)
       }
     }
@@ -146,6 +136,7 @@ struct TimelineSegmentRecords: View {
   let day: Date
   let item: DayDiary.Item
   let dayRecords: [HistoryRecord]?
+  var alignsTimeLeading = false
 
   @Environment(ViewerStore.self) private var store
   @State private var records = Loader<[HistoryRecord]>()
@@ -201,7 +192,7 @@ struct TimelineSegmentRecords: View {
   private func recordRows(_ rows: [HistoryRecord], total: Int) -> some View {
     ForEach(rows) { record in
       RecordRow(record: record, run: nil, selected: false, expanded: false, nested: true,
-                titleOverride: sourceTitle(for: record, count: total)) {
+                titleOverride: sourceTitle(for: record, count: total), alignsTimeLeading: alignsTimeLeading) {
         store.path.append(.reviewRecord(record.id))
       }
     }

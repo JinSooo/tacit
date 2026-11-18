@@ -10,7 +10,7 @@ struct ReviewPage: View {
       let today = Calendar.current.startOfDay(for: clock.date)
       let day = Binding(get: { store.reviewDay ?? today }, set: {
         store.reviewDay = $0 == today ? nil : $0
-        store.timelineFocus = nil
+        store.historyFocus = nil
       })
       ReviewDayContent(day: day, today: today, now: clock.date, refresh: refresh)
         .id(day.wrappedValue)
@@ -51,11 +51,9 @@ enum TimelineDay {
 
 private struct ReviewDayContent: View {
   @Environment(ViewerStore.self) private var store
-  @AppStorage(TimelineDensity.preferenceKey) private var density = TimelineDensity.compact
   @State private var diary = Loader<DayDiary?>()
   @State private var records = Loader<[HistoryRecord]>()
   @State private var loadedRevision: Int?
-  @State private var brush: ClosedRange<Date>?
   @State private var expanded: String?
   @State private var picking = false
   @State private var setup: (health: DistillHealth, tools: [AgentToolState])?
@@ -75,6 +73,7 @@ private struct ReviewDayContent: View {
       modelReady: setup.map { $0.health.state == .working },
       agentReady: setup.map { $0.tools.contains(where: \.connected) })
   }
+  private var density: TimelineDensity { store.timelineDensity }
   private var current: Bool { loadedRevision == store.revision }
   private var review: DayDiary? { current ? diary.value ?? nil : nil }
   private var failed: Bool { review?.failed?.value == true }
@@ -89,73 +88,91 @@ private struct ReviewDayContent: View {
   }
 
   var body: some View {
-    ScrollViewReader { proxy in
-      ScrollView {
-        VStack(alignment: .leading, spacing: 14) {
-          VStack(alignment: .leading, spacing: 12) {
-            dateLine
-            headline
-          }
-          .padding(.leading, TimelineReadingLayout.contentInset)
-          if density == .detailed && !items.isEmpty {
-            DayStrata(records: visibleRecords, segments: items, day: day, now: isToday ? now : nil, selected: expanded, brush: $brush) { id in
-              open(id, in: proxy)
-            }
-            .padding(.leading, TimelineReadingLayout.contentInset - 6)
-            .zIndex(1)
-          }
-          if showsSetup || !store.pending.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-              if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools) }
-              if !store.pending.isEmpty { TimelinePendingLine() }
-            }
-          }
-          LazyVStack(spacing: 0) {
-            let showsProjects = TimelineProjectLabels.showsNames(in: items)
-            ForEach(items.filter { item in density == .compact || (brush.map { item.intersects($0) } ?? true) }) { item in
-              TimelineSegmentRow(day: day, item: item, records: records.value,
-                                 projectName: showsProjects ? store.project(item.projectId)?.name : nil,
-                                 density: density, expanded: expanded == item.id) {
-                expanded = expanded == item.id ? nil : item.id
-              }
-              .id(item.id)
-            }
-          }
-          footer.padding(.leading, TimelineReadingLayout.contentInset)
+    Group {
+      if density == .compact {
+        compactList
+      } else {
+        HistoryPage(day: day, diary: review, dayRecords: current ? records.value : nil,
+                    dayError: current ? records.error : nil, refresh: refresh) { stats in
+          dayHeader(stats: stats)
         }
-        .modifier(ReviewWidth(maxWidth: 680 + TimelineReadingLayout.contentInset))
       }
-      .task(id: LoadKey(refresh: refresh, revision: store.revision)) {
-        repeat {
-          await load()
-          reveal(proxy)
-          if !isToday { break }
-          try? await Task.sleep(for: .seconds(60))
-        } while !Task.isCancelled
+    }
+    .task(id: LoadKey(refresh: refresh, revision: store.revision)) {
+      repeat {
+        await load()
+        if !isToday { break }
+        try? await Task.sleep(for: .seconds(60))
+      } while !Task.isCancelled
+    }
+  }
+
+  private var compactList: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 14) {
+        dayHeader().padding(.horizontal, TimelineReadingLayout.edge)
+        LazyVStack(spacing: 0) {
+          let showsProjects = TimelineProjectLabels.showsNames(in: items)
+          ForEach(items) { item in
+            TimelineSegmentRow(day: day, item: item, records: records.value,
+                               projectName: showsProjects ? store.project(item.projectId)?.name : nil,
+                               expanded: expanded == item.id) {
+              expanded = expanded == item.id ? nil : item.id
+            }
+          }
+        }
+        footer.padding(.horizontal, TimelineReadingLayout.edge)
       }
-      .onChange(of: store.timelineFocus) { reveal(proxy) }
-      .onChange(of: density) { brush = nil }
+      .modifier(ReviewWidth(maxWidth: TimelineReadingLayout.width))
+    }
+  }
+
+  private func dayHeader(stats: HistoryDayStats? = nil) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      dateLine
+      if let stats {
+        stats.frame(maxWidth: .infinity, alignment: .trailing)
+      }
+      headline
+      if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools) }
+      if !store.pending.isEmpty { TimelinePendingLine() }
     }
   }
 
   private var dateLine: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 16) {
-      Button { picking = true } label: {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-          Text(Fmt.date(day)).font(.serif(TextSize.display)).foregroundStyle(Palette.ink)
-          Text(ViewerFormat.weekday(day)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
-        }
-        .padding(.vertical, 4).contentShape(Rectangle())
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .firstTextBaseline, spacing: 16) {
+        dateTitle.fixedSize()
+        Spacer(minLength: 0)
+        dateControls
       }
-      .buttonStyle(.plain).help("跳到日期").popover(isPresented: $picking) {
-        DatePicker("选择日期", selection: Binding(get: { day }, set: {
-          day = Calendar.current.startOfDay(for: $0)
-          picking = false
-        }), in: ...now, displayedComponents: .date)
-          .datePickerStyle(.graphical).labelsHidden().padding(12)
-          .environment(\.locale, Locale(identifier: "zh_CN")).environment(\.calendar, ViewerCalendar.chinese)
+      VStack(alignment: .leading, spacing: 4) {
+        dateTitle
+        dateControls.frame(maxWidth: .infinity, alignment: .trailing)
       }
-      Spacer()
+    }
+  }
+
+  private var dateTitle: some View {
+    Button { picking = true } label: {
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        Text(Fmt.date(day)).font(.serif(TextSize.display)).foregroundStyle(Palette.ink)
+        Text(ViewerFormat.weekday(day)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+      }
+      .padding(.vertical, 4).contentShape(Rectangle())
+    }
+    .buttonStyle(.plain).help("跳到日期").popover(isPresented: $picking) {
+      DatePicker("选择日期", selection: Binding(get: { day }, set: {
+        day = Calendar.current.startOfDay(for: $0)
+        picking = false
+      }), in: ...now, displayedComponents: .date)
+        .datePickerStyle(.graphical).labelsHidden().padding(12)
+        .environment(\.locale, Locale(identifier: "zh_CN")).environment(\.calendar, ViewerCalendar.chinese)
+    }
+  }
+
+  private var dateControls: some View {
+    HStack(spacing: 16) {
       HStack(spacing: 0) {
         Button { shift(-1) } label: { PhIcon("caret-left", size: 14) }
           .help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
@@ -178,7 +195,11 @@ private struct ReviewDayContent: View {
   /// 两个图标都表达不准“简约 / 详细”，直接用字。
   private func densityButton(_ mode: TimelineDensity, title: String) -> some View {
     let selected = density == mode
-    return Button { density = mode } label: {
+    return Button {
+      guard density != mode else { return }
+      store.historyFocus = nil
+      store.timelineDensity = mode
+    } label: {
       Text(title).font(.system(size: TextSize.caption))
         .padding(.horizontal, 8).frame(height: 24)
         .foregroundStyle(selected ? Palette.accent : Palette.muted)
@@ -200,7 +221,13 @@ private struct ReviewDayContent: View {
       ReviewHeadline(text: summary, size: TextSize.title)
         .foregroundStyle(Palette.ink).lineSpacing(TextSize.serifLineSpacing(TextSize.title))
         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled).accessibilityAddTraits(.isHeader)
-    } else if current, let error = diary.error ?? records.error {
+    } else if density == .compact {
+      compactStatus
+    }
+  }
+
+  @ViewBuilder private var compactStatus: some View {
+    if current, let error = diary.error ?? records.error {
       Placeholder(kind: .error(error) { Task { await load() } })
     } else if failed && !hasSegments {
       status("最近一次整理失败", color: Palette.attention)
@@ -241,25 +268,6 @@ private struct ReviewDayContent: View {
     Text(text).font(.serif(TextSize.title)).foregroundStyle(color).accessibilityAddTraits(.isHeader)
   }
 
-  private func reveal(_ proxy: ScrollViewProxy) {
-    guard current, let target = store.timelineFocus, diary.value != nil, diary.error == nil else { return }
-    store.timelineFocus = nil
-    if items.contains(where: { $0.id == target.segment }) {
-      open(target.segment, in: proxy)
-    } else if let record = target.record {
-      store.showDayRecords(day, record: record)
-    }
-  }
-
-  private func open(_ id: String, in proxy: ScrollViewProxy) {
-    brush = nil
-    expanded = id
-    Task { @MainActor in
-      await Task.yield()
-      proxy.scrollTo(id, anchor: .top)
-    }
-  }
-
   private func loadSetup() async {
     do {
       async let health = store.api.distillHealth()
@@ -274,7 +282,9 @@ private struct ReviewDayContent: View {
     let revision = store.revision
     if !current {
       diary.value = nil
+      diary.error = nil
       records.value = nil
+      records.error = nil
     }
     async let review: Void = diary.run {
       let value = try await store.api.diary(day)

@@ -3,7 +3,6 @@ import CollectorCore
 
 struct TimelineSearchPage: View {
   @Environment(ViewerStore.self) private var store
-  @AppStorage(TimelineDensity.preferenceKey) private var density = TimelineDensity.compact
   @FocusState private var focused: Bool
   @State private var result: Results?
   @State private var request = UUID()
@@ -87,7 +86,7 @@ struct TimelineSearchPage: View {
                 let key = "\(date)/\(item.id)"
                 TimelineSegmentRow(day: day, item: item,
                                    projectName: result.labeledProjectDays.contains(date) ? store.project(item.projectId)?.name : nil,
-                                   density: density, expanded: expanded == key) {
+                                   expanded: expanded == key) {
                   expanded = expanded == key ? nil : key
                 }
               }
@@ -188,12 +187,7 @@ struct TimelineSearchPage: View {
       let location = try await store.api.timelineLocation(record: record.id)
       guard id == request, query == text, store.section == .search else { return }
       let day = TimelineDay.date(location.date) ?? record.start
-      if let segment = location.segmentId {
-        store.showReview(day, segment: segment, record: record.id)
-      } else {
-        store.showReview(day)
-        store.showDayRecords(day, record: record.id)
-      }
+      store.showDayRecords(day, record: record.id)
     } catch is CancellationError {
     } catch {
       guard id == request, query == text else { return }

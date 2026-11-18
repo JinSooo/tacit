@@ -164,7 +164,7 @@ private struct ProjectStoryRow: View {
                   .padding(.top, 12).padding(.bottom, 6)
               }
               TimelineSegmentRow(day: day, item: update.item, showsTitle: false,
-                                 density: .detailed, expanded: expandedRecord == update.id) {
+                                 expanded: expandedRecord == update.id) {
                 expandedRecord = expandedRecord == update.id ? nil : update.id
               }
             }
