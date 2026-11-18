@@ -14,7 +14,6 @@ struct RecordInspector: View {
   /// 对话记录所在的整场对话：整理过的原文和总结。
   @State private var conversation: ConversationDetail?
   @State private var error: String?
-  @State private var showAll = false
   @State private var showOriginal = false
   @State private var correcting = false
   @State private var confirmDelete = false
@@ -73,72 +72,49 @@ struct RecordInspector: View {
           .foregroundStyle(Palette.muted)
         }
         if let c = conversation { ConversationBody(conversation: c) }
-        else { bodyText(cur.body ?? "") }
+        else { RecordBodyText(text: cur.body ?? "", source: r.source) }
         if showOriginal, cur.id != r.id {
           VStack(alignment: .leading, spacing: 8) {
             Text("原文").sectionTitle()
-            bodyText(r.body ?? "")
+            RecordBodyText(text: r.body ?? "", source: r.source)
           }
         }
         contextGrid(r)
       }
-      .padding(20)
+      .modifier(ReviewWidth())
     }
     .background(Palette.paper)
   }
 
   func header(_ d: RecordDetail) -> some View {
     let r = d.record
-    return VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 12) {
-        SourceGlyph(source: r.source, app: r.contextText("app"), size: 32)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(SourceInfo.name(r.source)).font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.muted)
-          Text(conversation.map(conversationTime) ?? timeLine(r)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
-        }
-      }
+    let time = conversation.flatMap(conversationTime) ?? metadataTime(r.start, r.isSpan ? r.end : nil)
+    return VStack(alignment: .leading, spacing: 8) {
       Text(conversation.map { $0.title ?? "对话" } ?? RecordText.title(r, appShown: false)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
-        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled).accessibilityAddTraits(.isHeader)
+      HStack(spacing: 8) {
+        SourceGlyph(source: r.source, app: r.contextText("app"), size: 20).accessibilityHidden(true)
+        Text("\(SourceInfo.name(r.source)) · \(time)")
+          .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+      }
       actions(d)
     }
   }
 
-  func timeLine(_ r: HistoryRecord) -> String {
-    var s = "\(Fmt.date(r.start)) \(ViewerFormat.clock(r.start))"
-    if let e = r.end, r.isSpan {
-      if ViewerFormat.clock(e) != ViewerFormat.clock(r.start) { s += "–\(ViewerFormat.clock(e))" }
-      if r.seconds >= 1 { s += "，共 \(Fmt.duration(r.seconds))" }
+  func metadataTime(_ start: Date, _ end: Date?) -> String {
+    let sameDay = end.map { Calendar.current.isDate(start, inSameDayAs: $0) } ?? true
+    var time = "\(Fmt.date(start)) \(Fmt.range(start, sameDay ? end : nil))"
+    if let end {
+      if !sameDay { time += "–\(Fmt.date(end)) \(ViewerFormat.clock(end))" }
+      let seconds = end.timeIntervalSince(start)
+      if seconds >= 1 { time += " · \(Fmt.duration(seconds))" }
     }
-    return s
+    return time
   }
 
-  /// 整场对话的起止，"11 月 11 日 16:03–16:45，共 42 分钟"。
-  func conversationTime(_ c: ConversationDetail) -> String {
-    guard let a = ViewerTime.parse(c.start), let b = ViewerTime.parse(c.end) else { return "" }
-    var s = "\(Fmt.date(a)) \(Fmt.range(a, b))"
-    if b.timeIntervalSince(a) >= 60 { s += "，共 \(Fmt.duration(b.timeIntervalSince(a)))" }
-    return s
-  }
-
-  @ViewBuilder func bodyText(_ text: String) -> some View {
-    let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      Text("这条没有正文").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
-    } else {
-      VStack(alignment: .leading, spacing: 8) {
-        Text(showAll || lines.count <= 60 ? text : lines.prefix(60).joined(separator: "\n"))
-          .font(.system(size: TextSize.body))
-          .foregroundStyle(Palette.ink)
-          .lineSpacing(TextSize.lineSpacing(TextSize.body))
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(16)
-          .card()
-        if lines.count > 60 {
-          Button(showAll ? "收起" : "展开全部 \(Fmt.count(lines.count)) 行") { showAll.toggle() }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
-        }
-      }
-    }
+  func conversationTime(_ c: ConversationDetail) -> String? {
+    guard let start = ViewerTime.parse(c.start), let end = ViewerTime.parse(c.end) else { return nil }
+    return metadataTime(start, end)
   }
 
   @ViewBuilder func contextGrid(_ r: HistoryRecord) -> some View {
@@ -147,22 +123,27 @@ struct RecordInspector: View {
       VStack(alignment: .leading, spacing: 8) {
         Text("记录时的情况").sectionTitle()
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
-          ForEach(rows, id: \.0) { label, value in
+          ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            let (label, value) = row
             GridRow {
-              Text(label).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).gridColumnAlignment(.trailing)
+              Text(label).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+                .fixedSize().gridColumnAlignment(.leading)
               if label == "网址", let url = URL(string: value), ["http", "https"].contains(url.scheme ?? "") {
-                Link(value, destination: url).font(.system(size: TextSize.caption)).lineLimit(3)
+                Link(destination: url) {
+                  Text(value).multilineTextAlignment(.leading).foregroundStyle(Palette.accent)
+                }.lineLimit(3)
               } else if ["仓库", "目录", "路径"].contains(label) {
                 Button { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: (value as NSString).expandingTildeInPath) } label: {
-                  Text(value).font(.mono(TextSize.caption)).foregroundStyle(Palette.ink).multilineTextAlignment(.leading)
+                  Text(value).font(.mono(TextSize.body)).foregroundStyle(Palette.readingBody).multilineTextAlignment(.leading)
                 }
                 .buttonStyle(.plain).help("在访达中显示")
               } else {
-                Text(value).font(.system(size: TextSize.caption)).foregroundStyle(Palette.ink).textSelection(.enabled).lineLimit(4)
+                Text(value).foregroundStyle(Palette.readingBody).textSelection(.enabled).lineLimit(4)
               }
             }
           }
         }
+        .font(.system(size: TextSize.body))
       }
     }
   }
@@ -202,8 +183,8 @@ struct RecordInspector: View {
 
   func actions(_ d: RecordDetail) -> some View {
     VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 8) {
-        Button { correcting = true } label: { Label { Text("修正") } icon: { PhIcon("pencil-simple", size: 14) } }
+      HStack(spacing: 16) {
+        Button { correcting = true } label: { Label { Text("修正") } icon: { PhIcon("pencil-simple", size: TextSize.body) } }
         Button {
           NSPasteboard.general.clearContents()
           NSPasteboard.general.setString(conversation.map(ConversationBody.plain) ?? d.current.body ?? d.record.title, forType: .string)
@@ -213,12 +194,13 @@ struct RecordInspector: View {
             try? await Task.sleep(for: .seconds(1.5))
             if !Task.isCancelled { copied = false }
           }
-        } label: { Label { Text(copied ? "已复制" : "复制") } icon: { PhIcon(copied ? "check" : "copy", size: 14) } }
+        } label: { Label { Text(copied ? "已复制" : "复制") } icon: { PhIcon(copied ? "check" : "copy", size: TextSize.body) } }
         Spacer()
-        Button { confirmDelete = true } label: { Label { Text("删除") } icon: { PhIcon("trash", size: 14) } }
-          .buttonStyle(.borderless).foregroundStyle(Palette.attention)
+        Button("删除") { confirmDelete = true }
+          .buttonStyle(RecordActionStyle(attention: true))
           .disabled(busy)
       }
+      .buttonStyle(RecordActionStyle())
       if let deleteError { Text(deleteError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention).textSelection(.enabled) }
     }
     .controlSize(.small)
@@ -237,6 +219,56 @@ struct RecordInspector: View {
       onDelete([d.record.id] + d.corrections.map(\.id))
       store.revision += 1
     } catch { deleteError = error.localizedDescription }
+  }
+}
+
+private struct RecordActionStyle: ButtonStyle {
+  var attention = false
+  @Environment(\.isEnabled) private var enabled
+  @State private var hovering = false
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(.system(size: TextSize.body))
+      .foregroundStyle(attention ? Palette.attention : hovering ? Palette.ink : Palette.muted)
+      .opacity(!enabled ? 0.5 : configuration.isPressed ? 0.7 : 1)
+      .frame(minHeight: 24)
+      .contentShape(Rectangle())
+      .onHover { hovering = $0 }
+  }
+}
+
+private struct RecordBodyText: View {
+  let text: String
+  let source: String
+  @State private var showAll = false
+
+  var body: some View {
+    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      Text("这条没有正文").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+    } else {
+      let lines = RecordReadingLines.display(text, source: source)
+      let previewLimit = 40
+      VStack(alignment: .leading, spacing: 8) {
+        Text(showAll ? lines.joined(separator: "\n") : lines.prefix(previewLimit).joined(separator: "\n"))
+          .recordReadingStyle()
+        if lines.count > previewLimit {
+          Button(showAll ? "收起" : "展开全部") { showAll.toggle() }
+            .buttonStyle(.accentLink).font(.system(size: TextSize.body))
+        }
+      }
+    }
+  }
+}
+
+private extension SwiftUI.Text {
+  func recordReadingStyle() -> some View {
+    font(.system(size: TextSize.body))
+      .foregroundStyle(Palette.readingBody)
+      .lineSpacing(TextSize.lineSpacing(TextSize.body))
+      .textSelection(.enabled)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -380,10 +412,7 @@ struct ConversationBody: View {
           Button(showRaw ? "收起转写原文" : "查看转写原文") { withAnimation(.easeOut(duration: 0.2)) { showRaw.toggle() } }
             .buttonStyle(.accentLink).font(.system(size: TextSize.body))
           if showRaw {
-            Text(raw.map(\.body).joined(separator: "\n"))
-              .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-              .lineSpacing(TextSize.lineSpacing(TextSize.caption)).textSelection(.enabled)
-              .frame(maxWidth: .infinity, alignment: .leading)
+            Text(raw.map(\.body).joined(separator: "\n")).recordReadingStyle()
           }
         }
       }
@@ -395,13 +424,12 @@ struct ConversationBody: View {
     case "ready":
       VStack(alignment: .leading, spacing: 8) {
         if let s = c.summary {
-          Text(s).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink)
-            .lineSpacing(TextSize.lineSpacing(TextSize.body)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+          Text(s).recordReadingStyle()
         }
         ForEach(c.points, id: \.self) { p in
           HStack(alignment: .firstTextBaseline, spacing: 8) {
             Circle().fill(Palette.faint).frame(width: 4, height: 4).alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-            Text(p).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(p).recordReadingStyle()
           }
         }
       }
@@ -417,8 +445,7 @@ struct ConversationBody: View {
         Text(t.speaker).font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(Palette.ink)
         if let d = ViewerTime.parse(t.at) { Text(ViewerFormat.clock(d)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted) }
       }
-      Text(t.text).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink)
-        .lineSpacing(TextSize.lineSpacing(TextSize.body)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+      Text(t.text).recordReadingStyle()
     }
   }
 

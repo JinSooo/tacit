@@ -1,5 +1,34 @@
 import Foundation
 
+/// 原始记录详情的显示行。屏幕和浏览器的连续短行合为一行，空行和长行保留。
+public enum RecordReadingLines {
+  public static func display(_ text: String, source: String) -> [String] {
+    let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+    guard source == "mac.screen" || source == "mac.browser" else { return lines.map(String.init) }
+
+    var result: [String] = []
+    var fragments: [String] = []
+
+    func flushFragments() {
+      guard !fragments.isEmpty else { return }
+      result.append(fragments.joined(separator: " · "))
+      fragments.removeAll(keepingCapacity: true)
+    }
+
+    for line in lines {
+      let fragment = line.trimmingCharacters(in: .whitespaces)
+      if !fragment.isEmpty && fragment.count <= 12 {
+        fragments.append(fragment)
+      } else {
+        flushFragments()
+        result.append(String(line))
+      }
+    }
+    flushFragments()
+    return result
+  }
+}
+
 /// 读取记录页的一行：相邻、完全相同的读取（同一工具、同一动作、同样参数、同样成败）合成一行。
 public struct AuditGroup: Identifiable, Hashable, Sendable {
   /// 按列表顺序（新的在前），第一条就是最近的一次。

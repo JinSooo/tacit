@@ -2,6 +2,28 @@ import Foundation
 import Testing
 @testable import CollectorCore
 
+@Test(arguments: ["mac.screen", "mac.browser"])
+func recordReadingJoinsShortLinesAndPreservesLongAndBlankLines(source: String) {
+  let longLine = "  Compare changes to the sample routing rules.  "
+  let text = " Code \r\nSelf\r\n36m\r\n\(longLine)\r\nDraft\r\n\r\nReady\r\n123456789012\r\n1234567890123"
+  #expect(RecordReadingLines.display(text, source: source) == [
+    "Code · Self · 36m", longLine, "Draft", "", "Ready · 123456789012", "1234567890123",
+  ])
+}
+
+@Test func recordReadingKeepsLongURLIntactForWrapping() {
+  let url = "https://example.invalid/" + String(repeating: "a1b2c3d4", count: 40)
+  #expect(RecordReadingLines.display("Open\nTab\n\(url)\nDone", source: "mac.browser") == [
+    "Open · Tab", url, "Done",
+  ])
+}
+
+@Test func recordReadingLeavesOrdinaryTextLinesSeparate() {
+  #expect(RecordReadingLines.display("题目\n\n  草稿\n已确认\n", source: "manual.note") == [
+    "题目", "", "  草稿", "已确认", "",
+  ])
+}
+
 private func read(_ id: String, tool: String = "claude-code", kind: String = "context", args: String = #"{"cwd":"/tmp/repo","event":"startup"}"#,
                   ok: Bool = true) -> AuditRead {
   let json = #"{"id":"\#(id)","at":"2026-11-10T09:00:00Z","tool":"\#(tool)","kind":"\#(kind)","args":\#(args),"result_ids":[],"bytes":10,"ok":\#(ok ? 1 : 0)}"#
