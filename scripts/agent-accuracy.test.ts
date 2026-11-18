@@ -16,6 +16,7 @@ const emit = item => console.log(JSON.stringify({ type: "item.completed", item }
 if (!configs.some(c => c.startsWith("mcp_servers."))) {
   // 判分调用：不带任何 MCP；答案里有“天空”算意思一致，其余不一致。
   const input = require("node:fs").readFileSync(0, "utf8");
+  if (process.env.FAKE_JUDGE_FAIL) process.exit(1);
   if (!input.includes("可接受说法") || value("-m") !== ${JSON.stringify(model)}) process.exit(3);
   const same = /答案：“[^”]*天空/.test(input);
   emit({ id: "j1", type: "agent_message", text: JSON.stringify({ same, reason: same ? "同一颜色" : "罗列多种分组碰运气" }) });
@@ -57,6 +58,16 @@ emit({ id: "i2", type: "agent_message", text: JSON.stringify({ facts: { 颜色: 
     expect(row.facts).toEqual({ 颜色: true, 分组: true });
     expect(row.judged.颜色).toEqual({ same: true, reason: "同一颜色" });
     expect(row.correct).toBe(true);
+
+    // 判分调用一直失败时记为 judge_failed，不算答错也不算答对（2026-11-18 codex 间歇无返回）。
+    const failing = Bun.spawn([process.execPath, join(import.meta.dir, "agent-accuracy.ts"),
+      join(import.meta.dir, "fixtures/agent-accuracy.example.json"), "--regrade", saved], {
+      env: { ...process.env, PATH: dir + delimiter + process.env.PATH, CODEX_HOME: dir, RA_PORT: "47823", FAKE_JUDGE_FAIL: "1" }, stdout: "pipe",
+    });
+    const [failedOut] = await Promise.all([new Response(failing.stdout).text(), failing.exited]);
+    const failedRow = JSON.parse(failedOut.split("\n")[0]!);
+    expect(failedRow).toMatchObject({ error: "judge_failed", correct: false });
+    expect(failedRow.judged.颜色).toBeNull();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
