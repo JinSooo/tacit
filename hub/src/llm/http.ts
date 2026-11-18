@@ -3,6 +3,12 @@ import type { BackendContext, ReadKey } from "./types.ts";
 import { isLoopback } from "./local.ts";
 export { isLoopback } from "./local.ts";
 
+// 思考型模型（如经 Anthropic 兼容接口接入的 MiniMax）的思考 token 也算在输出里，8192 对当天整理偏紧（2026-11-18）。
+const ANTHROPIC_MAX_TOKENS = 16384;
+// 拒收 response_format 的兼容地址（MiniMax 解析不了 "type":["string","null"]，直接 400，2026-11-18）。进程内记住，之后不再带。
+const noResponseFormat = new Set<string>();
+const SCHEMA_NOTE = "只输出一个 JSON 对象，必须符合下面的 JSON Schema：键名照抄，必填字段都要有，不加别的字段，枚举只能从给定值里选，遵守长度和条数上限。";
+
 export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promise<unknown> {
   const anthropic = ctx.config.provider === "anthropic";
   const controller = new AbortController();
@@ -16,30 +22,46 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
       const key = local ? "" : await readKey(ctx.config.provider);
       if (controller.signal.aborted) throw new Error(`模型 HTTP 调用超时（${ctx.timeoutMs}ms）`);
       if (!local && !key.trim()) throw new Error("API key 为空");
-      const base = ctx.config.base_url ?? (anthropic ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1");
+      // 用户常把完整接口地址填进来（如 …/v1/chat/completions，2026-11-18 设置页 404），去掉末尾的接口路径再拼。
+      const base = (ctx.config.base_url ?? (anthropic ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1"))
+        .replace(/\/+$/, "").replace(anthropic ? /\/messages$/ : /\/chat\/completions$/, "");
       const requestBody = anthropic ? {
-          model: ctx.config.model, max_tokens: 8192, system: ctx.req.system, messages: [{ role: "user", content: ctx.req.prompt }],
+          model: ctx.config.model, max_tokens: ANTHROPIC_MAX_TOKENS, system: ctx.req.system, messages: [{ role: "user", content: ctx.req.prompt }],
           tools: [{ name: "emit_result", description: "返回符合 schema 的结果", input_schema: ctx.req.schema }], tool_choice: { type: "tool", name: "emit_result" },
         } : {
-          model: ctx.config.model, messages: [{ role: "system", content: ctx.req.system }, { role: "user", content: ctx.req.prompt }],
+          // 有的兼容服务（MiniMax 等）不读 response_format，模型看不到格式要求；schema 同时写进系统提示。
+          model: ctx.config.model, messages: [{ role: "system", content: `${ctx.req.system}\n\n${SCHEMA_NOTE}\n${JSON.stringify(ctx.req.schema)}` }, { role: "user", content: ctx.req.prompt }],
           ...(ctx.config.reasoning_effort === undefined ? {} : { reasoning_effort: ctx.config.reasoning_effort }),
-          response_format: { type: "json_schema", json_schema: { name: "result", strict: true, schema: ctx.req.schema } },
-        };
-      ctx.observer?.request("api",requestBody);
-      const response = await fetch(`${base.replace(/\/$/, "")}/${anthropic ? "messages" : "chat/completions"}`, {
-        method: "POST", signal: controller.signal, redirect: "error",
-        headers: { "content-type": "application/json", ...(anthropic ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : local ? {} : { authorization: `Bearer ${key}` }) },
-        body: JSON.stringify(requestBody),
-      });
+          ...(noResponseFormat.has(base) ? {} : { response_format: { type: "json_schema", json_schema: { name: "result", strict: true, schema: ctx.req.schema } } }),
+        } as Record<string, unknown>;
+      const send = (body: Record<string, unknown>) => {
+        ctx.observer?.request("api",body);
+        return fetch(`${base}/${anthropic ? "messages" : "chat/completions"}`, {
+          method: "POST", signal: controller.signal, redirect: "error",
+          headers: { "content-type": "application/json", ...(anthropic ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : local ? {} : { authorization: `Bearer ${key}` }) },
+          body: JSON.stringify(body),
+        });
+      };
+      let response = await send(requestBody);
+      if (!anthropic && response.status === 400 && "response_format" in requestBody) {
+        // schema 已经写进系统提示，去掉 response_format 再发一次；仍失败则照常报错。
+        const { response_format: _dropped, ...plain } = requestBody;
+        response = await send(plain);
+        if (response.ok) noResponseFormat.add(base);
+      }
       if (!response.ok) throw new Error(`模型 HTTP 请求失败（${response.status}）`);
       const text = await response.text();
       try { ctx.observer?.response(text); } catch { throw new Error("调用结果记录失败，结果未采用"); }
       ctx.metrics.outputChars = Array.from(text).length;
       const body = parseJSON(text) as any;
-      ctx.metrics.inputTokens = tokens(anthropic ? body?.usage?.input_tokens : body?.usage?.prompt_tokens);
+      const u = body?.usage ?? {};
+      // Anthropic 格式的 input_tokens 只是未命中缓存的部分，真实输入量要加上缓存读写（与 claude-cli 一致）。
+      ctx.metrics.inputTokens = tokens(anthropic
+        ? [u.input_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens].reduce((n: number, v: unknown) => n + (typeof v === "number" ? v : 0), 0)
+        : u.prompt_tokens);
       ctx.metrics.outputTokens = tokens(anthropic ? body?.usage?.output_tokens : body?.usage?.completion_tokens);
       if (anthropic) {
-        if (body.stop_reason === "max_tokens") throw new Error("Anthropic 输出达到 8192 token 上限，结果未保存");
+        if (body.stop_reason === "max_tokens") throw new Error(`Anthropic 输出达到 ${ANTHROPIC_MAX_TOKENS} token 上限，结果未保存`);
         const tool = body?.content?.find((part: any) => part.type === "tool_use" && part.name === "emit_result");
         if (!tool || body.stop_reason !== "tool_use") throw new Error("Anthropic 未返回完整结构化结果");
         ctx.metrics.outputChars = Array.from(JSON.stringify(tool.input)).length;
@@ -48,7 +70,8 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
       const choice = body?.choices?.[0];
       if (choice?.finish_reason !== "stop" || choice.message?.refusal || typeof choice.message?.content !== "string") throw new Error("OpenAI 兼容后端未返回完整 JSON 结果");
       ctx.metrics.outputChars = Array.from(choice.message.content).length;
-      return parseJSON(choice.message.content);
+      // 部分思考型模型把思考过程用 <think> 包在正文开头。
+      return parseJSON(choice.message.content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, ""));
     })()]);
   } catch (error) {
     if (controller.signal.aborted) throw new Error(`模型 HTTP 调用超时（${ctx.timeoutMs}ms）`);

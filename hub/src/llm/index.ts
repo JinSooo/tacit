@@ -41,8 +41,21 @@ export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRo
       try { observer = options.journal?.begin(row.id,req,config); }
       catch (error) { throw new Error(error instanceof Error && error.message === "记录已变化，等待重新整理" ? error.message : "调用记录保存失败，本次未发送"); }
       const ctx: BackendContext = { req, config, cwd, timeoutMs, metrics, observer, spawn: options.spawn ?? ((cmd, args, opts) => nodeSpawn(cmd, args, opts)) };
-      data = config.provider === "claude-cli" ? await claudeCLI(ctx) : config.provider === "codex-cli" ? await codexCLI(ctx) : await httpComplete(ctx, options.readKey ?? defaultReadKey);
-      if (req.normalizeOutput) data = req.normalizeOutput(data);
+      const call = async (c: BackendContext) => {
+        const out = config.provider === "claude-cli" ? await claudeCLI(c) : config.provider === "codex-cli" ? await codexCLI(c) : await httpComplete(c, options.readKey ?? defaultReadKey);
+        return req.normalizeOutput ? req.normalizeOutput(out) : out;
+      };
+      data = await call(ctx);
+      // HTTP 接口（如经 Anthropic 兼容接口接入的 MiniMax）不强制 maxLength 等约束，偶尔超长就整次作废。
+      // 把不合格的位置（只有路径和规则，不含内容）告诉模型重试一次；两次的用量合计。CLI 后端自己强制 schema，不重试。
+      if (!validate(data) && (config.provider === "anthropic" || config.provider === "openai-compatible")) {
+        const problems = [...new Set((validate.errors ?? []).map(e => `${e.instancePath || "/"} ${e.message ?? "不符合"}`))].slice(0, 8).join("；");
+        const first = { ...metrics };
+        data = await call({ ...ctx, req: { ...req, prompt: `${req.prompt}\n\n上一次输出不符合 JSON schema：${problems}。修正这些问题后重新完整输出。` } });
+        const sum = (a: number | null, b: number | null) => a === null && b === null ? null : (a ?? 0) + (b ?? 0);
+        metrics.inputTokens = sum(first.inputTokens, metrics.inputTokens); metrics.outputTokens = sum(first.outputTokens, metrics.outputTokens);
+        metrics.outputChars += first.outputChars;
+      }
       if (!validate(data)) throw new Error("模型输出不符合 schema");
       validated = true;
       row.ok = 1;

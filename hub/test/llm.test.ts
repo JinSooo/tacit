@@ -234,10 +234,12 @@ for (const provider of ["anthropic", "openai-compatible"]) {
         expect(options.headers["x-api-key"]).toBe("synthetic-key"); expect(options.headers["anthropic-version"]).toBe("2023-06-01");
         expect(body.system).toBe(request.system); expect(body.messages[0].content).toBe(request.prompt);
         expect(body.tools[0].input_schema).toEqual(schema); expect(body.tool_choice).toEqual({ type: "tool", name: "emit_result" });
-        return Response.json({ stop_reason: "tool_use", content: [{ type: "tool_use", name: "emit_result", input: { text: "hello" } }], usage: { input_tokens: 4, output_tokens: 2 } });
+        return Response.json({ stop_reason: "tool_use", content: [{ type: "tool_use", name: "emit_result", input: { text: "hello" } }], usage: { input_tokens: 1, cache_read_input_tokens: 2, cache_creation_input_tokens: 1, output_tokens: 2 } });
       }
       expect(options.headers.authorization).toBe("Bearer synthetic-key");
-      expect(body.messages).toEqual([{ role: "system", content: request.system }, { role: "user", content: request.prompt }]);
+      expect(body.messages[0].role).toBe("system"); expect(body.messages[0].content.startsWith(request.system)).toBe(true);
+      expect(body.messages[0].content).toContain(JSON.stringify(schema));
+      expect(body.messages[1]).toEqual({ role: "user", content: request.prompt });
       expect(body.response_format).toEqual({ type: "json_schema", json_schema: { name: "result", strict: true, schema } });
       return Response.json({ choices: [{ finish_reason: "stop", message: { content: '{"text":"hello"}' } }], usage: { prompt_tokens: 4, completion_tokens: 2 } });
     }) as typeof fetch;
@@ -259,7 +261,7 @@ for (const provider of ["anthropic", "openai-compatible"]) {
       const result = await llm.complete({ ...request, timeoutMs: 50 });
       expect(result.ok).toBe(false); if (!result.ok) {
         expect(result.error).not.toContain(request.prompt);
-        if (provider === "anthropic" && mode === "truncated") expect(result.error).toContain("8192 token 上限");
+        if (provider === "anthropic" && mode === "truncated") expect(result.error).toContain("16384 token 上限");
       }
     }
     expect(rows).toHaveLength(5); expect(rows.every(r => r.ok === 0)).toBe(true);
@@ -316,4 +318,52 @@ for (const mode of ["codex-error", "codex-echo"]) test(`Codex JSONL 失败诊断
     expect(result.error).not.toContain(request.prompt);
     expect(f.rows[0]!.error).toBe(result.error);
   }
+});
+
+// 2026-11-18：MiniMax 经 Anthropic 兼容接口时不强制 maxLength，当天概述超长导致整次作废。
+test("HTTP 后端输出不合 schema 时带上不合格位置重试一次，用量合计", async () => {
+  const dir = await directory(); await configure(dir, "anthropic", { base_url: "https://synthetic.invalid/v1" });
+  const limited = { type: "object", properties: { text: { type: "string", maxLength: 5 } }, required: ["text"], additionalProperties: false };
+  const prompts: string[] = [], rows: UsageRow[] = [];
+  globalThis.fetch = (async (_url: any, options: any) => {
+    const body = JSON.parse(options.body); prompts.push(body.messages[0].content);
+    const text = prompts.length === 1 ? "超过五个字的合成结果" : "合成结果";
+    return Response.json({ stop_reason: "tool_use", content: [{ type: "tool_use", name: "emit_result", input: { text } }], usage: { input_tokens: 10, output_tokens: 3 } });
+  }) as typeof fetch;
+  const llm = createLLM({ dataDir: dir, readKey: () => "synthetic-key", recordUsage: row => { rows.push(row); } });
+  const result = await llm.complete<{ text: string }>({ ...request, schema: limited });
+  expect(result.ok && result.data.text).toBe("合成结果");
+  expect(prompts).toHaveLength(2);
+  expect(prompts[1]).toContain("/text must NOT have more than 5 characters");
+  expect(prompts[1]).not.toContain("超过五个字");
+  expect(rows[0]).toMatchObject({ ok: 1, input_tokens: 20, output_tokens: 6 });
+});
+
+// 2026-11-18：设置页填了完整接口地址导致 404；MiniMax 不读 response_format，M3 把 <think> 写进正文。
+test("OpenAI 兼容：地址末尾的接口路径去掉，正文开头的 <think> 去掉", async () => {
+  const dir = await directory(); await configure(dir, "openai-compatible", { base_url: "https://synthetic.invalid/v1/chat/completions/" });
+  const urls: string[] = [];
+  globalThis.fetch = (async (url: any) => {
+    urls.push(String(url));
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: '<think>先想想合成结果</think>\n{"text":"hello"}' } }], usage: { prompt_tokens: 4, completion_tokens: 2 } });
+  }) as typeof fetch;
+  const llm = createLLM({ dataDir: dir, readKey: () => "synthetic-key", recordUsage: () => {} });
+  const result = await llm.complete<{ text: string }>(request);
+  expect(result.ok && result.data.text).toBe("hello");
+  expect(urls).toEqual(["https://synthetic.invalid/v1/chat/completions"]);
+});
+
+// 2026-11-18：MiniMax 解析不了 response_format 里的 "type":["string","null"]，整次 400。
+test("OpenAI 兼容服务拒收 response_format 时去掉它重发，同一地址之后不再带", async () => {
+  const dir = await directory(); await configure(dir, "openai-compatible", { base_url: "https://no-format.synthetic.invalid/v1" });
+  const sent: boolean[] = [];
+  globalThis.fetch = (async (_url: any, options: any) => {
+    const body = JSON.parse(options.body); sent.push("response_format" in body);
+    if ("response_format" in body) return new Response("invalid params", { status: 400 });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: '{"text":"hello"}' } }], usage: { prompt_tokens: 4, completion_tokens: 2 } });
+  }) as typeof fetch;
+  const llm = createLLM({ dataDir: dir, readKey: () => "synthetic-key", recordUsage: () => {} });
+  expect((await llm.complete(request)).ok).toBe(true);
+  expect((await llm.complete(request)).ok).toBe(true);
+  expect(sent).toEqual([true, false, false]);
 });
