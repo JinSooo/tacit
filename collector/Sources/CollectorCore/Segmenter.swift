@@ -24,6 +24,8 @@ public struct Observation {
 
 /// 把连续的观察合并成活动片段（mac.screen 时段记录）。
 /// 规则：换应用/窗口/URL、空闲超过 idleLimit、时长达到 maxSpan、正文超过 maxBody 时结束当前段。
+/// 切走后先把原段留住：切去的窗口不足 minSpan 就回来，算原段继续（插段本来就不写）；切去的窗口满 minSpan 才写出原段。
+/// 否则短暂瞄一眼别的窗口会把同一个窗口拆成两条记录（2026-11-17 一天 105 对，2026-11-18 决定）。
 public final class Segmenter {
   public struct Config {
     public var idleLimit: TimeInterval = 120
@@ -52,6 +54,8 @@ public final class Segmenter {
   public let device: String
   public var config: Config
   var current: Current?
+  /// 切走后暂留的上一段，等切去的窗口满 minSpan 或空闲超时再写出。
+  var held: Current?
 
   public init(device: String, config: Config = Config()) {
     self.device = device; self.config = config
@@ -67,9 +71,18 @@ public final class Segmenter {
       o.editable = [:]
     }
     var out: [Record] = []
+    if let h = held {
+      let detour = current.map { ($0.key == o.key ? o.time : $0.last).timeIntervalSince($0.start) } ?? 0
+      if detour >= config.minSpan || o.time.timeIntervalSince(h.last) > config.idleLimit { out += emit(h); held = nil }
+    }
     if let c = current {
       let stale = o.time.timeIntervalSince(c.last) > config.idleLimit
-      if c.key != o.key || stale || o.time.timeIntervalSince(c.start) >= config.maxSpan {
+      if c.key != o.key && !stale {
+        current = nil
+        if let h = held, h.key == o.key { current = h; held = nil }
+        else if c.last.timeIntervalSince(c.start) >= config.minSpan { held = c }
+        // 不足 minSpan 的插段不写，暂留的原段继续等。
+      } else if stale || o.time.timeIntervalSince(c.start) >= config.maxSpan {
         out += close(switching: c.key != o.key)
       }
     }
@@ -91,7 +104,11 @@ public final class Segmenter {
   }
 
   /// 空闲、锁屏、暂停、退出时调用。
-  public func flush() -> [Record] { close() }
+  public func flush() -> [Record] {
+    let earlier = held.map { emit($0) } ?? []
+    held = nil
+    return earlier + close()
+  }
 
   func begin(_ o: Observation) -> Current {
     Current(key: o.key, start: o.time, last: o.time, bundleID: o.bundleID, appName: o.appName,
@@ -122,6 +139,10 @@ public final class Segmenter {
   func close(switching: Bool = false) -> [Record] {
     guard let c = current else { return [] }
     current = nil
+    return emit(c, switching: switching)
+  }
+
+  func emit(_ c: Current, switching: Bool = false) -> [Record] {
     let duration = c.last.timeIntervalSince(c.start)
     if duration < config.minSpan && (switching || (c.lines.isEmpty && c.editable.isEmpty)) { return [] }
     var bodies: [String] = []

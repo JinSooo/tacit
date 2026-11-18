@@ -32,7 +32,9 @@ func obs(_ dt: TimeInterval, _ window: String = "doc.md", app: String = "abnerwo
   let s = Segmenter(device: "mac")
   #expect(s.observe(obs(0, lines: ["第一行", "第二行"])).isEmpty)
   #expect(s.observe(obs(16, lines: ["第二行", "第三行"])).isEmpty)
-  let out = s.observe(obs(17, "other.md", lines: ["新窗口"]))
+  #expect(s.observe(obs(17, "other.md", lines: ["新窗口"])).isEmpty)
+  // 切去的窗口满 15 秒才写出原段。
+  let out = s.observe(obs(32, "other.md"))
   #expect(out.count == 1)
   let r = out[0]
   #expect(r.source == "mac.screen" && r.kind == "span")
@@ -169,7 +171,8 @@ func screenSegmentsForDedicatedSourcesKeepOnlyWindowMetadata(bundle: String) {
   let s = Segmenter(device: "mac")
   _ = s.observe(obs(0, "Zen", app: "app.zen-browser.zen", lines: ["x"], url: "https://a.example/1"))
   _ = s.observe(obs(16, "Zen", app: "app.zen-browser.zen", url: "https://a.example/1"))
-  let out = s.observe(obs(17, "Zen", app: "app.zen-browser.zen", lines: ["y"], url: "https://a.example/2"))
+  #expect(s.observe(obs(17, "Zen", app: "app.zen-browser.zen", lines: ["y"], url: "https://a.example/2")).isEmpty)
+  let out = s.observe(obs(33, "Zen", app: "app.zen-browser.zen", url: "https://a.example/2"))
   #expect(out.count == 1 && out[0].context?.url == "https://a.example/1")
 }
 
@@ -247,4 +250,28 @@ func screenSegmentsForDedicatedSourcesKeepOnlyWindowMetadata(bundle: String) {
     #expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
   }
   #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["status.json"])
+}
+
+/// 2026-11-18：瞄一眼别的窗口（不足 15 秒）又回来，算同一段，不拆成两条。
+@Test func briefDetourReturnsToTheSameScreenRecord() {
+  let s = Segmenter(device: "mac")
+  let results = [
+    obs(0, "长文档", lines: ["第一段正文"]), obs(40, "长文档"),
+    obs(41, "瞄一眼", lines: ["插段文字"]), obs(48, "瞄一眼"),
+    obs(49, "长文档", lines: ["第二段正文"]), obs(90, "长文档"),
+    obs(91, "下一个窗口", lines: ["新的正文"]), obs(110, "下一个窗口"),
+  ].flatMap { s.observe($0) } + s.flush()
+  #expect(results.compactMap { $0.context?.window } == ["长文档", "下一个窗口"])
+  #expect(results.first?.body == "第一段正文\n第二段正文")
+  #expect(results.first.map { $0.t_end! } == LocalTime.iso(t0.addingTimeInterval(90)))
+}
+
+@Test func heldSegmentIsWrittenOnFlushAndAfterIdle() {
+  let s = Segmenter(device: "mac")
+  _ = s.observe(obs(0, "原窗口", lines: ["原正文"])); _ = s.observe(obs(20, "原窗口"))
+  _ = s.observe(obs(21, "插段"))
+  #expect(s.flush().compactMap { $0.context?.window } == ["原窗口"])
+  _ = s.observe(obs(300, "原窗口", lines: ["原正文"])); _ = s.observe(obs(320, "原窗口"))
+  _ = s.observe(obs(321, "插段"))
+  #expect(s.observe(obs(500, "原窗口")).compactMap { $0.context?.window } == ["原窗口"])
 }
