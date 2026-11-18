@@ -180,7 +180,7 @@ async function verifyProjectRemoval(call: (token: string) => Promise<Response>, 
   expect(store.getState("project_brief:main")).toBeNull();
   expect(store.getState("digest:thread")).toBeNull();
   expect(store.getState("candidates")).toEqual([{ id: "candidate", project_id: null, frame_ids: [] }]);
-  expect(store.day("2026-11-15")).toMatchObject({ needs_regen: 1, brief: null, detail: null });
+  expect(store.day("2026-11-15")).toMatchObject({ needs_regen: 0, brief: "合成概述", detail: { summary: "合成概述", items: [{ project_id: null }] } });
   expect(store.day("2026-11-16")).toMatchObject({ needs_regen: 0, brief: "另一日旧摘要" });
   expect(await context(repo)).toMatchObject({ project_id: null, text: "", tokens_est: 0 });
   const missing = await call(ctx.config.token);

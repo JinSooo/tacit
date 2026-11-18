@@ -370,9 +370,11 @@ export class DistillStore {
         SELECT id FROM threads WHERE project_id=? OR project_hint=?`).all(id, id);
       this.clearDerived(new Set(threads.map(thread => thread.id)), new Set([id]), [],
         { pendingResolution: "project_removed", clearThreadDays: false });
-      // 旧时间线段也可能只有项目引用，没有仍然存在的事项。
-      this.sql.prepare(`UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE EXISTS (
-        SELECT 1 FROM json_each(days.detail,'$.items') item WHERE json_extract(item.value,'$.project_id')=?)`).run(id);
+      // 时间线段的文字不随项目归属变化，只摘掉段上的项目标注，不让整天重新整理。
+      this.sql.prepare(`UPDATE days SET detail=json_set(detail,'$.items',(
+          SELECT json_group_array(CASE WHEN json_extract(item.value,'$.project_id')=? THEN json_set(item.value,'$.project_id',json('null')) ELSE json(item.value) END)
+          FROM json_each(days.detail,'$.items') item))
+        WHERE EXISTS (SELECT 1 FROM json_each(days.detail,'$.items') item WHERE json_extract(item.value,'$.project_id')=?)`).run(id, id);
       const candidates = this.getState<{ project_id: string | null }[]>("candidates");
       if (candidates?.some(candidate => candidate.project_id === id)) {
         this.setState("candidates", candidates.map(candidate => candidate.project_id === id ? { ...candidate, project_id: null } : candidate));
