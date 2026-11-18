@@ -461,12 +461,14 @@ test("事项搜索每词 AND 可跨标题、brief 和不同有效 open 事实，
 test("自动带入附加最新两条有效未决，按 60 码点截断，失效事实不出现", async () => {
   project(); thread(); thread("empty");
   openFact("t", "旧未决不带入", 0);
-  openFact("t", "等待虚构服务响应", 1);
+  openFact("t", "等待虚构服务响应。", 1);
   openFact("t", "待".repeat(61), 2);
   openFact("t", "失效未决不带入", 3, true);
   openFact("t", "决定不带入", 4, false, "decision");
   const result = await context();
-  expect(result.text).toContain("合成线程摘要t；未决：" + "待".repeat(60) + "…；等待虚构服务响应");
+  // 句号收尾后接“未决”，各条去掉自带句号，不出现“。；”。
+  expect(result.text).toContain("合成线程摘要t。未决：" + "待".repeat(60) + "…；等待虚构服务响应\n");
+  expect(result.text).not.toContain("。；");
   for (const text of ["旧未决不带入", "失效未决不带入", "决定不带入"]) expect(result.text).not.toContain(text);
   expect(result.text.split("\n").find((s: string) => s.includes("[empty]"))).not.toContain("未决");
   expect(result.tokens_est).toBe(estimateTokens(result.text));
