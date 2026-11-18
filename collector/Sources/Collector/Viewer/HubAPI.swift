@@ -184,6 +184,8 @@ final class HubAPI: @unchecked Sendable {
     return try await get(R.self, "/v1/projects").projects
   }
 
+  func removeProject(_ id: String) async throws { try await send("DELETE", "/v1/projects/\(id)") }
+
   func threads(project: String? = nil, status: String? = nil) async throws -> [HubThread] {
     struct R: Decodable { let threads: [HubThread]; let nextCursor: String? }
     var rows: [HubThread] = [], cursor: String? = nil, seen = Set<String>()

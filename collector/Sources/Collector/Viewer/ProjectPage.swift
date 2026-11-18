@@ -139,10 +139,10 @@ private struct ProjectStoryRow: View {
             PhIcon(expanded ? "caret-up" : "caret-down", size: 11).foregroundStyle(Palette.muted)
               .accessibilityHidden(true)
           }
-          TimelineSourceIcons(item: latest.item)
           if !expanded || story.updates.count == 1 {
             Text(latest.item.description).font(.system(size: TextSize.body))
-              .lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
+              .lineSpacing(TextSize.lineSpacing(TextSize.body) + 2).foregroundStyle(Palette.readingBody)
+            TimelineSourceIcons(item: latest.item, size: 20)
           }
         }
         .multilineTextAlignment(.leading).padding(.vertical, 20).contentShape(Rectangle())
@@ -163,7 +163,8 @@ private struct ProjectStoryRow: View {
                   .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
                   .padding(.top, 12).padding(.bottom, 6)
               }
-              TimelineSegmentRow(day: day, item: update.item, showsTitle: false, expanded: expandedRecord == update.id) {
+              TimelineSegmentRow(day: day, item: update.item, showsTitle: false,
+                                 density: .detailed, expanded: expandedRecord == update.id) {
                 expandedRecord = expandedRecord == update.id ? nil : update.id
               }
             }

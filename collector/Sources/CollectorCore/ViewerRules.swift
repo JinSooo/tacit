@@ -33,6 +33,17 @@ public enum PendingArchive {
 
 /// 回顾的活动条跟随实时采集开关；历史记录仍显示已经采集的内容。
 public enum ReviewActivity {
+  public static func segmentRecords(_ records: [HistoryRecord]) -> (visible: [HistoryRecord], collapsed: [HistoryRecord]) {
+    var visible: [HistoryRecord] = [], collapsed: [HistoryRecord] = []
+    for record in records {
+      switch Lane.of(record.source) {
+      case .screen, .browser: collapsed.append(record)
+      default: visible.append(record)
+      }
+    }
+    return visible.isEmpty ? (collapsed, []) : (visible, collapsed)
+  }
+
   public static func visibleRecords(_ records: [HistoryRecord], sources: [DataSourceStatus]) -> [HistoryRecord] {
     let enabled = Set(sources.lazy.filter(\.enabled).map(\.id))
     return records.filter { record in

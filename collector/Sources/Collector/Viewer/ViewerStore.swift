@@ -148,6 +148,15 @@ enum Route: Hashable {
 
   func project(_ id: String?) -> Project? { id.flatMap { id in projects.first { $0.id == id } } }
 
+  func removeProject(_ id: String) async throws {
+    try await api.removeProject(id)
+    sharedRequest += 1
+    projects.removeAll { $0.id == id }
+    if section == .project(id) || path.contains(.project(id)) { showReview() }
+    revision += 1
+    await refreshShared()
+  }
+
   func showReview(_ day: Date? = nil, segment: String? = nil, record: String? = nil) {
     reviewDay = day.flatMap { Calendar.current.isDateInToday($0) ? nil : Calendar.current.startOfDay(for: $0) }
     path = []

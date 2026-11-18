@@ -76,9 +76,9 @@ struct DayStrata: View {
   var lanePitch: CGFloat { laneHeight + laneGap }
 
   var lanes: [Lane] { isTimeline ? [] : Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } } }
-  var chapterTop: CGFloat { Self.axisHeight + (isTimeline ? 12 : 4) }
+  var chapterTop: CGFloat { Self.axisHeight + (isTimeline ? 0 : 4) }
   var lanesTop: CGFloat { chapterTop + (chapters.isEmpty ? 0 : Self.chapterHeight + 8) }
-  var height: CGFloat { lanesTop + CGFloat(lanes.count) * lanePitch + (isTimeline ? 10 : 2) }
+  var height: CGFloat { isTimeline ? chapterTop + Self.chapterHeight + 2 : lanesTop + CGFloat(lanes.count) * lanePitch + 2 }
 
   /// 时间轴只覆盖有活动的小时，前后各留一点；今天会延伸到此刻。
   var fullDomain: ClosedRange<Date> {
@@ -310,7 +310,8 @@ struct DayStrata: View {
         let label = major >= 3600 ? String(format: "%02d", cal.component(.hour, from: t)) : ViewerFormat.clock(t)
         let text = labels.resolve(Text(label).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted))
         let halfWidth = text.measure(in: CGSize(width: 100, height: Self.axisHeight)).width / 2
-        labels.draw(text, at: CGPoint(x: min(px, plot.maxX - halfWidth), y: 8), anchor: .center)
+        let labelX = min(max(px, halfWidth), plot.maxX - halfWidth)
+        labels.draw(text, at: CGPoint(x: labelX, y: 8), anchor: .center)
       }
       t = t.addingTimeInterval(step)
     }
