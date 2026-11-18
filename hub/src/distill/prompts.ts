@@ -264,6 +264,9 @@ export interface ProjectOutput { goal: string; status: string; people: string[] 
 
 // ---------- 5. 每日回顾 ----------
 
+export const MAX_DAY_SUMMARY_CHARS = 160;
+const MAX_DAY_SUMMARY_ACTIVITIES = 4;
+
 export const DAY_SYSTEM = `${DATA_RULES}
 
 任务：按当天实际发生的活动段，写给本人看。activities 每项是一段，有这段自己的 evidence。同一件事中断后再做会有两个编号。user 是本人，assistant 是 AI，other 是对方。
@@ -280,7 +283,9 @@ export const DAY_SYSTEM = `${DATA_RULES}
 - secondary=true 是同一时段的其他来源，只能在描述里补充，标题取主活动。refs 只填实际支持描述的编号，其中至少一条来自主活动。没有可写事实时可以省掉这段。时间和时长仅用于理解顺序和分量。
 - continues 指向同一事项的前一段。联系它理解进展，但本段只写新发生的变化；单纯重复、催促或重述之前的决定可以省略，不能搬用前一段的依据。
 - refs 原样复制本段 evidence.key（如 a3:r2），不要拆开、补写或引用其他段的编号。
-- highlight 是当天概述。按用户在场时间和结果内容选最多 3 条主线，可跨项目，也包括生活类活动。只依据 summary_eligible=true 且有结果或明确判断的 items，activities 填入支撑概述的 1–3 个 activity 编号。text 用 2–3 句、合计不超过 120 字，第一句写最主要的主线，每条主线交代结果或停在哪。用“你”或省略主语，不写过程数字（测试条数、提交号、用量），不复述给 AI 的操作指令，不加“项目名：”式前缀，不写建议或核实状态。没有可概括的内容返回 null。
+- highlight 是当天概述。按用户在场时间和结果内容选最多 ${MAX_DAY_SUMMARY_ACTIVITIES} 条主线，可跨项目，也包括聊天和录音中的工作沟通与生活。只依据 summary_eligible=true 且有结果或明确判断的 items，activities 填入支撑概述的 1–${MAX_DAY_SUMMARY_ACTIVITIES} 个 activity 编号。
+- highlight.text 用 2–4 句、合计不超过 ${MAX_DAY_SUMMARY_CHARS} 字。第一句点明最主要的主线，有项目时用 activities 对应段的 project 原文写出项目名，无项目时直接写事情，例如“学习 MCP”。每条主线写清具体对象（功能、文档、地点或版本）及结果或停在哪。
+- 涉及他人时，用相关记录中的称呼、evidence.speaker 或 evidence.chat（聊天名），只用于对应的消息或录音。不臆造真实姓名，不写“对方 1”这类编号。用“你”或省略主语，不写过程数字（测试条数、提交号、用量），不复述给 AI 的操作指令，不写建议或核实状态。没有可概括的内容返回 null。
 - ${STATUS_FIDELITY}
 输出用中文，专有名词保持原文。`;
 
@@ -296,12 +301,11 @@ export interface DayOutput {
 
 export const MAX_REVIEW_SEGMENTS = 30;
 export const MAX_REVIEW_CANDIDATES = 50;
-export const MAX_DAY_SUMMARY_CHARS = 120;
 export const DAY_SCHEMA = {
   type: "object", additionalProperties: false, required: ["highlight", "items", "omissions"],
   properties: {
     highlight: { type: ["object", "null"], additionalProperties: false, required: ["activities", "text"],
-      properties: { activities: { type: "array", minItems: 1, maxItems: 3, items: { type: "string" } },
+      properties: { activities: { type: "array", minItems: 1, maxItems: MAX_DAY_SUMMARY_ACTIVITIES, items: { type: "string" } },
         text: { type: "string", maxLength: MAX_DAY_SUMMARY_CHARS } } },
     omissions: { type: "array", maxItems: MAX_REVIEW_CANDIDATES, items: {
       type: "object", additionalProperties: false, required: ["activity", "reason", "title", "description", "refs"],

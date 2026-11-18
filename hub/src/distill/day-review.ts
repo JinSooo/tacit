@@ -4,7 +4,7 @@ import { groupConversations } from "../conversations.ts";
 import type { HubDB } from "../db.ts";
 import { unionSeconds } from "../durations.ts";
 import { redactString } from "../redact.ts";
-import { readDayEvidence, sampleDayEvidence, SKELETON_SOURCES, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
+import { dayDisplayName, readDayEvidence, sampleDayEvidence, SKELETON_SOURCES, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
 import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
 import { MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
@@ -17,6 +17,7 @@ const terse = (text: string, max: number) => Array.from(text.replace(/\s+/g, " "
 
 type ReviewRecord = DayReference & {
   start: number; end: number; key: string; thread: string | null; projectId: string | null; session: string | null;
+  projectName: string | null;
   related?: ReviewRecord[]; app: string | null; chat: string | null; evidence: UnnumberedEvidence[];
 };
 type Kind = "thread" | "speech" | "chat" | "session" | "misc";
@@ -56,15 +57,16 @@ export function isReadableReviewItem(item: { title?: unknown; description?: unkn
 function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
   type RawRow = {
     id: string; source: string; source_ref: string | null; title: string; t_start: string; t_start_ms: number; t_end: string | null;
-    context: string | null; key: string | null; thread_id: string | null; project_id: string | null;
+    context: string | null; key: string | null; thread_id: string | null; project_id: string | null; project_name: string | null;
     body: string | null; corrected: number;
   };
-  const rows = hub.db.prepare<unknown[], RawRow>(`SELECT r.id,r.source,r.source_ref,r.title,r.t_start,r.t_start_ms,r.t_end,r.context,f.key,a.thread_id,t.project_id,
+  const rows = hub.db.prepare<unknown[], RawRow>(`SELECT r.id,r.source,r.source_ref,r.title,r.t_start,r.t_start_ms,r.t_end,r.context,f.key,a.thread_id,t.project_id,p.name AS project_name,
     CASE WHEN r.source IN ('mac.screen','mac.browser','mac.app') THEN NULL ELSE COALESCE(c.body,r.body) END AS body,
     c.id IS NOT NULL AS corrected
     FROM records r
     LEFT JOIN frame_records fr ON fr.record_id=r.id LEFT JOIN frames f ON f.id=fr.frame_id
     LEFT JOIN assignments a ON a.frame_id=f.id LEFT JOIN threads t ON t.id=a.thread_id
+    LEFT JOIN projects p ON p.id=t.project_id
     LEFT JOIN records c ON c.id=(SELECT cc.id FROM records cc WHERE cc.corrects=r.id AND cc.source='manual.correction'
       ORDER BY cc.t_start_ms DESC,cc.id DESC LIMIT 1)
     WHERE r.t_start_ms<? AND (r.t_start_ms>=? OR (r.t_end IS NOT NULL AND julianday(r.t_end)>julianday(?)))
@@ -89,7 +91,7 @@ function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
     records.push({
       ...reference,
       start: Math.max(start, row.t_start_ms), end: Math.min(end, Math.max(row.t_start_ms, Date.parse(row.t_end ?? "") || row.t_start_ms)),
-      key, thread: row.thread_id, projectId: row.project_id, session, evidence,
+      key, thread: row.thread_id, projectId: row.project_id, projectName: row.project_name, session, evidence,
       app: context?.app ? redactString(context.app).text : null, chat: context?.chat ? redactString(context.chat).text : null,
     });
   }
@@ -400,6 +402,7 @@ export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 
   const leadingActivity = [...activitySeconds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   mergeAdjacent(candidates, gap);
   const selected = limitCandidates(candidates, leadingActivity);
+  const projectNames = new Map(rows.flatMap(r => r.projectId && r.projectName ? [[r.projectId, r.projectName] as const] : []));
   const baseLimit = Math.max(4, Math.floor(120 / Math.max(1, selected.length)));
   const extraEvidence = longerConversationBudget(selected);
   const dependencyRecordIds = new Set<string>();
@@ -423,7 +426,8 @@ export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 
     const evidence = [...sampleDayEvidence(direct, limit - secondary.length), ...secondary]
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
       .map((e, index) => ({ ...e, key: `r${index + 1}` }));
-    return { ...a, id, kind: a.activity.kind, key: `a${i + 1}`, records, apps, evidence };
+    const projectName = a.activity.projectId ? projectNames.get(a.activity.projectId) : undefined;
+    return { ...a, id, kind: a.activity.kind, key: `a${i + 1}`, projectName, records, apps, evidence };
   });
   const selectedSet = new Set(selected), visibleIds = new Set(segments.flatMap(s => s.records.map(r => r.id)));
   const withoutEvidence = allCandidates.filter(a => !a.primary.some(r =>
@@ -452,7 +456,7 @@ export function reviewMaterial(segments: ReviewSegment[]) {
     previous.set(a.activity.key, a.key);
     return {
       key: a.key, kind: a.kind, start: toLocalIso(a.start).slice(11, 16), continues,
-      project: a.activity.projectId, active_minutes: Math.round(a.seconds / 60),
+      project: dayDisplayName(a.projectName, MAX_DAY_SUMMARY_CHARS) ?? null, active_minutes: Math.round(a.seconds / 60),
       summary_eligible: a.seconds > 0,
       evidence: a.evidence.map(({ reference: _reference, position, ...entry }) =>
         ({ ...entry, key: `${a.key}:${entry.key}`, ...(position === "within_batch" ? { at: undefined } : {}) })),
@@ -470,7 +474,8 @@ function summaryLine(text: string): string {
   const characters = Array.from(line);
   if (characters.length <= MAX_DAY_SUMMARY_CHARS) return line;
   const prefix = characters.slice(0, MAX_DAY_SUMMARY_CHARS);
-  const lastSentence = prefix.findLastIndex(char => /[。！？.!?]/u.test(char));
+  const lastSentence = prefix.findLastIndex((char, index) =>
+    /[。！？!?]/u.test(char) || char === "." && /\s/u.test(characters[index + 1] ?? ""));
   return prefix.slice(0, lastSentence === -1 ? prefix.length : lastSentence + 1).join("").trimEnd();
 }
 

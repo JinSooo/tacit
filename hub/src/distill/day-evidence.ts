@@ -1,18 +1,29 @@
 import { toLocalIso, type RecordV1 } from "../../../packages/record/index.ts";
 import { parseTranscript } from "../conversations.ts";
+import { redactString } from "../redact.ts";
 import { materialBody } from "./material.ts";
 import { excerpt } from "./prompts.ts";
 
 export type DayRole = "user" | "assistant" | "other";
-export interface DayEvidenceInput { key: string; role: DayRole; source: string; at: string; text: string; secondary?: true }
+export interface DayEvidenceInput {
+  key: string; role: DayRole; source: string; at: string; text: string;
+  chat?: string; speaker?: string; secondary?: true;
+}
 export interface DayReference { id: string; at: string; source: string; title: string }
 export interface DayEvidence extends DayEvidenceInput {
   reference: DayReference;
   position?: "first" | "last" | "within_batch";
 }
 export type UnnumberedEvidence = Omit<DayEvidence, "key">;
-type Spoken = Pick<UnnumberedEvidence, "at" | "role" | "text" | "position">;
+type Spoken = Pick<UnnumberedEvidence, "at" | "role" | "text" | "position" | "chat" | "speaker">;
 type DayRecord = Pick<RecordV1, "source" | "t_start" | "t_end" | "context">;
+
+/** 不把过长的标签截成另一个名字。正文和引用预算沿用原来的规则。 */
+export function dayDisplayName(value: unknown, maxChars = 80): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const name = redactString(value).text.trim();
+  return name && !/[\r\n\u2028\u2029]/u.test(name) && Array.from(name).length <= maxChars ? name : undefined;
+}
 
 function spoken(record: Pick<RecordV1, "source" | "body" | "context">, original: DayRecord, end: number): Spoken[] | null {
   const at = original.t_start;
@@ -34,11 +45,20 @@ function spoken(record: Pick<RecordV1, "source" | "body" | "context">, original:
     });
   }
   const body = materialBody(record);
-  if (record.source === "manual.correction" || original.source === "manual.note") return [{ role: "user", text: body, at }];
-  if (original.source === "mac.audio") return parseTranscript(body, at)
-    .map(line => ({ role: line.label === "我" ? "user" : "other", text: line.text, at: toLocalIso(line.at_ms) }));
-  const fromMe = original.context?.extra?.from_me;
-  if (original.context?.chat && (fromMe === 0 || fromMe === 1)) return [{ role: fromMe === 1 ? "user" : "other", text: body, at }];
+  const context = original.context;
+  const chat = dayDisplayName(context?.chat);
+  if (record.source === "manual.correction") return [{ role: "user", text: body, at, chat }];
+  if (original.source === "manual.note") return [{ role: "user", text: body, at }];
+  if (original.source === "mac.audio") return parseTranscript(body, at).map(line => ({
+    role: line.label === "我" ? "user" : "other", text: line.text, at: toLocalIso(line.at_ms),
+    speaker: /^(?:我|对方\s*\d*|说话人\s*[A-Z0-9]+|未知说话人|其他人)$/iu.test(line.label)
+      ? undefined : dayDisplayName(line.label),
+  }));
+  const fromMe = context?.extra?.from_me;
+  if (context?.chat && (fromMe === 0 || fromMe === 1)) return [{
+    role: fromMe === 1 ? "user" : "other", text: body, at, chat,
+    speaker: fromMe === 0 ? dayDisplayName(context.extra?.sender) : undefined,
+  }];
   return [];
 }
 

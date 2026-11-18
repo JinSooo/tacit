@@ -1,17 +1,30 @@
 import { expect, test } from "bun:test";
 import Ajv2020 from "ajv/dist/2020.js";
-import { ASSIGN_SCHEMA, BRIEF_SCHEMA, THREAD_SCHEMA, CLASSIFY_SCHEMA, DAY_SCHEMA, DAY_SYSTEM, assignPrompt, briefPrompt, excerpt, keepGroundedFacts, threadPrompt } from "../src/distill/prompts.ts";
+import { ASSIGN_SCHEMA, BRIEF_SCHEMA, THREAD_SCHEMA, CLASSIFY_SCHEMA, DAY_SCHEMA, DAY_SYSTEM, assignPrompt, briefPrompt, excerpt, keepGroundedFacts, normalizeDayOutput, threadPrompt } from "../src/distill/prompts.ts";
 
-test("每日概述提示词和输出 schema 约定多条主线", () => {
-  expect(DAY_SYSTEM.split("\n").find(line => line.startsWith("- highlight 是当天概述。"))).toMatchInlineSnapshot(`"- highlight 是当天概述。按用户在场时间和结果内容选最多 3 条主线，可跨项目，也包括生活类活动。只依据 summary_eligible=true 且有结果或明确判断的 items，activities 填入支撑概述的 1–3 个 activity 编号。text 用 2–3 句、合计不超过 120 字，第一句写最主要的主线，每条主线交代结果或停在哪。用“你”或省略主语，不写过程数字（测试条数、提交号、用量），不复述给 AI 的操作指令，不加“项目名：”式前缀，不写建议或核实状态。没有可概括的内容返回 null。"`);
+test("每日概述提示词和输出 schema 约定四条带上下文的主线，保留旧单编号兼容", () => {
+  expect(DAY_SYSTEM).toContain("最多 4 条主线，可跨项目，也包括聊天和录音中的工作沟通与生活");
+  expect(DAY_SYSTEM).toContain("只依据 summary_eligible=true 且有结果或明确判断的 items");
+  expect(DAY_SYSTEM).toContain("highlight.text 用 2–4 句、合计不超过 160 字");
+  expect(DAY_SYSTEM).toContain("第一句点明最主要的主线，有项目时用 activities 对应段的 project 原文写出项目名");
+  expect(DAY_SYSTEM).toContain("每条主线写清具体对象（功能、文档、地点或版本）及结果或停在哪");
+  expect(DAY_SYSTEM).toContain("用相关记录中的称呼、evidence.speaker 或 evidence.chat");
+  expect(DAY_SYSTEM).toContain("不臆造真实姓名，不写“对方 1”这类编号");
+  expect(DAY_SYSTEM).not.toContain("不加“项目名：”式前缀");
   const valid = new Ajv2020({ strict: false }).compile(DAY_SCHEMA);
   const output = (highlight: unknown) => ({ highlight, items: [], omissions: [] });
-  expect(valid(output({ activities: ["a1", "a2", "a3"], text: "展板已试排。定下了集合地点。" }))).toBe(true);
+  const text = "展板已试排。定下了集合地点。";
+  const legacy = output({ activity: "a1", text });
+  expect(valid(output({ activities: ["a1", "a2", "a3", "a4"], text }))).toBe(true);
   expect(valid(output(null))).toBe(true);
-  expect(valid(output({ activities: [], text: "已试排。" }))).toBe(false);
-  expect(valid(output({ activities: ["a1", "a2", "a3", "a4"], text: "已试排。" }))).toBe(false);
-  expect(valid(output({ activities: ["a1"], text: "字".repeat(121) }))).toBe(false);
-  expect(valid(output({ activity: "a1", text: "已试排。" }))).toBe(false);
+  expect(valid(output({ activities: [], text }))).toBe(false);
+  expect(valid(output({ activities: ["a1", "a2", "a3", "a4", "a5"], text }))).toBe(false);
+  expect(valid(output({ activities: ["a1"], text: "字".repeat(160) }))).toBe(true);
+  expect(valid(output({ activities: ["a1"], text: "字".repeat(161) }))).toBe(false);
+  expect(valid(legacy)).toBe(false);
+  const normalized = normalizeDayOutput(legacy);
+  expect(normalized).toEqual(output({ activities: ["a1"], text }));
+  expect(valid(normalized)).toBe(true);
 });
 
 test("三个输出 schema 都能编译，并拒绝多余字段", () => {
