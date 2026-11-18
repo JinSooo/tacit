@@ -7,7 +7,7 @@ import { redactString } from "../redact.ts";
 import { readDayEvidence, sampleDayEvidence, SKELETON_SOURCES, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
 import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
-import { MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
+import { MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
 
 const MINUTE = 60_000;
 const MISC_SECONDS = 5 * 60;
@@ -465,6 +465,15 @@ const singleLine = (text: string, limit: number) => {
   return line && Array.from(line).length <= limit && !/[\r\n]/.test(line) ? line : null;
 };
 
+function summaryLine(text: string): string {
+  const line = redactString(text).text.replace(/\s*[\r\n\u2028\u2029]+\s*/gu, " ").trim();
+  const characters = Array.from(line);
+  if (characters.length <= MAX_DAY_SUMMARY_CHARS) return line;
+  const prefix = characters.slice(0, MAX_DAY_SUMMARY_CHARS);
+  const lastSentence = prefix.findLastIndex(char => /[。！？.!?]/u.test(char));
+  return prefix.slice(0, lastSentence === -1 ? prefix.length : lastSentence + 1).join("").trimEnd();
+}
+
 function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | undefined) {
   if (a.evidence.length && a.evidence.every(e => e.role === "user" && requestOnly(e.text))) return null;
   if (!candidate) return null;
@@ -499,7 +508,7 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
       active_seconds: a.seconds, sources: [...new Set(apps.map(r => r.source))], evidence: model.evidence,
       apps, record_ids: [...new Set(a.records.map(r => r.id))], project_id: a.activity.projectId,
     };
-    return [{ a, segment, model, keys: [a.key] }];
+    return [{ a, segment, summaryKeys: !excluded && a.seconds > 0 ? [a.key] : [] }];
   });
   if (output.items.some(item => item.content !== "request_only" && item.content !== "empty") && !result.length) return null;
   // 模型省略中间候选后可能产生新的相邻段；同事项按相同规则兜底，不凭项目猜事项。
@@ -516,7 +525,7 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
       sources: [...new Set([...x.segment.sources, ...y.segment.sources])],
       record_ids: [...new Set([...x.segment.record_ids, ...y.segment.record_ids])],
       evidence: [...new Map([...x.segment.evidence, ...y.segment.evidence].map(e => [e.id, e])).values()] };
-    x.keys.push(...y.keys);
+    x.summaryKeys.push(...y.summaryKeys);
     result.splice(i + 1, 1);
     // 合并后的覆盖率可能让前一对也满足条件。
     i = Math.max(0, i - 1);
@@ -526,7 +535,9 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
   const leadingActivity = [...activitySeconds.entries()].sort((a,b) => b[1]-a[1])[0]?.[0];
   const selected = new Set(limitCandidates(result.map(r => ({ ...r.a, result: r })), leadingActivity, MAX_REVIEW_SEGMENTS).map(r => r.result));
   result = result.filter(r => selected.has(r));
-  const main = output.highlight && result.find(({ a, model, keys }) => model && a.seconds > 0 && keys.includes(output.highlight!.activity));
+  const highlight = output.highlight;
+  const refs = !highlight ? [] : "activities" in highlight ? highlight.activities : [highlight.activity];
+  const main = result.some(({ summaryKeys }) => summaryKeys.some(key => refs.includes(key)));
   const projectSeconds = new Map<string, number>();
   for (const { a } of result) {
     const key = a.activity.projectId ?? a.activity.key;
@@ -535,7 +546,7 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
   const longest = result.filter(r => r.a.seconds > 0).sort((x,y) =>
     (projectSeconds.get(y.a.activity.projectId ?? y.a.activity.key) ?? 0) -
     (projectSeconds.get(x.a.activity.projectId ?? x.a.activity.key) ?? 0) || byImportance(x.a,y.a))[0]?.segment;
-  const summary = (main && singleLine(redactString(output.highlight!.text).text, 30)) || longest?.title || null;
+  const summary = (main && highlight && summaryLine(highlight.text)) || longest?.title || null;
   const timeline = result.map(({ a, segment }) => ({
     start: toLocalIso(a.start).slice(11, 16), end: a.end === dayEnd ? "24:00" : toLocalIso(a.end).slice(11, 16), text: segment.title,
   })).filter(chapter => chapter.start !== chapter.end);

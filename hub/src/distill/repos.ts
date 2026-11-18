@@ -6,13 +6,16 @@ import type { Project } from "./store.ts";
 type Repository = { root: string; worktree: string };
 const cache = new Map<string, { value: Repository | null; at: number }>();
 
+export function repoContainsPath(repo: string, path: string): boolean {
+  const root = resolve(repo), absolute = resolve(path);
+  return root !== homedir() && (absolute === root || absolute.startsWith(root.endsWith(sep) ? root : root + sep));
+}
+
 /** 按路径边界取最长别名，不能把 foo 和 foobar 当成同一仓库。 */
 export function projectForPath(path: string, projects: Project[]): Project | null {
   const absolute = resolve(path);
   return projects.flatMap(project => project.keys.repos.flatMap(repo => {
-    const root = resolve(repo);
-    return root !== homedir() && (absolute === root || absolute.startsWith(root.endsWith(sep) ? root : root + sep))
-      ? [{ project, length: root.length }] : [];
+    return repoContainsPath(repo, absolute) ? [{ project, length: resolve(repo).length }] : [];
   })).sort((a,b) => b.length - a.length)[0]?.project ?? null;
 }
 

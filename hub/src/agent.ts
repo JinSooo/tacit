@@ -8,6 +8,7 @@ import { HubDB, InputError } from "./db.ts";
 import { redactString } from "./redact.ts";
 import { DistillStore, type Project, type Thread } from "./distill/store.ts";
 import { projectForPath, resolveRepoRoot } from "./distill/repos.ts";
+import { ignoredRepo } from "./distill/rules.ts";
 import { readGeneral } from "./general-settings.ts";
 import { auditQueryExpiry, enqueueAgentAudit, flushAgentAudit } from "./agent-audit.ts";
 import { RuntimeLog, contentRevision } from "./runtime-log.ts";
@@ -83,7 +84,7 @@ export class AgentReads {
       const repo = resolveRepoRoot(absolute, projects);
       if (repo) project = projectForPath(repo, projects);
     }
-    return project;
+    return project && !ignoredRepo(absolute, this.store.ignoredProjectKeys().repos) ? project : null;
   }
 
   private context(params: URLSearchParams) {

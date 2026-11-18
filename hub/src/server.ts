@@ -147,6 +147,9 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       }
       const entity = /^\/v1\/(threads|projects)\/([^/]+)$/.exec(url.pathname);
       if (method === "GET" && entity) return respond(store.view(entity[1] as "threads" | "projects",entity[2]!,url.searchParams.get("level") ?? "brief"));
+      if (method === "DELETE" && entity?.[1] === "projects") {
+        return store.removeProject(entity[2]!) ? Response.json({ removed: true }) : Response.json({ error: "项目不存在" }, { status: 404 });
+      }
       const day = /^\/v1\/days\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
       if (method === "GET" && day) return respond(store.dayView(day[1]!));
       const segment = /^\/v1\/days\/(\d{4}-\d{2}-\d{2})\/segments\/([\w:%.-]{1,200})$/.exec(url.pathname);

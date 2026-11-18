@@ -52,7 +52,7 @@ export function repairFrameBoundaries(store: DistillStore, frameIds: string[]) {
       for (const fid of c.frame_ids) sql.prepare("UPDATE frames SET status='new' WHERE id=? AND status='candidate'").run(fid);
       return false;
     }));
-    store.clearDerived(affected, projects, times, true);
+    store.clearDerived(affected, projects, times, { preserveResolvedPending: true });
     for (const id of sourceThreads) {
       const remaining = sql.prepare('SELECT f.t_start_ms,f.t_end_ms FROM frames f JOIN assignments a ON a.frame_id=f.id WHERE a.thread_id=? ORDER BY f.t_start_ms,f.id').all(id) as { t_start_ms: number; t_end_ms: number }[];
       let last = 0, sessions = 0;

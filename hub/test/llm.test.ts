@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { createLLM, type LLMRequest, type Spawn, type UsageRow } from "../src/llm/index.ts";
 import { loadConfig } from "../src/llm/config.ts";
 import { resetCodexCatalog } from "../src/llm/codex-cli.ts";
+import { DAY_SCHEMA, DAY_SYSTEM, normalizeDayOutput } from "../src/distill/prompts.ts";
 
 const dirs: string[] = [];
 const originalFetch = globalThis.fetch;
@@ -40,7 +41,8 @@ if (mode === "codex-error" || mode === "codex-echo") {
 }
 if (mode === "limit") { console.log(JSON.stringify({type:"result", subtype:"success", is_error:true, result:"You've hit your 5-hour limit · resets 7:20pm"})); process.exit(1); }
 if (mode === "exit" || mode === "echo") { console.error(mode === "echo" ? JSON.parse(stdin).prompt : "x".repeat(900)); process.exit(2); }
-const data = mode === "schema" ? {text:42} : {text:"hello"};
+const data = mode === "schema" ? {text:42} : mode === "legacy-day"
+  ? {highlight:{activity:"a1",text:"已完成试排。"},items:[],omissions:[]} : {text:"hello"};
 if (args[0] === "exec") {
   const schemaFile = args[args.indexOf("--output-schema")+1];
   const opt = (k) => { const a = args.find(x => x.startsWith(k + "=")); return a && JSON.parse(a.slice(k.length + 1)); };
@@ -89,6 +91,15 @@ test("Claude：安全参数、stdin、cwd、权限、结构化输出和 usage", 
   expect(f.rows).toHaveLength(1);
   expect(f.rows[0]).toMatchObject({ tier: "minute", provider: "claude-cli", model: "haiku", ok: 1, input_tokens: 12, output_tokens: 3, output_chars: 16, error: null });
   expect(f.rows[0]!.input_chars).toBe(Array.from(request.system + request.prompt).length);
+});
+
+test("每日概述向提供方请求新 schema，本地接受旧单编号响应", async () => {
+  const f = await fixture("claude-cli", "legacy-day");
+  const result = await f.llm.complete({ ...request, tier: "day", task: "day", system: DAY_SYSTEM,
+    schema: DAY_SCHEMA, normalizeOutput: normalizeDayOutput });
+  expect(result).toMatchObject({ ok: true, data: { highlight: { activities: ["a1"], text: "已完成试排。" }, items: [], omissions: [] } });
+  const [start] = await f.logs();
+  expect(JSON.parse(start.args[start.args.indexOf("--json-schema") + 1])).toEqual(DAY_SCHEMA);
 });
 
 test("Codex：安全参数、临时 schema 与输出、stdin 和 finally 清理", async () => {
