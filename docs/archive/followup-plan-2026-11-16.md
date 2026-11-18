@@ -1,10 +1,10 @@
 # 收敛遗留问题处理文档（2026-11-16）
 
-给执行者（Codex）的任务书。接在 `docs/refocus-plan-2026-11-16.md` 之后，处理它第 8 节列出的遗留项和设计问题。界面相关的问题在 `docs/ui-fix-plan-2026-11-16.md`。
+给执行者（Codex）的任务书。接在 `docs/archive/refocus-plan-2026-11-16.md` 之后，处理它第 8 节列出的遗留项和设计问题。界面相关的问题在 `docs/archive/ui-fix-plan-2026-11-16.md`。
 
 ## 0. 执行约定
 
-沿用 `docs/refocus-plan-2026-11-16.md` 第 0 节，全部适用。补充三条：
+沿用 `docs/archive/refocus-plan-2026-11-16.md` 第 0 节，全部适用。补充三条：
 
 - 本文第 2 节的决定用户已在 2026-11-16 全部确认，并记入 `AGENTS.md`。
 - 改整理提示词或整理节奏的任务，改动前后各跑一次 `scripts/agent-accuracy.ts`，分数写进汇报；分数下降就停下来说明。
@@ -56,7 +56,7 @@
 ### F3 指标口径和目标
 
 - 依赖 E4、E5。`scripts/agent-metrics.ts` 增加按工具排除，默认排除 `accuracy-eval`、`release-check` 等非真实使用的工具名，并在输出里列出排除了什么。
-- 把 E4 的目标值写进 `docs/refocus-plan-2026-11-16.md` 第 5 节和 `docs/design.md` 的验收一节。
+- 把 E4 的目标值写进 `docs/archive/refocus-plan-2026-11-16.md` 第 5 节和 `docs/design.md` 的验收一节。
 - 完成判据：脚本对真实数据重跑，汇报里给出排除前后的三个指标。
 
 ### F4 屏幕记录
