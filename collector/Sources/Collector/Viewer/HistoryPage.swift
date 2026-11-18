@@ -173,8 +173,8 @@ struct HistoryPage<Header: View>: View {
       header(loadedKey != nil && !records.isEmpty
         ? HistoryDayStats(count: allBlocks.count, activeSeconds: ActiveTime.seconds(records), start: records.map(\.start).min())
         : nil)
-        .padding(.horizontal, TimelineReadingLayout.edge)
-        .modifier(ReviewWidth(maxWidth: TimelineReadingLayout.width))
+        // 详细档是通栏：页首与下方泳道、活动行共用左右边距，不再单独收窄居中。
+        .padding(.horizontal, 20).padding(.top, 28).padding(.bottom, 12)
       Section {
         if let error = dayError ?? activity.error {
           Placeholder(kind: .error(error) { store.revision += 1 }).frame(height: 240)
