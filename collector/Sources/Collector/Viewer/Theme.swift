@@ -16,6 +16,7 @@ enum Palette {
   /// 错误、缺权限、录音中：只染文字和小图标，不铺大面积底色。
   static let attention = dynamic(0x9D2933, 0xE58A8F)
   static let ink = dynamic(0x1C1B1A, 0xF2EFEA)
+  static let readingBody = dynamic(0x45413C, 0xCCC7C0)
   /// 次要文字，对比度 ≥ 4.5。
   static let muted = dynamic(0x6E6860, 0xA8A197)
   /// 只用于图形和分隔，不用于文字。
