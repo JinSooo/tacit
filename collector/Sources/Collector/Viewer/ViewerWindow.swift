@@ -41,7 +41,8 @@ import CollectorCore
     let w = NSWindow(contentViewController: hosting)
     w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
     w.toolbarStyle = .unified
-    w.title = "Tacit"
+    // 首次打开就可能落在无标题页面。后续页面标题由 SwiftUI 桥接到窗口。
+    w.title = ""
     w.contentMinSize = NSSize(width: 1080, height: 640)
     w.setContentSize(NSSize(width: 1360, height: 880))
     w.isReleasedWhenClosed = false
