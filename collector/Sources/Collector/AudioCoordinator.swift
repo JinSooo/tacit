@@ -45,6 +45,7 @@ final class AudioCoordinator {
   private let calendarMeetings = CalendarMeetingQuery()
   private var failure: String?
   private var lastMaintenance = Date.distantPast
+  private var lastCleanup = Date.distantPast
   private var lastInitialize = Date.distantPast
   private let maintenance = BackgroundMaintenance()
   private var inventory: [AudioMetadata] = []
@@ -122,7 +123,10 @@ final class AudioCoordinator {
       if now.timeIntervalSince(lastSync) >= 300 || shouldRunWorker(now) { sync() }
       if now.timeIntervalSince(lastMaintenance) >= 30 {
         lastMaintenance = now
-        refreshInventory(cleanup: worker == nil && retentionKnown)
+        // 保留期按天计，过期清理 10 分钟一次足够；盘点仍每 30 秒一次。
+        let cleanup = worker == nil && retentionKnown && now.timeIntervalSince(lastCleanup) >= 600
+        if cleanup { lastCleanup = now }
+        refreshInventory(cleanup: cleanup)
         publish()
       }
     }
