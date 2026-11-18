@@ -141,6 +141,7 @@ test("项目整理只重送上次之后的新依据，事实只带未决和用�
     ctx.db.db.prepare("UPDATE projects SET needs_regen=1 WHERE id='p'").run();
     await projectStep({ db: ctx.db, llm }, ctx.store, at + 2);
     expect(prompts[1].completion_evidence).toHaveLength(0);
-    expect(prompts[1].facts.map((f: any) => f.kind)).toEqual(["open"]);
+    // 没有新依据时不能消解，未决也不再送。
+    expect(prompts[1].facts).toEqual([]);
   } finally { ctx.cleanup(); }
 });

@@ -16,7 +16,10 @@ export function projectRequest(store: DistillStore, projectId: string, name: str
   const facts = store.facts("project_id", projectId);
   const byRef = new Map(facts.map((f, i) => [`f${i + 1}`, f]));
   const factRefs = new Map([...byRef].map(([ref, f]) => [f.id, ref]));
-  const targets = facts.filter(f => f.origin === "llm" && (f.kind === "open" || f.kind === "next") && f.thread_id);
+  // 只消解本次送去的近期线程里的未决；归档线程的旧未决不再进带入，没必要每次重送（record-anything 曾有 310 条）。
+  const shown = new Set(threads.map(t => t.id));
+  const targets = facts.filter(f => f.origin === "llm" && (f.kind === "open" || f.kind === "next") && f.thread_id && shown.has(f.thread_id))
+    .sort((a, b) => Date.parse(b.valid_at) - Date.parse(a.valid_at)).slice(0, 60);
   const summaries = new Map<string, Thread>(threads.flatMap((t, i) => {
     const thread = store.thread(t.id);
     return thread?.brief && thread.project_id === projectId ? [[`t${i + 1}`, thread] as const] : [];
@@ -40,7 +43,8 @@ export function projectRequest(store: DistillStore, projectId: string, name: str
     if (refs.length) evidence.set(f.id, refs);
   }
   // 详细版由线程简略版写成；事实只送待消解的未决、本次的新依据和用户写的事实。
-  const targetIds = new Set(targets.map(f => f.id));
+  // 没有新依据时模型不能做消解，未决也不必送。
+  const targetIds = new Set(evidence.size ? targets.map(f => f.id) : []);
   const views = facts.filter(f => targetIds.has(f.id) || evidence.has(f.id) || f.origin === "user").map(f => ({ id: factRefs.get(f.id), kind: f.kind, text: redactString(f.text).text, origin: f.origin, at: f.valid_at,
     scope: { thread_id: f.thread_id ?? null, project_id: f.project_id ?? null }, evidence: evidence.get(f.id) ?? [] }));
   const options = [...targets.map(f => factRefs.get(f.id)!), ...summaries.keys()];
