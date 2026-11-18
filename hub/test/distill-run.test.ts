@@ -557,3 +557,17 @@ test("常规整理只在当天结束后、首次或按需重写线程详细版�
   await digestStep(deps, store, now, "wanted");
   expect(store.wantedDigests().size).toBe(0);
 });
+
+test("只有屏幕记录的片段不能单独发起新线程，可以并进已有候选（2026-11-18 MiniMax 回归）", async () => {
+  const screen = (startMin: number, title: string) => fixture({ source: "mac.screen", kind: "span", t_start: iso(base + startMin * MIN), t_end: iso(base + (startMin + 1) * MIN), context: { app: "synthetic.browser" }, title, body: "" });
+  const glance = screen(0, "合成文档页"), work = session(10, 5, "合成新工作"), later = screen(20, "合成新工作页");
+  ctx.db.ingest([glance, work, later]);
+  [glance, work, later].forEach((r, i) => store.createFrame({ id: `sk-${i}`, key: i === 1 ? `session:sk-${i}` : `window:sk-${i}`, record_ids: [r.id], t_start_ms: Date.parse(r.t_start), t_end_ms: Date.parse(r.t_end!), chars: 10, private: 0, status: "new" }));
+  // 模型给每个片段都提议同一个新线程。
+  const fake = fakeLLM({ assign: frames => frames.map(f => ({ frame_id: f.id, thread_id: null, new_thread_title: "合成新工作", ignore: false, confidence: 0.9 })) });
+  await assignStep({ db: ctx.db, llm: fake.llm }, store, base + 30 * MIN);
+  const status = (id: string) => (ctx.db.db.prepare("SELECT status FROM frames WHERE id=?").get(id) as { status: string }).status;
+  expect(status("sk-0")).toBe("ignored");
+  expect(status("sk-1")).not.toBe("ignored");
+  expect(status("sk-2")).not.toBe("ignored");
+});

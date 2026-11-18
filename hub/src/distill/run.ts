@@ -18,6 +18,7 @@ import { projectRequest, type ProjectModelOutput } from "./project-request.ts";
 import { groundedQuote } from "./quotes.ts";
 import { gitMaterialKey, materialBody, uniqueMaterials } from "./material.ts";
 import { evidenceTime } from "./evidence-time.ts";
+import { SKELETON_SOURCES } from "./day-evidence.ts";
 import { resolveRepoRoot } from "./repos.ts";
 import { readGeneral } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
@@ -290,6 +291,8 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
         let cand = item.thread_id?.startsWith("cand:") ? candidates.find(c => `cand:${c.id}` === item.thread_id) : undefined;
         if (!cand && title) cand = candidates.find(c => c.title === title);
         if (!cand && !title) { ignore(); continue; }
+        // 屏幕、浏览器、应用只是时间骨架（AGENTS.md）：可以并进已有线程或候选，不能单独发起新线程（2026-11-18）。
+        if (!cand && skeletonOnly(store, f)) { ignore(); continue; }
         if (!cand) {
           const project = new DistillRules(store).projectForFrame(f);
           cand = { id: ulid(now), title: title!, frame_ids: [], minutes: 0, last_ms: 0, project_id: project?.id ?? null };
@@ -316,6 +319,11 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
     })();
   }
   return { calls, assigned, created_threads: created, ignored, failed, candidates: candidates.length };
+}
+
+function skeletonOnly(store: DistillStore, f: Frame): boolean {
+  const sources = f.record_ids.map(id => store.hub.get(id)?.source).filter((s): s is string => !!s);
+  return sources.length > 0 && sources.every(s => SKELETON_SOURCES.has(s));
 }
 
 // ---------------- 3. 线程详细版 + 简略版 ----------------
@@ -738,7 +746,7 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
     })();
     return { calls, ok: false };
   };
-  const result = material.length ? await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM,
+  const result = material.length ? await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM, timeoutMs: 300_000,
     prompt: P.dayPrompt(date, material, cutoff), schema: P.DAY_SCHEMA, normalizeOutput: P.normalizeDayOutput }) : null;
   const calls = Number(!!result);
   if (result?.ok === false) return failed(calls, result.error === "记录已变化，等待重新整理");
@@ -774,7 +782,7 @@ export interface RoundOptions { backfill?: boolean; slow?: boolean; days?: "all"
 
 /** 快步骤（切片、归线程、当前状态、生命周期）每轮都跑；slow=true 时再跑线程、项目和日记。 */
 /** 额度、频率限制类错误：本轮剩下的调用直接跳过，不再继续消耗。 */
-export const QUOTA_ERROR = /\b429\b|\brate[ _-]?limit(?:ed|ing|s|_exceeded)?\b|\bquota\b|\binsufficient_quota\b|\busage[ _-]+limit\b|\b(?:hit|reached|exceeded)\s+(?:your\s+|the\s+)?(?:\d+[ -](?:hour|day|week|month)\s+)?(?:usage\s+)?limit\b|额度|限额|频率限制/i;
+export const QUOTA_ERROR = /\b429\b|\brate[ _-]?limit(?:ed|ing|s|_exceeded|_error)?\b|\bquota\b|\binsufficient_quota\b|\binsufficient[ _]balance(?:_error)?\b|\busage[ _-]+limit\b|\b(?:hit|reached|exceeded)\s+(?:your\s+|the\s+)?(?:\d+[ -](?:hour|day|week|month)\s+)?(?:usage\s+)?limit\b|额度|限额|频率限制/i;
 /** 日志只写固定类别；底层 stderr 可能带用户正文，不能直接写。 */
 export function modelFailureCategory(error: string): string {
   if (QUOTA_ERROR.test(error)) return "quota";

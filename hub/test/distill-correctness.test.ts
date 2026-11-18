@@ -15,8 +15,8 @@ const detail = { goal: "合成目标", progress: "旧进展", artifacts: { files
 function thread(id = "t") {
   store.upsertThread({ id, title: "同名事项", project_id: "p", domain: "work", status: "active", brief: "旧摘要", detail, last_ms: base, updated_at: iso(base - 2 * 86400_000), needs_regen: 0 });
 }
-function frame(id: string, spans: [number, number][], owner = "t") {
-  const records = spans.map(([a,b]) => fixture({ kind: "span", t_start: iso(base + a * MIN), t_end: iso(base + b * MIN) }));
+function frame(id: string, spans: [number, number][], owner = "t", source = "mac.screen") {
+  const records = spans.map(([a,b]) => fixture({ source, kind: "span", t_start: iso(base + a * MIN), t_end: iso(base + b * MIN) }));
   ctx.db.ingest(records);
   const f = { id, key: `app:${id}`, record_ids: records.map(r => r.id), t_start_ms: base + Math.min(...spans.map(s => s[0])) * MIN,
     t_end_ms: base + Math.max(...spans.map(s => s[1])) * MIN, chars: 1, private: 0, status: "new" as const };
@@ -171,7 +171,8 @@ test("生成简略版期间用户再次纠错，保留待更新标记供下轮�
 });
 
 test("候选事项的十五分钟门槛不把片段内空档算作活动", async () => {
-  thread(); const f=frame("sparse",[[0,2],[9,11],[18,20]]);
+  // 纯屏幕片段不能单独发起候选（2026-11-18），这里用有正文的来源。
+  thread(); const f=frame("sparse",[[0,2],[9,11],[18,20]],"t","manual.note");
   ctx.db.db.prepare("DELETE FROM assignments WHERE frame_id=?").run(f.id);
   ctx.db.db.prepare("UPDATE frames SET status='new' WHERE id=?").run(f.id);
   const llm: LLM = { async complete<T>(req: LLMRequest) { const input = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!); return { ok:true,data:{ items:[{ frame_id:input[0].id,thread_id:null,new_thread_title:"稀疏活动",ignore:false,confidence:0.9 }] } as T,ms:1 }; } };
