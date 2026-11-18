@@ -174,7 +174,7 @@ struct HistoryPage<Header: View>: View {
         ? HistoryDayStats(count: allBlocks.count, activeSeconds: ActiveTime.seconds(records), start: records.map(\.start).min())
         : nil)
         // 详细档是通栏：页首与下方泳道、活动行共用左右边距，不再单独收窄居中。
-        .padding(.horizontal, 20).padding(.top, 28).padding(.bottom, 12)
+        .padding(.horizontal, HistoryLayout.inset).padding(.top, 28).padding(.bottom, 12)
       Section {
         if let error = dayError ?? activity.error {
           Placeholder(kind: .error(error) { store.revision += 1 }).frame(height: 240)
@@ -210,7 +210,7 @@ struct HistoryPage<Header: View>: View {
         .transition(.opacity)
       }
     }
-    .padding(.horizontal, 20).padding(.vertical, 12)
+    .padding(.horizontal, HistoryLayout.inset).padding(.vertical, 12)
     .background {
       Rectangle().fill(Palette.paper)
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.hairline).frame(height: 1) }
@@ -245,7 +245,7 @@ struct HistoryPage<Header: View>: View {
     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
       let hour = cal.component(.hour, from: item.start)
       if i == 0 || cal.component(.hour, from: items[i - 1].start) != hour {
-        HourMark(hour: hour).padding(.top, i == 0 ? 4 : 12).padding(.horizontal, 20)
+        HourMark(hour: hour).padding(.top, i == 0 ? 4 : 12).padding(.horizontal, HistoryLayout.inset)
       }
       switch item {
       case .single(let block):
@@ -255,7 +255,7 @@ struct HistoryPage<Header: View>: View {
         MinorSegmentsRow(blocks: group, expanded: expanded.contains(item.id), includesOmissions: includesOmissions) {
           withAnimation(.easeOut(duration: 0.2)) { if expanded.contains(item.id) { expanded.remove(item.id) } else { expanded.insert(item.id) } }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, HistoryLayout.inset)
         .id(item.id)
         if expanded.contains(item.id) {
           ForEach(group) { block in segmentRow(block, omitted: omitted) }
@@ -271,7 +271,7 @@ struct HistoryPage<Header: View>: View {
       withAnimation(.easeOut(duration: 0.2)) { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
       selection = .segment(block.id)
     }
-    .padding(.horizontal, 20)
+    .padding(.horizontal, HistoryLayout.inset)
     .id(block.id)
     if expanded.contains(block.id) {
       ForEach(RecordRuns.collapse(block.records, conversations: conversations)) { run in
@@ -280,7 +280,7 @@ struct HistoryPage<Header: View>: View {
                   expanded: false, nested: true, includesOmissions: hasOmission) {
           selection = .record(run.newest.id)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, HistoryLayout.inset)
         .id(run.id)
         .transition(.opacity)
       }
@@ -463,4 +463,9 @@ enum ViewerCalendar {
     c.firstWeekday = first
     return c
   }
+}
+
+/// 详细档通栏的左右边距：页首、泳道和活动行共用，留出与窗口边缘的呼吸空间。
+enum HistoryLayout {
+  static let inset: CGFloat = 44
 }
