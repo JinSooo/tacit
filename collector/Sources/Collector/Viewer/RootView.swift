@@ -4,34 +4,31 @@ import CollectorCore
 
 struct RootView: View {
   @Environment(ViewerStore.self) private var store
+  @AppStorage("viewer.sidebarVisible") private var sidebarVisible = true
+
+  private var columnVisibility: Binding<NavigationSplitViewVisibility> {
+    Binding(get: { sidebarVisible ? .all : .detailOnly },
+            set: { sidebarVisible = $0 != .detailOnly })
+  }
+
+  private var sidebarAction: String { sidebarVisible ? "隐藏侧栏" : "显示侧栏" }
 
   var body: some View {
     @Bindable var store = store
     let section = store.section
-    NavigationSplitView {
+    NavigationSplitView(columnVisibility: columnVisibility) {
       Sidebar()
         .navigationSplitViewColumnWidth(min: 200, ideal: 228, max: 300)
     } detail: {
       NavigationStack(path: $store.path) {
         page(section)
-          .toolbar { if needsAnchor(section) { ToolbarAnchor() } }
+          .toolbar { sidebarToggle }
           .navigationDestination(for: Route.self) { route in
-            switch route {
-            case .thread(let id): ThreadPage(id: id)
-            case .project(let id): ProjectPage(id: id)
-            case .projectContext(let id): ProjectContextPage(id: id)
-            case .reviewItem(let day, let id): ReviewItemPage(day: day, id: id)
-            case .reviewRecord(let id):
-              RecordInspector(id: id) { _ in
-                if store.path.last == .reviewRecord(id) { store.path.removeLast() }
-              }
-              .navigationTitle("历史记录")
-              .toolbar { BackButton() }
-            case .runtime: RuntimePage().toolbar { BackButton() }
-            }
+            destination(route).toolbar { sidebarToggle }
           }
       }
     }
+    .toolbar(removing: .sidebarToggle)
     .background(BehindWindowMaterial().ignoresSafeArea())
     .tint(Palette.accent)
     .accentColor(Palette.accent)
@@ -49,11 +46,14 @@ struct RootView: View {
     }
   }
 
-  /// 只有本身没有工具栏项的页面才放占位：占位项也占一格间距，放在别的页面上会把标题和按钮推开 8pt。
-  private func needsAnchor(_ section: Page) -> Bool {
-    switch section {
-    case .settings, .project: return true
-    default: return false
+  // 导航栈切换页面时会替换工具栏。根页和推入的详情都保留此项，避免标题栏高度变化。
+  private var sidebarToggle: some ToolbarContent {
+    ToolbarItem(placement: .navigation) {
+      Button { sidebarVisible.toggle() } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar) }
+        .help(sidebarAction)
+        .accessibilityLabel(sidebarAction)
+        .accessibilityValue(sidebarVisible ? "已展开" : "已折叠")
+        .keyboardShortcut("s", modifiers: [.control, .command])
     }
   }
 
@@ -63,6 +63,22 @@ struct RootView: View {
     case .search: TimelineSearchPage()
     case .settings: SettingsPage()
     case .project(let id): ProjectPage(id: id).id(id)
+    }
+  }
+
+  @ViewBuilder private func destination(_ route: Route) -> some View {
+    switch route {
+    case .thread(let id): ThreadPage(id: id)
+    case .project(let id): ProjectPage(id: id)
+    case .projectContext(let id): ProjectContextPage(id: id)
+    case .reviewItem(let day, let id): ReviewItemPage(day: day, id: id)
+    case .reviewRecord(let id):
+      RecordInspector(id: id) { _ in
+        if store.path.last == .reviewRecord(id) { store.path.removeLast() }
+      }
+      .navigationTitle("历史记录")
+      .toolbar { BackButton() }
+    case .runtime: RuntimePage().toolbar { BackButton() }
     }
   }
 }
@@ -126,20 +142,6 @@ struct Sidebar: View {
       removalError = error.localizedDescription
     }
   }
-}
-
-/// 页面一个工具栏项都没有时（设置、从侧栏进的项目页），SwiftUI 会把整条工具栏拆掉，
-/// 标题栏从 52pt 缩到 32pt，红绿灯和侧栏跟着跳。放一个看不见的固定项让工具栏一直在。
-/// 放在右侧：这两页右侧本来是空的，放左侧会把标题推开。
-struct ToolbarAnchor: ToolbarContent {
-  var body: some ToolbarContent {
-    if #available(macOS 26.0, *) {
-      ToolbarItem(placement: .primaryAction) { anchor }.sharedBackgroundVisibility(.hidden)
-    } else {
-      ToolbarItem(placement: .primaryAction) { anchor }
-    }
-  }
-  var anchor: some View { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
 }
 
 /// 侧栏默认图标偏大，压到和正文差不多的视觉重量。
