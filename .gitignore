@@ -31,3 +31,6 @@ __pycache__/
 *.m4a
 *.pcm
 *.aiff
+
+# 发布用安装包（scripts/release-dmg.sh）
+/dist/

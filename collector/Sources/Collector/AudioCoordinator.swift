@@ -44,6 +44,7 @@ final class AudioCoordinator {
   private var meetingHistory = MeetingMicrophoneHistory()
   private let calendarMeetings = CalendarMeetingQuery()
   private var failure: String?
+  private lazy var models = AudioModelDownload(config: config)
   private var lastMaintenance = Date.distantPast
   private var lastCleanup = Date.distantPast
   private var lastInitialize = Date.distantPast
@@ -148,7 +149,18 @@ final class AudioCoordinator {
   private func start() {
     lastStart = Date()
     let model = config.dataDir.appendingPathComponent("models/silero_vad.onnx").path
-    guard FileManager.default.fileExists(atPath: model) else { failure = "缺少语音模型，请重新运行 ./install.sh"; publish(); return }
+    guard models.ready else {
+      // 第一次开启录音才下载；下载完让下一轮状态检查立即开始录音，失败则 60 秒后随下一次启动重试。
+      failure = "正在下载语音模型（约 270MB），完成后自动开始录音"
+      models.start { [weak self] ok in
+        guard let self else { return }
+        self.queue.async {
+          if ok { self.failure = nil; self.lastStart = .distantPast } else { self.failure = self.models.lastFailure }
+          self.publish()
+        }
+      }
+      publish(); return
+    }
     guard #available(macOS 14.2, *) else { failure = "系统声音录音需要 macOS 14.2 或更新版本"; publish(); return }
     do {
       try startGuard.attempt {

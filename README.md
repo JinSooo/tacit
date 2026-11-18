@@ -13,7 +13,7 @@
 
 Tacit 用 AI 会话、微信对话和录音整理每天发生的事和你做的决定，结论可以点回原文。屏幕和浏览器提供应用、标题和时长，采集的文字仍可搜索。你可以在 Mac 的时间线展开每段活动，也可以让 Claude Code 或 Codex 查询项目进展。
 
-> **开发预览 v0.1.0**：当前主线是 Apple 芯片 Mac 版本，目标系统为 macOS 14 及以上。已在开发机安装试用，全天资源占用、记录准确率和更多系统环境仍在验收。暂不提供经过公证的安装包。
+> **开发预览**：当前提供 Apple 芯片 Mac 版本，需要 macOS 14 及以上。已在开发机安装试用，全天资源占用、记录准确率和更多系统环境仍在验收。安装包用自签名证书签名，没有经过 Apple 公证。
 
 ## 从一天的活动，到能接着用的上下文
 
@@ -30,20 +30,17 @@ Tacit 用 AI 会话、微信对话和录音整理每天发生的事和你做的�
 
 ## 开始使用
 
-需要 Apple 芯片 Mac、完整的 Xcode（Swift 6 及以上，含 `actool`）和 [Bun](https://bun.sh)。首次打开 Xcode 完成组件安装，仅安装 Command Line Tools 不足以覆盖应用资源编译。
+需要 Apple 芯片 Mac，macOS 14 及以上。
 
-```sh
-git clone --branch v0.1.0 https://github.com/JinSooo/tacit.git
-cd tacit
-bun install --frozen-lockfile
-./install.sh
-```
+1. 从 [Releases](https://github.com/JinSooo/tacit/releases/latest) 下载 `Tacit-版本号.dmg`，打开后把 Tacit 拖进“应用程序”。
+2. 从“应用程序”打开 Tacit。第一次打开会被 macOS 拦下，因为安装包没有经过 Apple 公证：点“完成”，到 **系统设置 › 隐私与安全性**，在页面下方找到 Tacit，点 **仍要打开** 并输入密码。没有这个按钮时，在终端运行 `xattr -dr com.apple.quarantine /Applications/Tacit.app` 后再打开。
+3. Tacit 出现在菜单栏后会自己准备好后台服务，不需要命令行。
 
-去掉 `--branch v0.1.0` 即安装主线最新代码。各版本说明见 [Releases](https://github.com/JinSooo/tacit/releases)。仓库为私有时，克隆需要有访问权限的 GitHub 账号。首次安装会下载并校验语音模型与推理库，然后构建、自签名应用，并安装本机后台服务。安装过程需要 Python 3；运行记录整理还需要可用的模型服务。
+接着从菜单栏打开 Tacit，时间线顶部会列出还差的几步：
 
-1. 从菜单栏打开 Tacit，在设置的数据源页面完成系统授权。
+1. 在设置的数据源页面完成系统授权。
 2. 在 **设置 › AI 模型** 选择整理所用的模型，并测试连接。全新配置默认使用本机已登录的 Claude Code，也可以改用 Codex 或 API。
-3. 在 **设置 › 数据源** 选择要记录的来源。需要记录微信对话时，在此开启并授权。
+3. 在 **设置 › 数据源** 选择要记录的来源。需要记录微信对话时，在此开启并授权。第一次开启录音会下载约 270MB 的本机语音模型。
 4. 在 **设置 › AI 工具** 连接你使用的工具，再到 **维护 › 密钥备份** 保存密钥备份。
 
 常规整理每 15 分钟运行一轮。模型调用会消耗你的 API 额度或账号用量；费用取决于活动量、历史导入和所选模型。
@@ -100,14 +97,12 @@ bun install --frozen-lockfile
 
 ## 更新与卸载
 
-```sh
-# 更新到指定版本并重新安装，保留已有数据与设置
-git fetch --tags
-git checkout v0.1.0
-./install.sh
+**更新**：下载新版本的 dmg，先从菜单栏右键菜单退出 Tacit，再把新版本拖进“应用程序”替换旧的。数据、设置和系统权限都会保留；新版本第一次打开如果又被拦下，按上面的方法放行。
 
-# 卸载时会询问是否一并删除数据
-./uninstall.sh
+**卸载**：在终端运行下面这行，它会询问是否一并删除数据。
+
+```sh
+sh /Applications/Tacit.app/Contents/Resources/uninstall.sh
 ```
 
 第三方数据源的安装入口目前已收起；已安装的扩展可以在数据源详情里更新或卸载。清单格式与示例见 [插件开发说明](docs/plugins.md)。
@@ -120,6 +115,21 @@ git checkout v0.1.0
 | `hub/` | Bun 后台、加密数据库、整理任务和 AI 接口 |
 | `web/` | React 网页备用入口 |
 | `plugins/`、`schema/` | 内置数据源、记录契约与跨端测试样例 |
+
+### 从源码安装
+
+需要完整的 Xcode（Swift 6 及以上，含 `actool`）和 [Bun](https://bun.sh)。首次打开 Xcode 完成组件安装，仅安装 Command Line Tools 不足以覆盖应用资源编译。
+
+```sh
+git clone https://github.com/JinSooo/tacit.git
+cd tacit
+bun install --frozen-lockfile
+./install.sh
+```
+
+仓库为私有时，克隆需要有访问权限的 GitHub 账号。`./install.sh` 在本机构建并签名应用，装进“应用程序”，再走和安装包首次打开相同的准备流程；重复运行就是升级，`./uninstall.sh` 卸载。发布安装包用 `scripts/release-dmg.sh`，见 [安装细节](docs/installation.md)。
+
+### 测试
 
 在仓库根目录运行：
 

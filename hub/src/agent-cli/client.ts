@@ -22,7 +22,7 @@ export async function readHub(kind: string, params: URLSearchParams, signal: Abo
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal, redirect: "error",
     });
   } catch {
-    throw new AgentError(signal.aborted ? "查询 hub 超时" : "hub 没运行，请运行 ./install.sh");
+    throw new AgentError(signal.aborted ? "查询 hub 超时" : "Tacit 后台服务没运行，请打开 Tacit");
   }
   // 不转述服务端错误正文，避免把请求或鉴权信息带进错误通道。
   // 例外：写入的 400 和 503 的 error 是 hub 给出的可读提示。

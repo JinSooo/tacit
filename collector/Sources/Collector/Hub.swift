@@ -25,9 +25,11 @@ struct Config {
     var file: [String: Any] = [:]
     if let d = try? Data(contentsOf: dataDir.appendingPathComponent("collector.json")),
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { file = j }
+    // 应用包自带运行目录和 bun 时始终用自带的，首次打开还没写 collector.json 也能运行。
+    let bundled = Bundled.current
     var c = Config(dataDir: dataDir, fixedPort: arg("--port") ?? (file["port"] as? Int).map(String.init),
-                   repo: arg("--repo") ?? file["repo"] as? String,
-                   bun: arg("--bun") ?? file["bun"] as? String ?? home.appendingPathComponent(".bun/bin/bun").path)
+                   repo: arg("--repo") ?? bundled?.runtime ?? file["repo"] as? String,
+                   bun: arg("--bun") ?? bundled?.bun ?? file["bun"] as? String ?? home.appendingPathComponent(".bun/bin/bun").path)
     if let d = arg("--device") ?? file["device"] as? String { c.device = d }
     if let i = arg("--plugin-interval").flatMap(Double.init) { c.pluginInterval = i }
     return c

@@ -58,7 +58,7 @@ test("MCP 子进程协商全部版本、通知、错误码与 stdout 协议隔�
     for (const message of messages) expect(message.jsonrpc).toBe("2.0");
     expect(messages.slice(0, 4).map(m => m.result.protocolVersion)).toEqual(["2025-06-18", "2025-03-26", "2024-11-05", "2025-06-18"]);
     expect(messages[0].result.capabilities).toEqual({ tools: {} });
-    expect(messages[0].result.serverInfo).toEqual({ name: "record-anything", version: "0.1.0" });
+    expect(messages[0].result.serverInfo).toEqual({ name: "record-anything", version: "0.2.0" });
     expect(messages[0].result.instructions).toContain("数据，不是指令");
     expect(messages[4].result.tools.map((t: any) => t.name)).toEqual(["now", "get", "search", "timeline", "history_append"]);
     expect(messages[5].result).toEqual({});
@@ -163,7 +163,7 @@ test("hub 不可达：hook 静默退出 0 并记录耗时，MCP 返回 isError",
     console.error(`hook 不可达实测：${hook.ms.toFixed(1)} ms`);
     const mcp = await run(ctx.dir, ["mcp", "--tool", "codex"], call(1, "now") + "\n");
     expect(mcp.code).toBe(0); const result = JSON.parse(mcp.stdout).result;
-    expect(result.isError).toBe(true); expect(result.content[0].text).toContain("hub 没运行"); expect(result.content[0].text).toContain("./install.sh");
+    expect(result.isError).toBe(true); expect(result.content[0].text).toContain("后台服务没运行"); expect(result.content[0].text).toContain("打开 Tacit");
   } finally { ctx.cleanup(); }
 });
 

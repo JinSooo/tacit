@@ -27,7 +27,7 @@ final class AudioPipeline {
     config.silero_vad.min_speech_duration = 0.25; config.silero_vad.window_size = 512
     config.silero_vad.max_speech_duration = 20
     guard let vad = SherpaOnnxCreateVoiceActivityDetector(&config, 30) else {
-      free(model); free(provider); throw AudioCaptureError("语音模型加载失败，请重新运行 ./install.sh")
+      free(model); free(provider); throw AudioCaptureError("语音模型加载失败，请关闭录音再打开重试")
     }
     self.vad = vad
   }

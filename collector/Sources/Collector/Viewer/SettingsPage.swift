@@ -350,7 +350,7 @@ struct MaintenanceSettingsView: View {
         }
       }
       if !c.pluginsAvailable {
-        SettingsMessage(text: "找不到 bun 或安装目录，插件类数据源暂时不能运行。重新运行一次 install.sh 就能修好。")
+        SettingsMessage(text: "安装不完整，AI 会话和浏览器等数据源暂时不能运行。重新安装 Tacit 就能修好。")
       }
       operation(.syncAll, verb: "同步", job: c.jobs[.syncAll], extra: latest("round")?.statusText,
                 what: "把还没送到后台服务的记录送过去，让文件、日历和各插件读一次新内容，再整理一轮。",
@@ -462,7 +462,7 @@ enum KeyBackup {
   static func copy() async -> State {
     let config = Config.load()
     guard let repo = config.repo, FileManager.default.isExecutableFile(atPath: config.bun) else {
-      return .failed("找不到 bun 或安装目录，重新运行一次 install.sh 再试。")
+      return .failed("安装不完整，请重新安装 Tacit 再试。")
     }
     let result: (status: Int32, out: String) = await Task.detached {
       let p = Process(), out = Pipe()

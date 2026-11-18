@@ -106,7 +106,7 @@
 
 ### 3.1 设置（网页和 Mac 设置页用，`hub/src/settings.ts`）
 
-端口来源（`hub/src/hub-json.ts` 的 `resolvePort`，中枢、`cli.ts open`、MCP 客户端共用）：环境变量 `RA_PORT` > `<数据目录>/hub.json` 的 `port`（1024–65535）> `47823`。采集端 `Config.load` 的顺序是 `--port` > `collector.json` 的 `port` > `hub.json` 的 `port` > `47823`；`install.sh` 的健康检查也读 `hub.json`。
+端口来源（`hub/src/hub-json.ts` 的 `resolvePort`，中枢、`cli.ts open`、MCP 客户端共用）：环境变量 `RA_PORT` > `<数据目录>/hub.json` 的 `port`（1024–65535）> `47823`。采集端 `Config.load` 的顺序是 `--port` > `collector.json` 的 `port` > `hub.json` 的 `port` > `47823`；安装准备（`hub/src/setup.ts`）的健康检查也读 `hub.json`。
 
 错误一律 `{ "error": "<中文说明>" }`：参数不合法 400，状态冲突 409，写文件或钥匙串失败 500（不带细节）。所有接口撞上别的进程的写锁时返回 503 `数据库忙，稍后再试`：中枢单线程，`serve` 只等锁 300 毫秒，调用方稍后重试。请求体只接受列出的字段，多余字段 400。
 
@@ -369,7 +369,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 ### 5.2 模型与库
 
 - sherpa-onnx v2.0.1（`sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib`），dylib 打进 app 的 `Contents/Frameworks` 并用同一张自签名证书签名；头文件 `sherpa-onnx/c-api/c-api.h`（同版本源码）。
-- 模型由 `install.sh` 下载到 `<数据目录>/models/`，不进安装包、不进仓库，下载后校验 sha256，不符就报错退出：
+- 模型在第一次开启录音时由 `cli.ts audio-models`（`hub/src/audio-models.ts`）下载到 `<数据目录>/models/`，不进安装包、不进仓库，逐个校验 sha256，不符就不放进去。SenseVoice 两个文件优先从 Hugging Face `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17` 单独下载，失败才从下表的整包取：
 
 | 文件 | 来源（github.com/k2-fsa/sherpa-onnx/releases/download/…） | sha256 |
 |---|---|---|

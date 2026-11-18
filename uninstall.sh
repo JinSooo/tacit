@@ -1,5 +1,5 @@
 #!/bin/sh
-# 卸载 record-anything：停止并移除 hub、提炼与采集端的开机自启、采集端应用和系统权限。数据默认保留。
+# 卸载 Tacit（源码目录或应用包 Contents/Resources 里都可运行）：停止并移除 hub、提炼与采集端的开机自启、采集端应用和系统权限。数据默认保留。
 set -eu
 . "$(dirname "$0")/scripts/mac-app.sh"
 DATA="$HOME/Library/Application Support/record-anything"
@@ -21,6 +21,8 @@ for l in collector distill hub; do
   rm -f "$AGENTS/dev.record-anything.$l.plist"
   rm -f "$DATA/launch-agents/dev.record-anything.$l.plist"
 done
+# 重新安装时按全新安装重新准备。
+rm -f "$DATA/app-setup.json"
 for app in "/Applications/Tacit.app" "$HOME/Applications/Tacit.app" \
            "/Applications/Record Anything.app" "$HOME/Applications/Record Anything.app"; do
   if tacit_owns_bundle "$app"; then rm -rf "$app"; fi

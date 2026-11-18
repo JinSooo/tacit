@@ -54,6 +54,20 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     try { console.log(JSON.stringify(new AudioStore(db).consolidateAll())); } finally { db.close(); }
     return;
   }
+  if (command === "setup") {
+    const app = argv[argv.indexOf("--app") + 1];
+    const flags = argv.slice(1).filter((a, i, all) => a !== "--app" && all[i - 1] !== "--app");
+    if (!argv.includes("--app") || !app || flags.some(f => !["--install", "--no-distill"].includes(f))) throw new Error("用法：bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]");
+    const { setup } = await import("./setup.ts");
+    await setup({ app, install: flags.includes("--install"), distill: flags.includes("--no-distill") ? false : flags.includes("--install") ? true : undefined });
+    return;
+  }
+  if (command === "audio-models") {
+    if (argv.length !== 1) throw new Error("用法：bun hub/src/cli.ts audio-models");
+    const [{ ensureAudioModels }, { dataDirOf }] = await Promise.all([import("./audio-models.ts"), import("./hub-json.ts")]);
+    await ensureAudioModels(join(dataDirOf(), "models"), fetch, m => console.log(m));
+    return;
+  }
   if (command === "keys") {
     if (name !== "export" || argv.length !== 2) throw new Error("用法：bun hub/src/cli.ts keys export");
     const { exportKeys } = await import("./keys.ts");
@@ -194,7 +208,11 @@ if (import.meta.main) main().catch(error => {
     const code = (error as { code?: string })?.code;
     console.log(JSON.stringify({ failure: error?.name === "SandboxUnavailableError" ? "sandbox" : code === "ENOENT" ? "missing_file" : code === "EACCES" || code === "EPERM" ? "permission" : "process" }));
   }
-  console.error("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。");
-  console.error(cliErrorDetail(error));
+  // 安装准备和模型下载不接触记录正文，原样给出原因。
+  if (["setup", "audio-models"].includes(process.argv[2] ?? "")) console.error(error instanceof Error ? error.message : String(error));
+  else {
+    console.error("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。");
+    console.error(cliErrorDetail(error));
+  }
   process.exitCode = 1;
 });

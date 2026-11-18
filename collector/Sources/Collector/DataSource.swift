@@ -29,7 +29,7 @@ final class PluginSource: DataSource {
   func runNow() { scheduler.run([descriptor.id], since: nil) }
   var running: Bool { scheduler.isRunning(descriptor.id) }
   var detail: (text: String, ok: Bool) {
-    if !scheduler.available { return ("找不到 bun 或安装目录，重新运行一次 install.sh", false) }
+    if !scheduler.available { return ("安装不完整，请重新安装 Tacit", false) }
     if descriptor.id == "shell" && !ShellHookFile.installed { return ("~/.zshrc 里还没有记录钩子", false) }
     if running { return ("运行中…", true) }
     guard let o = scheduler.outcome(descriptor.id) else { return ("还没运行过", true) }
@@ -97,6 +97,6 @@ enum ShellHookFile {
 
   enum HookError: LocalizedError {
     case noRepo
-    var errorDescription: String? { "找不到 record-anything 的安装目录，重新运行一次 install.sh 再试。" }
+    var errorDescription: String? { "安装不完整，请重新安装 Tacit 再试。" }
   }
 }

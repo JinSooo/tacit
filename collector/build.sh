@@ -21,7 +21,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSAccentColorName</key><string>AccentColor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
@@ -49,6 +49,15 @@ iconutil -c icns build/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf build/AppIcon.iconset
 # 第二个可执行文件由转写任务提供；不存在时采集端照常构建。
 if [ -f "$BIN/ra-audio-worker" ]; then cp "$BIN/ra-audio-worker" "$APP/Contents/MacOS/"; fi
+# 后台服务的运行时随应用分发，用户不用自己装 Bun。保留 Bun 官方签名（含 JIT 所需的权限），不重签。
+BUN_SRC="$(/usr/bin/readlink -f "$(command -v bun)")"
+codesign -dv "$BUN_SRC" 2>&1 | grep -q '^TeamIdentifier=7FRXF46ZSN$' || { echo "$BUN_SRC 不是 Bun 官方签名的版本" >&2; exit 1; }
+lipo -archs "$BUN_SRC" | grep -qw arm64 || { echo "$BUN_SRC 不含 arm64" >&2; exit 1; }
+cp "$BUN_SRC" "$APP/Contents/MacOS/bun"
+# 卸载脚本随应用分发，安装包用户也能完整卸载。
+cp ../uninstall.sh "$APP/Contents/Resources/uninstall.sh"
+mkdir -p "$APP/Contents/Resources/scripts"
+cp ../scripts/mac-app.sh "$APP/Contents/Resources/scripts/mac-app.sh"
 cat > build/audio.entitlements <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -59,7 +68,8 @@ PLIST
 # Hardened Runtime 下缺这项时，日历授权请求会被直接拒绝，不弹窗。
 sed 's#</dict>#  <key>com.apple.security.personal-information.calendars</key><true/>\n</dict>#' build/audio.entitlements > build/app.entitlements
 # 回归检查：构建 SDK 被记成部署目标时，系统让 SwiftUI 按 macOS 14 的兼容行为运行（工具栏图标偏上），见 swift.sh。
-for bin in "$APP/Contents/MacOS/"*; do
+for bin in "$APP/Contents/MacOS/Tacit" "$APP/Contents/MacOS/ra-audio-worker"; do
+  [ -f "$bin" ] || continue
   sdk="$(otool -l "$bin" | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "sdk" { print $2; exit }')"
   [ "$sdk" != "14.0" ] || { echo "$bin 的构建 SDK 被记成 14.0（应为 $(xcrun --sdk macosx --show-sdk-version)）" >&2; exit 1; }
 done

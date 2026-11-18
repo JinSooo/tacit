@@ -19,7 +19,7 @@ export function exportKeys(read: ReadKey = readKeychain, today = new Date()): { 
     `# record-anything 密钥备份（${today.toLocaleDateString("sv-SE")}）`,
     "# 存进密码管理器，不要存成普通文件，也不要发给别人。",
     "# 恢复：先把数据目录拷回 ~/Library/Application Support/record-anything/，",
-    "# 再在终端运行下面几行，最后运行 ./install.sh。顺序不能反，否则安装会生成新密钥。",
+    "# 再在终端运行下面几行，最后安装并打开 Tacit。顺序不能反，否则会生成新密钥。",
   ];
   const missing: string[] = [];
   for (const { account, label } of KEY_ACCOUNTS) {

@@ -32,3 +32,14 @@ import Testing
   #expect(FileManager.default.fileExists(atPath: startup.file("hub", enabled: true).path))
   #expect(!FileManager.default.fileExists(atPath: startup.file("hub", enabled: false).path))
 }
+
+/// 从安装盘或被系统随机挪动的位置打开时不能注册后台服务：路径在弹出安装盘或重启后就失效。
+@Test func appPlacementOnlyPreparesServicesFromApplications() {
+  let home = "/Users/someone"
+  #expect(AppPlacement.of(bundlePath: "/Applications/Tacit.app", home: home) == .installed)
+  #expect(AppPlacement.of(bundlePath: "/Users/someone/Applications/Tacit.app", home: home) == .installed)
+  #expect(AppPlacement.of(bundlePath: "/Volumes/Tacit/Tacit.app", home: home) == .mustMove)
+  #expect(AppPlacement.of(bundlePath: "/private/var/folders/x/T/AppTranslocation/ABC/d/Tacit.app", home: home) == .mustMove)
+  #expect(AppPlacement.of(bundlePath: "/Users/someone/src/tacit/collector/build/Tacit.app", home: home) == .elsewhere)
+  #expect(AppPlacement.of(bundlePath: "/Applications/Utilities/Tacit.app", home: home) == .elsewhere)
+}
