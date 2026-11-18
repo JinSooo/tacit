@@ -188,7 +188,7 @@ export class HubDB {
     })();
   }
 
-  list(params: URLSearchParams, { collapseScreenMatches = false } = {}): { records: Partial<StoredRecord>[]; next_cursor: string | null } {
+  list(params: URLSearchParams, { collapseScreenMatches = false, prioritizeContent = false } = {}): { records: Partial<StoredRecord>[]; next_cursor: string | null } {
     const where: string[] = [];
     const args: unknown[] = [];
     for (const field of ["device", "source"]) if (params.has(field)) { where.push(`r.${field}=?`); args.push(params.get(field)); }
@@ -211,19 +211,31 @@ export class HubDB {
     const limit = Number(params.get("limit") ?? 50);
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new InputError("limit 必须是 1–500 的整数");
     const cursor = params.get("cursor");
+    // Agent 独立使用 [来源层, 时间, id]；普通列表仍使用 [时间, id]。
+    const tierSql = "CASE WHEN r.source IN ('mac.screen','mac.browser','mac.app') THEN 1 ELSE 0 END";
+    const tierOf = (row: Row) => ["mac.screen", "mac.browser", "mac.app"].includes(String(row.source)) ? 1 : 0;
     let position: [number, string] | undefined;
+    let cursorTier = 0;
     if (cursor) {
       try {
-        const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+        if (prioritizeContent && (!/^[A-Za-z0-9_-]+$/.test(cursor) || Buffer.from(cursor, "base64url").toString("base64url") !== cursor)) throw new Error();
+        let parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+        if (prioritizeContent) {
+          if (!Array.isArray(parsed) || parsed.length !== 3 || ![0, 1].includes(parsed[0])) throw new Error();
+          cursorTier = parsed[0];
+          parsed = parsed.slice(1);
+        }
         if (!Array.isArray(parsed) || parsed.length !== 2 || !Number.isSafeInteger(parsed[0]) || typeof parsed[1] !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(parsed[1])) throw new Error();
         position = [parsed[0], parsed[1]];
       } catch { throw new InputError("cursor 无效"); }
     }
     if (position && !collapseScreenMatches) {
-      where.push("(r.t_start_ms < ? OR (r.t_start_ms = ? AND r.id < ?))");
+      const after = "(r.t_start_ms < ? OR (r.t_start_ms = ? AND r.id < ?))";
+      where.push(prioritizeContent ? `(${tierSql}>? OR (${tierSql}=? AND ${after}))` : after);
+      if (prioritizeContent) args.push(cursorTier, cursorTier);
       args.push(position[0], position[0], position[1]);
     }
-    const sql = `SELECT r.rowid,r.* FROM records r ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY r.t_start_ms DESC,r.id DESC`;
+    const sql = `SELECT r.rowid,r.* FROM records r ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY ${prioritizeContent ? tierSql + " ASC," : ""}r.t_start_ms DESC,r.id DESC`;
     let rows: Row[];
     if (collapseScreenMatches) {
       rows = [];
@@ -236,7 +248,10 @@ export class HubDB {
           if (seen.has(key)) continue;
           seen.add(key);
         }
-        if (position && (row.t_start_ms > position[0] || (row.t_start_ms === position[0] && String(row.id) >= position[1]))) continue;
+        if (position) {
+          const tier = prioritizeContent ? tierOf(row) : 0;
+          if (tier < cursorTier || tier === cursorTier && (row.t_start_ms > position[0] || (row.t_start_ms === position[0] && String(row.id) >= position[1]))) continue;
+        }
         rows.push(row);
         if (rows.length > limit) break;
       }
@@ -248,7 +263,7 @@ export class HubDB {
     const last = page.at(-1);
     return {
       records: page.map(row => decode(row, params.get("body") === "1")),
-      next_cursor: hasMore && last ? Buffer.from(JSON.stringify([last.t_start_ms, last.id])).toString("base64url") : null,
+      next_cursor: hasMore && last ? Buffer.from(JSON.stringify(prioritizeContent ? [tierOf(last), last.t_start_ms, last.id] : [last.t_start_ms, last.id])).toString("base64url") : null,
     };
   }
 
