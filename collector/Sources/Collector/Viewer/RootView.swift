@@ -27,7 +27,6 @@ struct RootView: View {
               }
               .navigationTitle("历史记录")
               .toolbar { BackButton() }
-            case .dayRecords: HistoryPage().toolbar { BackButton(shortcut: nil) }
             case .runtime: RuntimePage().toolbar { BackButton() }
             }
           }

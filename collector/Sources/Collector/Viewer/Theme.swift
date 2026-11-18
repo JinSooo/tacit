@@ -109,12 +109,13 @@ struct SourceGlyph: View {
   let source: String
   var app: String? = nil
   var size: CGFloat = 22
+  var showsTile = false
   var body: some View {
     if let image = AppIcons.icon(app) {
       Image(nsImage: image).resizable().interpolation(.high).frame(width: size + 4, height: size + 4).padding(-2)
-    } else if size >= 20 {
+    } else if showsTile || size >= 20 {
       // 没有应用图标时画来源符号：底色只用暖灰，和真实应用图标一样大。
-      RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+      RoundedRectangle(cornerRadius: min(Radius.control, size * 0.3), style: .continuous)
         .fill(Palette.fill)
         .overlay(PhIcon(SourceInfo.symbol(source), size: (size * 0.62).rounded()).foregroundStyle(Palette.muted))
         .frame(width: size, height: size)

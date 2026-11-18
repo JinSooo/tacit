@@ -2,18 +2,23 @@ import AppKit
 import SwiftUI
 import CollectorCore
 
-/// 一天的历史记录：列表按活动段聚合（事项或应用），展开才是原始记录；搜索时按记录显示命中。
-struct HistoryPage: View {
-  enum Selection: Hashable { case segment(String), record(String) }
+/// 时间线的详细视图：按事项或应用聚合活动，展开后显示原始记录。
+struct HistoryPage<Header: View>: View {
+  private enum Selection: Hashable { case segment(String), record(String) }
+  private struct Activity {
+    let segments: [HistorySegment]
+    let conversations: [ConversationRef]
+    let missing: [HistoryRecord]
+  }
+  private struct LoadKey: Equatable {
+    let refresh: Int
+    let revision: Int
+    let missing: [String]
+  }
 
   @Environment(ViewerStore.self) private var store
-  @State private var records: [HistoryRecord] = []
-  @State private var segments: [HistorySegment] = []
-  @State private var conversations: [ConversationRef] = []
-  @State private var diary: DayDiary?
-  @State private var loadedDay: Date?
-  @State private var loading = false
-  @State private var error: String?
+  @State private var activity = Loader<Activity>()
+  @State private var loadedKey: LoadKey?
   @State private var selection: Selection?
   @State private var expanded: Set<String> = []
   @State private var scrollTarget: String?
@@ -21,16 +26,21 @@ struct HistoryPage: View {
   @State private var lane: Lane?
   @State private var device: String?
   @State private var note = false
-  @State private var picking = false
-  // 搜索
-  @State private var results: [HistoryRecord] = []
-  @State private var cursor: String?
-  @State private var searching = false
 
-  var day: Date { store.historyDay }
-  var isSearch: Bool { !store.historySearch.trimmingCharacters(in: .whitespaces).isEmpty }
+  let day: Date
+  let diary: DayDiary?
+  let dayRecords: [HistoryRecord]?
+  let dayError: String?
+  let refresh: Int
+  @ViewBuilder let header: (HistoryDayStats?) -> Header
 
-  var visible: [HistoryRecord] {
+  private var records: [HistoryRecord] { (dayRecords ?? []) + (activity.value?.missing ?? []) }
+  private var segments: [HistorySegment] { activity.value?.segments ?? [] }
+  private var conversations: [ConversationRef] { activity.value?.conversations ?? [] }
+  private var loadKey: LoadKey {
+    LoadKey(refresh: refresh, revision: store.revision, missing: omittedIds.subtracting(dayRecords?.map(\.id) ?? []).sorted())
+  }
+  private var visible: [HistoryRecord] {
     records.filter { r in
       (lane == nil || Lane.of(r.source) == lane) && (device == nil || r.device == device) &&
         (brush.map { r.start <= $0.upperBound && (r.end ?? r.start) >= $0.lowerBound } ?? true)
@@ -38,28 +48,28 @@ struct HistoryPage: View {
   }
 
   /// 全部活动段（检查器、定位记录用）；列表用按筛选裁过的 blocks。
-  var allBlocks: [SegmentBlock] { SegmentBlocks.join(segments, records: records) }
-  var blocks: [SegmentBlock] {
+  private var allBlocks: [SegmentBlock] { SegmentBlocks.join(segments, records: records) }
+  private var blocks: [SegmentBlock] {
     lane == nil && device == nil && brush == nil ? allBlocks : SegmentBlocks.join(segments, records: records, visible: Set(visible.map(\.id)))
   }
   private var omittedIds: Set<String> { Set(diary?.detail?.omittedRecordIds ?? []) }
 
-  var selectedRecord: String? { if case .record(let id)? = selection { return id }; return nil }
+  private var selectedRecord: String? { if case .record(let id)? = selection { return id }; return nil }
   /// 选中项在列表里那一行的 id：合并显示的几条记录用这一行第一条的 id。
-  func rowID(for s: Selection?) -> String? {
-    switch s {
+  private func selectedRowID() -> String? {
+    switch selection {
     case .segment(let id)?: return id
     case .record(let id)?:
-      for block in blocks where expanded.contains(block.id) {
-        if let run = RecordRuns.collapse(block.records, conversations: conversations).first(where: { $0.records.contains { $0.id == id } }) { return run.id }
-      }
-      return id
+      guard let block = blocks.first(where: { $0.segment.recordIds.contains(id) }),
+            expanded.contains(block.id) else { return nil }
+      return RecordRuns.collapse(block.records, conversations: conversations)
+        .first(where: { $0.records.contains { $0.id == id } })?.id
     case nil: return nil
     }
   }
 
   /// 选中一条记录：展开它所在的段并滚过去。
-  func reveal(_ id: String) {
+  private func reveal(_ id: String) {
     selection = .record(id)
     if let block = allBlocks.first(where: { $0.segment.recordIds.contains(id) }) {
       expanded.insert(block.id)
@@ -67,19 +77,14 @@ struct HistoryPage: View {
       for case .minor(let group) in SegmentFold.fold(blocks) where group.contains(where: { $0.id == block.id }) {
         expanded.insert(SegmentListItem.minor(group).id)
       }
-      scrollTarget = block.id
+      scrollTarget = selectedRowID() ?? block.id
     }
   }
 
-  var chapters: [DayStrata.Chapter] {
-    DayStrata.chapters(from: diary, on: day)
-  }
-
   var body: some View {
-    @Bindable var store = store
     ScrollViewReader { proxy in
       ScrollView {
-        if isSearch { searchList } else { dayList }
+        dayList
       }
       .scrollContentBackground(.hidden)
       .background(Palette.paper)
@@ -89,9 +94,6 @@ struct HistoryPage: View {
         scrollTarget = nil
       }
     }
-    .navigationTitle(isSearch ? "搜索" : ViewerFormat.dayTitle(day))
-    .navigationSubtitle(isSearch ? "" : ViewerFormat.weekday(day))
-    .searchable(text: $store.historySearch, placement: .toolbar, prompt: "搜索历史记录")
     .toolbar { toolbar }
     .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { selection = nil } })) {
       inspector
@@ -105,21 +107,23 @@ struct HistoryPage: View {
         }
     }
     .sheet(isPresented: $note) { NoteSheet { store.revision += 1 } }
-    .task(id: LoadKey(day: day, revision: store.revision)) { await loadDay() }
-    .task(id: store.historySearch) { await search(reset: true) }
-    .onChange(of: day) { brush = nil; lane = nil; selection = nil; expanded = [] }
-    .onAppear { consumeFocus() }
-    .onChange(of: store.historyFocus) { consumeFocus() }
-    .onChange(of: records) { consumeFocus() }
-    // 详情栏打开时列表变窄、行高变了，滚动位置会跳到别处（用户点了 13:37 那段，列表跳到 10:41）。打开后把点的那一行滚回来。
-    .onChange(of: selection == nil) { closed, isClosed in
-      guard closed, !isClosed, let target = rowID(for: selection) else { return }
-      Task { try? await Task.sleep(for: .milliseconds(300)); scrollTarget = target }
+    .task(id: dayRecords == nil ? nil : loadKey) {
+      guard dayRecords != nil else { return }
+      await loadActivity(loadKey)
+    }
+    .onChange(of: store.historyFocus, initial: true) { consumeFocus() }
+    .onChange(of: dayError) { consumeFocus() }
+    // 详情栏打开时列表变窄、行高变了，布局完成后再把选中的行滚回来。
+    .task(id: selection == nil) {
+      guard selection != nil else { return }
+      do { try await Task.sleep(for: .milliseconds(300)) }
+      catch { return }
+      scrollTarget = selectedRowID()
     }
     .onKeyPress(.escape) { if selection != nil { selection = nil; return .handled }; if brush != nil { brush = nil; return .handled }; return .ignored }
   }
 
-  @ViewBuilder var inspector: some View {
+  @ViewBuilder private var inspector: some View {
     switch selection {
     case .segment(let id)?:
       if let block = allBlocks.first(where: { $0.id == id }) {
@@ -127,10 +131,8 @@ struct HistoryPage: View {
       }
     case .record(let id)?:
       // 从段里点进来的记录可以回到那一段。
-      let parent = isSearch ? nil : allBlocks.first { $0.segment.recordIds.contains(id) }
-      RecordInspector(id: id, back: parent.map { b in .init(title: SegmentText.title(b)) { selection = .segment(b.id) } }) { deleted in
-        records.removeAll { deleted.contains($0.id) }
-        results.removeAll { deleted.contains($0.id) }
+      let parent = allBlocks.first { $0.segment.recordIds.contains(id) }
+      RecordInspector(id: id, back: parent.map { b in .init(title: SegmentText.title(b)) { selection = .segment(b.id) } }) { _ in
         selection = nil
       }
       .id(id)
@@ -139,75 +141,45 @@ struct HistoryPage: View {
     }
   }
 
-  struct LoadKey: Equatable { let day: Date; let revision: Int }
-
-  func consumeFocus() {
-    guard let id = store.historyFocus, loadedDay == day, !loading else { return }
-    if records.contains(where: { $0.id == id }) {
-      lane = nil; brush = nil
-      reveal(id)
-      store.historyFocus = nil
-    } else {
-      // 不在当天列表里（例如修正记录），直接在检查器里打开。
-      selection = .record(id); store.historyFocus = nil
-    }
+  private func consumeFocus() {
+    guard let id = store.historyFocus, loadedKey == loadKey || dayError != nil else { return }
+    store.historyFocus = nil
+    lane = nil
+    brush = nil
+    device = nil
+    // 修正记录等可能不在当天的列表里，仍可在详情里打开。
+    reveal(id)
   }
 
-  // MARK: 读取
-
-  func loadDay() async {
-    let requestedDay = day
-    loading = true; error = nil
-    defer {
-      if !Task.isCancelled, day == requestedDay {
-        loadedDay = requestedDay
-        loading = false
-        consumeFocus()
-      }
+  private func loadActivity(_ key: LoadKey) async {
+    await activity.run {
+      async let grouped = store.api.segments(day)
+      async let missing = store.api.missingRecords(key.missing, from: [])
+      let (groups, extras) = try await (grouped, missing)
+      try Task.checkCancellation()
+      return Activity(segments: groups.segments, conversations: groups.conversations, missing: extras)
     }
-    do {
-      async let r = store.api.day(requestedDay)
-      async let s = store.api.segments(requestedDay)
-      async let d = store.api.diary(requestedDay)
-      let (rows, segs, diary) = try await (r, s, d)
-      let missing = try await store.api.missingRecords(diary?.detail?.omittedRecordIds ?? [], from: rows)
-      guard !Task.isCancelled, day == requestedDay else { return }
-      segments = segs.segments; conversations = segs.conversations
-      records = (rows + missing).sorted { ($0.start, $0.id) > ($1.start, $1.id) }
-      self.diary = diary
-    } catch is CancellationError {
-    } catch {
-      guard !Task.isCancelled, day == requestedDay else { return }
-      self.error = error.localizedDescription; records = []; segments = []; conversations = []; diary = nil
-    }
-  }
-
-  func search(reset: Bool) async {
-    guard isSearch else { results = []; cursor = nil; return }
-    if reset { try? await Task.sleep(for: .milliseconds(280)); if Task.isCancelled { return } }
-    searching = true; defer { searching = false }
-    do {
-      var q = HubAPI.RecordQuery(); q.q = store.historySearch.trimmingCharacters(in: .whitespaces); q.limit = 50; q.body = true
-      let page = try await store.api.records(q, cursor: reset ? nil : cursor)
-      results = reset ? page.records : results + page.records.filter { r in !results.contains { $0.id == r.id } }
-      cursor = page.nextCursor
-      error = nil
-    } catch is CancellationError {
-    } catch { self.error = error.localizedDescription }
+    guard !Task.isCancelled else { return }
+    loadedKey = key
+    if !records.contains(where: { $0.device == device }) { device = nil }
+    consumeFocus()
   }
 
   // MARK: 一天
 
-  @ViewBuilder var dayList: some View {
+  private var dayList: some View {
     let blocks = self.blocks
-    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-      dayHeader
-        .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 16)
+    return LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+      header(loadedKey != nil && !records.isEmpty
+        ? HistoryDayStats(count: allBlocks.count, activeSeconds: ActiveTime.seconds(records), start: records.map(\.start).min())
+        : nil)
+        .padding(.horizontal, TimelineReadingLayout.edge)
+        .modifier(ReviewWidth(maxWidth: TimelineReadingLayout.width))
       Section {
-        if loading && records.isEmpty {
-          Placeholder(kind: .loading).frame(height: 240)
-        } else if let error, records.isEmpty {
+        if let error = dayError ?? activity.error {
           Placeholder(kind: .error(error) { store.revision += 1 }).frame(height: 240)
+        } else if loadedKey == nil || dayRecords == nil {
+          Placeholder(kind: .loading).frame(height: 240)
         } else if records.isEmpty {
           Placeholder(kind: .empty("moon-stars", "这一天没有记录")).frame(height: 260)
         } else if blocks.isEmpty {
@@ -224,50 +196,9 @@ struct HistoryPage: View {
     }
   }
 
-  var dayHeader: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      ViewThatFits(in: .horizontal) {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-          dateTitle
-          Spacer(minLength: 16)
-          if !records.isEmpty { stats }
-        }
-        VStack(alignment: .leading, spacing: 8) {
-          dateTitle
-          if !records.isEmpty { stats }
-        }
-      }
-      Button("查看当天时间线") { store.showReview(day) }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
-    }
-  }
-
-  var dateTitle: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(longDate).font(.serif(TextSize.heading, .semibold)).foregroundStyle(Palette.ink)
-      Text(ViewerFormat.weekday(day)).font(.serif(TextSize.heading)).foregroundStyle(Palette.muted)
-    }
-    .lineLimit(1)
-    .fixedSize()
-  }
-
-  var longDate: String {
-    let c = Calendar.current.dateComponents([.year, .month, .day], from: day)
-    let year = c.year != Calendar.current.component(.year, from: Date()) ? "\(c.year!) 年 " : ""
-    return "\(year)\(c.month!) 月 \(c.day!) 日"
-  }
-
-  /// 段数是列表里的活动段（包括折起来的零碎段）；活跃时长是当天所有记录时段的并集，重叠只算一次。
-  var stats: some View {
-    let active = ActiveTime.seconds(records)
-    return Text("\(Fmt.count(allBlocks.count)) 段活动，活跃 \(Fmt.duration(active))")
-      .font(.system(size: TextSize.body)).monospacedDigit().foregroundStyle(Palette.muted)
-      .lineLimit(1).fixedSize()
-      .help("活跃时长按记录覆盖的时段算，几个来源同时在记录只算一次")
-  }
-
-  var strataHeader: some View {
+  private var strataHeader: some View {
     VStack(alignment: .leading, spacing: 8) {
-      DayStrata(records: records.filter { device == nil || $0.device == device }, chapters: chapters, day: day, selected: selectedRecord,
+      DayStrata(records: records.filter { device == nil || $0.device == device }, chapters: DayStrata.chapters(from: diary, on: day), day: day, selected: selectedRecord,
                 brush: $brush, lane: $lane,
                 conversationTitles: Dictionary(conversations.flatMap { c in c.title.map { t in c.recordIds.map { ($0, t) } } ?? [] }, uniquingKeysWith: { a, _ in a })) { r in reveal(r.id) }
       if brush != nil || lane != nil {
@@ -364,75 +295,46 @@ struct HistoryPage: View {
     return conversations.first { c in c.title != nil && c.recordIds.contains(where: ids.contains) }?.title
   }
 
-  func searchRows(_ rows: [HistoryRecord]) -> some View {
-    let omitted = omittedIds
-    return ForEach(rows) { r in
-      RecordRow(record: r, run: nil, selected: selectedRecord == r.id, expanded: false,
-                snippet: SearchSnippet.make(r.body ?? "", query: store.historySearch), includesOmissions: omitted.contains(r.id)) { selection = .record(r.id) }
-        .padding(.horizontal, 20)
-        .id(r.id)
-    }
-  }
-
-  // MARK: 搜索
-
-  @ViewBuilder var searchList: some View {
-    LazyVStack(alignment: .leading, spacing: 0) {
-      if results.isEmpty {
-        if searching { Placeholder(kind: .loading).frame(height: 300) }
-        else if let error { Placeholder(kind: .error(error) { Task { await search(reset: true) } }).frame(height: 300) }
-        else { Placeholder(kind: .empty("magnifying-glass", "没有找到「\(store.historySearch)」")).frame(height: 300) }
-      } else {
-        let groups = Dictionary(grouping: results) { Calendar.current.startOfDay(for: $0.start) }.sorted { $0.key > $1.key }
-        ForEach(groups, id: \.key) { day, rows in
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(ViewerFormat.dayTitle(day)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
-            Text(ViewerFormat.weekday(day)).font(.serif(TextSize.title)).foregroundStyle(Palette.muted)
-            Spacer()
-            Button("打开这一天") { store.historySearch = ""; store.historyDay = day }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
-          }
-          .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 8)
-          searchRows(rows.sorted { $0.start > $1.start })
-        }
-        if cursor != nil {
-          ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(24)
-            .onAppear { Task { await search(reset: false) } }
-        }
-      }
-    }
-    .padding(.bottom, 40)
-  }
-
   // MARK: 工具栏
 
-  @ToolbarContentBuilder var toolbar: some ToolbarContent {
-    if !isSearch {
-      DayNavigation(day: Binding(get: { day }, set: { store.historyDay = $0 }), picking: $picking)
-    }
+  private var toolbar: some ToolbarContent {
     ToolbarItemGroup(placement: .primaryAction) {
-      if !isSearch {
-        Menu {
-          Picker("来源", selection: $lane) {
-            Text("全部来源").tag(Lane?.none)
-            ForEach(Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } }, id: \.self) { Text($0.name).tag(Lane?.some($0)) }
+      Menu {
+        Picker("来源", selection: $lane) {
+          Text("全部来源").tag(Lane?.none)
+          ForEach(Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } }, id: \.self) { Text($0.name).tag(Lane?.some($0)) }
+        }
+        .pickerStyle(.inline)
+        let devices = Set(records.map(\.device)).sorted()
+        if devices.count > 1 {
+          Picker("设备", selection: $device) {
+            Text("全部设备").tag(String?.none)
+            ForEach(devices, id: \.self) { Text($0).tag(String?.some($0)) }
           }
           .pickerStyle(.inline)
-          let devices = Set(records.map(\.device)).sorted()
-          if devices.count > 1 {
-            Picker("设备", selection: $device) {
-              Text("全部设备").tag(String?.none)
-              ForEach(devices, id: \.self) { Text($0).tag(String?.some($0)) }
-            }
-            .pickerStyle(.inline)
-          }
-        } label: {
-          PhIcon("funnel-simple", fill: lane != nil || device != nil, size: PhIcon.toolbar)
         }
-        .help("筛选").accessibilityLabel("筛选")
+      } label: {
+        PhIcon("funnel-simple", fill: lane != nil || device != nil, size: PhIcon.toolbar)
       }
+      .help("筛选").accessibilityLabel("筛选")
       Button { note = true } label: { PhIcon("note-pencil", size: PhIcon.toolbar) }
         .help("补写一条记录").accessibilityLabel("补写一条记录").keyboardShortcut("n", modifiers: .command)
     }
+  }
+}
+
+struct HistoryDayStats: View {
+  let count: Int
+  let activeSeconds: TimeInterval
+  let start: Date?
+
+  var body: some View {
+    let startLabel = start.map { "开始 " + ViewerFormat.clock($0) }
+    let stats = ["\(Fmt.count(count)) 段活动", "活跃 \(Fmt.duration(activeSeconds))"] + (startLabel.map { [$0] } ?? [])
+    Text(stats.joined(separator: "，"))
+      .font(.system(size: TextSize.body)).monospacedDigit().foregroundStyle(Palette.muted)
+      .multilineTextAlignment(.trailing)
+      .help("活跃时长按记录覆盖的时段算，几个来源同时在记录只算一次")
   }
 }
 
@@ -457,6 +359,7 @@ struct RecordRow: View {
   var snippet: SearchSnippet? = nil
   var nested = false
   var titleOverride: String? = nil
+  var alignsTimeLeading = false
   var includesOmissions = false
   let action: () -> Void
   @State private var hovering = false
@@ -467,7 +370,7 @@ struct RecordRow: View {
         Text(timeText)
           .font(.system(size: TextSize.caption)).monospacedDigit()
           .foregroundStyle(Palette.muted)
-          .frame(width: Self.timeWidth, alignment: .trailing)
+          .frame(width: Self.timeWidth, alignment: alignsTimeLeading ? .leading : .trailing)
           .lineLimit(1)
         Group {
           if nested { Circle().fill(Palette.faint).frame(width: 5, height: 5) }

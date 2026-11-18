@@ -21,7 +21,6 @@ import CollectorCore
     case .settings: store.showSettings()
     case .pending: store.showPending()
     case .record(let id, let date):
-      store.showReview(date)
       store.showDayRecords(date, record: id)
     case nil:
       if window?.isVisible != true { store.showReview() }
