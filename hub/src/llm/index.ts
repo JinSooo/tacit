@@ -42,6 +42,7 @@ export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRo
       catch (error) { throw new Error(error instanceof Error && error.message === "记录已变化，等待重新整理" ? error.message : "调用记录保存失败，本次未发送"); }
       const ctx: BackendContext = { req, config, cwd, timeoutMs, metrics, observer, spawn: options.spawn ?? ((cmd, args, opts) => nodeSpawn(cmd, args, opts)) };
       data = config.provider === "claude-cli" ? await claudeCLI(ctx) : config.provider === "codex-cli" ? await codexCLI(ctx) : await httpComplete(ctx, options.readKey ?? defaultReadKey);
+      if (req.normalizeOutput) data = req.normalizeOutput(data);
       if (!validate(data)) throw new Error("模型输出不符合 schema");
       validated = true;
       row.ok = 1;

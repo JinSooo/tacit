@@ -2,7 +2,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 
 export type Tier = "minute" | "hour" | "day";
 export type Provider = "claude-cli" | "codex-cli" | "anthropic" | "openai-compatible";
-export interface LLMRequest { tier: Tier; task?: string; system: string; prompt: string; schema: object; timeoutMs?: number; contentRevision?: number; refs?: Record<string, string> }
+export interface LLMRequest { tier: Tier; task?: string; system: string; prompt: string; schema: object; timeoutMs?: number; contentRevision?: number; refs?: Record<string, string>; normalizeOutput?: (value: unknown) => unknown }
 export type LLMResult<T> = ({ ok: true; data: T; ms: number } | { ok: false; error: string; ms: number }) & { call_id?: string };
 export type ReasoningEffort = "none" | "low" | "medium" | "high";
 export interface ModelConfig { provider: Provider; model: string; base_url?: string; reasoning_effort?: ReasoningEffort }

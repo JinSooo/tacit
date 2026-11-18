@@ -206,7 +206,7 @@ llm_usage(id TEXT PRIMARY KEY, at TEXT, tier TEXT, task TEXT, provider TEXT, mod
 
 决定、否决、未决、下一步、推测存在 facts 表里，不放进 detail。`brief` 只能由 detail 和有效 facts 生成（AGENTS.md），一两句。项目的 detail 同理：`{ "goal", "status", "people" }` 加上项目下的 facts。
 
-项目详细版成功即保存，`needs_regen=0`，同时在 `distill_state` 写 `project_brief:<id>` 为 `true`。简略版失败后调度只补简略版；新的变化置 `needs_regen=1` 时先重做详细版。简略版成功后清掉待生成标记。每日时间线的一句话、活动段和依据在同一事务更新。
+项目详细版成功即保存，`needs_regen=0`，同时在 `distill_state` 写 `project_brief:<id>` 为 `true`。简略版失败后调度只补简略版；新的变化置 `needs_regen=1` 时先重做详细版。简略版成功后清掉待生成标记。每日时间线的当天概述（`detail.summary`）、活动段和依据在同一事务更新。
 
 ### 4.4 模型适配器（`hub/src/llm/`）
 
@@ -244,6 +244,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 | GET | `/v1/threads?status&project&limit&cursor` | 按 `last_ms` 倒序；默认只返回 brief |
 | GET | `/v1/threads/:id?level=brief\|detail\|evidence` | detail 带有效 facts；evidence 再带引用到的记录（title + t_start，不带 body） |
 | GET | `/v1/projects` 和 `/v1/projects/:id?level=…` | 同上 |
+| DELETE | `/v1/projects/:id` | 管理令牌专用。成功返回 `{ removed: true }`。项目不存在时返回 404 和 `{ error: "项目不存在" }` |
 | GET | `/v1/days/:date` | 某天的时间线 |
 | GET | `/v1/timeline?project_id&before&limit` | 读取项目已整理的段，按天倒序分页 |
 | GET | `/v1/timeline?q&before&limit` | 段标题和修正后的描述匹配所有关键词，按天倒序分页 |
@@ -259,15 +260,15 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 
 `now.updated_at` 记录当前展示摘要的生成时间。摘要缺少可信时间时返回 `null`。空缓存读取时直接查近 24 小时内已有简略版的进行中或暂停事项。近期有非私密活动等待切片、归类或生成摘要时，显示“有新活动待整理”，`updated_at` 为 `null`。无活跃事项的提示以本轮计算时间为准。
 
-时间线按后台的本地自然日整理。`detail.summary` 是至多 30 字的一句话，`detail.cutoff` 是取材截至时间。`detail.items` 包含最多 30 个有可读内容、互不重叠的段，按开始时间保存，Mac 列表按时间倒序。每项包含 `id`、`title`、`description`、`t_start`、`t_end`、`active_seconds`、`sources`、`apps: [{ source, app }]`、`record_ids`、`project_id` 和 `evidence`。只有具备对应应用时 `app` 才有值；无项目时 `project_id` 为 `null`。时长取主活动实际覆盖的并集，排除空档。AI 会话按含真实用户输入的批次实际起止计在场时间，每条输入最多支持 30 分钟；批次跨度在输入数乘 30 分钟以内时保留实际区间，超限从可定位的输入时刻（无逐条时刻时用批次起点）分配上限。当前采集格式只有批次首末时间，不据此虚构逐消息时间；若有逐消息时刻，按用户输入到下一输入或该轮回复结束计，单轮同样上限 30 分钟。评测与发布检查会话按专用来源标记排除，不计时、不参与摘要，原文保留可搜索；与 Agent 指标共用默认排除工具集合。Codex `goal` / `user_goal`、Automation 调度、Claude Code 手动上下文交接和已有过滤器识别的机器续跑不算用户输入。续跑结果优先并入当天已有同会话或同事项的用户发起段；没有发起段时可保留为零时长段（`t_start=t_end`、`active_seconds=0`），时间轴不画条，不参与一句话摘要。屏幕/应用骨架可作为原文成员，不扩张 AI 用户在场区间。`sources`、`apps` 只表示摘要实际引用的来源，交叠的背景应用不作为文字来源展示；原文成员不受此筛选影响。`detail.omitted_record_ids` 包括超限、无文字依据或模型省略的段中未被其他可见段包含的记录。旧 `detail.timeline` 继续提供 `{ start, end, text }`，Mac 时间轴使用 `items`。
+时间线按后台的本地自然日整理。`detail.summary` 是 2–3 句、合计至多 120 字的当天概述，必要时用活动段标题兜底，`detail.cutoff` 是取材截至时间。`detail.items` 包含最多 30 个有可读内容、互不重叠的段，按开始时间保存，Mac 列表按时间倒序。每项包含 `id`、`title`、`description`、`t_start`、`t_end`、`active_seconds`、`sources`、`apps: [{ source, app }]`、`record_ids`、`project_id` 和 `evidence`。只有具备对应应用时 `app` 才有值；无项目时 `project_id` 为 `null`。时长取主活动实际覆盖的并集，排除空档。AI 会话按含真实用户输入的批次实际起止计在场时间，每条输入最多支持 30 分钟；批次跨度在输入数乘 30 分钟以内时保留实际区间，超限从可定位的输入时刻（无逐条时刻时用批次起点）分配上限。当前采集格式只有批次首末时间，不据此虚构逐消息时间；若有逐消息时刻，按用户输入到下一输入或该轮回复结束计，单轮同样上限 30 分钟。评测与发布检查会话按专用来源标记排除，不计时、不参与摘要，原文保留可搜索；与 Agent 指标共用默认排除工具集合。Codex `goal` / `user_goal`、Automation 调度、Claude Code 手动上下文交接和已有过滤器识别的机器续跑不算用户输入。续跑结果优先并入当天已有同会话或同事项的用户发起段；没有发起段时可保留为零时长段（`t_start=t_end`、`active_seconds=0`），时间轴不画条，不参与当天概述。屏幕/应用骨架可作为原文成员，不扩张 AI 用户在场区间。`sources`、`apps` 只表示摘要实际引用的来源，交叠的背景应用不作为文字来源展示；原文成员不受此筛选影响。`detail.omitted_record_ids` 包括超限、无文字依据或模型省略的段中未被其他可见段包含的记录。旧 `detail.timeline` 继续提供 `{ start, end, text }`，Mac 时间轴使用 `items`。
 
 每日整理最多向模型提供 50 个候选，正文仍最多 30 段。输出超限先合并同项目相邻且间隔不超过 30 分钟、证据覆盖至少 60%、合并描述不超过 160 字的段，再按项目代表和实际覆盖时长取舍。省略只允许 request_only（只有请求、同意或催促且没有结果）、empty（没有具体内容，只证明采集存在）、excluded_session（评测或发布检查）。完成改动、原因或发现、验证或复现结果、学习中答对或弄懂的具体点、本人明确判断或决定、明确阻碍必须写入正文。内部 omissions 为每个省略提供 activity、reason、title、description、refs；无效或缺失理由按结果段处理，采用模型已给文字并校验本段引用；缺少有效文字则保留在未入时间线，并在运行记录警告。不额外调用模型，不用采集占位补文。
 
-整理输入先排除没有本段直接文字依据的候选，再分配 50 段输入候选预算（输出仍最多 30 段）。每段的 `continues` 可指向同一事项的前一段，供模型理解进展，不允许跨段借用依据。证据编号按段唯一（如 `a3:r2`）；输出 `refs` 必须逐字匹配本段输入编号，错误或跨段引用不采用。每日模型输入增加 `project`（已有归属或 null）、`summary_eligible`（在场时长大于 0）；内部输出每项增加 `content: result | judgment | request_only | empty`，前两类作为正文，后两类必须附有效省略理由，否则按结果校验，不向时间线接口新增字段。标题和描述写具体行动后的变化、结果、发现、阻碍或用户明确判断；只有请求的前段作为后续同活动结果的上下文，不单独展示，无后续结果同样省略。没有具体内容的录音省略。一句话按在场时间和有结果的内容概括当天主线，可概括同项目多段；不按原始跨度选最长会话。模型未提供有效摘要时，只从有在场时间的结果段中按同项目累计在场时间选标题。省略的段不自动补成采集占位。全量无效输出保留之前的结果并标记失败；正常的空结果可以保存为空。
+整理输入先排除没有本段直接文字依据的候选，再分配 50 段输入候选预算（输出仍最多 30 段）。每段的 `continues` 可指向同一事项的前一段，供模型理解进展，不允许跨段借用依据。证据编号按段唯一（如 `a3:r2`）；输出 `refs` 必须逐字匹配本段输入编号，错误或跨段引用不采用。每日模型输入增加 `project`（已有归属或 null）、`summary_eligible`（在场时长大于 0）；内部输出每项增加 `content: result | judgment | request_only | empty`，前两类作为正文，后两类必须附有效省略理由，否则按结果校验，不向时间线接口新增字段。标题和描述写具体行动后的变化、结果、发现、阻碍或用户明确判断；只有请求的前段作为后续同活动结果的上下文，不单独展示，无后续结果同样省略。没有具体内容的录音省略。模型按在场时间和结果或明确判断选出最多三条当天主线，可包含不同项目和生活活动，最主要的放在第一句。输出 `highlight: { activities, text } | null`，`activities` 为 1–3 个活动编号，至少一个有效引用须对应保留的正时长正文段。旧格式的单个 `activity` 作为一个编号读取。模型未提供有效摘要时，只从有在场时间的结果段中按同项目累计在场时间选标题。省略的段不自动补成采集占位。全量无效输出保留之前的结果并标记失败；正常的空结果可以保存为空。
 
 `evidence: [{id,at,source,title}]` 的 `at` 是原始记录的开始时间。`record_ids` 含整段可以展开的原文，即使跨过午夜。`needs_regen` 标识等待更新；最近该日整理失败时返回 `failed:true`，已成功的版本保留。删除或修正相关原文立即撤下受影响的时间线；删除原文还会清除模型调用的正文快照。段描述修正经脱敏后保存在加密 `distill_state` 的 `timeline_corrections:<date>`。重整后段 ID 相同且仍包含原成员时覆盖模型描述；成员被删或改为私密时清除关联修正。段删除在同一事务核对成员并使用现有删除流程。旧格式日期仍能查看整天原文，项目页不会触发历史补跑。
 
-`GET /v1/timeline` 接收项目 ID 或搜索词其中一项，返回 `{ days: [{ date, items }], next_cursor }`。`limit` 为 1–31 个命中日期，`before` 是不含该日期的 `YYYY-MM-DD` 游标。项目和段搜索按已经整理的结果读取，不运行模型。管理侧的日期、项目和搜索读取统一过滤旧回顾里的采集占位，不重写已存结果；只剩占位时不返回一句话摘要，原文定位回退到全天记录。
+`GET /v1/timeline` 接收项目 ID 或搜索词其中一项，返回 `{ days: [{ date, items }], next_cursor }`。`limit` 为 1–31 个命中日期，`before` 是不含该日期的 `YYYY-MM-DD` 游标。项目和段搜索按已经整理的结果读取，不运行模型。管理侧的日期、项目和搜索读取统一过滤旧回顾里的采集占位，不重写已存结果；只剩占位时不返回当天概述，原文定位回退到全天记录。
 
 管理侧的可读段可带 `thread_id`，从引用原文的现有归属计算；存在多个事项或与段项目冲突时省略。Mac 项目页只用这个字段串联更新，按最近更新排列事项，展开后保持每段原有的时间、时长、成员与修正/删除语义。无归属的段单列，不以相同标题合并。读取新分页后可把更早更新并入已有事项。该元数据不写入原始记录或日期存储，不返回给 Agent；Agent 读取保留原有正文大小限制和依据字段。
 
@@ -278,6 +279,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 - `GET /v1/threads` → `{ threads: Thread[], next_cursor }`，列表项不含 `detail`。
 - `GET /v1/projects` → `{ projects: Project[] }`，每项带 `thread_count`，不含 `detail`。
 - `GET /v1/threads/:id`、`/v1/projects/:id`：直接返回实体对象。`level=detail` 加 `facts`（有效的）；`level=evidence` 再加 `records: [{ id, title, t_start, source }]`（不带 body）。
+- 移除项目与待确认的 `project` 项执行 `ignore` 使用同一事务规则。保留原始记录，解除事项、事实和项目候选的关联，撤下相关派生内容并关闭相关待确认项。项目的仓库、站点和聊天键写入 `distill_state.ignored_project_keys`，阻止后续自动创建和提名。
 - `GET /v1/pending` → `{ pending: Pending[] }`，payload 在读取时补全展示字段，目标已不存在的项自动标记为 `stale` 并不再返回：
   - `project`：`{ project_id, name, keys, threads: [{ id, title, brief }] }`（最近 5 条线程）
   - `thread_done`：`{ thread_id, title, brief }`

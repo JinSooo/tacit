@@ -83,6 +83,9 @@ export class DistillStore {
   }
   upsertThread(thread: Thread) { this.put("threads", "id", thread); }
   upsertProject(project: Project) { this.put("projects", "id", project); }
+  ignoredProjectKeys(): ProjectKeys {
+    return this.getState<ProjectKeys>("ignored_project_keys") ?? { repos: [], hosts: [], chats: [] };
+  }
   upsertDay(day: { date: string; brief?: string | null; detail?: unknown; needs_regen?: number; updated_at?: string }) { this.put("days", "date", day); }
   projects(): Project[] { return this.sql.prepare("SELECT * FROM projects ORDER BY last_ms DESC,id DESC").all().map(r => decode<Project>(r as Row)); }
   projectSummaries() {
@@ -354,6 +357,33 @@ export class DistillStore {
     this.sql.prepare("UPDATE facts SET project_id=? WHERE project_id=?").run(dest.id,source);
     this.sql.prepare("DELETE FROM projects WHERE id=?").run(source);
   }
+  removeProject(id: string): boolean {
+    return this.sql.transaction(() => {
+      const project = this.project(id);
+      if (!project) return false;
+      const ignored = this.ignoredProjectKeys();
+      for (const key of ["repos", "hosts", "chats"] as const) {
+        ignored[key] = [...new Set([...ignored[key], ...project.keys[key]])];
+      }
+      this.setState("ignored_project_keys", ignored);
+      const threads = this.sql.prepare<[string, string], { id: string }>(`
+        SELECT id FROM threads WHERE project_id=? OR project_hint=?`).all(id, id);
+      this.clearDerived(new Set(threads.map(thread => thread.id)), new Set([id]), [],
+        { pendingResolution: "project_removed", clearThreadDays: false });
+      // 旧时间线段也可能只有项目引用，没有仍然存在的事项。
+      this.sql.prepare(`UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE EXISTS (
+        SELECT 1 FROM json_each(days.detail,'$.items') item WHERE json_extract(item.value,'$.project_id')=?)`).run(id);
+      const candidates = this.getState<{ project_id: string | null }[]>("candidates");
+      if (candidates?.some(candidate => candidate.project_id === id)) {
+        this.setState("candidates", candidates.map(candidate => candidate.project_id === id ? { ...candidate, project_id: null } : candidate));
+      }
+      this.sql.prepare("UPDATE threads SET project_id=NULL WHERE project_id=?").run(id);
+      this.sql.prepare("UPDATE threads SET project_hint=NULL WHERE project_hint=?").run(id);
+      this.sql.prepare("UPDATE facts SET project_id=NULL WHERE project_id=?").run(id);
+      this.sql.prepare("DELETE FROM projects WHERE id=?").run(id);
+      return true;
+    }).immediate();
+  }
   resolvePending(id: string, action: string, name?: string, target?: string) {
     this.sql.transaction(() => {
       const p = this.pending().find(p => p.id === id);
@@ -380,10 +410,7 @@ export class DistillStore {
           if (!target) throw new InputError("需要合并目标");
           this.mergeProjects(pid,target);
         } else if (action === "ignore") {
-          this.sql.prepare("UPDATE threads SET project_id=NULL,needs_regen=1 WHERE project_id=?").run(pid);
-          this.sql.prepare("UPDATE facts SET project_id=NULL WHERE project_id=?").run(pid);
-          this.sql.prepare("UPDATE threads SET project_hint=NULL WHERE project_hint=?").run(pid);
-          this.sql.prepare("DELETE FROM projects WHERE id=?").run(pid);
+          this.removeProject(pid);
         } else throw new InputError("项目操作无效");
       } else {
         const status = ({ done: "done", continue: "active", abandon: "abandoned" } as const)[action as "done"];
@@ -392,16 +419,19 @@ export class DistillStore {
         this.upsertThread({ ...thread, status });
       }
       this.sql.prepare("UPDATE pending SET resolved_at=?,resolution=? WHERE id=?").run(new Date().toISOString(),action,id);
-    })();
+    }).immediate();
   }
   /** 删除/修正立即撤下派生文字；模型调用中的旧快照也不能再写回来。 */
-  clearDerived(threads: Set<string>, projects: Set<string>, times: string[], preserveResolvedPending = false) {
+  clearDerived(threads: Set<string>, projects: Set<string>, times: string[],
+    { preserveResolvedPending = false, pendingResolution, clearThreadDays = true }:
+      { preserveResolvedPending?: boolean; pendingResolution?: string; clearThreadDays?: boolean } = {}) {
+    const pendingProjects = pendingResolution ? new Set(projects) : projects;
     this.setState("content_revision", (this.getState<number>("content_revision") ?? 0) + 1);
     for (const id of threads) {
       const t = this.thread(id);
       if (t?.project_id) projects.add(t.project_id);
-    // 事项归属会影响回顾分组，清理事项覆盖日期，而不只清理被删记录当天。
-      if (t?.first_ms != null && t?.last_ms != null) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date BETWEEN date(? / 1000.0,'unixepoch','localtime') AND date(? / 1000.0,'unixepoch','localtime')").run(t.first_ms,t.last_ms);
+      // 删除原文或改归属时，清理事项覆盖日期，而不只清理被删记录当天。
+      if (clearThreadDays && t?.first_ms != null && t?.last_ms != null) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date BETWEEN date(? / 1000.0,'unixepoch','localtime') AND date(? / 1000.0,'unixepoch','localtime')").run(t.first_ms,t.last_ms);
       this.sql.prepare("UPDATE threads SET title='正在重新整理',brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE id=?").run(id);
       this.setState(`digest:${id}`, null);
     }
@@ -411,12 +441,15 @@ export class DistillStore {
     }
     for (const time of new Set(times)) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date=date(?,'localtime')").run(time);
     this.setState("now", null);
-    const affected = new Set([...threads, ...projects]);
+    const affected = new Set([...threads, ...pendingProjects]);
     const references = (v: unknown): boolean => typeof v === "string" ? affected.has(v)
       : Array.isArray(v) ? v.some(references) : !!v && typeof v === "object" && Object.values(v).some(references);
+    const close = pendingResolution && this.sql.prepare("UPDATE pending SET resolved_at=?,resolution=? WHERE id=? AND resolved_at IS NULL");
+    const at = new Date().toISOString();
     for (const row of this.sql.prepare("SELECT id,payload,resolved_at FROM pending").all() as Row[]) {
-      if (preserveResolvedPending && row.resolved_at) continue;
-      if (references(JSON.parse(row.payload))) this.sql.prepare("DELETE FROM pending WHERE id=?").run(row.id);
+      if (!references(JSON.parse(row.payload))) continue;
+      if (close) close.run(at, pendingResolution, row.id);
+      else if (!preserveResolvedPending || !row.resolved_at) this.sql.prepare("DELETE FROM pending WHERE id=?").run(row.id);
     }
   }
 

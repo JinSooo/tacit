@@ -56,7 +56,7 @@ test("段保留连续活动的实际时长、全部原文和模型引用，排�
       expect(thread?.evidence.map(e => e.role)).toEqual(["user", "user", "assistant"]);
       expect(thread?.evidence.map(e => e.at)).toEqual([point(0), undefined, point(10)]);
       expect(audio?.evidence.map(e => e.role)).toEqual(["user", "other"]);
-      return { ok: true, data: { highlight: { activity: thread!.key, text: "定下导览入口并补齐图例" }, items: [
+      return { ok: true, data: { highlight: { activities: [thread!.key, audio!.key], text: "你定下了导览入口并补齐图例。周六的集合地点约在车站。" }, items: [
         { activity: audio!.key, title: "约定车站集合", description: "周六九点在车站见。", refs: [audio!.evidence[1]!.key] },
         { activity: thread!.key, title: "排定导览图", description: "入口改到北门，图例已补齐。展板还没印。", refs: [thread!.evidence[0]!.key,thread!.evidence[1]!.key] },
         { activity: "outside", title: "虚构事项", description: "不会出现在结果里。", refs: ["r1"] },
@@ -64,7 +64,11 @@ test("段保留连续活动的实际时长、全部原文和模型引用，排�
     } };
     expect(await dayStep({ db: ctx.db, llm }, store, day, now)).toEqual({ ok: true, calls: 1 });
     const review = await (await request(ctx, `/v1/days/${day}`)).json();
-    expect(review.brief).toBe("定下导览入口并补齐图例");
+    const summary = "你定下了导览入口并补齐图例。周六的集合地点约在车站。";
+    expect(review.brief).toBe(summary);
+    expect(review.detail.summary).toBe(summary);
+    const agentDay = await (await request(ctx, `/v1/agent/get?tool=codex&level=detail&id=${day}`)).json();
+    expect(agentDay.item.detail.summary).toBe(summary);
     expect(review.detail.cutoff).toBe(toLocalIso(now));
     const [a,b] = review.detail.items;
     expect(review.detail.items).toHaveLength(2);
@@ -344,6 +348,23 @@ test("个别引用编号写坏时保留该段，只丢坏引用", () => {
   } finally { ctx.cleanup(); }
 });
 
+test("当天概述允许部分编号失效，先脱敏并合成单段，超长优先截在句末", () => {
+  const ctx = setup();
+  try {
+    ctx.db.ingest([span(0, 12, { source: "codex.session", source_ref: "synthetic-summary", body: "[我] 新展板已摆好。" })]);
+    const plan = reviewPlan(ctx.db, base, base + 86400000), activity = reviewMaterial(plan.segments)[0]!;
+    const compose = (activities: string[], text: string) => composeReview(plan.segments, {
+      highlight: { activities, text },
+      items: [{ activity: activity.key, content: "result", title: "摆放展板", description: "新展板已摆好。", refs: [activity.evidence[0]!.key] }],
+    }, base + 86400000, point(12), [], [])!.summary;
+    const syntheticKey = "sk-proj-" + "aB3_".repeat(6);
+    const text = `新展板已摆好。\r\n 清除了测试密钥 ${syntheticKey}。\n${"未完".repeat(80)}`;
+    expect(compose(["unknown", activity.key], text)).toBe("新展板已摆好。 清除了测试密钥 [已脱敏:OpenAI]。");
+    expect(compose([activity.key], "𠮷".repeat(121))).toBe("𠮷".repeat(120));
+    expect(compose(["unknown"], text)).toBe("摆放展板");
+  } finally { ctx.cleanup(); }
+});
+
 test("整理中途原文改为私密，已返回的模型段也不能重新写回", async () => {
   const ctx = setup(), store = new DistillStore(ctx.db);
   const record = span(0, 5, { source: "codex.session", source_ref: "synthetic-inflight", body: "[我] 核对合成图例。" });
@@ -591,7 +612,10 @@ test("五十候选的结果最多三十段，同项目不同事项不合并", ()
     });
     const plan=reviewPlan(ctx.db,base,base+151*min), material=reviewMaterial(plan.segments);
     expect(material).toHaveLength(50);
-    const detail=composeReview(plan.segments,{highlight:{activity:material[1]!.key,text:"合成图例完成修正"},items:material.map((a,i)=>({activity:a.key,content:"result",title:"图例位置修正",description:`第 ${i} 张图例位置已修正。`,refs:[a.evidence[1]!.key]}))},base+86400000,point(151),[],[])!;
+    const items = material.map((a,i) => ({ activity:a.key, content:"result" as const, title:"图例位置修正", description:`第 ${i} 张图例位置已修正。`, refs:[a.evidence[1]!.key] }));
+    const compose = (activities: string[]) => composeReview(plan.segments, { highlight: { activities, text:"合成图例完成修正" }, items },
+      base+86400000,point(151),[],[])!;
+    const detail = compose([material[1]!.key]);
     expect(detail.items).toHaveLength(30);
     expect(detail.items[0]!.record_ids).toEqual([records[0]!.id]);
     expect(detail.items[1]!.record_ids).toEqual([records[1]!.id]);
@@ -599,6 +623,8 @@ test("五十候选的结果最多三十段，同项目不同事项不合并", ()
     expect(detail.summary).toBe("合成图例完成修正");
     expect(detail.items[0]!.active_seconds).toBe(120);
     expect(detail.omitted_record_ids).toHaveLength(20);
+    const discarded = plan.segments.find(segment => detail.omitted_record_ids.includes(segment.id))!;
+    expect(compose([discarded.key]).summary).toBe("图例位置修正");
   } finally {ctx.cleanup();}
 });
 

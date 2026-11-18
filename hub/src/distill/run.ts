@@ -225,12 +225,18 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
   let assigned = 0, created = 0, ignored = 0, calls = 0, failed = 0;
   const previous = store.getState<Candidate[]>("candidates") ?? [];
   let candidates = previous.filter(c => now - c.last_ms < LIMITS.candidateTTL);
+  const saveCandidates = () => {
+    for (const candidate of candidates) {
+      if (candidate.project_id && !store.project(candidate.project_id)) candidate.project_id = null;
+    }
+    store.setState("candidates", candidates);
+  };
   store.hub.db.transaction(() => {
     const live = JSON.stringify(candidates.flatMap(c=>c.frame_ids));
     const expired = JSON.stringify(previous.filter(c=>!candidates.includes(c)).flatMap(c=>c.frame_ids));
     store.hub.db.prepare("UPDATE frames SET status='candidate_expired' WHERE (status='candidate' AND id NOT IN (SELECT value FROM json_each(?))) OR (status='ignored' AND id IN (SELECT value FROM json_each(?)))").run(live,expired);
     store.hub.db.prepare("UPDATE frames SET status='candidate' WHERE status='ignored' AND id IN (SELECT value FROM json_each(?))").run(live);
-    store.setState("candidates",candidates);
+    saveCandidates();
   })();
   const pending = loadFrames(store, "WHERE status='new' ORDER BY t_start_ms,id");
   // 用户说过"不属于"某些线程的片段按拒绝的线程分组单独成批：候选里直接去掉这些线程（只在提示里写不能选，
@@ -297,18 +303,18 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
           if (frames.length) {
             const id = ulid(now);
             // last_ms 先留空，第一个片段由 touchThread 计为一段会话。
-            store.upsertThread({ id, project_hint: cand.project_id, status: "active", title: cand.title, first_ms: frames[0]!.t_start_ms, active_minutes: 0, sessions: 0, needs_regen: 1 });
+            const projectHint = cand.project_id && store.project(cand.project_id) ? cand.project_id : null;
+            store.upsertThread({ id, project_hint: projectHint, status: "active", title: cand.title, first_ms: frames[0]!.t_start_ms, active_minutes: 0, sessions: 0, needs_regen: 1 });
             for (const fr of frames) { store.assign(fr.id, id, "llm", item.confidence); touchThread(store, id, fr); }
             created++; assigned += frames.length; real.add(id); byTitle.set(cand.title, id);
           }
           candidates = candidates.filter(c => c !== cand);
         }
       }
-      store.setState("candidates", candidates);
+      saveCandidates();
       appliedCall(d.db,r.call_id);
     })();
   }
-  store.setState("candidates", candidates);
   return { calls, assigned, created_threads: created, ignored, failed, candidates: candidates.length };
 }
 
@@ -389,16 +395,23 @@ export async function conversationStep(d: Deps, now: number) {
 
 /** 没有项目候选的线程按名字找一个候选，交给下一次 classify / digest 判断（见 projectByName）。 */
 export function nominateByName(store: DistillStore): number {
+  const revision = contentRevision(store.hub);
   const rows = store.hub.db.prepare("SELECT * FROM threads WHERE project_hint IS NULL AND project_id IS NULL AND status IN ('active','paused','done')").all() as Thread[];
-  let n = 0;
-  for (const t of rows) {
-    const p = projectByName(store, `${t.title}\n${t.brief ?? ""}`);
-    if (!p) continue;
+  const ignored = store.ignoredProjectKeys(), rules = new DistillRules(store);
+  const hasIgnoredKeys = Object.values(ignored).some(keys => keys.length);
+  const nominations = rows.flatMap(t => {
+    const p = projectByName(store, `${t.title}\n${t.brief ?? ""}`, ignored);
+    if (!p || (hasIgnoredKeys && threadFrames(store, t.id).some(frame => rules.hasIgnoredProjectKey(frame, ignored)))) return [];
+    return [{ project: p.id, thread: t.id }];
+  });
+  if (!nominations.length) return 0;
+  return store.hub.db.transaction(() => {
+    if (revision !== contentRevision(store.hub)) return 0;
     // domain 清空：已提炼过的线程走一次 classify 重新判断是否属于这个项目。
-    store.hub.db.prepare("UPDATE threads SET project_hint=?,domain=NULL WHERE id=?").run(p.id, t.id);
-    n++;
-  }
-  return n;
+    const nominate = store.hub.db.prepare(`UPDATE threads SET project_hint=?,domain=NULL WHERE id=?
+      AND project_hint IS NULL AND project_id IS NULL AND EXISTS (SELECT 1 FROM projects WHERE id=?)`);
+    return nominations.reduce((count, { project, thread }) => count + nominate.run(project, thread, project).changes, 0);
+  }).immediate();
 }
 
 /** 判断规则改过一次：在仓库里做的学习从"生活"改算工作（用户 2026-11-12 确认）。之前判成生活、有候选项目的线程重判一次。 */
@@ -439,14 +452,19 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
   let updated = 0, failed = 0, facts = 0, calls = 0, dropped = 0, invalidInference = 0;
   const threads = store.hub.db.prepare("SELECT id FROM threads WHERE needs_regen=1 AND status!='abandoned' ORDER BY last_ms DESC LIMIT ?").all(LIMITS.threadsPerRound) as { id: string }[];
   for (const { id } of threads) {
+    const revision = contentRevision(d.db);
     const thread = store.thread(id)!;
     const frames = threadFrames(store, id);
     const recordVersions = frames.flatMap(f => f.record_ids).map(id => [id, store.hub.effective(id)?.id]);
     const unchanged = () => recordVersions.every(([id, version]) => store.hub.effective(id!)?.id === version);
     const countOf = (ids: Set<string>) => frames.filter(f => ids.has(f.id)).reduce((n, f) => n + f.record_ids.length, 0);
     if (!frames.length) {
-      store.upsertThread({ ...thread, detail: null, brief: null, needs_regen: 0, updated_at: toLocalIso(now) });
-      store.setState(`digest:${id}`, null); continue;
+      store.hub.db.transaction(() => {
+        if (revision !== contentRevision(d.db)) return;
+        store.upsertThread({ ...thread, detail: null, brief: null, needs_regen: 0, updated_at: toLocalIso(now) });
+        store.setState(`digest:${id}`, null);
+      }).immediate();
+      continue;
     }
     const mark = store.getState<DigestMark>(`digest:${id}`);
     const present = new Set(frames.map(f => f.id));
@@ -496,7 +514,8 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
       if (!unchanged()) { discardedCall(d.db,r.call_id); ok = false; break; }
       const known = new Set(chunk.flatMap(x => x.v.records.map(rec => rec.id)).filter(Boolean));
       const out = request.decode(r.data);
-      store.hub.db.transaction(() => {
+      ok = store.hub.db.transaction(() => {
+        if (revision !== contentRevision(d.db)) { discardedCall(d.db, r.call_id); return false; }
         applyClassification(store, id, out);
         const kept = out.new_facts.map(f => {
           const grounded = P.keepGroundedFacts([f], known)[0];
@@ -532,19 +551,23 @@ export async function digestStep(d: Deps, store: DistillStore, now: number) {
         const partial = pieces.filter(p => !done.has(p.frameId) && doneParts.has(p.key)).map(p => p.key);
         store.setState(`digest:${id}`, { frames: [...done], records: countOf(done), user_facts: factIds, fact_ids: currentFacts(), ...(partial.length ? { parts: partial } : {}) } satisfies DigestMark);
         appliedCall(d.db,r.call_id);
-      })();
+        return true;
+      }).immediate();
+      if (!ok) break;
     }
-    if (!ok) { failed++; log(JSON.stringify({ step: "digest", ok: false })); continue; }
+    if (!ok || revision !== contentRevision(d.db)) { failed++; log(JSON.stringify({ step: "digest", ok: false })); continue; }
     calls++;
     const brief = await makeBrief(d, "thread_brief", title, detail);
     if (brief === null) { failed++; continue; }
-    store.hub.db.transaction(() => {
+    const applied = store.hub.db.transaction(() => {
+      if (revision !== contentRevision(d.db)) { discardedCall(d.db, brief.call_id); return false; }
       store.upsertThread({ ...store.thread(id)!, brief: brief.text, needs_regen: Number(JSON.stringify(userFacts()) !== JSON.stringify(factIds)), updated_at: toLocalIso(now) });
       const projectId = store.thread(id)!.project_id;
       if (projectId) store.hub.db.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(projectId);
       appliedCall(d.db,brief.call_id);
-    })();
-    updated++;
+      return true;
+    }).immediate();
+    if (applied) updated++; else failed++;
   }
   return { calls, updated, failed, facts, dropped_ungrounded: dropped, dropped_invalid_inference: invalidInference };
 }
@@ -584,9 +607,11 @@ export async function dedupStep(d: Deps, store: DistillStore, now: number) {
 
 export async function projectStep(d: Deps, store: DistillStore, now: number) {
   let updated = 0, failed = 0, calls = 0;
-  for (const p of store.projects().filter(p => p.needs_regen || store.getState<boolean>(`project_brief:${p.id}`))) {
+  for (const { id } of store.projects()) {
+    const revision = contentRevision(d.db), p = store.project(id);
+    if (!p || (!p.needs_regen && !store.getState<boolean>(`project_brief:${id}`))) continue;
     // needs_regen 只标记详细版输入失效；简略版失败由独立检查点重试。
-    const pendingKey = `project_brief:${p.id}`;
+    const pendingKey = `project_brief:${id}`;
     let detail = p.detail;
     if (p.needs_regen || detail == null) {
       const threads = store.hub.db.prepare("SELECT * FROM threads WHERE project_id=? AND status!='abandoned' ORDER BY last_ms DESC LIMIT 20").all(p.id) as (Thread & { last_ms: number | null; active_minutes: number | null })[];
@@ -594,29 +619,44 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
       const salience = threads.reduce((s, t) => s + (t.active_minutes ?? 0) * Math.exp(-(now - (t.last_ms ?? 0)) / (7 * DAY)), 0);
       const described = threads.filter(t => t.brief);
       // 没有可用线程时清掉旧摘要，避免已移出的生活内容继续从项目摘要注入。
-      if (!described.length) { store.setState(pendingKey, null); store.upsertProject({ ...p, brief: null, detail: null, last_ms: last || p.last_ms, salience, needs_regen: 0, updated_at: toLocalIso(now) }); continue; }
+      if (!described.length) {
+        store.hub.db.transaction(() => {
+          if (revision !== contentRevision(d.db) || !store.project(id)) return;
+          store.setState(pendingKey, null);
+          store.upsertProject({ ...store.project(id)!, brief: null, detail: null, last_ms: last || p.last_ms, salience, needs_regen: 0, updated_at: toLocalIso(now) });
+        }).immediate();
+        continue;
+      }
       calls++;
       const views: P.ThreadView[] = described.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: p.name, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" }));
       const request = projectRequest(store, p.id, p.name, views);
       const r = await complete<ProjectModelOutput>(d, { tier: "hour", task: "project", system: P.PROJECT_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
       if (!r.ok) { failed++; continue; }
       detail = { goal: r.data.goal, status: r.data.status, people: r.data.people };
-      store.hub.db.transaction(() => {
+      const applied = store.hub.db.transaction(() => {
+        const current = store.project(id);
+        if (!current || revision !== contentRevision(d.db)) { discardedCall(d.db, r.call_id); return false; }
         request.apply(r.data, now);
-        store.upsertProject({ ...store.project(p.id)!, detail, last_ms: last, salience, needs_regen: 0, updated_at: toLocalIso(now) });
+        store.upsertProject({ ...current, detail, last_ms: last, salience, needs_regen: 0, updated_at: toLocalIso(now) });
         store.setState(pendingKey, true);
         appliedCall(d.db,r.call_id);
-      })();
+        return true;
+      }).immediate();
+      if (!applied) { failed++; continue; }
     }
+    if (revision !== contentRevision(d.db)) { failed++; continue; }
     calls++;
     const brief = await makeBrief(d, "project_brief", p.name, detail);
     if (brief === null) { failed++; continue; }
-    store.hub.db.transaction(() => {
-      store.upsertProject({ ...store.project(p.id)!, brief: brief.text, updated_at: toLocalIso(now) });
+    const applied = store.hub.db.transaction(() => {
+      const current = store.project(id);
+      if (!current || revision !== contentRevision(d.db)) { discardedCall(d.db, brief.call_id); return false; }
+      store.upsertProject({ ...current, brief: brief.text, updated_at: toLocalIso(now) });
       store.setState(pendingKey, null);
       appliedCall(d.db,brief.call_id);
-    })();
-    updated++;
+      return true;
+    }).immediate();
+    if (applied) updated++; else failed++;
   }
   return { calls, updated, failed };
 }
@@ -624,9 +664,11 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
 // ---------------- 5. 当前状态（确定性，不调模型） ----------------
 
 export function nowStep(store: DistillStore, now: number) {
-  const summary = nowSummary(store, now);
-  store.setState("now", summary);
-  return { threads: summary.detail.threads.length };
+  return store.hub.db.transaction(() => {
+    const summary = nowSummary(store, now);
+    store.setState("now", summary);
+    return { threads: summary.detail.threads.length };
+  }).immediate();
 }
 
 // ---------------- 6. 线程生命周期 ----------------
@@ -681,7 +723,7 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
     return { calls, ok: false };
   };
   const result = material.length ? await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM,
-    prompt: P.dayPrompt(date, material, cutoff), schema: P.DAY_SCHEMA }) : null;
+    prompt: P.dayPrompt(date, material, cutoff), schema: P.DAY_SCHEMA, normalizeOutput: P.normalizeDayOutput }) : null;
   const calls = Number(!!result);
   if (result?.ok === false) return failed(calls, result.error === "记录已变化，等待重新整理");
   const warnings: string[] = [];
