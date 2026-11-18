@@ -127,6 +127,33 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(ReviewActivity.visibleRecords(rows, sources: sources).contains { $0.source == "plugin.ext_text_file" })
 }
 
+@Test func segmentRecordsKeepConversationAndNotesAheadOfScreenAndWeb() throws {
+  let at = "2026-11-17T10:50:00+09:00"
+  let screen = try decode(HistoryRecord.self, """
+    {"id":"screen","source":"mac.screen","t_start":"\(at)","title":"地图预览","capture":{"method":"ocr"}}
+    """)
+  let chat = try decode(HistoryRecord.self, """
+    {"id":"chat","source":"mac.wechat","t_start":"\(at)","title":"商量集合点","capture":{"method":"ocr"}}
+    """)
+  let browser = try record("browser", "mac.browser", "街灯图例", at)
+  let agent = try record("agent", "codex.session", "核对地图标记", at)
+  let app = try record("app", "mac.app", "预览", at)
+  let audio = try record("audio", "mac.audio", "试讲导览", at)
+  let note = try record("note", "manual.note", "记录校对顺序", at)
+  let groups = ReviewActivity.segmentRecords([screen, chat, browser, agent, app, audio, note])
+  #expect(groups.visible.map(\.id) == ["chat", "agent", "audio", "note"])
+  #expect(groups.collapsed.map(\.id) == ["screen", "browser", "app"])
+}
+
+@Test func segmentRecordsWithOnlyScreenAndWebStayVisible() throws {
+  let at = "2026-11-17T10:50:00+09:00"
+  let rows = try [record("browser", "mac.browser", "街灯示例", at),
+                  record("screen", "mac.screen", "地图预览", at)]
+  let groups = ReviewActivity.segmentRecords(rows)
+  #expect(groups.visible == rows)
+  #expect(groups.collapsed.isEmpty)
+}
+
 @Test func reviewDoesNotPresentAnOverdueOrOfflineRoundAsScheduled() throws {
   let now = try #require(ViewerTime.parse("2026-11-17T00:52:00+09:00"))
   let healthy = try decode(DistillHealth.self, #"{"heartbeat_at":"2026-11-17T00:51:45+09:00","last_round_at":"2026-11-17T00:45:00+09:00","last_ok_at":"2026-11-17T00:47:00+09:00"}"#)

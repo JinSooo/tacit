@@ -70,6 +70,10 @@ struct RootView: View {
 
 struct Sidebar: View {
   @Environment(ViewerStore.self) private var store
+  @AppStorage("viewer.projectsExpanded") private var projectsExpanded = true
+  @State private var projectToRemove: Project?
+  @State private var removingProject = false
+  @State private var removalError: String?
 
   var body: some View {
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
@@ -78,18 +82,50 @@ struct Sidebar: View {
         SidebarLabel(title: "搜索", icon: "magnifying-glass").tag(Page.search)
       }
       if !store.projects.isEmpty {
-        Section("项目") {
+        Section("项目", isExpanded: $projectsExpanded) {
           // 还没确认的项目用虚线文件夹，和待确认里"新项目"同一个图标。
           ForEach(store.projects) { p in
             SidebarLabel(title: p.name, icon: p.confirmed.value ? "folder" : "folder-dashed")
               .help(p.confirmed.value ? p.name : "\(p.name)，还没确认")
+              .contextMenu {
+                Button("移除项目…", role: .destructive) { projectToRemove = p }
+                  .disabled(removingProject)
+              }
               .tag(Page.project(p.id))
           }
         }
       }
     }
     .listStyle(.sidebar)
-    .safeAreaInset(edge: .bottom, spacing: 0) { CaptureFooter() }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      VStack(alignment: .leading, spacing: 8) {
+        if let removalError {
+          Text(removalError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
+            .padding(.horizontal, 12)
+        }
+        CaptureFooter()
+      }
+    }
+    .alert("移除“\(projectToRemove?.name ?? "")”？",
+           isPresented: Binding(get: { projectToRemove != nil }, set: { if !$0 { projectToRemove = nil } }),
+           presenting: projectToRemove) { project in
+      Button("移除", role: .destructive) { Task { await removeProject(project) } }
+      Button("取消", role: .cancel) {}
+    } message: { _ in
+      Text("原始记录不会删除。这个目录以后不再自动识别为项目，新会话也不再带入它的内容。")
+    }
+  }
+
+  private func removeProject(_ project: Project) async {
+    guard !removingProject else { return }
+    removalError = nil
+    removingProject = true
+    defer { removingProject = false }
+    do {
+      try await store.removeProject(project.id)
+    } catch {
+      removalError = error.localizedDescription
+    }
   }
 }
 

@@ -1,6 +1,11 @@
 import SwiftUI
 import CollectorCore
 
+enum TimelineDensity: String {
+  static let preferenceKey = "viewer.timelineDensity"
+  case compact, detailed
+}
+
 enum TimelineReadingLayout {
   // 与原始记录行共用时间列和轴心，展开后仍是同一条时间线。
   static let edge: CGFloat = 8
@@ -10,7 +15,6 @@ enum TimelineReadingLayout {
   static let gutter = gap + markerWidth + gap
   static let axis = edge + timeWidth + gap + (markerWidth - 1) / 2
   static let contentInset = edge + timeWidth + gutter
-  static let rowPadding: CGFloat = 14
 }
 
 struct TimelineSegmentRow: View {
@@ -19,42 +23,57 @@ struct TimelineSegmentRow: View {
   var records: [HistoryRecord]? = nil
   var showsTitle = true
   var projectName: String? = nil
+  let density: TimelineDensity
   let expanded: Bool
   let onToggle: () -> Void
+  @State private var hovering = false
+
+  private var compact: Bool { density == .compact }
+  private var rowPadding: CGFloat { compact ? 12 : (showsTitle ? 18 : 14) }
+  private var time: String {
+    if compact { return ViewerTime.parse(item.tStart).map { ReviewTime.clock($0, on: day) } ?? "" }
+    return ReviewTime.range(item, on: day)
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Button(action: onToggle) {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-          Text(ReviewTime.range(item, on: day))
+          Text(time)
             .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
             .frame(width: TimelineReadingLayout.timeWidth, alignment: .trailing)
             .padding(.trailing, TimelineReadingLayout.gutter)
-          VStack(alignment: .leading, spacing: 6) {
+          VStack(alignment: .leading, spacing: 8) {
             if showsTitle {
-              TimelineSegmentTitle(item: item)
+              Text(item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
+            }
+            if compact || !showsTitle {
               description
+              HStack(spacing: 8) {
+                TimelineSourceIcons(item: item, size: 20).fixedSize()
+                projectLabel
+              }
             } else {
-              HStack(alignment: .top, spacing: 8) {
-                description
+              HStack(spacing: 12) {
+                projectLabel
                 TimelineSourceIcons(item: item).fixedSize()
               }
-            }
-            if let projectName {
-              Text(projectName).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+              description
             }
           }
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           PhIcon(expanded ? "caret-up" : "caret-down", size: 11)
+            .opacity(compact && !hovering && !expanded ? 0 : 1)
             .foregroundStyle(Palette.muted).padding(.leading, 16).accessibilityHidden(true)
         }
         .multilineTextAlignment(.leading)
         .padding(.horizontal, TimelineReadingLayout.edge)
-        .padding(.vertical, TimelineReadingLayout.rowPadding)
+        .padding(.vertical, rowPadding)
         .contentShape(Rectangle())
       }
       .buttonStyle(TimelineRowStyle())
+      .onHover { hovering = $0 }
       .accessibilityValue(expanded ? "已展开" : "已折叠")
       .accessibilityHint(expanded ? "收起原始记录" : "展开原始记录")
       if expanded {
@@ -71,31 +90,28 @@ struct TimelineSegmentRow: View {
       Circle().fill(expanded ? Palette.accent : Palette.muted)
         .frame(width: 5, height: 5)
         .offset(x: TimelineReadingLayout.axis - 2,
-                y: TimelineReadingLayout.rowPadding + 7)
+                y: rowPadding + 7)
         .accessibilityHidden(true).allowsHitTesting(false)
     }
   }
 
   private var description: some View {
     Text(item.description).font(.system(size: TextSize.body))
-      .lineSpacing(TextSize.lineSpacing(TextSize.body) + 2).foregroundStyle(Palette.readingBody)
+      .lineSpacing(TextSize.lineSpacing(TextSize.body) + (compact || !showsTitle ? 2 : 0))
+      .foregroundStyle(Palette.readingBody)
   }
-}
 
-struct TimelineSegmentTitle: View {
-  let item: DayDiary.Item
-
-  var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 8) {
-      Text(item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
-      TimelineSourceIcons(item: item).fixedSize()
-        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
+  @ViewBuilder private var projectLabel: some View {
+    if let projectName {
+      Text(projectName).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 }
 
 struct TimelineSourceIcons: View {
   let item: DayDiary.Item
+  var size: CGFloat = 16
 
   private var icons: [DayDiary.Item.App] {
     let apps = (item.apps ?? []).filter { $0.app?.isEmpty == false }
@@ -109,10 +125,10 @@ struct TimelineSourceIcons: View {
   }
 
   var body: some View {
-    HStack(spacing: 6) {
+    HStack(spacing: size == 20 ? 8 : 6) {
       ForEach(Array(icons.prefix(3)), id: \.self) { app in
         let label = AppIcons.name(SourceApplication.bundle(app: app.app, source: app.source)) ?? app.app ?? SourceInfo.name(app.source)
-        SourceGlyph(source: app.source, app: SourceApplication.bundle(app: app.app, source: app.source), size: 16)
+        SourceGlyph(source: app.source, app: SourceApplication.bundle(app: app.app, source: app.source), size: size)
           .help(label).accessibilityLabel(label)
       }
     }
@@ -133,6 +149,7 @@ struct TimelineSegmentRecords: View {
 
   @Environment(ViewerStore.self) private var store
   @State private var records = Loader<[HistoryRecord]>()
+  @State private var showsBackgroundRecords = false
   @State private var correcting = false
   @State private var confirmsDeletion = false
   @State private var deletionMembers: [String]?
@@ -142,10 +159,13 @@ struct TimelineSegmentRecords: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       if let rows = records.value {
-        ForEach(rows) { record in
-          RecordRow(record: record, run: nil, selected: false, expanded: false, nested: true, titleOverride: sourceTitle(for: record, count: rows.count)) {
-            store.path.append(.reviewRecord(record.id))
+        let groups = ReviewActivity.segmentRecords(rows)
+        recordRows(groups.visible, total: rows.count)
+        if !groups.collapsed.isEmpty {
+          DisclosureGroup("另有 \(Fmt.count(groups.collapsed.count)) 条屏幕和网页记录", isExpanded: $showsBackgroundRecords) {
+            recordRows(groups.collapsed, total: rows.count)
           }
+          .disclosureGroupStyle(TimelineRecordDisclosureStyle())
         }
       } else if let error = records.error {
         Text(error).foregroundStyle(Palette.attention).padding(.leading, TimelineReadingLayout.contentInset)
@@ -178,6 +198,15 @@ struct TimelineSegmentRecords: View {
     }
   }
 
+  private func recordRows(_ rows: [HistoryRecord], total: Int) -> some View {
+    ForEach(rows) { record in
+      RecordRow(record: record, run: nil, selected: false, expanded: false, nested: true,
+                titleOverride: sourceTitle(for: record, count: total)) {
+        store.path.append(.reviewRecord(record.id))
+      }
+    }
+  }
+
   private func sourceTitle(for record: HistoryRecord, count: Int) -> String? {
     guard TimelinePresence.repeatsTitle(recordCount: item.recordIds?.count ?? count,
       recordTitle: record.title, segmentTitle: item.title) else { return nil }
@@ -207,6 +236,28 @@ struct TimelineSegmentRecords: View {
       store.revision += 1
     } catch {
       deleteError = error.localizedDescription
+    }
+  }
+}
+
+private struct TimelineRecordDisclosureStyle: DisclosureGroupStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Button {
+        configuration.isExpanded.toggle()
+      } label: {
+        HStack(spacing: 8) {
+          PhIcon(configuration.isExpanded ? "caret-down" : "caret-right", size: 11)
+          configuration.label
+        }
+        .foregroundStyle(Palette.muted)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityValue(configuration.isExpanded ? "已展开" : "已折叠")
+      .padding(.leading, TimelineReadingLayout.contentInset)
+      if configuration.isExpanded { configuration.content }
     }
   }
 }

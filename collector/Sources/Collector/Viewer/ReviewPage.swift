@@ -51,6 +51,7 @@ enum TimelineDay {
 
 private struct ReviewDayContent: View {
   @Environment(ViewerStore.self) private var store
+  @AppStorage(TimelineDensity.preferenceKey) private var density = TimelineDensity.compact
   @State private var diary = Loader<DayDiary?>()
   @State private var records = Loader<[HistoryRecord]>()
   @State private var loadedRevision: Int?
@@ -96,7 +97,7 @@ private struct ReviewDayContent: View {
             headline
           }
           .padding(.leading, TimelineReadingLayout.contentInset)
-          if !items.isEmpty {
+          if density == .detailed && !items.isEmpty {
             DayStrata(records: visibleRecords, segments: items, day: day, now: isToday ? now : nil, selected: expanded, brush: $brush) { id in
               open(id, in: proxy)
             }
@@ -110,8 +111,11 @@ private struct ReviewDayContent: View {
             }
           }
           LazyVStack(spacing: 0) {
-            ForEach(items.filter { item in brush.map { item.intersects($0) } ?? true }) { item in
-              TimelineSegmentRow(day: day, item: item, records: records.value, projectName: TimelineProjectLabels.showsNames(in: items) ? store.project(item.projectId)?.name : nil, expanded: expanded == item.id) {
+            let showsProjects = TimelineProjectLabels.showsNames(in: items)
+            ForEach(items.filter { item in density == .compact || (brush.map { item.intersects($0) } ?? true) }) { item in
+              TimelineSegmentRow(day: day, item: item, records: records.value,
+                                 projectName: showsProjects ? store.project(item.projectId)?.name : nil,
+                                 density: density, expanded: expanded == item.id) {
                 expanded = expanded == item.id ? nil : item.id
               }
               .id(item.id)
@@ -130,6 +134,7 @@ private struct ReviewDayContent: View {
         } while !Task.isCancelled
       }
       .onChange(of: store.timelineFocus) { reveal(proxy) }
+      .onChange(of: density) { brush = nil }
     }
   }
 
@@ -160,7 +165,29 @@ private struct ReviewDayContent: View {
       }
       .buttonStyle(ReviewDateButtonStyle())
       .font(.system(size: TextSize.body)).fixedSize()
+      HStack(spacing: 2) {
+        densityButton(.compact, title: "简约", icon: "list-bullets")
+        densityButton(.detailed, title: "详细", icon: "clipboard-text")
+      }
+      .padding(2)
+      .background(Palette.fill, in: RoundedRectangle(cornerRadius: Radius.control))
+      .fixedSize()
     }
+  }
+
+  private func densityButton(_ mode: TimelineDensity, title: String, icon: String) -> some View {
+    let selected = density == mode
+    return Button { density = mode } label: {
+      PhIcon(icon, size: 16)
+        .frame(width: 28, height: 24)
+        .foregroundStyle(selected ? Palette.accent : Palette.muted)
+        .background(selected ? Palette.accent.opacity(0.13) : .clear,
+                    in: RoundedRectangle(cornerRadius: Radius.control - 2))
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(title).accessibilityLabel(title)
+    .accessibilityAddTraits(selected ? .isSelected : [])
   }
 
   private func shift(_ delta: Int) {

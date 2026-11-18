@@ -310,7 +310,8 @@ struct DayStrata: View {
         let label = major >= 3600 ? String(format: "%02d", cal.component(.hour, from: t)) : ViewerFormat.clock(t)
         let text = labels.resolve(Text(label).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted))
         let halfWidth = text.measure(in: CGSize(width: 100, height: Self.axisHeight)).width / 2
-        labels.draw(text, at: CGPoint(x: min(px, plot.maxX - halfWidth), y: 8), anchor: .center)
+        let labelX = min(max(px, halfWidth), plot.maxX - halfWidth)
+        labels.draw(text, at: CGPoint(x: labelX, y: 8), anchor: .center)
       }
       t = t.addingTimeInterval(step)
     }
