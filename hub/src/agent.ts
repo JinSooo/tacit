@@ -1,3 +1,4 @@
+import { DEFAULT_EXCLUDED_TOOLS } from "./distill/session-purpose.ts";
 import { currentNow } from "./now-status.ts";
 import { logFailure } from "./diagnostics.ts";
 import { isDatabaseBusy } from "./db-busy.ts";
@@ -139,6 +140,8 @@ export class AgentReads {
     let item: Item | null = kind === "day" ? this.store.dayView(id, { agent: true }) : this.store.view(kind === "thread" ? "threads" : "projects",id,level);
     if (!item) return this.record(asked, level, params);
     if (params.has("cursor")) throw new InputError("cursor 只用于原始记录续读");
+    // 评测和发布检查的读取不算真实使用，不触发按需重写。
+    if (kind === "thread" && level !== "brief" && !DEFAULT_EXCLUDED_TOOLS.has(params.get("tool") ?? "")) this.store.wantDigest(id);
     if (kind === "day" && level === "brief") { item = { ...item }; delete item.detail; }
     const value: Item = { notice, kind, item };
     if (level !== "brief" && JSON.stringify(value).length > 40000) {

@@ -536,3 +536,24 @@ test('详细整理跨活动片段去重相同提交，内容不同的提交材�
   expect(inputs.filter(r=>r.excerpt==='同一提交材料')).toHaveLength(1);expect(inputs.filter(r=>r.excerpt==='用户修正后的不同材料')).toHaveLength(1);
   expect(records.every(r=>!!ctx.db.get(r.id))).toBe(true);expect(store.getState<{frames:string[]}>('digest:git-thread')?.frames).toHaveLength(4);
 });
+
+test("常规整理只在当天结束后、首次或按需重写线程详细版（E3，2026-11-18 补实现）", async () => {
+  const now = base + 120 * MIN, dayStart = Date.parse("2026-11-08T00:00:00+08:00");
+  const threads = [["today", "旧摘要", now - 10 * MIN], ["yesterday", "旧摘要", dayStart - 60 * MIN], ["first", null, now - 5 * MIN]] as const;
+  threads.forEach(([id, brief, last], i) => {
+    const r = session(i * 20, 10, `合成活动 ${id}`); ctx.db.ingest([r]);
+    store.upsertThread({ id, title: `合成 ${id}`, status: "active", brief, last_ms: last, needs_regen: 1 });
+    store.createFrame({ id: `f-${id}`, key: `repo:${repo}`, record_ids: [r.id], t_start_ms: Date.parse(r.t_start), t_end_ms: Date.parse(r.t_end!), chars: 10, private: 0, status: "new" });
+    store.assign(`f-${id}`, id, "llm", 1);
+  });
+  const deps = { db: ctx.db, llm: fakeLLM().llm };
+  await digestStep(deps, store, now, "deferred");
+  expect(threads.map(([id]) => store.thread(id)!.needs_regen)).toEqual([1, 0, 0]);
+  await digestStep(deps, store, now, "wanted");
+  expect(store.thread("today")!.needs_regen).toBe(1);
+  store.wantDigest("today");
+  await digestStep(deps, store, now, "wanted");
+  expect(store.thread("today")!.needs_regen).toBe(0);
+  await digestStep(deps, store, now, "wanted");
+  expect(store.wantedDigests().size).toBe(0);
+});

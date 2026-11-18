@@ -281,6 +281,14 @@ export class DistillStore {
   }
   getState<T>(key: string): T | null { const row = this.sql.prepare("SELECT v FROM distill_state WHERE k=?").get(key) as Row | undefined; return row ? JSON.parse(row.v) : null; }
   setState(key: string, value: unknown) { this.sql.prepare("INSERT INTO distill_state VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(key,JSON.stringify(value)); }
+  /** 详细版按需更新（E3，2026-11-16 确认）：用户打开或 Agent 读取待更新线程的详细版时登记，下一轮整理优先重写。 */
+  wantDigest(id: string) {
+    const t = this.thread(id);
+    if (!t || !t.needs_regen) return;
+    const wanted = new Set(this.getState<string[]>("digest_wanted") ?? []);
+    if (!wanted.has(id)) { wanted.add(id); this.setState("digest_wanted", [...wanted]); }
+  }
+  wantedDigests(): Set<string> { return new Set(this.getState<string[]>("digest_wanted") ?? []); }
   writeUsage(usage: { id?: string; at?: string; tier: string; task?: string | null; provider: string; model: string; input_chars?: number; output_chars?: number; input_tokens?: number; output_tokens?: number; ms: number; ok: number; error?: string }) { this.put("llm_usage", "id", { id: ulid(), at: new Date().toISOString(), ...usage }); }
   threads(params: URLSearchParams) {
     const limit = Number(params.get("limit") ?? 50);

@@ -447,10 +447,24 @@ export async function classifyStep(d: Deps, store: DistillStore) {
   return { calls, updated, failed };
 }
 
-export async function digestStep(d: Deps, store: DistillStore, now: number) {
+/**
+ * 选哪些待更新线程重写详细版。all：全部（测试和补整理）。deferred：常规每小时那轮，按 E3（2026-11-16 确认）
+ * 只写被要求的、还没有摘要的、以及最后活动在今天之前的（即当天结束后更新一次）；今天仍在进行的只标待更新。
+ * wanted：每 15 分钟的快轮只处理按需请求。
+ */
+export type DigestSelect = "all" | "deferred" | "wanted";
+export async function digestStep(d: Deps, store: DistillStore, now: number, select: DigestSelect = "all") {
   const log = d.log ?? (() => {});
   let updated = 0, failed = 0, facts = 0, calls = 0, dropped = 0, invalidInference = 0;
-  const threads = store.hub.db.prepare("SELECT id FROM threads WHERE needs_regen=1 AND status!='abandoned' ORDER BY last_ms DESC LIMIT ?").all(LIMITS.threadsPerRound) as { id: string }[];
+  const wanted = store.wantedDigests(), todayStart = localDayStart(localDateString(now)) ?? now;
+  const pendingRows = store.hub.db.prepare("SELECT id,brief,last_ms FROM threads WHERE needs_regen=1 AND status!='abandoned' ORDER BY last_ms DESC").all() as { id: string; brief: string | null; last_ms: number | null }[];
+  const pendingIds = new Set(pendingRows.map(r => r.id));
+  const stale = [...wanted].filter(id => !pendingIds.has(id));
+  if (stale.length) { for (const id of stale) wanted.delete(id); store.setState("digest_wanted", [...wanted]); }
+  const threads = pendingRows
+    .filter(r => select === "all" || wanted.has(r.id) || (select === "deferred" && (r.brief == null || (r.last_ms ?? 0) < todayStart)))
+    .sort((x, y) => Number(wanted.has(y.id)) - Number(wanted.has(x.id)))
+    .slice(0, LIMITS.threadsPerRound);
   for (const { id } of threads) {
     const revision = contentRevision(d.db);
     const thread = store.thread(id)!;
@@ -756,7 +770,7 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
 
 // ---------------- 一轮 ----------------
 
-export interface RoundOptions { backfill?: boolean; slow?: boolean; days?: "all" | "past" | "none"; enabledDefault?: number }
+export interface RoundOptions { backfill?: boolean; slow?: boolean; days?: "all" | "past" | "none"; enabledDefault?: number; deferDigest?: boolean }
 
 /** 快步骤（切片、归线程、当前状态、生命周期）每轮都跑；slow=true 时再跑线程、项目和日记。 */
 /** 额度、频率限制类错误：本轮剩下的调用直接跳过，不再继续消耗。 */
@@ -803,8 +817,10 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
       out.dedup = await dedupStep(d, store, now);
       if (!(out.dedup as { failed: number }).failed) store.setState("dedup_ms", now);
     }
-    out.digest = await digestStep(d, store, now);
+    out.digest = await digestStep(d, store, now, opts.deferDigest ? "deferred" : "all");
     out.projects = await projectStep(d, store, now);
+  } else if (opts.deferDigest && store.wantedDigests().size) {
+    out.digest = await digestStep(d, store, now, "wanted");
   }
   out.lifecycle = lifecycleStep(store, now);
   out.now = nowStep(store, now);
@@ -909,7 +925,7 @@ async function regularRound(d: Deps, state: LoopState) {
   const slowDue = now - (store.getState<number>("slow_ms") ?? 0) >= HOUR;
   // 当天的日记每 3 小时刷新一次；过去的日子有变化就在每小时那轮重写。
   const todayDue = now - (store.getState<number>("today_ms") ?? 0) >= 3 * HOUR;
-  const result = await distillRound(d, { slow: slowDue, days: todayDue ? "all" : "past", enabledDefault: state.enabledDefault });
+  const result = await distillRound(d, { slow: slowDue, days: todayDue ? "all" : "past", enabledDefault: state.enabledDefault, deferDigest: true });
   log(JSON.stringify(result));
   const failed = Object.values(result).some(v => v && typeof v === "object" && "failed" in v && Number(v.failed) > 0)
     || Number((result.days as { pending?: number } | undefined)?.pending ?? 0) > 0;

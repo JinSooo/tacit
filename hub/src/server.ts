@@ -146,7 +146,11 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
         return Response.json({ threads: threads.map(({ detail: _detail, ...brief }) => brief) });
       }
       const entity = /^\/v1\/(threads|projects)\/([^/]+)$/.exec(url.pathname);
-      if (method === "GET" && entity) return respond(store.view(entity[1] as "threads" | "projects",entity[2]!,url.searchParams.get("level") ?? "brief"));
+      if (method === "GET" && entity) {
+        const level = url.searchParams.get("level") ?? "brief";
+        if (entity[1] === "threads" && level !== "brief") store.wantDigest(entity[2]!);
+        return respond(store.view(entity[1] as "threads" | "projects",entity[2]!,level));
+      }
       if (method === "DELETE" && entity?.[1] === "projects") {
         return store.removeProject(entity[2]!) ? Response.json({ removed: true }) : Response.json({ error: "项目不存在" }, { status: 404 });
       }
