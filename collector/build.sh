@@ -40,7 +40,7 @@ for lib in "$LIB"/*.dylib; do cp -L "$lib" "$APP/Contents/Frameworks/"; done
 mkdir -p "$APP/Contents/Resources"
 # 查看窗口和菜单栏的图标字体（Phosphor，MIT），启动时注册到进程。
 cp -R Resources/Phosphor "$APP/Contents/Resources/Phosphor"
-# 侧栏选中底色和侧栏图标跟随应用的 AccentColor，SwiftUI 的 .tint 管不到；不编进来就是系统蓝。
+# 侧栏选中底色和侧栏图标跟随应用的 AccentColor，SwiftUI 的 .tint 管不到；使用暖灰选中态；内容区的强调色单独由 Palette 控制。
 xcrun actool Resources/Assets.xcassets --compile "$APP/Contents/Resources" --platform macosx \
   --minimum-deployment-target 14.0 --output-partial-info-plist build/assets-info.plist >/dev/null
 rm -rf build/AppIcon.iconset

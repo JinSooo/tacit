@@ -131,7 +131,7 @@ private struct ProjectStoryRow: View {
       Button(action: onToggle) {
         VStack(alignment: .leading, spacing: 10) {
           HStack(alignment: .firstTextBaseline, spacing: 16) {
-            Text(latest.item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
+            TimelineSegmentTitle(item: latest.item)
               .frame(maxWidth: .infinity, alignment: .leading)
             if let day = TimelineDay.date(latest.day) {
               Text(Fmt.date(day)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
@@ -139,10 +139,9 @@ private struct ProjectStoryRow: View {
             PhIcon(expanded ? "caret-up" : "caret-down", size: 11).foregroundStyle(Palette.muted)
               .accessibilityHidden(true)
           }
-          TimelineSourceIcons(item: latest.item)
           if !expanded || story.updates.count == 1 {
             Text(latest.item.description).font(.system(size: TextSize.body))
-              .lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
+              .lineSpacing(TextSize.lineSpacing(TextSize.body) + 2).foregroundStyle(Palette.readingBody)
           }
         }
         .multilineTextAlignment(.leading).padding(.vertical, 20).contentShape(Rectangle())

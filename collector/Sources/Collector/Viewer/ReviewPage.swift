@@ -28,8 +28,10 @@ struct ReviewPage: View {
 }
 
 struct ReviewWidth: ViewModifier {
+  var maxWidth: CGFloat = 680
+
   func body(content: Content) -> some View {
-    content.frame(maxWidth: 680, alignment: .leading)
+    content.frame(maxWidth: maxWidth, alignment: .leading)
       .padding(.horizontal, 32).padding(.vertical, 28).frame(maxWidth: .infinity, alignment: .top)
   }
 }
@@ -88,15 +90,17 @@ private struct ReviewDayContent: View {
   var body: some View {
     ScrollViewReader { proxy in
       ScrollView {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 14) {
           VStack(alignment: .leading, spacing: 12) {
             dateLine
             headline
           }
+          .padding(.leading, TimelineReadingLayout.contentInset)
           if !items.isEmpty {
             DayStrata(records: visibleRecords, segments: items, day: day, now: isToday ? now : nil, selected: expanded, brush: $brush) { id in
               open(id, in: proxy)
             }
+            .padding(.leading, TimelineReadingLayout.contentInset - 6)
             .zIndex(1)
           }
           if showsSetup || !store.pending.isEmpty {
@@ -113,9 +117,9 @@ private struct ReviewDayContent: View {
               .id(item.id)
             }
           }
-          footer
+          footer.padding(.leading, TimelineReadingLayout.contentInset)
         }
-        .modifier(ReviewWidth())
+        .modifier(ReviewWidth(maxWidth: 680 + TimelineReadingLayout.contentInset))
       }
       .task(id: LoadKey(refresh: refresh, revision: store.revision)) {
         repeat {

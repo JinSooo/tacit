@@ -10,7 +10,7 @@ enum TimelineReadingLayout {
   static let gutter = gap + markerWidth + gap
   static let axis = edge + timeWidth + gap + (markerWidth - 1) / 2
   static let contentInset = edge + timeWidth + gutter
-  static let rowPadding: CGFloat = 18
+  static let rowPadding: CGFloat = 14
 }
 
 struct TimelineSegmentRow: View {
@@ -30,20 +30,19 @@ struct TimelineSegmentRow: View {
             .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
             .frame(width: TimelineReadingLayout.timeWidth, alignment: .trailing)
             .padding(.trailing, TimelineReadingLayout.gutter)
-          VStack(alignment: .leading, spacing: 8) {
+          VStack(alignment: .leading, spacing: 6) {
             if showsTitle {
-              Text(item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack(spacing: 12) {
-              if let projectName {
-                Text(projectName).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-                  .fixedSize(horizontal: false, vertical: true)
+              TimelineSegmentTitle(item: item)
+              description
+            } else {
+              HStack(alignment: .top, spacing: 8) {
+                description
+                TimelineSourceIcons(item: item).fixedSize()
               }
-              TimelineSourceIcons(item: item).fixedSize()
             }
-            Text(item.description).font(.system(size: TextSize.body))
-              .lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
+            if let projectName {
+              Text(projectName).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+            }
           }
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -77,6 +76,22 @@ struct TimelineSegmentRow: View {
     }
   }
 
+  private var description: some View {
+    Text(item.description).font(.system(size: TextSize.body))
+      .lineSpacing(TextSize.lineSpacing(TextSize.body) + 2).foregroundStyle(Palette.readingBody)
+  }
+}
+
+struct TimelineSegmentTitle: View {
+  let item: DayDiary.Item
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Text(item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
+      TimelineSourceIcons(item: item).fixedSize()
+        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
+    }
+  }
 }
 
 struct TimelineSourceIcons: View {
