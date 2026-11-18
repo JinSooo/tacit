@@ -166,8 +166,8 @@ private struct ReviewDayContent: View {
       .buttonStyle(ReviewDateButtonStyle())
       .font(.system(size: TextSize.body)).fixedSize()
       HStack(spacing: 2) {
-        densityButton(.compact, title: "简约", icon: "list-bullets")
-        densityButton(.detailed, title: "详细", icon: "clipboard-text")
+        densityButton(.compact, title: "简约")
+        densityButton(.detailed, title: "详细")
       }
       .padding(2)
       .background(Palette.fill, in: RoundedRectangle(cornerRadius: Radius.control))
@@ -175,18 +175,18 @@ private struct ReviewDayContent: View {
     }
   }
 
-  private func densityButton(_ mode: TimelineDensity, title: String, icon: String) -> some View {
+  /// 两个图标都表达不准“简约 / 详细”，直接用字。
+  private func densityButton(_ mode: TimelineDensity, title: String) -> some View {
     let selected = density == mode
     return Button { density = mode } label: {
-      PhIcon(icon, size: 16)
-        .frame(width: 28, height: 24)
+      Text(title).font(.system(size: TextSize.caption))
+        .padding(.horizontal, 8).frame(height: 24)
         .foregroundStyle(selected ? Palette.accent : Palette.muted)
         .background(selected ? Palette.accent.opacity(0.13) : .clear,
                     in: RoundedRectangle(cornerRadius: Radius.control - 2))
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .help(title).accessibilityLabel(title)
     .accessibilityAddTraits(selected ? .isSelected : [])
   }
 
