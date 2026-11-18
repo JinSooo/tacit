@@ -384,3 +384,90 @@ test("append：新增、同内容去重、内容变化挂修正、拦密钥、�
   const json = JSON.stringify(audit);
   expect(json).not.toContain("合成正文"); expect(json).not.toContain("notion");
 });
+
+test("Agent 搜索主体优先、层内时间和 id 倒序，跨层分页不重不漏且普通列表不变", async () => {
+  project("p", "/synthetic/foo", "layerneedle 项目");
+  thread("t", { brief: "layerneedle 事项" });
+  const sources = ["mac.screen", "mac.browser", "mac.app", "manual.note", "codex.session", "wechat.chat"];
+  const records = sources.map((source, i) => fixture({ source, source_ref: `synthetic-layer-${i}`, title: "layerneedle", body: "正文", t_start: new Date(i < 3 ? 9000 : i === 3 ? 2000 : 1000).toISOString() }));
+  expect(ctx.db.ingest(records).accepted).toBe(records.length);
+  const descending = (rows: typeof records) => rows.sort((a, b) => Date.parse(b.t_start) - Date.parse(a.t_start) || b.id.localeCompare(a.id)).map(r => r.id);
+  const expected = ["t", "p", ...descending(records.slice(3)), ...descending(records.slice(0, 3))];
+  for (const limit of [1, 2, 3, 4, 8]) {
+    let cursor: string | null = null;
+    const ids: string[] = [];
+    do {
+      const page = await read(`/v1/agent/search?tool=codex&q=layerneedle&limit=${limit}${cursor ? `&cursor=${cursor}` : ""}`);
+      ids.push(...[...page.threads, ...page.projects, ...page.records].map(r => r.id));
+      cursor = page.next_cursor;
+      expect(ids.length).toBeLessThanOrEqual(expected.length);
+    } while (cursor);
+    expect(ids).toEqual(expected);
+  }
+  expect((await read("/v1/records?q=layerneedle")).records.map((r: any) => r.id)).toEqual(expected.slice(5).concat(expected.slice(2, 5)));
+  const first = await read("/v1/agent/search?tool=codex&q=layerneedle&limit=3");
+  const decoded = JSON.parse(Buffer.from(first.next_cursor, "base64url").toString());
+  for (const malformed of [
+    first.next_cursor + "=", first.next_cursor + "!",
+    ...[ { ...decoded, records: [2, 1000, records[3]!.id] }, { ...decoded, records: [0, "1000", records[3]!.id] },
+      { ...decoded, records: [0, 1000, "bad"] }, { ...decoded, records: [1000, records[3]!.id] },
+      { ...decoded, records: [0, 1000, records[3]!.id, 1] } ].map(c => Buffer.from(JSON.stringify(c)).toString("base64url")),
+  ]) expect((await call(`/v1/agent/search?tool=codex&q=layerneedle&cursor=${encodeURIComponent(malformed)}`)).status).toBe(400);
+});
+
+test("搜索 snippet 取正文最早的不区分大小写命中，截断约 120 字且不泄露 body", async () => {
+  const records = [
+    fixture({ source: "manual.note", title: "alpha beta", body: "前".repeat(100) + "BeTa" + "后".repeat(150) + "alpha" }),
+    fixture({ source: "manual.note", title: "alpha beta", body: "alpha beta 短正文" }),
+    fixture({ source: "manual.note", title: "alpha beta", body: "没有命中词" }),
+    fixture({ source: "manual.note", title: "alpha beta", body: "" }),
+    fixture({ source: "manual.note", title: "alpha beta", body: "😀".repeat(150) + "BETA" }),
+  ];
+  expect(ctx.db.ingest(records).accepted).toBe(records.length);
+  const page = await read("/v1/agent/search?tool=codex&q=alpha%20beta");
+  const byId = new Map<string, any>(page.records.map((r: any) => [r.id, r]));
+  expect(byId.get(records[0]!.id).snippet).toBe("…" + "前".repeat(40) + "BeTa" + "后".repeat(76) + "…");
+  expect(byId.get(records[1]!.id).snippet).toBe(records[1]!.body);
+  for (const r of records.slice(2, 4)) expect(byId.get(r.id)).not.toHaveProperty("snippet");
+  expect(byId.get(records[4]!.id).snippet).toBe("…" + "😀".repeat(116) + "BETA");
+  for (const r of page.records) expect(r).not.toHaveProperty("body");
+});
+
+function openFact(threadId: string, text: string, order: number, invalid = false, kind: "open" | "decision" = "open") {
+  const record = fixture({ source: "manual.note", body: "虚构事实依据" });
+  ctx.db.ingest([record]);
+  const id = ulid(), at = new Date(1000 + order).toISOString();
+  store.writeFact({ id, thread_id: threadId, project_id: "p", kind, text, evidence: [record.id], origin: "llm", valid_at: at, created_at: at });
+  if (invalid) ctx.db.db.prepare("UPDATE facts SET invalid_at=? WHERE id=?").run(at, id);
+}
+
+test("事项搜索每词 AND 可跨标题、brief 和不同有效 open 事实，返回最新三条", async () => {
+  project(); thread("t", { title: "alpha 事项", brief: "beta 简述" }); thread("empty");
+  openFact("t", "gamma 老未决", 0);
+  openFact("t", "delta 未决一", 1);
+  openFact("t", "未决二", 2);
+  openFact("t", "未决三", 3);
+  openFact("t", "expiredneedle 失效", 4, true);
+  openFact("t", "decisionneedle 决定", 5, false, "decision");
+  const page = await read("/v1/agent/search?tool=codex&q=ALPHA%20beta%20GAMMA%20delta");
+  expect(page.threads).toHaveLength(1);
+  expect(page.threads[0]).toMatchObject({ id: "t", open: ["未决三", "未决二", "delta 未决一"] });
+  for (const q of ["expiredneedle", "decisionneedle", "gamma missingneedle"]) {
+    expect((await read(`/v1/agent/search?tool=codex&q=${encodeURIComponent(q)}`)).threads).toEqual([]);
+  }
+  expect((await read("/v1/agent/search?tool=codex&q=合成线程empty")).threads[0].open).toEqual([]);
+});
+
+test("自动带入附加最新两条有效未决，按 60 码点截断，失效事实不出现", async () => {
+  project(); thread(); thread("empty");
+  openFact("t", "旧未决不带入", 0);
+  openFact("t", "等待虚构服务响应", 1);
+  openFact("t", "待".repeat(61), 2);
+  openFact("t", "失效未决不带入", 3, true);
+  openFact("t", "决定不带入", 4, false, "decision");
+  const result = await context();
+  expect(result.text).toContain("合成线程摘要t；未决：" + "待".repeat(60) + "…；等待虚构服务响应");
+  for (const text of ["旧未决不带入", "失效未决不带入", "决定不带入"]) expect(result.text).not.toContain(text);
+  expect(result.text.split("\n").find((s: string) => s.includes("[empty]"))).not.toContain("未决");
+  expect(result.tokens_est).toBe(estimateTokens(result.text));
+});

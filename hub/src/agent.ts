@@ -23,10 +23,14 @@ export const AGENT_SOURCE = "manual.agent";
 const AGENT_DEVICE = "mac";
 type Item = Record<string, any>;
 type Position = [number, string] | null;
-type SearchCursor = { records: Position; threads: Position; projects: Position };
+type RecordPosition = [number, number, string] | null;
+type SearchCursor = { records: RecordPosition; threads: Position; projects: Position };
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-function decode(value: string): unknown {
-  try { return JSON.parse(Buffer.from(value, "base64url").toString()); }
+function decode(value: string, strict = false): unknown {
+  try {
+    if (strict && (!/^[A-Za-z0-9_-]+$/.test(value) || Buffer.from(value, "base64url").toString("base64url") !== value)) throw new Error();
+    return JSON.parse(Buffer.from(value, "base64url").toString());
+  }
   catch { throw new InputError("cursor 无效"); }
 }
 function position(value: unknown): value is Position {
@@ -56,6 +60,17 @@ export function estimateTokens(text: string) {
 const line = (text: string) => text.replace(/\s+/g, " ").trim();
 const freshness = (item: { updated_at?: string; needs_regen?: number }) => `摘要截至 ${item.updated_at ? toLocalIso(Date.parse(item.updated_at)).slice(0,16).replace("T"," ") : "时间未知"}${item.needs_regen ? "，有新活动待整理" : ""}`;
 
+const recordTier = (source: string) => ["mac.screen", "mac.browser", "mac.app"].includes(source) ? 1 : 0;
+function snippet(body: string, terms: string[]): string | undefined {
+  const lower = body.toLowerCase();
+  const matches = terms.map(term => lower.indexOf(term.toLowerCase())).filter(index => index >= 0);
+  if (!matches.length) return undefined;
+  // 用码点切片，避免截断 emoji 的代理对；优先留命中前 40 字，再补足 120 字。
+  const hit = Array.from(body.slice(0, Math.min(...matches))).length, points = Array.from(body);
+  const start = Math.max(0, Math.min(hit - 40, points.length - 120)), end = Math.min(points.length, start + 120);
+  return (start ? "…" : "") + points.slice(start, end).join("") + (end < points.length ? "…" : "");
+}
+
 export class AgentReads {
   readonly store: DistillStore;
   constructor(readonly hub: HubDB) { this.store = new DistillStore(hub); }
@@ -79,6 +94,11 @@ export class AgentReads {
     return project ? this.projectContext(project) : { value: { text: "", project_id: null, tokens_est: 0 }, ids: [] };
   }
 
+  private openFacts(threadId: string, limit: number): string[] {
+    return (this.hub.db.prepare(`SELECT text FROM facts WHERE thread_id=? AND kind='open' AND invalid_at IS NULL
+      ORDER BY created_at DESC,id DESC LIMIT ?`).all(threadId, limit) as { text: string }[]).map(f => f.text);
+  }
+
   projectContext(project: Project) {
     const empty = { value: { text: "", project_id: project.id, tokens_est: 0 }, ids: [], threads: [] };
     // 带入已整理的公开事项；有其他来源且最新修正为私密时，也不能把它误作公开依据。
@@ -89,8 +109,13 @@ export class AgentReads {
           WHERE a.thread_id=t.id AND r.sensitivity<>'private' AND COALESCE((SELECT c.sensitivity FROM records c
             WHERE c.corrects=r.id AND c.source='manual.correction' ORDER BY c.t_start_ms DESC,c.id DESC LIMIT 1),'normal')<>'private'))
       ORDER BY COALESCE(t.last_ms,0) DESC,t.id DESC`).all(project.id, Date.now() - PAUSED_CONTEXT_MS) as Thread[];
-    const entries = threads.map(t => ({ thread: t,
-      text: `事项 ${line(t.title)} [${t.id}]（${t.status === "active" ? "进行中" : "已暂停"}，${freshness(t)}）：${line(t.brief!)}` }));
+    const entries = threads.map(t => {
+      const open = this.openFacts(t.id, 2).map(text => {
+        const points = Array.from(line(text));
+        return points.slice(0, 60).join("") + (points.length > 60 ? "…" : "");
+      });
+      return { thread: t, text: `事项 ${line(t.title)} [${t.id}]（${t.status === "active" ? "进行中" : "已暂停"}，${freshness(t)}）：${line(t.brief!)}${open.length ? "；未决：" + open.join("；") : ""}` };
+    });
     const render = () => [intro,`项目：${line(project.name)}`,...entries.map(e => e.text),hint].join("\n");
     // 预算不足先舍弃最旧的事项；没有可带入的事项时，连标题也不发。
     const limit = readGeneral(this.hub).inject_tokens;
@@ -181,21 +206,25 @@ export class AgentReads {
     const q = required(params,"q").trim(), limit = limitOf(params), times = range(params);
     let cursor: SearchCursor = { records: null, threads: null, projects: null };
     if (params.has("cursor")) {
-      const parsed = decode(params.get("cursor")!) as SearchCursor | null;
-      if (!parsed || !position(parsed.records) || !position(parsed.threads) || !position(parsed.projects)
-        || parsed.records && !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(parsed.records[1])) throw new InputError("cursor 无效");
+      const parsed = decode(params.get("cursor")!, true) as SearchCursor | null;
+      if (!parsed || Object.keys(parsed).sort().join(",") !== "projects,records,threads" || (parsed.records !== null && (!Array.isArray(parsed.records) || parsed.records.length !== 3
+          || ![0, 1].includes(parsed.records[0]) || !position(parsed.records.slice(1)))) || !position(parsed.threads) || !position(parsed.projects)
+        || parsed.records && !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(parsed.records[2])) throw new InputError("cursor 无效");
       cursor = parsed;
     }
     const candidates: { kind: keyof SearchCursor; ms: number; id: string; item: Item }[] = [];
-    const rp = new URLSearchParams({ q,limit: String(limit) });
+    const terms = q.split(/\s+/);
+    const rp = new URLSearchParams({ q,limit: String(limit), body: "1" });
     for (const key of ["from","to"]) if (params.has(key)) rp.set(key,params.get(key)!);
     if (cursor.records) rp.set("cursor",encode(cursor.records));
-    const records = this.hub.list(rp, { collapseScreenMatches: true });
-    for (const r of records.records) candidates.push({ kind: "records", ms: Date.parse(r.t_start!),id: r.id!,item: { ...r,...(r.sensitivity === "private" ? { private: true } : {}) } });
+    const records = this.hub.list(rp, { collapseScreenMatches: true, prioritizeContent: true });
+    for (const record of records.records) {
+      const { body, ...r } = record, excerpt = snippet(body ?? "", terms);
+      candidates.push({ kind: "records", ms: Date.parse(r.t_start!),id: r.id!,item: { ...r,...(excerpt === undefined ? {} : { snippet: excerpt }),...(r.sensitivity === "private" ? { private: true } : {}) } });
+    }
     let more = records.next_cursor !== null;
     for (const kind of ["threads","projects"] as const) {
-      const terms = q.trim().split(/\s+/);
-      const where = terms.map(() => `(instr(lower(${kind === "threads" ? "title" : "name"}),lower(?))>0 OR instr(lower(COALESCE(brief,'')),lower(?))>0)`), args: unknown[] = terms.flatMap(term => [term, term]);
+      const where = terms.map(() => `(instr(lower(${kind === "threads" ? "title" : "name"}),lower(?))>0 OR instr(lower(COALESCE(brief,'')),lower(?))>0${kind === "threads" ? " OR EXISTS(SELECT 1 FROM facts f WHERE f.thread_id=threads.id AND f.kind='open' AND f.invalid_at IS NULL AND instr(lower(f.text),lower(?))>0)" : ""})`), args: unknown[] = terms.flatMap(term => kind === "threads" ? [term, term, term] : [term, term]);
       if (times.from !== null) { where.push("COALESCE(last_ms,0)>=?"); args.push(times.from); }
       if (times.to !== null) { where.push("COALESCE(last_ms,0)<=?"); args.push(times.to); }
       const pos = cursor[kind];
@@ -205,15 +234,20 @@ export class AgentReads {
       for (const row of rows.slice(0,limit)) {
         delete row.detail;
         if (kind === "projects") row.keys = JSON.parse(row.keys);
+        else row.open = this.openFacts(row.id, 3);
         candidates.push({ kind,ms: row.last_ms ?? 0,id: row.id,item: row });
       }
     }
     // 线程和项目（整理好的摘要）排在原始记录前面，各自按时间倒序；用户 2026-11-12 确认：
     // 按时间混排时，搜关键词的第一页常被几分钟前的屏幕记录占满，相关线程被挤到后面几页。
     const rank = { threads: 0, projects: 1, records: 2 } as const;
-    candidates.sort((a,b) => rank[a.kind]-rank[b.kind] || b.ms-a.ms || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    candidates.sort((a,b) => rank[a.kind]-rank[b.kind] || (a.kind === "records" && b.kind === "records" ? recordTier(a.item.source)-recordTier(b.item.source) : 0) || b.ms-a.ms || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
     const page = candidates.slice(0,limit), result: Record<keyof SearchCursor, Item[]> = { threads: [],projects: [],records: [] };
-    for (const entry of page) { result[entry.kind].push(entry.item); cursor[entry.kind] = [entry.ms,entry.id]; }
+    for (const entry of page) {
+      result[entry.kind].push(entry.item);
+      if (entry.kind === "records") cursor.records = [recordTier(entry.item.source),entry.ms,entry.id];
+      else cursor[entry.kind] = [entry.ms,entry.id];
+    }
     return { value: { notice,...result,next_cursor: more || candidates.length > limit ? encode(cursor) : null }, ids: page.map(e => e.id) };
   }
 
