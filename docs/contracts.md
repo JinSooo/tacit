@@ -223,7 +223,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 - Mac `collector-status.json` 新增 `hubBusy`（启动以来收到的 503 响应次数）和 `queuePeak`（启动以来内存队列实际保留条数的峰值，不超过容量），初值均为 0，重启归零。
 - 状态接口 `GET /v1/status` 的 `llm_today` 保留 `total`、`by_tier`，新增 `by_task`：每项含 `task`、`calls`、`ok`、`failed`、`input_tokens`、`output_tokens`、`ms`。旧调用及未传任务名的调用归入 `task: null`；未知 token 用量仍为 null，统计日期与原档位统计一致。
 - 配置 `<数据目录>/models.json`：`{ "tiers": { "minute": { "provider": "claude-cli", "model": "haiku" }, … } }`。provider 有 `claude-cli`、`codex-cli`、`anthropic`、`openai-compatible`（`base_url`）。API key 存在钥匙串（service `record-anything`，account `provider:<名字>`），不写进文件。
-- 当前配置（2026-11-08 起，避免占用户的 Claude 额度）：三档都用 `codex-cli`，`minute` 用 gpt-6-luna，`hour`、`day` 用 gpt-6.1-sol。没有 `models.json` 时代码里的默认仍是 `claude-cli`（haiku / sonnet）。以后换成单独的 API 通道。
+- 当前配置（2026-11-18 起）：三档都用 `openai-compatible`，`base_url` 为 `https://api.minimax.cn/v1`，模型 `MiniMax-M3.1-Flash`，`reasoning_effort` 为 `low`（MiniMax 默认最高档且不能关，填 `none` 会 400）。此前三档用 `codex-cli`（2026-11-08 起）。没有 `models.json` 时代码里的默认仍是 `claude-cli`（haiku / sonnet）。
 - **CLI 后端必须做到**：
   - 不保存会话：`claude -p --no-session-persistence`、`codex exec --ephemeral`；
   - 在 `<数据目录>/distill-work` 里运行（agent-sessions 插件会排除这个目录，双重保险）；
@@ -231,10 +231,17 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
   - 不给任何工具：只读沙箱，不能写文件、不能联网取数；
   - 提示词走 stdin，不出现在进程参数里；
   - 用 JSON Schema 约束输出；
-  - 同一时刻只跑一个调用，单次超时 180 秒。
+  - 同一时刻只跑一个调用，单次超时 180 秒；当天整理放宽到 300 秒（上限）。
   - `codex exec` 默认带编程 Agent 的整套说明和工具，固定开销约 1.1 万输入 token（2026-11-12 实测）。适配器用 `model_instructions_file` 换成一句说明，关掉权限、环境、协作模式说明和技能检索，并用 `codex debug models` 拿本机模型目录、去掉 `tool_mode` / `multi_agent_version` 后经 `model_catalog_json` 传回（这两项强制打开代码执行和多 Agent 工具，配置项关不掉）。读不到目录时不覆盖、照常调用。实测固定开销降到约 1800 token。
   - codex 默认先走 WebSocket，连不上时要超时重连 5 次（约 110 秒）才退回 HTTPS。`codex login status` 显示用 ChatGPT 登录时，适配器加一个只走 HTTPS 的 provider（`model_providers.ra-https`，`base_url = https://chatgpt.com/backend-api/codex`、`requires_openai_auth = true`、`supports_websockets = false`），认证仍由 codex 自己完成。其他登录方式不改。（2026-11-12 用户确认）
-- 输出不符合 schema 就当作失败，不重试，等下一轮再处理。
+- **HTTP 后端（`anthropic`、`openai-compatible`）**：
+  - `base_url` 末尾带接口路径（`/chat/completions`、`/messages`）时去掉再拼。
+  - OpenAI 兼容格式把 schema 同时写进系统提示；服务拒收 `response_format` 返回 400 时去掉它重发，同一地址在本进程内之后不再带。正文开头的 `<think>…</think>` 解析前去掉。
+  - 校验前按 schema 修补小偏差：去掉 `additionalProperties: false` 时多出的字段；枚举不收 `""` 但收 `null` 时把 `""` 改成 `null`；超出 `maxItems` 的列表截断。不改文字内容。
+  - 仍不符合时，把不合格的路径和规则（不含内容）告诉模型重试一次，两次用量合计。
+  - 失败信息带服务返回的错误类别（`error.type`、`error.code`、`base_resp.status_code` / `status_msg`），不带 `error.message`；HTTP 200 加非零 `base_resp` 也按失败处理。额度、频率限制按这些类别识别。
+  - Anthropic 格式输出上限 16384 token；输入 token 计入缓存读写。
+- CLI 后端输出不符合 schema 就当作失败，不重试，等下一轮再处理。
 
 ### 4.5 hub 管理接口（Mac 与本机网页）
 

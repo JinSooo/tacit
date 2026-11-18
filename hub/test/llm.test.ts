@@ -3,7 +3,8 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createLLM, type LLMRequest, type Spawn, type UsageRow } from "../src/llm/index.ts";
+import { modelFailureCategory } from "../src/distill/run.ts";
+import { createLLM, repairToSchema, type LLMRequest, type Spawn, type UsageRow } from "../src/llm/index.ts";
 import { loadConfig } from "../src/llm/config.ts";
 import { resetCodexCatalog } from "../src/llm/codex-cli.ts";
 import { DAY_SCHEMA, DAY_SYSTEM, normalizeDayOutput } from "../src/distill/prompts.ts";
@@ -199,7 +200,7 @@ test("并发调用跨 createLLM 实例串行，失败之后继续处理", async 
 test("配置和 schema 失败也记录用量，错误不带 schema 正文", async () => {
   const f = await fixture();
   expect((await f.llm.complete({ ...request, schema: { type: "synthetic-invalid" } })).ok).toBe(false);
-  expect((await f.llm.complete({ ...request, timeoutMs: 180001 })).ok).toBe(false);
+  expect((await f.llm.complete({ ...request, timeoutMs: 300_001 })).ok).toBe(false);
   expect(f.rows).toHaveLength(2); expect((await readdir(f.dir)).includes("calls.jsonl")).toBe(false);
 });
 
@@ -366,4 +367,41 @@ test("OpenAI 兼容服务拒收 response_format 时去掉它重发，同一地�
   expect((await llm.complete(request)).ok).toBe(true);
   expect((await llm.complete(request)).ok).toBe(true);
   expect(sent).toEqual([true, false, false]);
+});
+
+// 2026-11-18：错误信息只带状态码时，MiniMax 的余额不足等错误认不出是额度问题，每轮都会接着调用。
+test("HTTP 错误带上服务的错误类别（不带 message），额度和频率限制能被识别", async () => {
+  const dir = await directory(); await configure(dir, "openai-compatible", { base_url: "https://errors.synthetic.invalid/v1" });
+  const llm = createLLM({ dataDir: dir, readKey: () => "synthetic-key", recordUsage: () => {} });
+  const replies = [
+    () => new Response(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: `回显 ${request.prompt}` } }), { status: 429 }),
+    () => Response.json({ base_resp: { status_code: 1008, status_msg: "insufficient balance" } }),
+  ];
+  const errors: string[] = [];
+  for (const reply of replies) {
+    globalThis.fetch = (async (_url: any) => reply()) as typeof fetch;
+    const result = await llm.complete(request);
+    if (!result.ok) errors.push(result.error);
+  }
+  expect(errors).toEqual(["模型 HTTP 请求失败（429 rate_limit_error）", "模型 HTTP 请求失败（200 1008 insufficient balance）"]);
+  expect(errors.map(modelFailureCategory)).toEqual(["quota", "quota"]);
+});
+
+// 2026-11-18：MiniMax 在只收已有编号或 null 的位置填 ""、加多余字段、列表超长，整次作废后要重试。
+test("HTTP 输出校验前按 schema 修补小偏差，不改文字内容", async () => {
+  const assign = { type: "object", additionalProperties: false, required: ["items"], properties: { items: { type: "array", maxItems: 2, items: {
+    type: "object", additionalProperties: false, required: ["thread_id", "title"],
+    properties: { thread_id: { type: ["string", "null"], enum: [null, "t1"] }, title: { type: "string", maxLength: 4 } } } } } };
+  const dir = await directory(); await configure(dir, "openai-compatible", { base_url: "https://repair.synthetic.invalid/v1" });
+  let sent = 0;
+  globalThis.fetch = (async (_url: any) => {
+    sent++;
+    const content = JSON.stringify({ items: [{ thread_id: "", title: "合成", is_new: true }, { thread_id: "t1", title: "合成二" }, { thread_id: null, title: "多余" }], note: "多余字段" });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content } }], usage: { prompt_tokens: 4, completion_tokens: 2 } });
+  }) as typeof fetch;
+  const llm = createLLM({ dataDir: dir, readKey: () => "synthetic-key", recordUsage: () => {} });
+  const result = await llm.complete<any>({ ...request, schema: assign });
+  expect(result.ok && result.data).toEqual({ items: [{ thread_id: null, title: "合成" }, { thread_id: "t1", title: "合成二" }] });
+  expect(sent).toBe(1);
+  expect(repairToSchema({ title: "超过四个字的标题" }, { type: "object", properties: { title: { type: "string", maxLength: 4 } } })).toEqual({ title: "超过四个字的标题" });
 });

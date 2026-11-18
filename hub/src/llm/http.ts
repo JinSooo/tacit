@@ -9,6 +9,19 @@ const ANTHROPIC_MAX_TOKENS = 16384;
 const noResponseFormat = new Set<string>();
 const SCHEMA_NOTE = "只输出一个 JSON 对象，必须符合下面的 JSON Schema：键名照抄，必填字段都要有，不加别的字段，枚举只能从给定值里选，遵守长度和条数上限。";
 
+/**
+ * 只取服务返回的错误类别（类型、代码、状态说明），供判断额度和频率限制；不带 error.message 等可能回显请求内容的字段。
+ * 只保留可见 ASCII 的短词，避免把用户内容或凭证带进错误信息。
+ */
+export function errorKind(text: string): string {
+  let body: any;
+  try { body = JSON.parse(text); } catch { return ""; }
+  const parts = [body?.error?.type, body?.error?.code, body?.type !== "error" ? body?.type : undefined,
+    body?.base_resp?.status_code, body?.base_resp?.status_msg];
+  return parts.filter(p => p !== undefined && p !== null && p !== "").map(p => String(p))
+    .filter(p => /^[\x20-\x7e]{1,60}$/.test(p) && !/[A-Za-z0-9_-]{24,}/.test(p)).slice(0, 3).join(" ");
+}
+
 export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promise<unknown> {
   const anthropic = ctx.config.provider === "anthropic";
   const controller = new AbortController();
@@ -49,11 +62,13 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
         response = await send(plain);
         if (response.ok) noResponseFormat.add(base);
       }
-      if (!response.ok) throw new Error(`模型 HTTP 请求失败（${response.status}）`);
+      if (!response.ok) throw new Error(`模型 HTTP 请求失败（${[response.status, errorKind(await response.text().catch(() => ""))].filter(Boolean).join(" ")}）`);
       const text = await response.text();
       try { ctx.observer?.response(text); } catch { throw new Error("调用结果记录失败，结果未采用"); }
       ctx.metrics.outputChars = Array.from(text).length;
       const body = parseJSON(text) as any;
+      // MiniMax 等服务可能用 HTTP 200 加 base_resp 报错（如余额不足、频率限制）。
+      if (body?.base_resp && body.base_resp.status_code !== 0 && body.base_resp.status_code !== undefined) throw new Error(`模型 HTTP 请求失败（200 ${errorKind(text)}）`);
       const u = body?.usage ?? {};
       // Anthropic 格式的 input_tokens 只是未命中缓存的部分，真实输入量要加上缓存读写（与 claude-cli 一致）。
       ctx.metrics.inputTokens = tokens(anthropic
