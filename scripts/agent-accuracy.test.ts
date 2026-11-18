@@ -18,7 +18,7 @@ if (args[0] !== "exec" || value("-m") !== ${JSON.stringify(model)} || !args.incl
     || configs.some(c => c.includes("personal"))) process.exit(2);
 const emit = item => console.log(JSON.stringify({ type: "item.completed", item }));
 emit({ id: "i1", type: "mcp_tool_call", server: "tacit_eval", tool: "now", arguments: {}, result: { content: [{ type: "text", text: "{}" }] }, error: null });
-emit({ id: "i2", type: "agent_message", text: JSON.stringify({ facts: {}, evidence_ids: [] }) });
+emit({ id: "i2", type: "agent_message", text: JSON.stringify({ facts: { 颜色: "铅笔是蓝色的", 分组: "可能是文具组、画材组、办公组、收纳组、礼品组、耗材组、教具组、工具组、杂项组、样品组、赠品组、备用组、展示组、包装组、试用组、旧品组、新品组、外借组" }, evidence_ids: [] }) });
 `, { mode: 0o700 });
 
     const child = Bun.spawn([process.execPath, join(import.meta.dir, "agent-accuracy.ts"),
@@ -28,7 +28,11 @@ emit({ id: "i2", type: "agent_message", text: JSON.stringify({ facts: {}, eviden
     });
     const [output, status] = await Promise.all([new Response(child.stdout).text(), child.exited]);
     expect(status).toBe(0);
-    expect(JSON.parse(output.split("\n")[0]!)).toMatchObject({ id: "q-example", model, error: null });
+    const result = JSON.parse(output.split("\n")[0]!);
+    expect(result).toMatchObject({ id: "q-example", model, error: null });
+    // 换个说法但包含可接受答案算对；把多种说法堆成长答案不算对；原答案留在结果里供核对。
+    expect(result.facts).toEqual({ 颜色: true, 分组: false });
+    expect(result.answers.颜色).toBe("铅笔是蓝色的");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

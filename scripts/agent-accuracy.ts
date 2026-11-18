@@ -86,6 +86,13 @@ function normalize(value: string): string {
     .replace(/^[“‘"'「『]+|[。！!？?；;“”‘’"'」』]+$/gu, "");
 }
 
+// 自由描述的事实按“包含任一可接受说法”判对；限长防止把几种说法堆进一个答案里蒙对。（2026-11-18 Claude 决定）
+const ANSWER_LIMIT = 60;
+function accepts(accepted: string[], value: string): boolean {
+  const answer = normalize(value);
+  return answer.length > 0 && answer.length <= ANSWER_LIMIT && accepted.some(candidate => answer.includes(normalize(candidate)));
+}
+
 function safeRequest(input: ObjectValue | null): Call["request"] {
   const request: Call["request"] = {};
   if (!input) return request;
@@ -194,7 +201,7 @@ async function evaluate(question: Question, dataset: Dataset, mcp: string[], cwd
   const provided = object(observed.answer?.facts);
   const facts = Object.fromEntries(Object.entries(question.facts).map(([name, accepted]) => {
     const value = provided?.[name];
-    return [name, !error && typeof value === "string" && accepted.some(candidate => normalize(candidate) === normalize(value))];
+    return [name, !error && typeof value === "string" && accepts(accepted, value)];
   }));
   const cited = observed.answer?.evidence_ids;
   const verified = Array.isArray(cited)
@@ -203,7 +210,7 @@ async function evaluate(question: Question, dataset: Dataset, mcp: string[], cwd
   return {
     type: "question", id: question.id, category: question.category, date: question.date, model: connection.model ?? null,
     correct: !error && Object.values(facts).every(Boolean) && verified.length > 0,
-    facts, verified_evidence: verified, calls: observed.calls, error,
+    facts, answers: provided ?? null, verified_evidence: verified, calls: observed.calls, error,
   };
 }
 
