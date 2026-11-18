@@ -6,8 +6,8 @@ import { DistillStore } from "../src/distill/store.ts";
 import { createHandler } from "../src/server.ts";
 import { emptyDayOutput, fixture, setup } from "./helpers.ts";
 
-type ReviewInput = { activities: { key: string; kind: string; active_minutes: number;
-  evidence: { key: string; source: string; role: string; text: string; at?: string }[] }[] };
+type ReviewInput = { activities: { key: string; kind: string; active_minutes: number; project: string | null; summary_eligible: boolean;
+  evidence: { key: string; source: string; role: string; text: string; at?: string; chat?: string; speaker?: string }[] }[] };
 const parse = (prompt: string) => JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(prompt)![1]!) as ReviewInput;
 const day = "2026-11-16", base = Date.parse(day + "T10:00:00"), min = 60_000;
 const point = (offset: number) => toLocalIso(base + offset * min);
@@ -26,10 +26,15 @@ test("段保留连续活动的实际时长、全部原文和模型引用，排�
   const browser = span(1, 2, { source: "mac.browser", source_ref: "map-preview", title: "地图预览", body: "浏览器正文应排除" });
   const followup = span(3, 8, { source: "codex.session", source_ref: "demo#22", body: "[我] 已补齐图例，明天才印刷。" });
   const conversation = span(50, 53, { source: "mac.audio", body: "[10:50:05] 我：周六九点集合。" });
-  const conversationEnd = span(54, 57, { source: "mac.audio", body: "[10:54:05] 对方：周六九点在车站见。" });
+  const conversationEnd = span(54, 57, { source: "mac.audio", body: "[10:54:05] 合成向导：周六九点在车站见。\n[10:54:10] 对方 1：我搭早班车。" });
   const noise = span(60, 63, { title: "短窗口应排除", context: { window: "临时查阅" }, body: "短窗口正文应排除" });
+  const chatStart = fixture({ source: "mac.wechat", t_start: point(65),
+    context: { chat: "合成展览群", extra: { from_me: 1 } }, body: "我已经把手册放在入口。" });
+  const chatEnd = fixture({ source: "mac.wechat", t_start: point(67),
+    context: { chat: "合成展览群", extra: { from_me: 0, sender: "合成编辑" } }, body: "我已经换成新版手册了。" });
   const misc = span(70, 77, { title: "志愿者工作表", context: { window: "志愿者工作表" }, body: "工作表正文应排除" });
-  const privateNote = fixture({ source: "manual.note", t_start: point(80), sensitivity: "private", body: "私密正文应排除" });
+  const privateChat = span(78, 81, { source: "mac.wechat", sensitivity: "private",
+    context: { chat: "合成私密群", extra: { from_me: 0, sender: "合成私密联系人" } }, body: "私密正文应排除" });
   const fragment = fixture({ source: "mac.wechat", t_start: point(83), context: { chat: "零散消息", extra: { from_me: 0 } } });
   const note = fixture({ source: "manual.note", t_start: point(84) });
   const scheduled = span(85, 90, { source: "codex.session", source_ref: "synthetic-auto#0",
@@ -37,8 +42,8 @@ test("段保留连续活动的实际时长、全部原文和模型引用，排�
   const scheduledTail = span(91, 93, { source: "codex.session", source_ref: "synthetic-auto#1", body: "[AI] 自动任务续篇应排除。" });
   const lateSession = span(100, 120, { source: "claude_code.session", source_ref: "late-session", body: "[我] 跨截止点内容应排除。" });
   try {
-    const records = [first, screen, browser, followup, conversation, conversationEnd, noise, misc,
-      privateNote, fragment, note, scheduled, scheduledTail, lateSession];
+    const records = [first, screen, browser, followup, conversation, conversationEnd, noise, chatStart, chatEnd, misc,
+      privateChat, fragment, note, scheduled, scheduledTail, lateSession];
     expect(ctx.db.ingest(records).accepted).toBe(records.length);
     store.upsertProject({ id: "museum", name: "合成展厅", keys: { repos: [], hosts: [], chats: [] } });
     store.upsertThread({ id: "map", title: "展板", status: "active", project_id: "museum" });
@@ -48,30 +53,39 @@ test("段保留连续活动的实际时长、全部原文和模型引用，排�
         t_end_ms: Date.parse(record.t_end!), chars: 1, private: 0, status: "new" });
       store.assign(id, "map", "rule", 1);
     }
+    const summary = "合成展厅定下了导览入口并补齐图例。和合成向导约在车站集合。合成编辑已把入口的手册换成新版。";
     const llm: LLM = { async complete<T>(req: import("../src/llm/index.ts").LLMRequest) {
       expect(req.task).toBe("day");
       expect(req.prompt).not.toContain("屏幕正文应排除");
-      const { activities: [thread, audio] } = parse(req.prompt);
+      expect(req.prompt).not.toContain("合成私密群");
+      expect(req.prompt).not.toContain("合成私密联系人");
+      expect(req.prompt).not.toContain("私密正文应排除");
+      const { activities: [thread, audio, chat] } = parse(req.prompt);
+      expect(thread?.project).toBe("合成展厅");
       expect(thread?.active_minutes).toBe(10);
       expect(thread?.evidence.map(e => e.role)).toEqual(["user", "user", "assistant"]);
       expect(thread?.evidence.map(e => e.at)).toEqual([point(0), undefined, point(10)]);
-      expect(audio?.evidence.map(e => e.role)).toEqual(["user", "other"]);
-      return { ok: true, data: { highlight: { activities: [thread!.key, audio!.key], text: "你定下了导览入口并补齐图例。周六的集合地点约在车站。" }, items: [
+      expect(audio?.project).toBeNull();
+      expect(audio?.evidence.map(e => e.role)).toEqual(["user", "other", "other"]);
+      expect(audio?.evidence.map(e => e.speaker)).toEqual([undefined, "合成向导", undefined]);
+      expect(chat?.summary_eligible).toBe(true);
+      expect(chat?.evidence.map(e => [e.chat, e.speaker])).toEqual([["合成展览群", undefined], ["合成展览群", "合成编辑"]]);
+      return { ok: true, data: { highlight: { activities: [thread!.key, audio!.key, chat!.key], text: summary }, items: [
         { activity: audio!.key, title: "约定车站集合", description: "周六九点在车站见。", refs: [audio!.evidence[1]!.key] },
         { activity: thread!.key, title: "排定导览图", description: "入口改到北门，图例已补齐。展板还没印。", refs: [thread!.evidence[0]!.key,thread!.evidence[1]!.key] },
+        { activity: chat!.key, title: "入口换上新版手册", description: "新版手册已放在入口。", refs: [chat!.evidence[1]!.key] },
         { activity: "outside", title: "虚构事项", description: "不会出现在结果里。", refs: ["r1"] },
       ] } as T, ms: 1 };
     } };
     expect(await dayStep({ db: ctx.db, llm }, store, day, now)).toEqual({ ok: true, calls: 1 });
     const review = await (await request(ctx, `/v1/days/${day}`)).json();
-    const summary = "你定下了导览入口并补齐图例。周六的集合地点约在车站。";
     expect(review.brief).toBe(summary);
     expect(review.detail.summary).toBe(summary);
     const agentDay = await (await request(ctx, `/v1/agent/get?tool=codex&level=detail&id=${day}`)).json();
     expect(agentDay.item.detail.summary).toBe(summary);
     expect(review.detail.cutoff).toBe(toLocalIso(now));
     const [a,b] = review.detail.items;
-    expect(review.detail.items).toHaveLength(2);
+    expect(review.detail.items).toHaveLength(3);
     expect(a).toMatchObject({ id: first.id, title: "排定导览图", active_seconds: 10 * 60, t_start: point(0), t_end: point(10),
       sources: ["codex.session"], apps: [{ source: "codex.session", app: null }],
       record_ids: [first.id, screen.id, browser.id, followup.id], project_id: "museum",
@@ -79,7 +93,7 @@ test("段保留连续活动的实际时长、全部原文和模型引用，排�
     expect(b).toMatchObject({ title: "约定车站集合", active_seconds: 6 * 60, t_start: point(50), t_end: point(57) });
     expect(review.detail.omitted_record_ids).toEqual(expect.arrayContaining([misc.id, lateSession.id]));
     expect(ctx.db.get(misc.id)?.title).toBe(misc.title);
-    expect(review.detail.items.flatMap((item: { record_ids: string[] }) => item.record_ids)).not.toContain(privateNote.id);
+    expect(review.detail.items.flatMap((item: { record_ids: string[] }) => item.record_ids)).not.toContain(privateChat.id);
     expect(review.detail.items.flatMap((item: { record_ids: string[] }) => item.record_ids)).not.toContain(noise.id);
     expect(Object.keys(a.evidence[0]).sort()).toEqual(["at", "id", "source", "title"]);
     expect(review.detail.timeline[0]).toEqual({ start: "10:00", end: "10:10", text: "排定导览图" });
@@ -358,9 +372,11 @@ test("当天概述允许部分编号失效，先脱敏并合成单段，超长�
       items: [{ activity: activity.key, content: "result", title: "摆放展板", description: "新展板已摆好。", refs: [activity.evidence[0]!.key] }],
     }, base + 86400000, point(12), [], [])!.summary;
     const syntheticKey = "sk-proj-" + "aB3_".repeat(6);
-    const text = `新展板已摆好。\r\n 清除了测试密钥 ${syntheticKey}。\n${"未完".repeat(80)}`;
+    const text = `新展板已摆好。\r\n 清除了测试密钥 ${syntheticKey}。\n正在试装 0.2.2 ${"未完".repeat(80)}`;
     expect(compose(["unknown", activity.key], text)).toBe("新展板已摆好。 清除了测试密钥 [已脱敏:OpenAI]。");
-    expect(compose([activity.key], "𠮷".repeat(121))).toBe("𠮷".repeat(120));
+    const atLimit = "𠮷".repeat(159) + "。";
+    expect(compose([activity.key], atLimit + "未完")).toBe(atLimit);
+    expect(compose([activity.key], "𠮷".repeat(161))).toBe("𠮷".repeat(160));
     expect(compose(["unknown"], text)).toBe("摆放展板");
   } finally { ctx.cleanup(); }
 });
