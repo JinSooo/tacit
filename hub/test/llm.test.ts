@@ -3,7 +3,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { modelFailureCategory } from "../src/distill/run.ts";
+
 import { createLLM, repairToSchema, type LLMRequest, type Spawn, type UsageRow } from "../src/llm/index.ts";
 import { loadConfig } from "../src/llm/config.ts";
 import { resetCodexCatalog } from "../src/llm/codex-cli.ts";
@@ -148,8 +148,8 @@ for (const provider of ["claude-cli", "codex-cli"]) {
     if (!result.ok) {
       expect(result.error).not.toContain(request.prompt);
       expect(result.error.length).toBeLessThan(600);
-      if (mode === "json") expect(result.error).toContain("非法 JSON");
-      if (mode === "schema") expect(result.error).toContain("不符合 schema");
+      if (mode === "json") expect(result.error).toBe("invalid_json");
+      if (mode === "schema") expect(result.error).toBe("schema_mismatch");
     }
     if (provider === "codex-cli") {
       const start = (await f.logs())[0]; const file = start.args[start.args.indexOf("--output-schema") + 1];
@@ -160,7 +160,7 @@ for (const provider of ["claude-cli", "codex-cli"]) {
   test(`${provider}：超时确实杀死进程`, async () => {
     const f = await fixture(provider, "timeout");
     const result = await f.llm.complete({ ...request, timeoutMs: 250 });
-    expect(result.ok).toBe(false); if (!result.ok) expect(result.error).toContain("超时");
+    expect(result.ok).toBe(false); if (!result.ok) expect(result.error).toBe("timeout");
     const [start] = await f.logs();
     // 等待操作系统回收子进程，再核验 PID；不是仅检查返回值。
     for (let i = 0; i < 50; i++) {
@@ -208,7 +208,7 @@ test("usage 回调失败明确返回失败，队列仍可继续", async () => {
   const f = await fixture(); let calls = 0;
   const llm = createLLM({ dataDir: f.dir, spawn: f.spawn, recordUsage() { calls++; throw new Error("synthetic"); } });
   const result = await llm.complete(request); expect(result.ok).toBe(false);
-  if (!result.ok) expect(result.error).toBe("模型用量记录失败");
+  if (!result.ok) expect(result.error).toBe("usage_record_failed");
   expect(calls).toBe(1); expect((await f.llm.complete(request)).ok).toBe(true);
 });
 
@@ -218,7 +218,7 @@ test("HTTP 的 key 读取也受总超时约束，超时后不会发出延迟请�
   globalThis.fetch = (async () => { fetched = true; return Response.json({}); }) as unknown as typeof fetch;
   const llm = createLLM({ dataDir: dir, readKey: () => new Promise(resolve => { resolveKey = resolve; }), recordUsage: row => { rows.push(row); } });
   const result = await llm.complete({ ...request, timeoutMs: 30 });
-  expect(result.ok).toBe(false); if (!result.ok) expect(result.error).toContain("超时");
+  expect(result.ok).toBe(false); if (!result.ok) expect(result.error).toBe("timeout");
   resolveKey("synthetic-key"); await Bun.sleep(0);
   expect(fetched).toBe(false); expect(rows).toHaveLength(1);
 });
@@ -262,7 +262,7 @@ for (const provider of ["anthropic", "openai-compatible"]) {
       const result = await llm.complete({ ...request, timeoutMs: 50 });
       expect(result.ok).toBe(false); if (!result.ok) {
         expect(result.error).not.toContain(request.prompt);
-        if (provider === "anthropic" && mode === "truncated") expect(result.error).toContain("16384 token 上限");
+        if (provider === "anthropic" && mode === "truncated") expect(result.error).toBe("schema_mismatch");
       }
     }
     expect(rows).toHaveLength(5); expect(rows.every(r => r.ok === 0)).toBe(true);
@@ -295,7 +295,7 @@ test("Claude 出错原因从 stdout 的 result 取出", async () => {
   const f = await fixture("claude-cli", "limit");
   const r = await f.llm.complete({ tier: "minute", system: "合成", prompt: "合成", schema: { type: "object" } });
   expect(r.ok).toBe(false);
-  expect(r.ok ? "" : r.error).toContain("5-hour limit");
+  expect(r.ok ? "" : r.error).toBe("quota");
 });
 
 
@@ -315,7 +315,7 @@ for (const mode of ["codex-error", "codex-echo"]) test(`Codex JSONL 失败诊断
   const result = await f.llm.complete(request);
   expect(result.ok).toBe(false);
   if (!result.ok) {
-    expect(result.error).toContain(mode === "codex-error" ? "HTTP 429" : "已隐藏");
+    expect(result.error).toBe(mode === "codex-error" ? "rate_limited:429" : "cli_failed");
     expect(result.error).not.toContain(request.prompt);
     expect(f.rows[0]!.error).toBe(result.error);
   }
@@ -383,8 +383,7 @@ test("HTTP 错误带上服务的错误类别（不带 message），额度和频�
     const result = await llm.complete(request);
     if (!result.ok) errors.push(result.error);
   }
-  expect(errors).toEqual(["模型 HTTP 请求失败（429 rate_limit_error）", "模型 HTTP 请求失败（200 1008 insufficient balance）"]);
-  expect(errors.map(modelFailureCategory)).toEqual(["quota", "quota"]);
+  expect(errors).toEqual(["rate_limited:429", "quota:200"]);
 });
 
 // 2026-11-18：MiniMax 在只收已有编号或 null 的位置填 ""、加多余字段、列表超长，整次作废后要重试。

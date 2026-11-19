@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { InputError, type HubDB } from "./db.ts";
 import { redactString } from "./redact.ts";
 import { eraseAuditQueries, expireAuditQueries } from "./agent-audit.ts";
+import { classifyModelError, ModelError } from "./llm/error-category.ts";
 import type { LLMRequest, ModelConfig, UsageRow, CallObserver } from "./llm/types.ts";
 
 export const SNAPSHOT_DAYS = 7;
@@ -25,15 +26,31 @@ export function contentRevision(hub: HubDB): number {
   const row = hub.db.prepare("SELECT v FROM distill_state WHERE k='content_revision'").get() as { v: string } | undefined;
   return row ? Number(JSON.parse(row.v)) || 0 : 0;
 }
+/** 升级后开库时就地修正旧错误列，既有类别无需重写。 */
+export function sanitizeStoredModelErrors(hub: HubDB) {
+  hub.db.transaction(() => {
+    for (const table of ["llm_usage", "runtime_calls", "distill_requests"]) {
+      const rows = hub.db.prepare(`SELECT id,error FROM ${table} WHERE error IS NOT NULL`).all() as { id: string; error: string }[];
+      const update = hub.db.prepare(`UPDATE ${table} SET error=? WHERE id=?`);
+      for (const { id, error } of rows) {
+        const category = classifyModelError(error);
+        if (category !== error) update.run(category, id);
+      }
+    }
+  }).immediate();
+}
+
 export function expireSnapshots(hub: HubDB, now = Date.now()) {
-  hub.db.prepare(`UPDATE runtime_calls SET request_json=NULL,response_text=NULL,content_state='expired'
-    WHERE at_ms<=? AND content_state='available'`).run(now - RETENTION);
+  hub.db.prepare(`UPDATE runtime_calls SET request_json=NULL,response_text=NULL,error=NULL,
+    content_state=CASE WHEN content_state='available' THEN 'expired' ELSE content_state END
+    WHERE at_ms<=? AND (content_state='available' OR error IS NOT NULL)`).run(now - RETENTION);
   expireAuditQueries(hub, now);
 }
 /** 与记录删除共用事务。暂不假设摘要具备完整来源链，保守清除所有正文。 */
 export function eraseSnapshots(hub: HubDB) {
-  hub.db.prepare(`UPDATE runtime_calls SET request_json=NULL,response_text=NULL,content_state='deleted'
-    WHERE content_state='available'`).run();
+  hub.db.prepare(`UPDATE runtime_calls SET request_json=NULL,response_text=NULL,error=NULL,
+    content_state=CASE WHEN content_state='available' THEN 'deleted' ELSE content_state END
+    WHERE content_state='available' OR error IS NOT NULL`).run();
   eraseAuditQueries(hub);
 }
 
@@ -45,7 +62,7 @@ export class RuntimeLog {
     const safe = redactString(JSON.stringify({ system: req.system, prompt: req.prompt, schema: req.schema, refs: req.refs ?? {} }));
     this.hub.db.transaction(() => {
       expireSnapshots(this.hub, now);
-      if (revision !== contentRevision(this.hub)) throw new Error("记录已变化，等待重新整理");
+      if (revision !== contentRevision(this.hub)) throw new ModelError("unknown");
       this.hub.db.prepare(`INSERT INTO runtime_calls(id,at,at_ms,kind,task,tier,provider,model,revision,request_json,redactions)
         VALUES(?,?,?,'model',?,?,?,?,?,?,?)`).run(id,new Date(now).toISOString(),now,req.task ?? null,req.tier,config.provider,config.model,revision,safe.text,safe.count);
     }).immediate();
@@ -53,20 +70,29 @@ export class RuntimeLog {
       const encoded = redactString(JSON.stringify({ transport, request: payload, refs: req.refs ?? {} }));
       this.hub.db.transaction(() => {
         const row = this.hub.db.prepare("SELECT content_state FROM runtime_calls WHERE id=?").get(id) as Row | undefined;
-        if (!row || row.content_state !== "available" || revision !== contentRevision(this.hub)) throw new Error("记录已变化，等待重新整理");
+        if (!row || row.content_state !== "available" || revision !== contentRevision(this.hub)) throw new ModelError("unknown");
         // 出队后、真正发送前再检查一次；API 的钥匙串读取、CLI 的初始化也可能耗时。
         this.hub.db.prepare("UPDATE runtime_calls SET transport=?,request_json=?,redactions=?,provider_state='sending' WHERE id=?")
           .run(transport,encoded.text,encoded.count,id);
       }).immediate();
     };
-    const response = (text: string) => {
+    const response = (text: string, apiKey?: string) => {
+      let keyRedactions = 0;
+      if (apiKey) {
+        const encoded = JSON.stringify(apiKey).slice(1, -1);
+        for (const secret of new Set([encoded, apiKey])) {
+          const parts = text.split(secret);
+          keyRedactions += parts.length - 1;
+          text = parts.join("[已脱敏:API key]");
+        }
+      }
       const safe = redactString(text); // 先完整脱敏再截断，避免在密钥中间截断而漏检。
       this.hub.db.transaction(() => {
         expireSnapshots(this.hub);
         this.hub.db.prepare(`UPDATE runtime_calls SET provider_state='returned',
           response_text=CASE WHEN content_state='available' AND revision=? THEN ? ELSE NULL END,
           response_truncated=?,redactions=redactions+? WHERE id=?`)
-          .run(contentRevision(this.hub),safe.text.slice(0,OUTPUT_LIMIT),Number(safe.text.length > OUTPUT_LIMIT),safe.count,id);
+          .run(contentRevision(this.hub),safe.text.slice(0,OUTPUT_LIMIT),Number(safe.text.length > OUTPUT_LIMIT),safe.count + keyRedactions,id);
       }).immediate();
     };
     return { request, response };
@@ -81,7 +107,7 @@ export class RuntimeLog {
         provider_state=CASE WHEN provider_state='returned' THEN provider_state ELSE 'failed' END,
         validation_state=?,application_state=?,ms=?,input_tokens=?,output_tokens=?,error=? WHERE id=?`)
         .run(validated ? "passed" : "failed",stale ? "discarded" : row.ok ? "pending" : "not_applied",row.ms,row.input_tokens,row.output_tokens,
-          stale ? "记录已变化，结果未采用" : row.error ? redactString(row.error).text : null,row.id);
+          current.content_state === "available" && !stale && row.error !== null ? classifyModelError(row.error) : null,row.id);
     }).immediate();
   }
 

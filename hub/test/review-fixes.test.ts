@@ -2,7 +2,8 @@ import { afterEach, expect, test, spyOn } from "bun:test";
 import { chmodSync, statSync } from "node:fs";
 import { HubDB } from "../src/db.ts";
 import { DistillStore } from "../src/distill/store.ts";
-import { assignStep, withBreaker, type LLM } from "../src/distill/run.ts";
+import { assignStep, type LLM } from "../src/distill/run.ts";
+import { withModelCooldown } from "../src/distill/cooldown.ts";
 import { fixture, setup } from "./helpers.ts";
 
 const cleanups: (() => void)[] = [];
@@ -31,20 +32,29 @@ test("归属坏批次保留待重试，后续批次仍能处理，日志不带�
   const result = await assignStep({ db: ctx.db, llm, log: line => logs.push(line) }, store, Date.now());
   expect(calls).toBe(2); expect(result.failed).toBe(20);
   expect(store.frames().filter(f => f.status === "new")).toHaveLength(20);
-  expect(logs.join("\n")).toContain('"category":"output"');
+  expect(logs.join("\n")).toContain('"category":"schema_mismatch"');
   expect(logs.join("\n")).not.toContain("私密正文");
 });
 
-for (const [error, trips] of [
-  ["Usage: codex exec [OPTIONS]", false], ["context length exceeded", false], ["output token limit exceeded", false],
-  ["request time limit exceeded", false], ["HTTP 429", true], ["rate_limit_exceeded", true],
-  ["You've hit your 5-hour limit", true], ["insufficient_quota", true],
-] as const) test(`熔断只识别额度：${error}`, async () => {
-  let calls = 0, stopped = 0;
-  const llm = withBreaker({ async complete() { calls++; return { ok: false, error, ms: 1 }; } }, () => stopped++);
+for (const [error, kind] of [
+  ["Usage: codex exec [OPTIONS]", null], ["context length exceeded", null], ["output token limit exceeded", null],
+  ["request time limit exceeded", "network"], ["HTTP 429", "rate_limited"], ["rate_limit_exceeded", "rate_limited"],
+  ["You've hit your 5-hour limit", "quota"], ["insufficient_quota", "quota"],
+] as const) test(`冷却识别额度、限流和超时：${error}`, async () => {
+  const store = new DistillStore(context().db);
+  let calls = 0;
+  const llm = withModelCooldown({ async complete() { calls++; return { ok: false, error, ms: 1 }; } }, store, Date.now);
   const request = { tier: "minute" as const, system: "", prompt: "", schema: {} };
-  await llm.complete(request); await llm.complete(request);
-  expect(calls).toBe(trips ? 1 : 2); expect(stopped).toBe(trips ? 1 : 0);
+  if (kind === "network") await llm.complete(request);
+  if (kind) {
+    await expect(llm.complete(request)).rejects.toThrow(kind);
+    await expect(llm.complete(request)).rejects.toThrow(kind);
+    expect(store.getState("llm_cooldown")).toMatchObject({ kind });
+  } else {
+    await llm.complete(request); await llm.complete(request);
+    expect(store.getState("llm_cooldown")).toBeNull();
+  }
+  expect(calls).toBe(kind === "quota" || kind === "rate_limited" ? 1 : 2);
 });
 
 test("HTTP 500 记录诊断位置和代码，不记录正文、检索词或令牌", async () => {

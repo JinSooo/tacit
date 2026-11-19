@@ -181,6 +181,7 @@ test("models/test：用未保存的配置调一次，不写 llm_usage；错误�
   const script = join(ctx.dir, "fake-claude");
   writeFileSync(script, `#!${process.execPath}
 const input = await Bun.stdin.text();
+if (process.env.TEST_MODE === "rate") { console.error("HTTP 429"); process.exit(3); }
 if (process.env.TEST_MODE === "fail") { console.error("synthetic failure token=${SECRET}"); process.exit(3); }
 console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, structured_output: { ok: true }, usage: {} }));
 `);
@@ -189,6 +190,9 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
   const spawnWith = (mode: string): Spawn => (_cmd, args, options) => { calls.push(args); return nodeSpawn(script, args, { ...options, env: { ...options.env, TEST_MODE: mode } }); };
   const usage = () => (ctx.db.db.prepare("SELECT count(*) n FROM llm_usage").get() as { n: number }).n;
 
+  const cooldown = JSON.stringify({ until: new Date(Date.now() + 3600_000).toISOString(), kind: "quota" });
+  const state = () => ctx.db.db.prepare("SELECT v FROM distill_state WHERE k='llm_cooldown'").get();
+  ctx.db.db.prepare("INSERT INTO distill_state(k,v) VALUES('llm_cooldown',?)").run(cooldown);
   const ok = await call(handler({ llm: { spawn: spawnWith("ok") } }), "POST", "/v1/settings/models/test", { tier: "hour", config: tier("claude-cli", "unsaved-model") });
   expect(ok.status).toBe(200);
   expect(ok.body).toMatchObject({ ok: true, provider: "claude-cli", model: "unsaved-model", error: null });
@@ -199,7 +203,10 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
   const failed = await call(handler({ llm: { spawn: spawnWith("fail") } }), "POST", "/v1/settings/models/test", { tier: "minute" });
   expect(failed.status).toBe(200);
   expect(failed.body.ok).toBe(false); expect(failed.body.model).toBe("haiku");
-  expect(failed.body.error).toContain("退出失败"); expect(failed.body.error.length).toBeLessThanOrEqual(300);
+  expect(failed.body.error).toBe("cli_failed");
+  const rate = await call(handler({ llm: { spawn: spawnWith("rate") } }), "POST", "/v1/settings/models/test", { tier: "minute" });
+  expect(rate.body).toMatchObject({ ok: false, error: "rate_limited:429" });
+  expect(state()).toEqual({ v: cooldown });
   expect(usage()).toBe(0);
 
   const h = handler();

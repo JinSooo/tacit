@@ -1,3 +1,4 @@
+import { ModelError } from "./error-category.ts";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -104,9 +105,9 @@ export async function codexCLI(ctx: BackendContext): Promise<unknown> {
       } catch { /* CLI 诊断行不属于模型结果。 */ }
     }
     let text: string;
-    try { text = await readFile(output, "utf8"); } catch { throw new Error("Codex 未写入结果文件"); }
+    try { text = await readFile(output, "utf8"); } catch { throw new ModelError("cli_failed"); }
     ctx.metrics.outputChars = Array.from(text).length;
-    try { ctx.observer?.response(text); } catch { throw new Error("调用结果记录失败，结果未采用"); }
+    try { ctx.observer?.response(text); } catch { throw new ModelError("usage_record_failed"); }
     return parseJSON(text);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }

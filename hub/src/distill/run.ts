@@ -5,6 +5,8 @@ import { contentRevision, appliedCall, discardedCall } from "../runtime-log.ts";
 import type { HubDB } from "../db.ts";
 import { chatKey } from "../chat.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
+import { classifyModelError, type ModelErrorCode } from "../llm/error-category.ts";
+import { activeCooldown, ModelCooldown, withModelCooldown } from "./cooldown.ts";
 import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { DistillStore, type Frame, type Thread } from "./store.ts";
 import { persistFrames } from "./frames.ts";
@@ -33,9 +35,9 @@ export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: st
 async function complete<T>(d: Deps, req: LLMRequest): Promise<LLMResult<T>> {
   const revision = contentRevision(d.db);
   const result = await d.llm.complete<T>({ ...req, prompt: redactString(req.prompt).text, system: redactString(req.system).text, contentRevision: revision });
-  if (result.ok && revision !== contentRevision(d.db)) {
+  if (revision !== contentRevision(d.db)) {
     discardedCall(d.db,result.call_id);
-    return { ok: false, error: "记录已变化，等待重新整理", ms: result.ms, call_id: result.call_id };
+    return { ok: false, error: "unknown", discarded: true, ms: result.ms, call_id: result.call_id };
   }
   return result;
 }
@@ -266,7 +268,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
     calls++;
     const request = assignRequest(batch.map(x => x.v), choices);
     const r = await complete<P.AssignOutput>(d, { tier: "minute", task: "assign", system: P.ASSIGN_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
-    if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length, category: modelFailureCategory(r.error) })); continue; }
+    if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length, category: classifyModelError(r.error) })); continue; }
     const byFrame = new Map(request.decode(r.data).items.map(i => [i.frame_id, i]));
     const real = new Set(threads.map(t => t.id));
     // 同一批里多个片段提议同一个新标题，或者提议的标题就是已有线程：归到同一条，不重复建。
@@ -450,7 +452,10 @@ export async function classifyStep(d: Deps, store: DistillStore) {
       if (!r.ok) { failed++; continue; }
       store.hub.db.transaction(() => { applyClassification(store,id,r.data); appliedCall(d.db,r.call_id); })();
       updated++;
-    } catch { failed++; }
+    } catch (error) {
+      if (error instanceof ModelCooldown) throw error;
+      failed++;
+    }
   }
   return { calls, updated, failed };
 }
@@ -532,7 +537,7 @@ export async function digestStep(d: Deps, store: DistillStore, now: number, sele
       calls++;
       const request = threadRequest({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!), recordId => store.hub.get(recordId));
       const r = await complete<ThreadModelOutput>(d, { tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
-      if (!r.ok) { log(JSON.stringify({ step: "digest", ok: false, category: modelFailureCategory(r.error) })); ok = false; break; }
+      if (!r.ok) { log(JSON.stringify({ step: "digest", ok: false, category: classifyModelError(r.error) })); ok = false; break; }
       if (!unchanged()) { discardedCall(d.db,r.call_id); ok = false; break; }
       const known = new Set(chunk.flatMap(x => x.v.records.map(rec => rec.id)).filter(Boolean));
       const out = request.decode(r.data);
@@ -731,31 +736,31 @@ export function lifecycleStep(store: DistillStore, now: number) {
 
 // ---------------- 7. 日记 ----------------
 
-export async function dayStep(d: Deps, store: DistillStore, date: string, now: number) {
+export async function dayStep(d: Deps, store: DistillStore, date: string, now: number): Promise<{ calls: number; ok: boolean; error?: ModelErrorCode }> {
   const start = localDayStart(date);
-  if (start === null || start > now) return { calls: 0, ok: false };
+  if (start === null || start > now) return { calls: 0, ok: false, error: "bad_request" };
   const next = new Date(start);
   next.setDate(next.getDate() + 1);
   const end = Math.min(next.getTime(), now + 1), cutoff = toLocalIso(Math.min(next.getTime(), now));
   const revision = contentRevision(d.db);
   const { segments, omittedRecordIds, dependencyRecordIds } = reviewPlan(d.db, start, end), material = reviewMaterial(segments);
-  const failed = (calls: number, discarded = false) => {
+  const failed = (calls: number, discarded = false, error?: ModelErrorCode) => {
     store.hub.db.transaction(() => {
       store.upsertDay({ date, needs_regen: 1 });
       store.setState(`day_failed:${date}`, discarded ? null : true);
     })();
-    return { calls, ok: false };
+    return { calls, ok: false, ...(error ? { error } : {}) };
   };
   const result = material.length ? await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM, timeoutMs: 300_000,
     prompt: P.dayPrompt(date, material, cutoff), schema: P.DAY_SCHEMA, normalizeOutput: P.normalizeDayOutput }) : null;
   const calls = Number(!!result);
-  if (result?.ok === false) return failed(calls, result.error === "记录已变化，等待重新整理");
+  if (result?.ok === false) return result.discarded ? failed(calls, true) : failed(calls, false, classifyModelError(result.error));
   const warnings: string[] = [];
   const detail = composeReview(segments, result?.data ?? { highlight: null, items: [] },
     next.getTime(), cutoff, omittedRecordIds, dependencyRecordIds, activity => warnings.push(activity));
   if (!detail) {
     discardedCall(d.db, result?.call_id);
-    return failed(calls);
+    return failed(calls, false, "schema_mismatch");
   }
   return store.hub.db.transaction(() => {
     if (revision !== contentRevision(d.db)) {
@@ -767,9 +772,8 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
     if (result?.ok) {
       appliedCall(d.db, result.call_id);
       if (warnings.length) {
-        const warning = `每日整理无效省略 ${warnings.length} 段：已恢复可用文字，其余原文未入时间线`;
-        if (result.call_id) d.db.db.prepare("UPDATE runtime_calls SET error=? WHERE id=?").run(warning, result.call_id);
-        d.log?.(JSON.stringify({ step: "day", warning: "invalid_omission", count: warnings.length }));
+        if (result.call_id) d.db.db.prepare("UPDATE runtime_calls SET error='schema_mismatch' WHERE id=? AND content_state='available'").run(result.call_id);
+        d.log?.(JSON.stringify({ step: "day", category: "schema_mismatch", count: warnings.length }));
       }
     }
     return { calls, ok: true };
@@ -780,60 +784,49 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
 
 export interface RoundOptions { backfill?: boolean; slow?: boolean; days?: "all" | "past" | "none"; enabledDefault?: number; deferDigest?: boolean }
 
-/** 快步骤（切片、归线程、当前状态、生命周期）每轮都跑；slow=true 时再跑线程、项目和日记。 */
-/** 额度、频率限制类错误：本轮剩下的调用直接跳过，不再继续消耗。 */
-export const QUOTA_ERROR = /\b429\b|\brate[ _-]?limit(?:ed|ing|s|_exceeded|_error)?\b|\bquota\b|\binsufficient_quota\b|\binsufficient[ _]balance(?:_error)?\b|\busage[ _-]+limit\b|\b(?:hit|reached|exceeded)\s+(?:your\s+|the\s+)?(?:\d+[ -](?:hour|day|week|month)\s+)?(?:usage\s+)?limit\b|额度|限额|频率限制/i;
-/** 日志只写固定类别；底层 stderr 可能带用户正文，不能直接写。 */
-export function modelFailureCategory(error: string): string {
-  if (QUOTA_ERROR.test(error)) return "quota";
-  if (/超时|timed? ?out/i.test(error)) return "timeout";
-  if (/schema|结构化|JSON/i.test(error)) return "output";
-  if (/HTTP|连接|connect|network/i.test(error)) return "connection";
-  return "model";
-}
-export function withBreaker(llm: LLM, onTrip: (error: string) => void): LLM {
-  let tripped: string | null = null;
-  return {
-    async complete<T>(req: LLMRequest): Promise<LLMResult<T>> {
-      if (tripped) return { ok: false, error: `本轮已停止调用：${tripped}`, ms: 0 };
-      const r = await llm.complete<T>(req);
-      if (!r.ok && QUOTA_ERROR.test(r.error)) { tripped = r.error.slice(0, 200); onTrip(tripped); }
-      return r;
-    },
-  };
-}
-
+/** 快步骤每轮都跑；slow=true 时再跑线程、项目和日记。冷却会在下次模型调用前中止这一轮。 */
 export async function distillRound(deps: Deps, opts: RoundOptions = {}) {
-  let stopped: string | null = null;
-  const d: Deps = { ...deps, llm: withBreaker(deps.llm, e => { stopped = e; }) };
-  const out = await distillRoundInner(d, opts);
-  if (stopped) out.stopped = stopped;
+  const clock = deps.now ?? Date.now, now = clock();
+  const store = new DistillStore(deps.db);
+  const out: Record<string, unknown> = { at: toLocalIso(now) };
+  const d: Deps = { ...deps, llm: withModelCooldown(deps.llm, store, clock) };
+  try { await distillRoundInner(d, opts, out, store, now); }
+  catch (error) {
+    if (!(error instanceof ModelCooldown)) throw error;
+    out.stopped = error.kind;
+  }
   return out;
 }
 
-async function distillRoundInner(d: Deps, opts: RoundOptions) {
-  const now = d.now?.() ?? Date.now();
-  const store = new DistillStore(d.db);
-  const out: Record<string, unknown> = { at: toLocalIso(now) };
+async function distillRoundInner(d: Deps, opts: RoundOptions, out: Record<string, unknown>, store: DistillStore, now: number) {
   out.slice = sliceStep(d.db, opts.backfill ?? false, now, opts.enabledDefault ?? now);
-  // 先写对话总结，归线程时给模型看总结而不是转写开头。
-  out.conversations = await conversationStep(d, now);
-  out.assign = await assignStep(d, store, now);
-  out.classify = await classifyStep(d, store);
-  if (opts.slow) {
-    if (now - (store.getState<number>("dedup_ms") ?? 0) >= LIMITS.dedupEvery) {
-      out.dedup = await dedupStep(d, store, now);
-      if (!(out.dedup as { failed: number }).failed) store.setState("dedup_ms", now);
+  const active = activeCooldown(store, now);
+  if (active) out.stopped = active.kind;
+  else {
+    try {
+      // 先写对话总结，归线程时给模型看总结而不是转写开头。
+      out.conversations = await conversationStep(d, now);
+      out.assign = await assignStep(d, store, now);
+      out.classify = await classifyStep(d, store);
+      if (opts.slow) {
+        if (now - (store.getState<number>("dedup_ms") ?? 0) >= LIMITS.dedupEvery) {
+          out.dedup = await dedupStep(d, store, now);
+          if (!(out.dedup as { failed: number }).failed) store.setState("dedup_ms", now);
+        }
+        out.digest = await digestStep(d, store, now, opts.deferDigest ? "deferred" : "all");
+        out.projects = await projectStep(d, store, now);
+      } else if (opts.deferDigest && store.wantedDigests().size) {
+        out.digest = await digestStep(d, store, now, "wanted");
+      }
+    } catch (error) {
+      if (!(error instanceof ModelCooldown)) throw error;
+      out.stopped = error.kind;
     }
-    out.digest = await digestStep(d, store, now, opts.deferDigest ? "deferred" : "all");
-    out.projects = await projectStep(d, store, now);
-  } else if (opts.deferDigest && store.wantedDigests().size) {
-    out.digest = await digestStep(d, store, now, "wanted");
   }
   out.lifecycle = lifecycleStep(store, now);
   out.now = nowStep(store, now);
   store.setState("last_round_at", toLocalIso(now));
-  if (opts.slow && opts.days !== "none") {
+  if (!out.stopped && opts.slow && opts.days !== "none") {
     const today = localDate(now);
     const days = (d.db.db.prepare("SELECT date FROM days WHERE needs_regen=1 ORDER BY date").all() as { date: string }[])
       .map(r => r.date).filter(date => opts.days === "all" || date < today);
@@ -841,7 +834,6 @@ async function distillRoundInner(d: Deps, opts: RoundOptions) {
     for (const date of days) { const r = await dayStep(d, store, date, now); calls += r.calls; if (r.ok) done++; }
     out.days = { calls, done, pending: days.length - done };
   }
-  return out;
 }
 
 /** 按日期范围整理启用前的历史：[from 当天 0 点, to 次日 0 点) 与启用时刻取交集，按天切片。
@@ -868,60 +860,85 @@ export function backfillRange(db: HubDB, from: string, to: string, opts: { enabl
   return { days: days.length, frames };
 }
 
-/** unfinished：请求已执行完、但结束状态因库忙没写进去，下一次先补写，否则它一直是 running，新请求也排不进来。 */
-export interface LoopState { lastRound: number; enabledDefault: number; unfinished?: { id: string; error?: string; at: number } }
+/** 状态写入遇到库忙时，下一次先补写完成或重新排队。 */
+export interface LoopState { lastRound: number; enabledDefault: number; unfinished?: { id: string; error?: string; at: number; requeue?: boolean } }
 /** 常驻循环的一步：有排队请求就领取执行；否则到时间了跑常规一轮。返回这一步做了什么。 */
-export async function distillTick(d: Deps, state: LoopState, now = d.now?.() ?? Date.now()): Promise<"request" | "round" | "idle"> {
+export async function distillTick(deps: Deps, state: LoopState, at?: number): Promise<"request" | "round" | "idle"> {
+  const clock = deps.now ?? (at === undefined ? Date.now : () => at);
+  const now = at ?? clock(), d = { ...deps, now: clock };
   const store = new DistillStore(d.db), requests = new DistillRequests(d.db);
   const log = d.log ?? console.log;
+  const settleRequest = () => {
+    const pending = state.unfinished;
+    if (!pending) return;
+    if (pending.requeue) requests.requeue(pending.id);
+    else requests.finish(pending.id, pending.error, pending.at);
+    state.unfinished = undefined;
+  };
   store.setState("heartbeat_at", toLocalIso(now));
-  if (state.unfinished) { const u = state.unfinished; requests.finish(u.id, u.error, u.at); state.unfinished = undefined; }
-  const req = requests.claim(now);
+  settleRequest();
+  const req = activeCooldown(store, now) ? null : requests.claim(now);
   if (req) {
-    let error: string | undefined;
+    let error: ModelErrorCode | undefined, requeue = false;
     try {
       if (req.kind === "regen_days") {
-        const start = localDayStart(req.from!), last = localDayStart(req.to!);
-        if (start === null || last === null || start > last) throw new Error("日期范围无效");
-        const end = new Date(last); end.setDate(end.getDate() + 1);
-        const rows = d.db.db.prepare("SELECT t_start_ms FROM records WHERE t_start_ms>=? AND t_start_ms<? ORDER BY t_start_ms").all(start, end.getTime()) as { t_start_ms: number }[];
-        const dates = [...new Set(rows.map(r => localDateString(r.t_start_ms)))];
-        d.db.db.transaction(() => { for (const date of dates) store.upsertDay({ date, needs_regen: 1 }); })();
-        requests.progress(req.id, 0, dates.length);
-        const failed: string[] = [];
-        let calls = 0;
-        for (const [i, date] of dates.entries()) {
-          try {
-            const result = await dayStep(d, store, date, d.now?.() ?? now);
-            calls += result.calls;
-            if (!result.ok) failed.push(date);
-          } catch {
-            store.upsertDay({ date, needs_regen: 1 });
-            failed.push(date);
-          }
-          requests.progress(req.id, i + 1, dates.length);
+        let checkpoint = requests.regenProgress(req.id);
+        if (!checkpoint) {
+          const start = localDayStart(req.from!), last = localDayStart(req.to!);
+          if (start === null || last === null || start > last) throw new Error("日期范围无效");
+          const end = new Date(last); end.setDate(end.getDate() + 1);
+          const rows = d.db.db.prepare("SELECT t_start_ms FROM records WHERE t_start_ms>=? AND t_start_ms<? ORDER BY t_start_ms").all(start, end.getTime()) as { t_start_ms: number }[];
+          const dates = [...new Set(rows.map(r => localDateString(r.t_start_ms)))];
+          checkpoint = { dates };
+          d.db.db.transaction(() => {
+            for (const date of dates) store.upsertDay({ date, needs_regen: 1 });
+            requests.saveRegenProgress(req.id, 0, { dates });
+          })();
         }
-        if (failed.length) error = `整理失败日期：${failed.join(", ")}`;
-        log(JSON.stringify({ request: req.id, regen_days: { days: dates.length, calls, failed } }));
+        const work = { ...d, llm: withModelCooldown(d.llm, store, clock) };
+        const { dates } = checkpoint;
+        let calls = 0;
+        for (let i = req.progress?.done ?? 0; i < dates.length; i++) {
+          const date = dates[i]!;
+          try {
+            const result = await dayStep(work, store, date, clock());
+            calls += result.calls;
+            if (!result.ok) checkpoint.error ??= result.error ?? "unknown";
+          } catch (cause) {
+            if (cause instanceof ModelCooldown) throw cause;
+            store.upsertDay({ date, needs_regen: 1 });
+            checkpoint.error ??= classifyModelError(cause);
+          }
+          requests.saveRegenProgress(req.id, i + 1, checkpoint);
+        }
+        error = checkpoint.error;
+        log(JSON.stringify({ request: req.id, regen_days: { days: dates.length, calls, ...(error ? { error } : {}) } }));
       } else if (req.kind === "backfill") {
-        const r = backfillRange(d.db, req.from!, req.to!, { enabledDefault: state.enabledDefault, onProgress: (done, total) => requests.progress(req.id, done, total) });
-        log(JSON.stringify({ request: req.id, backfill: r }));
+        if (!req.progress || req.progress.done < req.progress.total) {
+          const r = backfillRange(d.db, req.from!, req.to!, { enabledDefault: state.enabledDefault, onProgress: (done, total) => requests.progress(req.id, done, total) });
+          log(JSON.stringify({ request: req.id, backfill: r }));
+        }
         // 切好的片段接着归线程、写线程和日记；一轮处理不完的由后续常规轮次继续。
-        log(JSON.stringify(await distillRound(d, { slow: true, days: "all", enabledDefault: state.enabledDefault })));
-      } else await regularRound(d, state);
-    } catch (e) {
-      error = e instanceof Error ? e.message.slice(0, 200) : "提炼失败";
-      log(JSON.stringify({ request: req.id, error }));
+        const result = await distillRound(d, { slow: true, days: "all", enabledDefault: state.enabledDefault });
+        log(JSON.stringify(result));
+        requeue = Boolean(result.stopped);
+      } else requeue = await regularRound(d, state);
+    } catch (cause) {
+      if (cause instanceof ModelCooldown) {
+        requeue = true;
+        log(JSON.stringify({ request: req.id, stopped: cause.kind }));
+      } else {
+        error = classifyModelError(cause);
+        log(JSON.stringify({ request: req.id, error }));
+      }
     }
-    // 先记下结果再写：写入撞上库忙时由 tickSafely 接住，下一次补写同样的结果。
-    state.unfinished = { id: req.id, error, at: d.now?.() ?? Date.now() };
-    requests.finish(req.id, error, state.unfinished.at);
-    state.unfinished = undefined;
+    state.unfinished = { id: req.id, error, at: clock(), ...(requeue ? { requeue } : {}) };
+    settleRequest();
     return "request";
   }
   if (now - state.lastRound < 15 * MIN) return "idle";
   try { await regularRound(d, state); }
-  catch (e) { log(JSON.stringify({ error: e instanceof Error ? e.message.slice(0, 200) : "提炼失败" })); }
+  catch (error) { log(JSON.stringify({ error: classifyModelError(error) })); }
   return "round";
 }
 
@@ -935,11 +952,13 @@ async function regularRound(d: Deps, state: LoopState) {
   const todayDue = now - (store.getState<number>("today_ms") ?? 0) >= 3 * HOUR;
   const result = await distillRound(d, { slow: slowDue, days: todayDue ? "all" : "past", enabledDefault: state.enabledDefault, deferDigest: true });
   log(JSON.stringify(result));
+  if (result.stopped) return true;
   const failed = Object.values(result).some(v => v && typeof v === "object" && "failed" in v && Number(v.failed) > 0)
     || Number((result.days as { pending?: number } | undefined)?.pending ?? 0) > 0;
   // 失败的慢速整理在下一轮（15 分钟）重试；不能把失败当完成再等整整一小时。
   if (slowDue && !failed) store.setState("slow_ms", now);
   if (slowDue && todayDue && !failed) store.setState("today_ms", now);
+  return false;
 }
 
 export async function runDistill({ db, llm, once, backfill, range, log = console.log, pollMs = 5000 }: { db: HubDB; llm: LLM; once: boolean; backfill: boolean; range?: { from: string; to: string }; log?: (line: string) => void; pollMs?: number }) {
@@ -987,7 +1006,7 @@ export async function tickSafely(d: Deps, state: LoopState, now?: number): Promi
   try { return await distillTick(d, state, now); }
   catch (e) {
     if ((e as { code?: unknown })?.code !== "SQLITE_BUSY") throw e;
-    (d.log ?? console.log)(JSON.stringify({ error: "数据库忙，下一次再试" }));
+    (d.log ?? console.log)(JSON.stringify({ step: "storage_busy", error: "unknown" }));
     return "busy";
   }
 }

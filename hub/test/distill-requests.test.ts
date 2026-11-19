@@ -119,11 +119,11 @@ test("round 请求立即跑一轮；执行出错置 failed；进程中断留下�
   const { request: bad } = requests.create({ kind: "backfill", from: "2026-11-01", to: "2026-11-02" }, now);
   ctx.db.db.prepare("UPDATE distill_requests SET date_from='bad' WHERE id=?").run(bad.id);
   expect(await distillTick(deps(now), state, now)).toBe("request");
-  expect(requests.get(bad.id)).toMatchObject({ status: "failed", error: "日期范围无效" });
+  expect(requests.get(bad.id)).toMatchObject({ status: "failed", error: "bad_request" });
   const { request: stuck } = requests.create({ kind: "round" }, now);
   requests.claim(now);
   expect(requests.recoverInterrupted(now)).toBe(1);
-  expect(requests.get(stuck.id)).toMatchObject({ status: "failed", error: "整理进程中断了" });
+  expect(requests.get(stuck.id)).toMatchObject({ status: "failed", error: "unknown" });
   // 失败后同类可以重新入队。
   expect(requests.create({ kind: "round" }, now).created).toBe(true);
 });
@@ -223,7 +223,7 @@ test("regen_days 只写范围内有记录的 days，失败继续、进度完成�
   const { request } = requests.create({ kind: "regen_days", from: "2026-11-03", to: "2026-11-07" }, now);
   await distillTick({ ...deps(now), llm }, { lastRound: now, enabledDefault: now }, now);
   expect(calls).toBe(3);
-  expect(requests.get(request.id)).toMatchObject({ status: "failed", progress: { done: 3, total: 3 }, error: "整理失败日期：2026-11-03, 2026-11-04" });
+  expect(requests.get(request.id)).toMatchObject({ status: "failed", progress: { done: 3, total: 3 }, error: "unknown" });
   expect(store.day("2026-11-03")!.needs_regen).toBe(1);
   expect(store.day("2026-11-04")!.needs_regen).toBe(1);
   expect(store.day("2026-11-05")!.needs_regen).toBe(0);
@@ -254,4 +254,110 @@ test("regen_days 空范围成功结束且无模型调用", async () => {
   await distillTick({ ...deps(now), llm }, { lastRound: now, enabledDefault: now }, now);
   expect(requests.get(request.id)).toMatchObject({ status: "done", progress: { done: 0, total: 0 } });
   expect(store.day("2026-11-03")).toBeNull();
+});
+
+test("手动三天重整遇到 HTTP 429 只发送一次，冷却结束后继续", async () => {
+  const now = day("2026-11-09", 12);
+  for (const date of ["2026-11-03", "2026-11-04", "2026-11-05"]) {
+    ctx.db.ingest([fixture({ source: "codex.session", source_ref: date, t_start: new Date(day(date)).toISOString(), body: "[我] 确认合成展板尺寸。" })]);
+  }
+  let calls = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    if (++calls === 1) return new Response(null, { status: 429 });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: '{"highlight":null,"items":[],"omissions":[]}' } }] });
+  } });
+  try {
+    const { createLLM } = await import("../src/llm/index.ts");
+    const config = { provider: "openai-compatible" as const, model: "synthetic", base_url: `http://127.0.0.1:${server.port}` };
+    const llm = createLLM({ dataDir: ctx.dir, recordUsage: () => {}, configs: async () => ({ minute: config, hour: config, day: config }) });
+    const { request } = requests.create({ kind: "regen_days", from: "2026-11-03", to: "2026-11-05" }, now);
+    const state: LoopState = { lastRound: now, enabledDefault: now };
+    const tick = (at: number) => distillTick({ ...deps(at), llm }, state, at);
+
+    await tick(now);
+    expect(calls).toBe(1);
+    expect(requests.get(request.id)).toMatchObject({ status: "queued", progress: { done: 0, total: 3 } });
+    const cooldown = store.getState<{ until: string; kind: string }>("llm_cooldown")!;
+    expect(cooldown.kind).toBe("rate_limited");
+    expect(Date.parse(cooldown.until)).toBe(now + HOUR / 2);
+    await tick(now + HOUR / 4);
+    expect(calls).toBe(1);
+    expect(requests.get(request.id)?.status).toBe("queued");
+
+    await tick(now + HOUR / 2);
+    expect(calls).toBe(4);
+    expect(requests.get(request.id)).toMatchObject({ status: "done", progress: { done: 3, total: 3 } });
+    expect(ctx.db.db.prepare("SELECT v FROM distill_state WHERE k='llm_cooldown'").get()).toBeUndefined();
+  } finally { server.stop(true); }
+});
+
+test("常规轮次连续两次超时后停止，下一轮仍遵守冷却", async () => {
+  const now = day("2026-11-09", 12);
+  for (const date of ["2026-11-03", "2026-11-04", "2026-11-05"]) {
+    ctx.db.ingest([fixture({ source: "codex.session", source_ref: date, t_start: new Date(day(date)).toISOString(), body: "[我] 核对合成图例。" })]);
+    store.upsertDay({ date, needs_regen: 1 });
+  }
+  store.setState("cursor_ms", now);
+  let calls = 0;
+  const llm: LLM = { async complete() { calls++; return { ok: false, error: "模型 HTTP 调用超时（5ms）", ms: 5 }; } };
+  const state: LoopState = { lastRound: 0, enabledDefault: now };
+  const tick = (at: number) => distillTick({ ...deps(at), llm }, state, at);
+  await tick(now);
+  expect(calls).toBe(2);
+  const cooldown = store.getState<{ until: string; kind: string }>("llm_cooldown")!;
+  expect(cooldown.kind).toBe("network");
+  expect(Date.parse(cooldown.until)).toBe(now + HOUR / 4);
+  await tick(now + HOUR / 4 - 1000);
+  expect(calls).toBe(2);
+});
+
+test("已有一天完成时额度冷却保留进度，进程恢复后只重跑剩余日期", async () => {
+  const now = day("2026-11-09", 12);
+  const dates = ["2026-11-03", "2026-11-04", "2026-11-05"];
+  for (const date of dates) {
+    ctx.db.ingest([fixture({ source: "codex.session", source_ref: date, t_start: new Date(day(date)).toISOString(), body: "[我] 核对合成展板。" })]);
+  }
+  const sent: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    const body = await req.json();
+    sent.push(dates.find(date => body.messages[1].content.includes(date))!);
+    if (sent.length === 2) return new Response('{"error":{"code":"insufficient_quota"}}', { status: 429, headers: { "retry-after": "28800" } });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: '{"highlight":null,"items":[],"omissions":[]}' } }] });
+  } });
+  try {
+    const { createLLM } = await import("../src/llm/index.ts");
+    const config = { provider: "openai-compatible" as const, model: "synthetic", base_url: `http://127.0.0.1:${server.port}` };
+    const llm = createLLM({ dataDir: ctx.dir, recordUsage: () => {}, configs: async () => ({ minute: config, hour: config, day: config }) });
+    const { request } = requests.create({ kind: "regen_days", from: dates[0], to: dates[2] }, now);
+    const tick = (at: number) => distillTick({ ...deps(at), llm }, { lastRound: at, enabledDefault: now }, at);
+
+    await tick(now);
+    expect(sent).toEqual(dates.slice(0, 2));
+    expect(requests.get(request.id)).toMatchObject({ status: "queued", progress: { done: 1, total: 3 } });
+    const cooldown = store.getState<{ until: string; kind: string }>("llm_cooldown")!;
+    expect(cooldown.kind).toBe("quota");
+    expect(Date.parse(cooldown.until)).toBe(now + 6 * HOUR);
+    // 模拟进程在写入冷却之后、写回排队状态之前退出。仍须恢复原请求和进度。
+    expect(requests.claim(now)?.id).toBe(request.id);
+    ctx.db.close();
+    ctx.db = new HubDB(ctx.file, ctx.config.dbKey);
+    requests = new DistillRequests(ctx.db);
+    expect(requests.recoverInterrupted(now + HOUR)).toBe(1);
+    await tick(now + 2 * HOUR);
+    expect(sent).toHaveLength(2);
+    await tick(now + 6 * HOUR);
+    expect(sent).toEqual([dates[0]!, dates[1]!, dates[1]!, dates[2]!]);
+    expect(requests.get(request.id)).toMatchObject({ status: "done", progress: { done: 3, total: 3 } });
+  } finally { server.stop(true); }
+});
+
+test("整理异常含虚构原文时，落盘错误和运行日志只记录类别", async () => {
+  const now = day("2026-11-09", 12), logs: string[] = [];
+  const { request } = requests.create({ kind: "backfill", from: "2026-11-03", to: "2026-11-05" }, now);
+  const secret = "合成内部正文 sk-SyntheticExample0123456789abcdef";
+  ctx.db.db.exec(`CREATE TRIGGER synthetic_distill_error BEFORE INSERT ON distill_state WHEN NEW.k='enabled_ms'
+    BEGIN SELECT RAISE(ABORT, '${secret}'); END`);
+  await distillTick({ ...deps(now), log: line => logs.push(line) }, { lastRound: now, enabledDefault: now }, now);
+  expect(requests.get(request.id)).toMatchObject({ status: "failed", error: "unknown" });
+  expect(logs.map(line => JSON.parse(line))).toEqual([{ request: request.id, error: "unknown" }]);
 });

@@ -1,3 +1,4 @@
+import { classifyModelError } from "../llm/error-category.ts";
 import { tryWriteWithoutWaiting } from "../db-busy.ts";
 import { chatKey } from "../chat.ts";
 import { AudioStore } from "../audio.ts";
@@ -289,7 +290,7 @@ export class DistillStore {
     if (!wanted.has(id)) { wanted.add(id); this.setState("digest_wanted", [...wanted]); }
   }
   wantedDigests(): Set<string> { return new Set(this.getState<string[]>("digest_wanted") ?? []); }
-  writeUsage(usage: { id?: string; at?: string; tier: string; task?: string | null; provider: string; model: string; input_chars?: number; output_chars?: number; input_tokens?: number; output_tokens?: number; ms: number; ok: number; error?: string }) { this.put("llm_usage", "id", { id: ulid(), at: new Date().toISOString(), ...usage }); }
+  writeUsage(usage: { id?: string; at?: string; tier: string; task?: string | null; provider: string; model: string; input_chars?: number; output_chars?: number; input_tokens?: number; output_tokens?: number; ms: number; ok: number; error?: string }) { this.put("llm_usage", "id", { id: ulid(), at: new Date().toISOString(), ...usage, error: usage.error == null ? undefined : classifyModelError(usage.error) }); }
   threads(params: URLSearchParams) {
     const limit = Number(params.get("limit") ?? 50);
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new InputError("limit 必须是 1–500 的整数");

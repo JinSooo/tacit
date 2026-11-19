@@ -655,7 +655,7 @@ test("无效省略缺文字在运行记录留下警告且保留全天原文", as
     }};
     expect(await dayStep({db:ctx.db,llm},store,day,base+6*min)).toEqual({ok:true,calls:1});
     expect(store.day(day)!.detail.omitted_record_ids).toContain(record.id);
-    expect(ctx.db.db.prepare("SELECT error FROM runtime_calls WHERE id=?").get("synthetic-day-warning")).toMatchObject({error:expect.stringContaining("无效省略 1 段")});
+    expect(ctx.db.db.prepare("SELECT error FROM runtime_calls WHERE id=?").get("synthetic-day-warning")).toMatchObject({error:"schema_mismatch"});
   } finally {ctx.cleanup();}
 });
 

@@ -212,7 +212,7 @@ test("遇到额度限制后本轮其余调用直接跳过，原因写进输出",
   const llm: LLM = { async complete() { calls++; return { ok: false as const, error: "claude 退出失败（1）：You've hit your 5-hour limit", ms: 1 }; } };
   const out = await round(llm, base + 3 * 60 * MIN) as Record<string, unknown>;
   expect(calls).toBe(1);
-  expect(String(out.stopped)).toContain("5-hour limit");
+  expect(out.stopped).toBe("quota");
   expect(ctx.db.db.prepare("SELECT status FROM frames").all()).toEqual([{ status: "new" }]);
 });
 

@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { redactRecord } from "./redact.ts";
 import { registerAgentAudit, stopAgentAudit } from "./agent-audit.ts";
-import { runtimeSchema, expireSnapshots, eraseSnapshots } from "./runtime-log.ts";
+import { runtimeSchema, expireSnapshots, eraseSnapshots, sanitizeStoredModelErrors } from "./runtime-log.ts";
 
 export type StoredRecord = RecordV1 & { t_received: string };
 export interface IngestResult { accepted: number; duplicates: number; rejected: { index: number; errors: string[] }[] }
@@ -178,6 +178,7 @@ export class HubDB {
         }
       }
       registerAgentAudit(this, key);
+      sanitizeStoredModelErrors(this);
       expireSnapshots(this);
       this.snapshotTimer = setInterval(() => {
         try { expireSnapshots(this); } catch { console.error(JSON.stringify({ location: "runtime.expire", category: "storage" })); }

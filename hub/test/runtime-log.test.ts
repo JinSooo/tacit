@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createLLM } from "../src/llm/index.ts";
@@ -188,4 +188,59 @@ test("自动带入保存实际返回快照，锁冲突不阻塞查询且留下�
     other.db.exec("ROLLBACK");
     expect(new AgentReads(ctx.db).audit(new URLSearchParams()).reads[0].args.snapshot_state).toBe("unavailable");
   } finally { if(other.db.inTransaction) other.db.exec("ROLLBACK"); other.close(); }
+});
+
+test("打开旧库时三个错误字段改写为固定类别，可重复打开", () => {
+  const id = ulid();
+  const legacy = "模型 HTTP 请求失败（502） 合成私密正文 sk-SyntheticExample0123456789abcdef";
+  log.begin(id, req, config);
+  ctx.db.db.prepare("UPDATE runtime_calls SET error=? WHERE id=?").run(legacy, id);
+  ctx.db.db.prepare("INSERT INTO llm_usage(id,at,tier,provider,model,input_chars,output_chars,ms,ok,error) VALUES(?,?,?,?,?,?,?,?,?,?)")
+    .run(id, new Date().toISOString(), "minute", config.provider, config.model, 0, 0, 5, 0, legacy);
+  const requestId = ulid();
+  ctx.db.db.prepare("INSERT INTO distill_requests(id,kind,status,created_at,error) VALUES(?,'round','failed',?,?)")
+    .run(requestId, new Date().toISOString(), "合成私密正文 sk-SyntheticExample0123456789abcdef");
+  const errors = () => ["runtime_calls", "llm_usage", "distill_requests"].map(table =>
+    (ctx.db.db.prepare(`SELECT error FROM ${table}`).get() as { error: string }).error);
+  expect(errors()).toEqual([legacy, legacy, "合成私密正文 sk-SyntheticExample0123456789abcdef"]);
+  for (let i = 0; i < 2; i++) {
+    ctx.db.close();
+    ctx.db = new HubDB(ctx.file, ctx.config.dbKey);
+    expect(errors()).toEqual(["server_error:502", "server_error:502", "unknown"]);
+  }
+});
+
+test("运行日志错误字段跟随过期和真删，迟到结果也不回填", () => {
+  const record = fixture(); ctx.db.ingest([record]);
+  const legacy = "合成私密正文 sk-SyntheticExample0123456789abcdef";
+  const expired = ulid(), deleted = ulid();
+  for (const id of [expired, deleted]) {
+    log.begin(id, req, config);
+    ctx.db.db.prepare("UPDATE runtime_calls SET error=? WHERE id=?").run(legacy, id);
+  }
+  const now = Date.now();
+  ctx.db.db.prepare("UPDATE runtime_calls SET at_ms=? WHERE id=?").run(now - 7 * 86400_000, expired);
+  expireSnapshots(ctx.db, now);
+  expect(log.detail(expired)).toMatchObject({ content_state: "expired", request: null, response: null, error: null });
+  ctx.db.delete(record.id);
+  log.finish({ ...usage(deleted), ok: 0, error: "network" }, false);
+  expect(log.detail(deleted)).toMatchObject({ content_state: "deleted", request: null, response: null, error: null });
+});
+
+test("HTTP 200 业务错误的短正文只进入加密快照，元数据和用量只留类别", async () => {
+  const key = "sk-Synth123", text = `preview client text ${key}`;
+  const fetch = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ base_resp: { status_code: 9999, status_msg: text } }));
+  const rows: Array<{ error: string | null }> = [];
+  const llm = createLLM({ dataDir: ctx.dir, journal: log, readKey: () => key, recordUsage: row => { rows.push(row); }, configs: async () => {
+    const c = { ...config, base_url: "https://synthetic.invalid" }; return { minute: c, hour: c, day: c };
+  } });
+  try {
+    const result = await llm.complete(req);
+    expect(result).toMatchObject({ ok: false, error: "unknown:200" });
+    expect(rows[0]?.error).toBe("unknown:200");
+    expect(log.models(new URLSearchParams()).calls[0]?.error).toBe("unknown:200");
+    expect(log.detail(result.call_id!)!.response).toContain("preview client text [已脱敏:API key]");
+    expect(log.detail(result.call_id!)!.response).not.toContain(key);
+    expect(readFileSync(ctx.file).includes(Buffer.from("preview client text"))).toBe(false);
+  } finally { fetch.mockRestore(); }
 });

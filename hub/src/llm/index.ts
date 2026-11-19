@@ -9,7 +9,7 @@ import { loadConfig, readKey as defaultReadKey } from "./config.ts";
 import { claudeCLI } from "./claude-cli.ts";
 import { codexCLI } from "./codex-cli.ts";
 import { httpComplete } from "./http.ts";
-import { safeError } from "./process.ts";
+import { classifyModelError, ModelError } from "./error-category.ts";
 import type { RuntimeLog } from "../runtime-log.ts";
 import type { BackendContext, LLMRequest, LLMResult, ModelConfig, ReadKey, Spawn, Tier, UsageRow } from "./types.ts";
 export type { Tier, LLMRequest, LLMResult, UsageRow, ReadKey, Spawn, ModelConfig } from "./types.ts";
@@ -47,7 +47,7 @@ export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRo
     const start = performance.now();
     const row: UsageRow = { id: ulid(), at: toLocalIso(Date.now()), tier: req.tier, task: req.task ?? null, provider: "", model: "", input_chars: Array.from(req.system).length + Array.from(req.prompt).length, output_chars: 0, input_tokens: null, output_tokens: null, ms: 0, ok: 0, error: null };
     const metrics = { outputChars: 0, inputTokens: null as number | null, outputTokens: null as number | null };
-    let data: unknown, validated = false;
+    let data: unknown, validated = false, retryAfterMs: number | undefined;
     const identity = options.journal ? { call_id: row.id } : {};
     try {
       const configs = await (options.configs ?? (() => loadConfig(options.dataDir)))();
@@ -55,7 +55,7 @@ export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRo
       if (!config) throw new Error("不支持的模型档位");
       row.provider = config.provider; row.model = config.model;
       const timeoutMs = req.timeoutMs ?? 180_000;
-      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) throw new Error(`timeoutMs 必须在 0 到 ${MAX_TIMEOUT_MS} 之间`);
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) throw new ModelError("bad_request");
       const ajv = (req.schema as { $schema?: string }).$schema?.includes("2020-12") ? new Ajv2020({ strict: false, allErrors: true }) : new Ajv({ strict: false, allErrors: true });
       (addFormats as unknown as (a: unknown) => void)(ajv);
       let validate;
@@ -64,7 +64,7 @@ export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRo
       await mkdir(cwd, { recursive: true, mode: 0o700 }); await chmod(cwd, 0o700);
       let observer;
       try { observer = options.journal?.begin(row.id,req,config); }
-      catch (error) { throw new Error(error instanceof Error && error.message === "记录已变化，等待重新整理" ? error.message : "调用记录保存失败，本次未发送"); }
+      catch (error) { throw error instanceof ModelError ? error : new ModelError("usage_record_failed"); }
       const ctx: BackendContext = { req, config, cwd, timeoutMs, metrics, observer, spawn: options.spawn ?? ((cmd, args, opts) => nodeSpawn(cmd, args, opts)) };
       const http = config.provider === "anthropic" || config.provider === "openai-compatible";
       const call = async (c: BackendContext) => {
@@ -84,19 +84,20 @@ export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRo
         metrics.inputTokens = sum(first.inputTokens, metrics.inputTokens); metrics.outputTokens = sum(first.outputTokens, metrics.outputTokens);
         metrics.outputChars += first.outputChars;
       }
-      if (!validate(data)) throw new Error("模型输出不符合 schema");
+      if (!validate(data)) throw new ModelError("schema_mismatch");
       validated = true;
       row.ok = 1;
     } catch (error) {
-      row.error = safeError(error instanceof Error ? error.message : "模型调用失败", [req.system, req.prompt]);
+      row.error = classifyModelError(error);
+      if (error instanceof ModelError) retryAfterMs = error.retryAfterMs;
     }
     row.ms = Math.round(performance.now() - start);
     row.output_chars = metrics.outputChars; row.input_tokens = metrics.inputTokens; row.output_tokens = metrics.outputTokens;
     try { await options.recordUsage(row); }
-    catch { row.ok = 0; row.error = "模型用量记录失败"; }
+    catch { row.ok = 0; row.error = "usage_record_failed"; }
     try { options.journal?.finish(row,validated); }
-    catch { return { ok: false, error: "调用结果记录失败，结果未采用", ms: row.ms, ...identity }; }
-    return row.ok ? { ok: true, data: data as T, ms: row.ms, ...identity } : { ok: false, error: row.error!, ms: row.ms, ...identity };
+    catch { return { ok: false, error: "usage_record_failed", ms: row.ms, ...identity }; }
+    return row.ok ? { ok: true, data: data as T, ms: row.ms, ...identity } : { ok: false, error: row.error!, ms: row.ms, ...(retryAfterMs === undefined ? {} : { retryAfterMs }), ...identity };
   }
   return { complete<T>(req: LLMRequest): Promise<LLMResult<T>> {
     const result = queue.then(() => execute<T>(req));

@@ -2,6 +2,7 @@
 // 避免两个进程同时调用模型、争同一个库。
 import { ulid } from "../../../packages/record/index.ts";
 import { InputError, type HubDB } from "../db.ts";
+import { classifyModelError, type ModelErrorCode } from "../llm/error-category.ts";
 
 export const requestsSchema = `
 CREATE TABLE IF NOT EXISTS distill_requests(id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('round','backfill')),date_from TEXT,date_to TEXT,status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed')),created_at TEXT NOT NULL,started_at TEXT,finished_at TEXT,error TEXT,progress_done INTEGER,progress_total INTEGER);
@@ -47,6 +48,10 @@ function decode(row: Row): DistillRequest {
   if (row.progress_total !== null) r.progress = { done: row.progress_done ?? 0, total: row.progress_total };
   return r;
 }
+
+// 固定本次请求的日期清单，避免冷却期间导入或删除记录导致续跑位置错位。
+const regenKey = (id: string) => `regen_days_progress:${id}`;
+type RegenProgress = { dates: string[]; error?: ModelErrorCode };
 
 export class DistillRequests {
   constructor(readonly hub: HubDB) {}
@@ -107,14 +112,39 @@ export class DistillRequests {
     this.sql.prepare("UPDATE distill_requests SET progress_done=?,progress_total=? WHERE id=?").run(done, total, id);
   }
 
-  finish(id: string, error?: string, now = Date.now()) {
-    this.sql.prepare("UPDATE distill_requests SET status=?,finished_at=?,error=? WHERE id=?")
-      .run(error ? "failed" : "done", new Date(now).toISOString(), error ?? null, id);
+  regenProgress(id: string): RegenProgress | null {
+    const row = this.sql.prepare("SELECT v FROM distill_state WHERE k=?").get(regenKey(id)) as { v: string } | undefined;
+    return row ? JSON.parse(row.v) : null;
   }
 
-  /** 上一个提炼进程执行到一半退出时留下的 running 请求标为失败，用户可以重新提交。 */
+  saveRegenProgress(id: string, done: number, checkpoint: RegenProgress) {
+    this.sql.transaction(() => {
+      this.sql.prepare("INSERT INTO distill_state VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(regenKey(id), JSON.stringify(checkpoint));
+      this.progress(id, done, checkpoint.dates.length);
+    })();
+  }
+
+  requeue(id: string) {
+    this.sql.prepare("UPDATE distill_requests SET status='queued' WHERE id=? AND status='running'").run(id);
+  }
+
+  finish(id: string, error?: string, now = Date.now()) {
+    this.sql.transaction(() => {
+      this.sql.prepare("UPDATE distill_requests SET status=?,finished_at=?,error=? WHERE id=?")
+        .run(error === undefined ? "done" : "failed", new Date(now).toISOString(), error === undefined ? null : classifyModelError(error), id);
+      this.sql.prepare("DELETE FROM distill_state WHERE k=?").run(regenKey(id));
+    })();
+  }
+
+  /** 冷却中崩溃可能来不及重新排队；保留这些请求的续跑位置。 */
   recoverInterrupted(now = Date.now()): number {
-    return this.sql.prepare("UPDATE distill_requests SET status='failed',finished_at=?,error='整理进程中断了' WHERE status='running'").run(new Date(now).toISOString()).changes;
+    return this.sql.transaction(() => {
+      if (this.sql.prepare("SELECT 1 FROM distill_state WHERE k='llm_cooldown'").get()) {
+        return this.sql.prepare("UPDATE distill_requests SET status='queued' WHERE status='running'").run().changes;
+      }
+      this.sql.prepare("DELETE FROM distill_state WHERE k IN (SELECT 'regen_days_progress:' || id FROM distill_requests WHERE status='running')").run();
+      return this.sql.prepare("UPDATE distill_requests SET status='failed',finished_at=?,error='unknown' WHERE status='running'").run(new Date(now).toISOString()).changes;
+    }).immediate();
   }
 }
 
