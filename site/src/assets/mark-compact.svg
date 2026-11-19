@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="834 30 300 300" role="img" aria-label="Tacit">
+  <defs><clipPath id="d"><circle cx="984" cy="180" r="79.5"/></clipPath></defs>
+  <rect x="834" y="30" width="300" height="300" rx="67.5" fill="#211f1d"/>
+  <circle cx="984" cy="180" r="100.5" fill="none" stroke="#e7e3dc" stroke-width="13.5"/>
+  <g clip-path="url(#d)">
+    <path fill="#93cbbd" d="M904.5 100.5h159v36.69H904.5z"/>
+    <path fill="#6bae9f" d="M904.5 161.65h159v36.69H904.5z"/>
+    <rect x="904.5" y="222.81" width="89.04" height="36.69" rx="18.35" fill="#4b8d7e"/>
+    <path fill="#4b8d7e" d="M904.5 222.81H984v36.69h-79.5z"/>
+  </g>
+</svg>
