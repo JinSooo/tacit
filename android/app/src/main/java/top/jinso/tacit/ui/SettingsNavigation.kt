@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.dp
 
 /** Internal destinations accepted by SettingsPage.initialSource, alongside source IDs. */
 internal object SettingsRoutes {
+    const val MAC = "settings.mac"
     const val SOURCES = "settings.sources"
     const val SPEECH = "settings.speech"
     const val PRIVACY = "settings.privacy"
@@ -21,6 +22,7 @@ internal object SettingsRoutes {
 
     fun parent(route: String?): String? = if (route == RETENTION) PRIVACY else null
     fun title(route: String?): String? = when (route) {
+        MAC -> "连接 Mac"
         SOURCES -> "数据源"
         SPEECH -> "语音转写"
         PRIVACY -> "隐私与存储"

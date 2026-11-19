@@ -31,7 +31,7 @@ internal object AudioPolicy {
     }
     fun cosine(a: FloatArray, b: FloatArray): Double =
         if (a.size != b.size || a.isEmpty()) -1.0 else a.indices.sumOf { a[it].toDouble() * b[it] }
-    fun mayTranscribe(me: FloatArray?, utterance: FloatArray, allowed: Boolean) =
-        allowed && me != null && cosine(me, utterance) >= .6
-    fun expired(start: Long, now: Long, days: Int) = start < now - days.coerceIn(1, 90) * 86_400_000L
+    fun mayTranscribe(me: FloatArray?, utterance: FloatArray, allowed: Boolean, threshold: Double = .6) =
+        allowed && me != null && cosine(me, utterance) >= threshold
+    fun expired(start: Long, now: Long, days: Int) = days > 0 && start < now - days * 86_400_000L
 }

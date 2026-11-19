@@ -18,7 +18,11 @@ class MainActivity : ComponentActivity() {
         setContent { TacitRoot(application as TacitApp, shared.value, resumed.value, quickNote.value) { shared.value = null } }
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); receive(intent) }
-    override fun onResume() { super.onResume(); resumed.value++ }
+    override fun onResume() {
+        super.onResume()
+        resumed.value++
+        top.jinso.tacit.sync.SyncWorker.enqueue(this)
+    }
     private fun receive(intent: Intent?) {
         if (intent?.action == "top.jinso.tacit.WRITE") quickNote.value++
         if(intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") shared.value = intent.getStringExtra(Intent.EXTRA_TEXT)?.take(200000)

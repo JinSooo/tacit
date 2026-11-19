@@ -41,7 +41,7 @@ import java.util.concurrent.CompletableFuture
     }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(if(state.modelsReady)"模型已就绪" else "尚未安装语音模型",color=MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("SenseVoice 语音转写、语音检测和声纹识别，共 279.8 MB。仅下载模型，录音与记录不上传。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("SenseVoice 语音转写、语音检测和声纹识别，共 279.8 MB。录音在手机上转写，只下载模型。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Text("来源：sherpa-onnx 官方 GitHub / Hugging Face。下载后校验 SHA-256，并在本机加载成功后启用。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         if(preparation.busy) {
             if(preparation.phase == SpeechPreparationPhase.DOWNLOADING) {
@@ -82,12 +82,24 @@ import java.util.concurrent.CompletableFuture
     var count by remember { mutableIntStateOf(0) }
     var clear by remember { mutableStateOf(false) }
     var days by remember { mutableStateOf(app.prefs.retentionDays.toString()) }
+    var macDays by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(audio, busy) {
-        if (!busy) withContext(Dispatchers.IO) { runCatching { audio.listClips().get().size }.getOrNull() }?.let { count = it }
+        if (busy) return@LaunchedEffect
+        val vault = withContext(Dispatchers.IO) { runCatching { app.vault }.getOrNull() } ?: return@LaunchedEffect
+        vault.changes.collect {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    vault.syncConnection()?.optJSONObject("audio")?.getInt("retention_days") to audio.listClips().get().size
+                }.getOrNull()
+            }?.let { (retention, clips) -> macDays = retention; count = clips }
+        }
     }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("本机保留 $count 段录音",color=MaterialTheme.colorScheme.onSurfaceVariant)
-        FlowRow(horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+        val syncedDays = macDays
+        if (syncedDays != null) {
+            Text(if (syncedDays == 0) "按 Mac 设置保留，不自动清除" else "按 Mac 设置保留 $syncedDays 天")
+        } else FlowRow(horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
             OutlinedTextField(days,{days=it.filter{c->c.isDigit()}.take(2)},Modifier.width(120.dp),label={Text("保留天数")},singleLine=true)
             TextButton(onClick={val value=days.toIntOrNull();if(value!=null&&value in 1..90){app.prefs.retentionDays=value;work({audio.prune()},"已更新保留期")}else notify("请输入 1 至 90 天")},enabled=!busy){Text("保存")}
         }

@@ -123,14 +123,15 @@ import top.jinso.tacit.ui.onboarding.*
         }
         when {
             editingBlacklist -> AppExclusions(app,resumed,notify)
+            selected==SettingsRoutes.MAC -> MacConnectionPage(app)
             selected==SettingsRoutes.SPEECH -> SpeechSettings(app,notify)
             selected==SettingsRoutes.RETENTION -> AudioStorageSettings(app,notify)
             selected==SettingsRoutes.PRIVACY -> {
                 SettingsNavigationRow("不记录的应用", "${app.prefs.blockedApps.size} 个应用") {
                     editingBlacklist=true
                 }
-                SettingsNavigationRow("录音保留与清理", "保留 ${app.prefs.retentionDays} 天") { selected=SettingsRoutes.RETENTION }
-                Text("记录和录音加密保存在这台手机，不上传。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                SettingsNavigationRow("录音保留与清理") { selected=SettingsRoutes.RETENTION }
+                Text("记录和录音在这台手机上加密保存。连接 Mac 后，文字记录会同步到 Mac。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
             }
             selected==SettingsRoutes.SHORTCUT -> {
                 Text("长按桌面 Tacit 图标，选择“写一条记录”，也可以添加独立的桌面入口。",color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -216,6 +217,7 @@ import top.jinso.tacit.ui.onboarding.*
                 }
                 HorizontalDivider()
                 Column {
+                    SettingsNavigationRow("连接 Mac") { selected=SettingsRoutes.MAC }
                     SettingsNavigationRow("数据源", "录音、聊天通知、应用使用") { selected=SettingsRoutes.SOURCES }
                     SettingsNavigationRow("语音转写", "识别说话内容与声音") { selected=SettingsRoutes.SPEECH }
                     SettingsNavigationRow("隐私与存储", "不记录的应用、录音保留与清理") { selected=SettingsRoutes.PRIVACY }
