@@ -1,0 +1,63 @@
+<section class="section" id="ai" aria-labelledby="ai-title">
+  <div class="wrap">
+    <header class="section-head">
+      <h2 class="heading" id="ai-title">让 AI 接着做</h2>
+      <p class="lead">每次开新会话，Tacit 都会带上当前项目正在推进的事，省去重讲背景的时间。</p>
+    </header>
+
+    <div class="ai-layout">
+      <div class="ai-terminal band-night">
+        <header class="ai-terminal-bar">
+          <svg aria-hidden="true" width="20" height="20"><use href="assets/sources.svg#terminal"/></svg>
+          <span>Claude Code 终端示例</span>
+        </header>
+
+        <section class="ai-scene" aria-labelledby="ai-start-title">
+          <h3 id="ai-start-title">新会话自动带入</h3>
+          <p class="ai-command"><span aria-hidden="true">$ </span><code>cd 晴天记账 &amp;&amp; claude</code></p>
+          <div class="ai-context">
+            <p>Tacit 记录的近期上下文（截至 <span class="num">11 月 19 日 17:52</span>）</p>
+            <p>项目：晴天记账</p>
+            <ul>
+              <li>事项 导出功能（进行中）：定为 CSV 加一份 JSON 元数据，金额统一存分。未决：是否按账本分别导出</li>
+              <li>事项 首页改版（进行中）：保留圆角卡片、去掉渐变，小林周五前出终稿。未决：深色模式卡片底色</li>
+              <li>事项 1.1 提审准备（进行中）：月度报表汇总错误已修好。未决：隐私说明是否写导出</li>
+            </ul>
+          </div>
+          <p class="ai-turn"><b lang="en">Claude</b><span>我先写 CSV 和 JSON 的导出逻辑，金额按分写入。按账本分别导出这点留待确认。</span></p>
+        </section>
+
+        <section class="ai-scene" aria-labelledby="ai-search-title">
+          <h3 id="ai-search-title">AI 主动查询</h3>
+          <p class="ai-turn"><b>你</b><span>导出格式上次怎么定的？</span></p>
+          <p class="ai-tool"><svg aria-hidden="true" width="16" height="16"><use href="assets/sources.svg#search"/></svg><span>MCP <code>tacit.search</code> → <code>tacit.get</code></span></p>
+          <p class="ai-turn"><b lang="en">Claude</b><span>定为 CSV 加一份 JSON 元数据，金额统一存分。</span></p>
+          <details class="ai-source">
+            <summary><span>出自 <span class="num">11 月 19 日 15:10</span> 与 Claude 的对话</span></summary>
+            <blockquote>
+              <p><b>你</b>　账单用 CSV，另外给一份 JSON 元数据。金额统一存分。</p>
+              <p><b lang="en">Claude</b>　记下了。导出时，CSV 里的金额用整数分表示。</p>
+            </blockquote>
+          </details>
+        </section>
+      </div>
+
+      <div class="ai-notes prose">
+        <ul class="ai-rules">
+          <li><strong>设置里一键连接</strong>Claude Code 和 Codex 都能查询历史，新会话也能自动带入。</li>
+          <li><strong>只带入当前项目</strong>带入有长度上限，生活类内容不带入。</li>
+          <li><strong>AI 以读取为主</strong>每次读取都留审计记录。只有你明确要求时才追加，已有记录不会被修改或删除。</li>
+        </ul>
+
+        <div class="ai-examples">
+          <h3>可以这样问</h3>
+          <ul>
+            <li>「昨天下午我主要在做什么？」</li>
+            <li>「这个项目上次定了哪些事，还有什么没做完？」</li>
+            <li>「把这次讨论的结论记到历史里。」</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

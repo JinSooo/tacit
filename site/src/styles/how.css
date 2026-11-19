@@ -1,0 +1,187 @@
+#how .section-head {
+  margin-block-end: clamp(32px, 5vw, 64px);
+}
+
+.how-flow {
+  --how-core-size: 240px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(32px, 96px) var(--how-core-size) minmax(32px, 96px) minmax(0, 1fr);
+  align-items: center;
+  padding-block: 24px;
+}
+
+.how-inputs,
+.how-outputs {
+  display: grid;
+  grid-auto-rows: minmax(min-content, 1fr);
+  min-block-size: var(--how-core-size);
+  align-self: stretch;
+}
+
+.how-inputs li,
+.how-outputs li {
+  display: grid;
+  align-content: center;
+  padding-block: 8px;
+}
+
+.how-inputs li {
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 12px;
+  padding-inline-end: 12px;
+}
+
+.how-outputs li {
+  padding-inline-start: 16px;
+}
+
+.how-inputs li + li,
+.how-outputs li + li {
+  border-top: 1px solid var(--line);
+}
+
+.how-flow h3 {
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+
+.how-flow p {
+  color: var(--reading);
+  font-size: var(--fs-body);
+  text-wrap: pretty;
+  margin-block-start: 4px;
+}
+
+.how-source-icon {
+  inline-size: 24px;
+  block-size: 24px;
+  color: var(--accent);
+}
+
+.how-core {
+  position: relative;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  inline-size: var(--how-core-size);
+  aspect-ratio: 1;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  text-align: center;
+}
+
+.how-core::before {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border: 1px solid var(--line);
+  border-radius: inherit;
+}
+
+.how-core h3 {
+  color: var(--accent);
+}
+
+.how-core ul {
+  color: var(--reading);
+}
+
+.how-core svg {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  margin-block-end: 4px;
+}
+
+.how-connector {
+  inline-size: 100%;
+  block-size: 100%;
+  min-block-size: 0;
+  fill: none;
+  stroke: var(--faint);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.how-connector path {
+  vector-effect: non-scaling-stroke;
+}
+
+.how-connector .how-tier-1 { stroke: var(--accent); stroke-width: 2.25; }
+.how-connector .how-tier-2 { stroke: var(--accent); stroke-width: 1.5; opacity: 0.6; }
+.how-connector .how-tier-3 { stroke-width: 1; stroke-dasharray: 2 4; }
+
+.how-connector .how-arrow {
+  stroke: var(--accent);
+}
+
+.how-caption {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 32px;
+  border-top: 1px solid var(--line);
+  margin-block-start: 32px;
+  padding-block-start: 16px;
+  font-size: var(--fs-caption);
+}
+
+.how-caption p + p {
+  margin-block-start: 0;
+}
+
+@media (max-width: 920px) {
+  .how-flow {
+    grid-template-columns: minmax(0, 1fr);
+    --how-core-size: 208px;
+    padding-block: 0;
+  }
+
+  .how-inputs,
+  .how-outputs {
+    grid-auto-rows: auto;
+    min-block-size: auto;
+  }
+
+  .how-inputs li {
+    padding-block: 12px;
+    padding-inline-end: 0;
+  }
+
+  .how-core {
+    justify-self: center;
+  }
+
+  .how-connector {
+    display: none;
+  }
+
+  .how-flow::before,
+  .how-flow::after {
+    content: "";
+    grid-column: 1;
+    justify-self: center;
+    inline-size: 1px;
+    block-size: 32px;
+    background: var(--accent);
+  }
+
+  .how-flow::before { grid-row: 2; }
+  .how-flow::after { grid-row: 4; }
+
+  .how-outputs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .how-outputs li {
+    border-top: 1px solid var(--line);
+    align-content: start;
+    padding: 12px 0 0;
+  }
+
+  .how-caption {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+}

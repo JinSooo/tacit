@@ -1,0 +1,107 @@
+.download-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 7fr);
+  gap: clamp(40px, 8vw, 112px);
+  padding-top: clamp(32px, 6vw, 72px);
+  border-top: 1px solid var(--line);
+}
+
+.download-layout .section-head {
+  align-self: start;
+  gap: 24px;
+  margin-bottom: 0;
+}
+
+.download-layout .display {
+  text-wrap: wrap;
+}
+
+.download-requirements {
+  margin-top: 12px;
+}
+
+.download-guide .title {
+  margin-bottom: 20px;
+}
+
+.download-steps {
+  display: grid;
+  gap: 20px;
+  padding-inline-start: 24px;
+  list-style: decimal;
+}
+
+.download-steps li {
+  min-width: 0;
+  padding-inline-start: 8px;
+}
+
+.download-steps li::marker {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.download-steps p {
+  margin-top: 4px;
+  color: var(--reading);
+}
+
+.download-command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--fill);
+  border-radius: var(--r-control);
+}
+
+.download-steps code {
+  font-size: var(--fs-caption);
+  overflow-wrap: anywhere;
+}
+
+.download-command code {
+  flex: 1 1 auto;
+}
+
+.download-copy {
+  margin-inline-start: auto;
+  min-height: 32px;
+  padding-inline: 8px;
+  color: var(--accent);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+}
+
+.download-copy:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.download-copy-status:empty {
+  margin-top: 0;
+}
+
+.download-status {
+  margin-top: clamp(40px, 6vw, 72px);
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.download-status a {
+  display: inline-block;
+}
+
+@media (max-width: 760px) {
+  .download-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .download-layout .btn-primary {
+    transition: none;
+  }
+}
