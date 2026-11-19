@@ -1,0 +1,153 @@
+package top.jinso.tacit.audio
+
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.IOException
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
+import java.util.concurrent.CancellationException
+
+class SpeechModelDownloadTest {
+    @get:Rule val temp = TemporaryFolder()
+    private val bytes = "fixed test model".toByteArray()
+    private val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    private fun resource(path: String = "sense-voice/model.int8.onnx") =
+        SpeechModelResource(path, "https://models.example/$path", bytes.size.toLong(), hash)
+    private class Connection(url: URL, val body: ByteArray, val status: Int = 200,
+        val location: String? = null, val length: Long = body.size.toLong(),
+        val stream: InputStream? = null) : HttpURLConnection(url) {
+        var closed = false
+        override fun connect() = Unit
+        override fun disconnect() { closed = true }
+        override fun usingProxy() = false
+        override fun getResponseCode() = status
+        override fun getContentLengthLong() = length
+        override fun getHeaderField(name: String?) = if (name == "Location") location else null
+        override fun getInputStream() = stream ?: ByteArrayInputStream(body)
+    }
+    @Test fun fixedCatalogMatchesSharedContractHashesAndSize() {
+        assertEquals(279787350L, SpeechModelCatalog.totalBytes)
+        assertEquals(4, SpeechModelCatalog.resources.size)
+        val contract = generateSequence(File(requireNotNull(System.getProperty("user.dir")))) { it.parentFile }
+            .map { File(it, "docs/contracts.md") }.first { it.isFile }.readText()
+        SpeechModelCatalog.resources.forEach { assertTrue("Hash drift: ${it.path}", contract.lineSequence().any { line -> line.contains(it.path) && line.contains(it.sha256) }) }
+    }
+    @Test fun downloadsAllFilesWithMonotonicProgressAndClosesConnections() {
+        val resources = listOf(resource(), resource("tokens.txt"))
+        val connections = mutableListOf<Connection>()
+        val progress = mutableListOf<Long>()
+        val stage = SpeechModelDownload(resources) { Connection(it, bytes).also(connections::add) }
+            .prepare(temp.root, ModelDownloadCancellation()) { count, _ -> progress += count }
+        resources.forEach { assertArrayEquals(bytes, File(stage, it.path).readBytes()) }
+        assertEquals(2L * bytes.size, progress.last())
+        assertTrue(progress.zipWithNext().all { it.first <= it.second })
+        assertTrue(connections.all { it.closed && it.requestMethod == "GET" && !it.doOutput && !it.instanceFollowRedirects })
+    }
+    private fun failsCleanly(resource: SpeechModelResource = resource(), factory: (URL) -> HttpURLConnection): Throwable {
+        val old = File(temp.root, "existing").apply { mkdir(); File(this,"marker").writeText("keep") }
+        val failure = runCatching { SpeechModelDownload(listOf(resource), factory).prepare(temp.root, ModelDownloadCancellation()) { _, _ -> } }.exceptionOrNull()
+        assertNotNull(failure)
+        assertEquals(listOf(old), temp.root.listFiles()!!.toList())
+        assertEquals("keep", File(old,"marker").readText())
+        return failure!!
+    }
+    @Test fun rejectsHashMismatchAndRemovesPartialStage() {
+        assertTrue(failsCleanly(resource().copy(sha256 = "0".repeat(64))) { Connection(it,bytes) }.message!!.contains("SHA-256"))
+    }
+    @Test fun rejectsTruncatedUnknownLengthResponse() {
+        assertTrue(failsCleanly { Connection(it,bytes.copyOf(3),length = -1) }.message!!.contains("不完整"))
+    }
+    @Test fun rejectsOversizedUnknownLengthResponse() {
+        assertTrue(failsCleanly { Connection(it,bytes + bytes,length = -1) }.message!!.contains("大小"))
+    }
+    @Test fun rejectsWrongContentLengthBeforeReading() {
+        failsCleanly { Connection(it,bytes,length = 1234,stream = object : InputStream() {
+            override fun read(): Int = throw AssertionError("Must reject headers before body")
+        }) }
+    }
+    @Test fun rejectsHttpErrorsWithoutTryingToLoadTheirBody() {
+        assertTrue(failsCleanly { Connection(it,bytes,status = 503) }.message!!.contains("HTTP 503"))
+    }
+    @Test fun permitsHttpsRedirectButRejectsDowngrade() {
+        var requests = 0
+        val stage = SpeechModelDownload(listOf(resource())) {
+            requests++
+            if (requests == 1) Connection(it,bytes,302,"https://cdn.example/model") else Connection(it,bytes)
+        }.prepare(temp.root,ModelDownloadCancellation()) { _, _ -> }
+        assertEquals(2,requests)
+        assertTrue(stage.isDirectory)
+        stage.deleteRecursively()
+        requests = 0
+        failsCleanly { requests++; Connection(it,bytes,302,"http://cdn.example/model") }
+        assertEquals(1,requests)
+    }
+    @Test fun limitsRedirectLoops() {
+        var requests = 0
+        failsCleanly { requests++; Connection(it,bytes,302,"https://cdn.example/model") }
+        assertEquals(6, requests)
+    }
+    @Test fun disconnectMidDownloadCleansStageAndKeepsCurrent() {
+        failsCleanly { Connection(it,bytes,stream = object : InputStream() {
+            var first = true
+            override fun read(): Int { if (first) { first=false; return 1 }; throw IOException("connection lost") }
+        }) }
+    }
+    @Test fun cancellationDuringDownloadCleansStage() {
+        val token = ModelDownloadCancellation()
+        val failure = runCatching {
+            SpeechModelDownload(listOf(resource())) { Connection(it,bytes) }
+                .prepare(temp.root,token) { count, _ -> if (count > 0) token.cancel() }
+        }.exceptionOrNull()
+        assertTrue(failure is CancellationException)
+        assertTrue(temp.root.listFiles()!!.isEmpty())
+    }
+    @Test fun cancellationBeforeDownloadMakesNoRequest() {
+        val token = ModelDownloadCancellation().apply { cancel() }
+        val failure = runCatching { SpeechModelDownload(listOf(resource())) { throw AssertionError("No request") }
+            .prepare(temp.root,token) { _, _ -> } }.exceptionOrNull()
+        assertTrue(failure is CancellationException)
+        assertTrue(temp.root.listFiles()!!.isEmpty())
+    }
+    @Test fun failedNativeValidationNeverReplacesExistingModel() {
+        val old = temp.newFolder("old")
+        val stage = temp.newFolder("stage")
+        var active = old
+        val failure = runCatching { activatePreparedSpeechModels(stage,ModelDownloadCancellation(),
+            { throw IllegalArgumentException("native graph invalid") }, { active=it }) }.exceptionOrNull()
+        assertNotNull(failure)
+        assertEquals(old,active)
+        assertTrue(old.isDirectory)
+        assertFalse(stage.exists())
+    }
+    @Test fun cancellingWhileNativeLoadFinishesNeverCommits() {
+        val stage = temp.newFolder("stage")
+        val token = ModelDownloadCancellation()
+        val failure = runCatching { activatePreparedSpeechModels(stage,token,
+            { token.cancel() }, { throw AssertionError("Cancelled stage must not activate") }) }.exceptionOrNull()
+        assertTrue(failure is CancellationException)
+        assertFalse(stage.exists())
+    }
+    @Test fun commitRunsAfterValidationAndCannotBeCancelledAfterwards() {
+        val stage = temp.newFolder("stage")
+        val token = ModelDownloadCancellation()
+        var loaded = false
+        var committed = false
+        activatePreparedSpeechModels(stage,token,{ loaded=true },{ assertTrue(loaded); committed=true })
+        assertTrue(committed)
+        assertTrue(stage.exists())
+        assertFalse(token.cancel())
+    }
+    @Test fun failedPointerCommitRemovesStage() {
+        val stage = temp.newFolder("stage")
+        val failure = runCatching { activatePreparedSpeechModels(stage,ModelDownloadCancellation(),{},
+            { throw IOException("disk full") }) }.exceptionOrNull()
+        assertTrue(failure is IOException)
+        assertFalse(stage.exists())
+    }
+}
