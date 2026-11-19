@@ -99,7 +99,13 @@ import Testing
   ok.arguments = ["-c", "echo synthetic-child-output; exit 0"]
   SetupStatus.run(ok, dataDirectory: root, build: build, log: diagnostics, diagnosticDescriptor: fd)
   #expect(try object(url)["ok"] as? Bool == true)
-  #expect(try logLines(setupLog).first?["exit_code"] as? Int == 0)
+  // setup.log 依次是开始事件、准备流程自己的输出、结束事件。
+  let setupText = try String(contentsOf: setupLog, encoding: .utf8).split(separator: "\n").map(String.init)
+  #expect(setupText.count == 3)
+  #expect(setupText[1] == "synthetic-child-output")
+  let setupEvents = [setupText[0], setupText[2]].compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+  #expect(setupEvents.compactMap { $0["code"] as? String } == ["setup_started", "setup_finished"])
+  #expect(setupEvents.last?["exit_code"] as? Int == 0)
   #expect(try FileManager.default.attributesOfItem(atPath: setupLog.path)[.posixPermissions] as? Int == 0o600)
 
   try FileManager.default.removeItem(at: setupLog)
