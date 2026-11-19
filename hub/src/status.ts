@@ -1,3 +1,4 @@
+import { deviceList } from "./devices/store.ts";
 import { BusyResponses } from "./db-busy.ts";
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -198,6 +199,7 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
   };
 
   return {
+    devices: deviceList(hub),
     generated_at: toLocalIso(now),
     hub: {
       started_at: toLocalIso(now - Math.round(process.uptime() * 1000)),

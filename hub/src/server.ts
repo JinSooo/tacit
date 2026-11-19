@@ -8,14 +8,15 @@ import { DistillRequests } from "./distill/requests.ts";
 import { ulid } from "../../packages/record/index.ts";
 import { timingSafeEqual } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
-import { resolve, extname, sep } from "node:path";
+import { resolve, extname, sep, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HubDB, InputError } from "./db.ts";
 import { historySegments } from "./history.ts";
 import { conversationDetail } from "./conversations.ts";
 import { hubStatus } from "./status.ts";
-import { DEFAULT_PORT, dataDirOf } from "./hub-json.ts";
+import { DEFAULT_LAN_PORT, DEFAULT_PORT, dataDirOf, resolveLanPort } from "./hub-json.ts";
 import { createSettings, type SettingsDeps } from "./settings.ts";
+import { DeviceService, type DeviceDeps } from "./devices/service.ts";
 import { RuntimeLog, backgroundLog } from "./runtime-log.ts";
 import { correctTimelineSegment, deleteTimelineSegment, timelineDays, timelineRecord } from "./timeline.ts";
 
@@ -65,7 +66,7 @@ function authorized(request: Request, token: string): boolean {
 }
 
 /** settings 不传时用默认数据目录和系统钥匙串，不会重启进程。 */
-export function createHandler(options: { db: HubDB; token: string; agentToken?: string; port?: number; webDir?: string; settings?: SettingsDeps }) {
+export function createHandler(options: { db: HubDB; token: string; agentToken?: string; port?: number; webDir?: string; settings?: SettingsDeps; devices?: DeviceService }) {
   if (!options.token) throw new Error("本地 token 不能为空");
   const { db, token } = options;
   const settings = createSettings(options.settings ?? { dataDir: dataDirOf() });
@@ -91,7 +92,12 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
       if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, busy: busy.snapshot() }));
-      if (url.pathname.startsWith("/v1/settings/")) { const r = await settings(request, url, { db, port, readJSON }); if (r) return r; }
+      if (url.pathname.startsWith("/v1/settings/")) {
+        const deviceResponse = await options.devices?.settings(method, url.pathname);
+        if (deviceResponse) return deviceResponse;
+        const response = await settings(request, url, { db, port, readJSON, lan: options.devices?.open ?? false });
+        if (response) return response;
+      }
       if (method === "GET" && url.pathname === "/v1/audit") return Response.json(new AgentReads(db).audit(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/runtime/models") return Response.json(new RuntimeLog(db).models(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/runtime/background") return Response.json(backgroundLog(options.settings?.dataDir ?? dataDirOf(),url.searchParams.get("source") ?? "hub"));
@@ -236,12 +242,22 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
   };
 }
 
-export function startServer(options: { db: HubDB; token: string; agentToken?: string; port?: number; settings?: SettingsDeps }) {
+export function startServer(options: {
+  db: HubDB; token: string; agentToken?: string; port?: number; settings?: SettingsDeps; deviceDeps?: DeviceDeps;
+}) {
+  const databaseFile = options.db.db.name;
+  const dataDir = options.settings?.dataDir ?? (databaseFile === ":memory:" ? null : dirname(databaseFile));
+  const devices = new DeviceService(options.db, dataDir === null ? DEFAULT_LAN_PORT : resolveLanPort(dataDir), options.deviceDeps);
   let handler: ReturnType<typeof createHandler>;
-  return Bun.serve({ hostname: "127.0.0.1", port: options.port ?? DEFAULT_PORT, fetch(request, server) {
-    handler ??= createHandler({ ...options, port: server.port });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: options.port ?? DEFAULT_PORT, fetch(request, server) {
+    handler ??= createHandler({ ...options, devices, port: server.port });
     // 测试连接最长等 60 秒，超过 Bun 默认的 10 秒空闲超时。
     if (new URL(request.url).pathname === "/v1/settings/models/test") server.timeout(request, 75);
     return handler(request);
   } });
+  devices.start();
+  return {
+    port: server.port, hostname: server.hostname, url: server.url,
+    async stop(force?: boolean) { await Promise.all([server.stop(force), devices.stop(force)]); },
+  };
 }

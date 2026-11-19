@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 export const DEFAULT_PORT = 47823;
+export const DEFAULT_LAN_PORT = 47824;
 /** hub.json 里允许的端口：避开需要特权的 0–1023。 */
 export const PORT_MIN = 1024, PORT_MAX = 65535;
 export type PortSource = "env" | "file" | "default";
@@ -40,6 +41,15 @@ export function resolvePort(env: NodeJS.ProcessEnv = process.env, dataDir = data
     return { port, source: "file" };
   }
   return { port: DEFAULT_PORT, source: "default" };
+}
+
+export function resolveLanPort(dataDir: string): number {
+  const port = readHubFile(dataDir)?.lan_port;
+  if (port === undefined) return DEFAULT_LAN_PORT;
+  if (typeof port !== "number" || !Number.isInteger(port) || port < PORT_MIN || port > PORT_MAX) {
+    throw new Error(`hub.json 的 lan_port 必须是 ${PORT_MIN}–${PORT_MAX} 的整数`);
+  }
+  return port;
 }
 
 /** 原子写入 hub.json 的 port，保留文件里的其他字段。 */

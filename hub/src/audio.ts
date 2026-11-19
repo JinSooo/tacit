@@ -134,7 +134,7 @@ export class AudioStore {
       return { acknowledged: true };
     }).immediate();
   }
-  embeddings(value: unknown) {
+  embeddings(value: unknown, caller?: string) {
     const b = object(value), device = deviceName(b.device), ref = text(b.conversation_ref, "conversation_ref");
     const start = date(b.t_start), end = date(b.t_end);
     if (Date.parse(end) < Date.parse(start) || !Array.isArray(b.speakers) || !b.speakers.length) throw new InputError("对话时间或说话人无效");
@@ -145,7 +145,8 @@ export class AudioStore {
     });
     if (new Set(input.map(s => s.local)).size !== input.length) throw new InputError("local 不能重复");
     return this.sql.transaction(() => {
-      if (this.sql.prepare("SELECT 1 FROM tombstones WHERE source='mac.audio' AND source_ref=?").get(ref)) throw new InputError("对话已删除");
+      if (caller) this.assertDeviceConversation(ref, caller);
+      if (this.sql.prepare("SELECT 1 FROM tombstones WHERE source IN ('mac.audio','android.audio') AND source_ref=?").get(ref)) throw new InputError("对话已删除");
       const old = this.sql.prepare("SELECT * FROM voice_embeddings WHERE conversation_ref=?").all(ref) as Embedding[];
       if (old.some(s => s.device !== device)) throw new InputError("对话属于其他设备");
       // 原样重传不更改中心和累计次数。
@@ -259,8 +260,8 @@ export class AudioStore {
   }
   /** 试听片段来自哪段对话、这个人当时说了什么。用户报告：光听一段模糊的录音认不出是谁。 */
   private sampleContext(s: Speaker, requestId: string): { at?: string; said?: string } {
-    const request = this.sql.prepare("SELECT conversation_ref FROM sample_requests WHERE id=?").get(requestId) as { conversation_ref: string } | undefined;
-    const record = request && this.sql.prepare("SELECT t_start,body FROM records WHERE source='mac.audio' AND source_ref=?").get(request.conversation_ref) as { t_start: string; body: string } | undefined;
+    const request = this.sql.prepare("SELECT conversation_ref,device FROM sample_requests WHERE id=?").get(requestId) as { conversation_ref: string; device: string } | undefined;
+    const record = request && this.sql.prepare("SELECT t_start,body FROM records WHERE source IN ('mac.audio','android.audio') AND source_ref=? AND device=?").get(request.conversation_ref,request.device) as { t_start: string; body: string } | undefined;
     if (!record) return {};
     // 记录里的说话人写法是转写当时的名字，未确认时是本地标签；两个都试。
     const names = new Set([s.name, s.label].map(n => (n ?? "").trim()).filter(Boolean));
@@ -372,15 +373,16 @@ export class AudioStore {
       return { conversations: refs.length, merged, same_name: same_name + this.mergeSameNames() };
     }).immediate();
   }
-  skipped(ref: string) {
-    text(ref,"conversation_ref");
+  skipped(value: unknown, caller?: string) {
+    const ref = text(value,"conversation_ref");
     this.sql.transaction(() => {
+      if (caller) this.assertDeviceConversation(ref, caller);
       this.sql.prepare("DELETE FROM voice_embeddings WHERE conversation_ref=?").run(ref);
       this.pruneOrphans();
     }).immediate();
     return { skipped: true };
   }
-  uploadSamples(value: unknown) {
+  uploadSamples(value: unknown, caller?: string) {
     const b = object(value), requestId = text(b.request_id,"request_id");
     if (!Array.isArray(b.clips) || !b.clips.length || b.clips.length > MAX_CLIPS) throw new InputError("试听样本必须是 1–3 段");
     const clips = b.clips.map(raw => {
@@ -393,7 +395,7 @@ export class AudioStore {
     });
     return this.sql.transaction(() => {
       const request = this.sql.prepare("SELECT * FROM sample_requests WHERE id=?").get(requestId) as SampleRequest | undefined;
-      if (!request || this.speaker(request.speaker_id)?.status !== "asked") throw new InputError("样本请求不存在或已处理");
+      if (!request || (caller && request.device !== caller) || this.speaker(request.speaker_id)?.status !== "asked") throw new InputError("样本请求不存在或已处理");
       const existing = (this.sql.prepare("SELECT COUNT(*) AS n FROM voice_samples WHERE speaker_id=? AND request_id!=?").get(request.speaker_id,requestId) as { n: number }).n;
       if (existing+clips.length > MAX_CLIPS) throw new InputError("每个说话人最多 3 段样本");
       this.sql.prepare("DELETE FROM voice_samples WHERE request_id=?").run(requestId);
@@ -407,7 +409,7 @@ export class AudioStore {
   speakers() { return { speakers: this.activeSpeakers().map(s => ({ id: s.id, label: s.label, name: s.name, is_me: Boolean(s.is_me), confirmed: s.status === "confirmed", conversations: s.conversations, seconds: s.seconds })) }; }
   /** 由 removeRecord 的删除事务调用，删除队列和逐条声纹一起提交。 */
   /** 采集端按新规则重认的每句说话人（见 conversations.saveLines）。只接受这台设备自己的对话。 */
-  lines(value: unknown) {
+  lines(value: unknown, caller?: string) {
     const b = object(value), device = deviceName(b.device), ref = text(b.conversation_ref, "conversation_ref");
     if (!Array.isArray(b.lines) || b.lines.length > 20000) throw new InputError("lines 必须是数组");
     const lines = b.lines.map(raw => {
@@ -417,12 +419,26 @@ export class AudioStore {
       return { at: l.at, speaker_id: l.speaker_id as string | null, hidden: l.hidden };
     });
     return this.sql.transaction(() => {
+      if (caller) this.assertDeviceConversation(ref, caller, true);
       const owner = this.sql.prepare("SELECT device FROM voice_embeddings WHERE conversation_ref=? LIMIT 1").get(ref) as { device: string } | undefined;
       if (owner && owner.device !== device) throw new InputError("对话属于其他设备");
-      if (this.sql.prepare("SELECT 1 FROM tombstones WHERE source='mac.audio' AND source_ref=?").get(ref)) throw new InputError("对话已删除");
+      if (this.sql.prepare("SELECT 1 FROM tombstones WHERE source IN ('mac.audio','android.audio') AND source_ref=?").get(ref)) throw new InputError("对话已删除");
       return { stored: saveLines(this.hub, ref, lines) };
     }).immediate();
   }
+  /** 语音表的对话键全局共享。设备通道必须先核对归属，再更新共享表。 */
+  assertDeviceConversation(ref: string, device: string, requireOwner = false) {
+    const owners = this.sql.prepare<[string, string, string], { device: string }>(`
+      SELECT device FROM voice_embeddings WHERE conversation_ref=?
+      UNION SELECT device FROM records WHERE source IN ('mac.audio','android.audio') AND source_ref=?
+      UNION SELECT device FROM sample_requests WHERE conversation_ref=?
+    `).all(ref, ref, ref);
+    if (owners.some(owner => owner.device !== device)
+      || (!owners.length && (requireOwner || this.sql.prepare("SELECT 1 FROM conversation_lines WHERE conversation_ref=?").get(ref)))) {
+      throw new InputError("对话不属于本设备");
+    }
+  }
+
   removeConversation(ref: string, device: string) {
     this.sql.prepare("DELETE FROM conversation_lines WHERE conversation_ref=?").run(ref);
     const devices = new Set([device, ...(this.sql.prepare("SELECT DISTINCT device FROM voice_embeddings WHERE conversation_ref=?").all(ref) as { device: string }[]).map(r => r.device)]);

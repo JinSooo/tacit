@@ -509,7 +509,7 @@ export class DistillStore {
     const removed = new Set(records.map(r => r.id)), input = JSON.stringify([...removed]);
     for (const {id} of records) {
       const record = this.hub.get(id);
-      if (record?.source === "mac.audio" && record.source_ref) new AudioStore(this.hub).removeConversation(record.source_ref,record.device);
+      if (record && (record.source === "mac.audio" || record.source === "android.audio") && record.source_ref) new AudioStore(this.hub).removeConversation(record.source_ref,record.device);
     }
     removeSummariesOf(this.hub, [...removed]);
     const affected = new Set<string>(), projects = new Set<string>(), changedFrames = new Set<string>();
