@@ -55,3 +55,16 @@
 1. 每次扫描都要有元素数和时间上限（比如 3,000 个元素、200 ms），并且只遍历和窗口可见区域相交的元素，否则 Mail 这类应用会卡住采集。
 2. 微信和 Zed 是 OCR 兜底的第一批目标。把 OCR 推到 v1 之后，意味着 v1 里这两个应用只有"应用名 + 窗口标题"。
 3. 除了 Notion，其余应用都不接受 `AXManualAccessibility`（返回 unsupported），但大多数照样能读到内容。
+
+## A-1 Android 无障碍读微信（2026-11-19）❌
+
+测试机：小米 14 Ultra / Android 16 / HyperOS 3.0 / 微信 8.0.80，adb 侧载。探针是只读的无障碍服务，限定 `com.tencent.mm`，开了 `flagReportViewIds`、`flagRetrieveInteractiveWindows`、`flagIncludeNotImportantViews`，只记录节点数、id 和文字长度，不记录正文。
+
+| 读取方式 | 聊天列表 | 群聊 | 单聊 |
+|---|---|---|---|
+| `uiautomator dump`（shell 权限） | 名称、时间、预览都在 | 发送人（头像描述）、正文、时间分隔都在 | “我”的消息头像在右侧，可区分 |
+| 第三方无障碍服务 | 根节点 0 个子节点 | 同左 | 同左 |
+
+- 同一时刻系统界面窗口能读到 51 个节点，只有微信的窗口是空的；强制停止后重启微信，结果不变。**微信会对第三方无障碍服务主动返回空界面树**，手机上不能用无障碍读微信。`uiautomator` 走 shell 权限，正式应用拿不到。
+- 用 adb 写 `enabled_accessibility_services` 时，HyperOS 会先删掉列表里失效的组件，再整体重写这一项。改动前要先保存原值，测完写回去。
+- 下一步：用真实消息测微信通知能带出什么（发送人、群名、是否截断、Mac 微信登录时手机是否还收到通知）。
