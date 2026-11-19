@@ -30,6 +30,7 @@ public final class DiagnosticLog: @unchecked Sendable {
     case statusWriteFailed
     case outboxDropped(total: Int)
     case outboxDegraded
+    case setupStarted
     case setupLogOpenFailed
     case setupStatusWriteFailed
     case setupFinished(exitCode: Int32)
@@ -47,6 +48,7 @@ public final class DiagnosticLog: @unchecked Sendable {
       case .statusWriteFailed: return ("collector", "status_write_failed", [:], true)
       case let .outboxDropped(total): return ("collector", "outbox_dropped", ["dropped": total], true)
       case .outboxDegraded: return ("collector", "outbox_degraded", [:], true)
+      case .setupStarted: return ("setup", "setup_started", [:], false)
       case .setupLogOpenFailed: return ("setup", "setup_log_open_failed", [:], false)
       case .setupStatusWriteFailed: return ("setup", "setup_status_write_failed", [:], false)
       case let .setupFinished(code): return ("setup", "setup_finished", ["exit_code": code], false)

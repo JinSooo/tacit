@@ -65,9 +65,12 @@ public struct SetupStatus: Encodable {
     catch { setupLog = nil; log.record(.setupLogOpenFailed, to: diagnosticDescriptor) }
     defer { if let setupLog { close(setupLog) } }
 
-    // 子进程输出可能含路径和错误原文。日志只留退出结果。
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
+    // setup 的输出是后台准备自己的步骤说明，留在本机 0600 的 setup.log 供排障（随 hub 轮转）；
+    // 诊断信息只摘取其中的结构化事件，不复制这些文本。
+    let output = setupLog.map { FileHandle(fileDescriptor: $0, closeOnDealloc: false) } ?? FileHandle.nullDevice
+    if let setupLog { log.record(.setupStarted, to: setupLog) }
+    process.standardOutput = output
+    process.standardError = output
     process.standardInput = FileHandle.nullDevice
     let exitCode: Int32
     let ok: Bool

@@ -393,7 +393,7 @@ final class AudioCoordinator {
     process.arguments = ["-b", workerURL.path, "--data-dir", config.dataDir.path, "--device", config.device, "--hub", config.hubURL.absoluteString]
     var env = ProcessInfo.processInfo.environment; env["RA_DATA_DIR"] = config.dataDir.path; process.environment = env
     // 系统库也能往这个流输出，转写退出原因和积压量通过诊断日志及状态文件记录。
-    process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.standardError  // worker 只写固定标签和计数，跟随主进程进 collector.log
     process.terminationHandler = { [weak self] p in
       let crashed = p.terminationReason == .uncaughtSignal
       if p.terminationStatus != 0 {
