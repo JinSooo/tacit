@@ -44,7 +44,9 @@ try {
     } finally { original.close(); }
   }
   hub = new HubDB(file,key);
-  assert.equal(hub.db.pragma("user_version",{simple:true}),11);
+  // 和新建库的版本比，不写死版本号（库版本升级后这里曾停在 11）。
+  const fresh = new HubDB(join(root,"fresh-version.db"),key); const latest = fresh.db.pragma("user_version",{simple:true}); fresh.close();
+  assert.equal(hub.db.pragma("user_version",{simple:true}),latest);
   assert.equal(hub.db.pragma("integrity_check",{simple:true}),"ok");
   assert.equal((hub.db.prepare("SELECT COUNT(*) n FROM records").get() as {n:number}).n,originalCount);
   assert.equal(readdirSync(root).filter(s=>s.includes("migration-v")).length,0);
