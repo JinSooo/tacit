@@ -1,1 +1,60 @@
-<section class="section" id="download" aria-label="download"><div class="wrap"><p class="caption">待实现：download</p></div></section>
+<section class="section" id="download" aria-labelledby="download-heading">
+  <div class="wrap">
+    <div class="download-layout">
+      <header class="section-head">
+        <h2 class="display" id="download-heading">下载 Tacit</h2>
+        <div>
+          <a class="btn btn-primary" href="https://github.com/JinSooo/tacit/releases/latest">
+            <svg aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
+            下载 Mac 版
+          </a>
+          <p class="download-requirements caption">Apple 芯片 Mac，macOS 14 或更新版本</p>
+        </div>
+      </header>
+
+      <div class="download-guide">
+        <h3 class="title">开始使用</h3>
+        <ol class="download-steps" role="list">
+          <li>
+            <strong>拖进“应用程序”</strong>
+            <p>打开下载的 <code>Tacit-&lt;版本号&gt;.dmg</code>，把 Tacit 拖进“应用程序”。</p>
+          </li>
+          <li id="download-open">
+            <strong>首次打开 Tacit</strong>
+            <p>从“应用程序”打开 Tacit。如果系统拦下，先点“完成”，再到<strong>系统设置 › 隐私与安全性</strong>，找到 Tacit，点<strong>仍要打开</strong>并输入密码。</p>
+            <p>如果没有这个按钮，在终端运行下面的命令，再打开 Tacit。</p>
+            <div class="download-command">
+              <code id="download-command">xattr -dr com.apple.quarantine /Applications/Tacit.app</code>
+              <button class="download-copy" type="button" aria-label="复制终端命令" hidden>复制</button>
+            </div>
+            <p class="download-copy-status caption" role="status"></p>
+          </li>
+          <li>
+            <strong>从菜单栏打开主窗口</strong>
+            <p>菜单栏出现 Tacit 图标后，后台服务会自动准备。打开主窗口，按时间线顶部的清单完成设置。</p>
+          </li>
+        </ol>
+      </div>
+    </div>
+
+    <p class="download-status caption">当前是开发预览。资源占用和记录准确率还在验收，重要结论请点回原文核对。 <a class="link" href="https://github.com/JinSooo/tacit">GitHub</a></p>
+  </div>
+</section>
+
+<script type="module">
+  const button = document.querySelector(".download-copy");
+  const command = document.querySelector("#download-command");
+  const status = document.querySelector(".download-copy-status");
+
+  if (navigator.clipboard?.writeText) {
+    button.hidden = false;
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(command.textContent.trim());
+        status.textContent = "已复制命令";
+      } catch {
+        status.textContent = "无法自动复制，请选中命令手动复制。";
+      }
+    });
+  }
+</script>
