@@ -80,6 +80,17 @@ final class AudioCoordinator {
     return transcription
   }
   func status() -> [String] { snapshotLock.lock(); defer { snapshotLock.unlock() }; return snapshot }
+  private var quietLevels = MicrophoneLevelHistogram()
+  /// 本次启动以来麦克风在没人说话时的音量分布，写进状态文件。
+  func microphoneQuietLevels() -> MicrophoneLevelHistogram {
+    snapshotLock.lock(); defer { snapshotLock.unlock() }
+    return quietLevels
+  }
+  /// 在音频队列上调用：这一段送进 VAD 之前，麦克风那一路不在人声段里才计入。
+  private func recordQuietLevel(_ dbfs: Double, duration: Double) {
+    guard pipelines[.mic]?.speechActive != true else { return }
+    snapshotLock.lock(); quietLevels.observe(dbfs: dbfs, duration: duration); snapshotLock.unlock()
+  }
   func update(enabled: Bool) {
     queue.async { [self] in
       guard !shuttingDown else { return }
@@ -259,6 +270,7 @@ final class AudioCoordinator {
           try self?.save(samples, track: .mic, start: start, end: end)
         }, level: { [weak self] dbfs, start, end in
           self?.health.observe(dbfs: dbfs, start: start, end: end, enabled: true); self?.healthLastFrame = end
+          self?.recordQuietLevel(dbfs, duration: end.timeIntervalSince(start))
         })
         sessionStarted = Date()
         let microphone = Microphone(buffer: captureBuffer(.mic, session: micGeneration), device: device)

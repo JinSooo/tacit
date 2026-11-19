@@ -143,6 +143,25 @@ public struct MicrophoneHealth {
   public mutating func reset() { quietSince = nil; warning = false }
 }
 
+/// 麦克风在没人说话时的音量分布（按 2 dB 分桶累计秒数），只写进采集端状态文件供排查，用来定“低于底噪就不跑 VAD”的门槛。
+/// 只累计 VAD 不在人声段里的缓冲；数字静音单独计，不混进底噪。
+public struct MicrophoneLevelHistogram: Equatable {
+  public private(set) var seconds: [Int: Double] = [:]
+  public private(set) var silentSeconds = 0.0
+  public init() {}
+  public mutating func observe(dbfs: Double, duration: Double) {
+    guard duration > 0, duration.isFinite else { return }
+    guard dbfs.isFinite, dbfs > -150 else { silentSeconds += duration; return }
+    let bucket = Int((min(dbfs, 0) / 2).rounded(.down)) * 2
+    seconds[bucket, default: 0] += duration
+  }
+  /// 状态文件里的形式：键是桶下沿（"-64" 表示 [-64, -62)），值保留到 0.1 秒。
+  public var json: [String: Any] {
+    ["bucket_db": 2, "silent_seconds": (silentSeconds * 10).rounded() / 10,
+     "seconds": Dictionary(uniqueKeysWithValues: seconds.map { (String($0.key), ($0.value * 10).rounded() / 10) })]
+  }
+}
+
 /// 有没有录完、等着转写的对话。扫描全部 meta.json 很慢，最多每分钟扫一次；
 /// 两次扫描之间沿用上次的结论，而不是当作"没有"——同一秒里会问两次（先决定要不要同步，同步回来再决定要不要启动转写），
 /// 第二次问到时扫描还在冷却中，以前会答"没有"，转写进程就再也起不来。
