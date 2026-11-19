@@ -20,8 +20,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   lazy var audio = AudioCoordinator(config: config)
   lazy var plugins = PluginScheduler(config: config)
   lazy var viewer: ViewerWindow = MainActor.assumeIsolated {
-    ViewerWindow(store: ViewerStore(api: api, device: config.device, controls: self))
+    let store = ViewerStore(api: api, device: config.device, controls: self)
+    store.onRevision = { [weak self] in self?.widgetPublisher?.refresh(invalidate: true) }
+    return ViewerWindow(store: store)
   }
+  private var widgetPublisher: WidgetSnapshotPublisher?
+  private var readyForTimelineURL = false
+  private var pendingTimelineDay: Date?
   lazy var segmenter = Segmenter(device: config.device)
   lazy var wechat = WeChatCollector(device: config.device, ocr: ocr, send: { [weak self] in self?.hub.enqueue($0) })
   let ax = AXReader()
@@ -83,6 +88,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.plugins.runAll() }
 
     let ws = NSWorkspace.shared.notificationCenter
+    if let file = WidgetSnapshot.fileURL,
+       file.deletingLastPathComponent().deletingLastPathComponent().path == config.dataDir.standardizedFileURL.path,
+       let plugins = Bundle.main.builtInPlugInsURL,
+       FileManager.default.fileExists(atPath: plugins.appendingPathComponent("TacitWidget.appex").path) {
+      MainActor.assumeIsolated {
+        widgetPublisher = WidgetSnapshotPublisher(api: api, file: file)
+        widgetPublisher?.refresh()
+      }
+      ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+        MainActor.assumeIsolated { self?.widgetPublisher?.refresh() }
+      }
+      NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) { [weak self] _ in
+        MainActor.assumeIsolated { self?.widgetPublisher?.refresh() }
+      }
+    }
+    readyForTimelineURL = true
+    if let day = pendingTimelineDay {
+      pendingTimelineDay = nil
+      MainActor.assumeIsolated { viewer.show(.timelineDay(day)) }
+    }
     ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.updateAudio() }
     ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.tick() }
     for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
@@ -165,9 +190,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     MainActor.assumeIsolated { viewer.show() }; return true
   }
 
+  func application(_ application: NSApplication, open urls: [URL]) {
+    guard let day = urls.lazy.compactMap({ WidgetSnapshot.timelineDate(from: $0) }).first,
+          day <= Date() else { return }
+    if readyForTimelineURL { MainActor.assumeIsolated { viewer.show(.timelineDay(day)) } }
+    else { pendingTimelineDay = day }
+  }
+
   func applicationWillTerminate(_ n: Notification) {
     guard !terminating else { return }
     terminating = true
+    MainActor.assumeIsolated { widgetPublisher?.stop() }
     timers.forEach { $0.invalidate() }
     files.flush(force: true)
     files.stop()

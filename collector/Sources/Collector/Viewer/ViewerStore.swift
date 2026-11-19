@@ -65,6 +65,7 @@ enum Page: Hashable {
 
 enum ViewerEntry {
   case timeline, settings, pending
+  case timelineDay(Date)
   case record(String, Date)
 }
 
@@ -105,7 +106,8 @@ enum Route: Hashable {
   /// 进入详细时间线后要定位的原始记录。
   var historyFocus: String?
   /// 记录被删除、补写或修正后递增，各页据此重新读取。
-  var revision = 0
+  var revision = 0 { didSet { onRevision?() } }
+  @ObservationIgnored var onRevision: (() -> Void)?
 
   init(api: HubAPI, device: String, controls: CaptureControlling?) {
     self.api = api

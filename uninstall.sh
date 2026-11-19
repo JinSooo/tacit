@@ -23,9 +23,14 @@ for l in collector distill hub; do
 done
 # 重新安装时按全新安装重新准备。
 rm -f "$DATA/app-setup.json"
+rm -rf "$DATA/widget"
 for app in "/Applications/Tacit.app" "$HOME/Applications/Tacit.app" \
            "/Applications/Record Anything.app" "$HOME/Applications/Record Anything.app"; do
-  if tacit_owns_bundle "$app"; then rm -rf "$app"; fi
+  if tacit_owns_bundle "$app"; then
+    widget="$app/Contents/PlugIns/TacitWidget.appex"
+    if [ -d "$widget" ]; then pluginkit -r "$widget" 2>/dev/null || true; fi
+    rm -rf "$app"
+  fi
 done
 tccutil reset All dev.record-anything.collector >/dev/null 2>&1 || true
 echo "已移除自启、采集端应用和它的系统权限。"
@@ -39,6 +44,6 @@ case "$answer" in
     security delete-generic-password -s record-anything -a audio-key >/dev/null 2>&1 || true
     security delete-generic-password -s record-anything -a audio-key-hex >/dev/null 2>&1 || true
     echo "数据和密钥已删除。" ;;
-  *) echo "数据保留在 $DATA（含语音模型 models/、加密音频 audio/），密钥保留在钥匙串（record-anything / db-key、audio-key-hex）。两者要一起保留，缺一个数据就打不开。" ;;
+  *) echo "数据保留在 ${DATA}（含语音模型 models/、加密音频 audio/），密钥保留在钥匙串（record-anything / db-key、audio-key-hex）。两者要一起保留，缺一个数据就打不开。" ;;
 esac
 echo "如果在 ~/.zshrc 里加过 plugins/shell/hook.zsh，请手动删掉那一行。"
