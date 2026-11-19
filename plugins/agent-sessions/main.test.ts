@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { collect, type State } from "./main.ts";
 import { cleanUserText, injectionRules, injectedBlockRules } from "./filters.ts";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
@@ -41,7 +42,7 @@ test("distill-work 目录下的会话不输出", async () => {
   s.write(s.file("claude"), [claude("user", "提炼调用的合成提示词", base + 60_000, { cwd: work })]);
   s.write(s.file("codex", "rollout-x.jsonl"), [meta(path.join(work, "sub")), codex("user", "提炼调用的合成提示词")]);
   const records: RecordV1[] = [];
-  await collect({ device: "mac", claudeDir: s.claudeDir, codexDir: s.codexDir, now: base + 3_600_000, excludeDirs: [work], onRecord: r => records.push(r) });
+  await collect({ device: "mac", claudeDir: s.claudeDir, codexDir: s.codexDir, now: base + 3_600_000, excludeDirs: [work], onRecord: r => { records.push(r); } });
   expect(records).toHaveLength(0);
 });
 
@@ -229,14 +230,14 @@ test("损坏行累计一条诊断，跳过后正常输出 checkpoint，半行仍
   const initial = JSON.stringify(claude("user", "有效消息"));
   const partial = JSON.stringify(claude("user", "下次完整消息", base + 120000));
   fs.writeFileSync(file, `损坏内容\n${initial}\n{"type":"user",}\n${partial.slice(0, 50)}`);
-  const state = await collect({ device: "mac", claudeDir: s.claudeDir, codexDir: s.codexDir, now: base + 7_200_000, onWarning: text => warnings.push(text), onRecord: record => records.push(record) });
+  const state = await collect({ device: "mac", claudeDir: s.claudeDir, codexDir: s.codexDir, now: base + 7_200_000, onWarning: text => warnings.push(text), onRecord: record => { records.push(record); } });
   expect(warnings).toEqual(["跳过 2 行损坏数据"]); expect(records.map(r => r.body)).toEqual(["[我] 有效消息"]);
   const offset = state.files[file]!.offset;
   fs.appendFileSync(file, partial.slice(50) + "\n");
   const next = await s.run(base + 7_200_000, state); expect(next.records[0]!.body).toBe("[我] 下次完整消息"); expect(next.state.files[file]!.offset).toBeGreaterThan(offset);
   const cli = Bun.spawnSync(["bun", path.join(import.meta.dir, "main.ts"), "--device", "mac"], { env: { ...process.env, RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir } });
   expect(cli.exitCode).toBe(0); expect(cli.stderr.toString().trim()).toBe("跳过 2 行损坏数据");
-  expect(JSON.parse(cli.stdout.toString().trim().split("\n").at(-1)!).type).toBe("checkpoint");
+  expect(JSON.parse(cli.stdout.toString().trim().split("\n").at(-1)!)).toMatchObject({ type: "checkpoint", sessionWarnings: { damaged: 2 } });
 });
 
 test("巨型工具行不隐藏后面的可见文字，字段逆序与压缩流结果一致", async () => {
@@ -290,4 +291,147 @@ test("v1 checkpoint 自动迁移，不重发；迁移后休眠再恢复仍保留
   const now = base + 12 * 86400_000; const pruned = await s.run(now, migrated.state); expect(Object.keys(pruned.state.sessions)).toHaveLength(0);
   fs.appendFileSync(file, JSON.stringify(codex("user", "新版本消息", now - 3_600_000)) + "\n"); fs.utimesSync(file, (now - 3_600_000) / 1000, (now - 3_600_000) / 1000);
   const next = await s.run(now, pruned.state); expect(next.records.map(r => r.body)).toEqual(["[我] 新版本消息"]); expect(next.records[0]!.context?.cwd).toBe(s.cwd);
+});
+
+test("超预算的乱序小时桶按一次性排序分条，重跑的标识和正文一致", async () => {
+  const s = setup();
+  const large = "文".repeat(88_000);
+  const count = 800;
+  const first = s.file("claude", "a.jsonl"), second = s.file("claude", "b.jsonl");
+  const time = (i: number) => base + i * 1000;
+  const content = (i: number) => `${i} ${large}`;
+  const write = (file: string, i: number) => fs.appendFileSync(file, JSON.stringify(claude("user", content(i), time(i))) + "\n");
+  // 晚时刻先出现；单文件也不保证按时刻排序，两个文件还有重复消息。
+  for (let i = count - 1; i >= 0; i--) write(i % 2 ? first : second, i);
+  write(second, 1);
+  for (const file of [first, second]) fs.utimesSync(file, base / 1000, base / 1000);
+  const hash = createHash("sha256");
+  for (let i = 0; i < count; i++) {
+    const ref = `claude-session#${new Date(base).toISOString()}${i ? "#" + (i + 1) : ""}`;
+    hash.update(JSON.stringify([ref, time(i), time(i), "[我] " + content(i)]));
+  }
+  const expected = hash.digest("hex");
+  const worker = path.join(s.root, "measure.ts");
+  fs.writeFileSync(worker, `
+    import { createHash } from "node:crypto";
+    import { collect } from ${JSON.stringify(path.join(import.meta.dir, "main.ts"))};
+    Bun.gc(true);
+    const baselineKiB = process.resourceUsage().maxRSS;
+    const options = {
+      device: "mac", claudeDir: ${JSON.stringify(s.claudeDir)}, codexDir: ${JSON.stringify(s.codexDir)},
+      now: ${base + 7_200_000}, excludeDirs: [],
+    };
+    async function scan() {
+      const hash = createHash("sha256");
+      let count = 0;
+      const state = await collect({ ...options, onRecord(r) {
+        count++;
+        hash.update(JSON.stringify([r.source_ref, Date.parse(r.t_start), Date.parse(r.t_end), r.body]));
+      } });
+      return { state, count, digest: hash.digest("hex") };
+    }
+    const first = await scan();
+    const peakKiB = process.resourceUsage().maxRSS - baselineKiB;
+    const retry = await scan();
+    await collect({ ...options, state: first.state, since: ${base - 1}, onRecord() { throw new Error("成功后重扫重复输出"); } });
+    console.log(JSON.stringify({ count: first.count, digest: first.digest, retryDigest: retry.digest, peakKiB }));
+  `);
+  const result = Bun.spawnSync([process.execPath, worker], { env: { ...process.env, TMPDIR: s.root } });
+  expect(result.exitCode).toBe(0);
+  const stats = JSON.parse(result.stdout.toString());
+  expect(stats).toMatchObject({ count, digest: expected, retryDigest: expected });
+  // 正文超过 134 MiB (UTF-16)。RSS 包含 Bun 堆和 I/O 临时对象，旧版此用例超过 700 MiB。
+  expect(stats.peakKiB).toBeLessThan(256 * 1024);
+  expect(fs.readdirSync(s.root).sort()).toEqual(["claude", "measure.ts", "project"]);
+}, 25_000);
+
+test("活动桶超过消息预算时保留原游标，关闭后按原分条规则完整导入", async () => {
+  const s = setup();
+  const file = s.file("claude");
+  s.write(file, [claude("user", "上一时间段")]);
+  const initial = await s.run(base + 3_600_000);
+  const offset = initial.state.files[file]!.offset;
+  const now = base + 3_660_000;
+  const messages = Array.from({ length: 20_001 }, (_, i) => `消息 ${i}`);
+  fs.appendFileSync(file, messages.map(text => JSON.stringify(claude("user", text, now))).join("\n") + "\n");
+  fs.utimesSync(file, now / 1000, now / 1000);
+  await expect(s.run(now, initial.state)).rejects.toThrow("待保存内容超过上限");
+  expect(initial.state.files[file]!.offset).toBe(offset);
+  const closed = await s.run(now + 30 * 60_000, initial.state);
+  const bodies = closed.records.flatMap(record => record.body.split("\n\n"));
+  expect(bodies).toEqual(messages.map(text => "[我] " + text));
+  expect((await s.run(now + 30 * 60_000, closed.state)).records).toHaveLength(0);
+}, 15_000);
+
+test("单文件格式变化告警；未知事件、角色、时刻及正文均计数，正常事件继续采集", async () => {
+  const s = setup();
+  const at = Date.now() - 2 * 3_600_000;
+  const unknown = [
+    { type: "new_event", body: "合成日志原文" },
+    { ...codex("new_role", "合成日志原文", at) },
+    { ...claude("user", "合成日志原文", at), timestamp: "new_date" },
+    claude("user", [{ type: "text", text: { value: "合成日志原文" } }], at),
+    ["合成日志原文"],
+  ];
+  s.write(s.file("claude"), Array.from({ length: 20 }, (_, i) => unknown[i % unknown.length]), at);
+  s.write(s.file("claude", "ordinary.jsonl"), Array.from({ length: 55 }, () => claude("user", "可见消息", at)), at);
+  const env = { ...process.env, RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir, RA_DATA_DIR: s.root };
+  const result = Bun.spawnSync([process.execPath, path.join(import.meta.dir, "main.ts"), "--device", "mac"], { env });
+  expect(result.exitCode).toBe(0);
+  const lines = result.stdout.toString().trim().split("\n").map(line => JSON.parse(line));
+  expect(lines.at(-1).sessionWarnings).toEqual({ unrecognized: 20 });
+  expect(lines.filter(line => line.type === "record").map(line => line.record.body)).toEqual(["[我] 可见消息"]);
+  expect(result.stderr.toString().trim()).toBe("Claude Code / Codex 会话格式可能已变化，有 20 行没有识别");
+  expect(JSON.stringify(lines.at(-1)) + result.stderr.toString()).not.toContain("合成日志原文");
+});
+
+test("整轮告警要求至少 50 行且严格过半，已知工具和被过滤的正文照常识别", async () => {
+  const s = setup();
+  const files = Array.from({ length: 5 }, (_, i) => s.file("codex", `${i}.jsonl`));
+  const known = [meta(s.cwd), { type: "event_msg", payload: { type: "token_count" } },
+    { type: "turn_context" }, { type: "response_item", payload: { type: "function_call_output" } },
+    codex("assistant", "分析", base, { channel: "analysis" }),
+    codex("developer", "指令"), codex("user", [{ type: "input_image" }]), codex("user", "正常消息")];
+  const unknown = [{ type: "new_event" }, codex("new_role", "未识别角色"),
+    { ...codex("user", "正文"), timestamp: "new_date" }, codex("user", [{ type: "new_block" }]),
+    codex("user", [{ type: "input_text", text: 42 }])];
+  const run = async (bad: number, good: number, reduceLast = false) => {
+    const warnings: string[] = [];
+    for (const [i, file] of files.entries()) {
+      s.write(file, [...Array.from({ length: good }, (_, i) => known[i % known.length]),
+        ...Array.from({ length: bad - (i === files.length - 1 && reduceLast ? 1 : 0) }, (_, i) => unknown[i % unknown.length])]);
+    }
+    await collect({ device: "mac", claudeDir: s.claudeDir, codexDir: s.codexDir, now: base + 7_200_000, onWarning: warning => warnings.push(warning) });
+    return warnings;
+  };
+  expect(await run(0, 30)).toEqual([]);
+  expect(await run(10, 1, true)).toEqual([]); // 49 行，比例过半
+  expect(await run(10, 10)).toEqual([]);  // 50 行，比例刚好一半
+  expect(await run(10, 9)).toEqual(["Claude Code / Codex 会话格式可能已变化，有 50 行没有识别"]);
+});
+
+test("runner 将诊断计数交给采集端，checkpoint 保存和去重照常", async () => {
+  const { runPlugin } = await import("../../hub/src/run-plugin.ts");
+  const { HubDB } = await import("../../hub/src/db.ts");
+  const s = setup();
+  const now = Date.now();
+  const at = now - 7_200_000;
+  const file = s.file("claude");
+  s.write(file, Array.from({ length: 20 }, () => ({ type: "new_event" })), at);
+  s.write(s.file("claude", "valid.jsonl"), [claude("user", "合成正文", at)], at);
+  fs.appendFileSync(file, "{损坏的合成日志}\n");
+  const db = new HubDB(path.join(s.root, "synthetic-history.db"), "synthetic-db-key-0123456789");
+  const command = [process.execPath, path.join(import.meta.dir, "main.ts")];
+  const env = { ...process.env, RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir, RA_DATA_DIR: s.root };
+  const run = () => runPlugin({ db, dataDir: s.root, name: "agent-sessions", command, env });
+  try {
+    const first = await run();
+    expect(first).toMatchObject({ accepted: 1, stateWritten: true, warnings: ["Claude Code / Codex 会话格式可能已变化，有 20 行没有识别", "跳过 1 行损坏数据"] });
+    expect(JSON.stringify(first)).not.toContain("合成");
+    fs.unlinkSync(path.join(s.root, "plugins/agent-sessions/state.json"));
+    expect(await run()).toMatchObject({ accepted: 0, duplicates: 1, stateWritten: true });
+    const next = await run();
+    expect(next).toMatchObject({ accepted: 0, duplicates: 0, stateWritten: true });
+    expect(next.warnings).toBeUndefined();
+  } finally { db.close(); }
 });

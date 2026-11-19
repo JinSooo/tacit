@@ -5,7 +5,7 @@ import { createZstdDecompress } from "node:zlib";
 
 type Json = { [key: string]: any };
 type Context = "root" | "message" | "origin" | "blocks" | "block" | "ignored";
-interface Frame { kind: "object" | "array"; context: Context; value: any; state: string; key: string }
+interface Frame { kind: "object" | "array"; context: Context; value: any; state: string; key: string; hasInvalidBlock?: boolean }
 const fields: { [context: string]: Set<string> } = {
   root: new Set(["type", "sessionId", "timestamp", "cwd", "isSidechain", "isMeta", "isCompactSummary", "promptSource", "turnOrigin", "origin", "message", "payload"]),
   message: new Set(["type", "id", "cwd", "role", "channel", "recipient", "content"]),
@@ -51,7 +51,13 @@ export class EventParser {
       if (this.keep()) top.value[top.key] = value;
     } else {
       if (!["value", "first"].includes(top.state)) throw Error();
-      if (top.context === "blocks" && value && typeof value === "object") top.value.push(value);
+      if (top.context === "blocks") {
+        if (value && typeof value === "object") top.value.push(value);
+        else if (!top.hasInvalidBlock) {
+          top.value.push(null);
+          top.hasInvalidBlock = true;
+        }
+      }
     }
     top.state = "comma";
   }
@@ -184,9 +190,9 @@ export class EventParser {
       }
     } catch { this.invalid = true; }
   }
-  finish(): { event: Json | null; damaged: boolean } {
+  finish(): { event: Json | null | undefined; damaged: boolean } {
     try { if (this.mode === "primitive") this.finishPrimitive(); } catch { this.invalid = true; }
-    if (!this.nonempty) return { event: null, damaged: false };
+    if (!this.nonempty) return { event: undefined, damaged: false };
     return { event: this.result, damaged: this.invalid || this.mode !== "normal" || this.stack.length !== 0 || !this.done };
   }
 }

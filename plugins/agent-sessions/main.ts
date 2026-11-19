@@ -4,21 +4,23 @@ import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
 import { readEvents } from "./json-lines.ts";
-import { clampTitle, emitCheckpoint, emitRecord, parsePluginArgs, toLocalIso, ulid, validateRecord, type RecordV1 } from "../../packages/record/index.ts";
-import { cleanUserText } from "./filters.ts";
+import { clampTitle, parsePluginArgs, toLocalIso, ulid, validateRecord, type RecordV1 } from "../../packages/record/index.ts";
+import { messageBuffer, type Message } from "./message-buffer.ts";
+import { parseSessionEvent, type Provider } from "./session-events.ts";
 
 const HOUR = 3_600_000;
 const RETENTION = 8 * 86400_000;
 const BODY_LIMIT = 150_000;
 const TRUNCATED = "…[已截断]";
-type Provider = "claude" | "codex";
-type Json = { [key: string]: any };
-interface Message { time: number; role: "user" | "assistant"; text: string }
+const PENDING_BYTES = 32 * 1024 * 1024;
+const PENDING_MESSAGES = 20_000;
+const PENDING_LIMIT = "当前会话待保存内容超过上限，关闭后重试";
+interface SessionWarnings { unrecognized?: number; damaged?: number }
 interface Bucket { part: number; messages: Message[] }
 interface Session { provider: Provider; id: string; cwd: string | null; seen: { [hour: string]: string[] }; buckets: { [hour: string]: Bucket }; mtime: number; lastActivity?: number }
 interface FileProgress { offset: number; mtime: number; size: number; identity: string; session: string | null; cwd?: string | null }
 export interface State { version: 2; since: number; replaySince: number; files: { [file: string]: FileProgress }; sessions: { [id: string]: Session } }
-export interface Options { device: string; now?: number; since?: number; state?: State; claudeDir?: string; codexDir?: string; excludeDirs?: string[]; onRecord?: (record: RecordV1) => void; onWarning?: (message: string) => void }
+export interface Options { device: string; now?: number; since?: number; state?: State; claudeDir?: string; codexDir?: string; excludeDirs?: string[]; onRecord?: (record: RecordV1) => void | Promise<void>; onWarning?: (message: string) => void; onDiagnostics?: (warnings: SessionWarnings) => void }
 
 function* walk(root: string): Generator<string> {
   if (!fs.existsSync(root)) return;
@@ -29,26 +31,6 @@ function* walk(root: string): Generator<string> {
   }
 }
 
-function visibleMessage(event: Json, provider: Provider): { role: Message["role"]; text: string } | null {
-  let message: Json;
-  if (provider === "claude") {
-    if (!["user", "assistant"].includes(event.type) || event.isSidechain || event.isMeta || event.isCompactSummary) return null;
-    if (event.type === "user" && (event.promptSource === "system" || ["task_notification", "hook"].includes(event.turnOrigin) || /task-notification|hook/.test(event.origin?.kind ?? ""))) return null;
-    message = event.message ?? {};
-  } else {
-    if (event.type !== "response_item" || event.payload?.type !== "message") return null;
-    message = event.payload;
-    if (message.role === "assistant" && (message.channel === "analysis" || (message.recipient && message.recipient !== "all"))) return null;
-  }
-  const role = message.role ?? event.type;
-  if (role !== "user" && role !== "assistant") return null;
-  const content = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
-  if (!Array.isArray(content)) return null;
-  const text = content.filter((b: Json) => b && ["text", "input_text", "output_text"].includes(b.type) && typeof b.text === "string")
-    .map((b: Json) => role === "user" ? cleanUserText(b.text) : b.text.trim()).filter(Boolean).join("\n");
-  return text ? { role, text } : null;
-}
-
 function repoRoot(cwd: string | null): string | null {
   if (!cwd || !path.isAbsolute(cwd)) return null;
   for (let dir = cwd; ; dir = path.dirname(dir)) {
@@ -56,10 +38,59 @@ function repoRoot(cwd: string | null): string | null {
     if (path.dirname(dir) === dir) return null;
   }
 }
-function shorten(text: string, length: number): string { return capturePrefix(text, Array.from(text).slice(0, length).join("").length); }
-function safePrefix(text: string, length: number): string { return capturePrefix(text, length); }
+function shorten(text: string, length: number): string {
+  let end = 0;
+  for (const char of text) {
+    if (length-- === 0) break;
+    end += char.length;
+  }
+  return capturePrefix(text, end);
+}
+
+async function emitBucket(options: Options, session: Session, hour: string, bucket: Bucket, messages: Iterable<Message>) {
+  const app = session.provider === "claude" ? "claude-code" : "codex";
+  const name = session.provider === "claude" ? "Claude Code" : "Codex";
+  const repo = repoRoot(session.cwd);
+  const ref = `${session.id}#${new Date(Number(hour)).toISOString()}`;
+  let body = "", firstUser: string | undefined, start = 0, end = 0;
+  const flush = async () => {
+    const part = bucket.part + 1;
+    const record: RecordV1 = {
+      id: ulid(), schema: 1, device: options.device, source: session.provider === "claude" ? "claude_code.session" : "codex.session",
+      source_ref: part === 1 ? ref : `${ref}#${part}`,
+      kind: "span", t_start: toLocalIso(start), t_end: toLocalIso(end),
+      context: { app, cwd: session.cwd, repo }, title: clampTitle(`${name} · ${path.basename(repo ?? session.cwd ?? "未知项目")} · ${firstUser ?? "AI 回复"}`),
+      body, capture: { method: "file" }, sensitivity: "normal",
+    };
+    if (!validateRecord(record).ok) throw new Error("记录不符合契约");
+    await options.onRecord?.(record);
+    bucket.part = part;
+    body = ""; firstUser = undefined;
+  };
+  for (const message of messages) {
+    let text = message.text;
+    if (message.role === "assistant" && text.length > 4000) {
+      const prefix = shorten(text, 4000);
+      if (prefix.length < text.length) text = prefix + TRUNCATED;
+    }
+    let rendered = `[${message.role === "user" ? "我" : "AI"}] ${text}`;
+    if (rendered.length > BODY_LIMIT) rendered = capturePrefix(rendered, BODY_LIMIT - TRUNCATED.length) + TRUNCATED;
+    if (body && body.length + 2 + rendered.length > BODY_LIMIT) await flush();
+    if (!body) start = message.time;
+    end = message.time;
+    if (firstUser === undefined && message.role === "user") firstUser = shorten(message.text, 40);
+    body += body ? "\n\n" + rendered : rendered;
+  }
+  if (body) await flush();
+}
 
 export async function collect(options: Options): Promise<State> {
+  let buffer: ReturnType<typeof messageBuffer> | undefined;
+  try { return await collectSessions(options, () => buffer ??= messageBuffer()); }
+  finally { buffer?.close(); }
+}
+
+async function collectSessions(options: Options, getBuffer: () => ReturnType<typeof messageBuffer>): Promise<State> {
   const now = options.now ?? Date.now();
   const initialSince = options.since ?? now - 7 * 86400_000;
   const state: State = options.state ? structuredClone(options.state) : { version: 2, since: initialSince, replaySince: initialSince, files: {}, sessions: {} };
@@ -70,7 +101,7 @@ export async function collect(options: Options): Promise<State> {
     for (const session of Object.values(state.sessions)) if (Array.isArray(session.seen)) session.seen = { [Math.floor(now / HOUR) * HOUR]: session.seen };
   }
   if (state.version !== 2 || !Number.isFinite(state.since) || !Number.isFinite(state.replaySince)) throw new Error("不支持的 checkpoint 格式");
-  let damaged = 0;
+  let damaged = 0, parsed = 0, unrecognized = 0, unrecognizedFile = false;
   for (const file of Object.keys(state.files)) if (!fs.existsSync(file)) delete state.files[file];
   const roots: [Provider, string][] = [
     ["claude", path.join(options.claudeDir ?? process.env.RA_CLAUDE_DIR ?? path.join(os.homedir(), ".claude"), "projects")],
@@ -82,6 +113,16 @@ export async function collect(options: Options): Promise<State> {
   const rescan = options.state !== undefined && options.since !== undefined;
   const floor = rescan ? options.since! : Math.max(state.since, state.replaySince);
   const seen = new Map<string, Set<string>>();
+  const bucketIds = new Map<Bucket, number>();
+  const add = (bucket: Bucket, message: Message, hash: string | null) => {
+    let id = bucketIds.get(bucket);
+    if (id === undefined) { id = bucketIds.size; bucketIds.set(bucket, id); }
+    getBuffer().add(id, message, hash);
+  };
+  for (const session of Object.values(state.sessions)) for (const bucket of Object.values(session.buckets)) {
+    for (const message of bucket.messages) add(bucket, message, null);
+    bucket.messages = [];
+  }
   for (const [provider, root] of roots) for (const file of walk(root)) {
     // Claude 的子 Agent 日志不是用户直接参与的会话。
     if (provider === "claude" && file.split(path.sep).includes("subagents")) continue;
@@ -93,33 +134,36 @@ export async function collect(options: Options): Promise<State> {
     const progress: FileProgress = reset ? { offset: 0, mtime: stat.mtimeMs, size: stat.size, identity, session: old?.session ?? null, cwd: old?.cwd ?? null } : { ...old };
     // 未修改文件不读取，但仍在下面检查它的待关闭桶。
     if (reset || stat.size !== old?.size || stat.mtimeMs !== old?.mtime) {
+      let fileParsed = 0, fileUnknown = 0;
       for await (const line of readEvents(file, progress.offset, stat.size)) {
         progress.offset = line.end;
         if (line.damaged) { damaged++; continue; }
         const event = line.event;
-        if (!event) continue;
-        const id = provider === "claude" ? event.sessionId ?? path.basename(file, ".jsonl") : event.type === "session_meta" ? event.payload?.id : null;
+        if (event === undefined) continue;
+        const id = provider === "claude" && event ? event.sessionId ?? path.basename(file, ".jsonl") : event?.type === "session_meta" ? event.payload?.id : null;
         if (typeof id === "string" && id) progress.session = `${provider}:${id}`;
-        if (!progress.session) continue;
+        const result = parseSessionEvent(event, provider, !!progress.session);
+        fileParsed++;
+        if (!result.recognized) fileUnknown++;
+        if (!progress.session || !event) continue;
         const session = state.sessions[progress.session] ??= { provider, id: progress.session.slice(provider.length + 1), cwd: progress.cwd ?? null, seen: {}, buckets: {}, mtime: stat.mtimeMs };
         const cwd = provider === "claude" ? event.cwd : event.type === "session_meta" ? event.payload?.cwd : null;
         if (typeof cwd === "string") session.cwd = cwd;
         progress.cwd = session.cwd;
-        const time = Date.parse(event.timestamp);
-        if (!Number.isFinite(time) || time < floor) continue;
-        const visible = visibleMessage(event, provider);
-        if (!visible) continue;
-        session.lastActivity = Math.max(session.lastActivity ?? session.mtime, time);
-        const hash = createHash("sha256").update(JSON.stringify([time, visible.role, visible.text])).digest("hex");
+        const message = result.message;
+        if (!message || message.time < floor) continue;
+        session.lastActivity = Math.max(session.lastActivity ?? session.mtime, message.time);
+        const hash = createHash("sha256").update(JSON.stringify([message.time, message.role, message.text])).digest("hex");
         let known = seen.get(progress.session);
         if (!known) { known = new Set(Object.values(session.seen).flat()); seen.set(progress.session, known); }
         if (known.has(hash)) continue;
-        known.add(hash);
-        const hour = String(Math.floor(time / HOUR) * HOUR);
-        (session.seen[hour] ??= []).push(hash);
+        const hour = String(Math.floor(message.time / HOUR) * HOUR);
         const bucket = session.buckets[hour] ??= { part: 0, messages: [] };
-        bucket.messages.push({ time, ...visible });
+        add(bucket, message, hash);
       }
+      parsed += fileParsed;
+      unrecognized += fileUnknown;
+      if (fileUnknown >= 20 && fileUnknown === fileParsed) unrecognizedFile = true;
     }
     progress.mtime = stat.mtimeMs; progress.size = stat.size;
     state.files[file] = progress;
@@ -135,45 +179,38 @@ export async function collect(options: Options): Promise<State> {
   const excluded = (options.excludeDirs ?? [path.join(process.env.RA_DATA_DIR ?? path.join(os.homedir(), "Library/Application Support/record-anything"), "distill-work")])
     .flatMap(dir => { const all = [path.resolve(dir)]; try { all.push(fs.realpathSync(dir)); } catch {} return all; });
   const isExcluded = (cwd: string | null) => !!cwd && excluded.some(dir => cwd === dir || cwd.startsWith(dir + path.sep));
-  for (const session of Object.values(state.sessions)) for (const [hour, bucket] of Object.entries(session.buckets).sort(([a], [b]) => Number(a) - Number(b))) {
-    if (isExcluded(session.cwd)) { bucket.messages = []; continue; }
-    if (!bucket.messages.length || !(now > Number(hour) + HOUR + 10 * 60_000 || now - session.mtime >= 30 * 60_000)) continue;
-    const messages = bucket.messages.sort((a, b) => a.time - b.time);
-    const app = session.provider === "claude" ? "claude-code" : "codex";
-    const name = session.provider === "claude" ? "Claude Code" : "Codex";
-    const repo = repoRoot(session.cwd);
-    // 在消息边界拆分；单条过长时把前缀和截断标记也计入正文上限。
-    const pieces: { messages: Message[]; body: string }[] = [];
-    let current: { messages: Message[]; body: string } = { messages: [], body: "" };
-    for (const message of messages) {
-      let text = message.text;
-      if (message.role === "assistant" && Array.from(text).length > 4000) text = shorten(text, 4000) + TRUNCATED;
-      let rendered = `[${message.role === "user" ? "我" : "AI"}] ${text}`;
-      if (rendered.length > BODY_LIMIT) rendered = safePrefix(rendered, BODY_LIMIT - TRUNCATED.length) + TRUNCATED;
-      if (current.messages.length && current.body.length + 2 + rendered.length > BODY_LIMIT) {
-        pieces.push(current); current = { messages: [], body: "" };
-      }
-      if (current.messages.length) current.body += "\n\n";
-      current.body += rendered; current.messages.push(message);
+  const isClosed = (hour: string, session: Session) => now > Number(hour) + HOUR + 10 * 60_000 || now - session.mtime >= 30 * 60_000;
+  // 活动桶要随 checkpoint 保留。超限时在发送任何记录前结束本轮，
+  // runner 保留旧游标，等桶关闭后重读；中途输出会改变分条边界。
+  let pendingBytes = 0, pendingMessages = 0;
+  for (const session of Object.values(state.sessions)) {
+    if (isExcluded(session.cwd)) continue;
+    for (const [hour, bucket] of Object.entries(session.buckets)) {
+      const id = bucketIds.get(bucket);
+      if (id === undefined || isClosed(hour, session)) continue;
+      const size = getBuffer().size(id);
+      pendingBytes += size.bytes;
+      pendingMessages += size.count;
+      if (pendingBytes > PENDING_BYTES || pendingMessages > PENDING_MESSAGES) throw new Error(PENDING_LIMIT);
     }
-    if (current.messages.length) pieces.push(current);
-    for (const piece of pieces) {
-      const firstUser = piece.messages.find(m => m.role === "user");
-      const part = bucket.part + 1;
-      const record: RecordV1 = {
-        id: ulid(), schema: 1, device: options.device, source: session.provider === "claude" ? "claude_code.session" : "codex.session",
-        source_ref: `${session.id}#${new Date(Number(hour)).toISOString()}${part > 1 ? `#${part}` : ""}`,
-        kind: "span", t_start: toLocalIso(piece.messages[0]!.time), t_end: toLocalIso(piece.messages.at(-1)!.time),
-        context: { app, cwd: session.cwd, repo }, title: clampTitle(`${name} · ${path.basename(repo ?? session.cwd ?? "未知项目")} · ${firstUser ? shorten(firstUser.text, 40) : "AI 回复"}`),
-        body: piece.body, capture: { method: "file" }, sensitivity: "normal",
-      };
-      const validation = validateRecord(record);
-      if (!validation.ok) throw new Error(`记录不符合契约：${validation.errors.join("；")}`);
-      options.onRecord?.(record); bucket.part = part;
-    }
-    bucket.messages = [];
   }
   const cutoff = now - RETENTION;
+  for (const session of Object.values(state.sessions)) {
+    const excluded = isExcluded(session.cwd);
+    for (const [hour, bucket] of Object.entries(session.buckets).sort(([a], [b]) => Number(a) - Number(b))) {
+      const id = bucketIds.get(bucket);
+      if (id === undefined) continue;
+      const closed = isClosed(hour, session);
+      const buffer = getBuffer();
+      if (!excluded) {
+        if (closed) await emitBucket(options, session, hour, bucket, buffer.messages(id));
+        else bucket.messages = Array.from(buffer.messages(id));
+      }
+      if (Number(hour) + HOUR > cutoff || bucket.messages.length) {
+        for (const { hash } of buffer.hashes(id)) (session.seen[hour] ??= []).push(hash);
+      }
+    }
+  }
   // 已过期的桶不再重放；文件偏移和 cwd 仍保留，休眠会话追加时可直接恢复。
   const replaySince = Math.floor(cutoff / HOUR) * HOUR;
   for (const [key, session] of Object.entries(state.sessions)) {
@@ -186,7 +223,17 @@ export async function collect(options: Options): Promise<State> {
     if (Math.max(session.mtime, session.lastActivity ?? 0) < cutoff && !Object.values(session.buckets).some(bucket => bucket.messages.length)) delete state.sessions[key];
   }
   state.replaySince = Math.max(state.replaySince, replaySince);
-  if (damaged) (options.onWarning ?? console.error)(`跳过 ${damaged} 行损坏数据`);
+  const warnings: SessionWarnings = {};
+  const warn = options.onWarning ?? console.error;
+  if (unrecognizedFile || (unrecognized >= 50 && unrecognized * 2 > parsed)) {
+    warnings.unrecognized = unrecognized;
+    warn(`Claude Code / Codex 会话格式可能已变化，有 ${unrecognized} 行没有识别`);
+  }
+  if (damaged) {
+    warnings.damaged = damaged;
+    warn(`跳过 ${damaged} 行损坏数据`);
+  }
+  if (warnings.unrecognized || warnings.damaged) options.onDiagnostics?.(warnings);
   return state;
 }
 
@@ -196,10 +243,18 @@ if (import.meta.main) {
     if (args.since && !Number.isFinite(args.since.getTime())) throw new Error("--since 必须是有效的 RFC3339 时间");
     // runner 首次运行也会传 --state，文件还不存在，按首次运行处理；文件存在但损坏时明确失败，不能默默当成首次运行导致增量丢失。
     const state = args.stateFile && fs.existsSync(args.stateFile) ? JSON.parse(fs.readFileSync(args.stateFile, "utf8")) as State : undefined;
-    emitCheckpoint(await collect({ device: args.device, since: args.since?.getTime(), state, onRecord: emitRecord }));
+    let sessionWarnings: SessionWarnings | undefined;
+    const checkpoint = await collect({
+      device: args.device, since: args.since?.getTime(), state,
+      onRecord: record => new Promise<void>((resolve, reject) => {
+        process.stdout.write(JSON.stringify({ type: "record", record }) + "\n", error => error ? reject(error) : resolve());
+      }),
+      onDiagnostics: warnings => { sessionWarnings = warnings; },
+    });
+    process.stdout.write(JSON.stringify({ type: "checkpoint", state: checkpoint, sessionWarnings }) + "\n");
   } catch (error) {
     // 不回显日志行、JSON.parse 的片段或文件路径，避免泄露真实数据。
-    console.error(error instanceof Error && /^(?:不支持的 checkpoint|--since|记录不符合契约)/.test(error.message) ? error.message : "读取会话日志或 checkpoint 失败");
+    console.error(error instanceof Error && /^(?:不支持的 checkpoint|--since|记录不符合契约|当前会话待保存内容超过上限)/.test(error.message) ? error.message : "读取会话日志或 checkpoint 失败");
     process.exitCode = 1;
   }
 }

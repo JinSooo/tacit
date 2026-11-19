@@ -13,6 +13,7 @@ const BUSY_RETRY_MS = [250, 500, 1000, 2000, 4000];
 
 export interface PluginSummary {
   failure?: string;
+  warnings?: string[];
   accepted: number; duplicates: number; rejected: number; exitCode: number;
   filtered: number; stateWritten: boolean; protocolErrors: number; released: number; releaseErrors: number;
 }
@@ -118,6 +119,14 @@ export async function runPlugin(options: {
           if (options.sandbox && message.release?.length) throw new Error();
           release = message.release ?? [];
           checkpoint = message.state; hasCheckpoint = true;
+          // 内置会话插件只报告计数，第三方插件或日志内容不能借摘要进入采集端。
+          if (options.name === "agent-sessions" && !options.sandbox) {
+            const { unrecognized, damaged } = message.sessionWarnings ?? {};
+            const warnings: string[] = [];
+            if (Number.isSafeInteger(unrecognized) && unrecognized >= 20) warnings.push(`Claude Code / Codex 会话格式可能已变化，有 ${unrecognized} 行没有识别`);
+            if (Number.isSafeInteger(damaged) && damaged > 0) warnings.push(`跳过 ${damaged} 行损坏数据`);
+            summary.warnings = warnings.length ? warnings : undefined;
+          }
         } else throw new Error();
       } catch { summary.protocolErrors++; }
     }
