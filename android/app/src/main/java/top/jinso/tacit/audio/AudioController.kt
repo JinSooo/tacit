@@ -261,12 +261,20 @@ internal class AudioRuntime private constructor(val context: Context) {
         try { block() } catch (e: Throwable) { report("本地音频处理失败，请检查模型、空间和权限后重试"); throw e }
     }, worker)
     fun closeEngine() { engine?.close(); engine = null; accelerationStatus = "使用 CPU" }
+    /**
+     * Called on the microphone thread. Encryption and disk writes happen on the worker so a slow write
+     * can never stall AudioRecord and drop audio; the caller may reuse [pcm] as soon as this returns.
+     */
     fun captured(pcm: ShortArray, start: Long, token: Long, final: Boolean = false) {
-        synchronized(lock) {
-            if (token != generation || (!requested && !final) || !allowed()) return
-            store.add(pcm, start)
+        if (token != generation || (!requested && !final) || !allowed()) return
+        val copy = pcm.copyOf()
+        submit {
+            try {
+                // A discard (generation bump) or pause queued after capture still wins.
+                synchronized(lock) { if (token == generation && allowed()) store.add(copy, start) }
+            } finally { copy.fill(0) }
+            schedule()
         }
-        schedule()
     }
     fun schedule() {
         if (!queued.compareAndSet(false, true)) return

@@ -29,7 +29,7 @@ class AudioQueriesDeviceTest {
         }
         store.index.getJSONArray("speakers").put(JSONObject().put("id", "voice").put("segments", 20)
             .put("seconds", 20.0).put("vector", JSONArray(listOf(1f, 0f))))
-        store.save()
+        store.commit(store.clips(), store.speakers())
     }
     private fun stable(file: File, action: () -> Unit) {
         // A fixed old timestamp avoids sleeps and filesystem timestamp-resolution races.
@@ -75,11 +75,10 @@ class AudioQueriesDeviceTest {
         assertEquals(1, store.speakers().single().getJSONArray("conversations").length())
         stable(file) { read.listConversations(); read.listClips(); read.listSpeakers() }
         val expired = store.clips().first()
-        expired.put("start", System.currentTimeMillis() - 8 * 86_400_000L); store.save()
-        val beforeExpiry = file.readBytes()
+        expired.put("start", System.currentTimeMillis() - 8 * 86_400_000L); store.saveClip(expired)
         assertEquals(1, read.listClips().size)
         assertFalse(store.exists(expired.getString("id")))
-        assertFalse(beforeExpiry.contentEquals(file.readBytes()))
+        assertFalse(File(file.parentFile, "${expired.getString("id")}.meta.enc").exists())
         assertEquals(conversation.recordIds, read.listConversations().single().recordIds)
         stable(file) { read.listClips(); read.listSpeakers(); read.listConversations() }
         val reloaded = EncryptedAudioStore(context)

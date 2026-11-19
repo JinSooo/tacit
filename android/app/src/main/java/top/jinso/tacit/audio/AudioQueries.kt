@@ -10,12 +10,12 @@ internal class AudioQueries(private val store: EncryptedAudioStore, private val 
             it.getBoolean("analyzed"), it.optString("conversation").takeIf(String::isNotEmpty)) }
     }
     fun listConversations(): List<AudioConversation> {
-        if (ledger.prepare()) store.save()
+        ledger.prepare()
         return ledger.listConversations()
     }
     fun listSpeakers(includeIgnored: Boolean = false): List<AudioSpeaker> {
         store.prune(retentionDays())
-        if (ledger.prepare()) store.save()
+        ledger.prepare()
         return store.speakers().filter {
             (includeIgnored || !it.optBoolean("ignored")) && (it.optBoolean("me") || it.optString("name").isNotEmpty() ||
                 (includeIgnored && it.optBoolean("ignored")) ||

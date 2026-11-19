@@ -97,11 +97,18 @@ class AudioRecorderService : Service() {
             runtime.report("正在录音，音频已加密保存")
             runtime.schedule()
             var lastRevision = silence.revision
-            while (running && runtime.requested && token == runtime.generation && runtime.allowed()) {
-                if (Build.VERSION.SDK_INT >= 29) input.activeRecordingConfiguration?.let { silence.update(it.isClientSilenced) }
+            // The registered callback reports silencing as it happens. Polling the configuration is a
+            // cross-process call, so it and the preference-backed permission check run about once a second.
+            var reads = 0
+            var allowed = true
+            while (running && runtime.requested && token == runtime.generation && allowed) {
+                val poll = reads++ % POLL_EVERY_READS == 0
+                if (poll) {
+                    allowed = runtime.allowed()
+                    if (Build.VERSION.SDK_INT >= 29) input.activeRecordingConfiguration?.let { silence.update(it.isClientSilenced) }
+                }
                 val n = input.read(block, 0, minOf(block.size, segment.size - used), AudioRecord.READ_BLOCKING)
                 if (n < 0) { if (!running) break else error("AudioRecord read failed") }
-                if (Build.VERSION.SDK_INT >= 29) input.activeRecordingConfiguration?.let { silence.update(it.isClientSilenced) }
                 if (silence.drop(lastRevision)) {
                     block.fill(0); segment.fill(0); used = 0; needsTimestamp = true
                     if (runtime.silenced != silence.silenced) {
@@ -139,6 +146,7 @@ class AudioRecorderService : Service() {
             stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
         }
     }
+    private companion object { const val POLL_EVERY_READS = 10 }
     override fun onDestroy() {
         running = false
         runCatching { recorder?.stop() }

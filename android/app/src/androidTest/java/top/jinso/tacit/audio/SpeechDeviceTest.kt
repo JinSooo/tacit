@@ -42,7 +42,7 @@ class SpeechDeviceTest {
             val old=store.add(pcm,System.currentTimeMillis()-8*86400000L)
             val fresh=store.add(pcm,System.currentTimeMillis())
             assertTrue(store.pcm(fresh).all{kotlin.math.abs(it-12345/32768f)<.0001f})
-            assertFalse(File(context.noBackupFilesDir,"audio/index.enc").readBytes().toString(Charsets.UTF_8).contains(fresh))
+            assertFalse(File(context.noBackupFilesDir,"audio/$fresh.meta.enc").readBytes().toString(Charsets.UTF_8).contains("samples"))
             store.prune(7);assertFalse(store.exists(old));assertTrue(store.exists(fresh))
             store.clips().first().getJSONArray("utterances").put(org.json.JSONObject().put("record","test-record"));store.save()
             store.deleteRecord("test-record");assertFalse(store.exists(fresh));assertTrue(store.clips().isEmpty())

@@ -31,15 +31,55 @@ internal class EncryptedAudioStore(context: Context) {
     }
     private val indexFile = File(dir, "index.enc")
     private var loaded: JSONObject? = null
-    val index: JSONObject get() = loaded ?: (if (indexFile.exists() || File(dir, "index.enc.bak").exists()) {
-        val plain = read(indexFile)
-        try { JSONObject(String(plain, Charsets.UTF_8)) } finally { plain.fill(0) }
-    } else JSONObject().put("clips", JSONArray()).put("speakers", JSONArray()))
-        .also { loaded = it }
-    fun save() {
-        val plain = index.toString().toByteArray(Charsets.UTF_8)
+    /**
+     * In memory the index keeps every clip under "clips" and every voice under "speakers". On disk only
+     * conversations and transcripts live in index.enc; each clip is `<id>.meta.enc` and each voice is
+     * `<id>.speaker.enc`, so a save costs the same no matter how long recording has run.
+     */
+    val index: JSONObject get() = loaded ?: load().also { loaded = it }
+    private fun load(): JSONObject {
+        val head = if (indexFile.exists() || File(dir, "index.enc.bak").exists()) {
+            val plain = read(indexFile)
+            try { JSONObject(String(plain, Charsets.UTF_8)) } finally { plain.fill(0) }
+        } else JSONObject()
+        // Older layouts kept clips and voices inside index.enc. Item files are written before the head,
+        // so a crash in between replays the migration.
+        val legacyClips = head.optJSONArray("clips")?.objects()?.filter { exists(it.getString("id")) }
+        val legacySpeakers = head.optJSONArray("speakers")?.objects()
+        legacyClips?.forEach { compactClip(it); writeItem(META, it) }
+        legacySpeakers?.forEachIndexed { n, it -> compactVector(it); if (!it.has("order")) it.put("order", n); writeItem(SPEAKER, it) }
+        if (legacyClips != null || legacySpeakers != null) writeHead(head)
+        val clips = items(META).filter { clip ->
+            exists(clip.getString("id")).also { if (!it) removeMeta(clip.getString("id")) }
+        }.sortedBy { it.getLong("start") }
+        val speakers = items(SPEAKER).sortedWith(compareBy({ it.optLong("order") }, { it.getString("id") }))
+        return head.put("clips", JSONArray(clips)).put("speakers", JSONArray(speakers))
+    }
+    private fun items(suffix: String): List<JSONObject> = checkNotNull(dir.listFiles())
+        .filter { it.name.endsWith(suffix) }.map { file ->
+            val plain = read(file)
+            try { JSONObject(String(plain, Charsets.UTF_8)) } finally { plain.fill(0) }
+        }
+    /** Persists the head plus the listed clips. Clips that did not change are never rewritten. */
+    fun save(vararg clips: JSONObject) = commit(clips.toList())
+    fun commit(clips: Collection<JSONObject> = emptyList(), speakers: Collection<JSONObject> = emptyList()) {
+        writeHead(index)
+        clips.forEach { writeItem(META, it) }
+        saveSpeakers(speakers)
+    }
+    fun saveClip(clip: JSONObject) = writeItem(META, clip)
+    fun saveSpeakers(speakers: Collection<JSONObject>) = speakers.forEach { writeItem(SPEAKER, it) }
+    private fun writeHead(source: JSONObject) {
+        val names = source.keys().asSequence().filter { it != "clips" && it != "speakers" }.toList().toTypedArray()
+        val plain = JSONObject(source, names).toString().toByteArray(Charsets.UTF_8)
         try { write(indexFile, plain) } finally { plain.fill(0) }
     }
+    private fun writeItem(suffix: String, item: JSONObject) {
+        val plain = item.toString().toByteArray(Charsets.UTF_8)
+        try { write(itemFile(item.getString("id"), suffix), plain) } finally { plain.fill(0) }
+    }
+    private fun compactClip(clip: JSONObject) = clip.optJSONArray("utterances")?.objects()?.forEach(::compactVector)
+    private fun compactVector(row: JSONObject) { row.vectorOrNull("vector")?.let { row.putVector("vector", it) } }
     fun clips(): List<JSONObject> = index.getJSONArray("clips").objects()
     fun speakers(): List<JSONObject> = index.getJSONArray("speakers").objects()
     fun transcripts(): List<JSONObject> = index.optJSONArray("transcripts")?.objects().orEmpty()
@@ -49,11 +89,14 @@ internal class EncryptedAudioStore(context: Context) {
         val bytes = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
         samples.forEach { bytes.putShort(it) }
         try { write(file(id), bytes.array()) } finally { bytes.array().fill(0) }
-        index.getJSONArray("clips").put(JSONObject().put("id", id).put("start", start)
-            .put("samples", samples.size).put("analyzed", false).put("utterances", JSONArray()))
-        save()
+        val clip = JSONObject().put("id", id).put("start", start)
+            .put("samples", samples.size).put("analyzed", false).put("utterances", JSONArray())
+        index.getJSONArray("clips").put(clip)
+        writeItem(META, clip)
         return id
     }
+    /** A microphone clip without any voice has nothing to keep; remove its audio and metadata right away. */
+    fun discard(clipId: String) = erase(setOf(clipId)) { false }
     fun pcm(id: String): FloatArray {
         val bytes = read(file(id))
         try {
@@ -68,12 +111,9 @@ internal class EncryptedAudioStore(context: Context) {
         // An unfinished legacy import has no committed recording.
         val original = clips()
         val keep = original.filterNot { it.optBoolean("pendingImport") || AudioPolicy.expired(it.getLong("start"), now, days) }
+        // Published text lives in the head, not in retained PCM metadata, so dropping clip files is enough.
+        if (keep.size != original.size) index.put("clips", JSONArray(keep))
         removeUnindexedPcm(keep.map { it.getString("id") }.toSet())
-        // Published text lives in a separate encrypted collection, not in retained PCM metadata.
-        if (keep.size != original.size) {
-            index.put("clips", JSONArray(keep))
-            save()
-        }
     }
     fun deleteRecord(recordId: String, matchRef: (String) -> Boolean = { false }) {
         val transcriptClips = transcripts().filter { it.getString("recordId") == recordId }
@@ -102,7 +142,7 @@ internal class EncryptedAudioStore(context: Context) {
     private fun removeUnindexedPcm(retained: Set<String>) {
         val files = checkNotNull(dir.listFiles())
         files.filter {
-            val id = it.name.substringBefore(".pcm.enc", "")
+            val id = it.name.substringBefore(".pcm.enc", "").ifEmpty { it.name.substringBefore(META, "") }
             id.isNotEmpty() && id !in retained
         }.forEach { check(it.delete()) { "Audio cleanup failed" } }
     }
@@ -112,18 +152,22 @@ internal class EncryptedAudioStore(context: Context) {
         val retainedText = transcripts().filterNot(removeTranscript)
         if (clipIds.isEmpty() && retainedText.size == transcripts().size) return
         clipIds.forEach(::removePcm)
-        loaded = JSONObject(previous.toString())
+        // Only top-level arrays are replaced, so a shallow copy is enough to roll back on a failed write.
+        val names = previous.keys().asSequence().toList().toTypedArray()
+        loaded = JSONObject(previous, names)
             .put("clips", JSONArray(clips().filterNot { it.getString("id") in clipIds }))
             .put("transcripts", JSONArray(retainedText))
-        try { save() } catch (error: Exception) {
+        try { writeHead(index) } catch (error: Exception) {
             loaded = previous
             throw error
         }
+        clipIds.forEach(::removeMeta)
     }
 
-    private fun removePcm(id: String) {
-        val pcm = file(id)
-        listOf(pcm, File(pcm.path + ".bak"), File(pcm.path + ".new")).forEach {
+    private fun removePcm(id: String) = removeAtomic(file(id))
+    private fun removeMeta(id: String) = removeAtomic(itemFile(id, META))
+    private fun removeAtomic(target: File) {
+        listOf(target, File(target.path + ".bak"), File(target.path + ".new")).forEach {
             if (it.exists()) check(it.delete()) { "Audio cleanup failed" }
         }
     }
@@ -134,13 +178,20 @@ internal class EncryptedAudioStore(context: Context) {
         loaded = JSONObject().put("clips", JSONArray()).put("speakers", JSONArray())
             .put("transcripts", text).put("conversations", groups)
         save()
-        dir.listFiles()?.filter { it.name.endsWith(".pcm.enc") || it.name.endsWith(".pcm.enc.bak") }
+        dir.listFiles()?.filter { f -> listOf(".pcm.enc", META, SPEAKER).any { f.name.endsWith(it) || f.name.endsWith("$it.bak") } }
             ?.forEach { check(it.delete()) { "Audio cleanup failed" } }
     }
     private fun file(id: String): File {
         require(Regex("[a-f0-9-]{36}").matches(id))
         return File(dir, "$id.pcm.enc")
     }
+    private fun itemFile(id: String, suffix: String): File {
+        require(Regex("[A-Za-z0-9-]{1,64}").matches(id)) { "Invalid audio item id" }
+        return File(dir, "$id$suffix")
+    }
+    /** Writes an encrypted file exactly as the store does; only for migration tests that need a layout-1 index. */
+    @androidx.annotation.VisibleForTesting
+    internal fun writeLegacyIndex(plain: ByteArray) { loaded = null; write(indexFile, plain) }
     private fun write(file: File, plain: ByteArray) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key)
@@ -164,3 +215,22 @@ internal class EncryptedAudioStore(context: Context) {
 }
 internal fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 internal fun JSONArray.vector(): FloatArray = FloatArray(length()) { getDouble(it).toFloat() }
+private const val META = ".meta.enc"
+private const val SPEAKER = ".speaker.enc"
+
+/** Vectors are stored as base64 little-endian float32: about a quarter of the decimal JSON size and no float formatting. */
+internal fun JSONObject.putVector(name: String, vector: FloatArray): JSONObject {
+    val bytes = ByteBuffer.allocate(vector.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+    vector.forEach { bytes.putFloat(it) }
+    return put(name, java.util.Base64.getEncoder().encodeToString(bytes.array()))
+}
+/** Reads either the compact form or the legacy decimal JSON array. */
+internal fun JSONObject.vectorOrNull(name: String): FloatArray? = when (val value = opt(name)) {
+    is JSONArray -> value.vector()
+    is String -> {
+        val buf = ByteBuffer.wrap(java.util.Base64.getDecoder().decode(value)).order(ByteOrder.LITTLE_ENDIAN)
+        FloatArray(buf.remaining() / 4) { buf.float }
+    }
+    else -> null
+}
+internal fun JSONObject.vectorAt(name: String): FloatArray = requireNotNull(vectorOrNull(name)) { "Missing vector $name" }

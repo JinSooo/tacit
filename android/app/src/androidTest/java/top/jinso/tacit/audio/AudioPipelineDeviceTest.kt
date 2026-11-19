@@ -31,13 +31,13 @@ class AudioPipelineDeviceTest {
     private fun add(store: EncryptedAudioStore, time: Long, me: Boolean = false, seconds: Int = 1) =
         store.add(ShortArray(SAMPLE_RATE * seconds) { if (me) 2 else 1 }, time)
     private fun meId(store: EncryptedAudioStore) = store.speakers().first {
-        it.getJSONArray("vector").getDouble(1) > .9 }.getString("id")
+        it.vectorAt("vector")[1] > .9 }.getString("id")
 
     private fun seedMe(store: EncryptedAudioStore) {
         store.index.getJSONArray("speakers").put(JSONObject().put("id", "seed-me").put("me", true)
             .put("vector", JSONArray(listOf(0f, 1f))).put("seconds", 0.0).put("segments", 0)
             .put("conversations", JSONArray()))
-        store.save()
+        store.saveSpeakers(store.speakers())
     }
 
     @Test fun laterMeBackfillsEarlierClipOnlyInSameConversationWithStableNames() = isolated { store, context ->
@@ -155,6 +155,72 @@ class AudioPipelineDeviceTest {
         ledger.ignore(id, false); ledger.markMe(id)
         AudioProcessor(store, Any(), speech).drain({ false }) { error("Paused") }
         assertEquals(0, speech.calls)
+    }
+
+    // Regression: one index held every clip and was rewritten in full several times per 30 s clip,
+    // so CPU grew with recording time (about 9% of a core after 2 h on the Xiaomi 14 Ultra).
+    @Test fun savingOneClipNeverRewritesTheOthers() = isolated { store, context ->
+        val t = System.currentTimeMillis() - 3_600_000
+        val speech = FakeSpeech()
+        fun run() = AudioProcessor(store, Any(), speech).drain({ true }) { error("No me: must not publish") }
+        val dir = File(context.noBackupFilesDir, "audio")
+        fun metas() = dir.listFiles { f -> f.name.endsWith(".meta.enc") }!!.toList()
+        add(store, t); run()
+        val head = File(dir, "index.enc").length()
+        repeat(40) { add(store, t + (it + 1) * 30_000L) }; run()
+        assertTrue("Head must not grow with clips", File(dir, "index.enc").length() < head + 512)
+        assertEquals(41, metas().size)
+        val old = 1_600_000_000_000L
+        metas().forEach { assertTrue(it.setLastModified(old)) }
+        val fresh = add(store, t + 41 * 30_000L); run()
+        assertEquals(listOf(fresh), metas().filter { it.lastModified() != old }.map { it.name.removeSuffix(".meta.enc") })
+        val reloaded = EncryptedAudioStore(context)
+        assertEquals(42, reloaded.clips().size)
+        assertTrue(reloaded.clips().all { it.getBoolean("analyzed") && it.getJSONArray("utterances").length() == 1 })
+    }
+
+    // Regression: clips with no voice were kept for the whole retention period (about 2.7 GB a day).
+    @Test fun silentMicrophoneClipIsDeletedOnceAnalyzed() = isolated { store, context ->
+        val silent = add(store, System.currentTimeMillis() - 60_000)
+        val voiced = add(store, System.currentTimeMillis() - 30_000, me = true)
+        val voice = FakeSpeech()
+        // Samples of value 1 stand for silence, value 2 for a voice.
+        val processor = AudioProcessor(store, Any(), object : SpeechEngine by voice {
+            override fun segments(pcm: FloatArray) = if (pcm[0] > 0.00005f) voice.segments(pcm) else emptyList()
+        })
+        processor.drain({ true }) { error("No me: must not publish") }
+        assertFalse(store.exists(silent)); assertTrue(store.exists(voiced))
+        assertEquals(listOf(voiced), store.clips().map { it.getString("id") })
+        val dir = File(context.noBackupFilesDir, "audio")
+        assertFalse(File(dir, "$silent.meta.enc").exists())
+        assertEquals(listOf(voiced), EncryptedAudioStore(context).clips().map { it.getString("id") })
+    }
+
+    @Test fun layoutOneIndexMigratesIntoClipFilesOnce() = isolated { store, context ->
+        val id = add(store, System.currentTimeMillis() - 60_000)
+        val dir = File(context.noBackupFilesDir, "audio")
+        val metaFile = File(dir, "$id.meta.enc")
+        assertTrue(metaFile.delete())
+        val legacy = JSONObject()
+            .put("clips", JSONArray().put(JSONObject().put("id", id).put("start", 1L).put("samples", SAMPLE_RATE)
+                .put("analyzed", true).put("utterances", JSONArray().put(JSONObject().put("start", 0)
+                    .put("length", SAMPLE_RATE).put("speaker", "s").put("vector", JSONArray(listOf(0.25f, 0.5f)))))))
+            .put("speakers", JSONArray().put(JSONObject().put("id", "s").put("vector", JSONArray(listOf(0f, 1f)))
+                .put("seconds", 1.0).put("segments", 1).put("conversations", JSONArray())))
+            .put("clips_layout_probe", true)
+        store.writeLegacyIndex(legacy.toString().toByteArray())
+        val migrated = EncryptedAudioStore(context)
+        assertEquals(listOf(id), migrated.clips().map { it.getString("id") })
+        assertTrue(metaFile.exists())
+        val row = migrated.clips().single().getJSONArray("utterances").getJSONObject(0)
+        assertTrue(row.get("vector") is String)
+        assertArrayEquals(floatArrayOf(0.25f, 0.5f), row.vectorAt("vector"), 0f)
+        assertArrayEquals(floatArrayOf(0f, 1f), migrated.speakers().single().vectorAt("vector"), 0f)
+        // The head no longer lists clips or voices: without their files nothing brings them back.
+        assertTrue(metaFile.delete()); assertTrue(File(dir, "s.speaker.enc").delete())
+        assertTrue(EncryptedAudioStore(context).clips().isEmpty())
+        assertTrue(EncryptedAudioStore(context).speakers().isEmpty())
+        assertTrue(EncryptedAudioStore(context).index.optBoolean("clips_layout_probe"))
     }
 
     @Test fun policyRevokedDuringAsrCannotPersistOrPublishReturnedText() = isolated { store, _ ->

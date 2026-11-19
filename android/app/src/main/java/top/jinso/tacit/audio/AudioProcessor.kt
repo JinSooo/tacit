@@ -22,12 +22,18 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
     fun drain(allowed: () -> Boolean, publish: (AudioPublication) -> String?) {
         val ledger = AudioLedger(store)
         val clips = synchronized(lock) {
-            if (ledger.prepare()) store.save()
+            ledger.prepare()
             store.clips().filter { microphoneClip(it) && store.exists(it.getString("id")) }.sortedBy { it.getLong("start") }
         }
         for (clip in clips) {
             if (!allowed()) return
-            if (clip.getBoolean("analyzed")) continue
+            if (clip.getBoolean("analyzed")) {
+                // Clips analyzed before silent audio was dropped at analysis time.
+                if (clip.getJSONArray("utterances").length() == 0) synchronized(lock) {
+                    if (store.exists(clip.getString("id"))) store.discard(clip.getString("id"))
+                }
+                continue
+            }
             val pcm = synchronized(lock) {
                 val id = clip.getString("id")
                 if (store.exists(id)) store.pcm(id) else null
@@ -36,24 +42,32 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
             try {
                 synchronized(lock) {
                     if (!allowed() || !store.exists(clip.getString("id"))) return
+                    // Only conversations with a voice are worth keeping; silence never waits out the retention period.
+                    if (spans.isEmpty()) { store.discard(clip.getString("id")); return@synchronized }
                     val utterances = JSONArray()
+                    val voices = mutableSetOf<JSONObject>()
                     for (span in spans) {
                         require(span.start >= 0 && span.start + span.samples.size <= clip.getInt("samples"))
                         val speaker = ledger.assign(span.vector, span.samples.size.toDouble() / SAMPLE_RATE)
+                        voices += speaker
                         utterances.put(JSONObject().put("start", span.start).put("length", span.samples.size)
-                            .put("speaker", speaker.getString("id")).put("vector", JSONArray(span.vector.toList()))
+                            .put("speaker", speaker.getString("id")).putVector("vector", span.vector)
                             .put("done", false))
                     }
                     clip.put("utterances", utterances).put("analyzed", true)
-                    ledger.prepare(); store.save()
+                    ledger.prepare(listOf(clip), voices)
                 }
             } finally { spans.forEach { it.samples.fill(0f) } }
         }
+        // Without a "me" voice nothing is eligible; skip the pass instead of checking every clip.
+        val voice = synchronized(lock) { ledger.meVoice(macVoiceprint) } ?: return
+        val presence = mutableMapOf<String, Boolean>()
+        fun eligible(clip: JSONObject) = ledger.eligible(clip, allowed(), macVoiceprint, voice, presence)
         for (clip in clips) {
             if (!allowed()) return
             val utterances = clip.getJSONArray("utterances").objects()
             if (utterances.all { it.optBoolean("done") }) continue
-            if (!synchronized(lock) { ledger.eligible(clip, allowed(), macVoiceprint) }) continue
+            if (!synchronized(lock) { eligible(clip) }) continue
             if (!clip.optBoolean("textPrepared")) {
                 val pcm = synchronized(lock) {
                     val id = clip.getString("id")
@@ -67,13 +81,13 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
                     }
                 } finally { pcm.fill(0f) }
                 synchronized(lock) {
-                    if (!ledger.eligible(clip, allowed(), macVoiceprint)) return
+                    if (!eligible(clip)) return
                     utterances.zip(texts).forEach { (u, text) -> u.put("text", text) }
-                    clip.put("textPrepared", true); store.save()
+                    clip.put("textPrepared", true); store.saveClip(clip)
                 }
             }
             synchronized(lock) {
-                if (!ledger.eligible(clip, allowed(), macVoiceprint)) return
+                if (!eligible(clip)) return
                 val body = utterances.filter { it.optString("text").isNotBlank() }.joinToString("\n") {
                     "对方 ${ledger.label(clip, it.getString("speaker"))}：${it.getString("text")}"
                 }
@@ -86,7 +100,7 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
                     u.remove("text")
                     u.put("done", true)
                 }
-                store.save()
+                store.save(clip)
             }
         }
     }
