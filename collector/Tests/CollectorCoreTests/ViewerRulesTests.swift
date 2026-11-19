@@ -57,6 +57,8 @@ private func read(_ id: String, tool: String = "claude-code", kind: String = "co
   #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: 0, elapsed: 0.4) == "没有新记录")
   #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: 3, elapsed: 2.7) == "新增 3 条，用时 2 秒")
   #expect(PluginImport.outcomeText(ok: false, exitStatus: 1, accepted: nil, elapsed: 125) == "失败（退出码 1），用时 2 分 5 秒")
+  // 会话格式变化时，“上次运行”要带上告警，不能只显示成功。
+  #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: 0, elapsed: 0.4, warnings: ["Claude Code / Codex 会话格式可能已变化，有 25 行没有识别"]) == "没有新记录；Claude Code / Codex 会话格式可能已变化，有 25 行没有识别")
   #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: nil, elapsed: 180) == "完成，用时 3 分钟")
 }
 

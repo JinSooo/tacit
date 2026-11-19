@@ -142,7 +142,7 @@ public enum PluginImport {
   public static func timeout(since: Date?) -> TimeInterval { since == nil ? 180 : 1800 }
 
   /// 一次运行的状态文字，例如"新增 3 条，用时 2 秒"。不到 1 秒不写耗时。
-  public static func outcomeText(ok: Bool, exitStatus: Int32, accepted: Int?, elapsed: TimeInterval, failure: String? = nil) -> String {
+  public static func outcomeText(ok: Bool, exitStatus: Int32, accepted: Int?, elapsed: TimeInterval, failure: String? = nil, warnings: [String] = []) -> String {
     let head: String
     if !ok {
       let labels = ["sandbox": "当前系统无法隔离此数据源，未执行", "permission": "无权读取来源", "missing_file": "来源文件或程序不存在", "network": "连接失败", "interrupted": "已中断", "storage": "记录保存失败", "protocol": "输出格式无效", "rejected": "记录未通过校验", "cleanup": "缓冲清理失败", "process": "插件进程失败"]
@@ -152,7 +152,10 @@ public enum PluginImport {
     else { head = "完成" }
     let s = Int(elapsed)
     let took = s >= 60 ? (s % 60 == 0 ? "\(s / 60) 分钟" : "\(s / 60) 分 \(s % 60) 秒") : s >= 1 ? "\(s) 秒" : nil
-    return took.map { "\(head)，用时 \($0)" } ?? head
+    let base = took.map { "\(head)，用时 \($0)" } ?? head
+    // 告警由 runner 按计数生成，不含正文；最多显示两条。
+    let notes = warnings.prefix(2).filter { !$0.isEmpty && $0.count <= 80 }
+    return notes.isEmpty ? base : ([base] + notes).joined(separator: "；")
   }
 }
 
