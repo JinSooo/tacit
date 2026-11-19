@@ -23,8 +23,7 @@ final class HubAPI: @unchecked Sendable {
     session = URLSession(configuration: c)
   }
 
-  private func request(_ path: String, query: [String: String?] = [:], method: String = "GET", body: Data? = nil, timeout: TimeInterval? = nil) async throws -> Data {
-    guard let token = tokenProvider() else { throw HubError(message: "找不到后台服务的访问令牌，后台服务可能还没启动过", status: 0) }
+  private func request(_ path: String, query: [String: String?] = [:], method: String = "GET", body: Data? = nil, timeout: TimeInterval? = nil, authenticated: Bool = true) async throws -> Data {
     var c = URLComponents(url: base, resolvingAgainstBaseURL: false)!
     c.path = path
     let items = query.compactMap { k, v in v.map { URLQueryItem(name: k, value: $0) } }
@@ -36,7 +35,10 @@ final class HubAPI: @unchecked Sendable {
     var r = URLRequest(url: c.url!)
     r.httpMethod = method
     if let timeout { r.timeoutInterval = timeout }
-    r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    if authenticated {
+      guard let token = tokenProvider() else { throw HubError(message: "找不到后台服务的访问令牌，后台服务可能还没启动过", status: 0) }
+      r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
     if let body { r.httpBody = body; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     let data: Data, response: URLResponse
     do { (data, response) = try await session.data(for: r) }
@@ -48,6 +50,18 @@ final class HubAPI: @unchecked Sendable {
       throw HubError(message: msg ?? "请求失败（\(status)）", status: status)
     }
     return data
+  }
+
+  func isReachable() async -> Bool {
+    struct Health: Decodable { let ok: Bool }
+    guard let data = try? await request("/v1/health", timeout: 3, authenticated: false),
+          let health = try? JSONDecoder().decode(Health.self, from: data) else { return false }
+    return health.ok
+  }
+
+  func diagnosticStatus() async -> (reachable: Bool, status: Data?) {
+    guard await isReachable(), !Task.isCancelled else { return (false, nil) }
+    return (true, try? await request("/v1/status", timeout: 3))
   }
 
   /// 中枢网页的状态页地址，和 `bun hub/src/cli.ts open` 一样把 token 放在 hash 里（不会发给服务器）。

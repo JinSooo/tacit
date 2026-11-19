@@ -44,6 +44,7 @@ private struct ReviewDayContent: View {
   @State private var expanded: String?
   @State private var picking = false
   @State private var setup: (health: DistillHealth, tools: [AgentToolState])?
+  @State private var startupMessage: String?
   @Binding var day: Date
   let today: Date
   let now: Date
@@ -92,6 +93,16 @@ private struct ReviewDayContent: View {
         try? await Task.sleep(for: .seconds(60))
       } while !Task.isCancelled
     }
+    .task(id: refresh) {
+      let dataDir = Config.load().dataDir
+      while !Task.isCancelled {
+        let message = DiagnosticSummary.startupMessage(in: dataDir)
+        let reachable = message == nil ? true : await store.api.isReachable()
+        guard !Task.isCancelled else { return }
+        startupMessage = reachable ? nil : message
+        try? await Task.sleep(for: .seconds(5))
+      }
+    }
   }
 
   private var compactList: some View {
@@ -121,9 +132,19 @@ private struct ReviewDayContent: View {
       if let stats {
         stats.frame(maxWidth: .infinity, alignment: .trailing)
       }
-      headline
-      if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools) }
-      if !store.pending.isEmpty { TimelinePendingLine() }
+      if startupMessage == nil || hasSegments { headline }
+      if let startupMessage {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+          Text(startupMessage).foregroundStyle(Palette.attention)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 0)
+          OpenLogsButton().buttonStyle(.accentLink).fixedSize()
+        }
+        .font(.system(size: TextSize.body))
+      } else {
+        if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools) }
+        if !store.pending.isEmpty { TimelinePendingLine() }
+      }
     }
   }
 

@@ -348,6 +348,7 @@ struct MaintenanceSettingsView: View {
         SettingsRow("运行记录") {
           Button("打开运行记录") { store.path.append(.runtime) }
         }
+        DiagnosticSettingsRow()
       }
       if !c.pluginsAvailable {
         SettingsMessage(text: "安装不完整，AI 会话和浏览器等数据源暂时不能运行。重新安装 Tacit 就能修好。")
