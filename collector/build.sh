@@ -60,7 +60,7 @@ PLIST
 # ExtensionFoundation needs the Foundation entry point. Keep the Swift @main it dispatches to.
 xcrun --sdk macosx swiftc -target arm64-apple-macosx14.0 -O -application-extension -parse-as-library \
   -Xlinker -e -Xlinker _NSExtensionMain -Xlinker -u -Xlinker _main \
-  Sources/CollectorCore/WidgetSnapshot.swift Sources/Collector/Viewer/Palette.swift Widget/TacitWidget.swift \
+  Sources/CollectorCore/WidgetSnapshot.swift Sources/Collector/Viewer/Palette.swift Widget/DayWidgetView.swift Widget/TacitWidget.swift \
   -o "$WIDGET/Contents/MacOS/TacitWidget"
 mkdir -p "$APP/Contents/Frameworks"
 LIB="vendor/sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib/lib"
