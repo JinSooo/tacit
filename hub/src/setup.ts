@@ -100,6 +100,7 @@ export interface SetupOptions {
   env?: NodeJS.ProcessEnv;
   launchctl?: (args: string[]) => number;
   healthy?: (port: number) => Promise<boolean>;
+  wait?: (ms: number) => Promise<void>;
   shellPath?: () => string[];
   initialize?: () => Promise<void>;
   relocate?: (runtime: string, bun: string, home: string) => string[];
@@ -175,24 +176,37 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     if (before !== text) { writeFileSync(file, text); changed.add(job); }
   }
 
+  const wait = o.wait ?? (ms => Bun.sleep(ms));
   const loaded = (job: Job) => launchctl(["print", `${domain}/${label(job)}`]) === 0;
+  // bootout 返回时旧任务可能还没退完，紧接着 bootstrap 会失败、任务就此没有加载（2026-11-19 升级实测）。
+  const unload = async (job: Job) => {
+    launchctl(["bootout", `${domain}/${label(job)}`]);
+    for (let i = 0; i < 40 && loaded(job); i++) await wait(250);
+  };
+  const load = async (job: Job) => {
+    for (let i = 0; i < 5; i++) {
+      if (launchctl(["bootstrap", domain, join(agents, `${label(job)}.plist`)]) === 0 || loaded(job)) return;
+      await wait(1000);
+    }
+    throw new Error(`后台任务 ${label(job)} 没能加载，请重新打开 Tacit`);
+  };
   const restart = full || changed.has("hub") || changed.has("distill");
-  if (restart) for (const job of ["distill", "hub"] as const) launchctl(["bootout", `${domain}/${label(job)}`]);
+  if (restart) for (const job of ["distill", "hub"] as const) await unload(job);
   if (restart || !loaded("hub")) {
-    launchctl(["bootstrap", domain, join(agents, `${label("hub")}.plist`)]);
+    await load("hub");
     const { port } = resolvePort(env, data);
     const healthy = o.healthy ?? (async (p: number) => {
       for (let i = 0; i < 15; i++) {
         try { if ((await fetch(`http://127.0.0.1:${p}/v1/health`)).ok) return true; } catch {}
-        await Bun.sleep(1000);
+        await wait(1000);
       }
       return false;
     });
     if (!(await healthy(port))) throw new Error(`后台服务没能启动，原因写在 ${join(data, "logs/hub.log")}`);
   }
-  if (distill && (restart || !loaded("distill"))) launchctl(["bootstrap", domain, join(agents, `${label("distill")}.plist`)]);
+  if (distill && (restart || !loaded("distill"))) await load("distill");
   // 先记下已完成，采集端启动后自己再跑一次时就不会重复初始化。
   if (full || previous?.distill !== distill) writePrivate(stampFile, JSON.stringify({ app: o.app, version, distill } satisfies Stamp) + "\n");
-  if (o.install) launchctl(["bootstrap", domain, join(agents, `${label("collector")}.plist`)]);
+  if (o.install) await load("collector");
   return { full, restarted: restart };
 }

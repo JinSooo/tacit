@@ -26,6 +26,7 @@ function fixture() {
     disableFrozen: () => { events.push("frozen"); },
     version: () => version,
     log: () => {},
+    wait: async () => {},
     ...extra,
   });
   return { root, app, home, data, calls, events, run, setVersion: (v: string) => { version = v; },
@@ -107,5 +108,30 @@ test("后台服务没起来时报错，不写完成记录，下次打开重新�
     await expect(f.run({ healthy: async () => false })).rejects.toThrow("后台服务没能启动");
     expect(existsSync(join(f.data, "app-setup.json"))).toBe(false);
     expect((await f.run()).full).toBe(true);
+  } finally { f.cleanup(); }
+});
+
+// 回归：升级后打开时后台还在运行，bootout 后立刻 bootstrap 失败，后台服务从此没有加载（2026-11-19 安装包升级实测）。
+test("后台在运行时重新准备：等旧任务退完再加载，加载失败会重试", async () => {
+  const f = fixture();
+  try {
+    await f.run();
+    f.setVersion("v2");
+    const running = new Set(["hub", "distill"]), tearingDown = new Map<string, number>();
+    const job = (target: string) => target.split("dev.record-anything.")[1]!.replace(".plist", "");
+    const launchctl = (args: string[]) => {
+      const name = job(args.at(-1)!);
+      if (args[0] === "print") {
+        const left = tearingDown.get(name);
+        if (left) { tearingDown.set(name, left - 1); return 0; }
+        return running.has(name) ? 0 : 1;
+      }
+      if (args[0] === "bootout") { running.delete(name); tearingDown.set(name, 2); return 0; }
+      if (tearingDown.get(name)) return 5;
+      running.add(name); return 0;
+    };
+    expect((await f.run({ launchctl })).restarted).toBe(true);
+    expect([...running].sort()).toEqual(["distill", "hub"]);
+    await expect(f.run({ install: true, launchctl: args => args[0] === "bootstrap" ? 5 : args[0] === "print" ? 1 : 0 })).rejects.toThrow("没能加载");
   } finally { f.cleanup(); }
 });

@@ -1,6 +1,7 @@
 // 录音用的本机语音模型：第一次开启录音时下载到数据目录，逐个校验 sha256 后原子替换。
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -33,14 +34,43 @@ export async function sha256(file: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function download(url: string, target: string, fetcher: typeof fetch) {
-  const response = await fetcher(url, { redirect: "follow" });
-  if (!response.ok || !response.body) throw new Error(`下载失败（HTTP ${response.status}）`);
-  await Bun.write(target, response);
+class HttpError extends Error { constructor(readonly status: number) { super(`下载失败（HTTP ${status}）`); } }
+
+/** 断线或服务端出错时从已下载的位置续传，最多 6 次；4xx 不重试。 */
+async function download(url: string, target: string, o: Required<Options>) {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (attempt) await o.wait(Math.min(30_000, 2000 * 2 ** (attempt - 1)));
+    const have = existsSync(target) ? statSync(target).size : 0;
+    try {
+      const response = await o.fetcher(url, { redirect: "follow", headers: have ? { Range: `bytes=${have}-` } : {} });
+      if (have && response.status === 416) return;
+      if (!response.ok || !response.body) throw new HttpError(response.status);
+      const append = have > 0 && response.status === 206;
+      // 逐块写盘：断线时已收到的部分留在文件里，下次从这里续传。
+      const file = await open(target, append ? "a" : "w");
+      try { for await (const chunk of response.body) await file.write(chunk); } finally { await file.close(); }
+      return;
+    } catch (error) {
+      failure = error;
+      if (error instanceof HttpError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status)) break;
+      o.log(`${error instanceof Error ? error.message : "下载中断"}，稍后续传`);
+    }
+  }
+  throw failure instanceof Error ? failure : new Error("下载失败");
+}
+
+export interface Options {
+  fetcher?: typeof fetch;
+  log?: (message: string) => void;
+  models?: Model[];
+  wait?: (ms: number) => Promise<void>;
 }
 
 /** 缺什么下载什么；已有且校验通过的文件不再下载。 */
-export async function ensureAudioModels(dir: string, fetcher: typeof fetch = fetch, log: (m: string) => void = () => {}, models: Model[] = AUDIO_MODELS): Promise<void> {
+export async function ensureAudioModels(dir: string, options: Options = {}): Promise<void> {
+  const o: Required<Options> = { fetcher: fetch, log: () => {}, models: AUDIO_MODELS, wait: ms => Bun.sleep(ms), ...options };
+  const { log, models } = o;
   mkdirSync(dir, { recursive: true });
   const missing: Model[] = [];
   for (const model of models) {
@@ -55,9 +85,10 @@ export async function ensureAudioModels(dir: string, fetcher: typeof fetch = fet
       const staged = join(staging, model.file.replaceAll("/", "_"));
       let ok = false;
       for (const url of model.urls) {
-        try { log(`下载 ${model.file}`); await download(url, staged, fetcher); ok = await sha256(staged) === model.sha256; }
+        try { log(`下载 ${model.file}`); await download(url, staged, o); ok = await sha256(staged) === model.sha256; }
         catch (error) { log(`${model.file}：${error instanceof Error ? error.message : "下载失败"}`); }
         if (ok) break;
+        rmSync(staged, { force: true });
       }
       if (!ok && model.archive) {
         let extracted = archives.get(model.archive.url);
@@ -65,7 +96,7 @@ export async function ensureAudioModels(dir: string, fetcher: typeof fetch = fet
           extracted = join(staging, `archive-${archives.size}`); mkdirSync(extracted);
           const packed = join(staging, `archive-${archives.size}.tar.bz2`);
           log(`下载 ${model.archive.url}`);
-          await download(model.archive.url, packed, fetcher);
+          await download(model.archive.url, packed, o);
           const members = missing.filter(m => m.archive?.url === model.archive!.url).map(m => m.archive!.member);
           const tar = spawnSync("/usr/bin/tar", ["-xjf", packed, "-C", extracted, ...members], { stdio: "ignore" });
           rmSync(packed, { force: true });

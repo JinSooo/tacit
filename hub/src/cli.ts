@@ -65,7 +65,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (command === "audio-models") {
     if (argv.length !== 1) throw new Error("用法：bun hub/src/cli.ts audio-models");
     const [{ ensureAudioModels }, { dataDirOf }] = await Promise.all([import("./audio-models.ts"), import("./hub-json.ts")]);
-    await ensureAudioModels(join(dataDirOf(), "models"), fetch, m => console.log(m));
+    await ensureAudioModels(join(dataDirOf(), "models"), { log: m => console.log(m) });
     return;
   }
   if (command === "keys") {
