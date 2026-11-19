@@ -52,8 +52,10 @@ struct ProjectPage: View {
             .accessibilityAddTraits(.isHeader)
         }
         if let brief {
-          Text(brief).font(.system(size: TextSize.body)).foregroundStyle(Palette.readingBody)
-            .lineSpacing(TextSize.lineSpacing(TextSize.body))
+          // 与时间线当天概述同一样式：页首一句话是这一页的视觉锚点。
+          ReviewHeadline(text: brief, size: TextSize.title)
+            .foregroundStyle(Palette.ink).lineSpacing(TextSize.serifLineSpacing(TextSize.title))
+            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }
       }
       .padding(.horizontal, TimelineReadingLayout.edge)

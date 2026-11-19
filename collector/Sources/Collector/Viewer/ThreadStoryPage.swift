@@ -87,7 +87,7 @@ struct StoryUpdates: View {
             VStack(spacing: 0) {
               ForEach(group.items.reversed()) { item in
                 let key = "\(group.date)/\(item.id)"
-                TimelineSegmentRow(day: day, item: item, showsTitle: false,
+                TimelineSegmentRow(day: day, item: item,
                                    expanded: expandedRecord == key) {
                   expandedRecord = expandedRecord == key ? nil : key
                 }
