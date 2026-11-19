@@ -11,7 +11,7 @@
 | `Contents/MacOS/Tacit` | 菜单栏应用（采集端） |
 | `Contents/MacOS/ra-audio-worker` | 本机转写进程 |
 | `Contents/MacOS/bun` | 后台运行时，保留 Bun 官方签名 |
-| `Contents/PlugIns/TacitWidget.appex` | 中号桌面小组件，与主应用使用同一张证书签名 |
+| `Contents/PlugIns/TacitWidget.appex` | 中号和大号桌面小组件，与主应用使用同一张证书签名 |
 | `Contents/Resources/runtime/` | 后台服务、整理、内置数据源和网页的固定快照 |
 | `Contents/Resources/uninstall.sh` | 卸载脚本 |
 

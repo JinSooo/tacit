@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title description">
+  <title id="title">Tacit 的工作方式</title>
+  <desc id="description">左边是记录来源：AI 会话、微信对话、录音、屏幕与浏览器。中间是在本机整理成时间线、当天概述和事项。右边是两个出口：给你看的时间线、项目页和桌面小组件，给 AI 工具查询和新会话带入。</desc>
+  <style>
+    .bg { fill: #fbfaf7; }
+    .card { fill: #ffffff; stroke: #e7e3dc; }
+    .core { fill: #211f1d; }
+    .h { font: 600 15px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #1c1b1a; }
+    .t { font: 15px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #1c1b1a; }
+    .s { font: 13px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #6e6860; }
+    .label { font: 600 13px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #3b7468; letter-spacing: 1px; }
+    .ct { font: 600 22px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #eeeae3; }
+    .cs { font: 14px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #b7afa5; }
+    .ci { font: 15px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #eeeae3; }
+    .dot { fill: #3b7468; }
+    .cdot { fill: #93cbbd; }
+    .line { stroke: #c9c2b8; stroke-width: 1.5; fill: none; }
+    .arrow { fill: #c9c2b8; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #181716; }
+      .card { fill: #211f1d; stroke: #2f2c29; }
+      .core { fill: #2b2825; }
+      .h, .t { fill: #f2efea; }
+      .s { fill: #a8a197; }
+      .label { fill: #7db8a9; }
+      .dot { fill: #7db8a9; }
+      .line { stroke: #5e5953; }
+      .arrow { fill: #5e5953; }
+    }
+  </style>
+  <rect class="bg" width="1200" height="430" rx="24"/>
+
+  <text class="label" x="48" y="56">记录</text>
+  <g>
+    <rect class="card" x="48" y="74" width="300" height="70" rx="12"/>
+    <circle class="dot" cx="72" cy="101" r="4"/>
+    <text class="t" x="88" y="106">AI 会话</text>
+    <text class="s" x="88" y="128">Claude Code、Codex 里你说的话和结果</text>
+
+    <rect class="card" x="48" y="156" width="300" height="70" rx="12"/>
+    <circle class="dot" cx="72" cy="183" r="4"/>
+    <text class="t" x="88" y="188">微信对话</text>
+    <text class="s" x="88" y="210">默认关闭，开启后按聊天拆成消息</text>
+
+    <rect class="card" x="48" y="238" width="300" height="70" rx="12"/>
+    <circle class="dot" cx="72" cy="265" r="4"/>
+    <text class="t" x="88" y="270">录音</text>
+    <text class="s" x="88" y="292">在本机转写，只分“我”和“对方”</text>
+
+    <rect class="card" x="48" y="320" width="300" height="70" rx="12"/>
+    <circle class="dot" cx="72" cy="347" r="4"/>
+    <text class="t" x="88" y="352">屏幕与浏览器</text>
+    <text class="s" x="88" y="374">只当时间骨架：应用、标题、时长</text>
+  </g>
+
+  <path class="line" d="M348 109 C 390 109, 390 232, 432 232"/>
+  <path class="line" d="M348 191 C 390 191, 390 232, 432 232"/>
+  <path class="line" d="M348 273 C 390 273, 390 232, 432 232"/>
+  <path class="line" d="M348 355 C 390 355, 390 232, 432 232"/>
+  <path class="arrow" d="M432 226 L444 232 L432 238 Z"/>
+
+  <text class="label" x="452" y="56">在本机整理</text>
+  <rect class="core" x="452" y="74" width="296" height="316" rx="16"/>
+  <text class="ct" x="480" y="124">Tacit</text>
+  <text class="cs" x="480" y="152">加密数据库 · 模型由你选择</text>
+  <circle class="cdot" cx="486" cy="203" r="4"/>
+  <text class="ci" x="502" y="208">一天切成连续的活动段</text>
+  <circle class="cdot" cx="486" cy="247" r="4"/>
+  <text class="ci" x="502" y="252">当天概述，约每 3 小时更新</text>
+  <circle class="cdot" cx="486" cy="291" r="4"/>
+  <text class="ci" x="502" y="296">事项跨天接续，记下决定</text>
+  <circle class="cdot" cx="486" cy="335" r="4"/>
+  <text class="ci" x="502" y="340">每条结论都能点回原文</text>
+
+  <path class="line" d="M748 232 C 790 232, 790 150, 832 150"/>
+  <path class="line" d="M748 232 C 790 232, 790 314, 832 314"/>
+  <path class="arrow" d="M832 144 L844 150 L832 156 Z"/>
+  <path class="arrow" d="M832 308 L844 314 L832 320 Z"/>
+
+  <text class="label" x="852" y="56">两个出口</text>
+  <rect class="card" x="852" y="74" width="300" height="152" rx="12"/>
+  <text class="h" x="876" y="108">给你</text>
+  <text class="t" x="876" y="140">时间线：今天做了什么</text>
+  <text class="t" x="876" y="168">项目页：这个项目怎么样了</text>
+  <text class="t" x="876" y="196">桌面小组件：抬眼就能看</text>
+
+  <rect class="card" x="852" y="238" width="300" height="152" rx="12"/>
+  <text class="h" x="876" y="272">给 AI</text>
+  <text class="t" x="876" y="304">主动查询历史和项目进展</text>
+  <text class="t" x="876" y="332">新会话自动带入当前项目</text>
+  <text class="s" x="876" y="360">Claude Code、Codex，通过 MCP</text>
+</svg>
