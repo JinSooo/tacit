@@ -15,6 +15,7 @@
 </p>
 
 <p align="center">
+  <a href="https://tacit.jinso.top">官网</a> ·
   <a href="#开始使用">开始使用</a> ·
   <a href="#它能做什么">功能</a> ·
   <a href="#连接-ai">连接 AI</a> ·
@@ -192,6 +193,7 @@ sh /Applications/Tacit.app/Contents/Resources/uninstall.sh
 | `collector/` | Swift / SwiftUI 菜单栏应用、采集、录音、本地转写和桌面小组件 |
 | `hub/` | Bun 后台服务、加密数据库、整理任务和 AI 接口（MCP） |
 | `web/` | 网页状态页 |
+| `site/` | 官网 [tacit.jinso.top](https://tacit.jinso.top)，零依赖静态页，部署见 `site/README.md` |
 | `plugins/`、`schema/` | 内置数据源、记录格式与跨端测试样例 |
 
 <details>
