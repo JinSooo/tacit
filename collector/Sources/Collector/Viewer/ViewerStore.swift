@@ -71,7 +71,7 @@ enum ViewerEntry {
 enum Route: Hashable {
   case thread(String)
   case project(String)
-  case projectContext(String)
+  case threadStory(String)
   case reviewItem(Date, String)
   case reviewRecord(String)
   case runtime

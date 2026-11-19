@@ -256,6 +256,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 | DELETE | `/v1/projects/:id` | 管理令牌专用。成功返回 `{ removed: true }`。项目不存在时返回 404 和 `{ error: "项目不存在" }` |
 | GET | `/v1/days/:date` | 某天的时间线 |
 | GET | `/v1/timeline?project_id&before&limit` | 读取项目已整理的段，按天倒序分页 |
+| GET | `/v1/timeline?thread_id&before&limit` | 按引用原文的现有事项归属筛选已整理的段，按天倒序分页，支持无项目的事项 |
 | GET | `/v1/timeline?q&before&limit` | 段标题和修正后的描述匹配所有关键词，按天倒序分页 |
 | GET | `/v1/timeline/record/:id` | `{ date, segment_id }`，定位记录所属的段。原文有但未入段时返回原始日期和空段 ID |
 | GET | `/v1/projects/:id/context` | `{ threads }`，按实际会话带入规则和预算选出的事项简略版，不记 Agent 审计 |
@@ -277,7 +278,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 
 `evidence: [{id,at,source,title}]` 的 `at` 是原始记录的开始时间。`record_ids` 含整段可以展开的原文，即使跨过午夜。`needs_regen` 标识等待更新；最近该日整理失败时返回 `failed:true`，已成功的版本保留。删除或修正相关原文立即撤下受影响的时间线；删除原文还会清除模型调用的正文快照。段描述修正经脱敏后保存在加密 `distill_state` 的 `timeline_corrections:<date>`。重整后段 ID 相同且仍包含原成员时覆盖模型描述；成员被删或改为私密时清除关联修正。段删除在同一事务核对成员并使用现有删除流程。旧格式日期仍能查看整天原文，项目页不会触发历史补跑。
 
-`GET /v1/timeline` 接收项目 ID 或搜索词其中一项，返回 `{ days: [{ date, items }], next_cursor }`。`limit` 为 1–31 个命中日期，`before` 是不含该日期的 `YYYY-MM-DD` 游标。项目和段搜索按已经整理的结果读取，不运行模型。管理侧的日期、项目和搜索读取统一过滤旧回顾里的采集占位，不重写已存结果；只剩占位时不返回当天概述，原文定位回退到全天记录。
+`GET /v1/timeline` 接收项目 ID、事项 ID 或搜索词其中一项，返回 `{ days: [{ date, items }], next_cursor }`。`limit` 为 1–31 个命中日期，`before` 是不含该日期的 `YYYY-MM-DD` 游标。项目、事项和段搜索按已经整理的结果读取，不运行模型。管理侧的日期、项目、事项和搜索读取统一过滤旧回顾里的采集占位，不重写已存结果；只剩占位时不返回当天概述，原文定位回退到全天记录。
 
 管理侧的可读段可带 `thread_id`，从引用原文的现有归属计算；存在多个事项或与段项目冲突时省略。Mac 项目页只用这个字段串联更新，按最近更新排列事项，展开后保持每段原有的时间、时长、成员与修正/删除语义。无归属的段单列，不以相同标题合并。读取新分页后可把更早更新并入已有事项。该元数据不写入原始记录或日期存储，不返回给 Agent；Agent 读取保留原有正文大小限制和依据字段。
 

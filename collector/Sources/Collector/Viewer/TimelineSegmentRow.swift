@@ -24,6 +24,7 @@ struct TimelineSegmentRow: View {
   var records: [HistoryRecord]? = nil
   var showsTitle = true
   var projectName: String? = nil
+  var offersThreadStory = false
   let expanded: Bool
   let onToggle: () -> Void
   @State private var hovering = false
@@ -67,7 +68,8 @@ struct TimelineSegmentRow: View {
       .accessibilityValue(expanded ? "已展开" : "已折叠")
       .accessibilityHint(expanded ? "收起原始记录" : "展开原始记录")
       if expanded {
-        TimelineSegmentRecords(day: day, item: item, dayRecords: records, alignsTimeLeading: showsTitle)
+        TimelineSegmentRecords(day: day, item: item, dayRecords: records, alignsTimeLeading: showsTitle,
+                               offersThreadStory: offersThreadStory)
           .padding(.bottom, 16)
       }
     }
@@ -137,6 +139,7 @@ struct TimelineSegmentRecords: View {
   let item: DayDiary.Item
   let dayRecords: [HistoryRecord]?
   var alignsTimeLeading = false
+  var offersThreadStory = false
 
   @Environment(ViewerStore.self) private var store
   @State private var records = Loader<[HistoryRecord]>()
@@ -165,6 +168,9 @@ struct TimelineSegmentRecords: View {
         ProgressView().controlSize(.small).padding(.leading, TimelineReadingLayout.contentInset).accessibilityLabel("正在读取原始记录")
       }
       HStack(spacing: 16) {
+        if offersThreadStory, let threadId = item.threadId {
+          Button("这件事的经过") { store.path.append(.threadStory(threadId)) }.buttonStyle(.accentLink)
+        }
         Button("这段写得不对") { correcting = true }.buttonStyle(.accentLink)
         Button("删除这段记录") {
           guard let members = item.recordIds, !members.isEmpty else { return }

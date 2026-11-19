@@ -116,6 +116,7 @@ private struct ReviewDayContent: View {
           ForEach(items) { item in
             TimelineSegmentRow(day: day, item: item, records: records.value,
                                projectName: showsProjects ? store.project(item.projectId)?.name : nil,
+                               offersThreadStory: true,
                                expanded: expanded == item.id) {
               expanded = expanded == item.id ? nil : item.id
             }

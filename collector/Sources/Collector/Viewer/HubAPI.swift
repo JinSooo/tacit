@@ -159,8 +159,8 @@ final class HubAPI: @unchecked Sendable {
     let nextCursor: String?
   }
 
-  func timeline(projectId: String? = nil, query: String? = nil, before: String? = nil) async throws -> TimelineResult {
-    try await get(TimelineResult.self, "/v1/timeline", ["project_id": projectId, "q": query, "before": before])
+  func timeline(projectId: String? = nil, threadId: String? = nil, query: String? = nil, before: String? = nil) async throws -> TimelineResult {
+    try await get(TimelineResult.self, "/v1/timeline", ["project_id": projectId, "thread_id": threadId, "q": query, "before": before])
   }
 
   struct TimelineLocation: Decodable, Sendable {

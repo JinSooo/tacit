@@ -11,9 +11,11 @@ type TimelineDay = { date: string; items: ReviewItem[] };
 const normalized = (text: string) => text.normalize("NFKC").toLowerCase();
 
 export function timelineDays(hub: HubDB, params: URLSearchParams) {
-  const project = params.get("project_id"), q = params.get("q")?.trim();
-  if (project ? params.has("q") || project.length > 128 : !q || q.length > 4096 || params.has("project_id")) {
-    throw new InputError("请提供有效项目或搜索词");
+  const filters = ["project_id", "thread_id", "q"].filter(key => params.has(key));
+  const project = params.get("project_id"), thread = params.get("thread_id"), q = params.get("q")?.trim();
+  if (filters.length !== 1 || !(project || thread || q) ||
+      (project?.length ?? 0) > 128 || (thread?.length ?? 0) > 128 || (q?.length ?? 0) > 4096) {
+    throw new InputError("请提供一个有效的项目、事项或搜索词");
   }
   const before = params.get("before");
   if (before !== null && localDayStart(before) === null) throw new InputError("日期游标无效");
@@ -22,6 +24,7 @@ export function timelineDays(hub: HubDB, params: URLSearchParams) {
 
   const words = q ? normalized(q).split(/\s+/u) : [];
   const days: TimelineDay[] = [];
+  const store = new DistillStore(hub);
   const rows = hub.db.prepare<[string | null, string | null, string | null, string | null], DayRow>(`
     SELECT d.date,d.detail,c.v corrections FROM days d
     LEFT JOIN distill_state c ON c.k='timeline_corrections:' || d.date
@@ -32,8 +35,9 @@ export function timelineDays(hub: HubDB, params: URLSearchParams) {
     const detail = JSON.parse(row.detail) as { items?: StoredReviewItem[] };
     if (!Array.isArray(detail.items)) continue;
     const corrections = row.corrections ? JSON.parse(row.corrections) as TimelineCorrections : null;
-    const items = new DistillStore(hub).readingItems(applyTimelineCorrections(detail.items, corrections)).filter(isTimelineItem).filter(item => {
+    const items = store.readingItems(applyTimelineCorrections(detail.items, corrections)).filter(isTimelineItem).filter(item => {
       if (project) return item.project_id === project;
+      if (thread) return "thread_id" in item && item.thread_id === thread;
       const target = normalized(`${item.title}\n${item.description}`);
       return words.every(word => target.includes(word));
     });

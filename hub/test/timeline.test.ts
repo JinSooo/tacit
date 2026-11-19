@@ -8,7 +8,7 @@ import { fixture, setup } from "./helpers.ts";
 const day = "2026-06-18", previousDay = "2026-06-17", midnight = Date.parse(`${day}T00:00:00`);
 const at = (minutes: number) => toLocalIso(midnight + minutes * 60_000);
 
-function segment(id: string, recordIds: string[], project = "trail", start = 0): ReviewItem {
+function segment(id: string, recordIds: string[], project: string | null = "trail", start = 0): ReviewItem {
   return {
     id, title: "校对步道地图", description: "核对石桥到林场的路线。", t_start: at(start), t_end: at(start + 4),
     active_seconds: 240, sources: ["manual.note"], apps: [{ source: "manual.note", app: null }], record_ids: recordIds,
@@ -53,6 +53,44 @@ test("时间线按项目和搜索词分页，按记录编号定位跨午夜段�
     const mcp = await (await ctx.send(`/v1/agent/get?tool=codex&id=${previousDay}&level=detail`, "GET", undefined, ctx.config.agentToken)).json();
     expect(mcp.item.detail.items[0]).not.toHaveProperty("record_ids");
     expect(mcp.item.detail).not.toHaveProperty("omitted_record_ids");
+  } finally { await ctx.cleanup(); }
+});
+
+test("时间线按引用原文的事项归属跨天分页，事项可无项目且与其他筛选互斥", async () => {
+  const ctx = timelineFixture();
+  try {
+    ctx.store.upsertThread({ id: "route", title: "核对入口路线", status: "active" });
+    ctx.store.upsertThread({ id: "sign", title: "更新指示牌", status: "active" });
+    const updates = [
+      { id: "route-today", thread: "route", start: 10 },
+      { id: "sign-today", thread: "sign", start: 20 },
+      { id: "sign-yesterday", thread: "sign", start: -35 },
+      { id: "route-earlier", thread: "route", start: -1470 },
+    ].map(({ id, thread, start }) => {
+      const raw = fixture({ source: "manual.note", t_start: at(start), title: "合成步道笔记", body: "记录步道入口的标记。" });
+      expect(ctx.db.ingest([raw]).accepted).toBe(1);
+      ctx.store.createFrame({ id, key: "trail", record_ids: [raw.id], t_start_ms: Date.parse(raw.t_start),
+        t_end_ms: Date.parse(raw.t_start), chars: 1, private: 0, status: "new" });
+      ctx.store.assign(id, thread, "user", 1);
+      return { ...segment(id, [raw.id], null, start),
+        evidence: [{ id: raw.id, at: raw.t_start, source: raw.source, title: raw.title }] };
+    });
+    const earlierDay = "2026-06-16";
+    ctx.store.upsertDay({ date: day, detail: { items: updates.slice(0, 2) } });
+    ctx.store.upsertDay({ date: previousDay, detail: { items: [updates[2]] } });
+    ctx.store.upsertDay({ date: earlierDay, detail: { items: [updates[3]] } });
+
+    const path = "/v1/timeline?thread_id=route&limit=1";
+    expect(await (await ctx.send(path)).json()).toEqual({
+      days: [{ date: day, items: [{ ...updates[0], thread_id: "route" }] }], next_cursor: day,
+    });
+    expect(await (await ctx.send(`${path}&before=${day}`)).json()).toEqual({
+      days: [{ date: earlierDay, items: [{ ...updates[3], thread_id: "route" }] }], next_cursor: null,
+    });
+    for (const filters of ["thread_id=route&project_id=trail", "thread_id=route&q=route",
+      "project_id=trail&q=route", "thread_id=route&q=", "thread_id=", `thread_id=${"a".repeat(129)}`]) {
+      expect((await ctx.send(`/v1/timeline?${filters}`)).status).toBe(400);
+    }
   } finally { await ctx.cleanup(); }
 });
 
