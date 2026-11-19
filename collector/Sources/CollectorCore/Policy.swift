@@ -54,7 +54,8 @@ public enum ClipboardPolicy {
 public final class OutboundQueue {
   public let capacity: Int
   public private(set) var items: [Record] = []
-  public private(set) var dropped = 0
+  private var dropCount = 0
+  public var dropped: Int { lock.lock(); defer { lock.unlock() }; return dropCount }
   private var peak = 0
   private let lock = NSLock()
 
@@ -65,7 +66,7 @@ public final class OutboundQueue {
     items += records
     if items.count > capacity {
       let n = items.count - capacity
-      dropped += n
+      dropCount += n
       items.removeFirst(n)
     }
     peak = max(peak, items.count)

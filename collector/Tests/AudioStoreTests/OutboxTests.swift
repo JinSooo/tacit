@@ -70,3 +70,79 @@ private func outboxRecord(_ body: String = "合成待发送记录") -> Record {
   #expect(throws: (any Error).self) { try store.append(r) }
   #expect(try String(contentsOf: outside, encoding: .utf8) == "合成外部文件")
 }
+
+@Test func outboxEnforcesEncryptedByteLimitAndEvictsOldestAcrossRestart() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let key = SymmetricKey(size: .bits256)
+  let oldest = outboxRecord(), middle = outboxRecord(), newest = outboxRecord()
+  let original = try OutboxStore(dataDirectory: root, key: key)
+  // 反序写入，淘汰按记录时间而非遍历顺序。
+  _ = try original.append(middle)
+  _ = try original.append(oldest)
+  let initialBytes = original.bytes
+  let limited = try OutboxStore(dataDirectory: root, key: key, byteLimit: initialBytes)
+  #expect(limited.bytes == initialBytes)
+  _ = try limited.append(newest)
+  #expect(limited.dropped == 1)
+  #expect(limited.bytes <= initialBytes)
+  #expect(limited.restore(limit: 3).records == [middle, newest].map(RecordRedaction.record))
+  let reopened = try OutboxStore(dataDirectory: root, key: key)
+  #expect(reopened.restore(limit: 3).records == [middle, newest].map(RecordRedaction.record))
+  try reopened.acknowledge([middle.id, newest.id])
+  #expect(reopened.bytes == 0)
+}
+
+@Test func degradedOutboxRetriesAtSixtySecondsAndPersistsMemoryRecords() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+  let blockedPath = root.appendingPathComponent("outbox")
+  try Data().write(to: blockedPath)
+  let key = SymmetricKey(size: .bits256)
+  var opens = 0
+  let buffer = OutboxBuffer {
+    opens += 1
+    return try OutboxStore(dataDirectory: root, key: key)
+  }
+  let record = outboxRecord()
+  buffer.retry(at: 10)
+  buffer.enqueue([record], at: 11)
+  #expect(buffer.status.degraded)
+  #expect(buffer.batch(limit: 10) == [RecordRedaction.record(record)])
+  try FileManager.default.removeItem(at: blockedPath)
+  buffer.retry(at: 69)
+  #expect(opens == 1)
+  buffer.retry(at: 70)
+  #expect(opens == 2)
+  #expect(!buffer.status.degraded)
+  #expect(buffer.status.bytes > 0)
+  #expect(buffer.memory.count == 0)
+  #expect(buffer.count == 1)
+  let reopened = try OutboxStore(dataDirectory: root, key: key)
+  #expect(reopened.restore(limit: 10).records == [RecordRedaction.record(record)])
+  try buffer.acknowledge([record.id], at: 71)
+  #expect(buffer.status.bytes == 0)
+}
+
+@Test func outboxRecoversAfterAnActiveStoreFailsToPersist() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let key = SymmetricKey(size: .bits256)
+  let buffer = OutboxBuffer { try OutboxStore(dataDirectory: root, key: key) }
+  let disk = outboxRecord(), fallback = outboxRecord()
+  buffer.retry(at: 0)
+  buffer.enqueue([disk], at: 1)
+  let blockedPath = root.appendingPathComponent("outbox/\(fallback.id).enc")
+  try FileManager.default.createDirectory(at: blockedPath, withIntermediateDirectories: false)
+  buffer.enqueue([fallback], at: 2)
+  #expect(buffer.status.degraded)
+  #expect(buffer.batch(limit: 1).map(\.id) == [fallback.id])
+  #expect(buffer.count == 2)
+  try FileManager.default.removeItem(at: blockedPath)
+  buffer.retry(at: 62)
+  #expect(!buffer.status.degraded)
+  #expect(buffer.batch(limit: 2).map(\.id) == [disk.id, fallback.id])
+  try buffer.acknowledge([disk.id], at: 63)
+  #expect(buffer.batch(limit: 2).map(\.id) == [fallback.id])
+}

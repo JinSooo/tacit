@@ -8,7 +8,9 @@ import CollectorCore
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   /// 第二个实例启动时发这个通知，请已在运行的采集端打开窗口。
   static let showWindowNotification = "dev.record-anything.collector.show-window"
-  let config = Config.load()
+  let config: Config
+
+  init(config: Config) { self.config = config }
   let toggles = SourceToggles(store: UserDefaults.standard)
   lazy var sources = DataSourceRegistry(toggles: toggles)
   lazy var hub = HubClient(config: config)
@@ -365,7 +367,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let pending = hub.pendingCount
     if let e = hub.lastError { menu.addItem(disabled("\(e)，\(pending) 条等着发送")) }
     else if pending > 0 { menu.addItem(disabled("\(pending) 条等着发送")) }
-    if hub.queue.dropped > 0 { menu.addItem(disabled("等太久丢掉了 \(hub.queue.dropped) 条")) }
+    let dropped = hub.queue.dropped + hub.outboxStatus.dropped
+    if dropped > 0 { menu.addItem(disabled("等太久丢掉了 \(dropped) 条")) }
     menu.addItem(.separator())
 
     if paused { menu.addItem(item("继续记录", #selector(resume))) }
@@ -508,16 +511,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     captureQueue.async { [self] in
       var s: [String: Any] = stats
       s["queue"] = hub.pendingCount; s["dropped"] = hub.queue.dropped
-      s["hubBusy"] = hub.hubBusy; s["queuePeak"] = hub.queue.queuePeak
+      s["hubBusy"] = hub.hubBusy; s["queuePeak"] = hub.queuePeak
       s["sent"] = hub.sent; s["rejected"] = hub.rejected; s["hubError"] = hub.lastError ?? NSNull()
       s["axTrusted"] = AXIsProcessTrusted(); s["ocrEnabled"] = enabledSources["ocr"] ?? false; s["ocrGranted"] = ocr.granted
       s["sources"] = enabledSources
       s["paused"] = pausedUntil != nil; s["plugins"] = plugins.status()
       s["footprintMB"] = Int(footprintMB()); s["cpuSeconds"] = Int(cpuSeconds())
       s["time"] = LocalTime.iso(Date())
-      if let d = try? JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted, .sortedKeys]) {
-        try? PrivateFile.write(d, to: config.dataDir.appendingPathComponent("collector-status.json"))
-      }
+      CollectorStatus.write(s, transcription: enabledSources["audio"] == true ? audio.transcriptionStatus() : nil,
+                            outbox: hub.outboxStatus, to: config.dataDir.appendingPathComponent("collector-status.json"))
     }
   }
 }
@@ -544,19 +546,28 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-icon"), i + 1 < Comman
   catch { FileHandle.standardError.write(Data("\(error)\n".utf8)); exit(1) }
 }
 
-// 已经有一个采集端在跑（例如 launchd 刚拉起，用户又从访达打开）：请它打开窗口，自己退出。
-// launchd 拉起的那份不弹窗口：launchd 会给它的任务设 XPC_SERVICE_NAME。
-let instanceLock = InstanceLock.acquire(path: Config.load().dataDir.appendingPathComponent("collector.lock").path)
+let config = Config.load()
+let logFile = config.dataDir.appendingPathComponent("logs/collector.log")
+let launchedByAgent = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"]?.hasPrefix("dev.record-anything.") == true
+let launchSource: DiagnosticLog.LaunchSource = launchedByAgent || DiagnosticLog.isFile(logFile, on: STDERR_FILENO)
+  ? .launchd : Bundle.main.bundleURL.pathExtension == "app" ? .finder : .unknown
+do { try DiagnosticLog.redirectIfNeeded(to: logFile) }
+catch { DiagnosticLog.shared.record(.collectorLogOpenFailed) }
+DiagnosticLog.installUncaughtExceptionHandler()
+
+// 已经有一个采集端在跑时，请它打开窗口，自己退出。launchd 拉起的实例不弹窗。
+let instanceLock = InstanceLock.acquire(path: config.dataDir.appendingPathComponent("collector.lock").path)
 if case .held = instanceLock {
-  if ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"]?.hasPrefix("dev.record-anything.") != true {
+  if !launchedByAgent {
     DistributedNotificationCenter.default().postNotificationName(.init(AppDelegate.showWindowNotification), object: nil, deliverImmediately: true)
   }
   exit(0)
 }
+DiagnosticLog.shared.record(.started(DiagnosticBuild(), launchSource))
 
 Phosphor.register()
 let app = NSApplication.shared
-let delegate = AppDelegate()
+let delegate = AppDelegate(config: config)
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()

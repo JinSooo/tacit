@@ -34,22 +34,14 @@ enum AppSetup {
 
   private static func run(config: Config, app: String) {
     guard let bundled = Bundled.current else { return }
-    let logs = config.dataDir.appendingPathComponent("logs")
-    try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
-    let file = logs.appendingPathComponent("setup.log")
-    if !FileManager.default.fileExists(atPath: file.path) { FileManager.default.createFile(atPath: file.path, contents: nil) }
-    let log = try? FileHandle(forWritingTo: file)
-    _ = try? log?.seekToEnd()
-    log?.write(Data("\n== \(ISO8601DateFormatter().string(from: Date())) \(app)\n".utf8))
     let p = Process()
     p.executableURL = URL(fileURLWithPath: bundled.bun)
     p.arguments = [bundled.runtime + "/hub/src/cli.ts", "setup", "--app", app]
     p.currentDirectoryURL = URL(fileURLWithPath: bundled.runtime)
-    p.standardOutput = log ?? FileHandle.nullDevice
-    p.standardError = log ?? FileHandle.nullDevice
-    p.standardInput = FileHandle.nullDevice
-    do { try p.run(); p.waitUntilExit() } catch { log?.write(Data("无法启动准备流程：\(error.localizedDescription)\n".utf8)) }
-    try? log?.close()
+    var environment = ProcessInfo.processInfo.environment
+    environment["RA_DATA_DIR"] = config.dataDir.path
+    p.environment = environment
+    SetupStatus.run(p, dataDirectory: config.dataDir)
   }
 
   @MainActor private static func askToMove() {

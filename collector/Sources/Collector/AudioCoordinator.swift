@@ -74,6 +74,11 @@ final class AudioCoordinator {
       publish()
     }
   }
+  private var transcription = TranscriptionStatus(pending: 0, failed: 0)
+  func transcriptionStatus() -> TranscriptionStatus {
+    snapshotLock.lock(); defer { snapshotLock.unlock() }
+    return transcription
+  }
   func status() -> [String] { snapshotLock.lock(); defer { snapshotLock.unlock() }; return snapshot }
   func update(enabled: Bool) {
     queue.async { [self] in
@@ -387,9 +392,13 @@ final class AudioCoordinator {
     let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/taskpolicy")
     process.arguments = ["-b", workerURL.path, "--data-dir", config.dataDir.path, "--device", config.device, "--hub", config.hubURL.absoluteString]
     var env = ProcessInfo.processInfo.environment; env["RA_DATA_DIR"] = config.dataDir.path; process.environment = env
-    process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.standardError
+    // 系统库也能往这个流输出，转写退出原因和积压量通过诊断日志及状态文件记录。
+    process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
     process.terminationHandler = { [weak self] p in
       let crashed = p.terminationReason == .uncaughtSignal
+      if p.terminationStatus != 0 {
+        DiagnosticLog.shared.record(.audioWorkerExit(status: p.terminationStatus, reason: crashed ? .signal : .exit))
+      }
       self?.queue.async { [weak self] in
         guard let self else { return }
         self.worker = nil; self.inventoryRevision += 1; self.lastMaintenance = .distantPast; self.lastSync = .distantPast; self.closedScan.invalidate(); self.pendingScan.invalidate()
@@ -399,7 +408,11 @@ final class AudioCoordinator {
     do {
       try process.run(); worker = process; lastWorker = Date(); voiceChanged = false
       if failure?.hasPrefix(Self.workerLaunchFailure) == true { failure = nil }
-    } catch { failure = "\(Self.workerLaunchFailure)：\(error.localizedDescription)"; workerFailureAt = Date() }
+    } catch {
+      DiagnosticLog.shared.record(.audioWorkerLaunchFailed)
+      failure = "\(Self.workerLaunchFailure)：\(error.localizedDescription)"
+      workerFailureAt = Date()
+    }
   }
   private func persistState() {
     var state: [String: Any] = ["retention_days": retentionDays, "last_worker": LocalTime.iso(lastWorker), "voice_changed": voiceChanged]
@@ -434,6 +447,10 @@ final class AudioCoordinator {
     if health.warning { lines.append("麦克风可能没有权限") }
     if let failure { lines.append(failure) }
     if let maintenanceFailure { lines.append(maintenanceFailure) }
-    snapshotLock.lock(); snapshot = lines; snapshotLock.unlock()
+    let failed = all.filter { $0.status == .failed }.count
+    snapshotLock.lock()
+    snapshot = lines
+    transcription = .init(pending: pending, failed: failed)
+    snapshotLock.unlock()
   }
 }

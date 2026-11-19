@@ -51,17 +51,21 @@ struct Config {
 /// 先在独立 I/O 队列脱敏、加密保存，再发送；成功确认后删除本机待发送副本。
 final class HubClient {
   let config: Config
-  let queue = OutboundQueue()
+  let queue: OutboundQueue
+  private let buffer: OutboxBuffer
   private var inFlight = false
   private let lock = NSLock()
   private var networkError: String?
   private var storageError: String?
   private var storedCount = 0
+  private var peak = 0
+  private var diskStatus = OutboxStatus()
+  var outboxStatus: OutboxStatus { lock.lock(); defer { lock.unlock() }; return diskStatus }
+  var queuePeak: Int { lock.lock(); defer { lock.unlock() }; return peak }
   private var pendingWrites = 0
   private let io = DispatchQueue(label: "record-anything.outbox", qos: .utility)
-  private var outbox: OutboxStore?
   var lastError: String? { lock.lock(); defer { lock.unlock() }; return storageError ?? networkError }
-  var pendingCount: Int { lock.lock(); defer { lock.unlock() }; return max(storedCount, queue.count) + pendingWrites }
+  var pendingCount: Int { lock.lock(); defer { lock.unlock() }; return storedCount + pendingWrites }
   private(set) var sent = 0
   private(set) var rejected = 0
   private var deliveryMetrics = HubDeliveryMetrics()
@@ -69,49 +73,54 @@ final class HubClient {
 
   init(config: Config) {
     self.config = config
-    io.async { [self] in
-      do { outbox = try OutboxStore(dataDirectory: config.dataDir); refill() }
-      catch { savingFailed() }
-    }
+    queue = OutboundQueue()
+    buffer = OutboxBuffer(memory: queue, open: { try OutboxStore(dataDirectory: config.dataDir) })
+    io.async { [self] in retryOutbox() }
   }
 
-  private func savingFailed() {
-    lock.lock(); storageError = "待发送记录无法安全保存或恢复，请检查磁盘空间和数据目录；暂时只在内存中重试。"; lock.unlock()
+  private func retryOutbox() {
+    buffer.retry(at: ProcessInfo.processInfo.systemUptime)
+    publishOutbox()
   }
-  private func refill() {
-    guard let outbox else { return }
-    let restored = outbox.restore(limit: queue.capacity - queue.count, excluding: Set(queue.peek(queue.capacity).map(\.id)))
-    queue.push(restored.records)
-    lock.lock(); storedCount = outbox.count + queue.peek(queue.capacity).filter { !outbox.contains($0.id) }.count; lock.unlock()
-    if restored.unreadable > 0 { savingFailed() }
+
+  private func publishOutbox(writesCompleted: Int = 0) {
+    let status = buffer.status
+    lock.lock()
+    let newDrops = status.dropped > diskStatus.dropped
+    diskStatus = status
+    storedCount = buffer.count
+    peak = buffer.queuePeak
+    pendingWrites -= writesCompleted
+    storageError = status.degraded
+      ? "待发送记录无法安全保存，请检查磁盘空间和数据目录；暂时只在内存中重试。"
+      : buffer.hasStorageError ? "有待发送记录无法安全保存或恢复。" : nil
+    lock.unlock()
+    if newDrops { DiagnosticLog.shared.record(.outboxDropped(total: status.dropped)) }
+    if status.degraded { DiagnosticLog.shared.record(.outboxDegraded) }
   }
+
   func enqueue(_ records: [Record]) {
     guard !records.isEmpty else { return }
     lock.lock(); pendingWrites += records.count; lock.unlock()
     io.async { [self] in
-      for record in records {
-        do {
-          if let outbox { _ = try outbox.append(record) }
-          else { queue.push([RecordRedaction.record(record)]) }
-        } catch {
-          savingFailed()
-          // 已有同 id 的损坏副本不以新捕获的内容替换；保留原文件供修复。
-          if outbox?.contains(record.id) != true { queue.push([RecordRedaction.record(record)]) }
-        }
-      }
-      refill()
-      lock.lock(); pendingWrites -= records.count; lock.unlock()
+      buffer.enqueue(records, at: ProcessInfo.processInfo.systemUptime)
+      publishOutbox(writesCompleted: records.count)
     }
   }
 
-  func flush() { io.async { [self] in sendNext() } }
+  func flush() {
+    io.async { [self] in
+      retryOutbox()
+      sendNext()
+    }
+  }
+
   private func sendNext() {
-    lock.lock()
-    if inFlight { lock.unlock(); return }
-    let batch = queue.peek(200)
-    if batch.isEmpty { lock.unlock(); return }
+    guard !inFlight else { return }
+    let batch = buffer.batch(limit: 200)
+    publishOutbox()
+    guard !batch.isEmpty else { return }
     inFlight = true
-    lock.unlock()
 
     guard let token = config.token else { finish(error: "找不到 hub 的 token，hub 是否启动过？", done: nil); return }
     var req = URLRequest(url: config.hubURL.appendingPathComponent("v1/ingest"))
@@ -126,7 +135,7 @@ final class HubClient {
     URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
       guard let self else { return }
       let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-      if let err { self.finish(error: "hub 连不上：\(err.localizedDescription)", done: nil); return }
+      if err != nil { self.finish(error: "hub 连不上。", done: nil); return }
       // 503 是中枢撞上别的进程的写锁、不等锁直接返回：中枢是通的，记录留在队列里下一轮再发，不提示连不上。
       if status == 503 { self.finish(error: nil, done: nil, status: status); return }
       guard status == 200, let data else {
@@ -145,18 +154,18 @@ final class HubClient {
   private func finish(error: String?, done: (Set<String>, Int, Int)?, status: Int? = nil) {
     io.async { [self] in
       var acknowledged = done
-      if let done, let outbox {
-        do { try outbox.acknowledge(done.0) }
-        catch { savingFailed(); acknowledged = nil }
+      if let done {
+        do { try buffer.acknowledge(done.0, at: ProcessInfo.processInfo.systemUptime) }
+        catch { acknowledged = nil }
       }
       lock.lock()
       if let status { deliveryMetrics.received(status: status) }
       inFlight = false
       networkError = error
-      if let done = acknowledged { queue.remove(ids: done.0); sent += done.1; rejected += done.2 }
+      if let done = acknowledged { sent += done.1; rejected += done.2 }
       lock.unlock()
-      refill()
-      if acknowledged != nil && queue.count > 0 { sendNext() }
+      publishOutbox()
+      if acknowledged != nil { sendNext() }
     }
   }
 }
