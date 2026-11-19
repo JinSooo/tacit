@@ -13,6 +13,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.core.Draft
+import top.jinso.tacit.sync.AudioSync
+import top.jinso.tacit.sync.Change
+import top.jinso.tacit.sync.voiceprint
+import java.time.Instant
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletionException
 import java.util.concurrent.ExecutionException
@@ -86,7 +90,7 @@ class AudioController(context: Context) {
     fun importModels(tree: Uri): CompletableFuture<Unit> = runtime.importModels { runtime.models.import(tree) }
     fun installStagedModels(): CompletableFuture<Unit> = runtime.importModels { runtime.models.installStaged() }
     fun prune(): CompletableFuture<Unit> = runtime.submit {
-        synchronized(runtime.lock) { runtime.store.prune(runtime.app.prefs.retentionDays) }
+        synchronized(runtime.lock) { runtime.store.prune(runtime.retentionDays()) }
     }
     /** Removes recordings and voiceprints; already saved History is managed by Vault/UI separately. */
     fun clearAudio(): CompletableFuture<Unit> {
@@ -115,7 +119,29 @@ internal class AudioRuntime private constructor(val context: Context) {
     val lock = Any()
     val store = EncryptedAudioStore(context)
     val ledger = AudioLedger(store)
-    val queries = AudioQueries(store, ledger, { app.prefs.retentionDays }, { sample(it) != null })
+    val queries = AudioQueries(store, ledger, ::retentionDays, { sample(it) != null })
+
+    fun retentionDays(): Int = macPolicy()?.getInt("retention_days") ?: app.prefs.retentionDays
+    private fun macPolicy() = app.vault.syncConnection()?.optJSONObject("audio")
+
+    fun applyMacAudio(audio: AudioSync, persist: () -> Unit) {
+        synchronized(lock) {
+            policyRevision++
+            store.applyRemoteCleanup(audio.retention, audio.purgeBefore?.let { Instant.parse(it).toEpochMilli() },
+                audio.deleted.toSet(), app.vault::audioSourceRef)
+            persist()
+        }
+        schedule()
+    }
+
+    fun applyRecordChanges(page: List<Change>, deletes: List<Change.Delete>) = synchronized(lock) {
+        policyRevision++
+        for (deletion in deletes) {
+            store.deleteRecord(deletion.id) { clip -> app.vault.audioSourceRef(clip) == deletion.ref }
+        }
+        app.vault.applyChanges(page)
+    }
+
     val models = SpeechModels(context)
     val qnnModels = QnnModels(context)
     @Volatile var accelerationStatus = "使用 CPU"; private set
@@ -245,30 +271,36 @@ internal class AudioRuntime private constructor(val context: Context) {
     fun schedule() {
         if (!queued.compareAndSet(false, true)) return
         submit {
+            val policyAtStart = policyRevision
             var completed = false
             try { drain(); completed = true } finally {
                 queued.set(false)
-                // A final recording segment may arrive while drain processes its snapshot.
-                if (completed && allowed() && models.current()!=null &&
-                    synchronized(lock) { store.clips().any { microphoneClip(it) && !it.getBoolean("analyzed") && store.exists(it.getString("id")) } }) schedule()
+                // A new segment or Mac voiceprint can arrive while processing the current snapshot.
+                if (completed && allowed() && models.current() != null && synchronized(lock) {
+                        policyAtStart != policyRevision ||
+                            store.clips().any { microphoneClip(it) && !it.getBoolean("analyzed") && store.exists(it.getString("id")) }
+                    }) schedule()
             }
         }
     }
     fun drain() {
         val token = generation
-        val policy = policyRevision
-        synchronized(lock) { store.prune(app.prefs.retentionDays) }
+        val (policy, voiceprint) = synchronized(lock) {
+            val mac = macPolicy()
+            store.prune(mac?.getInt("retention_days") ?: app.prefs.retentionDays)
+            policyRevision to mac?.optJSONObject("voiceprint")?.voiceprint()
+        }
         if (!allowed()) return
         val dir = models.current() ?: run { report("录音已加密保存，等待准备本地模型"); return }
         val speech = engine ?: AcceleratedSpeechEngine(LocalSpeechEngine(dir), context, qnnModels.current()) { accelerationStatus = it }.also { engine = it }
-        AudioProcessor(store, lock, speech).drain({ allowed() && token == generation && policy == policyRevision }) { p ->
+        AudioProcessor(store, lock, speech, voiceprint).drain({ allowed() && token == generation && policy == policyRevision }) { p ->
             app.vault.ingest(Draft(source = AUDIO_SOURCE, title = "对话记录", body = p.body,
                 start = p.start, end = p.end,
                 sourceRef = "audio:${p.clipId}", method = "asr"))
         }
         report(when {
             silenced -> "麦克风正由其他应用使用，等待系统恢复"
-            synchronized(lock) { store.speakers().none { it.optBoolean("me") } } -> "仅本地识别人声，等待标记“我”"
+            voiceprint == null && synchronized(lock) { store.speakers().none { it.optBoolean("me") } } -> "仅本地识别人声，等待标记“我”"
             recording -> "正在录音，本地转写中"
             else -> "本地音频处理完成"
         })

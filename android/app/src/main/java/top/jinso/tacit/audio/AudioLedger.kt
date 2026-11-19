@@ -2,6 +2,7 @@ package top.jinso.tacit.audio
 
 import org.json.JSONArray
 import org.json.JSONObject
+import top.jinso.tacit.sync.MacVoiceprint
 import top.jinso.tacit.core.Secrets
 import java.util.UUID
 
@@ -102,17 +103,19 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
             .also { store.index.getJSONArray("speakers").put(it) }
     }
 
-    fun eligible(clip: JSONObject, allowed: Boolean): Boolean {
+    fun eligible(clip: JSONObject, allowed: Boolean, mac: MacVoiceprint? = null): Boolean {
         val me = store.speakers().firstOrNull { it.optBoolean("me") && !it.optBoolean("ignored") }
+        val voice = mac?.vector ?: me?.getJSONArray("vector")?.vector()
+        val threshold = mac?.threshold ?: .6
         val conversation = clip.optString("conversation")
-        val presence = me != null && conversation.isNotEmpty() && store.clips().any { other ->
+        val presence = voice != null && conversation.isNotEmpty() && store.clips().any { other ->
             other.optString("conversation") == conversation && store.exists(other.getString("id")) &&
                 utterances(other).any { u -> u.optJSONArray("vector")?.let {
-                    AudioPolicy.mayTranscribe(me.getJSONArray("vector").vector(), it.vector(), true)
+                    AudioPolicy.mayTranscribe(voice, it.vector(), allowed, threshold)
                 } == true }
         }
         return store.exists(clip.getString("id")) && AudioPolicy.conversationAllowed(
-            me != null, presence, allowed)
+            voice != null, presence, allowed)
     }
 
     fun rename(id: String, name: String?) {

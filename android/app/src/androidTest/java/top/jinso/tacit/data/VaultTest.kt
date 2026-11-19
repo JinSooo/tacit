@@ -5,6 +5,9 @@ import android.content.ContextWrapper
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.*
+import org.json.JSONObject
+import top.jinso.tacit.core.Ids
+import top.jinso.tacit.sync.Change
 import org.junit.Test
 import org.junit.runner.RunWith
 import top.jinso.tacit.core.Draft
@@ -168,4 +171,56 @@ class VaultTest {
         } finally { context.noBackupFilesDir.deleteRecursively() }
     }
 
+    @Test fun syncStateSurvivesReopenAndRemoteChangesAreIdempotent() {
+        val context = isolated()
+        val prefs = Preferences(context)
+        val pairedId = "android-aebagbaf"
+        val draft = Draft(Sources.NOTE, "补写", "用于同步测试", sourceRef = "synthetic-ref", method = "manual")
+        val (original, rejected, deleted) = Vault(context, prefs).let { vault ->
+            try {
+                val original = vault.ingest(draft)!!
+                val rejected = vault.ingest(draft.copy(sourceRef = null))!!
+                val deleted = vault.ingest(draft.copy(sourceRef = null))!!
+                vault.saveSyncConnection(JSONObject().put("device", pairedId))
+                val batch = vault.uploadBatch(pairedId)
+                assertEquals(listOf(original, rejected, deleted), batch.map { it.first })
+                assertEquals(pairedId, batch.first().second.getString("device"))
+                assertEquals(prefs.device, JSONObject(vault.wire(original)!!).getString("device"))
+                vault.applyReceipt(batch.map { it.first }, mapOf(1 to "测试拒绝"))
+                assertEquals(1, vault.delete(deleted))
+                Triple(original, rejected, deleted)
+            } finally { vault.close() }
+        }
+        val vault = Vault(context, prefs)
+        try {
+            assertEquals(listOf(deleted), vault.pendingDeletes())
+            assertEquals(mapOf("测试拒绝" to 1), vault.rejectedReasons(includeReasons = true))
+            assertEquals(0, vault.pendingCount())
+            val originalWire = JSONObject(vault.wire(original)!!)
+            val fix = JSONObject(originalWire.toString()).apply {
+                put("id", Ids.next())
+                put("source", Sources.CORRECTION)
+                put("corrects", original)
+                put("device", "mac")
+                put("body", "Mac 修正")
+                remove("source_ref")
+            }
+            val correction = Change.Correction(fix)
+            repeat(2) { vault.applyChanges(listOf(correction)) }
+            assertEquals("Mac 修正", vault.corrections(original).single().body)
+            assertTrue(vault.uploadBatch(pairedId).isEmpty())
+            val removal = Change.Delete(original, Sources.NOTE, originalWire.getString("source_ref"))
+            repeat(2) { vault.applyChanges(listOf(removal, correction)) }
+            assertNull(vault.get(original))
+            assertNull(vault.get(fix.getString("id")))
+            assertNull(vault.ingest(draft))
+            assertNotNull(vault.get(rejected))
+            assertEquals(listOf(deleted), vault.pendingDeletes())
+            vault.confirmDeletes(listOf(deleted))
+            assertTrue(vault.pendingDeletes().isEmpty())
+        } finally {
+            vault.close()
+            context.noBackupFilesDir.deleteRecursively()
+        }
+    }
 }

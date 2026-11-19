@@ -14,6 +14,34 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** Losing a key fails closed. Existing data is never replaced or silently reset. */
 class Keys(private val context: Context) {
+    fun wrapDeviceKey(raw: ByteArray, publicKey: String): ByteArray {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val key = store.getKey(DEVICE_ALIAS, null) as? SecretKey ?: KeyGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore",
+        ).run {
+            init(KeyGenParameterSpec.Builder(DEVICE_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256).build())
+            generateKey()
+        }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        cipher.updateAAD(publicKey.toByteArray())
+        return cipher.iv + cipher.doFinal(raw)
+    }
+
+    fun unwrapDeviceKey(wrapped: ByteArray, publicKey: String): ByteArray {
+        require(wrapped.size == 60)
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val key = checkNotNull(store.getKey(DEVICE_ALIAS, null) as? SecretKey)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, wrapped.copyOfRange(0, 12)))
+        cipher.updateAAD(publicKey.toByteArray())
+        return cipher.doFinal(wrapped, 12, wrapped.size - 12)
+    }
+
+    private companion object { const val DEVICE_ALIAS = "tacit.device.v1" }
+
     fun databaseKey(databaseExists: Boolean): ByteArray {
         val wrapped = File(context.noBackupFilesDir, "vault.key")
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

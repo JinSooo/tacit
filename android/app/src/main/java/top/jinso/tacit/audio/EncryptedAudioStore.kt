@@ -68,28 +68,64 @@ internal class EncryptedAudioStore(context: Context) {
         // An unfinished legacy import has no committed recording.
         val original = clips()
         val keep = original.filterNot { it.optBoolean("pendingImport") || AudioPolicy.expired(it.getLong("start"), now, days) }
-        val ids = keep.map { it.getString("id") }.toSet()
-        // Remove orphan ciphertext after a process death between clip and index commit too.
-        dir.listFiles()?.filter { it.name.endsWith(".pcm.enc") && it.name.removeSuffix(".pcm.enc") !in ids }
-            ?.forEach { check(it.delete()) { "Audio cleanup failed" } }
+        removeUnindexedPcm(keep.map { it.getString("id") }.toSet())
         // Published text lives in a separate encrypted collection, not in retained PCM metadata.
         if (keep.size != original.size) {
             index.put("clips", JSONArray(keep))
             save()
         }
     }
-    fun deleteRecord(recordId: String) {
-        val keep = clips().filter { clip ->
-            val matches = clip.getJSONArray("utterances").objects().any { it.optString("record") == recordId }
-            if (matches) removePcm(clip.getString("id"))
-            !matches
-        }
-        index.put("clips", JSONArray(keep))
-        index.put("transcripts", JSONArray(transcripts().filterNot { it.getString("recordId") == recordId })); save()
+    fun deleteRecord(recordId: String, matchRef: (String) -> Boolean = { false }) {
+        val transcriptClips = transcripts().filter { it.getString("recordId") == recordId }
+            .map { it.getString("clipId") }.toSet()
+        val selected = clips().filter { clip ->
+            val id = clip.getString("id")
+            id in transcriptClips || matchRef(id) ||
+                clip.getJSONArray("utterances").objects().any { it.optString("record") == recordId }
+        }.map { it.getString("id") }.toSet()
+        erase(selected) { it.getString("recordId") == recordId }
     }
+
+    fun applyRemoteCleanup(days: Int, before: Long?, refs: Set<String>, wireRef: (String) -> String) {
+        fun matches(row: JSONObject, clipId: String, conversation: String): Boolean =
+            refs.isNotEmpty() && (row.optString(conversation) in refs || wireRef(clipId) in refs)
+        val now = System.currentTimeMillis()
+        val removed = clips().filter { clip ->
+            val start = clip.getLong("start")
+            matches(clip, clip.getString("id"), "conversation") ||
+                (before != null && start < before) || AudioPolicy.expired(start, now, days)
+        }.map { it.getString("id") }.toSet()
+        erase(removed) { matches(it, it.getString("clipId"), "conversationId") }
+        removeUnindexedPcm(clips().map { it.getString("id") }.toSet())
+    }
+
+    private fun removeUnindexedPcm(retained: Set<String>) {
+        val files = checkNotNull(dir.listFiles())
+        files.filter {
+            val id = it.name.substringBefore(".pcm.enc", "")
+            id.isNotEmpty() && id !in retained
+        }.forEach { check(it.delete()) { "Audio cleanup failed" } }
+    }
+
+    private fun erase(clipIds: Set<String>, removeTranscript: (JSONObject) -> Boolean) {
+        val previous = index
+        val retainedText = transcripts().filterNot(removeTranscript)
+        if (clipIds.isEmpty() && retainedText.size == transcripts().size) return
+        clipIds.forEach(::removePcm)
+        loaded = JSONObject(previous.toString())
+            .put("clips", JSONArray(clips().filterNot { it.getString("id") in clipIds }))
+            .put("transcripts", JSONArray(retainedText))
+        try { save() } catch (error: Exception) {
+            loaded = previous
+            throw error
+        }
+    }
+
     private fun removePcm(id: String) {
         val pcm = file(id)
-        if (pcm.exists()) check(pcm.delete()) { "Audio cleanup failed" }
+        listOf(pcm, File(pcm.path + ".bak"), File(pcm.path + ".new")).forEach {
+            if (it.exists()) check(it.delete()) { "Audio cleanup failed" }
+        }
     }
     fun clear() {
         // Save durable text/labels first; failed PCM deletion must not erase already saved History metadata.
