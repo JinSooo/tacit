@@ -498,3 +498,79 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 - 删除任一原始记录时，同事务清空所有现存模型/自动带入快照正文；内容修订号在发送前、结果保存和业务采用前检查，迟到响应不得写回已删除正文。修正不清除已有快照，但使旧请求结果失效。快照存储失败阻止本次模型整理，普通采集与查询继续。
 - 自动带入保存当次实际返回文本，普通 AI 查询只留元数据与当前内容链接。正文存储失败的自动带入仍可返回，审计明确标记正文不可用。默认预算仍为 800 估算 token，条目带摘要截至时间和待整理提示。
 - 更新运行目录不会自动重载已有 MCP 进程；要获取新版 `get.cursor` 工具定义及响应编码，需要客户端重新连接 MCP。新启动的进程直接使用安装包内的固定运行目录。
+
+## 6. 设备配对与同步（v3，2026-11-19）
+
+Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录和它们的删除、修正；不在手机上展示其他设备的记录。
+
+### 6.1 加密与身份
+
+- HPKE（RFC 9180）：DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / AES-128-GCM。中枢用 `@hpke/core` + `@hpke/dhkem-x25519`，Android 用 BouncyCastle `org.bouncycastle.crypto.hpke.HPKE`；两端共用 `schema/fixtures/device-envelope.json` 的互通向量（中枢生成，Android 单测必须能解开并按相同输入复现密文以外的全部字段）。
+- 中枢长期密钥对：私钥 32 字节十六进制存钥匙串 service `record-anything`、account `device-key`（经 `/usr/bin/security`，同现有密钥）；首次创建配对时生成，`hub_id` = 公钥 SHA-256 前 16 字节的 base32 小写。丢失后所有设备需重新配对，记录不受影响。
+- 设备密钥对：手机本地生成 X25519，私钥用 Android Keystore 包裹的 AES 密钥加密后存本地；只把公钥交给中枢。
+- `device_id` 由中枢在配对时分配：`android-` + 8 位 base32 小写。之后该设备上传的记录 `device` 一律是它；手机在发送时把本机记录的 `device` 改写为这个值（本地库里的原值不改）。
+
+### 6.2 信封
+
+所有设备请求都是 `POST /v1/device`，`Content-Type: application/json`：
+
+```json
+{ "v": 1, "device": "android-abcd1234" | null, "enc": "<base64url>", "ct": "<base64url>" }
+```
+
+- 配对请求 `device` 为 null，HPKE base 模式加密给中枢公钥；其余请求用 auth 模式（发送方是设备私钥），中枢据 `device` 取公钥，解不开即 401。
+- `info` = `tacit-device-v1`；`aad` = UTF-8 的 `device` 值（配对时为空串）。
+- 明文：`{ "op": string, "ts": RFC3339, "nonce": base64url(16 字节), "body": object }`。中枢拒绝 `ts` 与本机时钟相差超过 10 分钟，或 20 分钟内见过的 `nonce`（内存记录，重启清空；所有 op 都幂等）。
+- 响应：HTTP 200，`{ "v": 1, "enc", "ct" }`，中枢用 auth 模式（发送方是中枢私钥）加密给设备公钥，`info` = `tacit-device-v1/response`，`aad` = 请求的 `nonce`。明文 `{ "status": number, "body": object }`，`status` 沿用对应本机接口的 HTTP 状态语义，错误时 `body` 为 `{ error }`。
+- 无法加密回复的错误用明文 JSON：400 信封格式错误；401 `{ "error": "设备未配对或已移除" }`（手机据此提示重新配对）；413 信封超过 8 MiB；503 数据库忙。错误不带细节。
+
+### 6.3 局域网监听
+
+- 中枢在本机监听之外另起一个监听：`0.0.0.0:<lan_port>`，`lan_port` 读 `hub.json` 的 `lan_port`，默认 47824。**只有**存在未过期的配对邀请或至少一台已配对设备时才监听，最后一台设备移除且无邀请时关闭。
+- 这个监听只接受 `POST /v1/device` 和 `GET /v1/device/hello`（无需加密，返回 `{ "hub_id", "v": 1 }`，供手机确认地址上是不是自己的 Mac），其他路径 404，不提供网页、MCP 和管理接口，也不做 Host 校验（安全靠信封）。
+- Bonjour：Mac 采集端在中枢局域网监听开着时登记 `_tacit._tcp`，端口 `lan_port`，TXT `hub=<hub_id>`；中枢在 `GET /v1/settings/devices` 里给出 `lan.open` 和 `lan.port` 供采集端判断。
+- 手机找 Mac 的顺序：上次成功的地址 → 配对邀请里的地址 → Bonjour 按 `hub_id` 解析 → 用户在手机设置里填的地址（任意 `http(s)://host:port`，例如 Tailscale）。每个地址先调 `hello` 核对 `hub_id`。
+
+### 6.4 配对
+
+管理接口（本机监听、管理令牌）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/v1/settings/devices` | `{ lan: { open, port, addrs: ["192.168.1.5:47824"] }, pairing: { expires_at } \| null, devices: [{ id, name, platform, paired_at, last_seen, records, pending_changes }] }` |
+| POST | `/v1/settings/devices/pairing` | 创建邀请（作废旧邀请），10 分钟有效、只能用一次 → `{ uri, expires_at }`；打开局域网监听 |
+| DELETE | `/v1/settings/devices/pairing` | 作废邀请 |
+| DELETE | `/v1/settings/devices/:id` | 移除设备：删公钥和待下发变更；**已入库的记录保留**；之后该设备的请求一律 401 |
+
+- 邀请 `uri` = `tacit://pair?d=<base64url(JSON)>`，JSON 为 `{ "v": 1, "hub_id", "name": "<Mac 电脑名>", "pk": "<中枢公钥 base64url>", "code": "<16 字节随机数 base64url>", "addrs": [...], "expires_at" }`。Mac 设置页把它画成二维码；手机扫码或粘贴。
+- 手机发 op `pair`，`body` = `{ code, device_pk, name, platform: "android" }`。`code` 不对、过期或已用 → `status` 403。成功 → `{ device_id, hub_id, name }`，邀请作废，设备入库。
+- 同一部手机重新配对算新设备（新 `device_id`），旧设备留在列表里由用户移除。
+
+### 6.5 操作
+
+除 `pair` 外，中枢把信封里的 `device` 当作调用方身份，下列 op 中的 `device` 字段一律以它为准（请求体里给了也忽略）。
+
+| op | body | 返回 | 说明 |
+|---|---|---|---|
+| `ingest` | `{ records }` | 同 `/v1/ingest` | 额外规则：`record.device` 必须等于调用方；`source` 必须以 `android.` 开头，或是 `manual.note`，或是 `manual.correction` 且 `corrects` 指向本设备的记录；不符合的那一条进 `rejected` |
+| `delete` | `{ ids }`（1–100） | `{ deleted }` | 只删 `device` 等于调用方的记录（其余 id 忽略），走现有真删流程 |
+| `sync` | `{ cursor }`（首次 0） | `{ changes, cursor, more }` | 中枢下发给这台设备的变更，按 `seq` 升序，每页最多 200 条；见 6.6 |
+| `sync.ack` | `{ cursor }` | `{ ok: true }` | 删除 `seq ≤ cursor` 的待下发变更 |
+| `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`（body 带 `conversation_ref`）、`audio.samples`、`audio.lines` | 同 5.4 对应接口 | 同 5.4 | 只是换了通道 |
+
+每次成功解开的请求都更新设备的 `last_seen`。
+
+### 6.6 下发变更
+
+- 新表 `device_changes(seq INTEGER PRIMARY KEY AUTOINCREMENT, device TEXT NOT NULL, kind TEXT NOT NULL, record_id TEXT NOT NULL, source TEXT, source_ref TEXT, created_at TEXT NOT NULL)`，与触发它的写入同一事务：
+  - `delete`：删除一条 `device` 是已配对设备的记录（不论删除由谁发起，包括这台设备自己，回声无害）。
+  - `correction`：入库一条 `manual.correction`，其 `corrects` 指向已配对设备的记录（不论修正来自 Mac 还是手机）。
+- `sync` 返回的 `changes` 为 `{ seq, kind: "delete", id, source, source_ref }` 或 `{ seq, kind: "correction", record: RecordV1 }`；修正记录若已被删除则跳过这条变更。
+- 手机收到 `delete`：删本地记录、它的修正和待发送条目，写本地墓碑；收到 `correction`：按原样存入本地库（同 id 已存在就跳过）。处理完再 `sync.ack`。
+- 设备移除时删掉它全部待下发变更。
+
+### 6.7 手机上传
+
+- 本地加密库为每条记录维护发送状态：待发送 → 已确认（accepted 或 duplicate）/ 被拒（保留原因，设置页可见，不重试）。回执校验同“Mac 待发送记录”：计数之和等于批大小才更新状态，否则整批重试。每批最多 200 条、信封不超过 8 MiB。
+- 手机上删的记录先进本地删除队列，经 `delete` 发出、成功后出队；本地墓碑阻止同一条再次上传。
+- 触发：有新记录后 30 秒、打开应用、网络恢复，以及 WorkManager 每 15 分钟一次（要求有网络）。连不上就指数退避，最长 1 小时；手机可以攒几天数据。
