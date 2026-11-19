@@ -16,7 +16,7 @@ const readKeychain: ReadKey = account => {
 /** 输出可直接执行的恢复命令；只在用户明确运行 `keys export` 时打印到终端，不写文件。 */
 export function exportKeys(read: ReadKey = readKeychain, today = new Date()): { text: string; missing: string[] } {
   const lines = [
-    `# record-anything 密钥备份（${today.toLocaleDateString("sv-SE")}）`,
+    `# Tacit 密钥备份（${today.toLocaleDateString("sv-SE")}）`,
     "# 存进密码管理器，不要存成普通文件，也不要发给别人。",
     "# 恢复：先把数据目录拷回 ~/Library/Application Support/record-anything/，",
     "# 再在终端运行下面几行，最后安装并打开 Tacit。顺序不能反，否则会生成新密钥。",

@@ -8,6 +8,8 @@ import { redactString } from "./redact.ts";
 import { tools as mcpTools } from "./agent-cli/mcp.ts";
 
 export const AGENT_TOOLS = ["claude-code", "codex", "claude-desktop"] as const;
+/** 在 Claude Code、Codex 里登记的服务名。旧版用 record-anything，连接、断开和升级时一并清理或迁移。 */
+export const SERVER = "tacit", LEGACY_SERVER = "record-anything";
 export type AgentTool = typeof AGENT_TOOLS[number];
 type Json = Record<string, any>;
 export interface InstallEnvironment {
@@ -17,7 +19,25 @@ export interface InstallEnvironment {
   run?: (command: string, args: string[], home: string) => { status: number | null; stdout: string; stderr: string };
   print?: (text: string) => void;
 }
-const quote = (value: string) => /^[\w/.:=-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+export const quote = (value: string) => /^[\w/.:=-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+/** 只解析本应用生成的简单命令，不执行 shell 或展开变量。 */
+export function words(s: string): string[] | null {
+  const result: string[] = []; let value = "", active = false, mode = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (mode) {
+      if (c === mode) mode = "";
+      else if (c === "\\" && mode === '"') { if (++i >= s.length) return null; value += s[i]; }
+      else value += c;
+    } else if (c === "'" || c === '"') { mode = c; active = true; }
+    else if (c === "\\") { if (++i >= s.length) return null; value += s[i]; active = true; }
+    else if (/\s/.test(c)) { if (active) { result.push(value); value = ""; active = false; } }
+    else { if (/[;$`|&<>]/.test(c)) return null; value += c; active = true; }
+  }
+  if (mode) return null;
+  if (active) result.push(value);
+  return result;
+}
 const object = (value: unknown): value is Json => value !== null && typeof value === "object" && !Array.isArray(value);
 
 const desktopConfig = (home: string) => resolve(home, "Library/Application Support/Claude/claude_desktop_config.json");
@@ -36,18 +56,20 @@ function desktopFile(home: string, install: boolean, cli: string, bun: string) {
   let data: Json;
   try { data = existed ? JSON.parse(before) : {}; } catch { throw new Error(`${file} 不是合法 JSON，未写入配置`); }
   if (!object(data) || data.mcpServers !== undefined && !object(data.mcpServers)) throw new Error(`${file} 的 mcpServers 结构无效，未写入配置`);
-  const current = data.mcpServers?.["record-anything"];
-  if (Object.hasOwn(data.mcpServers ?? {}, "record-anything") && !ownsDesktopEntry(current)) {
-    throw new Error("Claude Desktop 中的 record-anything 名称已被其他配置占用，请先在 Claude Desktop 中检查该配置");
+  const current = data.mcpServers?.[SERVER];
+  if (Object.hasOwn(data.mcpServers ?? {}, SERVER) && !ownsDesktopEntry(current)) {
+    throw new Error(`Claude Desktop 中的 ${SERVER} 名称已被其他配置占用，请先在 Claude Desktop 中检查该配置`);
   }
-  if (!install && current === undefined) return { file, existed, before, after: before };
+  const legacy = ownsDesktopEntry(data.mcpServers?.[LEGACY_SERVER]);
+  if (!install && current === undefined && !legacy) return { file, existed, before, after: before };
+  if (legacy) delete data.mcpServers[LEGACY_SERVER];
   if (install) {
     const entry = desktopEntry(cli, bun);
-    if (JSON.stringify(current) === JSON.stringify(entry)) return { file, existed, before, after: before };
+    if (!legacy && JSON.stringify(current) === JSON.stringify(entry)) return { file, existed, before, after: before };
     data.mcpServers ??= {};
-    data.mcpServers["record-anything"] = entry;
+    data.mcpServers[SERVER] = entry;
   } else {
-    delete data.mcpServers["record-anything"];
+    delete data.mcpServers[SERVER];
     if (!Object.keys(data.mcpServers).length) delete data.mcpServers;
   }
   return { file, existed, before, after: JSON.stringify(data, null, 2) + "\n" };
@@ -65,9 +87,12 @@ function hookFile(file: string, install: boolean, cli: string, bun: string, tool
   let data: Json;
   try { data = existed ? JSON.parse(before) : {}; } catch { throw new Error(`${file} 不是合法 JSON，未写入配置`); }
   if (!object(data) || data.hooks !== undefined && !object(data.hooks) || data.hooks?.SessionStart !== undefined && !Array.isArray(data.hooks.SessionStart)) throw new Error(`${file} 的 hooks 结构无效，未写入配置`);
-  const marker = `${cli} hook session-start`;
-  // 带空格的路径会被 shell 引用；同时识别未引用和本模块生成的命令。
-  const ours = (hook: any) => object(hook) && typeof hook.command === "string" && (hook.command.includes(marker) || hook.command.includes(`${quote(cli)} hook session-start`));
+  // 按 shell 规则拆开再比，加没加引号都认得（2026-11-19：升级迁移写的全引号命令曾被当成没连接）。
+  const ours = (hook: any) => {
+    if (!object(hook) || typeof hook.command !== "string") return false;
+    const tokens = words(hook.command);
+    return !!tokens && tokens[1] === cli && tokens[2] === "hook" && tokens[3] === "session-start";
+  };
   let found = false;
   if (!install && !(data.hooks?.SessionStart ?? []).some((row: any) => object(row) && Array.isArray(row.hooks) && row.hooks.some(ours))) return { file, existed, before, after: before };
   const entry = { matcher: "startup|resume|clear|compact", hooks: [{ type: "command", command: `${quote(bun)} ${quote(cli)} hook session-start --tool ${tool}`, timeout: 5 }] };
@@ -127,10 +152,10 @@ function approvalDiff(plan: ReturnType<typeof codexApprovals>) {
 }
 
 // 只定位普通 TOML 表；解析表头以兼容引号和空白，不重排其余文本。
-function codexApprovals(file: string, install: boolean, preserved: string[] = []) {
+function codexApprovals(file: string, install: boolean, preserved: string[] = [], server: string = SERVER) {
   const existed = existsSync(file), before = existed ? readFileSync(file, "utf8") : "";
   const data = Bun.TOML.parse(before) as Json;
-  const target = data.mcp_servers?.["record-anything"]?.tools ?? {};
+  const target = data.mcp_servers?.[server]?.tools ?? {};
   const names = new Set(mcpTools.map(tool => tool.name));
   const sections: { start: number; end: number; path: string[] }[] = [];
   let offset = 0, multiline = "";
@@ -157,17 +182,19 @@ function codexApprovals(file: string, install: boolean, preserved: string[] = []
     }
     offset += line.length;
   }
-  const ours = (keys: string[]) => keys.length === 4 && keys[0] === "mcp_servers" && keys[1] === "record-anything" && keys[2] === "tools" && names.has(keys[3]!);
+  const ours = (keys: string[]) => keys.length === 4 && keys[0] === "mcp_servers" && keys[1] === server && keys[2] === "tools" && names.has(keys[3]!);
   let after = before;
   if (install) {
     const missing = mcpTools.filter(tool => !Object.hasOwn(target, tool.name));
     const additions = missing.map(tool => preserved.find(text => {
       const parsed = Bun.TOML.parse(text) as Json;
-      return Object.hasOwn(parsed.mcp_servers?.["record-anything"]?.tools ?? {}, tool.name);
-    // 只读工具默认免确认；写入工具（history_append）每次都要用户在 Codex 里确认。
-    }) ?? `[mcp_servers.record-anything.tools.${tool.name}]\napproval_mode = "${tool.annotations.readOnlyHint ? "approve" : "prompt"}"\n`).join("\n");
+      const tools = parsed.mcp_servers?.[server]?.tools ?? parsed.mcp_servers?.[LEGACY_SERVER]?.tools ?? {};
+      return Object.hasOwn(tools, tool.name);
+    // 只读工具默认免确认；写入工具（history_append）每次都要用户在 Codex 里确认。旧服务名下的用户规则改到新名下沿用。
+    })?.replace(new RegExp(`^(\\s*\\[\\s*mcp_servers\\s*\\.\\s*)(?:"${LEGACY_SERVER}"|${LEGACY_SERVER})(?=\\s*\\.)`, "m"), `$1${server}`)
+      ?? `[mcp_servers.${server}.tools.${tool.name}]\napproval_mode = "${tool.annotations.readOnlyHint ? "approve" : "prompt"}"\n`).join("\n");
     if (additions) {
-      const parent = sections.find(section => section.path.join(".") === "mcp_servers.record-anything");
+      const parent = sections.find(section => section.path.join(".") === `mcp_servers.${server}`);
       const at = parent?.end ?? before.length;
       after = before.slice(0, at) + (at && before[at - 1] !== "\n" ? "\n" : "") + "\n" + additions + "\n" + before.slice(at);
     }
@@ -204,32 +231,41 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}) {
   const codexFile = resolve(home, ".codex/config.toml");
   // 提前校验 TOML，避免改完 MCP 后才发现原配置损坏。
   const approvalPlan = tools.includes("codex") ? codexApprovals(codexFile, action === "install") : undefined;
+  const legacyApprovals = tools.includes("codex") ? codexApprovals(codexFile, false, [], LEGACY_SERVER).preserved : [];
   print(yes ? "将执行以下改动：" : "预览（未写入；加 --yes 执行）：");
   for (const plan of plans) {
     if (plan.before !== plan.after) print(diff(plan.file, plan.before, plan.after, plan.existed));
     else print(`${plan.file}：无需改动`);
   }
   // Desktop 配置含其他连接器及用户偏好，预览不输出原文或凭据。
-  if (desktopPlan) print(`${desktopPlan.file}：${desktopPlan.before === desktopPlan.after ? "无需改动" : `${action === "install" ? "登记" : "移除"} record-anything 查询服务（保留其他配置）`}`);
+  if (desktopPlan) print(`${desktopPlan.file}：${desktopPlan.before === desktopPlan.after ? "无需改动" : `${action === "install" ? "登记" : "移除"} Tacit 查询服务（保留其他配置）`}`);
   for (const { tool, command } of commands) {
     if (!command) { print(`找不到 ${tool === "codex" ? "codex" : "claude"}，跳过 MCP 注册/移除`); continue; }
-    const remove = tool === "codex" ? ["mcp", "remove", "record-anything"] : ["mcp", "remove", "--scope", "user", "record-anything"];
-    const add = ["mcp", "add", ...(tool === "codex" ? [] : ["--scope", "user"]), "record-anything", "--", bun, cli, "mcp", "--tool", tool];
-    const get = ["mcp", "get", "record-anything"];
-    print(`$ ${[command, ...get].map(quote).join(" ")}`);
-    print(`已注册时执行：${[command, ...remove].map(quote).join(" ")}`);
+    const remove = (name: string) => tool === "codex" ? ["mcp", "remove", name] : ["mcp", "remove", "--scope", "user", name];
+    const add = ["mcp", "add", ...(tool === "codex" ? [] : ["--scope", "user"]), SERVER, "--", bun, cli, "mcp", "--tool", tool];
+    const get = (name: string) => ["mcp", "get", name];
+    print(`$ ${[command, ...get(SERVER)].map(quote).join(" ")}`);
+    print(`已注册时执行：${[command, ...remove(SERVER)].map(quote).join(" ")}`);
+    print(`旧名称已注册时执行：${[command, ...remove(LEGACY_SERVER)].map(quote).join(" ")}`);
     if (action === "install") print(`$ ${[command, ...add].map(quote).join(" ")}`);
     if (tool === "codex" && !yes && approvalPlan && approvalPlan.before !== approvalPlan.after) print(approvalDiff(approvalPlan));
     if (yes) {
-      const registered = run(command, get, home);
-      if (registered.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(registered.stderr + registered.stdout)) throw new Error(`${tool} MCP 查询失败，未继续注册`);
+      const registered = (name: string) => {
+        const result = run(command, get(name), home);
+        if (result.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(result.stderr + result.stdout)) throw new Error(`${tool} MCP 查询失败，未继续注册`);
+        return result.status === 0;
+      };
+      const current = registered(SERVER), legacy = registered(LEGACY_SERVER);
       if (tool === "codex" && approvalPlan?.existed) backupConnection(codexFile);
-      for (const args of [...(registered.status === 0 ? [remove] : []), ...(action === "install" ? [add] : [])]) {
+      for (const args of [...(legacy ? [remove(LEGACY_SERVER)] : []), ...(current ? [remove(SERVER)] : []), ...(action === "install" ? [add] : [])]) {
         if (run(command, args, home).status !== 0) throw new Error(`${tool} MCP ${args[1]} 失败，请检查该工具配置后重试`);
       }
       if (tool === "codex") {
-        const plan = codexApprovals(codexFile, action === "install", approvalPlan?.preserved);
-        if (plan.before !== plan.after) { print(approvalDiff(plan)); saveConnectionPlan(plan); }
+        // 依次读取并保存：第二步必须基于第一步写入后的文件。
+        for (const next of [() => codexApprovals(codexFile, false, [], LEGACY_SERVER), () => codexApprovals(codexFile, action === "install", [...(approvalPlan?.preserved ?? []), ...legacyApprovals])]) {
+          const plan = next();
+          if (plan.before !== plan.after) { print(approvalDiff(plan)); saveConnectionPlan(plan); }
+        }
         pruneConnectionBackups(codexFile);
       }
     }
@@ -265,9 +301,9 @@ export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
       try {
         const text = read(desktopConfig(home));
         const data = text ? JSON.parse(text) : {};
-        const entry = data?.mcpServers?.["record-anything"];
+        const entry = data?.mcpServers?.[SERVER];
         connected = ownsDesktopEntry(entry) && entry.command === bun && entry.args[0] === cli && entry.disabled !== true;
-        partial = Object.hasOwn(data?.mcpServers ?? {}, "record-anything") && !connected;
+        partial = (Object.hasOwn(data?.mcpServers ?? {}, SERVER) || ownsDesktopEntry(data?.mcpServers?.[LEGACY_SERVER])) && !connected;
       } catch { partial = true; }
       return { id, label: LABELS[id], installed: desktopInstalled(home, env), connected, partial };
     }
@@ -281,10 +317,10 @@ export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
     try {
       if (id === "claude-code") {
         const text = read(resolve(home, ".claude.json"));
-        mcp = !!text && object(JSON.parse(text)?.mcpServers?.["record-anything"]);
+        mcp = !!text && object(JSON.parse(text)?.mcpServers?.[SERVER]);
       } else {
         const text = read(resolve(home, ".codex/config.toml"));
-        mcp = !!text && object((Bun.TOML.parse(text) as Json).mcp_servers?.["record-anything"]);
+        mcp = !!text && object((Bun.TOML.parse(text) as Json).mcp_servers?.[SERVER]);
       }
     } catch {}
     return { id, label: LABELS[id], installed: !!which(id === "codex" ? "codex" : "claude"), connected: hook && mcp, partial: hook !== mcp };

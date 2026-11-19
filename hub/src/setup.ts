@@ -149,7 +149,9 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     const collector = join(data, "collector.json");
     writePrivate(collector, JSON.stringify({ ...(readJSON(collector) ?? {}), repo: runtime, bun }, null, 2) + "\n");
     const relocate = o.relocate ?? (await import("./relocate-install.ts")).relocateInstall;
-    log(`已更新 ${relocate(runtime, bun, home).length} 份 AI 工具连接配置。`);
+    // 连接迁移失败不能挡住后台启动；用户可以在设置里重新连接。
+    try { log(`已更新 ${relocate(runtime, bun, home).length} 份 AI 工具连接配置。`); }
+    catch (error) { log(`AI 工具连接没有迁移（${error instanceof Error ? error.message : "未知原因"}），请在 设置 › AI 工具 里重新连接。`); }
     (o.disableFrozen ?? (() => {
       for (const s of FROZEN_SOURCES) spawnSync("/usr/bin/defaults", ["write", "dev.record-anything.collector", `source.${s}.enabled`, "-bool", "false"]);
     }))();

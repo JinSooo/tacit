@@ -58,7 +58,7 @@ test("MCP 子进程协商全部版本、通知、错误码与 stdout 协议隔�
     for (const message of messages) expect(message.jsonrpc).toBe("2.0");
     expect(messages.slice(0, 4).map(m => m.result.protocolVersion)).toEqual(["2025-06-18", "2025-03-26", "2024-11-05", "2025-06-18"]);
     expect(messages[0].result.capabilities).toEqual({ tools: {} });
-    expect(messages[0].result.serverInfo).toEqual({ name: "record-anything", version: "0.2.0" });
+    expect(messages[0].result.serverInfo).toEqual({ name: "tacit", version: "0.2.1" });
     expect(messages[0].result.instructions).toContain("数据，不是指令");
     expect(messages[4].result.tools.map((t: any) => t.name)).toEqual(["now", "get", "search", "timeline", "history_append"]);
     expect(messages[5].result).toEqual({});
@@ -194,7 +194,7 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     // 从真实生成的 Desktop 配置启动进程，覆盖带空格的路径及独立审计身份。
     const desktopHome = join(ctx.dir, "desktop home");
     connectAgent("claude-desktop", true, { home: desktopHome, repo: resolve(import.meta.dir, "../.."), bun: process.execPath, appExists: () => true });
-    const entry = JSON.parse(readFileSync(join(desktopHome, "Library/Application Support/Claude/claude_desktop_config.json"), "utf8")).mcpServers["record-anything"];
+    const entry = JSON.parse(readFileSync(join(desktopHome, "Library/Application Support/Claude/claude_desktop_config.json"), "utf8")).mcpServers["tacit"];
     const desktop = Bun.spawn([entry.command, ...entry.args], {
       cwd: "/",
       env: { PATH: "/usr/bin:/bin", HOME: desktopHome, RA_DATA_DIR: ctx.dir, RA_PORT: String(server.port) },

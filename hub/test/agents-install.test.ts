@@ -29,7 +29,7 @@ test("预览给出 unified diff 和外部命令，既不写文件也不调用外
   expect(existsSync(join(ctx.home, ".codex"))).toBe(false);
   expect(ctx.calls).toEqual([]);
   expect(ctx.output.join("\n")).toContain("@@ -1,");
-  expect(ctx.output.join("\n")).toContain("--scope user record-anything --");
+  expect(ctx.output.join("\n")).toContain("--scope user tacit --");
   expect(ctx.output.join("\n")).toContain("trusted_hash");
 });
 
@@ -52,7 +52,7 @@ test("Desktop 不依赖 CLI 或 hook：预览不泄密，连接幂等并保留�
   const data = JSON.parse(readFileSync(file, "utf8"));
   expect(data.preferences).toEqual(original.preferences);
   expect(data.mcpServers.unrelated).toEqual(original.mcpServers.unrelated);
-  expect(data.mcpServers["record-anything"]).toEqual({ command: ctx.env.bun, args: [ctx.env.repo + "/hub/src/cli.ts", "mcp", "--tool", "claude-desktop"] });
+  expect(data.mcpServers["tacit"]).toEqual({ command: ctx.env.bun, args: [ctx.env.repo + "/hub/src/cli.ts", "mcp", "--tool", "claude-desktop"] });
   expect(statSync(file).mode & 0o777).toBe(0o600);
   const files = readdirSync(dirname(file));
   expect(files.some(name => name.includes(".ra-backup-") && readFileSync(join(dirname(file), name), "utf8") === before)).toBe(true);
@@ -72,15 +72,23 @@ test("Desktop 损坏配置和同名冲突不覆盖；路径过期可重新连接
   const ctx = setup(); ctx.env.appExists = () => true;
   const file = join(ctx.home, "Library/Application Support/Claude/claude_desktop_config.json");
   ctx.write({}, file);
-  for (const text of ["{broken", "null", "[]", '{"mcpServers":[]}', '{"mcpServers":{"record-anything":{"command":"unrelated"}}}']) {
+  for (const text of ["{broken", "null", "[]", '{"mcpServers":[]}', '{"mcpServers":{"tacit":{"command":"unrelated"}}}']) {
     writeFileSync(file, text);
     expect(() => connectAgent("claude-desktop", true, ctx.env)).toThrow();
     expect(readFileSync(file, "utf8")).toBe(text);
     expect(readdirSync(dirname(file))).toEqual(["claude_desktop_config.json"]);
   }
-  ctx.write({ mcpServers: { "record-anything": { command: "/old/bun", args: ["/old/repo/hub/src/cli.ts", "mcp", "--tool", "claude-desktop"] } } }, file);
+  ctx.write({ mcpServers: { "tacit": { command: "/old/bun", args: ["/old/repo/hub/src/cli.ts", "mcp", "--tool", "claude-desktop"] } } }, file);
   expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")).toMatchObject({ connected: false, partial: true });
   expect(connectAgent("claude-desktop", true, ctx.env).states.find(t => t.id === "claude-desktop")).toMatchObject({ connected: true, partial: false });
+  // 旧名称下的本应用条目：显示需要重新连接，连接后换成新名称，旧条目移除；别人的同名旧条目不动。
+  ctx.write({ mcpServers: { "record-anything": { command: "/old/bun", args: ["/old/repo/hub/src/cli.ts", "mcp", "--tool", "claude-desktop"] } } }, file);
+  expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")).toMatchObject({ connected: false, partial: true });
+  connectAgent("claude-desktop", true, ctx.env);
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")).mcpServers)).toEqual(["tacit"]);
+  ctx.write({ mcpServers: { "record-anything": { command: "someone-else" } } }, file);
+  connectAgent("claude-desktop", true, ctx.env);
+  expect(Object.keys(JSON.parse(readFileSync(file, "utf8")).mcpServers).sort()).toEqual(["record-anything", "tacit"]);
 });
 
 test("默认安装不连接 Desktop；默认卸载包含卸载应用后留下的 Desktop 配置", () => {
@@ -119,7 +127,8 @@ test("两工具安装幂等，保留用户 hook、字段顺序、权限和最近
   }
   expect(statSync(ctx.file).mode & 0o777).toBe(0o640);
   expect(readdirSync(dirname(ctx.file)).filter(name => name.includes(".ra-backup-"))).toHaveLength(1);
-  expect(ctx.calls.slice(0, 3).map(call => call[2])).toEqual(["get", "remove", "add"]);
+  // 新旧两个名字都查；旧名称和当前名称已注册时先移除再登记。
+  expect(ctx.calls.slice(0, 5).map(call => `${call[2]} ${call.includes("record-anything") ? "record-anything" : "tacit"}`)).toEqual(["get tacit", "get record-anything", "remove record-anything", "remove tacit", "add tacit"]);
   expect(ctx.calls.some(call => call.includes("--scope"))).toBe(true);
   expect(ctx.calls.some(call => call[0] === "/fake/codex" && call.includes("--scope"))).toBe(false);
   // shell 引用实际解析后仍是绝对路径和原始参数，不执行目标命令。
@@ -161,7 +170,7 @@ test("混合条目卸载只移除本仓库命令，并清理重复注册", () =>
 test("未注册不 remove，命令失败中止，非法参数不触发操作", () => {
   const ctx = setup(); ctx.missing();
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
-  expect(ctx.calls.map(call => call[2])).toEqual(["get", "add"]);
+  expect(ctx.calls.map(call => call[2])).toEqual(["get", "get", "add"]);
   ctx.env.run = () => ({ status: 1, stdout: "", stderr: "configuration parse error" });
   expect(() => runAgents(["uninstall", "--yes"], ctx.env)).toThrow("查询失败");
   for (const args of [[], ["install", "--tool"], ["install", "--tool", "other"], ["install", "--unknown"]]) expect(() => runAgents(args, ctx.env)).toThrow();
@@ -181,23 +190,23 @@ test("默认子进程执行器只运行临时假命令，并隔离 HOME 和工�
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   const log = readFileSync(join(ctx.home, "commands.log"), "utf8");
   expect(log).toContain(`${ctx.home}\n${join(ctx.home, ".codex")}\n${join(ctx.home, ".claude")}\n`);
-  expect(log).toContain("mcp\nget\nrecord-anything\n");
-  expect(log).toContain("mcp\nremove\nrecord-anything\n");
-  expect(log).toContain("mcp\nadd\nrecord-anything\n--\n/tmp/bun bin\n/tmp/合成仓库 with 'quote'/hub/src/cli.ts\nmcp\n--tool\ncodex\n");
+  expect(log).toContain("mcp\nget\ntacit\n");
+  expect(log).toContain("mcp\nremove\ntacit\n");
+  expect(log).toContain("mcp\nadd\ntacit\n--\n/tmp/bun bin\n/tmp/合成仓库 with 'quote'/hub/src/cli.ts\nmcp\n--tool\ncodex\n");
   expect(readdirSync(join(ctx.home, ".codex")).some(name => name.includes(".ra-tmp-"))).toBe(false);
 });
 
 test("Codex 预览只显示缺失工具的追加，不泄露其他配置且不写入", () => {
   const ctx = setup(), file = join(ctx.home, ".codex/config.toml");
   mkdirSync(dirname(file));
-  const original = '[mcp_servers.record-anything]\ncommand = "bun"\n[mcp_servers.record-anything.tools.now]\napproval_mode = "prompt"\n[mcp_servers.other]\ncommand = "合成保密配置"\n';
+  const original = '[mcp_servers.tacit]\ncommand = "bun"\n[mcp_servers.tacit.tools.now]\napproval_mode = "prompt"\n[mcp_servers.other]\ncommand = "合成保密配置"\n';
   writeFileSync(file, original);
   runAgents(["install", "--tool", "codex"], ctx.env);
   const output = ctx.output.join("\n");
-  expect(output).toContain('+[mcp_servers.record-anything.tools.get]');
+  expect(output).toContain('+[mcp_servers.tacit.tools.get]');
   expect(output).toContain('+approval_mode = "approve"');
   expect(output).not.toContain("合成保密配置");
-  expect(output).not.toContain('+[mcp_servers.record-anything.tools.now]');
+  expect(output).not.toContain('+[mcp_servers.tacit.tools.now]');
   expect(readFileSync(file, "utf8")).toBe(original);
   expect(ctx.calls).toEqual([]);
 });
@@ -205,12 +214,12 @@ test("Codex 预览只显示缺失工具的追加，不泄露其他配置且不�
 test("Codex 文本补齐保留现有工具规则、其他服务、权限并备份，重复安装不追加", () => {
   const ctx = setup(), file = join(ctx.home, ".codex/config.toml");
   mkdirSync(dirname(file));
-  const original = '# 合成配置\n[mcp_servers.record-anything]\ncommand = "bun"\n[mcp_servers."record-anything".tools."now"] # 保留用户规则\napproval_mode = "prompt"\n[mcp_servers.other]\ncommand = "other"\n';
+  const original = '# 合成配置\n[mcp_servers.tacit]\ncommand = "bun"\n[mcp_servers."tacit".tools."now"] # 保留用户规则\napproval_mode = "prompt"\n[mcp_servers.other]\ncommand = "other"\n';
   writeFileSync(file, original); chmodSync(file, 0o640);
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   const installed = readFileSync(file, "utf8"), data = Bun.TOML.parse(installed) as any;
-  expect(data.mcp_servers["record-anything"].tools).toEqual({ now: { approval_mode: "prompt" }, get: { approval_mode: "approve" }, search: { approval_mode: "approve" }, timeline: { approval_mode: "approve" }, history_append: { approval_mode: "prompt" } });
-  expect(installed).toContain('[mcp_servers."record-anything".tools."now"] # 保留用户规则\napproval_mode = "prompt"');
+  expect(data.mcp_servers["tacit"].tools).toEqual({ now: { approval_mode: "prompt" }, get: { approval_mode: "approve" }, search: { approval_mode: "approve" }, timeline: { approval_mode: "approve" }, history_append: { approval_mode: "prompt" } });
+  expect(installed).toContain('[mcp_servers."tacit".tools."now"] # 保留用户规则\napproval_mode = "prompt"');
   expect(installed).toContain('[mcp_servers.other]\ncommand = "other"\n');
   expect(installed.indexOf("tools.get")).toBeLessThan(installed.indexOf('tools."now"'));
   expect(statSync(file).mode & 0o777).toBe(0o640);
@@ -219,20 +228,20 @@ test("Codex 文本补齐保留现有工具规则、其他服务、权限并备�
   expect(readFileSync(file, "utf8")).toBe(installed);
   runAgents(["uninstall", "--tool", "codex", "--yes"], ctx.env);
   const removed = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
-  expect(removed.mcp_servers["record-anything"].tools).toBeUndefined();
+  expect(removed.mcp_servers["tacit"].tools).toBeUndefined();
   expect(removed.mcp_servers.other.command).toBe("other");
 });
 
 test("Codex 卸载兜底仅清理四表，保留其他工具、数组表和多行字符串", () => {
   const ctx = setup(), file = join(ctx.home, ".codex/config.toml");
   mkdirSync(dirname(file));
-  const literal = 'description = """\n[mcp_servers.record-anything.tools.now]\n这是合成字符串\n"""\n';
-  writeFileSync(file, literal + '[mcp_servers.record-anything.tools.now]\napproval_mode = "approve"\n[[custom]]\nname = "保留数组项"\n[mcp_servers.record-anything.tools.other]\napproval_mode = "prompt"\n');
+  const literal = 'description = """\n[mcp_servers.tacit.tools.now]\n这是合成字符串\n"""\n';
+  writeFileSync(file, literal + '[mcp_servers.tacit.tools.now]\napproval_mode = "approve"\n[[custom]]\nname = "保留数组项"\n[mcp_servers.tacit.tools.other]\napproval_mode = "prompt"\n');
   runAgents(["uninstall", "--tool", "codex", "--yes"], ctx.env);
   const content = readFileSync(file, "utf8"), data = Bun.TOML.parse(content) as any;
   expect(content).toStartWith(literal);
   expect(data.custom).toEqual([{ name: "保留数组项" }]);
-  expect(data.mcp_servers["record-anything"].tools).toEqual({ other: { approval_mode: "prompt" } });
+  expect(data.mcp_servers["tacit"].tools).toEqual({ other: { approval_mode: "prompt" } });
 });
 
 test.skipIf(!Bun.which("codex"))("真实 Codex 在临时 HOME 安装、重装保留既有工具规则，卸载连带移除子表", () => {
@@ -245,14 +254,28 @@ test.skipIf(!Bun.which("codex"))("真实 Codex 在临时 HOME 安装、重装保
   ctx.env.run = undefined;
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   let data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
-  expect(Object.keys(data.mcp_servers["record-anything"].tools).sort()).toEqual(["get", "history_append", "now", "search", "timeline"]);
-  expect(data.mcp_servers["record-anything"].tools.history_append.approval_mode).toBe("prompt");
+  expect(Object.keys(data.mcp_servers["tacit"].tools).sort()).toEqual(["get", "history_append", "now", "search", "timeline"]);
+  expect(data.mcp_servers["tacit"].tools.history_append.approval_mode).toBe("prompt");
   writeFileSync(file, readFileSync(file, "utf8").replace('approval_mode = "approve"', 'approval_mode = "prompt"'));
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
-  expect(data.mcp_servers["record-anything"].tools.now.approval_mode).toBe("prompt");
+  expect(data.mcp_servers["tacit"].tools.now.approval_mode).toBe("prompt");
   runAgents(["uninstall", "--tool", "codex", "--yes"], ctx.env);
   data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
-  expect(data.mcp_servers["record-anything"]).toBeUndefined();
+  expect(data.mcp_servers["tacit"]).toBeUndefined();
   expect(data.mcp_servers.unrelated.command).toBe("/usr/bin/true");
+});
+
+test("Codex 从旧服务名改连：旧名称下的用户工具规则沿用到新名称，旧的工具子表移除", () => {
+  const ctx = setup(), file = join(ctx.home, ".codex/config.toml");
+  mkdirSync(dirname(file));
+  writeFileSync(file, '[mcp_servers.record-anything]\ncommand = "bun"\n[mcp_servers."record-anything".tools."now"] # 用户规则\napproval_mode = "prompt"\n[mcp_servers.other]\ncommand = "other"\n');
+  runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
+  const content = readFileSync(file, "utf8"), data = Bun.TOML.parse(content) as any;
+  expect(data.mcp_servers.tacit.tools.now.approval_mode).toBe("prompt");
+  expect(data.mcp_servers.tacit.tools.get.approval_mode).toBe("approve");
+  expect(data.mcp_servers["record-anything"]?.tools).toBeUndefined();
+  expect(content).toContain('[mcp_servers.tacit.tools."now"] # 用户规则');
+  expect(data.mcp_servers.other.command).toBe("other");
+  expect(ctx.calls.some(call => call[2] === "remove" && call[3] === "record-anything")).toBe(true);
 });

@@ -133,7 +133,9 @@
 - general 存在 `distill_state` 表的 `general_settings` 键里。中枢生成自动注入时、提炼进程每轮线程生命周期步骤时现读，改完不需要重启。
 - 只监听 127.0.0.1；没有开放局域网的接口，配对和应用层 HPKE 加密之后才开放（v3），`lan` 目前恒为 false。
 
-Claude Desktop 的 MCP 配置写入 `~/Library/Application Support/Claude/claude_desktop_config.json` 的 `mcpServers.record-anything`：Bun 与入口均用绝对路径，参数为 `<repo>/hub/src/cli.ts mcp --tool claude-desktop`。不写 token、不登记 hook、不采集 Desktop 聊天记录。保留其他连接器和偏好；写前备份，原子替换；同名非本工具配置拒绝覆盖。路径过期显示 `partial`，重新连接修复。默认 `agents install` 在发现应用时包含 Desktop，默认 `uninstall` 也清理应用移除后遗留的配置。读取及用户明确要求的追加沿用 4.6，审计 tool 为 `claude-desktop`。
+在 Claude Code、Codex 和 Claude Desktop 里登记的服务名是 `tacit`（工具名形如 `mcp__tacit__search`）。0.2.0 以前叫 `record-anything`：升级时（`hub/src/relocate-install.ts`）把本应用登记的旧条目原位改名，Codex 的工具审批子表和 Claude Code 用户设置里 `mcp__record-anything…` 的权限规则一并改名；设置页连接或断开时也会移除本应用的旧条目。同名的他人条目不动。
+
+Claude Desktop 的 MCP 配置写入 `~/Library/Application Support/Claude/claude_desktop_config.json` 的 `mcpServers.tacit`：Bun 与入口均用绝对路径，参数为 `<repo>/hub/src/cli.ts mcp --tool claude-desktop`。不写 token、不登记 hook、不采集 Desktop 聊天记录。保留其他连接器和偏好；写前备份，原子替换；同名非本工具配置拒绝覆盖。路径过期显示 `partial`，重新连接修复。默认 `agents install` 在发现应用时包含 Desktop，默认 `uninstall` 也清理应用移除后遗留的配置。读取及用户明确要求的追加沿用 4.6，审计 tool 为 `claude-desktop`。
 
 ## 4. 提炼层（v1）
 

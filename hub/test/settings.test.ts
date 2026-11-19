@@ -303,9 +303,9 @@ test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；�
       calls.push([command, ...args]);
       // 合成的 claude：mcp add 写 ~/.claude.json，mcp get 按是否写过返回。
       const file = join(home, ".claude.json");
-      if (args[1] === "add") writeFileSync(file, JSON.stringify({ mcpServers: { "record-anything": { command: "bun" } } }));
+      if (args[1] === "add") writeFileSync(file, JSON.stringify({ mcpServers: { [args.at(-7)!]: { command: "bun" } } }));
       if (args[1] === "remove") writeFileSync(file, "{}");
-      const registered = existsSync(file) && readFileSync(file, "utf8").includes("record-anything");
+      const registered = existsSync(file) && Object.hasOwn(JSON.parse(readFileSync(file, "utf8")).mcpServers ?? {}, args.at(-1)!);
       return args[1] === "get" ? { status: registered ? 0 : 1, stdout: "", stderr: registered ? "" : "No MCP server found" } : { status: 0, stdout: "", stderr: "" };
     },
   };

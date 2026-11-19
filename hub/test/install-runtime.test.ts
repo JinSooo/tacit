@@ -16,7 +16,7 @@ test("已连接工具迁移固定路径：保留用户配置、权限选择，�
   const home = temp(), runtime = join(home, "Tacit runtime's"), bun = process.execPath, old = "/old/repo/hub/src/cli.ts";
   const mcp = (tool: string) => ({ command: "/old/bun", args: [old, "mcp", "--tool", tool], disabled: true });
   const hook = (tool: string) => ({ type: "command", command: `/old/bun ${old} hook session-start --tool ${tool}`, timeout: 5 });
-  write(join(home, ".claude/settings.json"), { unrelated: 2, hooks: { SessionStart: [{ hooks: [hook("claude-code"), { command: "echo unchanged" }] }] } });
+  write(join(home, ".claude/settings.json"), { unrelated: 2, permissions: { allow: ["mcp__record-anything__search", "mcp__record-anything", "mcp__tacit", "Bash(ls)"] }, hooks: { SessionStart: [{ hooks: [hook("claude-code"), { command: "echo unchanged" }] }] } });
   write(join(home, ".claude.json"), { mcpServers: { "record-anything": mcp("claude-code"), other: { command: "untouched" } } });
   write(join(home, ".codex/hooks.json"), { hooks: { SessionStart: [{ hooks: [hook("codex")] }] } });
   write(join(home, ".codex/config.toml"), `# keep comment\nmodel = "synthetic"\n[mcp_servers.record-anything]\ncommand = "/old/bun"\nargs = [\n "${old}",\n "mcp", "--tool", "codex"\n]\nenabled = false\n[mcp_servers.record-anything.tools.history_append]\napproval_mode = "prompt"\n[mcp_servers.other]\ncommand = "untouched"\n`);
@@ -25,13 +25,33 @@ test("已连接工具迁移固定路径：保留用户配置、权限选择，�
   const toml = readFileSync(join(home, ".codex/config.toml"), "utf8");
   expect(toml).toStartWith('# keep comment\nmodel = "synthetic"');
   const parsed = Bun.TOML.parse(toml) as any;
-  expect(parsed.mcp_servers["record-anything"].args[0]).toBe(join(runtime, "hub/src/cli.ts"));
-  expect(parsed.mcp_servers["record-anything"].enabled).toBe(false);
-  expect(parsed.mcp_servers["record-anything"].tools.history_append.approval_mode).toBe("prompt");
+  // 服务名从 record-anything 改成 tacit：位置、用户选择和工具规则都保留。
+  expect(parsed.mcp_servers["record-anything"]).toBeUndefined();
+  expect(parsed.mcp_servers.tacit.args[0]).toBe(join(runtime, "hub/src/cli.ts"));
+  expect(parsed.mcp_servers.tacit.enabled).toBe(false);
+  expect(parsed.mcp_servers.tacit.tools.history_append.approval_mode).toBe("prompt");
+  expect(toml).toContain("[mcp_servers.tacit.tools.history_append]");
   expect(parsed.mcp_servers.other.command).toBe("untouched");
-  expect(JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers["record-anything"].disabled).toBe(true);
+  const claude = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
+  expect(Object.keys(claude.mcpServers)).toEqual(["tacit", "other"]);
+  expect(claude.mcpServers.tacit.disabled).toBe(true);
+  expect(JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")).permissions.allow).toEqual(["mcp__tacit__search", "mcp__tacit", "Bash(ls)"]);
+  expect(Object.keys(JSON.parse(readFileSync(join(home, "Library/Application Support/Claude/claude_desktop_config.json"), "utf8")).mcpServers)).toEqual(["tacit"]);
   expect(relocateInstall(runtime, bun, home)).toEqual([]);
   const empty = temp(); expect(relocateInstall(runtime, bun, empty)).toEqual([]); expect(readdirSync(empty)).toEqual([]);
+});
+
+// 回归：v0.2.0 迁移把钩子写成全引号命令，设置页按未加引号的形式识别，已连接的工具显示成需要重新连接（2026-11-19 实测）。
+test("迁移后的连接在设置页显示为已连接（路径不含需要引号的字符）", () => {
+  const home = temp(), runtime = join(home, "runtime"), bun = join(home, "bin/bun"), old = "/old/repo/hub/src/cli.ts";
+  const hook = (tool: string) => ({ type: "command", command: `/old/bun ${old} hook session-start --tool ${tool}`, timeout: 5 });
+  write(join(home, ".claude/settings.json"), { hooks: { SessionStart: [{ hooks: [hook("claude-code")] }] } });
+  write(join(home, ".claude.json"), { mcpServers: { tacit: { command: "/old/bun", args: [old, "mcp", "--tool", "claude-code"] } } });
+  write(join(home, ".codex/hooks.json"), { hooks: { SessionStart: [{ hooks: [hook("codex")] }] } });
+  write(join(home, ".codex/config.toml"), `[mcp_servers.tacit]\ncommand = "/old/bun"\nargs = ["${old}", "mcp", "--tool", "codex"]\n`);
+  relocateInstall(runtime, bun, home);
+  const states = agentStatus({ home, repo: runtime, bun, which: c => `/fake/${c}`, appExists: () => false });
+  expect(states.filter(s => s.id !== "claude-desktop").map(s => [s.id, s.connected, s.partial])).toEqual([["claude-code", true, false], ["codex", true, false]]);
 });
 
 test("升级停用旧终端钩子，保留配置链接和缓冲过的历史，旧进程无法继续追加", () => {
@@ -66,8 +86,10 @@ test("配置预检失败时不迁移任何文件；不覆盖同名非本应用 M
   write(join(home, ".codex/config.toml"), "broken = [");
   expect(() => relocateInstall("/runtime", "/bun", home)).toThrow(); expect(readFileSync(file, "utf8")).toBe(before);
   write(join(home, ".codex/config.toml"), '[mcp_servers.record-anything]\ncommand="other"\nargs=["custom"]\n');
+  write(join(home, ".claude.json"), { mcpServers: { "record-anything": { command: "other" } } });
   relocateInstall("/runtime", "/bun", home);
-  expect(readFileSync(join(home, ".codex/config.toml"), "utf8")).toContain('command="other"');
+  expect(readFileSync(join(home, ".codex/config.toml"), "utf8")).toBe('[mcp_servers.record-anything]\ncommand="other"\nargs=["custom"]\n');
+  expect(Object.keys(JSON.parse(readFileSync(join(home, ".claude.json"), "utf8")).mcpServers)).toEqual(["record-anything"]);
 });
 
 test("打包运行目录独立启动真实数据库与 MCP，修改源码副本不影响安装快照", () => {
