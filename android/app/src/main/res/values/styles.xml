@@ -1,0 +1,1 @@
+<resources><style name="Theme.Tacit" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">true</item><item name="android:windowActionModeOverlay">true</item><item name="android:colorAccent">#3B7468</item><item name="android:windowBackground">#FBFAF7</item></style></resources>
