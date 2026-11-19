@@ -1,8 +1,3 @@
-#ai {
-  margin-block-start: clamp(72px, 9vw, 128px);
-  padding-block: clamp(64px, 8vw, 112px);
-}
-
 #ai .section-head {
   margin-block-end: clamp(32px, 5vw, 64px);
 }
@@ -15,7 +10,7 @@
 }
 
 .ai-terminal {
-  background: var(--raised);
+  background: var(--night);
   border: 1px solid var(--line);
   border-radius: var(--r-stage);
   font-family: var(--mono), var(--sans);
