@@ -16,16 +16,6 @@
   text-wrap: wrap;
 }
 
-.download-layout .btn-primary {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
-.download-layout .btn-primary:hover {
-  background: var(--ink);
-  color: var(--paper);
-}
-
 .download-requirements {
   margin-top: 12px;
 }

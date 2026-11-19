@@ -147,8 +147,10 @@
 
 .more-meeting {
   grid-area: 1 / 1;
-  padding-left: clamp(16px, 3vw, 40px);
-  border-inline-start: 2px solid var(--accent);
+  padding: clamp(20px, 3vw, 32px);
+  border: 1px solid var(--line);
+  border-radius: var(--r-stage);
+  background: var(--raised);
   color: var(--reading);
 }
 
