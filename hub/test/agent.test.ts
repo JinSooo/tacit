@@ -472,4 +472,9 @@ test("自动带入附加最新两条有效未决，按 60 码点截断，失效�
   for (const text of ["旧未决不带入", "失效未决不带入", "决定不带入"]) expect(result.text).not.toContain(text);
   expect(result.text.split("\n").find((s: string) => s.includes("[empty]"))).not.toContain("未决");
   expect(result.tokens_est).toBe(estimateTokens(result.text));
+  const preview = await read("/v1/projects/p/context");
+  expect(preview.threads.map(({ id, open }: { id: string; open: string[] }) => ({ id, open }))).toEqual([
+    { id: "t", open: ["待".repeat(60) + "…", "等待虚构服务响应"] },
+    { id: "empty", open: [] },
+  ]);
 });

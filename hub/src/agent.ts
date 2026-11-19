@@ -116,7 +116,7 @@ export class AgentReads {
         const points = Array.from(line(text).replace(/[。；;.]+$/u, ""));
         return points.slice(0, 60).join("") + (points.length > 60 ? "…" : "");
       });
-      return { thread: t, text: `事项 ${line(t.title)} [${t.id}]（${t.status === "active" ? "进行中" : "已暂停"}，${freshness(t)}）：${line(t.brief!)}${open.length ? (/[。！？.!?]$/u.test(line(t.brief!)) ? "" : "。") + "未决：" + open.join("；") : ""}` };
+      return { thread: { ...t, open }, text: `事项 ${line(t.title)} [${t.id}]（${t.status === "active" ? "进行中" : "已暂停"}，${freshness(t)}）：${line(t.brief!)}${open.length ? (/[。！？.!?]$/u.test(line(t.brief!)) ? "" : "。") + "未决：" + open.join("；") : ""}` };
     });
     const render = () => [intro,`项目：${line(project.name)}`,...entries.map(e => e.text),hint].join("\n");
     // 预算不足先舍弃最旧的事项；没有可带入的事项时，连标题也不发。

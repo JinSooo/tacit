@@ -259,7 +259,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 | GET | `/v1/timeline?thread_id&before&limit` | 按引用原文的现有事项归属筛选已整理的段，按天倒序分页，支持无项目的事项 |
 | GET | `/v1/timeline?q&before&limit` | 段标题和修正后的描述匹配所有关键词，按天倒序分页 |
 | GET | `/v1/timeline/record/:id` | `{ date, segment_id }`，定位记录所属的段。原文有但未入段时返回原始日期和空段 ID |
-| GET | `/v1/projects/:id/context` | `{ threads }`，按实际会话带入规则和预算选出的事项简略版，不记 Agent 审计 |
+| GET | `/v1/projects/:id/context` | `{ threads }`，按实际会话带入规则和预算选出的事项简略版，每项含 `open: string[]`，与带入使用相同的最新两条有效未决文字及 60 码点截断，不记 Agent 审计 |
 | PATCH | `/v1/days/:date/segments/:id` | `{ description }` 替换描述，返回 `{ item }` |
 | DELETE | `/v1/days/:date/segments/:id` | `{ record_ids }` 确认待删成员。成员变化返回 409，成功返回 `{ deleted }` |
 | GET | `/v1/pending` | 当前待确认项。既有的事项完成提问保留在库中 |

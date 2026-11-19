@@ -4,9 +4,11 @@ import CollectorCore
 struct ProjectPage: View {
   let id: String
   @Environment(ViewerStore.self) private var store
+  @State private var overview: (revision: Int, brief: String)?
   @State private var context = Loader<[HubThread]>()
   @State private var timeline = Loader<HubAPI.TimelineResult>()
-  @State private var expanded: String?
+  @State private var expandedThread: String?
+  @State private var expandedSegment: String?
   @State private var loadingMore = false
   @State private var moreError: String?
   @State private var loadedRevision: Int?
@@ -16,19 +18,16 @@ struct ProjectPage: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
-        if store.section != .project(id) {
-          Text(store.project(id)?.name ?? "项目")
-            .font(.system(size: TextSize.heading, weight: .semibold)).foregroundStyle(Palette.ink)
-            .accessibilityAddTraits(.isHeader)
-        }
+      VStack(alignment: .leading, spacing: 32) {
+        projectOverview
         VStack(alignment: .leading, spacing: 12) {
-          sectionTitle("新会话会带入的内容")
-          contextPreview
+          sectionTitle("正在推进")
+          ongoingWork
         }
+        .padding(.horizontal, TimelineReadingLayout.edge)
         .task(id: store.revision) { await loadContext() }
         VStack(alignment: .leading, spacing: 12) {
-          sectionTitle("各件事的经过")
+          sectionTitle("最近的进展").padding(.horizontal, TimelineReadingLayout.edge)
           results
         }
       }
@@ -38,44 +37,54 @@ struct ProjectPage: View {
     .navigationTitle("")
     .modifier(QuietPageTitle())
     .toolbar { BackButton() }
+    .task(id: store.revision) { await loadOverview() }
     .task(id: store.revision) { await load() }
   }
 
+  @ViewBuilder private var projectOverview: some View {
+    let showsName = store.section != .project(id)
+    let brief = overview?.revision == store.revision ? overview?.brief : nil
+    if showsName || brief != nil {
+      VStack(alignment: .leading, spacing: 8) {
+        if showsName {
+          Text(store.project(id)?.name ?? "项目")
+            .font(.system(size: TextSize.heading, weight: .semibold)).foregroundStyle(Palette.ink)
+            .accessibilityAddTraits(.isHeader)
+        }
+        if let brief {
+          Text(brief).font(.system(size: TextSize.body)).foregroundStyle(Palette.readingBody)
+            .lineSpacing(TextSize.lineSpacing(TextSize.body))
+        }
+      }
+      .padding(.horizontal, TimelineReadingLayout.edge)
+    }
+  }
+
   private func sectionTitle(_ title: String) -> some View {
-    Text(title).font(.system(size: TextSize.title, weight: .semibold)).foregroundStyle(Palette.ink)
+    Text(title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.readingBody)
       .accessibilityAddTraits(.isHeader)
   }
 
-  @ViewBuilder private var contextPreview: some View {
+  @ViewBuilder private var ongoingWork: some View {
     if contextRevision == store.revision, let error = context.error {
       Placeholder(kind: .error(error) { Task { await loadContext() } })
     } else if contextRevision == store.revision, let list = context.value {
       if list.isEmpty {
-        Text("当前没有可带入的内容。")
-          .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        Text("现在没有正在推进的事。")
+          .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
       } else {
         LazyVStack(alignment: .leading, spacing: 0) {
           ForEach(list) { thread in
-            Rectangle().fill(Palette.hairline).frame(height: 1).accessibilityHidden(true)
-            Button { store.path.append(.thread(thread.id)) } label: {
-              HStack(alignment: .firstTextBaseline, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                  Text(thread.title).font(.system(size: TextSize.title, weight: .semibold)).foregroundStyle(Palette.ink)
-                  if let brief = thread.cardSummary {
-                    Text(brief).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
-                  }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                PhIcon("caret-right", size: 11).foregroundStyle(Palette.muted).accessibilityHidden(true)
-              }
-              .multilineTextAlignment(.leading).padding(.vertical, 12).contentShape(Rectangle())
+            ProjectContextRow(thread: thread, expanded: expandedThread == thread.id) {
+              expandedThread = expandedThread == thread.id ? nil : thread.id
             }
-            .buttonStyle(TimelineRowStyle())
           }
         }
+        Text("新会话会带入这几件事。")
+          .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
       }
     } else {
-      ProgressView().controlSize(.small).accessibilityLabel("正在读取带入内容")
+      ProgressView().controlSize(.small).accessibilityLabel("正在读取正在推进的事")
     }
   }
 
@@ -86,26 +95,47 @@ struct ProjectPage: View {
       if page.days.isEmpty {
         Text("这个项目还没有可展示的整理结果。")
           .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+          .padding(.horizontal, TimelineReadingLayout.edge)
       } else {
-        let updates = page.days.flatMap { day in day.items.map { ProjectUpdate(day: day.date, item: $0) } }
-        LazyVStack(alignment: .leading, spacing: 0) {
-          ForEach(ProjectReading.stories(updates)) { story in
-            ProjectStoryRow(story: story, expanded: expanded == story.id) {
-              expanded = expanded == story.id ? nil : story.id
+        LazyVStack(alignment: .leading, spacing: 16) {
+          ForEach(page.days) { group in
+            if let day = TimelineDay.date(group.date) {
+              VStack(alignment: .leading, spacing: 6) {
+                TimelineDayHeading(day: day).padding(.horizontal, TimelineReadingLayout.edge)
+                VStack(spacing: 0) {
+                  ForEach(group.items) { item in
+                    let key = "\(group.date)/\(item.id)"
+                    TimelineSegmentRow(day: day, item: item, offersThreadStory: true,
+                                       expanded: expandedSegment == key) {
+                      expandedSegment = expandedSegment == key ? nil : key
+                    }
+                  }
+                }
+              }
             }
           }
         }
         if let next = page.nextCursor {
           Button("加载更早的日期") { Task { await loadMore(before: next) } }.buttonStyle(.accentLink)
             .font(.system(size: TextSize.caption)).disabled(loadingMore)
+            .padding(.horizontal, TimelineReadingLayout.edge)
         }
         if let moreError {
           Text(moreError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
+            .padding(.horizontal, TimelineReadingLayout.edge)
         }
       }
     } else {
       ProgressView().controlSize(.small).accessibilityLabel("正在读取项目进展")
     }
+  }
+
+  private func loadOverview() async {
+    let revision = store.revision
+    let project = try? await store.api.project(id, level: "detail")
+    guard !Task.isCancelled, revision == store.revision else { return }
+    let brief = project?.brief?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    overview = brief.isEmpty ? nil : (revision, brief)
   }
 
   private func loadContext() async {
@@ -150,44 +180,48 @@ struct ProjectPage: View {
   }
 }
 
-private struct ProjectStoryRow: View {
-  let story: ProjectStory
+private struct ProjectContextRow: View {
+  let thread: HubThread
   let expanded: Bool
   let onToggle: () -> Void
-
-  private var latest: ProjectUpdate { story.latest }
+  @Environment(ViewerStore.self) private var store
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Rectangle().fill(Palette.hairline).frame(height: 1).accessibilityHidden(true)
       Button(action: onToggle) {
-        VStack(alignment: .leading, spacing: 10) {
-          HStack(alignment: .firstTextBaseline, spacing: 16) {
-            Text(latest.item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
-              .frame(maxWidth: .infinity, alignment: .leading)
-            if let day = TimelineDay.date(latest.day) {
-              Text(Fmt.date(day)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(thread.title).font(.system(size: TextSize.title, weight: .semibold)).foregroundStyle(Palette.ink)
+            if let brief = thread.cardSummary {
+              Text(brief).font(.system(size: TextSize.body)).foregroundStyle(Palette.readingBody)
+                .lineSpacing(TextSize.lineSpacing(TextSize.body))
             }
-            PhIcon(expanded ? "caret-up" : "caret-down", size: 11).foregroundStyle(Palette.muted)
-              .accessibilityHidden(true)
+            ForEach(Array((thread.open ?? []).prefix(2).enumerated()), id: \.offset) { _, fact in
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("•").accessibilityHidden(true)
+                Text(fact)
+              }
+              .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+            }
           }
-          if !expanded || story.updates.count == 1 {
-            Text(latest.item.description).font(.system(size: TextSize.body))
-              .lineSpacing(TextSize.lineSpacing(TextSize.body) + 2).foregroundStyle(Palette.readingBody)
-            TimelineSourceIcons(item: latest.item, size: 20)
-          }
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          PhIcon(expanded ? "caret-up" : "caret-down", size: 11).foregroundStyle(Palette.muted)
+            .accessibilityHidden(true)
         }
-        .multilineTextAlignment(.leading).padding(.vertical, 20).contentShape(Rectangle())
+        .multilineTextAlignment(.leading).padding(.vertical, 12).contentShape(Rectangle())
       }
       .buttonStyle(TimelineRowStyle())
       .accessibilityValue(expanded ? "已展开" : "已折叠")
-      .accessibilityHint(story.updates.count > 1 ? "展开这件事的经过" : "展开原始记录")
+      .accessibilityHint(expanded ? "收起这件事的经过" : "展开这件事的经过")
       if expanded {
-        if story.updates.count == 1, let day = TimelineDay.date(latest.day) {
-          TimelineSegmentRecords(day: day, item: latest.item, dayRecords: nil).padding(.bottom, 20)
-        } else {
-          StoryUpdates(updates: Array(story.updates.reversed()))
+        VStack(alignment: .leading, spacing: 8) {
+          StoryUpdates(threadId: thread.id)
+          Button("AI 记住的要点") { store.path.append(.thread(thread.id)) }
+            .buttonStyle(.accentLink).font(.system(size: TextSize.caption))
         }
+        .padding(.leading, 16).padding(.bottom, 16)
       }
     }
   }

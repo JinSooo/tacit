@@ -140,6 +140,7 @@ public struct HubThread: Decodable, Identifiable, Hashable, Sendable {
   public let sessions: Int?
   public let domain: String?
   public let needsRegen: FlexBool?
+  public let open: [String]?
   public var last: Date? { lastMs.map { Date(timeIntervalSince1970: $0 / 1000) } }
   public var first: Date? { firstMs.map { Date(timeIntervalSince1970: $0 / 1000) } }
   public var cardSummary: String? {
