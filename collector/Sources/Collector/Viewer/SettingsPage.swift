@@ -156,7 +156,7 @@ private struct LoginStartupSection: View {
     } header: { Text("启动与运行") }
     footer: { Note("登录这台 Mac 后在菜单栏运行，并启动保存与整理服务。关闭后本次继续运行，下次需手动打开应用。关闭主窗口不会停止记录。") }
     .task {
-      while !Task.isCancelled { refresh(); try? await Task.sleep(for: .seconds(5)) }
+      while !Task.isCancelled { refresh(); await WindowVisibility.pause(.seconds(5)) }
     }
   }
   func refresh() { enabled = startup.enabled; installed = startup.installed; mixed = startup.mixed }
@@ -265,7 +265,7 @@ struct HubSettingsView: View {
       // 端口可能在中枢网页上改过：定时刷新，但不覆盖正在输入的内容。
       while !Task.isCancelled {
         if !busy, info == nil || port == String(info!.port) { await load() }
-        try? await Task.sleep(for: .seconds(5))
+        await WindowVisibility.pause(.seconds(5))
       }
     }
   }
@@ -404,7 +404,7 @@ struct MaintenanceSettingsView: View {
       // 有排队或执行中的请求时 3 秒刷新一次，否则 30 秒。
       while !Task.isCancelled {
         await loadRequests()
-        try? await Task.sleep(for: .seconds(requests.contains { !$0.finished } ? 3 : 30))
+        await WindowVisibility.pause(.seconds(requests.contains { !$0.finished } ? 3 : 30))
       }
     }
   }

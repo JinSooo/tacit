@@ -90,7 +90,7 @@ private struct ReviewDayContent: View {
       repeat {
         await load()
         if !isToday { break }
-        try? await Task.sleep(for: .seconds(60))
+        await WindowVisibility.pause(.seconds(60))
       } while !Task.isCancelled
     }
     .task(id: refresh) {
@@ -100,7 +100,7 @@ private struct ReviewDayContent: View {
         let reachable = message == nil ? true : await store.api.isReachable()
         guard !Task.isCancelled else { return }
         startupMessage = reachable ? nil : message
-        try? await Task.sleep(for: .seconds(5))
+        await WindowVisibility.pause(.seconds(5))
       }
     }
   }

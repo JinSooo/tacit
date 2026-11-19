@@ -47,9 +47,15 @@ public enum ViewerTime {
   private static let lock = NSLock()
 
   /// hub 里既有 `2026-11-09T12:20:55+09:00`，也有 `2026-11-09T03:16:24.791Z`。
+  /// 时间线绘制时会对同一批时间串反复解析，ISO8601DateFormatter 每次都很贵；按原串缓存结果，超量时整体清空。
+  private static var cache: [String: Date?] = [:]
   public static func parse(_ s: String) -> Date? {
     lock.lock(); defer { lock.unlock() }
-    return plain.date(from: s) ?? fractional.date(from: s)
+    if let hit = cache[s] { return hit }
+    let date = plain.date(from: s) ?? fractional.date(from: s)
+    if cache.count >= 20_000 { cache.removeAll(keepingCapacity: true) }
+    cache[s] = date
+    return date
   }
 
   /// 本地日历中某一天的 [00:00, 次日 00:00)。

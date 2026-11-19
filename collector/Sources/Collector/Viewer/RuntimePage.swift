@@ -131,7 +131,7 @@ struct RuntimeSnapshotView: View {
         do { let value = try await store.api.callSnapshot(id); if !Task.isCancelled { snapshot = value; error = nil } }
         catch is CancellationError { break }
         catch { snapshot = nil; self.error = error.localizedDescription }
-        do { try await Task.sleep(for:.seconds(5)) } catch { break }
+        await WindowVisibility.pause(.seconds(5))
       }
     }
   }

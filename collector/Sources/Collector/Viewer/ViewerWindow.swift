@@ -33,6 +33,7 @@ import CollectorCore
     DispatchQueue.main.async { if let m = NSApp.mainMenu { Self.localizeSystemItems(m) } }
     window?.makeKeyAndOrderFront(nil)
     NSApp.activate()
+    if let window { WindowVisibility.update(window) }
   }
 
   private func makeWindow() -> NSWindow {
@@ -53,9 +54,14 @@ import CollectorCore
   }
 
   func windowWillClose(_ notification: Notification) {
-    DispatchQueue.main.async {
+    DispatchQueue.main.async { [weak self] in
       NSApp.setActivationPolicy(.accessory)
+      if let window = self?.window { WindowVisibility.update(window) }
     }
+  }
+
+  func windowDidChangeOcclusionState(_ notification: Notification) {
+    if let window { WindowVisibility.update(window) }
   }
 
   // MARK: 菜单
