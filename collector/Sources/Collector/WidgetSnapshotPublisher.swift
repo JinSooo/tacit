@@ -17,7 +17,45 @@ import CollectorCore
     self.file = file
     self.icons = WidgetSnapshot.iconDirectory(for: file)
     // 升级后快照内容可能没变，系统会一直沿用旧版画面；每次启动主动重绘一次。
-    WidgetCenter.shared.reloadAllTimelines()
+    // 升级前就在跑的扩展进程不会被系统换掉，重绘全部报版本不符，先结束它。
+    let logger = logger
+    DispatchQueue.global(qos: .utility).async {
+      let stopped = Self.stopStaleExtension()
+      if stopped > 0 { logger.notice("Stopped \(stopped, privacy: .public) stale widget extension process") }
+      WidgetCenter.shared.reloadAllTimelines()
+    }
+  }
+
+  nonisolated private static func stopStaleExtension() -> Int {
+    guard let plugins = Bundle.main.builtInPlugInsURL else { return 0 }
+    let executable = plugins.appendingPathComponent("TacitWidget.appex/Contents/MacOS/TacitWidget")
+      .resolvingSymlinksInPath().path
+    var info = stat()
+    guard stat(executable, &info) == 0 else { return 0 }
+    let installedAt = Date(timeIntervalSince1970: TimeInterval(info.st_ctimespec.tv_sec)
+      + TimeInterval(info.st_ctimespec.tv_nsec) / 1_000_000_000)
+    let pids = StaleExtension.pids(among: runningProcesses(), executable: executable, installedAt: installedAt)
+    for pid in pids { kill(pid, SIGTERM) }
+    // 等旧进程退出再请求重绘，否则系统可能仍把这次重绘交给它。
+    for _ in 0..<20 where pids.contains(where: { kill($0, 0) == 0 }) { usleep(100_000) }
+    return pids.count
+  }
+
+  nonisolated private static func runningProcesses() -> [StaleExtension.Process] {
+    let capacity = proc_listallpids(nil, 0)
+    guard capacity > 0 else { return [] }
+    var pids = [pid_t](repeating: 0, count: Int(capacity) + 32)
+    let count = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+    guard count > 0 else { return [] }
+    var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+    return pids.prefix(Int(count)).compactMap { pid in
+      guard pid > 0, proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return nil }
+      var bsd = proc_bsdinfo()
+      let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+      guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, size) == size else { return nil }
+      let started = Date(timeIntervalSince1970: TimeInterval(bsd.pbi_start_tvsec) + TimeInterval(bsd.pbi_start_tvusec) / 1_000_000)
+      return StaleExtension.Process(pid: pid, path: String(cString: path), started: started)
+    }
   }
 
   func refresh(invalidate: Bool = false) {

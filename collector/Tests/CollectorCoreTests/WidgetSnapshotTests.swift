@@ -95,4 +95,17 @@ final class WidgetSnapshotTests: XCTestCase {
       XCTAssertNil(WidgetSnapshot.iconURL(named: name, in: directory))
     }
   }
+
+  func testUpgradeStopsOnlyWidgetProcessesStartedBeforeTheNewBinary() {
+    // 回归：升级后旧扩展进程继续运行，系统重绘一直报版本不符，小组件停在升级前的画面。
+    let installed = Date(timeIntervalSince1970: 1_000)
+    let executable = "/Applications/Tacit.app/Contents/PlugIns/TacitWidget.appex/Contents/MacOS/TacitWidget"
+    let processes = [
+      StaleExtension.Process(pid: 10, path: executable, started: installed.addingTimeInterval(-3600)),
+      StaleExtension.Process(pid: 11, path: executable, started: installed.addingTimeInterval(5)),
+      StaleExtension.Process(pid: 12, path: "/Applications/Other.app/Contents/MacOS/TacitWidget",
+                             started: installed.addingTimeInterval(-3600)),
+    ]
+    XCTAssertEqual(StaleExtension.pids(among: processes, executable: executable, installedAt: installed), [10])
+  }
 }
