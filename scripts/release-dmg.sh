@@ -28,6 +28,7 @@ hdiutil create -quiet -volname "Tacit $VERSION" -srcfolder "$STAGE" -fs HFS+ -fo
 # 从安装包里取出的应用必须签名完整、自带的运行时能跑。
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MNT" "$DMG"
 codesign --verify --deep --strict "$MNT/Tacit.app"
+[ -x "$MNT/Tacit.app/Contents/PlugIns/TacitWidget.appex/Contents/MacOS/TacitWidget" ]
 "$MNT/Tacit.app/Contents/MacOS/bun" --version >/dev/null
 [ -f "$MNT/Tacit.app/Contents/Resources/runtime/hub/src/cli.ts" ] && [ -f "$MNT/Tacit.app/Contents/Resources/uninstall.sh" ]
 hdiutil detach -quiet "$MNT"

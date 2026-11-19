@@ -36,19 +36,6 @@ struct ReviewWidth: ViewModifier {
   }
 }
 
-enum TimelineDay {
-  static func key(_ day: Date) -> String {
-    let c = Calendar.current.dateComponents([.year, .month, .day], from: day)
-    return String(format: "%04d-%02d-%02d", c.year!, c.month!, c.day!)
-  }
-
-  static func date(_ key: String) -> Date? {
-    let values = key.split(separator: "-").compactMap { Int($0) }
-    guard values.count == 3 else { return nil }
-    return Calendar.current.date(from: DateComponents(year: values[0], month: values[1], day: values[2]))
-  }
-}
-
 private struct ReviewDayContent: View {
   @Environment(ViewerStore.self) private var store
   @State private var diary = Loader<DayDiary?>()

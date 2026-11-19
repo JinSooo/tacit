@@ -25,6 +25,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
+  <key>CFBundleURLTypes</key>
+  <array><dict>
+    <key>CFBundleURLName</key><string>dev.record-anything.collector.timeline</string>
+    <key>CFBundleURLSchemes</key><array><string>tacit</string></array>
+  </dict></array>
   <key>NSMicrophoneUsageDescription</key><string>录制麦克风中的人声，在本机加密保存并整理对话记录。</string>
   <key>NSAudioCaptureUsageDescription</key><string>录制系统播放的人声，在本机加密保存并整理对话记录。</string>
   <key>NSCalendarsFullAccessUsageDescription</key><string>读取已结束的日程，将标题、地点和参会人整理成活动记录。</string>
@@ -33,6 +38,30 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSDownloadsFolderUsageDescription</key><string>记录下载完成的文件名、路径和来源，不读取文件内容。</string>
 </dict></plist>
 PLIST
+WIDGET="$APP/Contents/PlugIns/TacitWidget.appex"
+mkdir -p "$WIDGET/Contents/MacOS"
+cat > "$WIDGET/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>dev.record-anything.collector.widget</string>
+  <key>CFBundleName</key><string>TacitWidget</string>
+  <key>CFBundleDisplayName</key><string>Tacit</string>
+  <key>CFBundleExecutable</key><string>TacitWidget</string>
+  <key>CFBundlePackageType</key><string>XPC!</string>
+  <key>CFBundleShortVersionString</key><string>$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>NSExtension</key><dict>
+    <key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string>
+  </dict>
+</dict></plist>
+PLIST
+# ExtensionFoundation needs the Foundation entry point. Keep the Swift @main it dispatches to.
+xcrun --sdk macosx swiftc -target arm64-apple-macosx14.0 -O -application-extension -parse-as-library \
+  -Xlinker -e -Xlinker _NSExtensionMain -Xlinker -u -Xlinker _main \
+  Sources/CollectorCore/WidgetSnapshot.swift Sources/Collector/Viewer/Palette.swift Widget/TacitWidget.swift \
+  -o "$WIDGET/Contents/MacOS/TacitWidget"
 mkdir -p "$APP/Contents/Frameworks"
 LIB="vendor/sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib/lib"
 for lib in "$LIB"/*.dylib; do cp -L "$lib" "$APP/Contents/Frameworks/"; done
@@ -83,9 +112,10 @@ done
 if [ -f "$APP/Contents/MacOS/ra-audio-worker" ]; then
   codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements build/audio.entitlements "$APP/Contents/MacOS/ra-audio-worker"
 fi
+codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements Widget/Widget.entitlements "$WIDGET"
 codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements build/app.entitlements "$APP"
 codesign -d -r- "$APP" 2>&1 | grep designated
-codesign --verify --strict "$APP"
+codesign --verify --deep --strict "$APP"
 codesign -d --entitlements - "$APP"
 # 回归检查：日历 entitlement 丢了不会报错，只会让授权按钮失效。
 codesign -d --entitlements - "$APP" 2>/dev/null | grep -q personal-information.calendars || { echo "缺少日历 entitlement" >&2; exit 1; }

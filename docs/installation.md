@@ -11,6 +11,7 @@
 | `Contents/MacOS/Tacit` | 菜单栏应用（采集端） |
 | `Contents/MacOS/ra-audio-worker` | 本机转写进程 |
 | `Contents/MacOS/bun` | 后台运行时，保留 Bun 官方签名 |
+| `Contents/PlugIns/TacitWidget.appex` | 中号桌面小组件，与主应用使用同一张证书签名 |
 | `Contents/Resources/runtime/` | 后台服务、整理、内置数据源和网页的固定快照 |
 | `Contents/Resources/uninstall.sh` | 卸载脚本 |
 
@@ -36,6 +37,14 @@
 `./install.sh` 准备推理库（`scripts/fetch-audio-lib.sh`）、构建网页、构建并签名应用、装进“应用程序”，然后运行同一个 `setup`，并额外启动菜单栏应用。从旧名称 Record Anything 升级时先校验签名，并在数据目录的 `install-rollback` 保存原应用包、启动项和采集端配置。
 
 不希望整理自动运行时执行 `RA_NO_DISTILL=1 ./install.sh`：停用整理并记住这个选择，之后打开应用也不会加回来。再运行一次不带这个变量的 `./install.sh` 即可恢复。
+
+## 桌面小组件
+
+从“应用程序”打开 Tacit 后，在桌面空白处右键选择“编辑小组件”，搜索 Tacit 并添加“Tacit 时间线”。点击小组件应打开当日时间线。主程序在启动、唤醒、记录变更和每 10 分钟检查一次当天整理结果，变化时刷新小组件。
+
+主程序把当天概述和最近三段的开始时刻、标题写到 `~/Library/Application Support/record-anything/widget/today.json`。该目录只给小组件沙盒授予只读访问。跨天后小组件切到新的一天，主程序在零点或重新运行时移除旧文件。卸载时即使保留历史记录也会清理该目录。
+
+自签名扩展已在关闭 SIP 的 macOS 27.2.1 上通过桌面渲染验证。在开启 SIP 的机器上，首次打开后用虚构记录生成当天整理，再从图库添加小组件。确认首次添加和随后的刷新都不弹出“访问其他 App 的数据”授权，显示的内容与当天时间线一致，并核对点击跳转和跨天清理。
 
 ## 发布安装包
 

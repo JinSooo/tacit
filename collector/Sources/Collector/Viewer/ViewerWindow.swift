@@ -18,6 +18,7 @@ import CollectorCore
   func show(_ entry: ViewerEntry? = nil) {
     switch entry {
     case .timeline: store.showReview()
+    case .timelineDay(let day): store.showReview(day)
     case .settings: store.showSettings()
     case .pending: store.showPending()
     case .record(let id, let date):

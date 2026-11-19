@@ -60,7 +60,7 @@ staging="$(mktemp -d "$APP_DIR/.tacit-install.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
 trap 'exit 1' HUP INT TERM
 ditto "collector/build/Tacit.app" "$staging/Tacit.app"
-codesign --verify --strict "$staging/Tacit.app"
+codesign --verify --deep --strict "$staging/Tacit.app"
 backup=""
 legacy_exec=""
 legacy_worker=""
