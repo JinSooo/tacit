@@ -10,37 +10,42 @@ struct DayWidgetView: View {
   private var large: Bool { family == .systemLarge }
 
   var body: some View {
+    // 大号放不下时先少一段，不压缩间距。
     ViewThatFits(in: .vertical) {
-      contents(recentCount: large ? 5 : 3)
-      contents(recentCount: large ? 4 : 2)
+      contents(recentCount: large ? 4 : 3)
+      contents(recentCount: large ? 3 : 2)
+      contents(recentCount: large ? 2 : 1)
     }
-    .padding(.horizontal, 16)
-    .padding(.vertical, large ? 16 : 12)
+    .padding(.horizontal, large ? 18 : 16)
+    .padding(.vertical, large ? 18 : 12)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .containerBackground(Palette.paper, for: .widget)
     .widgetURL(snapshot.timelineURL)
   }
 
+  /// 大号分三块：日期和概述、活动条、最近几段，块间留白比块内大，读起来不挤。
   private func contents(recentCount: Int) -> some View {
-    VStack(alignment: .leading, spacing: large ? 8 : 4) {
-      Text(date.formatted(.dateTime.month(.wide).day().weekday(.wide).locale(Locale(identifier: "zh_CN"))))
-        .font(.system(size: TextSize.title, weight: .semibold, design: .serif))
-        .foregroundStyle(Palette.ink)
-        .lineLimit(1)
-        .accessibilityAddTraits(.isHeader)
+    VStack(alignment: .leading, spacing: large ? 16 : 4) {
+      VStack(alignment: .leading, spacing: large ? 6 : 4) {
+        Text(date.formatted(.dateTime.month(.wide).day().weekday(.wide).locale(Locale(identifier: "zh_CN"))))
+          .font(.system(size: TextSize.title, weight: .semibold, design: .serif))
+          .foregroundStyle(Palette.ink)
+          .lineLimit(1)
+          .accessibilityAddTraits(.isHeader)
 
-      if let summary = snapshot.summary {
-        Text(summary)
-          .font(.system(size: TextSize.body))
-          .foregroundStyle(Palette.readingBody)
-          .lineSpacing(large ? TextSize.lineSpacing(TextSize.body) : 0)
-          .lineLimit(large ? 4 : 2)
-          .fixedSize(horizontal: false, vertical: true)
+        if let summary = snapshot.summary {
+          Text(summary)
+            .font(.system(size: TextSize.body))
+            .foregroundStyle(Palette.readingBody)
+            .lineSpacing(large ? TextSize.lineSpacing(TextSize.body) : 0)
+            .lineLimit(large ? 3 : 2)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
 
       if let range = snapshot.activityRange(at: date) {
         activityStrip(range)
-        VStack(alignment: .leading, spacing: large ? 8 : 4) {
+        VStack(alignment: .leading, spacing: large ? 12 : 4) {
           ForEach(Array(snapshot.segments.prefix(recentCount).enumerated()), id: \.offset) { _, segment in
             recentRow(segment)
           }
@@ -87,11 +92,11 @@ struct DayWidgetView: View {
   }
 
   private func recentRow(_ segment: WidgetSnapshot.Segment) -> some View {
-    HStack(alignment: .top, spacing: 8) {
+    HStack(alignment: .top, spacing: 10) {
       sourceIcon(segment)
         .accessibilityHidden(true)
 
-      VStack(alignment: .leading, spacing: 4) {
+      VStack(alignment: .leading, spacing: 2) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           Text(segment.title)
             .font(.system(size: TextSize.body, weight: .medium))

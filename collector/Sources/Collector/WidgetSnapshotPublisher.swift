@@ -16,6 +16,8 @@ import CollectorCore
     self.api = api
     self.file = file
     self.icons = WidgetSnapshot.iconDirectory(for: file)
+    // 升级后快照内容可能没变，系统会一直沿用旧版画面；每次启动主动重绘一次。
+    WidgetCenter.shared.reloadAllTimelines()
   }
 
   func refresh(invalidate: Bool = false) {
