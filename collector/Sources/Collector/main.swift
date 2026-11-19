@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   lazy var sources = DataSourceRegistry(toggles: toggles)
   lazy var hub = HubClient(config: config)
   lazy var api = HubAPI(base: { [config] in config.hubURL }, token: { [config] in config.token })
+  @MainActor private lazy var deviceDiscovery = DeviceDiscovery(advertiser: BonjourDeviceAdvertiser())
   lazy var files = FileCollector(device: config.device, isPaused: { [weak self] in self.map { $0.paused || !$0.enabled("files") } ?? true },
                                 send: { [weak self] in self?.hub.enqueue($0) })
   lazy var calendar = CalendarCollector(device: config.device, isPaused: { [weak self] in self.map { $0.paused || !$0.enabled("calendar") } ?? true },
@@ -24,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   lazy var viewer: ViewerWindow = MainActor.assumeIsolated {
     let store = ViewerStore(api: api, device: config.device, controls: self)
     store.onRevision = { [weak self] in self?.widgetPublisher?.refresh(invalidate: true) }
+    store.onDeviceSettingsUpdate = { [weak self] settings, invitationHubId in
+      guard let self, !self.terminating else { return }
+      self.deviceDiscovery.update(settings, invitationHubId: invitationHubId)
+    }
     return ViewerWindow(store: store)
   }
   private var widgetPublisher: WidgetSnapshotPublisher?
@@ -77,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if audio.initiallyBlocked { toggles.setEnabled("audio", false) }
     sources.launch(paused: paused)
     updateIcon()
+    MainActor.assumeIsolated { deviceDiscovery.refreshIfDue(api: api) }
 
     timers = [
       Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.tick() },
@@ -202,7 +208,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func applicationWillTerminate(_ n: Notification) {
     guard !terminating else { return }
     terminating = true
-    MainActor.assumeIsolated { widgetPublisher?.stop() }
+    MainActor.assumeIsolated {
+      widgetPublisher?.stop()
+      deviceDiscovery.update(nil)
+    }
     timers.forEach { $0.invalidate() }
     files.flush(force: true)
     files.stop()
@@ -507,6 +516,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func writeStatus() {
+    MainActor.assumeIsolated { deviceDiscovery.refreshIfDue(api: api) }
     let enabledSources = Dictionary(uniqueKeysWithValues: DataSourceCatalog.all.map { ($0.id, enabled($0.id)) })
     captureQueue.async { [self] in
       var s: [String: Any] = stats

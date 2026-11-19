@@ -158,6 +158,7 @@ export class DeviceService {
         this.reconcile();
       }
       return json(ok({
+        hub_id: this.boundHubID() ?? null,
         lan: { open: this.open, port: this.port, addrs: this.addresses },
         pairing: invite ? { expires_at: new Date(invite.expires).toISOString() } : null,
         devices: deviceList(this.hub),

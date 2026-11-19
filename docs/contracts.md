@@ -528,7 +528,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 
 - 中枢在本机监听之外另起一个监听：`0.0.0.0:<lan_port>`，`lan_port` 读 `hub.json` 的 `lan_port`，默认 47824，允许 1024–65535 的整数。本机 `GET /v1/settings/hub` 的 `lan` 为局域网端口实际监听状态。**只有**存在未过期的配对邀请或至少一台已配对设备时才监听，最后一台设备移除且无邀请时关闭。
 - 这个监听只接受 `POST /v1/device` 和 `GET /v1/device/hello`（无需加密，返回 `{ "hub_id", "v": 1 }`，供手机确认地址上是不是自己的 Mac），其他路径 404，不提供网页、MCP 和管理接口，也不做 Host 校验（安全靠信封）。
-- Bonjour：Mac 采集端在中枢局域网监听开着时登记 `_tacit._tcp`，端口 `lan_port`，TXT `hub=<hub_id>`；中枢在 `GET /v1/settings/devices` 里给出 `lan.open` 和 `lan.port` 供采集端判断。
+- Bonjour：Mac 采集端在中枢局域网监听开着时登记 `_tacit._tcp`，端口 `lan_port`，TXT `hub=<hub_id>`；中枢在 `GET /v1/settings/devices` 里给出 `lan.open`、`lan.port` 和 `hub_id`。
 - 手机找 Mac 的顺序：上次成功的地址 → 配对邀请里的地址 → Bonjour 按 `hub_id` 解析 → 用户在手机设置里填的地址（任意 `http(s)://host:port`，例如 Tailscale）。每个地址先调 `hello` 核对 `hub_id`。
 
 ### 6.4 配对
@@ -537,11 +537,12 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/settings/devices` | `{ lan: { open, port, addrs: ["192.168.1.5:47824"] }, pairing: { expires_at } \| null, devices: [{ id, name, platform, paired_at, last_seen, records, pending_changes }] }` |
+| GET | `/v1/settings/devices` | `{ hub_id, lan: { open, port, addrs: ["192.168.1.5:47824"] }, pairing: { expires_at } \| null, devices: [{ id, name, platform, paired_at, last_seen, records, pending_changes }] }` |
 | POST | `/v1/settings/devices/pairing` | 创建邀请（作废旧邀请），10 分钟有效、只能用一次，重启后作废 → `{ uri, expires_at }`；打开局域网监听，端口绑定失败返回 409 |
 | DELETE | `/v1/settings/devices/pairing` | 作废邀请 |
 | DELETE | `/v1/settings/devices/:id` | 移除设备：删公钥和待下发变更；**已入库的记录保留**；监听仍开着时，该设备的请求一律 401；关闭监听后连接失败 |
 
+- `hub_id` 是当前中枢身份，尚未生成密钥时为 `null`。局域网监听开启时必须返回该身份，采集端启动或邀请用完后仍可登记 Bonjour。
 - 邀请 `uri` = `tacit://pair?d=<base64url(JSON)>`，JSON 为 `{ "v": 1, "hub_id", "name": "<Mac 电脑名>", "pk": "<中枢公钥 base64url>", "code": "<16 字节随机数 base64url>", "addrs": [...], "expires_at" }`。Mac 设置页把它画成二维码；手机扫码或粘贴。
 - 手机发 op `pair`，`body` = `{ code, device_pk, name, platform: "android" }`。`code` 不对、过期或已用 → `status` 403。成功 → `{ device_id, hub_id, name }`，邀请作废，设备入库。
 - 同一部手机重新配对算新设备（新 `device_id`），旧设备留在列表里由用户移除。

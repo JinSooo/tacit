@@ -30,6 +30,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleURLName</key><string>dev.record-anything.collector.timeline</string>
     <key>CFBundleURLSchemes</key><array><string>tacit</string></array>
   </dict></array>
+  <key>NSBonjourServices</key><array><string>_tacit._tcp</string></array>
+  <key>NSLocalNetworkUsageDescription</key><string>让手机在局域网内找到这台 Mac。</string>
   <key>NSMicrophoneUsageDescription</key><string>录制麦克风中的人声，在本机加密保存并整理对话记录。</string>
   <key>NSAudioCaptureUsageDescription</key><string>录制系统播放的人声，在本机加密保存并整理对话记录。</string>
   <key>NSCalendarsFullAccessUsageDescription</key><string>读取已结束的日程，将标题、地点和参会人整理成活动记录。</string>

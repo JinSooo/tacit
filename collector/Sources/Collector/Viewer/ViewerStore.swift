@@ -108,6 +108,7 @@ enum Route: Hashable {
   /// 记录被删除、补写或修正后递增，各页据此重新读取。
   var revision = 0 { didSet { onRevision?() } }
   @ObservationIgnored var onRevision: (() -> Void)?
+  @ObservationIgnored var onDeviceSettingsUpdate: ((DeviceSettings?, String?) -> Void)?
 
   init(api: HubAPI, device: String, controls: CaptureControlling?) {
     self.api = api

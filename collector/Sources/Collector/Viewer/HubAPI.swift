@@ -14,13 +14,12 @@ final class HubAPI: @unchecked Sendable {
   private let tokenProvider: () -> String?
   private let session: URLSession
 
-  init(base: @escaping () -> URL, token: @escaping () -> String?) {
+  init(base: @escaping () -> URL, token: @escaping () -> String?, configuration: URLSessionConfiguration = .ephemeral) {
     self.baseURL = base
     self.tokenProvider = token
-    let c = URLSessionConfiguration.ephemeral
-    c.timeoutIntervalForRequest = 20
-    c.requestCachePolicy = .reloadIgnoringLocalCacheData
-    session = URLSession(configuration: c)
+    configuration.timeoutIntervalForRequest = 20
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    session = URLSession(configuration: configuration)
   }
 
   private func request(_ path: String, query: [String: String?] = [:], method: String = "GET", body: Data? = nil, timeout: TimeInterval? = nil, authenticated: Bool = true) async throws -> Data {
@@ -344,6 +343,20 @@ extension HubAPI {
   }
 
   func hubSettings() async throws -> HubPortSettings { try await get(HubPortSettings.self, "/v1/settings/hub") }
+  /// nil 表示后台服务版本还没有设备管理接口。
+  func deviceSettings() async throws -> DeviceSettings? {
+    do { return try await call(DeviceSettings.self, "GET", "/v1/settings/devices", nil, timeout: 5) }
+    catch let error as HubError where error.status == 404 { return nil }
+  }
+  func createDeviceInvitation() async throws -> DeviceInvitation {
+    try await call(DeviceInvitation.self, "POST", "/v1/settings/devices/pairing", nil)
+  }
+  func cancelDeviceInvitation() async throws {
+    try await send("DELETE", "/v1/settings/devices/pairing")
+  }
+  func removeDevice(_ id: String) async throws {
+    try await send("DELETE", "/v1/settings/devices/\(id)")
+  }
   func setHubPort(_ port: Int) async throws -> Bool {
     struct R: Decodable { let restarting: Bool }
     return try await call(R.self, "PUT", "/v1/settings/hub", ["port": port]).restarting

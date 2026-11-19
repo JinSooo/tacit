@@ -59,7 +59,7 @@ test("LAN 仅在邀请或设备存在时监听，hello 返回身份，本机管�
   const hub = await runningHub();
   try {
     expect(await (await hub.settings()).json()).toMatchObject({
-      lan: { open: false, port: hub.lanPort, addrs: [`192.0.2.2:${hub.lanPort}`] }, pairing: null, devices: [],
+      hub_id: null, lan: { open: false, port: hub.lanPort, addrs: [`192.0.2.2:${hub.lanPort}`] }, pairing: null, devices: [],
     });
     await expect(fetch(hub.lan + "/v1/device/hello")).rejects.toThrow();
     expect(hub.writes).toBe(0);
@@ -73,7 +73,8 @@ test("LAN 仅在邀请或设备存在时监听，hello 返回身份，本机管�
       expect((await fetch(hub.lan + path)).status).toBe(404);
     }
     expect((await hub.admin("/v1/device/hello")).status).toBe(404);
-    expect(await (await hub.settings()).json()).toMatchObject({ pairing: { expires_at: invite.expires_at } });
+    // 采集端靠这个 hub_id 登记 Bonjour，邀请用完或采集端重启后也要能拿到。
+    expect(await (await hub.settings()).json()).toMatchObject({ hub_id: invite.hub_id, pairing: { expires_at: invite.expires_at } });
     expect((await hub.settings("/pairing", "DELETE")).status).toBe(200);
     expect(await (await hub.admin("/v1/settings/hub")).json()).toMatchObject({ lan: false });
     await expect(fetch(hub.lan + "/v1/device/hello")).rejects.toThrow();

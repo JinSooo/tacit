@@ -22,6 +22,8 @@ let package = Package(
       linkerSettings: [.unsafeFlags(["-L", lib, "-Xlinker", "-rpath", "-Xlinker", lib])]),
     .executableTarget(name: "Collector", dependencies: ["CollectorCore", "AudioStore", "CSherpa"], swiftSettings: v5,
       linkerSettings: [.unsafeFlags(["-L", lib, "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
+    .testTarget(name: "CollectorTests", dependencies: ["Collector"], swiftSettings: v5,
+      linkerSettings: [.unsafeFlags(["-L", lib, "-Xlinker", "-rpath", "-Xlinker", lib])]),
     .testTarget(name: "AudioStoreTests", dependencies: ["AudioStore"], swiftSettings: v5),
     .testTarget(name: "CollectorCoreTests", dependencies: ["CollectorCore"], swiftSettings: v5),
   ]
