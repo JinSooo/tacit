@@ -35,13 +35,13 @@ struct RootView: View {
     .task {
       while !Task.isCancelled {
         store.refreshCapture()
-        try? await Task.sleep(for: .seconds(2))
+        await WindowVisibility.pause(.seconds(2))
       }
     }
     .task {
       while !Task.isCancelled {
         await store.refreshShared()
-        try? await Task.sleep(for: .seconds(60))
+        await WindowVisibility.pause(.seconds(60))
       }
     }
   }

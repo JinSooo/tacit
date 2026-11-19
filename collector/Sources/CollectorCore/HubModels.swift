@@ -258,7 +258,7 @@ public struct NowState: Decodable, Sendable {
   private static let emptyBrief = "最近 24 小时没有活跃的线程。"
 }
 
-public struct DayDiary: Decodable, Sendable {
+public struct DayDiary: Decodable, Equatable, Sendable {
   public struct Chapter: Decodable, Hashable, Sendable { public let start: String; public let end: String; public let text: String }
   public struct Reference: Decodable, Identifiable, Hashable, Sendable {
     public let id: String; public let at: String; public let source: String; public let title: String
@@ -291,7 +291,7 @@ public struct DayDiary: Decodable, Sendable {
       return start <= range.upperBound && (end > range.lowerBound || (end == start && start == range.lowerBound))
     }
   }
-  public struct Body: Decodable, Sendable {
+  public struct Body: Decodable, Equatable, Sendable {
     public let summary: String?
     public let timeline: [Chapter]?
     public let items: [Item]?

@@ -80,6 +80,17 @@ final class AudioCoordinator {
     return transcription
   }
   func status() -> [String] { snapshotLock.lock(); defer { snapshotLock.unlock() }; return snapshot }
+  private var quietLevels = MicrophoneLevelHistogram()
+  /// 本次启动以来麦克风在没人说话时的音量分布，写进状态文件。
+  func microphoneQuietLevels() -> MicrophoneLevelHistogram {
+    snapshotLock.lock(); defer { snapshotLock.unlock() }
+    return quietLevels
+  }
+  /// 在音频队列上调用：这一段送进 VAD 之前，麦克风那一路不在人声段里才计入。
+  private func recordQuietLevel(_ dbfs: Double, duration: Double) {
+    guard pipelines[.mic]?.speechActive != true else { return }
+    snapshotLock.lock(); quietLevels.observe(dbfs: dbfs, duration: duration); snapshotLock.unlock()
+  }
   func update(enabled: Bool) {
     queue.async { [self] in
       guard !shuttingDown else { return }
@@ -127,9 +138,12 @@ final class AudioCoordinator {
         health.observe(dbfs: -160, start: healthLastFrame ?? sessionStarted, end: now, enabled: true)
       }
       if now.timeIntervalSince(lastSync) >= 300 || shouldRunWorker(now) { sync() }
-      if now.timeIntervalSince(lastMaintenance) >= 30 {
+      // 对话结束、转写进程退出、同步删除后都会立即重新盘点；定时盘点只是兜底。逐个检查上千个对话目录
+      // 每 30 秒一次曾占采集端空闲 CPU 约五分之一（2026-11-19 实测），所以只在转写进程运行、对话状态
+      // 正被它改写时保持 30 秒，其余时间 10 分钟一次。
+      if now.timeIntervalSince(lastMaintenance) >= (worker == nil ? 600 : 30) {
         lastMaintenance = now
-        // 保留期按天计，过期清理 10 分钟一次足够；盘点仍每 30 秒一次。
+        // 保留期按天计，过期清理 10 分钟一次足够。
         let cleanup = worker == nil && retentionKnown && now.timeIntervalSince(lastCleanup) >= 600
         if cleanup { lastCleanup = now }
         refreshInventory(cleanup: cleanup)
@@ -256,6 +270,7 @@ final class AudioCoordinator {
           try self?.save(samples, track: .mic, start: start, end: end)
         }, level: { [weak self] dbfs, start, end in
           self?.health.observe(dbfs: dbfs, start: start, end: end, enabled: true); self?.healthLastFrame = end
+          self?.recordQuietLevel(dbfs, duration: end.timeIntervalSince(start))
         })
         sessionStarted = Date()
         let microphone = Microphone(buffer: captureBuffer(.mic, session: micGeneration), device: device)
@@ -368,6 +383,11 @@ final class AudioCoordinator {
           let purgeText = reply["purge_before"] as? String
           let purge = AudioPolicy.date(purgeText)
           if purgeText != nil && purge == nil { throw AudioError.invalidMetadata }
+          // 没有要删的对话时不扫描：保留期清理和盘点由定时维护负责，每 5 分钟同步一次不必再扫两遍目录。
+          if purgeText == nil && deleting.isEmpty {
+            if self.shouldRunWorker(Date()) { self.launchWorker() }
+            self.persistState(); return
+          }
           guard !self.maintenance.isRunning, let store = self.store else { self.lastSync = .distantPast; return }
           let revision = self.inventoryRevision
           self.maintenance.perform(returningTo: self.queue, operation: {

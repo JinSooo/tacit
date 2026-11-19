@@ -518,6 +518,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s["paused"] = pausedUntil != nil; s["plugins"] = plugins.status()
       s["footprintMB"] = Int(footprintMB()); s["cpuSeconds"] = Int(cpuSeconds())
       s["time"] = LocalTime.iso(Date())
+      if enabledSources["audio"] == true { s["micQuietLevels"] = audio.microphoneQuietLevels().json }
       CollectorStatus.write(s, transcription: enabledSources["audio"] == true ? audio.transcriptionStatus() : nil,
                             outbox: hub.outboxStatus, to: config.dataDir.appendingPathComponent("collector-status.json"))
     }

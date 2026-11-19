@@ -13,3 +13,17 @@ import Observation
     catch { self.error = error.localizedDescription }
   }
 }
+
+extension Loader where T: Equatable {
+  /// 定时刷新时内容常常没变；原样赋值也会让页面整页重绘，所以只在值变化时替换。
+  func run(_ load: () async throws -> T) async {
+    loading = true; defer { loading = false }
+    do {
+      let next = try await load()
+      if value != next { value = next }
+      if error != nil { error = nil }
+    }
+    catch is CancellationError {}
+    catch { self.error = error.localizedDescription }
+  }
+}
