@@ -47,15 +47,26 @@ import CollectorCore
     var pids = [pid_t](repeating: 0, count: Int(capacity) + 32)
     let count = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
     guard count > 0 else { return [] }
-    var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
     return pids.prefix(Int(count)).compactMap { pid in
-      guard pid > 0, proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return nil }
+      guard pid > 0, let path = launchPath(pid) else { return nil }
       var bsd = proc_bsdinfo()
       let size = Int32(MemoryLayout<proc_bsdinfo>.size)
       guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, size) == size else { return nil }
       let started = Date(timeIntervalSince1970: TimeInterval(bsd.pbi_start_tvsec) + TimeInterval(bsd.pbi_start_tvusec) / 1_000_000)
-      return StaleExtension.Process(pid: pid, path: String(cString: path), started: started)
+      return StaleExtension.Process(pid: pid, path: path, started: started)
     }
+  }
+
+  /// 进程启动时的执行路径。程序文件被替换后 proc_pidpath 对旧进程返回 ENOENT，正好漏掉要找的进程。
+  nonisolated private static func launchPath(_ pid: pid_t) -> String? {
+    var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+    var size = 0
+    guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+    var buffer = [UInt8](repeating: 0, count: size)
+    guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0 else { return nil }
+    // 开头是 argc，紧接着是以 0 结尾的执行路径。
+    let bytes = buffer.prefix(size).dropFirst(MemoryLayout<Int32>.size)
+    return String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
   }
 
   func refresh(invalidate: Bool = false) {
