@@ -1,1 +1,94 @@
-<section class="section" id="more" aria-label="more"><div class="wrap"><p class="caption">待实现：more</p></div></section>
+<section class="section" id="more" aria-labelledby="more-heading">
+  <div class="wrap">
+    <header class="section-head">
+      <h2 class="heading" id="more-heading">回看这一天</h2>
+      <p class="lead">找回读过的网页，重温一场会议，或在桌面上看看今天做了什么。</p>
+    </header>
+
+    <article class="more-feature">
+      <div class="more-copy">
+        <h3 class="title">找回看过的东西</h3>
+        <p>屏幕和浏览器上的文字都可以搜。按日期、来源或设备筛选，找到那段活动，也能点开看原文。</p>
+      </div>
+      <div class="more-search" aria-label="搜索示例" role="group">
+        <form class="more-search-form" role="search" aria-label="搜索示例记录">
+          <label class="more-search-field">
+            <svg aria-hidden="true"><use href="assets/sources.svg#search"/></svg>
+            <span class="visually-hidden">搜索示例记录</span>
+            <input type="search" name="query" value="SwiftData" autocomplete="off" spellcheck="false" readonly>
+          </label>
+          <div class="more-search-filters">
+            <select name="day" aria-label="日期" disabled>
+              <option value="">全部日期</option>
+              <option value="11-19">11 月 19 日</option>
+            </select>
+            <select name="source" aria-label="来源" disabled>
+              <option value="">全部来源</option>
+              <option value="browser">浏览器</option>
+              <option value="chat">微信</option>
+            </select>
+            <select name="device" aria-label="设备" disabled>
+              <option value="">全部设备</option>
+              <option value="mac">这台 Mac</option>
+            </select>
+          </div>
+        </form>
+
+        <div class="more-search-results" aria-live="polite">
+          <div class="more-search-day" data-day="11-19">
+            <h4 class="caption num">11 月 19 日 星期四</h4>
+            <ul>
+              <li data-source="browser" data-device="mac">
+                <div class="more-search-meta caption">
+                  <span>时间线</span><time class="num" datetime="17:40">17:40</time>
+                </div>
+                <p class="more-search-result-title" data-search-text>读 <mark>SwiftData</mark> 迁移文档</p>
+                <p class="more-search-excerpt" data-search-text>弄清轻量迁移和自定义迁移的分界。</p>
+              </li>
+              <li data-source="browser" data-device="mac">
+                <div class="more-search-meta caption">
+                  <span><svg aria-hidden="true"><use href="assets/sources.svg#browser"/></svg>原始记录，Safari</span>
+                  <time class="num" datetime="17:40">17:40</time>
+                </div>
+                <p class="more-search-result-title" data-search-text><mark>SwiftData</mark> 迁移文档</p>
+                <p class="more-search-excerpt" data-search-text>用 <mark>SwiftData</mark> 做迁移时，字段重命名可以走轻量迁移。</p>
+              </li>
+            </ul>
+          </div>
+          <p class="more-search-empty" hidden>示例里没有符合条件的记录。</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="more-feature more-feature-meeting">
+      <div class="more-copy">
+        <h3 class="title">会议与聊天</h3>
+        <p>录音默认在本机转写，按场整理成总结和去掉口头禅的原文，说话人按“我”和“对方”区分。微信对话默认关闭，开启后按聊天拆成消息。</p>
+      </div>
+      <div class="more-meeting">
+        <p class="more-meeting-meta caption">
+          <svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg>
+          <span>录音</span><time class="num" datetime="16:30">16:30</time>
+        </p>
+        <h4 class="title">和阿杰的周会</h4>
+        <p>晴天记账 1.1 定在 12 月第一周提审。导出功能排进 1.2。</p>
+        <dl class="more-transcript">
+          <div><dt>我</dt><dd>晴天记账 1.1 放在 12 月第一周提审，可以吗？</dd></div>
+          <div><dt>对方</dt><dd>可以，导出功能放进 1.2。</dd></div>
+          <div><dt>我</dt><dd>好，导出就按下午定的格式，CSV 加一份 JSON 元数据。</dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="more-feature more-feature-widget">
+      <div class="more-copy">
+        <h3 class="title">桌面小组件</h3>
+        <p>中号和大号都能看到当天概述、活动条和最近几段。点一下就打开当天的时间线。</p>
+      </div>
+      <picture class="more-widgets">
+        <source media="(prefers-color-scheme: dark)" srcset="assets/widget-dark.png">
+        <img src="assets/widget-light.png" width="1560" height="816" loading="lazy" alt="晴天记账示例的大号和中号小组件，显示 11 月 19 日的概述、活动条和最近几段">
+      </picture>
+    </article>
+  </div>
+</section>
