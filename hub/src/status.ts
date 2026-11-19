@@ -1,7 +1,9 @@
 import { BusyResponses } from "./db-busy.ts";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { toLocalIso } from "../../packages/record/index.ts";
 import type { HubDB } from "./db.ts";
+import type { RequestStatus } from "./distill/requests.ts";
 
 /**
  * 中枢状态页的数据：只给计数、时间和状态，不读记录的标题和正文。
@@ -9,7 +11,78 @@ import type { HubDB } from "./db.ts";
  */
 type Counts = Record<string, number>;
 interface UsageRow { at: string | null; tier: string | null; task: string | null; model: string | null; ok: number | null; input_tokens: number | null; output_tokens: number | null; ms: number | null }
-interface TierUsage { tier: string; models: string[]; calls: number; ok: number; failed: number; input_tokens: number | null; output_tokens: number | null; ms: number }
+interface UsageTotals {
+  calls: number; ok: number; failed: number; ms: number;
+  input_tokens: number | null; output_tokens: number | null;
+  input_tokens_incomplete: boolean; output_tokens_incomplete: boolean;
+}
+interface RequestRow {
+  id: string; status: RequestStatus; done: number | null; total: number | null; error: string | null;
+  created_at: string; updated_at: string;
+}
+
+const emptyUsage = (): UsageTotals => ({
+  calls: 0, ok: 0, failed: 0, ms: 0, input_tokens: null, output_tokens: null,
+  input_tokens_incomplete: false, output_tokens_incomplete: false,
+});
+function addUsage(sum: UsageTotals, row: UsageTotals) {
+  sum.calls += row.calls;
+  sum.ok += row.ok;
+  sum.failed += row.failed;
+  sum.ms += row.ms;
+  if (row.input_tokens !== null) sum.input_tokens = (sum.input_tokens ?? 0) + row.input_tokens;
+  if (row.output_tokens !== null) sum.output_tokens = (sum.output_tokens ?? 0) + row.output_tokens;
+  sum.input_tokens_incomplete ||= row.input_tokens_incomplete;
+  sum.output_tokens_incomplete ||= row.output_tokens_incomplete;
+}
+
+const errorCode = /^(timeout|network|rate_limited|quota|auth|bad_request|server_error|invalid_json|schema_mismatch|cli_failed|usage_record_failed|unknown)(?::[1-5][0-9]{2})?$/;
+function statusError(value: string | null): string | null {
+  if (value === null) return null;
+  const code = errorCode.exec(value)?.[0];
+  return code === value ? code : "unknown";
+}
+
+function isoTimestamp(value: unknown): string | null {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
+    && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+function modelCooldown(value: unknown, now: number) {
+  if (!value || typeof value !== "object") return null;
+  const { until, kind } = value as { until?: unknown; kind?: unknown };
+  const timestamp = isoTimestamp(until);
+  return timestamp && Date.parse(timestamp) > now && (kind === "rate_limited" || kind === "quota" || kind === "network")
+    ? { until: timestamp, kind }
+    : null;
+}
+
+const nonnegativeCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+function collectorSnapshot(databaseFile: string, now: number) {
+  const unavailable = { transcription: null, transcription_disabled: false, collector: null };
+  if (!databaseFile || databaseFile === ":memory:") return unavailable;
+  // history.db 与采集端快照放在同一个已解析的数据目录中。
+  try {
+    const snapshot = JSON.parse(readFileSync(join(dirname(databaseFile), "collector-status.json"), "utf8"));
+    const updated_at = isoTimestamp(snapshot?.time);
+    if (!updated_at) return unavailable;
+    const stale = now - Date.parse(updated_at) > 120_000;
+    const { transcription, outboxBytes, outboxDropped, outboxDegraded } = snapshot;
+    const pending: unknown = transcription?.pending;
+    const failed: unknown = transcription?.failed;
+    return {
+      transcription: nonnegativeCount(pending) && nonnegativeCount(failed) ? { pending, failed, updated_at, stale } : null,
+      transcription_disabled: transcription === null && !stale,
+      collector: nonnegativeCount(outboxBytes) && nonnegativeCount(outboxDropped) && typeof outboxDegraded === "boolean"
+        ? { outbox_bytes: outboxBytes, outbox_dropped: outboxDropped, outbox_degraded: outboxDegraded, updated_at, stale }
+        : null,
+    };
+  } catch {
+    return unavailable;
+  }
+}
 
 const tierOrder = ["minute", "hour", "day"];
 const tierRank = (tier: string) => { const i = tierOrder.indexOf(tier); return i < 0 ? tierOrder.length : i; };
@@ -72,6 +145,7 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
   const file = sql.name;
   let bytes: number | null = null;
   if (file && file !== ":memory:") { try { bytes = statSync(file).size; } catch { bytes = null; } }
+  const { transcription, transcription_disabled, collector } = collectorSnapshot(file, now);
 
   const { bySource, byDevice, tombstones } = recordGroups(hub);
 
@@ -80,39 +154,47 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
   const dayStart = new Date(`${today}T00:00:00`).getTime();
   const usage = (sql.prepare("SELECT at,tier,task,model,ok,input_tokens,output_tokens,ms FROM llm_usage WHERE at>=?").all(localDate(dayStart - 86_400_000)) as UsageRow[])
     .filter(r => r.at !== null && Date.parse(r.at) >= dayStart && Date.parse(r.at) <= now + 60_000);
-  const tiers = new Map<string, TierUsage & { modelSet: Set<string> }>();
-  const add = (sum: number | null, value: number | null) => value === null ? sum : (sum ?? 0) + value;
+  const tiers = new Map<string, UsageTotals & { tier: string; modelSet: Set<string> }>();
+  const tasks = new Map<string | null, UsageTotals & { task: string | null }>();
+  const total = emptyUsage();
   for (const r of usage) {
     const tier = r.tier ?? "未知";
-    const t = tiers.get(tier) ?? { tier, models: [], modelSet: new Set<string>(), calls: 0, ok: 0, failed: 0, input_tokens: null, output_tokens: null, ms: 0 };
-    t.calls++; if (r.ok) t.ok++; else t.failed++;
+    const t = tiers.get(tier) ?? { tier, modelSet: new Set<string>(), ...emptyUsage() };
+    const task = tasks.get(r.task) ?? { task: r.task, ...emptyUsage() };
     if (r.model) t.modelSet.add(r.model);
-    t.input_tokens = add(t.input_tokens, r.input_tokens); t.output_tokens = add(t.output_tokens, r.output_tokens);
-    t.ms += r.ms ?? 0;
+    const metrics = {
+      calls: 1, ok: r.ok ? 1 : 0, failed: r.ok ? 0 : 1, ms: r.ms ?? 0,
+      input_tokens: r.input_tokens, output_tokens: r.output_tokens,
+      input_tokens_incomplete: r.input_tokens === null, output_tokens_incomplete: r.output_tokens === null,
+    };
+    addUsage(t, metrics);
+    addUsage(task, metrics);
+    addUsage(total, metrics);
     tiers.set(tier, t);
+    tasks.set(r.task, task);
   }
   const byTier = [...tiers.values()].map(({ modelSet, ...t }) => ({ ...t, models: [...modelSet].sort() })).sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || a.tier.localeCompare(b.tier));
-  const tasks = new Map<string | null, { task: string | null; calls: number; ok: number; failed: number; input_tokens: number | null; output_tokens: number | null; ms: number }>();
-  for (const r of usage) {
-    const t = tasks.get(r.task) ?? { task: r.task, calls: 0, ok: 0, failed: 0, input_tokens: null, output_tokens: null, ms: 0 };
-    t.calls++; if (r.ok) t.ok++; else t.failed++;
-    t.input_tokens = add(t.input_tokens, r.input_tokens); t.output_tokens = add(t.output_tokens, r.output_tokens);
-    t.ms += r.ms ?? 0; tasks.set(r.task, t);
-  }
   const byTask = [...tasks.values()].sort((a, b) => (a.task ?? "").localeCompare(b.task ?? ""));
-  const total = byTier.reduce((s, t) => ({ calls: s.calls + t.calls, ok: s.ok + t.ok, failed: s.failed + t.failed, input_tokens: add(s.input_tokens, t.input_tokens), output_tokens: add(s.output_tokens, t.output_tokens), ms: s.ms + t.ms }),
-    { calls: 0, ok: 0, failed: 0, input_tokens: null as number | null, output_tokens: null as number | null, ms: 0 });
 
-  // 模型错误在写入 llm_usage 前已由 safeError 去掉提示词内容；这里再截短。at 有两种时间写法，按 ULID 取最新。
-  const lastError = sql.prepare("SELECT id,at,tier,error FROM llm_usage WHERE ok=0 ORDER BY id DESC LIMIT 1").get() as { id: string; at: string; tier: string; error: string | null } | undefined;
-  // 最近一次成功：网页据此判断最近错误之后是否已恢复。
-  const lastOk = sql.prepare("SELECT id,at FROM llm_usage WHERE ok=1 ORDER BY id DESC LIMIT 1").get() as { id: string; at: string } | undefined;
+  // at 有本地时间和 UTC 两种写法，按 ULID 判断调用写入顺序。旧行缺少用途，无法证明同类恢复。
+  const lastError = sql.prepare("SELECT id,at,tier,task,error FROM llm_usage WHERE ok=0 ORDER BY id DESC LIMIT 1").get() as
+    { id: string; at: string; tier: string | null; task: string | null; error: string | null } | undefined;
+  const recovered = !!(lastError?.tier && lastError.task && sql.prepare(
+    "SELECT 1 FROM llm_usage WHERE id>? AND ok=1 AND tier=? AND task=? LIMIT 1",
+  ).get(lastError.id, lastError.tier, lastError.task));
+  const lastOk = sql.prepare("SELECT at FROM llm_usage WHERE ok=1 ORDER BY id DESC LIMIT 1").get() as { at: string } | undefined;
   const deletes = (sql.prepare("SELECT v FROM audio_settings WHERE k GLOB 'delete:*'").all() as { v: string }[])
     .reduce((n, r) => { try { const v = JSON.parse(r.v); return n + (Array.isArray(v) ? v.length : 0); } catch { return n; } }, 0);
-  // 提炼请求队列（distill_requests，库版本 6 起一定存在）。
+  // 进度写入没有单独的时间戳，updated_at 是最近一次可观测的状态转换时间。
+  const recentRequests = sql.prepare(`
+    SELECT id,status,progress_done AS done,progress_total AS total,error,created_at,
+      COALESCE(finished_at,started_at,created_at) AS updated_at
+    FROM distill_requests ORDER BY created_at DESC,id DESC LIMIT 5
+  `).all() as RequestRow[];
   const requests = {
     total: scalar<number>("SELECT COUNT(*) FROM distill_requests"),
     by_status: counts("SELECT status AS k,COUNT(*) AS n FROM distill_requests GROUP BY status"),
+    recent: recentRequests.map(row => ({ ...row, error: statusError(row.error) })),
   };
 
   return {
@@ -150,13 +232,16 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
       },
       pending_open: counts("SELECT kind AS k,COUNT(*) AS n FROM pending WHERE resolved_at IS NULL GROUP BY kind"),
       requests,
-      last_error: lastError ? { at: lastError.at, tier: lastError.tier, error: (lastError.error ?? "").slice(0, 300), recovered: !!lastOk && lastOk.id > lastError.id } : null,
+      last_error: lastError ? { at: lastError.at, tier: lastError.tier, error: statusError(lastError.error) ?? "unknown", recovered } : null,
       last_ok_at: lastOk?.at ?? null,
+      cooldown: modelCooldown(state("llm_cooldown"), now),
     },
+    collector,
     llm_today: { date: today, total, by_tier: byTier, by_task: byTask },
     agent_reads_today: (sql.prepare("SELECT at FROM agent_reads WHERE at>=?").all(localDate(dayStart - 86_400_000)) as { at: string }[]).filter(r => Date.parse(r.at) >= dayStart).length,
-    // 转写在各设备本地进行，中枢只收文字和声纹，没有转写队列可报。
     audio: {
+      transcription,
+      transcription_disabled,
       // 提问被关闭（例如 F9 收尾）后说话人仍是 asked；只有还挂着未答提问的才算“已问”。
       speakers: counts(`SELECT CASE WHEN s.status='asked' AND NOT EXISTS (SELECT 1 FROM pending p WHERE p.kind='voice'
         AND p.resolved_at IS NULL AND json_extract(p.payload,'$.speaker_id')=s.id) THEN 'new' ELSE s.status END AS k,

@@ -270,7 +270,10 @@ dialog h2 { font-size: var(--text-title); font-weight: 600; margin: 0 0 16px; }
 .status-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 0 24px; }
 .status-lines { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 24px; margin: 0; padding: 16px; border-top: 1px solid var(--line); }
 .status-lines dt { color: var(--muted); }
+.status-lines dd { margin: 0; }
 .status-lines:first-child { border-top: 0; }
+.status-requests { margin: 8px 0 0; padding: 0; list-style: none; }
+.status-requests li + li { margin-top: 4px; }
 
 /* 操作结果提示：屏幕底部居中，几秒后消失；待确认的可以撤销。 */
 .toasts { position: fixed; left: 50%; bottom: 24px; z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 32px); transform: translateX(-50%); }
