@@ -1,1 +1,208 @@
-/* hero 区块样式 */
+.hero {
+  padding-top: clamp(32px, 6vw, 64px);
+}
+
+.hero-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  align-items: center;
+  gap: clamp(32px, 4vw, 56px);
+}
+
+.hero-intro {
+  container-type: inline-size;
+}
+
+.hero-intro .display {
+  font-size: min(var(--fs-display), 16cqi);
+  text-wrap: initial;
+}
+
+.hero-lead {
+  max-width: 28em;
+  margin-top: 28px;
+  color: var(--reading);
+  line-height: 1.8;
+  text-wrap: pretty;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-block: 28px 12px;
+}
+
+.hero-window {
+  --hero-time-width: 44px;
+  --hero-axis-gap: 24px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-stage);
+  background: var(--raised);
+  box-shadow: 0 20px 60px -44px color-mix(in srgb, var(--ink) 28%, transparent);
+}
+
+.hero-window-bar {
+  position: relative;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  text-align: center;
+}
+
+.hero-window-dots {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  display: flex;
+  gap: 6px;
+  transform: translateY(-50%);
+}
+
+.hero-window-dots i {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--faint);
+  border-radius: 50%;
+  background: var(--fill);
+}
+
+.hero-window-page {
+  padding: 24px clamp(16px, 3vw, 40px);
+}
+
+.hero-date {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+}
+
+.hero-overview {
+  margin-block: 8px 24px;
+  color: var(--reading);
+  line-height: 1.6;
+  text-wrap: wrap;
+}
+
+.hero-timeline li:not(:last-child)::after {
+  position: absolute;
+  inset-block: 11px -11px;
+  left: var(--hero-time-width);
+  width: 1px;
+  background: var(--line);
+  z-index: -1;
+  content: "";
+}
+
+.hero-timeline li {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--hero-time-width) minmax(0, 1fr);
+  gap: var(--hero-axis-gap);
+  padding-bottom: 8px;
+  isolation: isolate;
+}
+
+.hero-timeline li:last-child {
+  padding-bottom: 0;
+}
+
+.hero-timeline li::before {
+  position: absolute;
+  top: 8px;
+  left: calc(var(--hero-time-width) - 3px);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: "";
+}
+
+.hero-timeline time {
+  padding-top: 2px;
+}
+
+.hero-timeline h3 {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.hero-timeline p {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.hero-source {
+  display: block;
+  width: fit-content;
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.hero-source svg {
+  width: 16px;
+  height: 16px;
+}
+
+.hero-writing-line {
+  display: block;
+  width: 28px;
+  height: 2px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .hero-layout {
+    max-width: var(--reading-width);
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .hero-window {
+    --hero-axis-gap: 12px;
+  }
+
+  .hero-actions .btn {
+    padding-inline: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hero-glyph {
+    animation: hero-show 1ms var(--hero-letter-delay) both;
+  }
+
+  .hero-window[data-writing] .hero-timeline li {
+    animation: hero-write-row 220ms var(--ease) var(--hero-row-delay) both;
+  }
+
+  .hero-window[data-writing] .hero-writing-line {
+    animation: hero-write-line 280ms var(--ease) var(--hero-line-delay) both;
+    transform-origin: left;
+  }
+}
+
+@keyframes hero-show {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes hero-write-row {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hero-write-line {
+  from { opacity: 0; transform: scaleX(0); }
+  to { opacity: 1; transform: scaleX(1); }
+}
