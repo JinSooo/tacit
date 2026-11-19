@@ -1,1 +1,217 @@
-/* ai 区块样式 */
+#ai {
+  margin-block-start: clamp(72px, 9vw, 128px);
+  padding-block: clamp(64px, 8vw, 112px);
+}
+
+#ai .section-head {
+  margin-block-end: clamp(32px, 5vw, 64px);
+}
+
+.ai-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 8fr) minmax(0, 3fr);
+  align-items: start;
+  gap: clamp(32px, 5vw, 72px);
+}
+
+.ai-terminal {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--r-stage);
+  font-family: var(--mono), var(--sans);
+  font-size: var(--fs-caption);
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.ai-terminal-bar,
+.ai-scene {
+  padding-inline: clamp(16px, 3vw, 32px);
+}
+
+.ai-terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-block: 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.ai-terminal-bar svg {
+  flex: none;
+}
+
+.ai-scene {
+  padding-block: 24px;
+}
+
+.ai-scene + .ai-scene {
+  border-top: 1px solid var(--line);
+}
+
+.ai-scene h3,
+.ai-examples h3 {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  margin-block-end: 12px;
+}
+
+.ai-terminal code {
+  font: inherit;
+}
+
+.ai-command,
+.ai-source summary {
+  color: var(--accent);
+}
+
+.ai-context {
+  display: grid;
+  gap: 4px;
+  border-inline-start: 1px solid var(--accent);
+  padding-inline-start: 12px;
+  margin-block: 16px;
+  color: var(--reading);
+}
+
+.ai-context li + li {
+  margin-block-start: 4px;
+}
+
+.ai-turn {
+  display: grid;
+  grid-template-columns: 7ch minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.ai-turn b,
+.ai-source blockquote b {
+  font-weight: 600;
+}
+
+.ai-tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  margin-block: 8px;
+  padding-inline-start: calc(7ch + 8px);
+}
+
+.ai-tool svg {
+  flex: none;
+}
+
+.ai-source {
+  margin-block-start: 4px;
+  margin-inline-start: calc(7ch + 8px);
+}
+
+.ai-source summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  inline-size: fit-content;
+  min-block-size: 32px;
+  padding-inline-end: 4px;
+  cursor: pointer;
+}
+
+.ai-source summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-source summary > span {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.ai-source summary::after {
+  content: "";
+  inline-size: 6px;
+  block-size: 6px;
+  flex: none;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+.ai-source[open] summary::after {
+  transform: translateY(2px) rotate(225deg);
+}
+
+.ai-source blockquote {
+  border-inline-start: 1px solid var(--accent);
+  padding-inline-start: 12px;
+  margin-block-start: 8px;
+  color: var(--reading);
+}
+
+.ai-source blockquote p + p {
+  margin-block-start: 4px;
+}
+
+.ai-rules li,
+.ai-examples li {
+  text-wrap: pretty;
+}
+
+.ai-rules li {
+  padding-block: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.ai-rules strong {
+  display: block;
+  color: var(--ink);
+  font-weight: 600;
+  margin-block-end: 4px;
+}
+
+.ai-examples {
+  border-top: 1px solid var(--line);
+  padding-block-start: 16px;
+}
+
+.ai-examples h3 {
+  color: var(--ink);
+}
+
+.ai-examples li {
+  padding-inline-start: 1em;
+  text-indent: -1em;
+}
+
+.ai-examples li + li {
+  margin-block-start: 8px;
+}
+
+@media (max-width: 820px) {
+  .ai-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-source summary {
+    min-block-size: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ai-terminal[data-written] .ai-context :is(p, li),
+  .ai-terminal[data-written] .ai-context + .ai-turn {
+    animation: ai-write-in 180ms var(--ease) both;
+  }
+
+  .ai-terminal[data-written] .ai-context p + p { animation-delay: 64ms; }
+  .ai-terminal[data-written] .ai-context li:nth-child(1) { animation-delay: 128ms; }
+  .ai-terminal[data-written] .ai-context li:nth-child(2) { animation-delay: 192ms; }
+  .ai-terminal[data-written] .ai-context li:nth-child(3) { animation-delay: 256ms; }
+  .ai-terminal[data-written] .ai-context + .ai-turn { animation-delay: 320ms; }
+
+  @keyframes ai-write-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+}
