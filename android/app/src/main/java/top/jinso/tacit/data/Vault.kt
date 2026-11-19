@@ -17,7 +17,6 @@ import top.jinso.tacit.sync.MAX_ENVELOPE
 
 class Vault(context: Context, private val prefs: Preferences, private val onSendableChange: () -> Unit = {}) {
     private val db: SQLiteDatabase
-    private val hasLegacySummaries: Boolean
     val changes = MutableStateFlow(0L)
     init {
         System.loadLibrary("sqlcipher")
@@ -44,11 +43,9 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
             db.execSQL("CREATE TABLE IF NOT EXISTS sync_records (id TEXT PRIMARY KEY, state TEXT NOT NULL, reason TEXT)")
             db.execSQL("CREATE TABLE IF NOT EXISTS sync_deletes (id TEXT PRIMARY KEY)")
         }
-        // An upgraded vault may contain old derived text. Preserve its delete/correction invalidation.
-        hasLegacySummaries = db.rawQuery(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('conversation_summaries','summary_sources')",
-            emptyArray<String>(),
-        ).use { it.moveToFirst() && it.getInt(0) == 2 }
+        // 0.3 的手机端整理已撤下，派生文本不再展示，也不再维护：升级时直接删掉。
+        db.execSQL("DROP TABLE IF EXISTS summary_sources")
+        db.execSQL("DROP TABLE IF EXISTS conversation_summaries")
     }
     /** Same source/ref returns its original ID, so an interrupted audio publish can finish its metadata.
      * Permission and tombstone rejection still return null; duplicates never rewrite the original. */
@@ -89,7 +86,6 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
         if (row == -1L) return ref?.let {
             db.rawQuery("SELECT id FROM records WHERE source=? AND ref=?", arrayOf(draft.source,it)).use { c -> if(c.moveToFirst())c.getString(0) else null }
         }
-        draft.corrects?.let { invalidateSummaries(it) }
         changes.value++
         if (draft.source in Sources.UPLOADABLE && syncConnection()?.optBoolean("removed") == false) onSendableChange()
         return id
@@ -167,7 +163,6 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
             db.rawQuery("SELECT source,ref FROM records WHERE id=?", arrayOf(target)).use { c ->
                 if (c.moveToFirst() && !c.isNull(1)) tombstone(c.getString(0) + ":" + c.getString(1))
             }
-            invalidateSummaries(target)
             db.delete("sync_records", "id=?", arrayOf(target))
             if (!enqueue) db.delete("sync_deletes", "id=?", arrayOf(target))
             count += db.delete("records", "id=?", arrayOf(target))
@@ -320,14 +315,8 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
         }
         db.insertOrThrow("records", null, values)
         setSyncState(id, "remote")
-        invalidateSummaries(parent)
     }
 
-    private fun invalidateSummaries(recordId: String) {
-        if (!hasLegacySummaries) return
-        db.execSQL("DELETE FROM conversation_summaries WHERE id IN (SELECT summary_id FROM summary_sources WHERE record_id=?)", arrayOf(recordId))
-        db.execSQL("DELETE FROM summary_sources WHERE summary_id NOT IN (SELECT id FROM conversation_summaries)")
-    }
     @Synchronized fun close() { db.close() }
     private companion object { const val CHAT_AND_MICROPHONE_SCOPE = 1 }
 

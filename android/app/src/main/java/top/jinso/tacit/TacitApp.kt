@@ -21,6 +21,7 @@ class TacitApp : Application() {
         if (getProcessName().endsWith(":qnn")) return
         prefs = Preferences(this)
         top.jinso.tacit.audio.AudioMaintenanceWorker.schedule(this)
+        Thread({ top.jinso.tacit.data.LegacyFiles.remove(noBackupFilesDir) }, "tacit-legacy-cleanup").apply { isDaemon = true }.start()
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) { SyncWorker.enqueue(this@TacitApp) }
