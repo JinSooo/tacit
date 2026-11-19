@@ -78,13 +78,13 @@ export function createSettings(deps: SettingsDeps) {
     return { ...readGeneral(hub), defaults: GENERAL_DEFAULTS, ranges: GENERAL_RANGES };
   }
 
-  return async function handle(request: Request, url: URL, ctx: { db: HubDB; port: number; readJSON: () => Promise<unknown> }): Promise<Response | null> {
+  return async function handle(request: Request, url: URL, ctx: { db: HubDB; port: number; readJSON: () => Promise<unknown>; lan: boolean }): Promise<Response | null> {
     const { pathname } = url, method = request.method;
     if (!pathname.startsWith("/v1/settings/")) return null;
 
     if (pathname === "/v1/settings/hub") {
       const locked = env.RA_PORT !== undefined;
-      if (method === "GET") return Response.json({ port: ctx.port, listen: "127.0.0.1", lan: false, locked });
+      if (method === "GET") return Response.json({ port: ctx.port, listen: "127.0.0.1", lan: ctx.lan, locked });
       if (method === "PUT") {
         const body = object(await ctx.readJSON());
         if (Object.keys(body).some(k => k !== "port")) throw new InputError("只接受 port");
