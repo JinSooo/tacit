@@ -16,13 +16,29 @@ function expand(file: string, seen: string[] = []): string {
   );
 }
 
+// 产物是单个自带样式、脚本和来源符号的 index.html，双击用 file:// 打开也能完整显示；图片仍在 assets/。
+// 来源符号的 id 加 src- 前缀，避免和区块 id（如 #ai）重名。
+// 脚本改成普通脚本并各自包一层块作用域，避免 file:// 下模块脚本被拦，也避免各区块的顶层变量重名。
+function inline(html: string): string {
+  const read = (rel: string) => readFileSync(join(src, rel), "utf8");
+  const sprite = read("assets/sources.svg").replace(/<!--[\s\S]*?-->/g, "")
+    .replace("<svg ", '<svg aria-hidden="true" width="0" height="0" style="position:absolute" ')
+    .replace(/<symbol id="/g, '<symbol id="src-');
+  return html
+    .replace(/<link rel="stylesheet" href="([^"]+)">/g, (_, rel: string) => `<style>\n${read(rel)}</style>`)
+    .replace(/<script type="module" src="([^"]+)"><\/script>/g, (_, rel: string) => `<script>{\n${read(rel)}}</script>`)
+    .replace(/<script type="module">([\s\S]*?)<\/script>/g, (_, body: string) => `<script>{${body}}</script>`)
+    .replaceAll("assets/sources.svg#", "#src-")
+    .replace(/<body([^>]*)>/, (m) => `${m}\n${sprite}`);
+}
+
 export function build() {
   rmSync(dist, { recursive: true, force: true });
   mkdirSync(dist, { recursive: true });
-  for (const dir of ["styles", "scripts", "assets"]) cpSync(join(src, dir), join(dist, dir), { recursive: true });
-  const html = expand(join(src, "index.html"));
-  const missing = html.match(/<!--\s*include:[^>]*-->/);
-  if (missing) throw new Error(`未展开的引用：${missing[0]}`);
+  cpSync(join(src, "assets"), join(dist, "assets"), { recursive: true });
+  const html = inline(expand(join(src, "index.html")));
+  const missing = html.match(/<!--\s*include:[^>]*-->|type="module"|sources\.svg#/);
+  if (missing) throw new Error(`未处理的引用：${missing[0]}`);
   writeFileSync(join(dist, "index.html"), html);
 }
 

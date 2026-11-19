@@ -5,7 +5,10 @@
 ```sh
 bun site/build.ts           # 构建到 site/dist
 bun site/build.ts --serve   # 构建并在 http://localhost:4300 预览，刷新即重建
+open site/dist/index.html   # 不起服务也能直接打开看
 ```
+
+构建产物是一个内联了全部样式、脚本和来源符号的 `index.html`，加上 `assets/` 里的图片，可以直接放到任何静态托管上。
 
 `src/index.html` 是页面骨架，`<!-- include: sections/x.html -->` 在构建时换成区块内容。每个区块有自己的 `sections/x.html`、`styles/x.css`，需要交互时再加 `scripts/x.js`。公共层只有 `styles/base.css`、`scripts/main.js` 和 `assets/` 里的标志、来源符号。页面不请求任何外部资源，不放统计脚本。
 
