@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -132,6 +132,12 @@ test("后台在运行时重新准备：等旧任务退完再加载，加载失�
     };
     expect((await f.run({ launchctl })).restarted).toBe(true);
     expect([...running].sort()).toEqual(["distill", "hub"]);
-    await expect(f.run({ install: true, launchctl: args => args[0] === "bootstrap" ? 5 : args[0] === "print" ? 1 : 0 })).rejects.toThrow("没能加载");
+    const logs: string[] = [], setupLog = join(f.data, "logs/setup.log");
+    chmodSync(setupLog, 0o644);
+    await expect(f.run({ install: true, log: line => logs.push(line),
+      launchctl: args => args[0] === "bootstrap" ? 5 : args[0] === "print" ? 1 : 0,
+    })).rejects.toThrow("dev.record-anything.hub 没能加载");
+    expect(logs.filter(line => line.includes("dev.record-anything.hub") && line.includes("launchctl 退出码 5"))).toHaveLength(5);
+    expect(statSync(setupLog).mode & 0o777).toBe(0o600);
   } finally { f.cleanup(); }
 });

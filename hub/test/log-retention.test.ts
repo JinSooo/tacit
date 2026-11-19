@@ -1,8 +1,8 @@
 import {expect,test} from "bun:test";
-import {mkdtempSync,rmSync,openSync,closeSync,writeSync,readFileSync,statSync,symlinkSync,writeFileSync} from "node:fs";
+import {mkdtempSync,rmSync,openSync,closeSync,writeSync,readFileSync,statSync,symlinkSync,writeFileSync,mkdirSync,chmodSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {rotateLog} from "../src/log-retention.ts";
+import {rotateLog,startLogRetention} from "../src/log-retention.ts";
 
 test("轮转限制活动日志和两份副本，已有 append fd 继续写入，拒绝链接",()=>{
   const dir=mkdtempSync(join(tmpdir(),"ra-log-")),file=join(dir,"test.log");
@@ -15,4 +15,20 @@ test("轮转限制活动日志和两份副本，已有 append fd 继续写入，
     const other=join(dir,"other");writeFileSync(other,"keep");symlinkSync(other,join(dir,"link"));
     expect(()=>rotateLog(join(dir,"link"),1)).toThrow();expect(readFileSync(other,"utf8")).toBe("keep");
   } finally {closeSync(fd);rmSync(dir,{recursive:true,force:true});}
+});
+
+test("后台启动时轮转达到 5 MiB 的 setup.log，并收紧活动文件和副本权限", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ra-log-"));
+  let stop: (() => void) | undefined;
+  try {
+    const logs = join(dir, "logs"), file = join(logs, "setup.log");
+    mkdirSync(logs);
+    const content = Buffer.alloc(5 * 1024 * 1024, "a");
+    writeFileSync(file, content);
+    chmodSync(file, 0o644);
+    stop = startLogRetention(dir);
+    expect(statSync(file).size).toBe(0);
+    expect(readFileSync(file + ".1")).toEqual(content);
+    for (const path of [file, file + ".1"]) expect(statSync(path).mode & 0o777).toBe(0o600);
+  } finally { stop?.(); rmSync(dir, { recursive: true, force: true }); }
 });

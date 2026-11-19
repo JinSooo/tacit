@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -60,7 +60,7 @@ test("CLI open --print 读取已有 token 和端口，不访问数据库密钥",
   } finally { ctx.cleanup(); }
 });
 
-test("CLI 数据库迁移错误保留中文首行并输出真实 name/message，不输出堆栈或密钥", () => {
+test("CLI 数据库迁移错误保留中文首行和错误码，屏蔽原始异常", () => {
   const ctx = setup();
   try {
     // 合成的不完整 v2 结构让打开阶段产生可识别的迁移错误。
@@ -68,12 +68,68 @@ test("CLI 数据库迁移错误保留中文首行并输出真实 name/message，
     const result = spawnSync(process.execPath, [cli, "init"], { env: { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey }, encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stderr.split("\n")[0]).toBe("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。");
-    expect(result.stderr).toContain("SqliteError: duplicate column name: domain");
+    expect(result.stderr).toContain("Error (db_migration_failed)");
+    expect(result.stderr).not.toContain("duplicate column name");
     expect(result.stderr).not.toContain(ctx.config.dbKey);
     expect(result.stderr).not.toContain("at ");
     expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(2);
     expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE name='agent_reads'").get()).toBeUndefined();
   } finally { ctx.cleanup(); }
+});
+
+test("serve 启动失败写固定错误和仅错误码的日志，区分开库、迁移与配置", () => {
+  const ctx = setup();
+  try {
+    const env = { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey, RA_PORT: "0", TZ: "Asia/Tokyo" };
+    const target = join(ctx.dir, "hub-startup-error.json");
+    ctx.db.db.exec("DROP TABLE agent_reads; PRAGMA user_version=2;");
+    const cases = [
+      [{ RA_DB_KEY: "synthetic-wrong-key" }, "db_open_failed"],
+      [{}, "db_migration_failed"],
+      [{ RA_PORT: "invalid" }, "unknown"],
+    ] as const;
+    for (const [override, code] of cases) {
+      const result = spawnSync(process.execPath, [cli, "serve"], { env: { ...env, ...override }, encoding: "utf8", timeout: 5_000 });
+      expect(result.status).toBe(1);
+      const raw = readFileSync(target, "utf8");
+      expect(JSON.parse(raw)).toEqual({ code, at: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+09:00$/), message: expect.any(String) });
+      for (const privateText of [ctx.dir, ctx.config.dbKey, "synthetic-wrong-key", "duplicate column name"]) {
+        expect(raw + result.stderr).not.toContain(privateText);
+      }
+      expect(statSync(target).mode & 0o777).toBe(0o600);
+    }
+    expect(readFileSync(join(ctx.dir, "logs/hub.log"), "utf8").trim().split("\n").map(line => JSON.parse(line)))
+      .toEqual(cases.map(([, code]) => ({ code })));
+  } finally { ctx.cleanup(); }
+});
+
+test.skipIf(bindDenied)("serve 识别真实端口冲突，下次开始监听后删除启动错误文件", async () => {
+  const ctx = setup();
+  const busy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  let child: ReturnType<typeof Bun.spawn> | undefined;
+  try {
+    const env = { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey, RA_PORT: String(busy.port) };
+    const target = join(ctx.dir, "hub-startup-error.json");
+    const failed = spawnSync(process.execPath, [cli, "serve"], { env, timeout: 5_000 });
+    expect(failed.status).toBe(1);
+    expect(JSON.parse(readFileSync(target, "utf8")).code).toBe("port_in_use");
+
+    const running = Bun.spawn([process.execPath, cli, "serve"], { env: { ...env, RA_PORT: "0" }, stdout: "pipe" });
+    child = running;
+    const reader = new Response(running.stdout).body!.getReader();
+    try {
+      const output = new TextDecoder().decode((await reader.read()).value);
+      const port = /Hub 已启动：http:\/\/127\.0\.0\.1:(\d+)/.exec(output)?.[1];
+      expect(port).toBeDefined();
+      expect((await fetch(`http://127.0.0.1:${port}/v1/health`)).ok).toBe(true);
+      expect(existsSync(target)).toBe(false);
+    } finally { reader.releaseLock(); }
+  } finally {
+    child?.kill();
+    await child?.exited;
+    await busy.stop(true);
+    ctx.cleanup();
+  }
 });
 
 test("CLI 非数据库错误只打印 name/code，不打印可能夹带正文的 message", async () => {

@@ -1,11 +1,12 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { constants, openSync, closeSync, fsyncSync, writeFileSync, readFileSync, mkdirSync, chmodSync, lstatSync, readdirSync, renameSync, unlinkSync } from "node:fs";
+import { constants, openSync, closeSync, fsyncSync, writeFileSync, readFileSync, mkdirSync, chmodSync, lstatSync, readdirSync, renameSync, unlinkSync, fstatSync } from "node:fs";
 import { join } from "node:path";
 import { tryWriteWithoutWaiting } from "./db-busy.ts";
+import { diagnostic } from "./diagnostics.ts";
 import type { HubDB } from "./db.ts";
 
 type AuditRow = [string, string, string, string, string, string, number, number];
-type Queue = { key: Buffer; directory: string | null; rows: Map<string, AuditRow>; errorLogged: boolean; timer?: ReturnType<typeof setInterval> };
+type Queue = { key: Buffer; directory: string | null; rows: Map<string, AuditRow>; corruptNotRemoved: Set<string>; errorLogged: boolean; timer?: ReturnType<typeof setInterval> };
 const queues = new WeakMap<HubDB, Queue>();
 const missing = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "ENOENT";
 const QUERY_RETENTION_MS = 7 * 86_400_000;
@@ -54,23 +55,53 @@ function persist(queue: Queue, row: AuditRow) {
     try { unlinkSync(temp); } catch (e) { if (!missing(e)) throw e; }
   }
 }
-function restore(queue: Queue) {
-  if (!directory(queue)) return;
-  for (const name of readdirSync(queue.directory!)) {
-    if (!/^[0-9A-HJKMNP-TV-Z]{26}\.enc$/.test(name)) continue;
-    const id = name.slice(0, -4); if (queue.rows.has(id)) continue;
-    const path = join(queue.directory!, name);
-    let fd: number;
-    try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
-    catch (e) { if (missing(e)) continue; throw e; }
-    let bytes: Buffer; try { bytes = readFileSync(fd); } finally { closeSync(fd); }
-    if (bytes.length < 29 || bytes.length > 256_000) throw new Error("审计暂存数据无效");
-    const cipher = createDecipheriv("aes-256-gcm", queue.key, bytes.subarray(0, 12)); cipher.setAuthTag(bytes.subarray(12, 28));
+function decodePending(key: Buffer, id: string, bytes: Buffer): AuditRow | undefined {
+  if (bytes.length < 29 || bytes.length > 256_000) return;
+  try {
+    const cipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12));
+    cipher.setAuthTag(bytes.subarray(12, 28));
     const row: unknown = JSON.parse(Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]).toString("utf8"));
     if (!Array.isArray(row) || row.length !== 8 || row[0] !== id || !row.slice(0, 6).every(v => typeof v === "string")
-      || !Number.isSafeInteger(row[6]) || ![0, 1].includes(row[7])) throw new Error("审计暂存数据无效");
-    queue.rows.set(id, row as AuditRow);
+      || !Number.isSafeInteger(row[6]) || ![0, 1].includes(row[7])) return;
+    const args = JSON.parse(row[4]), ids = JSON.parse(row[5]);
+    if (!args || typeof args !== "object" || Array.isArray(args) || !Array.isArray(ids) || !ids.every(v => typeof v === "string")) return;
+    return row as AuditRow;
+  } catch { return; }
+}
+function restore(queue: Queue) {
+  if (!directory(queue)) return;
+  let corrupt = 0;
+  for (const entry of readdirSync(queue.directory!, { withFileTypes: true })) {
+    const { name } = entry;
+    if (!name.endsWith(".enc") || (!entry.isFile() && !entry.isSymbolicLink())) continue;
+    const id = name.slice(0, -4);
+    if (queue.rows.has(id)) continue;
+    const path = join(queue.directory!, name);
+    let row: AuditRow | undefined;
+    if (entry.isFile() && /^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)) {
+      let fd: number;
+      try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+      catch (e) { if (missing(e)) continue; throw e; }
+      try {
+        const size = fstatSync(fd).size;
+        if (size >= 29 && size <= 256_000) row = decodePending(queue.key, id, readFileSync(fd));
+      } finally { closeSync(fd); }
+    }
+    if (row) {
+      queue.rows.set(id, row);
+      queue.corruptNotRemoved.delete(name);
+      continue;
+    }
+    if (!queue.corruptNotRemoved.has(name)) corrupt++;
+    try { unlinkSync(path); queue.corruptNotRemoved.delete(name); }
+    catch (e) {
+      if (missing(e)) queue.corruptNotRemoved.delete(name);
+      else queue.corruptNotRemoved.add(name);
+    }
   }
+  if (corrupt) console.error(JSON.stringify({
+    ...diagnostic({ code: "audit_pending_corrupt" }, "audit.restore"), count: corrupt,
+  }));
 }
 function retry(hub: HubDB, queue: Queue) {
   if (queue.rows.size && !queue.timer && hub.db.open) {
@@ -80,7 +111,7 @@ function retry(hub: HubDB, queue: Queue) {
 /** 使用独立派生密钥加密，不把返回正文写入文件；检索词只以脱敏截断后的形式随参数保存。打开数据库即恢复未入库审计。 */
 export function registerAgentAudit(hub: HubDB, databaseKey: string) {
   const queue: Queue = { key: createHash("sha256").update("record-anything:agent-audit:v1\0").update(databaseKey).digest(),
-    directory: hub.db.name === ":memory:" ? null : `${hub.db.name}.audit-pending`, rows: new Map(), errorLogged: false };
+    directory: hub.db.name === ":memory:" ? null : `${hub.db.name}.audit-pending`, rows: new Map(), corruptNotRemoved: new Set(), errorLogged: false };
   queues.set(hub, queue); restore(queue); flushAgentAudit(hub); retry(hub, queue);
 }
 /** 写库成功后才移除加密日志；提交后崩溃可重放，按审计 id 去重。 */

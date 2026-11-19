@@ -1,12 +1,14 @@
 import { expect, spyOn, test } from "bun:test";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HubDB } from "../src/db.ts";
 import { createHandler } from "../src/server.ts";
 import { AgentReads } from "../src/agent.ts";
 import { setup, fixture } from "./helpers.ts";
+import { ulid } from "../../packages/record/index.ts";
 
-test("真实子进程在写锁期间返回读取后退出，重开数据库仍能恢复加密审计且不重复", async () => {
+test("重开数据库时丢弃坏审计暂存，恢复真实子进程的加密暂存且不重复入库", async () => {
   const ctx = setup(), original = fixture(); ctx.db.ingest([original]);
   const child = Bun.spawn([process.execPath, "-e", `
     import {HubDB} from './hub/src/db.ts'; import {AgentReads} from './hub/src/agent.ts';
@@ -29,12 +31,24 @@ test("真实子进程在写锁期间返回读取后退出，重开数据库仍�
     const files = readdirSync(pending).filter(f => f.endsWith(".enc"));
     expect(files).toHaveLength(1);
     expect(readFileSync(join(pending, files[0]!)).includes(Buffer.from(original.id))).toBe(false);
-    const recovered = new HubDB(ctx.file, ctx.config.dbKey);
-    expect(recovered.db.prepare("SELECT COUNT(*) n FROM agent_reads").get()).toEqual({ n: 1 });
-    recovered.close();
-    const again = new HubDB(ctx.file, ctx.config.dbKey);
-    expect(again.db.prepare("SELECT COUNT(*) n FROM agent_reads").get()).toEqual({ n: 1 }); again.close();
-    expect(readdirSync(pending)).toEqual([]);
+    writeFileSync(join(pending, `${ulid()}.enc`), Buffer.alloc(3));
+    writeFileSync(join(pending, `${ulid()}.enc`), Buffer.alloc(100));
+    const key = createHash("sha256").update("record-anything:agent-audit:v1\0").update(ctx.config.dbKey).digest();
+    const iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", key, iv);
+    const invalid = Buffer.concat([cipher.update("{synthetic-invalid-json"), cipher.final()]);
+    writeFileSync(join(pending, `${ulid()}.enc`), Buffer.concat([iv, cipher.getAuthTag(), invalid]));
+    const diagnostics = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 2; i++) {
+        const recovered = new HubDB(ctx.file, ctx.config.dbKey);
+        try { expect(recovered.db.prepare("SELECT COUNT(*) n FROM agent_reads").get()).toEqual({ n: 1 }); }
+        finally { recovered.close(); }
+      }
+      expect(readdirSync(pending)).toEqual([]);
+      expect(diagnostics.mock.calls.map(([line]) => JSON.parse(line))).toEqual([
+        { location: "audit.restore", name: "Error", code: "audit_pending_corrupt", count: 3 },
+      ]);
+    } finally { diagnostics.mockRestore(); }
   } finally {
     child.kill(); if (ctx.db.db.inTransaction) ctx.db.db.exec("ROLLBACK"); ctx.cleanup();
   }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { AudioStore } from "../src/audio.ts";
 import { HubDB } from "../src/db.ts";
 import { fixture, setup } from "./helpers.ts";
@@ -8,6 +8,20 @@ import { ulid } from "../../packages/record/index.ts";
 let ctx: ReturnType<typeof setup>;
 beforeEach(() => { ctx = setup(); });
 afterEach(() => ctx.cleanup());
+
+test("迁移失败重试时，截断或等长但损坏的备份会被完整副本替换", () => {
+  // 模拟一份有结构冲突的旧库，迁移失败后可以立即检验留下的副本。
+  ctx.db.db.exec("CREATE TABLE distill_requests_v11 (id TEXT); PRAGMA user_version=11;");
+  ctx.db.close();
+  const source = readFileSync(ctx.file), backup = `${ctx.file}.migration-v11.bak`;
+  for (const bytes of [source.subarray(0, 100), Buffer.alloc(source.length)]) {
+    writeFileSync(backup, bytes);
+    writeFileSync(`${backup}.tmp`, source.subarray(0, 50));
+    expect(() => new HubDB(ctx.file, ctx.config.dbKey)).toThrow(expect.objectContaining({ code: "db_migration_failed" }));
+    expect(readFileSync(backup)).toEqual(source);
+    expect(existsSync(`${backup}.tmp`)).toBe(false);
+  }
+});
 
 test("SQLCipher 实际文件加密，错误密钥拒绝，正确密钥重开及迁移版本保留", () => {
   const record = fixture();

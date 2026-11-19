@@ -35,7 +35,7 @@ export function rotateLog(path: string, limit = 5 * 1024 * 1024): boolean {
 
 export function startLogRetention(dataDir: string): () => void {
   const run = () => {
-    for (const name of ["hub","distill","collector"]) {
+    for (const name of ["hub","distill","collector","setup"]) {
       try { rotateLog(join(dataDir,"logs",`${name}.log`)); }
       catch { console.error(JSON.stringify({location:"logs.rotate",category:"storage",log:name})); }
     }

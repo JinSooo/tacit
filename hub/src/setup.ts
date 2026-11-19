@@ -1,6 +1,6 @@
 // 应用自己完成安装后的准备：数据目录与密钥、AI 工具连接路径、后台服务的启动配置。
 // 安装包首次打开、升级后打开，以及源码安装的 install.sh 都走这里；重复运行只改有变化的部分。
-import { accessSync, chmodSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants, existsSync, fchmodSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -109,6 +109,8 @@ export interface SetupOptions {
   log?: (message: string) => void;
 }
 interface Stamp { app: string; version: string; distill: boolean }
+/** 只装入写给用户的固定文案，系统异常交给 CLI 按错误码处理。 */
+export class SetupError extends Error {}
 
 function writePrivate(file: string, text: string) {
   writeFileSync(file, text, { mode: 0o600 }); chmodSync(file, 0o600);
@@ -120,7 +122,7 @@ function readJSON(file: string): any {
 export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted: boolean }> {
   const home = o.home ?? homedir(), env = o.env ?? process.env, log = o.log ?? (m => console.log(m));
   const runtime = join(o.app, "Contents/Resources/runtime"), bun = join(o.app, "Contents/MacOS/bun");
-  if (!existsSync(join(runtime, "hub/src/cli.ts")) || !executable(bun)) throw new Error(`安装包不完整：${o.app}`);
+  if (!existsSync(join(runtime, "hub/src/cli.ts")) || !executable(bun)) throw new SetupError("Tacit 安装包不完整");
   const data = dataDirOf(env);
   const launchctl = o.launchctl ?? ((args: string[]) => spawnSync("/bin/launchctl", args, { stdio: "ignore" }).status ?? 1);
   const domain = `gui/${process.getuid?.() ?? 0}`;
@@ -136,6 +138,8 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
 
   mkdirSync(join(data, "logs"), { recursive: true });
   chmodSync(data, 0o700);
+  const setupLog = openSync(join(data, "logs", "setup.log"), constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  try { fchmodSync(setupLog, 0o600); } finally { closeSync(setupLog); }
   if (full) {
     // 前台创建或读取钥匙串里的数据库密钥，并试开一次数据库，失败当场可见。
     await (o.initialize ?? (async () => {
@@ -143,7 +147,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
       const config = loadConfig(env);
       // 打开失败的消息可能带出密钥，只报原因类别。
       try { new HubDB(join(config.dataDir, "history.db"), config.dbKey).close(); }
-      catch { throw new Error("无法打开加密数据库，请确认钥匙串里的数据库密钥与数据目录匹配"); }
+      catch { throw new SetupError("无法打开加密数据库，请确认钥匙串里的数据库密钥与数据目录匹配"); }
     }))();
     // 采集端配置只更新运行目录和 bun，保留用户改过的其他项。
     const collector = join(data, "collector.json");
@@ -151,7 +155,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     const relocate = o.relocate ?? (await import("./relocate-install.ts")).relocateInstall;
     // 连接迁移失败不能挡住后台启动；用户可以在设置里重新连接。
     try { log(`已更新 ${relocate(runtime, bun, home).length} 份 AI 工具连接配置。`); }
-    catch (error) { log(`AI 工具连接没有迁移（${error instanceof Error ? error.message : "未知原因"}），请在 设置 › AI 工具 里重新连接。`); }
+    catch { log("AI 工具连接没有迁移，请在 设置 › AI 工具 里重新连接。"); }
     (o.disableFrozen ?? (() => {
       for (const s of FROZEN_SOURCES) spawnSync("/usr/bin/defaults", ["write", "dev.record-anything.collector", `source.${s}.enabled`, "-bool", "false"]);
     }))();
@@ -187,10 +191,13 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
   };
   const load = async (job: Job) => {
     for (let i = 0; i < 5; i++) {
-      if (launchctl(["bootstrap", domain, join(agents, `${label(job)}.plist`)]) === 0 || loaded(job)) return;
+      const status = launchctl(["bootstrap", domain, join(agents, `${label(job)}.plist`)]);
+      if (status === 0) return;
+      log(`后台任务 ${label(job)} 加载返回 launchctl 退出码 ${status}（第 ${i + 1} 次）`);
+      if (loaded(job)) return;
       await wait(1000);
     }
-    throw new Error(`后台任务 ${label(job)} 没能加载，请重新打开 Tacit`);
+    throw new SetupError(`后台任务 ${label(job)} 没能加载，请重新打开 Tacit`);
   };
   const restart = full || changed.has("hub") || changed.has("distill");
   if (restart) for (const job of ["distill", "hub"] as const) await unload(job);
@@ -204,7 +211,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
       }
       return false;
     });
-    if (!(await healthy(port))) throw new Error(`后台服务没能启动，原因写在 ${join(data, "logs/hub.log")}`);
+    if (!(await healthy(port))) throw new SetupError("后台服务没能启动，请查看 logs/hub.log");
   }
   if (distill && (restart || !loaded("distill"))) await load("distill");
   // 先记下已完成，采集端启动后自己再跑一次时就不会重复初始化。

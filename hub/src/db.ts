@@ -2,7 +2,7 @@
 import type DatabaseTypes from "../../node_modules/better-sqlite3-multiple-ciphers/index.d.ts";
 import { createRequire } from "node:module";
 const Database: typeof DatabaseTypes = createRequire(import.meta.url)("better-sqlite3-multiple-ciphers");
-import { copyFileSync, constants, chmodSync, unlinkSync, openSync, closeSync, fsyncSync, readdirSync, lstatSync } from "node:fs";
+import { copyFileSync, constants, chmodSync, unlinkSync, openSync, closeSync, fsyncSync, readdirSync, lstatSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { audioSchema } from "./audio.ts";
 import { distillSchema, usageTaskSchema } from "./distill/schema.ts";
@@ -18,6 +18,44 @@ import { runtimeSchema, expireSnapshots, eraseSnapshots } from "./runtime-log.ts
 export type StoredRecord = RecordV1 & { t_received: string };
 export interface IngestResult { accepted: number; duplicates: number; rejected: { index: number; errors: string[] }[] }
 export class InputError extends Error {}
+
+function setCipher(db: DatabaseTypes.Database, key: string): void {
+  db.pragma("cipher='sqlcipher'");
+  db.pragma("legacy=4");
+  db.pragma(`key='${key.replaceAll("'", "''")}'`);
+}
+
+function validMigrationBackup(file: string, backup: string, key: string, version: number): boolean {
+  let stat;
+  try { stat = lstatSync(backup); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return false; throw e; }
+  if (!stat.isFile()) throw new Error("迁移备份路径无效");
+  if (stat.size !== lstatSync(file).size) return false;
+  let db: DatabaseTypes.Database | undefined;
+  try {
+    db = new Database(backup, { readonly: true, fileMustExist: true });
+    setCipher(db, key);
+    return db.pragma("user_version", { simple: true }) === version
+      && db.pragma("integrity_check", { simple: true }) === "ok";
+  } catch { return false; }
+  finally { db?.close(); }
+}
+
+/** 持有源库写锁并且尚未修改迁移页。临时文件可以在中断后安全重建。 */
+function ensureMigrationBackup(file: string, key: string, version: number): void {
+  const backup = `${file}.migration-v${version}.bak`, temp = `${backup}.tmp`;
+  rmSync(temp, { force: true });
+  if (validMigrationBackup(file, backup, key, version)) { chmodSync(backup, 0o600); return; }
+  try {
+    copyFileSync(file, temp, constants.COPYFILE_EXCL);
+    chmodSync(temp, 0o600);
+    const fd = openSync(temp, "r");
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    renameSync(temp, backup);
+    const dir = openSync(dirname(file), "r");
+    try { fsyncSync(dir); } finally { closeSync(dir); }
+  } finally { rmSync(temp, { force: true }); }
+}
 
 /** 与存储实验一致：中文重叠两字，非中文原样交给 unicode61。 */
 export function bigram(text: string): string {
@@ -49,12 +87,10 @@ export class HubDB {
   constructor(file: string, key: string) {
     if (!key) throw new Error("数据库密钥不能为空");
     this.db = new Database(file);
-    let migrationBackup: string | undefined;
+    let migrating = false;
     try {
       if (file !== ":memory:") chmodSync(file, 0o600);
-      this.db.pragma("cipher='sqlcipher'");
-      this.db.pragma("legacy=4");
-      this.db.pragma(`key='${key.replaceAll("'", "''")}'`);
+      setCipher(this.db, key);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
       if (version > 12) throw new Error("数据库版本比当前 hub 新");
@@ -65,15 +101,8 @@ export class HubDB {
       this.db.transaction(() => {
         const version = this.db.pragma("user_version", { simple: true }) as number;
         if (version > 12) throw new Error("数据库版本比当前 hub 新");
-        if (version > 0 && version < 12 && file !== ":memory:") {
-          migrationBackup = `${file}.migration-v${version}.bak`;
-          // 已持有写锁，尚未写入迁移页，复制的是完整的旧版本；失败重试保留原副本。
-          try { copyFileSync(file, migrationBackup, constants.COPYFILE_EXCL); }
-          catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-          if (!lstatSync(migrationBackup).isFile()) throw new Error("迁移备份路径无效");
-          chmodSync(migrationBackup, 0o600);
-          const fd = openSync(migrationBackup, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
-        }
+        migrating = version < 12;
+        if (version > 0 && migrating && file !== ":memory:") ensureMigrationBackup(file, key, version);
         if (version === 0) {
           this.db.exec(`
             CREATE TABLE records (
@@ -132,14 +161,20 @@ export class HubDB {
         if (version < 11) this.db.exec(runtimeSchema);
         if (version < 12) this.db.exec(regenDaysRequestsSchema);
       }).immediate();
+      migrating = false;
       const backups = file === ":memory:" ? [] : readdirSync(dirname(file)).filter(name =>
         name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|10|11)\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
       if (backups.length) {
         if (this.db.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("迁移后完整性检查失败，已保留备份");
         for (const backup of backups) {
           const path = join(dirname(file), backup);
-          if (!lstatSync(path).isFile()) throw new Error("迁移备份路径无效");
-          unlinkSync(path);
+          try {
+            if (!lstatSync(path).isFile()) throw new Error("迁移备份路径无效");
+            unlinkSync(path);
+          } catch (e) {
+            // 另一个进程可能已通过完整性检查并清理了同一份备份。
+            if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+          }
         }
       }
       registerAgentAudit(this, key);
@@ -148,7 +183,11 @@ export class HubDB {
         try { expireSnapshots(this); } catch { console.error(JSON.stringify({ location: "runtime.expire", category: "storage" })); }
       }, 30 * 60_000);
       this.snapshotTimer.unref();
-    } catch (e) { this.db.close(); throw e; }
+    } catch (e) {
+      this.db.close();
+      if (migrating) throw Object.assign(new Error("数据库迁移失败，已保留可用的备份", { cause: e }), { code: "db_migration_failed" });
+      throw e;
+    }
   }
   close(): void { clearInterval(this.snapshotTimer); if (this.db.open) { stopAgentAudit(this); this.db.close(); } }
 

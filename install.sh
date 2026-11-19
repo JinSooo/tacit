@@ -4,7 +4,7 @@
 set -eu
 REPO="$(cd "$(dirname "$0")" && pwd)"
 . "$REPO/scripts/mac-app.sh"
-DATA="$HOME/Library/Application Support/record-anything"
+DATA="${RA_DATA_DIR-$HOME/Library/Application Support/record-anything}"
 APP_DIR="$(tacit_install_dir /Applications "$HOME/Applications")"
 APP="$APP_DIR/Tacit.app"
 LEGACY="$APP_DIR/Record Anything.app"
@@ -12,30 +12,116 @@ RUNTIME="$APP/Contents/Resources/runtime"
 DOMAIN="gui/$(id -u)"
 step() { printf '\n== %s\n' "$1"; }
 
+job_plist() {
+  printf 'dev.record-anything.%s.plist\n' "$1"
+}
+
+snapshot_services() {
+  mkdir "$staging/LaunchAgents" "$staging/launch-agents"
+  : > "$staging/loaded-jobs"
+  for job in hub distill collector; do
+    file="$(job_plist "$job")"
+    if [ -f "$HOME/Library/LaunchAgents/$file" ]; then
+      cp -p "$HOME/Library/LaunchAgents/$file" "$staging/LaunchAgents/$file"
+    fi
+    if [ -f "$DATA/launch-agents/$file" ]; then
+      cp -p "$DATA/launch-agents/$file" "$staging/launch-agents/$file"
+    fi
+    if launchctl print "$DOMAIN/dev.record-anything.$job" >/dev/null 2>&1; then
+      printf '%s\n' "$job" >> "$staging/loaded-jobs"
+    fi
+  done
+  for file in collector.json app-setup.json; do
+    if [ -f "$DATA/$file" ]; then cp -p "$DATA/$file" "$staging/$file"; fi
+  done
+}
+
+restore_file() {
+  if [ -f "$1" ]; then cp -p "$1" "$2"; else rm -f "$2"; fi
+}
+
+restore_install() {
+  failed=0
+  if [ "$setup_started" = 1 ]; then
+    for job in collector distill hub; do
+      launchctl bootout "$DOMAIN/dev.record-anything.$job" >/dev/null 2>&1 || true
+    done
+    for job in collector distill hub; do
+      target="$DOMAIN/dev.record-anything.$job"
+      for retry in 1 2 3 4 5; do
+        launchctl print "$target" >/dev/null 2>&1 || break
+        sleep 1
+      done
+      if launchctl print "$target" >/dev/null 2>&1; then
+        printf '没能退出新版后台任务 %s。\n' "$job" >&2
+        failed=1
+      fi
+    done
+  fi
+  if [ ! -d "$staging/Tacit.app" ]; then rm -rf "$APP" || return 1; fi
+  if [ -d "$previous_app" ]; then mv "$previous_app" "$APP" || return 1; fi
+  if [ -d "$staging/previous.bundle" ]; then mv "$staging/previous.bundle" "$LEGACY" || failed=1; fi
+  if [ "$setup_started" = 1 ]; then
+    for job in hub distill collector; do
+      file="$(job_plist "$job")"
+      restore_file "$staging/LaunchAgents/$file" "$HOME/Library/LaunchAgents/$file" || failed=1
+      restore_file "$staging/launch-agents/$file" "$DATA/launch-agents/$file" || failed=1
+    done
+    for file in collector.json app-setup.json; do
+      restore_file "$staging/$file" "$DATA/$file" || failed=1
+    done
+  fi
+  while IFS= read -r job; do
+    target="$DOMAIN/dev.record-anything.$job"
+    file="$(job_plist "$job")"
+    plist="$HOME/Library/LaunchAgents/$file"
+    if [ -f "$DATA/launch-agents/$file" ]; then plist="$DATA/launch-agents/$file"; fi
+    if launchctl print "$target" >/dev/null 2>&1; then continue; fi
+    loaded=0
+    for retry in 1 2 3 4 5; do
+      if launchctl bootstrap "$DOMAIN" "$plist" >/dev/null 2>&1; then loaded=1; break; fi
+      sleep 1
+    done
+    if [ "$loaded" = 0 ]; then
+      printf '没能重新加载旧后台任务 %s。\n' "$job" >&2
+      failed=1
+    fi
+  done < "$staging/loaded-jobs"
+  return "$failed"
+}
+
+finish_install() {
+  status="$1"
+  trap - EXIT
+  trap '' HUP INT TERM
+  if [ "$status" -ne 0 ]; then
+    printf 'Tacit 源码安装失败（退出码 %s）。\n' "$status" >&2
+    if [ "$switching" = 1 ]; then
+      if restore_install; then
+        printf '已回滚应用和后台启动项，并重新加载原先运行的任务。\n' >&2
+      else
+        printf '自动回滚未完整完成。安装备份保留在 %s（应用备份如有，在 %s）。\n' "$staging" "$previous_app" >&2
+        exit "$status"
+      fi
+    fi
+  fi
+  rm -rf "$staging"
+  exit "$status"
+}
+
 save_rename_backup() (
   set -eu
   umask 077
   mkdir -p "$DATA/install-rollback"
   backup="$(mktemp -d "$DATA/install-rollback/before-Tacit.XXXXXX")"
-  mkdir "$backup/LaunchAgents" "$backup/launch-agents" "$staging/verify-backup"
+  mkdir "$staging/verify-backup"
   ditto -c -k --sequesterRsrc --keepParent "$LEGACY" "$backup/Record Anything.app.zip"
   ditto -x -k "$backup/Record Anything.app.zip" "$staging/verify-backup"
   codesign --verify --strict "$staging/verify-backup/Record Anything.app"
   printf '%s\n' "$LEGACY" > "$backup/application-path"
-  : > "$backup/loaded-jobs"
-  for job in collector hub distill; do
-    file="dev.record-anything.$job.plist"
-    if [ -f "$HOME/Library/LaunchAgents/$file" ]; then
-      cp -p "$HOME/Library/LaunchAgents/$file" "$backup/LaunchAgents/$file"
-    fi
-    if [ -f "$DATA/launch-agents/$file" ]; then
-      cp -p "$DATA/launch-agents/$file" "$backup/launch-agents/$file"
-    fi
-    if launchctl print "$DOMAIN/dev.record-anything.$job" >/dev/null 2>&1; then
-      printf '%s\n' "$job" >> "$backup/loaded-jobs"
-    fi
-  done
-  if [ -f "$DATA/collector.json" ]; then cp -p "$DATA/collector.json" "$backup/collector.json"; fi
+  cp -Rp "$staging/LaunchAgents" "$staging/launch-agents" "$backup"
+  cp -p "$staging/loaded-jobs" "$backup/loaded-jobs"
+  if [ -f "$staging/collector.json" ]; then cp -p "$staging/collector.json" "$backup/collector.json"; fi
   printf '%s\n' "$backup"
 )
 
@@ -57,10 +143,14 @@ collector/build.sh
 
 step "准备安装包"
 staging="$(mktemp -d "$APP_DIR/.tacit-install.XXXXXX")"
-trap 'rm -rf "$staging"' EXIT
+previous_app="$staging.previous.app"
+switching=0
+setup_started=0
+trap 'finish_install "$?"' EXIT
 trap 'exit 1' HUP INT TERM
 ditto "collector/build/Tacit.app" "$staging/Tacit.app"
 codesign --verify --deep --strict "$staging/Tacit.app"
+snapshot_services
 backup=""
 legacy_exec=""
 legacy_worker=""
@@ -77,6 +167,7 @@ if tacit_owns_bundle "$LEGACY"; then
   legacy_worker="$LEGACY/Contents/MacOS/ra-audio-worker"
 fi
 
+switching=1
 step "停止旧进程"
 # 先让采集端完成收尾；它退出前后台服务必须继续接收最后一批记录。
 COLLECTOR_PIDS="$(tacit_processes "$APP/Contents/MacOS/Tacit" "$legacy_exec")"
@@ -87,17 +178,20 @@ for l in distill hub; do launchctl bootout "$DOMAIN/dev.record-anything.$l" 2>/d
 
 step "安装采集端到 $APP"
 tacit_check_destination "$APP"
-rm -rf "$APP"
+if [ -d "$APP" ]; then mv "$APP" "$previous_app"; fi
 mv "$staging/Tacit.app" "$APP"
 
 step "初始化数据、连接 AI 工具并启动后台服务"
 # 与安装包首次打开走同一套准备流程（hub/src/setup.ts）。
 if [ "${RA_NO_DISTILL:-0}" = 1 ]; then NO_DISTILL=--no-distill; else NO_DISTILL=""; fi
+setup_started=1
 "$APP/Contents/MacOS/bun" "$RUNTIME/hub/src/cli.ts" setup --app "$APP" --install $NO_DISTILL
 if [ -n "$backup" ]; then
   # 新启动项加载后再撤下旧路径，避免相同包标识的两个应用同时留在“应用程序”。
   mv "$LEGACY" "$staging/previous.bundle"
 fi
+switching=0
+rm -rf "$previous_app"
 
 step "装好了"
 cat <<MSG
