@@ -2,18 +2,25 @@ import Foundation
 
 extension WidgetSnapshot {
   /// The diary endpoint projects the day review, whose input excludes private originals and corrections.
-  public init(diary: DayDiary?, now: Date, calendar: Calendar = .current) {
+  public init(diary: DayDiary?, now: Date, calendar: Calendar = .current,
+              iconFor: (DayDiary.Item.App) -> String? = { _ in nil }) {
     let day = TimelineDay.key(now, calendar: calendar)
     guard let diary, diary.date == day,
+          let midnight = calendar.dateInterval(of: .day, for: now)?.end,
           let items = diary.detail?.items, items.allSatisfy({ $0.recordIds != nil }) else {
       self.init(day: day)
       return
     }
-    let segments = items.compactMap { item -> (start: Date, id: String, title: String)? in
+    let segments = items.compactMap { item -> (id: String, segment: Segment)? in
       let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
       guard let start = item.start, TimelineDay.key(start, calendar: calendar) == day, !title.isEmpty else { return nil }
-      return (start, item.id, title)
-    }.sorted { ($0.start, $0.id) > ($1.start, $1.id) }
-    self.init(day: day, summary: diary.summary, segments: segments.prefix(3).map { Segment(start: $0.start, title: $0.title) })
+      let end = min(item.end ?? start, midnight)
+      let first = item.apps?.first ?? item.sources.first.map { DayDiary.Item.App(source: $0, app: nil) }
+      return (item.id, Segment(
+        start: start, end: TimelinePresence.hasDuration(activeSeconds: item.activeSeconds, start: start, end: end) ? end : start,
+        title: title, description: item.description, source: first?.source, icon: first.flatMap(iconFor)
+      ))
+    }.sorted { ($0.segment.start, $0.id) > ($1.segment.start, $1.id) }
+    self.init(day: day, summary: diary.summary, segments: segments.map(\.segment))
   }
 }

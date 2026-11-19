@@ -13,15 +13,23 @@ public enum TimelineDay {
   }
 }
 
-/// This is the entire file shared with the extension. Keep authenticated API types in the host.
+/// The widget reads this projection and its PNG assets. Keep authenticated API types in the host.
 public struct WidgetSnapshot: Codable, Equatable, Sendable {
   public struct Segment: Codable, Equatable, Sendable {
     public let start: Date
+    public let end: Date
     public let title: String
+    public let description: String
+    public let source: String?
+    public let icon: String?
 
-    public init(start: Date, title: String) {
+    public init(start: Date, end: Date, title: String, description: String, source: String? = nil, icon: String? = nil) {
       self.start = start
+      self.end = end
       self.title = title
+      self.description = description
+      self.source = source
+      self.icon = icon
     }
   }
 
@@ -40,6 +48,21 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     guard let home = getpwuid(getuid())?.pointee.pw_dir else { return nil }
     return URL(fileURLWithPath: String(cString: home), isDirectory: true)
       .appendingPathComponent("Library/Application Support/record-anything/widget/today.json")
+  }
+
+  public static func iconDirectory(for file: URL) -> URL {
+    file.deletingLastPathComponent().appendingPathComponent("icons", isDirectory: true)
+  }
+
+  public static func iconURL(named name: String, in directory: URL) -> URL? {
+    guard name.utf8.count == 68, name.hasSuffix(".png"),
+          name.utf8.dropLast(4).allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
+    return directory.appendingPathComponent(name)
+  }
+
+  public func activityRange(at now: Date) -> ClosedRange<Date>? {
+    guard let start = segments.map(\.start).min(), let end = segments.map(\.end).max() else { return nil }
+    return start...max(start, end, now)
   }
 
   public static func readToday(from file: URL, now: Date = .now, calendar: Calendar = .current) -> Self? {
