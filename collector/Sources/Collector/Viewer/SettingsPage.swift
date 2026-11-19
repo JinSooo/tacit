@@ -214,7 +214,7 @@ struct GeneralPreferencesSection: View {
   }
 }
 
-// MARK: 中枢与连接
+// MARK: 后台服务
 
 struct HubSettingsView: View {
   @Environment(ViewerStore.self) private var store
@@ -242,8 +242,9 @@ struct HubSettingsView: View {
           }
         }
       } header: { Text("连接与保存") } footer: {
-        Note("仅接受这台 Mac 上的连接。配对和加密完成前，其他设备不能接入。")
+        Note("管理连接仅限这台 Mac。")
       }
+      PhoneSettingsSection()
       Section("连接设置") {
         SettingsRow("端口") {
           HStack(spacing: 8) {
