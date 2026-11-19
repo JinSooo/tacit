@@ -12,6 +12,21 @@ open site/dist/index.html   # 不起服务也能直接打开看
 
 `src/index.html` 是页面骨架，`<!-- include: sections/x.html -->` 在构建时换成区块内容。每个区块有自己的 `sections/x.html`、`styles/x.css`，需要交互时再加 `scripts/x.js`。公共层只有 `styles/base.css`、`scripts/main.js` 和 `assets/` 里的标志、来源符号。页面不请求任何外部资源，不放统计脚本。
 
+## 部署
+
+线上地址 https://tacit.jinso.top ，是 Cloudflare Pages 项目 `tacit`（`tacit-c51.pages.dev`），直接上传，没有 Git 连接。`jinso.top` 的 DNS 在 Cloudflare，API 令牌在本机钥匙串，入口和资源清单见 `/Users/jinso/Self/基础设施/`。
+
+更新时先 `bun site/build.ts`，把 `site/dist` 复制到仓库外的临时目录，再在那个目录里运行：
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=<账号 ID> CLOUDFLARE_API_TOKEN=<从钥匙串读取> \
+  npx wrangler@4 pages deploy dist --project-name tacit --branch main --commit-dirty=true
+```
+
+不要在仓库根目录运行 wrangler：它会自动生成 `wrangler.jsonc`、`vite.config.ts`，改写 `package.json` 和 `bun.lock`，并试图把仓库当成 Worker 构建。项目已存在，不需要也不要再加 `--force`。
+
+仓库是私有的，在它公开以前，页面上的下载按钮和 GitHub 链接对访客是 404。
+
 ## 区块
 
 | 顺序 | id | 内容 |
