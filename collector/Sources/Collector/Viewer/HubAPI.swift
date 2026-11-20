@@ -321,9 +321,16 @@ struct ModelSettingsInfo: Decodable {
   let tierInfo: [String: TierInfo]
 }
 struct GeneralSettingsInfo: Decodable, Equatable {
+  enum PolishTiming: String, Decodable { case afterSegment = "after_segment", hourly, nightly }
+  enum OverviewTiming: String, Decodable { case hourly, everyThreeHours = "every_3h", nightly }
+
   var injectTokens: Int
   var askDoneDays: Int
   var archiveDays: Int
+  let timelinePolish: PolishTiming
+  let timelineOverview: OverviewTiming
+  let dailyTokenLimit: Int?
+  let modelUsage: ModelUsageSummary
   let ranges: [String: [Int]]
 }
 struct ModelTestResult: Decodable { let ok: Bool; let ms: Double?; let error: String? }
@@ -371,7 +378,7 @@ extension HubAPI {
   func setKey(provider: String, key: String) async throws { try await send("PUT", "/v1/settings/keys/\(provider)", ["key": key]) }
   func deleteKey(provider: String) async throws { try await send("DELETE", "/v1/settings/keys/\(provider)") }
   func generalSettings() async throws -> GeneralSettingsInfo { try await get(GeneralSettingsInfo.self, "/v1/settings/general") }
-  func saveGeneral(_ values: [String: Int]) async throws -> GeneralSettingsInfo {
+  func saveGeneral(_ values: [String: Any]) async throws -> GeneralSettingsInfo {
     try await call(GeneralSettingsInfo.self, "PUT", "/v1/settings/general", values)
   }
 

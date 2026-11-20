@@ -242,14 +242,36 @@ test.each(["hourly", "every_3h", "nightly"])("概述节奏 %s 只在到点且材
   expect(overviewCalls()).toHaveLength(mode === "nightly" ? 0 : 2);
 });
 
-test("通用设置只读新增节奏，旧字段写入保留内部键，无效值用默认值", () => {
+test("通用设置读写时间线节奏，旧字段写入保留节奏，无效值用默认值", () => {
   expect(readTimelineSettings(ctx.db)).toEqual({ polish: "after_segment", overview: "hourly" });
   setModes("hourly", "every_3h");
   updateGeneral(ctx.db, { archive_days: 8 });
   expect(readTimelineSettings(ctx.db)).toEqual({ polish: "hourly", overview: "every_3h" });
-  expect(() => updateGeneral(ctx.db, { timeline_polish: "nightly" })).toThrow();
+  updateGeneral(ctx.db, { timeline_polish: "nightly" });
+  expect(readTimelineSettings(ctx.db)).toEqual({ polish: "nightly", overview: "every_3h" });
   setModes("sometimes", "sometimes");
   expect(readTimelineSettings(ctx.db)).toEqual({ polish: "after_segment", overview: "hourly" });
+});
+
+test("用量冷却保留手动整理的排队状态与实时草稿，调高上限后继续", async () => {
+  const now = at(540);
+  const record = chat(480, "东区苗床", "东区苗床已经贴标。");
+  save(record);
+  const requests = new DistillRequests(ctx.db);
+  const { request } = requests.create({ kind: "regen_days", from: date, to: date }, now);
+  store.writeUsage({ at: toLocalIso(now), task: "assign", tier: "minute", provider: "claude-cli",
+    model: "synthetic-model", input_tokens: 90, output_tokens: 10, ms: 1, ok: 1 });
+  updateGeneral(ctx.db, { daily_token_limit: 100 });
+  const state: LoopState = { lastRound: now, enabledDefault: now };
+  await distillTick(deps(now), state, now);
+  expect(requests.get(request.id)?.status).toBe("queued");
+  expect(calls).toHaveLength(0);
+  expect(view(540).drafts.map((item: { id: string }) => item.id)).toEqual([record.id]);
+
+  updateGeneral(ctx.db, { daily_token_limit: 101 });
+  await distillTick(deps(now), state, now);
+  expect(requests.get(request.id)?.status).toBe("done");
+  expect(polishCalls()).toHaveLength(1);
 });
 
 test("当天 regen_days 只补已结束的段与概述，排队后已更新即跳过", async () => {

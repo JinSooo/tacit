@@ -4,14 +4,16 @@ import { readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { toLocalIso } from "../../packages/record/index.ts";
 import type { HubDB } from "./db.ts";
+import { readGeneral } from "./general-settings.ts";
+import { budgetCooldown, providerCooldown } from "./distill/cooldown.ts";
 import type { RequestStatus } from "./distill/requests.ts";
+import { modelUsageDayStart, modelUsageRows, usageTokens } from "./model-usage.ts";
 
 /**
  * 中枢状态页的数据：只给计数、时间和状态，不读记录的标题和正文。
  * 必须只读：不调用 DistillStore.pending() 这类会顺带改库的方法。
  */
 type Counts = Record<string, number>;
-interface UsageRow { at: string | null; tier: string | null; task: string | null; model: string | null; ok: number | null; input_tokens: number | null; output_tokens: number | null; ms: number | null }
 interface UsageTotals {
   calls: number; ok: number; failed: number; ms: number;
   input_tokens: number | null; output_tokens: number | null;
@@ -47,15 +49,6 @@ function statusError(value: string | null): string | null {
 function isoTimestamp(value: unknown): string | null {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
     && Number.isFinite(Date.parse(value)) ? value : null;
-}
-
-function modelCooldown(value: unknown, now: number) {
-  if (!value || typeof value !== "object") return null;
-  const { until, kind } = value as { until?: unknown; kind?: unknown };
-  const timestamp = isoTimestamp(until);
-  return timestamp && Date.parse(timestamp) > now && (kind === "rate_limited" || kind === "quota" || kind === "network")
-    ? { until: timestamp, kind }
-    : null;
 }
 
 const nonnegativeCount = (value: unknown): value is number =>
@@ -150,11 +143,9 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
 
   const { bySource, byDevice, tombstones } = recordGroups(hub);
 
-  // 用量的 at 有本地时间和 UTC 两种写法：先按日期前缀粗筛，再按时刻精确判断是否属于今天。
   const today = localDate(now);
-  const dayStart = new Date(`${today}T00:00:00`).getTime();
-  const usage = (sql.prepare("SELECT at,tier,task,model,ok,input_tokens,output_tokens,ms FROM llm_usage WHERE at>=?").all(localDate(dayStart - 86_400_000)) as UsageRow[])
-    .filter(r => r.at !== null && Date.parse(r.at) >= dayStart && Date.parse(r.at) <= now + 60_000);
+  const dayStart = modelUsageDayStart(now);
+  const usage = modelUsageRows(hub, dayStart, now);
   const tiers = new Map<string, UsageTotals & { tier: string; modelSet: Set<string> }>();
   const tasks = new Map<string | null, UsageTotals & { task: string | null }>();
   const total = emptyUsage();
@@ -176,6 +167,8 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
   }
   const byTier = [...tiers.values()].map(({ modelSet, ...t }) => ({ ...t, models: [...modelSet].sort() })).sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || a.tier.localeCompare(b.tier));
   const byTask = [...tasks.values()].sort((a, b) => (a.task ?? "").localeCompare(b.task ?? ""));
+  const dailyLimit = readGeneral(hub).daily_token_limit;
+  const todayTokens = usageTokens(total);
 
   // at 有本地时间和 UTC 两种写法，按 ULID 判断调用写入顺序。旧行缺少用途，无法证明同类恢复。
   const lastError = sql.prepare("SELECT id,at,tier,task,error FROM llm_usage WHERE ok=0 ORDER BY id DESC LIMIT 1").get() as
@@ -236,10 +229,10 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
       requests,
       last_error: lastError ? { at: lastError.at, tier: lastError.tier, error: statusError(lastError.error) ?? "unknown", recovered } : null,
       last_ok_at: lastOk?.at ?? null,
-      cooldown: modelCooldown(state("llm_cooldown"), now),
+      cooldown: budgetCooldown(now, dailyLimit, todayTokens) ?? providerCooldown(state("llm_cooldown"), now),
     },
     collector,
-    llm_today: { date: today, total, by_tier: byTier, by_task: byTask },
+    llm_today: { date: today, total, by_tier: byTier, by_task: byTask, used_tokens: todayTokens, token_limit: dailyLimit },
     agent_reads_today: (sql.prepare("SELECT at FROM agent_reads WHERE at>=?").all(localDate(dayStart - 86_400_000)) as { at: string }[]).filter(r => Date.parse(r.at) >= dayStart).length,
     audio: {
       transcription,

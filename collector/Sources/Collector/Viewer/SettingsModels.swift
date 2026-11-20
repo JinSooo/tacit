@@ -7,6 +7,10 @@ struct ModelSettingsView: View {
   @State private var info: ModelSettingsInfo?
   @State private var saved: [String: ModelTierConfig] = [:]
   @State private var draft: [String: ModelTierConfig] = [:]
+  @State private var timelineSaved: TimelineDraft?
+  @State private var timelineDraft: TimelineDraft?
+  @State private var timelineSettings: GeneralSettingsInfo?
+  @State private var timelineError: String?
   @State private var error: String?
   @State private var saving = false
   @State private var tests: [String: TestState] = [:]
@@ -41,7 +45,8 @@ struct ModelSettingsView: View {
         }
         if let healthError { SettingsMessage(text: healthError) }
         HStack {
-          Button("刷新状态") { Task { await loadHealth() } }
+          Button("刷新状态") { Task { await loadHealth(); await loadTimeline() } }
+            .disabled(saving)
           Spacer()
           Button("查看用量与详细状态…") {
             if let url = store.api.statusPageURL() { NSWorkspace.shared.open(url) }
@@ -50,12 +55,13 @@ struct ModelSettingsView: View {
       }
       if let info {
         if let e = info.configError { SettingsMessage(text: "模型配置文件有问题，整理会失败，保存一次就能修好：\(e)") }
-        ForEach(Self.tiers, id: \.self) { tier in tierSection(tier, info: info) }
+        ForEach(Self.tiers, id: \.self) { tier in tierSection(tier, info: info) }.disabled(saving)
+        timelineSection
         keysSection(info)
-        if draft != saved {
+        if draft != saved || timelineDraft != timelineSaved {
           HStack {
             Spacer()
-            Button("撤销修改") { draft = saved }.disabled(saving)
+            Button("撤销修改") { draft = saved; timelineDraft = timelineSaved }.disabled(saving)
             Button(saving ? "正在保存…" : "保存") { Task { await save() } }.keyboardShortcut(.defaultAction).disabled(saving)
           }
         }
@@ -64,7 +70,7 @@ struct ModelSettingsView: View {
       }
       if let error { SettingsMessage(text: error) }
     }
-    .task { await load(); await loadHealth() }
+    .task { await load(); await loadTimeline(); await loadHealth() }
     .sheet(item: Binding(get: { editingKey.map(KeyTarget.init) }, set: { editingKey = $0?.id })) { target in
       KeyEntrySheet(provider: target.id, label: label(target.id, info: info)) { await load() }
     }
@@ -75,6 +81,61 @@ struct ModelSettingsView: View {
   }
 
   struct KeyTarget: Identifiable { let id: String }
+
+  private struct TimelineDraft: Equatable {
+    var polish: GeneralSettingsInfo.PolishTiming
+    var overview: GeneralSettingsInfo.OverviewTiming
+    var limitText: String?
+
+    init(_ settings: GeneralSettingsInfo) {
+      polish = settings.timelinePolish
+      overview = settings.timelineOverview
+      limitText = settings.dailyTokenLimit.map(DailyTokenLimit.inputText)
+    }
+  }
+
+  @ViewBuilder private var timelineSection: some View {
+    Section {
+      if let draft = Binding($timelineDraft) {
+        Picker("整理时间线", selection: draft.polish) {
+          Text("每段结束后").tag(GeneralSettingsInfo.PolishTiming.afterSegment)
+          Text("每小时").tag(GeneralSettingsInfo.PolishTiming.hourly)
+          Text("只在晚上").tag(GeneralSettingsInfo.PolishTiming.nightly)
+        }.disabled(saving)
+        Text("越晚整理用量越少，草稿始终实时出现").foregroundStyle(Palette.muted)
+        Picker("当天概述", selection: draft.overview) {
+          Text("每小时").tag(GeneralSettingsInfo.OverviewTiming.hourly)
+          Text("每 3 小时").tag(GeneralSettingsInfo.OverviewTiming.everyThreeHours)
+          Text("只在晚上").tag(GeneralSettingsInfo.OverviewTiming.nightly)
+        }.disabled(saving)
+        Picker("每天用量上限", selection: Binding(
+          get: { draft.limitText.wrappedValue != nil },
+          set: { draft.limitText.wrappedValue = $0 ? timelineSaved?.limitText ?? "" : nil }
+        )) {
+          Text("不限").tag(false)
+          Text("自定义").tag(true)
+        }.disabled(saving)
+        if draft.limitText.wrappedValue != nil {
+          SettingsRow("万 token") {
+            TextField("万 token", text: Binding(
+              get: { draft.limitText.wrappedValue ?? "" },
+              set: { draft.limitText.wrappedValue = $0 }
+            )).labelsHidden().multilineTextAlignment(.trailing)
+              .monospacedDigit().frame(width: 120).disabled(saving)
+          }
+        }
+        Text("达到后当天暂停整理，明天 0 点恢复，草稿照常出现").foregroundStyle(Palette.muted)
+      } else if let timelineError {
+        SettingsMessage(text: timelineError)
+      } else {
+        ProgressView().frame(maxWidth: .infinity)
+      }
+    } header: {
+      Text("时间线整理")
+    } footer: {
+      if let line = timelineSettings?.modelUsage.line { Note(line).monospacedDigit() }
+    }
+  }
 
   // MARK: 每一档
 
@@ -247,10 +308,56 @@ struct ModelSettingsView: View {
     catch is CancellationError {} catch { healthError = error.localizedDescription }
   }
 
+  private func applyTimeline(_ settings: GeneralSettingsInfo) {
+    timelineSettings = settings
+    let current = TimelineDraft(settings)
+    if timelineDraft == timelineSaved { timelineDraft = current }
+    timelineSaved = current
+    timelineError = nil
+  }
+
+  private func loadTimeline() async {
+    let previous = timelineSaved
+    do {
+      let settings = try await store.api.generalSettings()
+      guard timelineSaved == previous, !saving || previous == nil else { return }
+      if timelineDraft == timelineSaved { applyTimeline(settings) }
+      else { timelineSettings = settings }
+    }
+    catch is CancellationError {} catch { timelineError = error.localizedDescription }
+  }
+
   func save() async {
     saving = true; defer { saving = false }
-    do { let i = try await store.api.saveModels(draft); info = i; saved = i.tiers; draft = i.tiers; error = nil }
-    catch { self.error = error.localizedDescription }
+    error = nil
+    var values: [String: Any] = [:]
+    if let timelineDraft, timelineDraft != timelineSaved {
+      if timelineDraft.polish != timelineSaved?.polish { values["timeline_polish"] = timelineDraft.polish.rawValue }
+      if timelineDraft.overview != timelineSaved?.overview { values["timeline_overview"] = timelineDraft.overview.rawValue }
+      if timelineDraft.limitText != timelineSaved?.limitText {
+        if let text = timelineDraft.limitText {
+          guard let range = timelineSettings?.ranges["daily_token_limit"], range.count == 2, range[0] <= range[1],
+                let tokens = DailyTokenLimit.tokens(from: text, range: range[0]...range[1]) else {
+            error = "请输入有效的用量上限，最多四位小数。"
+            return
+          }
+          values["daily_token_limit"] = tokens
+        } else {
+          values["daily_token_limit"] = NSNull()
+        }
+      }
+    }
+    do {
+      if draft != saved {
+        let i = try await store.api.saveModels(draft)
+        info = i; saved = i.tiers; draft = i.tiers
+      }
+      if !values.isEmpty {
+        let settings = try await store.api.saveGeneral(values)
+        timelineDraft = TimelineDraft(settings)
+        applyTimeline(settings)
+      }
+    } catch { self.error = error.localizedDescription }
   }
 
   func test(_ tier: String) async {

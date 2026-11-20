@@ -121,8 +121,8 @@
 | POST | `/v1/settings/models/test` | `{ tier, config? }`；`config` 是一档未保存的配置，不给就用已保存的 | `{ ok, ms, provider, model, error }`。最小提示调用一次，要求返回 `ok=true`，只验证连接与输出格式，超时 60 秒，`error` 已脱敏、≤300 字；不写 `llm_usage`。同一时间只跑一个，否则 409 |
 | PUT | `/v1/settings/keys/:provider` | `{ key }`，8–1024 个可见 ASCII，不含空格、`"`、`\` | `{ provider, set: true }`；写钥匙串 service `record-anything`、account `provider:<provider>`（已有则覆盖） |
 | DELETE | `/v1/settings/keys/:provider` | — | `{ provider, deleted }`；`deleted` 为删除前是否存在 |
-| GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, defaults, ranges }` |
-| PUT | `/v1/settings/general` | 三项中任意几项 | 同 GET。`inject_tokens` 200–4000（默认 800）、`ask_done_days` 1–30 使用天（默认 3）、`archive_days` 1–90 使用天（默认 7），都是整数 |
+| GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, timeline_polish, timeline_overview, daily_token_limit, defaults, ranges, model_usage }` |
+| PUT | `/v1/settings/general` | 六个设置字段中任意几项 | 同 GET。空请求、未知字段及非法值返回 400，整份不写 |
 | GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial }] }`，`id` 为 `claude-code`、`codex`、`claude-desktop`。前两者的会话开始钩子（`~/.claude/settings.json`、`~/.codex/hooks.json`）和 MCP 登记（`~/.claude.json` 的 `mcpServers`、`~/.codex/config.toml` 的 `mcp_servers`）都在才算 `connected`，只有一个算 `partial`。Desktop 检查 `/Applications/Claude.app` 或 `~/Applications/Claude.app` 是否存在，MCP 配置见下，不要求 hook。状态表示配置已登记，不表示应用已重载 |
 | PUT | `/v1/settings/agents/:id` | `{ connected }` | `{ tools, note }`。等同 `cli.ts agents install|uninstall --tool <id> --yes`；本机找不到该工具时连接返回 409；执行失败 500，带原因。Codex 连接后的 `note` 提醒首次批准钩子；Desktop 连接、断开均提醒完全退出并重新打开应用；其他情况为 null |
 
@@ -131,9 +131,15 @@
 - `reasoning_effort` 仅适用于 `openai-compatible`，可选 `none`、`low`、`medium`、`high`；省略表示跟随模型，不发送此参数。连接测试与实际整理使用同一份配置；服务和模型可能不支持某个强度，客户端不承诺统一能力。旧配置无需迁移。
 - 本机地址只是连接位置，不保证推理不转发到云端；本次接入不改变 private 内容排除规则。Mac 和网页通过同一个列表接口读取，区分未连接、读取失败和空模型列表。本机连接不提示填写 API key。
 - 账号登录类后端（`claude-cli`、`codex-cli`）只调用本机已登录的命令，不需要 key，不接受 `base_url` 或 `reasoning_effort`。
-- general 存在 `distill_state` 表的 `general_settings` 键里。中枢生成自动注入时、提炼进程每轮线程生命周期步骤时现读，改完不需要重启。
-- 同一个 JSON 键可读取内部字段 `timeline_polish`（`after_segment` 默认、`hourly`、`nightly`）和 `timeline_overview`（`hourly` 默认、`every_3h`、`nightly`）。缺省或无效取默认值。现有通用设置接口保持原格式，写入公开字段时保留这两个内部字段。
+- general 存在 `distill_state` 表的 `general_settings` 键里。使用时现读，缺省或无效取默认值，改完不需要重启。
 - 只监听 127.0.0.1；没有开放局域网的接口，配对和应用层 HPKE 加密之后才开放（v3），`lan` 目前恒为 false。
+
+通用设置字段与默认值：
+
+- `inject_tokens` 200–4000（默认 800）、`ask_done_days` 1–30 使用天（默认 3）、`archive_days` 1–90 使用天（默认 7），都是整数。
+- `timeline_polish` 为 `after_segment`（默认）、`hourly` 或 `nightly`。`timeline_overview` 为 `hourly`（默认）、`every_3h` 或 `nightly`。
+- `daily_token_limit` 为 1–1,000,000,000 的整数，单位为 token，默认 `null` 表示不限。`defaults` 返回全部设置的默认值，`ranges` 返回整数设置的上下界。
+- `model_usage` 只读，包含 `days_with_usage`、`average_daily_tokens`、`average_daily_timeline_tokens` 和 `today_tokens`。窗口包含今天和之前六个本地自然日，按有已知 token 数的日期平均，输入和输出合计。时间线部分统计 `day`、`day_polish`、`day_brief`，使用相同的天数作分母。排除 `connection_test`，旧整理调用的空任务名计入总量。无数据时两个平均值为 `null`，今天没有已知用量时 `today_tokens` 为 0。
 
 在 Claude Code、Codex 和 Claude Desktop 里登记的服务名是 `tacit`（工具名形如 `mcp__tacit__search`）。0.2.0 以前叫 `record-anything`：升级时（`hub/src/relocate-install.ts`）把本应用登记的旧条目原位改名，Codex 的工具审批子表和 Claude Code 用户设置里 `mcp__record-anything…` 的权限规则一并改名；设置页连接或断开时也会移除本应用的旧条目。同名的他人条目不动。
 
@@ -226,6 +232,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 - 状态接口 `GET /v1/status` 的 `hub.busy`：`{ since, total, by_route: { ingest, agent, web }, last_at }`。仅在内存中累计数据库忙返回的 503 响应，每个响应记一次；服务重启归零。`since` 为进程启动时间（ISO），`total` 为启动以来总次数；`ingest` 对应 `/v1/ingest`，`agent` 对应 `/v1/agent/*`，其余接口归 `web`。`last_at` 为最近一次的 ISO 时间，从未发生时为 null，所有计数初值为 0。不保存请求内容。不包含后台任务内部跳过写入或未返回 503 的锁冲突，也不是全天统计。
 - Mac `collector-status.json` 新增 `hubBusy`（启动以来收到的 503 响应次数）和 `queuePeak`（启动以来内存队列实际保留条数的峰值，不超过容量），初值均为 0，重启归零。
 - 状态接口 `GET /v1/status` 的 `llm_today` 保留 `total`、`by_tier`，新增 `by_task`：每项含 `task`、`calls`、`ok`、`failed`、`input_tokens`、`output_tokens`、`ms`。旧调用及未传任务名的调用归入 `task: null`；未知 token 用量仍为 null，统计日期与原档位统计一致。
+- `llm_today.used_tokens` 是今天已知的整理输入和输出 token 合计，`llm_today.token_limit` 是上限，`null` 表示不限。达到上限时，`distill.cooldown` 为 `{ kind: "budget", until }`，到期时间为本地次日 0 点。调高到已用量之上或取消上限后立即解除用量冷却，提供商冷却继续按原到期时间判断。
 - 配置 `<数据目录>/models.json`：`{ "tiers": { "minute": { "provider": "claude-cli", "model": "haiku" }, … } }`。provider 有 `claude-cli`、`codex-cli`、`anthropic`、`openai-compatible`（`base_url`）。API key 存在钥匙串（service `record-anything`，account `provider:<名字>`），不写进文件。
 - 当前配置（2026-11-18 起）：三档都用 `openai-compatible`，`base_url` 为 `https://api.minimax.cn/v1`，模型 `MiniMax-M3.1-Flash`，`reasoning_effort` 为 `low`（MiniMax 默认最高档且不能关，填 `none` 会 400）。此前三档用 `codex-cli`（2026-11-08 起）。没有 `models.json` 时代码里的默认仍是 `claude-cli`（haiku / sonnet）。
 - **CLI 后端必须做到**：

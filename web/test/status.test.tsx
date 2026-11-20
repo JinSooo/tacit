@@ -19,7 +19,7 @@ function emptyStatus(): HubStatus {
       requests: { total: 0, by_status: {}, recent: [] }, last_error: null, last_ok_at: null, cooldown: null,
     },
     collector: null,
-    llm_today: { date: "2026-11-12", total, by_tier: [] },
+    llm_today: { date: "2026-11-12", total, by_tier: [], used_tokens: 0, token_limit: null },
     agent_reads_today: 0,
     audio: { transcription: null, transcription_disabled: false, speakers: {}, voice_conversations: 0, sample_requests_open: 0, deletes_pending: 0 },
   };
@@ -96,7 +96,7 @@ test("整理区显示手动进度、中文错误类别、模型暂停及同类�
 test("模型用量只标注缺失 token 的格，区分部分已知和全未知", () => {
   const status = emptyStatus();
   const usage = { calls: 2, ok: 1, failed: 1, ms: 1200, input_tokens: 30, output_tokens: 12, input_tokens_incomplete: true, output_tokens_incomplete: false };
-  status.llm_today = { date: "2026-11-12", total: { ...usage, calls: 3, ok: 2, output_tokens_incomplete: true }, by_tier: [
+  status.llm_today = { ...status.llm_today, used_tokens: 42, total: { ...usage, calls: 3, ok: 2, output_tokens_incomplete: true }, by_tier: [
     { ...usage, tier: "minute", models: ["example"] },
     { ...usage, tier: "hour", models: ["example"], calls: 1, failed: 0, input_tokens: null, output_tokens: null, output_tokens_incomplete: true },
   ] };
@@ -105,4 +105,15 @@ test("模型用量只标注缺失 token 的格，区分部分已知和全未知"
   expect(html).toContain('data-label="输出">12</td>');
   expect(html).toContain('data-label="输入">未知</td>');
   expect(html).toContain('data-label="输出">12<span class="muted">（部分未知）</span></td>');
+});
+
+test("模型用量显示今天已用与上限，用量冷却说明次日零点恢复", () => {
+  const status = emptyStatus();
+  expect(render(status)).toContain("今天已用 0 token / 上限 不限");
+  status.llm_today.used_tokens = 10_500;
+  status.llm_today.token_limit = 10_000;
+  status.distill.cooldown = { kind: "budget", until: "2026-11-13T00:00:00+09:00" };
+  const html = render(status);
+  expect(html).toContain("今天已用 10,500 token / 上限 10,000 token");
+  expect(html).toContain("已达到今天的用量上限，明天 0 点恢复");
 });

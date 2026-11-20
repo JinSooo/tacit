@@ -7,6 +7,7 @@ import { DEFAULT_TIERS, KEY_PROVIDERS, PROVIDERS, TIERS, loadConfig, saveConfig,
 import { KEY_PATTERN, systemKeychain, type Keychain } from "./llm/keychain.ts";
 import { createLLM, type ModelConfig, type ReadKey, type Spawn, type Tier } from "./llm/index.ts";
 import { GENERAL_DEFAULTS, GENERAL_RANGES, readGeneral, updateGeneral } from "./general-settings.ts";
+import { readModelUsage } from "./model-usage.ts";
 import { redactString } from "./redact.ts";
 import { RuntimeLog, appliedCall } from "./runtime-log.ts";
 import { isLoopback, localModels } from "./llm/local.ts";
@@ -75,7 +76,7 @@ export function createSettings(deps: SettingsDeps) {
     return { tiers, config_error, keys: await keyStatus(), providers: PROVIDER_INFO, tier_info: TIER_INFO };
   }
   function general(hub: HubDB) {
-    return { ...readGeneral(hub), defaults: GENERAL_DEFAULTS, ranges: GENERAL_RANGES };
+    return { ...readGeneral(hub), defaults: GENERAL_DEFAULTS, ranges: GENERAL_RANGES, model_usage: readModelUsage(hub) };
   }
 
   return async function handle(request: Request, url: URL, ctx: { db: HubDB; port: number; readJSON: () => Promise<unknown>; lan: boolean }): Promise<Response | null> {

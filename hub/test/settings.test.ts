@@ -210,6 +210,18 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
   expect(usage()).toBe(0);
 
   const h = handler();
+  const store = new DistillStore(ctx.db);
+  store.writeUsage({ tier: "day", task: "day", provider: "claude-cli", model: "synthetic-model",
+    input_tokens: 1, output_tokens: 1, ms: 1, ok: 1 });
+  expect((await call(h, "PUT", "/v1/settings/general", { daily_token_limit: 2 })).status).toBe(200);
+  const status = (await call(h, "GET", "/v1/status")).body;
+  expect(status.distill.cooldown.kind).toBe("budget");
+  const afterBudget = await call(handler({ llm: { spawn: spawnWith("ok") } }), "POST", "/v1/settings/models/test", { tier: "hour" });
+  expect(afterBudget.body.ok).toBe(true);
+  expect(calls).toHaveLength(4);
+  expect(usage()).toBe(1);
+  expect(state()).toEqual({ v: cooldown });
+
   for (const body of [{}, { tier: "week" }, { tier: "minute", config: tier("unknown") }, { tier: "minute", extra: 1 }]) expect((await call(h, "POST", "/v1/settings/models/test", body)).status).toBe(400);
   writeFileSync(join(ctx.dir, "models.json"), "{");
   expect((await call(h, "POST", "/v1/settings/models/test", { tier: "minute" })).body.error).toContain("不是合法 JSON");
@@ -218,17 +230,22 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
 test("general：默认值、范围、只改给出的字段；注入上限和提炼生命周期现读", async () => {
   const h = handler();
   const initial = (await call(h, "GET", "/v1/settings/general")).body;
-  expect(initial).toEqual({ inject_tokens: 800, ask_done_days: 3, archive_days: 7, defaults: { inject_tokens: 800, ask_done_days: 3, archive_days: 7 }, ranges: { inject_tokens: [200, 4000], ask_done_days: [1, 30], archive_days: [1, 90] } });
+  const defaults = { inject_tokens: 800, ask_done_days: 3, archive_days: 7,
+    timeline_polish: "after_segment", timeline_overview: "hourly", daily_token_limit: null } as const;
+  expect(initial).toEqual({ ...defaults, defaults,
+    ranges: { inject_tokens: [200, 4000], ask_done_days: [1, 30], archive_days: [1, 90], daily_token_limit: [1, 1_000_000_000] },
+    model_usage: { days_with_usage: 0, average_daily_tokens: null, average_daily_timeline_tokens: null, today_tokens: 0 },
+  });
   for (const body of [{}, [], { inject_tokens: 199 }, { inject_tokens: 4001 }, { ask_done_days: 0 }, { ask_done_days: 31 }, { archive_days: 91 }, { archive_days: 1.5 }, { archive_days: "7" }, { other: 1 }, { inject_tokens: 900, other: 1 }]) {
     expect((await call(h, "PUT", "/v1/settings/general", body)).status).toBe(400);
   }
-  expect(readGeneral(ctx.db)).toEqual({ inject_tokens: 800, ask_done_days: 3, archive_days: 7 });
+  expect(readGeneral(ctx.db)).toEqual(defaults);
   const saved = await call(h, "PUT", "/v1/settings/general", { inject_tokens: 200, archive_days: 2 });
   expect(saved.status).toBe(200); expect(saved.body).toMatchObject({ inject_tokens: 200, ask_done_days: 3, archive_days: 2 });
   expect(await call(h, "PUT", "/v1/settings/general", { ask_done_days: 1 })).toMatchObject({ body: { inject_tokens: 200, ask_done_days: 1, archive_days: 2 } });
   // 库里存的值坏了（例如手改）时回落到默认值。
   ctx.db.db.prepare("UPDATE distill_state SET v=? WHERE k='general_settings'").run(JSON.stringify({ inject_tokens: 99999, ask_done_days: 2 }));
-  expect(readGeneral(ctx.db)).toEqual({ inject_tokens: 800, ask_done_days: 2, archive_days: 7 });
+  expect(readGeneral(ctx.db)).toEqual({ ...defaults, ask_done_days: 2 });
 
   // 带入上限现读：800 时放得下两项，200 时两项都放不下。
   const store = new DistillStore(ctx.db);
@@ -255,6 +272,25 @@ test("general：默认值、范围、只改给出的字段；注入上限和提�
   await call(h, "PUT", "/v1/settings/general", { archive_days: 1 });
   expect(lifecycleStep(store, now)).toMatchObject({ archived: 1, asked: 0 });
   expect(store.thread("quiet")?.status).toBe("archived");
+});
+
+test("general：时间线节奏和上限的保存、部分更新与整份校验", async () => {
+  const h = handler();
+  const path = "/v1/settings/general";
+  const values = { timeline_polish: "hourly", timeline_overview: "every_3h", daily_token_limit: 30_001 };
+  expect(await call(h, "PUT", path, values)).toMatchObject({ status: 200, body: values });
+  for (const invalid of [
+    { timeline_polish: "every_3h" }, { timeline_overview: "after_segment" }, { timeline_polish: null },
+    { daily_token_limit: 0 }, { daily_token_limit: -1 }, { daily_token_limit: 1.5 },
+    { daily_token_limit: true }, { daily_token_limit: "30000" }, { daily_token_limit: 1_000_000_001 },
+    { model_usage: {} },
+  ]) {
+    expect((await call(h, "PUT", path, { timeline_polish: "nightly", ...invalid })).status).toBe(400);
+  }
+  expect(await call(h, "GET", path)).toMatchObject({ status: 200, body: values });
+  expect(await call(h, "PUT", path, { daily_token_limit: null })).toMatchObject({
+    status: 200, body: { ...values, daily_token_limit: null },
+  });
 });
 
 test("设置路由：未知路径和方法 404，Host 校验照旧", async () => {

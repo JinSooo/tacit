@@ -26,10 +26,10 @@ export interface HubStatus {
     /** recovered：同一档位、同一用途在这次失败后调用成功。 */
     last_error: { at: string; tier: string | null; error: string; recovered: boolean } | null;
     last_ok_at: string | null;
-    cooldown: { until: string; kind: "rate_limited" | "quota" | "network" } | null;
+    cooldown: { until: string; kind: "rate_limited" | "quota" | "network" | "budget" } | null;
   };
   collector: (CollectorUpdate & { outbox_bytes: number; outbox_dropped: number; outbox_degraded: boolean }) | null;
-  llm_today: { date: string; total: Omit<TierUsage, "tier" | "models">; by_tier: TierUsage[] };
+  llm_today: { date: string; total: Omit<TierUsage, "tier" | "models">; by_tier: TierUsage[]; used_tokens: number; token_limit: number | null };
   agent_reads_today: number;
   audio: {
     transcription: (CollectorUpdate & { pending: number; failed: number }) | null; transcription_disabled: boolean;

@@ -131,7 +131,9 @@ export function StatusContent({ status, refreshFailed }: { status: HubStatus; re
         </dd></>}
         {pendingTotal > 0 && <><dt>待确认</dt><dd><Counts items={countList(distill.pending_open, pendingNames)} /></dd></>}
         <dt>开始整理</dt><dd>{distill.enabled_at ? <time dateTime={distill.enabled_at}>{distill.enabled_at.slice(0, 16).replace("T", " ")}</time> : "还没开始"}{distill.enabled_at && !distill.backfill_done && "，之前的历史还没整理完"}</dd>
-        {distill.cooldown && <><dt>模型状态</dt><dd className="error">模型暂停调用到 <time dateTime={distill.cooldown.until}>{clockMs(Date.parse(distill.cooldown.until))}</time>（原因：{errorName(distill.cooldown.kind)}）</dd></>}
+        {distill.cooldown && <><dt>模型状态</dt><dd className="error">{distill.cooldown.kind === "budget"
+          ? "已达到今天的用量上限，明天 0 点恢复"
+          : <>模型暂停调用到 <time dateTime={distill.cooldown.until}>{clockMs(Date.parse(distill.cooldown.until))}</time>（原因：{errorName(distill.cooldown.kind)}）</>}</dd></>}
         {distill.last_error && <><dt>最近出错</dt><dd className={distill.last_error.recovered ? "muted" : "error"}>
           {distill.last_error.tier && Object.hasOwn(tierNames, distill.last_error.tier) ? `${tierNames[distill.last_error.tier]}，` : ""}
           <Since at={distill.last_error.at} />，{errorName(distill.last_error.error)}{distill.last_error.recovered && "，同类调用之后已恢复"}
@@ -140,6 +142,7 @@ export function StatusContent({ status, refreshFailed }: { status: HubStatus; re
     </div>
 
     <h2 className="section-title">今天的模型用量</h2>
+    <p className="muted">今天已用 {formatNumber(usage.used_tokens)} token / 上限 {usage.token_limit === null ? "不限" : `${formatNumber(usage.token_limit)} token`}</p>
     {usage.by_tier.length ? <div className="group table-wrap"><table className="data-table stack-table"><thead><tr><th scope="col">用途</th><th scope="col">模型</th><th scope="col" className="num">调用</th><th scope="col" className="num">输入 token</th><th scope="col" className="num">输出 token</th><th scope="col" className="num">总耗时</th></tr></thead><tbody>
       {usage.by_tier.map(row => <tr key={row.tier}><td>{tierNames[row.tier] ?? row.tier}</td><td className="end">{row.models.join("、") || "—"}</td><td className="num" data-label="调用">{formatNumber(row.calls)} 次{row.failed > 0 && <span className="error">，失败 {formatNumber(row.failed)}</span>}</td><td className="num end" data-label="输入"><Tokens value={row.input_tokens} incomplete={row.input_tokens_incomplete} /></td><td className="num" data-label="输出"><Tokens value={row.output_tokens} incomplete={row.output_tokens_incomplete} /></td><td className="num end" data-label="耗时">{formatMs(row.ms)}</td></tr>)}
       {usage.by_tier.length > 1 && <tr className="total"><td>合计</td><td className="end" /><td className="num" data-label="调用">{formatNumber(usage.total.calls)} 次{usage.total.failed > 0 && <span className="error">，失败 {formatNumber(usage.total.failed)}</span>}</td><td className="num end" data-label="输入"><Tokens value={usage.total.input_tokens} incomplete={usage.total.input_tokens_incomplete} /></td><td className="num" data-label="输出"><Tokens value={usage.total.output_tokens} incomplete={usage.total.output_tokens_incomplete} /></td><td className="num end" data-label="耗时">{formatMs(usage.total.ms)}</td></tr>}
