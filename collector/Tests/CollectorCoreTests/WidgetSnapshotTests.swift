@@ -67,6 +67,35 @@ final class WidgetSnapshotTests: XCTestCase {
     XCTAssertEqual(snapshot, WidgetSnapshot(day: "2026-01-15"))
   }
 
+  func testSnapshotIncludesTodaysPublicDraftsWithOrWithoutReview() throws {
+    let now = try XCTUnwrap(ViewerTime.parse("2026-01-15T13:00:00+09:00"))
+    let draft: [String: Any] = [
+      "id": "draft-1", "title": "苗圃群", "excerpt": "我给育苗盘换了位置。",
+      "t_start": "2026-01-15T11:00:00+09:00", "t_end": "2026-01-15T11:03:00+09:00",
+      "active_seconds": 180, "sources": ["mac.wechat"], "apps": [["source": "mac.wechat"]],
+      "record_ids": ["public-1"],
+    ]
+    let earlier = [
+      "id": "review-1", "title": "测量种植槽", "description": "标好育苗区。",
+      "t_start": "2026-01-15T08:00:00+09:00", "t_end": "2026-01-15T08:30:00+09:00",
+      "active_seconds": 1800, "sources": ["manual.note"], "evidence": [], "record_ids": ["public-2"],
+    ] as [String: Any]
+    let detail: [String: Any] = ["summary": "标好了育苗区。", "items": [earlier]]
+    let response: [String: Any] = ["date": "2026-01-15", "drafts": [draft]]
+    let draftOnly = try HubJSON.decoder().decode(DayDiary.self, from: JSONSerialization.data(withJSONObject: response))
+    let snapshot = WidgetSnapshot(diary: draftOnly, now: now, calendar: calendar)
+    XCTAssertNil(snapshot.summary)
+    XCTAssertEqual(snapshot.segments.map(\.title), ["苗圃群"])
+    XCTAssertEqual(snapshot.segments.first?.description, "我给育苗盘换了位置。")
+
+    let mixed = response.merging(["detail": detail]) { _, new in new }
+    let diary = try HubJSON.decoder().decode(DayDiary.self, from: JSONSerialization.data(withJSONObject: mixed))
+    let withReview = WidgetSnapshot(diary: diary, now: now, calendar: calendar)
+    XCTAssertEqual(withReview.summary, "标好了育苗区。")
+    XCTAssertEqual(withReview.segments.map(\.title), ["苗圃群", "测量种植槽"])
+    XCTAssertFalse(String(decoding: try JSONEncoder().encode(withReview), as: UTF8.self).contains("public-1"))
+  }
+
   func testYesterdayFileIsUnreadableAsTodayAndURLRejectsInvalidDates() throws {
     let morning = try XCTUnwrap(ViewerTime.parse("2026-01-15T00:00:00+09:00"))
     let snapshot = WidgetSnapshot(day: "2026-01-15", summary: "温室改用分区浇水。")

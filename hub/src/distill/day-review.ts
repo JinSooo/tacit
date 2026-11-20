@@ -33,6 +33,7 @@ export interface ReviewItem {
   active_seconds: number; sources: string[]; evidence: DayReference[];
   apps: { source: string; app: string | null }[]; record_ids: string[]; project_id: string | null;
 }
+export type DraftItem = Omit<ReviewItem, "description" | "evidence"> & { excerpt: string; thread_id?: string };
 export interface ReviewDetail {
   summary: string | null;
   timeline: { start: string; end: string; text: string }[];
@@ -54,7 +55,9 @@ export function isReadableReviewItem(item: { title?: unknown; description?: unkn
   return !!item.title.trim() && !!text && !CAPTURE_ONLY.has(text);
 }
 
-function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
+type DraftWindow = { cutoff?: number; covered: ReadonlySet<string> };
+
+function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow): ReviewRecord[] {
   type RawRow = {
     id: string; source: string; source_ref: string | null; title: string; t_start: string; t_start_ms: number; t_end: string | null;
     context: string | null; key: string | null; thread_id: string | null; project_id: string | null; project_name: string | null;
@@ -77,25 +80,34 @@ function loadRecords(hub: HubDB, start: number, end: number): ReviewRecord[] {
     ORDER BY r.t_start_ms,r.id`).iterate(end, start, new Date(start).toISOString());
   const records: ReviewRecord[] = [];
   const excluded = new Set<string>();
+  const cutoff = draft?.cutoff;
+  const windowStart = Math.max(start, cutoff ?? start);
+  const evidenceStart = cutoff === undefined ? start : Math.max(start, cutoff + 1);
   for (const row of rows) {
     const context = row.context ? JSON.parse(row.context) as Parameters<typeof frameKey>[0]["context"] : undefined;
+    const isSession = SESSION_SOURCES.has(row.source);
+    const session = isSession && row.source_ref
+      ? JSON.stringify([row.source, row.source_ref.split("#", 1)[0]]) : null;
+    if (isSession && excludedSession(row.body ?? "", context)) excluded.add(session ?? row.id);
+    const finish = Math.max(row.t_start_ms, Date.parse(row.t_end ?? "") || row.t_start_ms);
+    if (cutoff !== undefined && (finish <= cutoff ||
+      (row.t_start_ms >= cutoff && draft?.covered.has(row.id)))) continue;
     const key = row.key ?? frameKey({ id: row.id, source: row.source, source_ref: row.source_ref, context } as Parameters<typeof frameKey>[0]);
     const title = terse(redactString(row.title).text, 120) || "原始记录";
     const reference = { id: row.id, source: row.source, title, at: row.t_start };
     const evidence = readDayEvidence(reference, { source: row.source, t_start: row.t_start, t_end: row.t_end, context },
-      row.body, !!row.corrected, start, end);
-    const session = SESSION_SOURCES.has(row.source) && row.source_ref
-      ? JSON.stringify([row.source, row.source_ref.split("#", 1)[0]]) : null;
-    if (SESSION_SOURCES.has(row.source) && excludedSession(row.body ?? "", context)) excluded.add(session ?? row.id);
+      row.body, !!row.corrected, evidenceStart, end);
     if (!evidence) continue;
+    if (draft && !SKELETON_SOURCES.has(row.source) &&
+      (!evidence.length || (isSession && !evidence.some(entry => entry.role === "user")))) continue;
     records.push({
       ...reference,
-      start: Math.max(start, row.t_start_ms), end: Math.min(end, Math.max(row.t_start_ms, Date.parse(row.t_end ?? "") || row.t_start_ms)),
+      start: Math.max(windowStart, row.t_start_ms), end: Math.min(end, finish),
       key, thread: row.thread_id, projectId: row.project_id, projectName: row.project_name, session, evidence,
       app: context?.app ? redactString(context.app).text : null, chat: context?.chat ? redactString(context.chat).text : null,
     });
   }
-  return presenceRecords(records.filter(r => !excluded.has(r.session ?? r.id)), start, end);
+  return presenceRecords(records.filter(r => !excluded.has(r.session ?? r.id)), windowStart, end);
 }
 
 /** 批次只有首末时刻：按实际跨度计，每条真实输入最多支持 30 分钟。 */
@@ -211,8 +223,8 @@ function candidatesIn(piece: Piece): Candidate[] {
   });
 }
 
-const eligible = (kind: Kind, count: number, seconds: number) =>
-  kind === "thread" || kind === "speech" || kind === "session" || (kind === "chat" && count > 1) || seconds >= MISC_SECONDS;
+const eligible = (kind: Kind, records: ReviewRecord[], seconds: number) =>
+  kind === "thread" || kind === "speech" || kind === "session" || (kind === "chat" && records.length > 1) || seconds >= MISC_SECONDS;
 const byImportance = (a: { seconds: number; start: number }, b: { seconds: number; start: number }) =>
   b.seconds - a.seconds || a.start - b.start;
 
@@ -240,7 +252,7 @@ function rankWindows(r: ReviewRecord, activity: Activity): { span: Span; rank: n
 
 function eventRank(r: ReviewRecord) { return r.evidence.some(e => e.role === "user") ? 3 : r.evidence.length ? 2 : 0; }
 
-function splitOverlaps(activities: Activity[]): Candidate[] {
+function splitOverlaps(activities: Activity[], accepts = eligible): Candidate[] {
   type Changes = { starts: Activity[]; ends: Activity[]; coverage: { activity: Activity; rank: number; delta: number }[] };
   const events = new Map<number, Changes>();
   const change = (at: number) => {
@@ -251,7 +263,7 @@ function splitOverlaps(activities: Activity[]): Candidate[] {
   const points: Activity[] = [];
   for (const activity of activities) {
     const spans = activity.records.filter(r => r.end > r.start);
-    if (!eligible(activity.kind, activity.records.length, unionSeconds(spans.map(r => [r.start, r.end])))) continue;
+    if (!accepts(activity.kind, activity.records, unionSeconds(spans.map(r => [r.start, r.end])))) continue;
     if (activity.start === activity.end) { points.push(activity); continue; }
     change(activity.start).starts.push(activity);
     change(activity.end).ends.push(activity);
@@ -292,7 +304,7 @@ function splitOverlaps(activities: Activity[]): Candidate[] {
     else pieces.push({ activity: winner, start, end });
   }
 
-  const candidates = pieces.flatMap(candidatesIn).filter(a => eligible(a.activity.kind, a.primary.length, a.seconds));
+  const candidates = pieces.flatMap(candidatesIn).filter(a => accepts(a.activity.kind, a.primary, a.seconds));
   // 瞬时事件落在可见段内时作为来源和原文归入该段，否则同一时刻保留意图最强的事件。
   points.sort((a, b) => a.start - b.start || eventRank(b.records[0]!) - eventRank(a.records[0]!) || a.key.localeCompare(b.key));
   const covered = candidates.slice();
@@ -388,12 +400,25 @@ function longerConversationBudget(segments: Candidate[]) {
   return extras;
 }
 
+function cutCandidates(rows: ReviewRecord[], gap: number, accepts = eligible) {
+  const sessionThreads = new Set(rows.filter(r => SESSION_SOURCES.has(r.source)).flatMap(r => r.thread ?? []));
+  return splitOverlaps(groupRecords(rows.filter(r =>
+    !SKELETON_SOURCES.has(r.source) || !r.thread || !sessionThreads.has(r.thread)), gap), accepts);
+}
+
+function segmentId(a: Candidate) {
+  const anchor = a.primary[0]!;
+  return a.start > Date.parse(anchor.at) ? `${anchor.id}:${a.start}` : anchor.id;
+}
+
+function recordMembership(a: Candidate, overlapping: ReviewRecord[]) {
+  return overlapping.filter(r => !a.activity.projectId || !r.projectId || r.projectId === a.activity.projectId);
+}
+
 export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 30) {
   const rows = loadRecords(hub, start, end);
   const gap = gapMinutes * MINUTE;
-  const sessionThreads = new Set(rows.filter(r => SESSION_SOURCES.has(r.source)).flatMap(r => r.thread ?? []));
-  const allCandidates = splitOverlaps(groupRecords(rows.filter(r =>
-    !SKELETON_SOURCES.has(r.source) || !r.thread || !sessionThreads.has(r.thread)), gap));
+  const allCandidates = cutCandidates(rows, gap);
   const candidates = allCandidates.filter(a => a.primary.some(r =>
     r.evidence.some(entry => evidenceInPiece(entry, r, a))));
   const candidateCount = allCandidates.length, evidenceCount = candidates.length;
@@ -406,12 +431,9 @@ export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 
   const baseLimit = Math.max(4, Math.floor(120 / Math.max(1, selected.length)));
   const extraEvidence = longerConversationBudget(selected);
   const dependencyRecordIds = new Set<string>();
-  const recordMembership = (a: Candidate, overlapping: ReviewRecord[]) =>
-    overlapping.filter(r => !a.activity.projectId || !r.projectId || r.projectId === a.activity.projectId);
   const segments = selected.map((a, i) => {
     const limit = baseLimit + (extraEvidence.get(a) ?? 0);
-    const primary = a.primary[0]!, anchor = primary.id;
-    const id = a.start > Date.parse(primary.at) ? `${anchor}:${a.start}` : anchor;
+    const id = segmentId(a);
     const overlapping = [...new Set(rows.filter(r => inPiece(r, a))
       .flatMap(r => [r, ...(r.related ?? [])]))].sort((x,y) => Date.parse(x.at)-Date.parse(y.at) || x.id.localeCompare(y.id));
     for (const r of overlapping) dependencyRecordIds.add(r.id);
@@ -442,6 +464,41 @@ export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 
       longestActivityRetained: !leadingActivity || selected.some(c => c.activity.key === leadingActivity),
       fallbackCount: segments.filter(s => !s.evidence.length).length },
   };
+}
+
+const draftSpeech = (entry: UnnumberedEvidence) => entry.role !== "assistant" && !requestOnly(entry.text);
+
+export function dayDrafts(hub: HubDB, start: number, end: number, window: DraftWindow): DraftItem[] {
+  if (window.cutoff !== undefined && window.cutoff >= end - 1) return [];
+  // 助手独自续跑的批次（含压缩和交接）不进入草稿的时间区间或原文成员。
+  const rows = loadRecords(hub, start, end, window);
+  const gap = 30 * MINUTE;
+  // 单条实质聊天或手记也可实时显示，无需等到模型整理的候选门槛。
+  const candidates = cutCandidates(rows, gap, (_kind, records) =>
+    records.some(r => r.evidence.some(draftSpeech))).filter(a => a.primary.some(r =>
+      r.evidence.some(e => draftSpeech(e) && evidenceInPiece(e, r, a))));
+  return mergeAdjacent(candidates, gap).map(a => {
+    const speaking = a.primary.flatMap(r => {
+      const entries = r.evidence.filter(e => draftSpeech(e) && evidenceInPiece(e, r, a));
+      return entries.length ? [{ record: r, entries }] : [];
+    });
+    const primary = speaking[0]!.record;
+    const entries = speaking.flatMap(s => s.entries);
+    const quote = entries.find(e => e.role === "user") ?? entries[0]!;
+    const sentence = redactString(quote.text).text.split(/(?<=[。！？!?])|(?<=\.)\s+|\r?\n/u, 1)[0]!;
+    const apps = [...new Map(speaking.map(({ record: { source, app } }) =>
+      [JSON.stringify([source, app]), { source, app }])).values()];
+    const members = recordMembership(a, rows.filter(r => inPiece(r, a)));
+    const threads = new Set(speaking.flatMap(({ record }) => record.thread ?? []));
+    const title = primary.source === "mac.audio" ? "一场对话"
+      : primary.chat || (SESSION_SOURCES.has(primary.source) ? primary.title : primary.app || primary.title);
+    return {
+      id: segmentId(a), t_start: toLocalIso(a.start), t_end: toLocalIso(a.end), active_seconds: a.seconds,
+      title, excerpt: terse(sentence, 60), sources: [...new Set(apps.map(app => app.source))], apps,
+      record_ids: [...new Set(members.map(r => r.id))], project_id: a.activity.projectId,
+      ...(threads.size === 1 ? { thread_id: [...threads][0]! } : {}),
+    };
+  });
 }
 
 export function reviewInput(hub: HubDB, start: number, end: number, gapMinutes = 30) {

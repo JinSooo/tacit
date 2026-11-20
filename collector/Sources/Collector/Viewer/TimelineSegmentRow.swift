@@ -25,6 +25,8 @@ struct TimelineSegmentRow: View {
   var showsTitle = true
   var projectName: String? = nil
   var offersThreadStory = false
+  var isDraft = false
+  var isOrganizing = false
   let expanded: Bool
   let onToggle: () -> Void
   @State private var hovering = false
@@ -38,13 +40,17 @@ struct TimelineSegmentRow: View {
     VStack(alignment: .leading, spacing: 0) {
       Button(action: onToggle) {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-          Text(time)
-            .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
-            .frame(width: TimelineReadingLayout.timeWidth, alignment: showsTitle ? .leading : .trailing)
-            .padding(.trailing, TimelineReadingLayout.gutter)
+          HStack(spacing: 4) {
+            Text(time).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+            if isOrganizing {
+              ProgressView().controlSize(.mini).accessibilityLabel("正在整理")
+            }
+          }
+          .frame(width: TimelineReadingLayout.timeWidth, alignment: showsTitle ? .leading : .trailing)
+          .padding(.trailing, TimelineReadingLayout.gutter)
           VStack(alignment: .leading, spacing: 8) {
             if showsTitle {
-              Text(item.title).font(.system(size: TextSize.title, weight: .medium)).foregroundStyle(Palette.ink)
+              Text(item.title).font(.system(size: TextSize.title, weight: isDraft ? .regular : .medium)).foregroundStyle(Palette.ink)
             }
             description
             HStack(spacing: showsTitle ? 6 : 8) {
@@ -69,7 +75,7 @@ struct TimelineSegmentRow: View {
       .accessibilityHint(expanded ? "收起原始记录" : "展开原始记录")
       if expanded {
         TimelineSegmentRecords(day: day, item: item, dayRecords: records, alignsTimeLeading: showsTitle,
-                               offersThreadStory: offersThreadStory)
+                               offersThreadStory: offersThreadStory, isDraft: isDraft)
           .padding(.bottom, 16)
       }
     }
@@ -79,11 +85,18 @@ struct TimelineSegmentRow: View {
         .accessibilityHidden(true).allowsHitTesting(false)
     }
     .overlay(alignment: .topLeading) {
-      Circle().fill(expanded ? Palette.accent : Palette.muted)
-        .frame(width: 5, height: 5)
-        .offset(x: TimelineReadingLayout.axis - 2,
-                y: rowPadding + 7)
-        .accessibilityHidden(true).allowsHitTesting(false)
+      let color = expanded ? Palette.accent : Palette.muted
+      Group {
+        if isDraft {
+          Circle().fill(Palette.paper).overlay(Circle().strokeBorder(color, lineWidth: 1))
+            .frame(width: 7, height: 7)
+            .offset(x: TimelineReadingLayout.axis - 3, y: rowPadding + 6)
+        } else {
+          Circle().fill(color).frame(width: 5, height: 5)
+            .offset(x: TimelineReadingLayout.axis - 2, y: rowPadding + 7)
+        }
+      }
+      .accessibilityHidden(true).allowsHitTesting(false)
     }
   }
 
@@ -140,6 +153,7 @@ struct TimelineSegmentRecords: View {
   let dayRecords: [HistoryRecord]?
   var alignsTimeLeading = false
   var offersThreadStory = false
+  var isDraft = false
 
   @Environment(ViewerStore.self) private var store
   @State private var records = Loader<[HistoryRecord]>()
@@ -171,13 +185,15 @@ struct TimelineSegmentRecords: View {
         if offersThreadStory, let threadId = item.threadId {
           Button("这件事的经过") { store.path.append(.threadStory(threadId)) }.buttonStyle(.accentLink)
         }
-        Button("这段写得不对") { correcting = true }.buttonStyle(.accentLink)
-        Button("删除这段记录") {
-          guard let members = item.recordIds, !members.isEmpty else { return }
-          deletionMembers = members
-          confirmsDeletion = true
+        if !isDraft {
+          Button("这段写得不对") { correcting = true }.buttonStyle(.accentLink)
+          Button("删除这段记录") {
+            guard let members = item.recordIds, !members.isEmpty else { return }
+            deletionMembers = members
+            confirmsDeletion = true
+          }
+          .buttonStyle(.accentLink).disabled(deleting || item.recordIds?.isEmpty != false)
         }
-        .buttonStyle(.accentLink).disabled(deleting || item.recordIds?.isEmpty != false)
       }
       .padding(.leading, TimelineReadingLayout.contentInset)
       if let deleteError {
@@ -220,7 +236,8 @@ struct TimelineSegmentRecords: View {
       else { source = try await store.api.day(day) }
       let found = source.filter { idSet.contains($0.id) }
       let missing = try await store.api.missingRecords(ids, from: found)
-      return (found + missing).sorted { ($0.start, $0.id) > ($1.start, $1.id) }
+      return (found + missing).filter { !isDraft || $0.sensitivity != "private" }
+        .sorted { ($0.start, $0.id) > ($1.start, $1.id) }
     }
   }
 
@@ -233,85 +250,6 @@ struct TimelineSegmentRecords: View {
       store.revision += 1
     } catch {
       deleteError = error.localizedDescription
-    }
-  }
-}
-
-/// 最近一次整理之后才到的记录：不调用模型，原样折在列表最上面一行，整理完自动并入时间线。
-struct TimelineUnsortedRow: View {
-  let day: Date
-  let since: Date
-  let records: [HistoryRecord]
-  let running: Bool
-  let expanded: Bool
-  let onToggle: () -> Void
-
-  @Environment(ViewerStore.self) private var store
-  @State private var hovering = false
-  @State private var showsBackgroundRecords = false
-
-  private var groups: (visible: [HistoryRecord], collapsed: [HistoryRecord]) { ReviewActivity.segmentRecords(records) }
-  private var label: String {
-    let since = ReviewTime.clock(self.since, on: day), count = Fmt.count(groups.visible.count)
-    return running ? "正在整理 \(since) 之后的 \(count) 条记录" : "\(since) 之后的 \(count) 条记录还没整理"
-  }
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      Button(action: onToggle) {
-        HStack(alignment: .center, spacing: 0) {
-          Color.clear.frame(width: TimelineReadingLayout.timeWidth, height: 1)
-            .padding(.trailing, TimelineReadingLayout.gutter)
-          HStack(spacing: 8) {
-            Text(label).font(.system(size: TextSize.body)).monospacedDigit().foregroundStyle(Palette.muted)
-            if running { ProgressView().controlSize(.mini).accessibilityHidden(true) }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          PhIcon(expanded ? "caret-up" : "caret-down", size: 11)
-            .opacity(!hovering && !expanded ? 0 : 1)
-            .foregroundStyle(Palette.muted).padding(.leading, 16).accessibilityHidden(true)
-        }
-        .padding(.horizontal, TimelineReadingLayout.edge)
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(TimelineRowStyle())
-      .onHover { hovering = $0 }
-      .accessibilityValue(expanded ? "已展开" : "已折叠")
-      .accessibilityHint(expanded ? "收起原始记录" : "展开原始记录")
-      if expanded {
-        VStack(alignment: .leading, spacing: 8) {
-          recordRows(groups.visible)
-          if !groups.collapsed.isEmpty {
-            DisclosureGroup("另有 \(Fmt.count(groups.collapsed.count)) 条屏幕和网页记录", isExpanded: $showsBackgroundRecords) {
-              recordRows(groups.collapsed)
-            }
-            .disclosureGroupStyle(TimelineRecordDisclosureStyle())
-          }
-        }
-        .font(.system(size: TextSize.caption))
-        .padding(.bottom, 16)
-      }
-    }
-    .background(alignment: .leading) {
-      Rectangle().fill(Palette.hairline).frame(width: 1)
-        .offset(x: TimelineReadingLayout.axis)
-        .accessibilityHidden(true).allowsHitTesting(false)
-    }
-    .overlay(alignment: .topLeading) {
-      // 空心点：这里还不是整理好的一段。
-      Circle().fill(Palette.paper).overlay(Circle().strokeBorder(Palette.muted, lineWidth: 1))
-        .frame(width: 7, height: 7)
-        .offset(x: TimelineReadingLayout.axis - 3, y: 12 + 6)
-        .accessibilityHidden(true).allowsHitTesting(false)
-    }
-  }
-
-  private func recordRows(_ rows: [HistoryRecord]) -> some View {
-    ForEach(rows) { record in
-      RecordRow(record: record, run: nil, selected: false, expanded: false, nested: true, alignsTimeLeading: true) {
-        store.path.append(.reviewRecord(record.id))
-      }
     }
   }
 }

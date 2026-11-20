@@ -83,24 +83,14 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
 }
 
 // 用户报告：12 点多简约时间线还停在 11:27，看不出后面有内容没整理。
-@Test func timelineCatchUpOnlyAsksForRecentSubstanceOncePerHalfHour() throws {
+@Test func timelineCatchUpOnlyAsksForDraftsOncePerHalfHour() {
   let cutoff = ViewerTime.parse("2026-11-20T11:54:00+09:00")!
-  let rows = [
-    try record("a", "mac.wechat", "群聊", "2026-11-20T11:40:00+09:00"),
-    try record("b", "mac.screen", "窗口", "2026-11-20T12:10:00+09:00", "2026-11-20T12:20:00+09:00"),
-    try record("c", "codex.session", "会话", "2026-11-20T11:50:00+09:00", "2026-11-20T12:30:00+09:00"),
-    try decode(HistoryRecord.self, #"{"id":"d","device":"mac","source":"mac.wechat","kind":"event","t_start":"2026-11-20T12:40:00+09:00","title":"私密","sensitivity":"private"}"#),
-  ]
-  let unsorted = ReviewActivity.unsorted(rows, after: cutoff)
-  #expect(unsorted.map(\.id) == ["b", "c"])
   let now = cutoff.addingTimeInterval(40 * 60)
-  #expect(TimelineCatchUp.shouldRequest(unsorted: unsorted, cutoff: cutoff, lastRequest: nil, now: now))
-  #expect(!TimelineCatchUp.shouldRequest(unsorted: unsorted, cutoff: cutoff, lastRequest: now.addingTimeInterval(-10 * 60), now: now))
-  #expect(!TimelineCatchUp.shouldRequest(unsorted: unsorted, cutoff: cutoff, lastRequest: nil, now: cutoff.addingTimeInterval(20 * 60)))
-  // 只有屏幕记录时不补整理。
-  #expect(!TimelineCatchUp.shouldRequest(unsorted: unsorted.filter { $0.id == "b" }, cutoff: cutoff, lastRequest: nil, now: now))
-  // 今天还没有整理结果时，有主体记录就请求。
-  #expect(TimelineCatchUp.shouldRequest(unsorted: ReviewActivity.unsorted(rows, after: nil), cutoff: nil, lastRequest: nil, now: now))
+  #expect(TimelineCatchUp.shouldRequest(hasDrafts: true, cutoff: cutoff, lastRequest: nil, now: now))
+  #expect(!TimelineCatchUp.shouldRequest(hasDrafts: true, cutoff: cutoff, lastRequest: now.addingTimeInterval(-10 * 60), now: now))
+  #expect(!TimelineCatchUp.shouldRequest(hasDrafts: true, cutoff: cutoff, lastRequest: nil, now: cutoff.addingTimeInterval(20 * 60)))
+  #expect(!TimelineCatchUp.shouldRequest(hasDrafts: false, cutoff: cutoff, lastRequest: nil, now: now))
+  #expect(TimelineCatchUp.shouldRequest(hasDrafts: true, cutoff: nil, lastRequest: nil, now: now))
 }
 
 @Test func reviewActivityFollowsCaptureSwitchesEvenWithOldRecordsFromFrozenSources() throws {

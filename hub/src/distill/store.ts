@@ -7,7 +7,8 @@ import { frameRecordsSchema, frameRejectionsSchema } from "./schema.ts";
 import { HubDB, InputError } from "../db.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { recordSpans, unionSeconds } from "../durations.ts";
-import { isReadableReviewItem, type ReviewItem } from "./day-review.ts";
+import { dayDrafts, isReadableReviewItem, type ReviewItem } from "./day-review.ts";
+import { localDateString, localDayStart } from "./requests.ts";
 
 export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" | "candidate" | "candidate_expired" }
 export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[] }
@@ -121,8 +122,9 @@ export class DistillStore {
         ...(apps.length ? { apps, sources: [...new Set(apps.map(app => app.source))] } : {}) };
     });
   }
-  dayView(date: string, { agent = false } = {}): Row | null {
-    const row = this.day(date);
+  dayView(date: string, { agent = false, now = Date.now() } = {}): Row | null {
+    const isToday = !agent && date === localDateString(now);
+    const row = this.day(date) ?? (isToday ? { date, detail: null } : null);
     if (!row) return null;
     // 旧库仍可读取日期和时间条，接口只返回当前契约里的字段。
     const { summary, timeline, items, cutoff, omitted_record_ids } = row.detail ?? {};
@@ -143,8 +145,19 @@ export class DistillStore {
     const chapters = !agent && adjusted?.every(isTimelineItem) ? reading?.map(item => ({
       start: item.t_start.slice(11, 16), end: item.t_end.slice(0, 10) > date ? "24:00" : item.t_end.slice(11, 16), text: item.title,
     })).filter(item => item.start !== item.end) : timeline;
+    let drafts;
+    if (isToday) {
+      // 旧回顾没有 cutoff 时，以已展示的最晚段尾为界。
+      const at = Date.parse(cutoff);
+      const legacyEnds = Number.isFinite(at) ? [] : (reading ?? []).map(item => Date.parse(item.t_end)).filter(Number.isFinite);
+      drafts = dayDrafts(this.hub, localDayStart(date)!, now + 1, {
+        cutoff: Number.isFinite(at) ? at : legacyEnds.length ? Math.max(...legacyEnds) : undefined,
+        covered: visibleIds,
+      });
+    }
     return { ...row, ...(!agent && Array.isArray(items) ? { brief: heading ?? null } : {}), detail: row.detail ? { summary: heading, timeline: chapters, items: visible, cutoff,
       ...(!agent && (Array.isArray(omitted_record_ids) || hiddenIds.length) ? { omitted_record_ids: omitted } : {}) } : null,
+      ...(drafts ? { drafts } : {}),
       ...(this.getState<boolean>(`day_failed:${date}`) ? { failed: true } : {}) };
   }
   facts(field: "thread_id" | "project_id", id: string): Fact[] { return this.sql.prepare(`SELECT * FROM facts WHERE ${field}=? AND invalid_at IS NULL ORDER BY created_at,id`).all(id).map(r => decode<Fact>(r as Row)); }

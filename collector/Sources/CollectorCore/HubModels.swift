@@ -291,6 +291,25 @@ public struct DayDiary: Decodable, Equatable, Sendable {
       return start <= range.upperBound && (end > range.lowerBound || (end == start && start == range.lowerBound))
     }
   }
+  public struct Draft: Decodable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let excerpt: String
+    public let tStart: String
+    public let tEnd: String
+    public let activeSeconds: TimeInterval
+    public let sources: [String]
+    public let apps: [Item.App]
+    public let recordIds: [String]
+    public let projectId: String?
+    public let threadId: String?
+
+    public var item: Item {
+      Item(id: id, title: title, description: excerpt, tStart: tStart, tEnd: tEnd,
+           activeSeconds: activeSeconds, sources: sources, evidence: [], apps: apps,
+           recordIds: recordIds, projectId: projectId, threadId: threadId)
+    }
+  }
   public struct Body: Decodable, Equatable, Sendable {
     public let summary: String?
     public let timeline: [Chapter]?
@@ -300,6 +319,7 @@ public struct DayDiary: Decodable, Equatable, Sendable {
   }
   public let date: String
   public let detail: Body?
+  public let drafts: [Draft]?
   public let needsRegen: FlexBool?
   public let failed: FlexBool?
 

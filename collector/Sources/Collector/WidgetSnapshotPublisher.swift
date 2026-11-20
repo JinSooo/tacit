@@ -90,6 +90,7 @@ import CollectorCore
         let diary = try await api.diary(now)
         try Task.checkCancellation()
         guard day == TimelineDay.key(.now) else { return }
+        // 草稿可早于当天概述出现，是否发布由快照投影后的内容决定。
         let snapshot = WidgetSnapshot(diary: diary, now: now, calendar: calendar, iconFor: publishIcon)
         if snapshot.summary == nil && snapshot.segments.isEmpty {
           removeSnapshot()

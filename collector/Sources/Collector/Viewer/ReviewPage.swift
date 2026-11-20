@@ -67,17 +67,11 @@ private struct ReviewDayContent: View {
   private var failed: Bool { review?.failed?.value == true }
   private var isToday: Bool { day == today }
   private var hasSegments: Bool { review?.detail?.items?.allSatisfy { $0.recordIds != nil } == true }
-  private var visibleRecords: [HistoryRecord] {
-    ReviewActivity.visibleRecords(records.value ?? [], sources: store.capture.sources)
-  }
   private var cutoff: Date? { review?.detail?.cutoff.flatMap(ViewerTime.parse) }
-  /// 今天最近一次整理之后才到的记录；以往日期整理到 24:00，没有这一截。
-  private var unsorted: [HistoryRecord] {
-    guard isToday, current, records.value != nil else { return [] }
-    return ReviewActivity.unsorted(visibleRecords, after: cutoff)
+  private var drafts: [DayDiary.Item] {
+    guard isToday else { return [] }
+    return (review?.drafts ?? []).reversed().map(\.item)
   }
-  private var showsUnsorted: Bool { hasSegments && cutoff != nil && ReviewActivity.hasSubstance(unsorted) }
-  private static let unsortedID = "unsorted"
   private var items: [DayDiary.Item] {
     guard hasSegments else { return [] }
     return (review?.detail?.items ?? []).sorted { ($0.tStart, $0.id) > ($1.tStart, $1.id) }
@@ -99,7 +93,7 @@ private struct ReviewDayContent: View {
         await load()
         if !isToday { break }
         if await catchUp() { continue }
-        await WindowVisibility.pause(.seconds(TimelineCatchUp.isRunning(store.catchUpRequest) ? 10 : 60))
+        await WindowVisibility.pause(.seconds(TimelineCatchUp.isRunning(store.catchUpRequest) ? 10 : 30))
       } while !Task.isCancelled
     }
     .task(id: refresh) {
@@ -119,14 +113,17 @@ private struct ReviewDayContent: View {
       VStack(alignment: .leading, spacing: 14) {
         dayHeader().padding(.horizontal, TimelineReadingLayout.edge)
         LazyVStack(spacing: 0) {
-          if showsUnsorted, let cutoff {
-            TimelineUnsortedRow(day: day, since: cutoff, records: unsorted,
-                                running: TimelineCatchUp.isRunning(store.catchUpRequest),
-                                expanded: expanded == Self.unsortedID) {
-              expanded = expanded == Self.unsortedID ? nil : Self.unsortedID
+          let drafts = self.drafts
+          let showsProjects = TimelineProjectLabels.showsNames(in: drafts + items)
+          ForEach(drafts) { item in
+            TimelineSegmentRow(day: day, item: item, records: records.value,
+                               projectName: showsProjects ? store.project(item.projectId)?.name : nil,
+                               offersThreadStory: true, isDraft: true,
+                               isOrganizing: item.id == drafts.first?.id && TimelineCatchUp.isRunning(store.catchUpRequest),
+                               expanded: expanded == item.id) {
+              expanded = expanded == item.id ? nil : item.id
             }
           }
-          let showsProjects = TimelineProjectLabels.showsNames(in: items)
           ForEach(items) { item in
             TimelineSegmentRow(day: day, item: item, records: records.value,
                                projectName: showsProjects ? store.project(item.projectId)?.name : nil,
@@ -258,6 +255,8 @@ private struct ReviewDayContent: View {
       status("最近一次整理失败", color: Palette.attention)
     } else if !current || diary.value == nil || records.value == nil {
       ProgressView().controlSize(.small).accessibilityLabel("正在读取时间线")
+    } else if !drafts.isEmpty {
+      EmptyView()
     } else if records.value?.isEmpty == true && review?.detail == nil {
       status("这一天没有记录")
     } else if hasSegments && !items.isEmpty {
@@ -276,7 +275,6 @@ private struct ReviewDayContent: View {
   private var footer: some View {
     HStack(alignment: .firstTextBaseline, spacing: 16) {
       if hasSegments, let at = cutoff {
-        // 还没整理的部分在列表最上面单独一行，这里只说截至时间和失败。
         Text("内容截至 \(ReviewTime.clock(at, on: day))\(failed ? "，最近一次整理失败" : "")")
           .monospacedDigit().foregroundStyle(failed ? Palette.attention : Palette.muted)
       }
@@ -302,7 +300,7 @@ private struct ReviewDayContent: View {
 
   /// 打开今天的时间线时按需补整理（规则见 TimelineCatchUp）。返回 true 表示补整理刚结束，需要马上重新读取。
   private func catchUp() async -> Bool {
-    guard current, diary.error == nil, records.value != nil else { return false }
+    guard current, diary.error == nil else { return false }
     if let request = store.catchUpRequest {
       guard let list = try? await store.api.distillRequests() else { return false }
       let latest = list.first { $0.id == request.id }
@@ -312,7 +310,7 @@ private struct ReviewDayContent: View {
       return true
     }
     let now = Date()
-    guard TimelineCatchUp.shouldRequest(unsorted: unsorted, cutoff: cutoff,
+    guard TimelineCatchUp.shouldRequest(hasDrafts: !(review?.drafts ?? []).isEmpty, cutoff: cutoff,
                                         lastRequest: store.catchUpRequestedAt, now: now) else { return false }
     store.catchUpRequestedAt = now
     let date = TimelineDay.key(day)
