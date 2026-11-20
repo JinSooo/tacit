@@ -13,6 +13,8 @@ const MINUTE = 60_000;
 const MISC_SECONDS = 5 * 60;
 const EVIDENCE_WINDOW = 2 * MINUTE;
 const SESSION_SOURCES = new Set(["codex.session", "claude_code.session"]);
+// 跨进窗口的记录最早从窗口前多久开始：录音、AI 会话批次都不超过 24 小时，留一倍余量；否则按结束时间找跨界记录要扫全部历史。
+const LONGEST_RECORD = 48 * 60 * MINUTE;
 const terse = (text: string, max: number) => Array.from(text.replace(/\s+/g, " ").trim()).slice(0, max).join("");
 
 type ReviewRecord = DayReference & {
@@ -63,6 +65,8 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
     context: string | null; key: string | null; thread_id: string | null; project_id: string | null; project_name: string | null;
     body: string | null; corrected: number;
   };
+  const cutoff = draft?.cutoff;
+  const queryStart = cutoff === undefined ? start : Math.max(start, cutoff);
   const rows = hub.db.prepare<unknown[], RawRow>(`SELECT r.id,r.source,r.source_ref,r.title,r.t_start,r.t_start_ms,r.t_end,r.context,f.key,a.thread_id,t.project_id,p.name AS project_name,
     CASE WHEN r.source IN ('mac.screen','mac.browser','mac.app') THEN NULL ELSE COALESCE(c.body,r.body) END AS body,
     c.id IS NOT NULL AS corrected
@@ -72,15 +76,14 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
     LEFT JOIN projects p ON p.id=t.project_id
     LEFT JOIN records c ON c.id=(SELECT cc.id FROM records cc WHERE cc.corrects=r.id AND cc.source='manual.correction'
       ORDER BY cc.t_start_ms DESC,cc.id DESC LIMIT 1)
-    WHERE r.t_start_ms<? AND (r.t_start_ms>=? OR (r.t_end IS NOT NULL AND julianday(r.t_end)>julianday(?)))
+    WHERE r.t_start_ms<? AND r.t_start_ms>=? AND (r.t_start_ms>=? OR (r.t_end IS NOT NULL AND julianday(r.t_end)>julianday(?)))
       AND r.sensitivity<>'private' AND COALESCE(c.sensitivity,'normal')<>'private'
       AND (r.source IN ('mac.screen','mac.browser','mac.app','mac.audio','codex.session','claude_code.session','mac.wechat','manual.note')
         OR (r.source NOT IN ('mac.shell','mac.git','mac.file','mac.clipboard','manual.agent','manual.correction')
           AND json_type(r.context,'$.chat')='text' AND json_extract(r.context,'$.extra.from_me') IN (0,1)))
-    ORDER BY r.t_start_ms,r.id`).iterate(end, start, new Date(start).toISOString());
+    ORDER BY r.t_start_ms,r.id`).iterate(end, queryStart - LONGEST_RECORD, queryStart, new Date(queryStart).toISOString());
   const records: ReviewRecord[] = [];
   const excluded = new Set<string>();
-  const cutoff = draft?.cutoff;
   const windowStart = Math.max(start, cutoff ?? start);
   const evidenceStart = cutoff === undefined ? start : Math.max(start, cutoff + 1);
   for (const row of rows) {
@@ -106,6 +109,19 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
       key, thread: row.thread_id, projectId: row.project_id, projectName: row.project_name, session, evidence,
       app: context?.app ? redactString(context.app).text : null, chat: context?.chat ? redactString(context.chat).text : null,
     });
+  }
+  // 草稿只读截止之后的记录；评测或发布检查的标记可能只在截止前的批次里，只为截止后出现的会话补查。
+  if (queryStart > start) {
+    const earlier = hub.db.prepare<[string, string, string, string, number, number], { body: string | null; context: string | null }>(`
+      SELECT body,context FROM records WHERE source=? AND (source_ref=? OR substr(source_ref,1,length(?))=?)
+        AND t_start_ms>=? AND t_start_ms<?`);
+    for (const key of new Set(records.flatMap(r => r.session ? [r.session] : []))) {
+      if (excluded.has(key)) continue;
+      const [source, ref] = JSON.parse(key) as [string, string], prefix = `${ref}#`;
+      for (const row of earlier.iterate(source, ref, prefix, prefix, start, queryStart)) {
+        if (excludedSession(row.body ?? "", row.context ? JSON.parse(row.context) : undefined)) { excluded.add(key); break; }
+      }
+    }
   }
   return presenceRecords(records.filter(r => !excluded.has(r.session ?? r.id)), windowStart, end);
 }

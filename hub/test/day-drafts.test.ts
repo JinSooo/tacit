@@ -100,6 +100,8 @@ test("草稿排除各类噪声和私密原文及修正，时间骨架仅供展�
       chat(781, "怎么又不跑了？"),
       chat(782, "继续吧。"),
       session(840, "release#b", "[我] 同一个发布检查会话的后续输入。"),
+      // 截止前只靠工具标记识别的评测会话，截止后的批次也不成草稿（草稿只读截止后的记录时仍要补查）。
+      session(845, "eval#b", "[我] 评测会话的后续输入。"),
     ];
     const substantive = chat(850, "东侧加装了遮阳板。");
     const background = fixture({ source: "mac.screen", kind: "span", t_start: at(849), t_end: at(851) });
