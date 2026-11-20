@@ -36,8 +36,8 @@ export const PROVIDER_INFO = [
 /** 按 distill/run.ts 里各档的实际调用写。 */
 export const TIER_INFO: Record<Tier, { label: string; description: string }> = {
   minute: { label: "实时整理", description: "每 15 分钟一次，把新的动作归到对应的事项和项目里。用得最频繁，适合选快一些的模型。" },
-  hour: { label: "每小时汇总", description: "每小时一次，把事项的新进展写进详细记录，并汇总每个项目。一次要读的内容最多。" },
-  day: { label: "每日日记", description: "当天每 3 小时更新一次日记，以前的日子有新内容时重写。整理启用前的历史也用它。" },
+  hour: { label: "每小时汇总", description: "每小时一次，把事项的新进展写进详细记录，并汇总每个项目。" },
+  day: { label: "每日时间线", description: "今天的时间线每小时更新一次，打开时间线时按需补一次；以前的日子有新内容时重写。整理启用前的历史也用它。" },
 };
 
 const TEST_SCHEMA = { type: "object", properties: { ok: { type: "boolean", enum: [true] } }, required: ["ok"], additionalProperties: false };

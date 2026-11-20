@@ -119,7 +119,7 @@ export function StatusContent({ status, refreshFailed }: { status: HubStatus; re
       <dl className="status-lines">
         <dt>活动片段</dt><dd><Counts items={countList(distill.frames, frameNames)} /></dd>
         <dt>事项</dt><dd><Counts items={countList(distill.threads, threadNames)} /></dd>
-        {regen.threads + regen.projects + regen.days > 0 && <><dt>等待更新</dt><dd>{[regen.threads && `事项 ${regen.threads}`, regen.projects && `项目 ${regen.projects}`, regen.days && `每日回顾 ${regen.days} 天`].filter(Boolean).join("，")}</dd></>}
+        {regen.threads + regen.projects + regen.days > 0 && <><dt>等待更新</dt><dd>{[regen.threads && `事项 ${regen.threads}`, regen.projects && `项目 ${regen.projects}`, regen.days && `每日时间线 ${regen.days} 天`].filter(Boolean).join("，")}</dd></>}
         {distill.requests.total > 0 && <><dt>手动整理</dt><dd>
           <Counts items={countList(distill.requests.by_status, requestNames)} unit=" 次" />
           <ul className="status-requests">{distill.requests.recent.map(request => <li key={request.id}>

@@ -43,7 +43,7 @@ public struct ModelCall: Decodable, Identifiable, Sendable {
   public var date: Date? { ViewerTime.parse(at) }
   public var title: String {
     guard let task else { return "早期调用" }
-    return ["assign":"整理活动", "thread_digest":"整理事项", "thread_brief":"事项摘要", "classify":"判断归属", "dedupe":"合并事项", "project":"项目进展", "project_brief":"项目摘要", "day":"每日回顾", "day_brief":"回顾摘要", "conversation_summary":"对话总结", "connection_test":"测试连接"][task] ?? "模型整理"
+    return ["assign":"整理活动", "thread_digest":"整理事项", "thread_brief":"事项摘要", "classify":"判断归属", "dedupe":"合并事项", "project":"项目进展", "project_brief":"项目摘要", "day":"每日时间线", "day_brief":"当天概述", "conversation_summary":"对话总结", "connection_test":"测试连接"][task] ?? "模型整理"
   }
   public var status: String {
     if applicationState == "discarded" { return "记录已变化，未采用" }

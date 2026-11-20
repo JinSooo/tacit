@@ -204,7 +204,7 @@ public struct DistillRequestInfo: Decodable, Equatable, Identifiable, Sendable {
     case "queued": return prefix + "排队中，等后台整理进程处理"
     case "running":
       if let p = progress, p.total > 0, p.done < p.total { return prefix + "正在准备，已完成 \(p.done) 天，共 \(p.total) 天" }
-      return prefix + (kind == "backfill" ? "正在整理事项和每日回顾" : "正在整理")
+      return prefix + (kind == "backfill" ? "正在整理事项和每日时间线" : "正在整理")
     case "done":
       if kind == "backfill", let p = progress { return prefix + (p.total == 0 ? "完成，这段日期里没有要整理的记录" : "完成，整理了 \(p.total) 天") }
       return prefix + "完成"

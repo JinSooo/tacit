@@ -56,6 +56,8 @@ export const LIMITS = {
   conversationDays: 7, conversationsPerRound: 4, conversationChars: 24_000,
   // 合并重复线程：每天看一次最近的线程，模型把握不低于 0.8 才并。
   dedupThreads: 60, dedupConfidence: 0.8, dedupEvery: DAY,
+  // 打开时间线刚补整理过的今天，整点那轮不再紧接着重写。
+  todayFresh: 30 * MIN,
 };
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -461,21 +463,20 @@ export async function classifyStep(d: Deps, store: DistillStore) {
 }
 
 /**
- * 选哪些待更新线程重写详细版。all：全部（测试和补整理）。deferred：常规每小时那轮，按 E3（2026-11-16 确认）
- * 只写被要求的、还没有摘要的、以及最后活动在今天之前的（即当天结束后更新一次）；今天仍在进行的只标待更新。
- * wanted：每 15 分钟的快轮只处理按需请求。
+ * 选哪些待更新线程重写详细版。all：每小时那轮写全部待更新的（2026-11-20 起当天仍在进行的也写，
+ * 让新会话带入和时间线同步）。wanted：每 15 分钟的快轮只处理被打开或被 Agent 读取的。
  */
-export type DigestSelect = "all" | "deferred" | "wanted";
+export type DigestSelect = "all" | "wanted";
 export async function digestStep(d: Deps, store: DistillStore, now: number, select: DigestSelect = "all") {
   const log = d.log ?? (() => {});
   let updated = 0, failed = 0, facts = 0, calls = 0, dropped = 0, invalidInference = 0;
-  const wanted = store.wantedDigests(), todayStart = localDayStart(localDateString(now)) ?? now;
+  const wanted = store.wantedDigests();
   const pendingRows = store.hub.db.prepare("SELECT id,brief,last_ms FROM threads WHERE needs_regen=1 AND status!='abandoned' ORDER BY last_ms DESC").all() as { id: string; brief: string | null; last_ms: number | null }[];
   const pendingIds = new Set(pendingRows.map(r => r.id));
   const stale = [...wanted].filter(id => !pendingIds.has(id));
   if (stale.length) { for (const id of stale) wanted.delete(id); store.setState("digest_wanted", [...wanted]); }
   const threads = pendingRows
-    .filter(r => select === "all" || wanted.has(r.id) || (select === "deferred" && (r.brief == null || (r.last_ms ?? 0) < todayStart)))
+    .filter(r => select === "all" || wanted.has(r.id))
     .sort((x, y) => Number(wanted.has(y.id)) - Number(wanted.has(x.id)))
     .slice(0, LIMITS.threadsPerRound);
   for (const { id } of threads) {
@@ -782,7 +783,7 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
 
 // ---------------- 一轮 ----------------
 
-export interface RoundOptions { backfill?: boolean; slow?: boolean; days?: "all" | "past" | "none"; enabledDefault?: number; deferDigest?: boolean }
+export interface RoundOptions { backfill?: boolean; slow?: boolean; days?: "all" | "past" | "none"; enabledDefault?: number; wantedDigestsOnFast?: boolean }
 
 /** 快步骤每轮都跑；slow=true 时再跑线程、项目和日记。冷却会在下次模型调用前中止这一轮。 */
 export async function distillRound(deps: Deps, opts: RoundOptions = {}) {
@@ -813,9 +814,9 @@ async function distillRoundInner(d: Deps, opts: RoundOptions, out: Record<string
           out.dedup = await dedupStep(d, store, now);
           if (!(out.dedup as { failed: number }).failed) store.setState("dedup_ms", now);
         }
-        out.digest = await digestStep(d, store, now, opts.deferDigest ? "deferred" : "all");
+        out.digest = await digestStep(d, store, now, "all");
         out.projects = await projectStep(d, store, now);
-      } else if (opts.deferDigest && store.wantedDigests().size) {
+      } else if (opts.wantedDigestsOnFast && store.wantedDigests().size) {
         out.digest = await digestStep(d, store, now, "wanted");
       }
     } catch (error) {
@@ -828,8 +829,9 @@ async function distillRoundInner(d: Deps, opts: RoundOptions, out: Record<string
   store.setState("last_round_at", toLocalIso(now));
   if (!out.stopped && opts.slow && opts.days !== "none") {
     const today = localDate(now);
+    const fresh = (date: string) => now - (Date.parse(store.day(date)?.updated_at ?? "") || 0) < LIMITS.todayFresh;
     const days = (d.db.db.prepare("SELECT date FROM days WHERE needs_regen=1 ORDER BY date").all() as { date: string }[])
-      .map(r => r.date).filter(date => opts.days === "all" || date < today);
+      .map(r => r.date).filter(date => date < today || (opts.days === "all" && !fresh(date)));
     let calls = 0, done = 0;
     for (const date of days) { const r = await dayStep(d, store, date, now); calls += r.calls; if (r.ok) done++; }
     out.days = { calls, done, pending: days.length - done };
@@ -881,7 +883,12 @@ export async function distillTick(deps: Deps, state: LoopState, at?: number): Pr
   if (req) {
     let error: ModelErrorCode | undefined, requeue = false;
     try {
-      if (req.kind === "regen_days") {
+      // 打开时间线排的当天补整理：排队后常规轮次已经写过今天，就不再重写一遍。
+      const today = localDate(now);
+      if (req.kind === "regen_days" && req.from === today && req.to === today && !requests.regenProgress(req.id)
+          && (Date.parse(store.day(today)?.updated_at ?? "") || 0) >= Date.parse(req.created_at)) {
+        log(JSON.stringify({ request: req.id, regen_days: { days: 0, calls: 0, skipped: "fresh" } }));
+      } else if (req.kind === "regen_days") {
         let checkpoint = requests.regenProgress(req.id);
         if (!checkpoint) {
           const start = localDayStart(req.from!), last = localDayStart(req.to!);
@@ -947,17 +954,15 @@ async function regularRound(d: Deps, state: LoopState) {
   const now = d.now?.() ?? Date.now();
   // 失败也算跑过一轮，避免出错时每 5 秒重试一次。
   state.lastRound = now;
+  // 只有一个整点钟：快步骤每 15 分钟；到点后按顺序写事项、项目和日记（含今天）。
   const slowDue = now - (store.getState<number>("slow_ms") ?? 0) >= HOUR;
-  // 当天的日记每 3 小时刷新一次；过去的日子有变化就在每小时那轮重写。
-  const todayDue = now - (store.getState<number>("today_ms") ?? 0) >= 3 * HOUR;
-  const result = await distillRound(d, { slow: slowDue, days: todayDue ? "all" : "past", enabledDefault: state.enabledDefault, deferDigest: true });
+  const result = await distillRound(d, { slow: slowDue, days: "all", enabledDefault: state.enabledDefault, wantedDigestsOnFast: true });
   log(JSON.stringify(result));
   if (result.stopped) return true;
   const failed = Object.values(result).some(v => v && typeof v === "object" && "failed" in v && Number(v.failed) > 0)
     || Number((result.days as { pending?: number } | undefined)?.pending ?? 0) > 0;
   // 失败的慢速整理在下一轮（15 分钟）重试；不能把失败当完成再等整整一小时。
   if (slowDue && !failed) store.setState("slow_ms", now);
-  if (slowDue && todayDue && !failed) store.setState("today_ms", now);
   return false;
 }
 

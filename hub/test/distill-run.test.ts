@@ -537,7 +537,8 @@ test('详细整理跨活动片段去重相同提交，内容不同的提交材�
   expect(records.every(r=>!!ctx.db.get(r.id))).toBe(true);expect(store.getState<{frames:string[]}>('digest:git-thread')?.frames).toHaveLength(4);
 });
 
-test("常规整理只在当天结束后、首次或按需重写线程详细版（E3，2026-11-18 补实现）", async () => {
+// 用户反馈：新会话带入的事项摘要停在前一天（“摘要截至 00:23，有新活动待整理”），和时间线不同步。
+test("整点那轮重写所有待更新线程（含今天仍在进行的），快轮只处理按需请求", async () => {
   const now = base + 120 * MIN, dayStart = Date.parse("2026-11-08T00:00:00+08:00");
   const threads = [["today", "旧摘要", now - 10 * MIN], ["yesterday", "旧摘要", dayStart - 60 * MIN], ["first", null, now - 5 * MIN]] as const;
   threads.forEach(([id, brief, last], i) => {
@@ -547,14 +548,13 @@ test("常规整理只在当天结束后、首次或按需重写线程详细版�
     store.assign(`f-${id}`, id, "llm", 1);
   });
   const deps = { db: ctx.db, llm: fakeLLM().llm };
-  await digestStep(deps, store, now, "deferred");
-  expect(threads.map(([id]) => store.thread(id)!.needs_regen)).toEqual([1, 0, 0]);
   await digestStep(deps, store, now, "wanted");
-  expect(store.thread("today")!.needs_regen).toBe(1);
+  expect(threads.map(([id]) => store.thread(id)!.needs_regen)).toEqual([1, 1, 1]);
   store.wantDigest("today");
   await digestStep(deps, store, now, "wanted");
-  expect(store.thread("today")!.needs_regen).toBe(0);
-  await digestStep(deps, store, now, "wanted");
+  expect(threads.map(([id]) => store.thread(id)!.needs_regen)).toEqual([0, 1, 1]);
+  await digestStep(deps, store, now, "all");
+  expect(threads.map(([id]) => store.thread(id)!.needs_regen)).toEqual([0, 0, 0]);
   expect(store.wantedDigests().size).toBe(0);
 });
 

@@ -8,7 +8,7 @@ export interface CallSnapshot extends ModelCall {
 }
 export const taskNames: Record<string,string> = {
   assign: "整理活动", thread_digest: "整理事项", thread_brief: "事项摘要", classify: "判断归属", dedupe: "合并事项",
-  project: "项目进展", project_brief: "项目摘要", day: "每日日记", day_brief: "日记摘要", conversation_summary: "对话总结", connection_test: "测试连接",
+  project: "项目进展", project_brief: "项目摘要", day: "每日时间线", day_brief: "当天概述", conversation_summary: "对话总结", connection_test: "测试连接",
 };
 export const callTask = (task: string | null) => task ? taskNames[task] ?? "模型整理" : "早期调用";
 export function callStatus(call: ModelCall): string {

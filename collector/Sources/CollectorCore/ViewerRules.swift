@@ -88,6 +88,21 @@ public enum ReviewActivity {
     }
   }
 
+  /// 最近一次整理之后才到的非私密记录，按时间倒序。没有整理结果时返回全部。
+  public static func unsorted(_ records: [HistoryRecord], after cutoff: Date?) -> [HistoryRecord] {
+    records.filter { record in
+      guard record.sensitivity != "private" else { return false }
+      guard let cutoff else { return true }
+      return (record.end ?? record.start) > cutoff
+    }
+      .sorted { ($0.start, $0.id) > ($1.start, $1.id) }
+  }
+
+  /// 屏幕和网页只是时间骨架，单独不会成段，也不值得为它补整理。
+  public static func hasSubstance(_ records: [HistoryRecord]) -> Bool {
+    records.contains { ![.screen, .browser].contains(Lane.of($0.source)) }
+  }
+
   // 来源名是记录协议，开关是采集器 ID。截图识字与辅助功能共用屏幕记录，两种 AI 会话共用一个开关。
   private static let collectorID = [
     "mac.screen": "screen", "mac.app": "screen", "mac.browser": "browser",
@@ -95,4 +110,21 @@ public enum ReviewActivity {
     "mac.audio": "audio", "mac.calendar": "calendar", "mac.wechat": "wechat",
     "mac.shell": "shell", "mac.git": "git", "mac.file": "files", "mac.clipboard": "clipboard",
   ]
+}
+
+/// 打开今天的时间线时补整理：离上次整理超过半小时、之后又有聊天 / AI 会话 / 录音这类记录才请求，
+/// 同一窗口半小时内最多请求一次，失败时不会每次刷新都重发。冷却由后台统一处理。
+public enum TimelineCatchUp {
+  public static let interval: TimeInterval = 30 * 60
+
+  public static func shouldRequest(unsorted: [HistoryRecord], cutoff: Date?, lastRequest: Date?, now: Date) -> Bool {
+    guard ReviewActivity.hasSubstance(unsorted) else { return false }
+    if let cutoff, now.timeIntervalSince(cutoff) < interval { return false }
+    if let lastRequest, now.timeIntervalSince(lastRequest) < interval { return false }
+    return true
+  }
+
+  public static func isRunning(_ request: DistillRequestInfo?) -> Bool {
+    request?.status == "queued" || request?.status == "running"
+  }
 }

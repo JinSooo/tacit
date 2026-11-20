@@ -40,7 +40,7 @@ export const STATUS_REFRESH_MS = 15_000;
 export const fetchStatus = (api: Api, signal?: AbortSignal) => api<HubStatus>("/v1/status", { signal });
 
 /** 模型档位的界面名，设置页和状态页共用（docs/ui.md 用词表）。 */
-export const tierNames: Record<string, string> = { minute: "实时整理", hour: "每小时汇总", day: "每日回顾" };
+export const tierNames: Record<string, string> = { minute: "实时整理", hour: "每小时汇总", day: "每日时间线" };
 export const frameNames: Record<string, string> = { new: "等待整理", assigned: "已归入事项", ignored: "已忽略", candidate: "待积累", candidate_expired: "未形成事项" };
 export const threadNames: Record<string, string> = { active: "进行中", paused: "暂停", done: "完成", archived: "已归档", abandoned: "不做了" };
 export const pendingNames: Record<string, string> = { project: "新项目", merge: "可能重复的项目", thread_done: "做完了吗", voice: "新声音" };

@@ -349,7 +349,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 - 请求对象：`{ id, kind, from?, to?, status: queued|running|done|failed, created_at, started_at?, finished_at?, error?, progress?: { done, total } }`，时间是 UTC ISO。
 - 表 `distill_requests(id, kind, date_from, date_to, status, created_at, started_at, finished_at, error, progress_done, progress_total)`。
 - **领取**：常驻循环每 5 秒在一个 immediate 事务里取最早的 `queued` 置为 `running`，执行完置 `done`，出错置 `failed` 并写 `error`。执行完一条立刻再看队列。进程启动时把遗留的 `running` 标为 `failed`（`error=提炼进程中断`），用户可以重新提交。常驻进程没在跑时请求一直是 `queued`。
-- **regen_days**：请求体 `{"kind":"regen_days","from":"YYYY-MM-DD","to":"YYYY-MM-DD"}`，必须提供合法本地日期，from ≤ to，闭区间最多 31 天。把范围内有原始记录的日期（含尚无 days 行的日期）标为 needs_regen=1，依次只调用日整理；不切片、不归属、不更新事项、项目和原始记录。progress 为已尝试天数 / 有记录的总天数。单日失败继续下一天，失败日期保持 needs_regen=1 供常规轮次重试；有失败时请求为 failed，error 列出失败日期，否则 done。
+- **regen_days**：请求体 `{"kind":"regen_days","from":"YYYY-MM-DD","to":"YYYY-MM-DD"}`，必须提供合法本地日期，from ≤ to，闭区间最多 31 天。把范围内有原始记录的日期（含尚无 days 行的日期）标为 needs_regen=1，依次只调用日整理；不切片、不归属、不更新事项、项目和原始记录。progress 为已尝试天数 / 有记录的总天数。单日失败继续下一天，失败日期保持 needs_regen=1 供常规轮次重试；有失败时请求为 failed，error 列出失败日期，否则 done。只含今天的请求开始执行时，若排队后今天已被整理过，直接以 done 结束、不调用模型。
 - **round**：立即跑一轮常规增量（快慢档判断与定时轮次相同），并把下一次定时轮次顺延 15 分钟。
 - **backfill**：范围取 `[from 当天 0 点, to 次日 0 点)` 与 `enabled_ms` 之前的交集，按天切片（与 `--backfill` 同一套逻辑），`progress` 是已切的天数 / 范围内有记录的天数；已在片段里的记录由 `frame_records` 排除，所以重复整理同一范围不会重复切。切完接着跑一轮慢档（归线程、线程、项目、日记），处理不完的由后续常规轮次继续。启用之后的记录归增量处理，范围外的历史（例如"导入全部历史"导入的旧记录）不提炼。
 - **心跳**：常驻进程每次看队列时、以及执行长任务期间每 30 秒，把 `distill_state.heartbeat_at` 写成当前本地时间（带时区偏移的 ISO）。

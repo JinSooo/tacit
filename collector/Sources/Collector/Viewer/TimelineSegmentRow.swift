@@ -237,6 +237,85 @@ struct TimelineSegmentRecords: View {
   }
 }
 
+/// 最近一次整理之后才到的记录：不调用模型，原样折在列表最上面一行，整理完自动并入时间线。
+struct TimelineUnsortedRow: View {
+  let day: Date
+  let since: Date
+  let records: [HistoryRecord]
+  let running: Bool
+  let expanded: Bool
+  let onToggle: () -> Void
+
+  @Environment(ViewerStore.self) private var store
+  @State private var hovering = false
+  @State private var showsBackgroundRecords = false
+
+  private var groups: (visible: [HistoryRecord], collapsed: [HistoryRecord]) { ReviewActivity.segmentRecords(records) }
+  private var label: String {
+    let since = ReviewTime.clock(self.since, on: day), count = Fmt.count(groups.visible.count)
+    return running ? "正在整理 \(since) 之后的 \(count) 条记录" : "\(since) 之后的 \(count) 条记录还没整理"
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button(action: onToggle) {
+        HStack(alignment: .center, spacing: 0) {
+          Color.clear.frame(width: TimelineReadingLayout.timeWidth, height: 1)
+            .padding(.trailing, TimelineReadingLayout.gutter)
+          HStack(spacing: 8) {
+            Text(label).font(.system(size: TextSize.body)).monospacedDigit().foregroundStyle(Palette.muted)
+            if running { ProgressView().controlSize(.mini).accessibilityHidden(true) }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          PhIcon(expanded ? "caret-up" : "caret-down", size: 11)
+            .opacity(!hovering && !expanded ? 0 : 1)
+            .foregroundStyle(Palette.muted).padding(.leading, 16).accessibilityHidden(true)
+        }
+        .padding(.horizontal, TimelineReadingLayout.edge)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(TimelineRowStyle())
+      .onHover { hovering = $0 }
+      .accessibilityValue(expanded ? "已展开" : "已折叠")
+      .accessibilityHint(expanded ? "收起原始记录" : "展开原始记录")
+      if expanded {
+        VStack(alignment: .leading, spacing: 8) {
+          recordRows(groups.visible)
+          if !groups.collapsed.isEmpty {
+            DisclosureGroup("另有 \(Fmt.count(groups.collapsed.count)) 条屏幕和网页记录", isExpanded: $showsBackgroundRecords) {
+              recordRows(groups.collapsed)
+            }
+            .disclosureGroupStyle(TimelineRecordDisclosureStyle())
+          }
+        }
+        .font(.system(size: TextSize.caption))
+        .padding(.bottom, 16)
+      }
+    }
+    .background(alignment: .leading) {
+      Rectangle().fill(Palette.hairline).frame(width: 1)
+        .offset(x: TimelineReadingLayout.axis)
+        .accessibilityHidden(true).allowsHitTesting(false)
+    }
+    .overlay(alignment: .topLeading) {
+      // 空心点：这里还不是整理好的一段。
+      Circle().fill(Palette.paper).overlay(Circle().strokeBorder(Palette.muted, lineWidth: 1))
+        .frame(width: 7, height: 7)
+        .offset(x: TimelineReadingLayout.axis - 3, y: 12 + 6)
+        .accessibilityHidden(true).allowsHitTesting(false)
+    }
+  }
+
+  private func recordRows(_ rows: [HistoryRecord]) -> some View {
+    ForEach(rows) { record in
+      RecordRow(record: record, run: nil, selected: false, expanded: false, nested: true, alignsTimeLeading: true) {
+        store.path.append(.reviewRecord(record.id))
+      }
+    }
+  }
+}
+
 private struct TimelineRecordDisclosureStyle: DisclosureGroupStyle {
   func makeBody(configuration: Configuration) -> some View {
     VStack(alignment: .leading, spacing: 8) {

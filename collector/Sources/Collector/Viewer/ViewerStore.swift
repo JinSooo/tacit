@@ -3,6 +3,7 @@ import SwiftUI
 // 只引入用到的类型：CollectorCore 里有个叫 Observation 的结构体，会挡住 @Observable 宏展开要找的 Observation 模块。
 import enum CollectorCore.CaptureFooterStatus
 import struct CollectorCore.Project
+import struct CollectorCore.DistillRequestInfo
 import struct CollectorCore.PendingItem
 import struct CollectorCore.Speaker
 import struct CollectorCore.DataSourceStatus
@@ -102,6 +103,9 @@ enum Route: Hashable {
   }
   var timelineSearch = ""
   var timelinePendingExpanded = false
+  /// 打开今天时间线时排的补整理：跨页面保留，避免来回切换重复请求。
+  var catchUpRequest: DistillRequestInfo?
+  @ObservationIgnored var catchUpRequestedAt: Date?
   @ObservationIgnored private var sharedRequest = 0
   /// 进入详细时间线后要定位的原始记录。
   var historyFocus: String?

@@ -70,6 +70,14 @@ private struct ReviewDayContent: View {
   private var visibleRecords: [HistoryRecord] {
     ReviewActivity.visibleRecords(records.value ?? [], sources: store.capture.sources)
   }
+  private var cutoff: Date? { review?.detail?.cutoff.flatMap(ViewerTime.parse) }
+  /// 今天最近一次整理之后才到的记录；以往日期整理到 24:00，没有这一截。
+  private var unsorted: [HistoryRecord] {
+    guard isToday, current, records.value != nil else { return [] }
+    return ReviewActivity.unsorted(visibleRecords, after: cutoff)
+  }
+  private var showsUnsorted: Bool { hasSegments && cutoff != nil && ReviewActivity.hasSubstance(unsorted) }
+  private static let unsortedID = "unsorted"
   private var items: [DayDiary.Item] {
     guard hasSegments else { return [] }
     return (review?.detail?.items ?? []).sorted { ($0.tStart, $0.id) > ($1.tStart, $1.id) }
@@ -90,7 +98,8 @@ private struct ReviewDayContent: View {
       repeat {
         await load()
         if !isToday { break }
-        await WindowVisibility.pause(.seconds(60))
+        if await catchUp() { continue }
+        await WindowVisibility.pause(.seconds(TimelineCatchUp.isRunning(store.catchUpRequest) ? 10 : 60))
       } while !Task.isCancelled
     }
     .task(id: refresh) {
@@ -110,6 +119,13 @@ private struct ReviewDayContent: View {
       VStack(alignment: .leading, spacing: 14) {
         dayHeader().padding(.horizontal, TimelineReadingLayout.edge)
         LazyVStack(spacing: 0) {
+          if showsUnsorted, let cutoff {
+            TimelineUnsortedRow(day: day, since: cutoff, records: unsorted,
+                                running: TimelineCatchUp.isRunning(store.catchUpRequest),
+                                expanded: expanded == Self.unsortedID) {
+              expanded = expanded == Self.unsortedID ? nil : Self.unsortedID
+            }
+          }
           let showsProjects = TimelineProjectLabels.showsNames(in: items)
           ForEach(items) { item in
             TimelineSegmentRow(day: day, item: item, records: records.value,
@@ -259,12 +275,9 @@ private struct ReviewDayContent: View {
 
   private var footer: some View {
     HStack(alignment: .firstTextBaseline, spacing: 16) {
-      if hasSegments, let at = review?.detail?.cutoff.flatMap(ViewerTime.parse) {
-        let pending = review?.needsRegen?.value == true || visibleRecords.contains {
-          $0.sensitivity != "private" && ($0.end ?? $0.start) > at
-        }
-        let suffix = failed ? "，最近一次整理失败" : pending ? "，有新活动待整理" : ""
-        Text("内容截至 \(ReviewTime.clock(at, on: day))\(suffix)")
+      if hasSegments, let at = cutoff {
+        // 还没整理的部分在列表最上面单独一行，这里只说截至时间和失败。
+        Text("内容截至 \(ReviewTime.clock(at, on: day))\(failed ? "，最近一次整理失败" : "")")
           .monospacedDigit().foregroundStyle(failed ? Palette.attention : Palette.muted)
       }
       Spacer(minLength: 0)
@@ -285,6 +298,29 @@ private struct ReviewDayContent: View {
       try Task.checkCancellation()
       setup = value
     } catch { setup = nil }
+  }
+
+  /// 打开今天的时间线时按需补整理（规则见 TimelineCatchUp）。返回 true 表示补整理刚结束，需要马上重新读取。
+  private func catchUp() async -> Bool {
+    guard current, diary.error == nil, records.value != nil else { return false }
+    if let request = store.catchUpRequest {
+      guard let list = try? await store.api.distillRequests() else { return false }
+      let latest = list.first { $0.id == request.id }
+      store.catchUpRequest = latest
+      if TimelineCatchUp.isRunning(latest) { return false }
+      store.catchUpRequest = nil
+      return true
+    }
+    let now = Date()
+    guard TimelineCatchUp.shouldRequest(unsorted: unsorted, cutoff: cutoff,
+                                        lastRequest: store.catchUpRequestedAt, now: now) else { return false }
+    store.catchUpRequestedAt = now
+    let date = TimelineDay.key(day)
+    if let info = try? await store.api.requestDistill(kind: "regen_days", range: DistillDateRange(from: date, to: date)),
+       TimelineCatchUp.isRunning(info) {
+      store.catchUpRequest = info
+    }
+    return false
   }
 
   private func load() async {
