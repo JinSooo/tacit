@@ -26,7 +26,7 @@ test("当天回顾失败不推进慢速检查点，十五分钟重试且不在�
   store.createFrame({ id: "retry", key: "app:synthetic.app", record_ids: [r.id], t_start_ms: now - HOUR, t_end_ms: now - HOUR, chars: r.body.length, private: 0, status: "ignored" });
   store.upsertDay({ date: "2026-11-09", needs_regen: 1 });
   let calls = 0;
-  const llm: LLM = { async complete(req) { if (req.task === "day") calls++; return { ok: false, error: "合成路由失败", ms: 1 }; } };
+  const llm: LLM = { async complete(req) { if (req.task === "day_polish") calls++; return { ok: false, error: "合成路由失败", ms: 1 }; } };
   const state: LoopState = { lastRound: 0, enabledDefault: now - 2 * HOUR };
   await distillTick({ ...deps(now), llm }, state, now);
   expect(calls).toBe(1);
@@ -254,31 +254,6 @@ test("regen_days 空范围成功结束且无模型调用", async () => {
   await distillTick({ ...deps(now), llm }, { lastRound: now, enabledDefault: now }, now);
   expect(requests.get(request.id)).toMatchObject({ status: "done", progress: { done: 0, total: 0 } });
   expect(store.day("2026-11-03")).toBeNull();
-});
-
-// 用户报告：当天时间线每 3 小时才刷新，12 点多还停在 11:27。改为和慢步骤共用一个整点钟，打开时补整理过的今天半小时内不重写。
-test("当天时间线随整点那轮刷新；刚补整理过的今天不紧接着重写，排队后已写过的补整理直接结束", async () => {
-  const now = day("2026-11-09", 12), date = "2026-11-09", later = now + 10 * 60_000;
-  ctx.db.ingest([fixture({ source: "codex.session", source_ref: "today-refresh", t_start: new Date(now - HOUR / 2).toISOString(), body: "[我] 确认虚构展板改成横版。" })]);
-  let calls = 0;
-  const llm: LLM = { async complete(req) { if (req.task === "day") calls++; return { ok: true, data: { highlight: null, items: [] } as any, ms: 1 }; } };
-  const state: LoopState = { lastRound: 0, enabledDefault: now - 2 * HOUR };
-  requests.create({ kind: "regen_days", from: date, to: date }, now);
-  await distillTick({ ...deps(now), llm }, state, now);
-  expect(calls).toBe(1);
-  // 十分钟后整点那轮到点：今天刚补整理过，不再重写。
-  store.upsertDay({ date, needs_regen: 1 });
-  await distillTick({ ...deps(later), llm }, state, later);
-  expect(calls).toBe(1);
-  expect(store.getState("slow_ms")).toBe(later);
-  // 下一个整点（原来要等三小时）今天随这轮刷新。
-  await distillTick({ ...deps(later + HOUR), llm }, state, later + HOUR);
-  expect(calls).toBe(2);
-  // 补整理排队时整点那轮正好在写今天：轮到它时今天已是新的，不再调用模型。
-  const queued = requests.create({ kind: "regen_days", from: date, to: date }, later + HOUR - 1000).request;
-  await distillTick({ ...deps(later + HOUR + 5000), llm }, state, later + HOUR + 5000);
-  expect(calls).toBe(2);
-  expect(requests.get(queued.id)!.status).toBe("done");
 });
 
 test("手动三天重整遇到 HTTP 429 只发送一次，冷却结束后继续", async () => {

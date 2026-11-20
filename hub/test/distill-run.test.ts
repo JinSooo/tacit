@@ -46,6 +46,7 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
     async complete<T>(req: LLMRequest) {
       const kind = req.system === P.ASSIGN_SYSTEM ? "assign" : req.system === P.THREAD_SYSTEM ? "thread"
         : req.system === P.BRIEF_SYSTEM ? "brief"
+        : req.system === P.DAY_POLISH_SYSTEM ? "day_polish" : req.system === P.DAY_OVERVIEW_SYSTEM ? "day_brief"
         : req.system === P.CLASSIFY_SYSTEM ? "classify" : req.system === P.CONVERSATION_SYSTEM ? "conversation" : req.system === P.PROJECT_SYSTEM ? "project" : req.system === P.DAY_SYSTEM ? "day" : req.system === P.DEDUP_SYSTEM ? "dedup" : "unknown";
       calls.push({ kind, req });
       const ok = (data: unknown) => ({ ok: true as const, data: data as T, ms: 1 });
@@ -76,6 +77,15 @@ function fakeLLM(behave: Partial<{ assign: (frames: ReturnType<typeof framesIn>,
       if (kind === "conversation") return ok({ title: "合成对话", summary: "合成总结", points: [] });
       if (kind === "brief") return ok({ brief: "合成简略" });
       if (kind === "project") return ok({ goal: "合成项目目标", status: "合成项目进展", people: [], resolutions: [] });
+      if (kind === "day_brief") return ok({ summary: "合成项目展板有了进展。已核对版式。" });
+      if (kind === "day_polish") {
+        const activities = (framesIn(req.prompt) as unknown as
+          { activities: { key: string; evidence: { key: string; secondary?: boolean }[] }[] }).activities;
+        return ok({ highlight: null, omissions: [], items: activities.map(activity => ({
+          content: "result", activity: activity.key, title: "合成事项", description: "更新了合成展板。",
+          refs: [activity.evidence.find(entry => !entry.secondary)!.key],
+        })) });
+      }
       if (kind === "day") {
         const first = JSON.parse(/<data>\n([\s\S]*)\n<\/data>/.exec(req.prompt)![1]!).activities[0];
         return ok(first ? { highlight: { activity: first.key, text: "合成回顾" }, omissions: [],
@@ -137,7 +147,7 @@ test("完整一轮：建线程与项目、事实有依据、private 不外发、
   expect(t.project_id).toBe(project.id); expect(project.brief).toBe("合成简略");
   expect(store.pending().map(p => p.kind).sort()).toEqual(["project"]);
   expect(ctx.db.db.prepare("SELECT status FROM frames WHERE key LIKE 'url:%'").get()).toEqual({ status: "ignored" });
-  expect(store.day("2026-11-08")?.brief).toBe("合成回顾");
+  expect(store.day("2026-11-08")?.brief).toBe("合成项目展板有了进展。已核对版式。");
   // 当前状态用线程的简略版，简略版没提到项目名时补上项目名，不重复拼标题。
   expect((store.getState<{ brief: string }>("now"))!.brief).toBe("synthetic-repo：合成简略");
 
@@ -458,7 +468,7 @@ test("回顾把同一聊天的历史空格变体合成一件事", async () => {
 });
 
 
-test("假模型完整一轮经真实适配器写用量，九类任务均正确且不存正文", async () => {
+test("假模型完整一轮经真实适配器写用量，润色和概述分别写用量且不存正文", async () => {
   ctx.db.ingest([session(0, 20, "合成开发会话"), fixture({ source: "mac.audio", source_ref: "usage-audio", kind: "span",
     t_start: iso(base + 30 * MIN), t_end: iso(base + 35 * MIN), body: `[10:30:00] 我：${"这是本轮的合成对话内容。".repeat(30)}`, capture: { method: "asr" } })]);
   for (const id of ["old-a", "old-b"]) store.upsertThread({ id, title: "旧线程", status: "active", brief: "旧简略", detail: {}, last_ms: base, needs_regen: 0 });
@@ -478,11 +488,11 @@ test("假模型完整一轮经真实适配器写用量，九类任务均正确�
   } finally { globalThis.fetch = originalFetch; }
   const rows = ctx.db.db.prepare("SELECT * FROM llm_usage ORDER BY rowid").all() as { task: string; tier: string; ok: number }[];
   expect(rows.every(r => r.ok === 1)).toBe(true);
-  expect([...new Set(rows.map(r => r.task))].sort()).toEqual(["assign", "thread_digest", "thread_brief", "project", "project_brief", "classify", "conversation_summary", "day", "dedupe"].sort());
+  expect([...new Set(rows.map(r => r.task))].sort()).toEqual(["assign", "thread_digest", "thread_brief", "project", "project_brief", "classify", "conversation_summary", "day_polish", "day_brief", "dedupe"].sort());
   expect(rows.map(r => [r.task, r.tier])).toEqual([
     ["conversation_summary", "minute"], ["assign", "minute"], ["classify", "minute"], ["classify", "minute"],
     ["dedupe", "hour"], ["thread_digest", "hour"], ["thread_brief", "minute"],
-    ["project", "hour"], ["project_brief", "minute"], ["day", "day"],
+    ["project", "hour"], ["project_brief", "minute"], ["day_polish", "day"], ["day_brief", "day"],
   ]);
   expect(JSON.stringify(rows)).not.toContain("合成");
 });

@@ -7,7 +7,7 @@ import { frameRecordsSchema, frameRejectionsSchema } from "./schema.ts";
 import { HubDB, InputError } from "../db.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { recordSpans, unionSeconds } from "../durations.ts";
-import { dayDrafts, isReadableReviewItem, type ReviewItem } from "./day-review.ts";
+import { dayDrafts, incrementalReview, isReadableReviewItem, type ReviewDetail, type ReviewItem } from "./day-review.ts";
 import { localDateString, localDayStart } from "./requests.ts";
 
 export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" | "candidate" | "candidate_expired" }
@@ -88,7 +88,7 @@ export class DistillStore {
   ignoredProjectKeys(): ProjectKeys {
     return this.getState<ProjectKeys>("ignored_project_keys") ?? { repos: [], hosts: [], chats: [] };
   }
-  upsertDay(day: { date: string; brief?: string | null; detail?: unknown; needs_regen?: number; updated_at?: string }) { this.put("days", "date", day); }
+  upsertDay(day: { date: string; brief?: string | null; detail?: unknown; needs_regen?: number; updated_at?: string | null }) { this.put("days", "date", day); }
   projects(): Project[] { return this.sql.prepare("SELECT * FROM projects ORDER BY last_ms DESC,id DESC").all().map(r => decode<Project>(r as Row)); }
   projectSummaries() {
     return this.sql.prepare("SELECT p.*,(SELECT count(*) FROM threads t WHERE t.project_id=p.id) AS thread_count FROM projects p ORDER BY p.last_ms DESC,p.id DESC").all().map(r => {
@@ -127,7 +127,11 @@ export class DistillStore {
     const row = this.day(date) ?? (isToday ? { date, detail: null } : null);
     if (!row) return null;
     // 旧库仍可读取日期和时间条，接口只返回当前契约里的字段。
-    const { summary, timeline, items, cutoff, omitted_record_ids } = row.detail ?? {};
+    const plan = isToday && Array.isArray(row.detail?.record_ids)
+      ? incrementalReview(this.hub, localDayStart(date)!, now, row.detail) : undefined;
+    const { summary, timeline, cutoff } = row.detail ?? {};
+    const items = plan?.items ?? row.detail?.items;
+    const omitted_record_ids = plan ? plan.omittedIds(plan.items, plan.preserved) : row.detail?.omitted_record_ids;
     const adjusted = Array.isArray(items) ? applyTimelineCorrections(items, this.getState<TimelineCorrections>(timelineCorrectionKey(date))) : undefined;
     const reading = !agent && adjusted ? this.readingItems(adjusted) : undefined;
     const visible = agent ? adjusted?.map(item => {
@@ -150,7 +154,7 @@ export class DistillStore {
       // 旧回顾没有 cutoff 时，以已展示的最晚段尾为界。
       const at = Date.parse(cutoff);
       const legacyEnds = Number.isFinite(at) ? [] : (reading ?? []).map(item => Date.parse(item.t_end)).filter(Number.isFinite);
-      drafts = dayDrafts(this.hub, localDayStart(date)!, now + 1, {
+      drafts = plan?.drafts() ?? dayDrafts(this.hub, localDayStart(date)!, now + 1, {
         cutoff: Number.isFinite(at) ? at : legacyEnds.length ? Math.max(...legacyEnds) : undefined,
         covered: visibleIds,
       });
@@ -447,15 +451,16 @@ export class DistillStore {
   }
   /** 删除/修正立即撤下派生文字；模型调用中的旧快照也不能再写回来。 */
   clearDerived(threads: Set<string>, projects: Set<string>, times: string[],
-    { preserveResolvedPending = false, pendingResolution, clearThreadDays = true }:
-      { preserveResolvedPending?: boolean; pendingResolution?: string; clearThreadDays?: boolean } = {}) {
+    { preserveResolvedPending = false, pendingResolution, clearThreadDays = true, preserveIncrementalDays = false }:
+      { preserveResolvedPending?: boolean; pendingResolution?: string; clearThreadDays?: boolean; preserveIncrementalDays?: boolean } = {}) {
+    const keepIncremental = preserveIncrementalDays ? " AND json_type(detail,'$.polished_segments') IS NULL" : "";
     const pendingProjects = pendingResolution ? new Set(projects) : projects;
     this.setState("content_revision", (this.getState<number>("content_revision") ?? 0) + 1);
     for (const id of threads) {
       const t = this.thread(id);
       if (t?.project_id) projects.add(t.project_id);
       // 删除原文或改归属时，清理事项覆盖日期，而不只清理被删记录当天。
-      if (clearThreadDays && t?.first_ms != null && t?.last_ms != null) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date BETWEEN date(? / 1000.0,'unixepoch','localtime') AND date(? / 1000.0,'unixepoch','localtime')").run(t.first_ms,t.last_ms);
+      if (clearThreadDays && t?.first_ms != null && t?.last_ms != null) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date BETWEEN date(? / 1000.0,'unixepoch','localtime') AND date(? / 1000.0,'unixepoch','localtime')" + keepIncremental).run(t.first_ms,t.last_ms);
       this.sql.prepare("UPDATE threads SET title='正在重新整理',brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE id=?").run(id);
       this.setState(`digest:${id}`, null);
     }
@@ -463,7 +468,7 @@ export class DistillStore {
       this.sql.prepare("UPDATE projects SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE id=?").run(id);
       this.setState(`project_brief:${id}`, null);
     }
-    for (const time of new Set(times)) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date=date(?,'localtime')").run(time);
+    for (const time of new Set(times)) this.sql.prepare("UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE date=date(?,'localtime')" + keepIncremental).run(time);
     this.setState("now", null);
     const affected = new Set([...threads, ...pendingProjects]);
     const references = (v: unknown): boolean => typeof v === "string" ? affected.has(v)
@@ -478,13 +483,48 @@ export class DistillStore {
   }
 
   /** 引用可来自同一录音的另一自然日，直接按依据 ID 撤下涉及的回顾。 */
-  private clearReviewEvidence(recordIds: string[]) {
-    this.sql.prepare(`WITH removed(id) AS (SELECT value FROM json_each(?))
-      UPDATE days SET brief=NULL,detail=NULL,needs_regen=1,updated_at=NULL WHERE
+  private clearReviewEvidence(recordIds: string[], deleting = false) {
+    const input = JSON.stringify(recordIds);
+    const affected = this.sql.prepare(`WITH removed(id) AS (SELECT value FROM json_each(?))
+      SELECT date,detail FROM days WHERE
         EXISTS (SELECT 1 FROM json_tree(days.detail) ref JOIN removed ON removed.id=ref.value WHERE ref.key='id')
         OR EXISTS (SELECT 1 FROM json_each(days.detail,'$.record_ids') ref JOIN removed ON removed.id=ref.value)
         OR EXISTS (SELECT 1 FROM json_each(days.detail,'$.items') item
-          JOIN json_each(item.value,'$.record_ids') ref JOIN removed ON removed.id=ref.value)`).run(JSON.stringify(recordIds));
+          JOIN json_each(item.value,'$.record_ids') ref JOIN removed ON removed.id=ref.value)`)
+      .all(input) as { date: string; detail: string }[];
+    const removed = new Set(recordIds);
+    for (const { date, detail: raw } of affected) {
+      const detail = JSON.parse(raw) as ReviewDetail;
+      if (!detail.polished_segments) {
+        this.upsertDay({ date, detail: null, brief: null, updated_at: null, needs_regen: 1 });
+        continue;
+      }
+      const withdrawn = new Set<string>();
+      for (const segment of detail.polished_segments) {
+        if (!segment.dependencies.some(id => removed.has(id))) continue;
+        withdrawn.add(segment.id);
+        segment.pending = true;
+        if (deleting) {
+          segment.dependencies = segment.dependencies.filter(id => !removed.has(id));
+          segment.record_ids = segment.record_ids.filter(id => !removed.has(id));
+        }
+      }
+      const items = detail.items.filter(item => !withdrawn.has(item.id));
+      if (items.length !== detail.items.length) {
+        detail.summary = null;
+        delete detail.overview_input;
+        delete detail.overview_checked_ms;
+      }
+      detail.items = items;
+      detail.timeline = items.map(item => ({
+        start: item.t_start.slice(11, 16), end: item.t_end.slice(11, 16), text: item.title,
+      })).filter(item => item.start !== item.end);
+      if (deleting) {
+        detail.record_ids = detail.record_ids.filter(id => !removed.has(id));
+        detail.omitted_record_ids = detail.omitted_record_ids.filter(id => !removed.has(id));
+      }
+      this.upsertDay({ date, detail, brief: detail.summary, needs_regen: 1, updated_at: null });
+    }
   }
 
   private clearTimelineCorrections(recordIds: string[]) {
@@ -511,7 +551,7 @@ export class DistillStore {
     this.sql.prepare(`UPDATE facts SET invalid_at=? WHERE origin='llm' AND invalid_at IS NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (${placeholders}))`).run(new Date().toISOString(), ...ids);
     this.clearReviewEvidence(ids);
     if (original.sensitivity === "private" || original.corrections.at(-1)?.sensitivity === "private") this.clearTimelineCorrections(ids);
-    this.clearDerived(new Set(affected.map(r => r.thread_id)), new Set(), [original.t_start]);
+    this.clearDerived(new Set(affected.map(r => r.thread_id)), new Set(), [original.t_start], { preserveIncrementalDays: true });
     removeSummariesOf(this.hub, id);
     this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=date(?, 'localtime')").run(original.t_start);
   }
@@ -557,9 +597,9 @@ export class DistillStore {
       this.sql.prepare("DELETE FROM facts WHERE id=?").run(f.id);
     }
     for (const tid of affected) this.sql.prepare("UPDATE threads SET active_minutes=? WHERE id=?").run(this.activeMinutes(tid),tid);
-    this.clearReviewEvidence([...removed]);
+    this.clearReviewEvidence([...removed], true);
     this.clearTimelineCorrections([...removed]);
-    this.clearDerived(affected, projects, records.map(r=>r.time));
+    this.clearDerived(affected, projects, records.map(r=>r.time), { preserveIncrementalDays: true });
     const candidates = this.getState<{ frame_ids: string[] }[]>("candidates");
     if (candidates) this.setState("candidates", candidates.filter(c => !c.frame_ids.some(id => changedFrames.has(id))));
   }

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { contentRevision, appliedCall, discardedCall } from "../runtime-log.ts";
 // 提炼流程：切片 → 归线程 → 线程详细版 → 简略版 → 项目 → 当前状态 → 日记。契约：docs/contracts.md 第 4 节。
 // 模型调用都在事务之外；每一步落库用小事务，失败只影响这一步，下一轮再试。
@@ -8,7 +9,7 @@ import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { classifyModelError, type ModelErrorCode } from "../llm/error-category.ts";
 import { activeCooldown, ModelCooldown, withModelCooldown } from "./cooldown.ts";
 import type { LLMRequest, LLMResult } from "../llm/index.ts";
-import { DistillStore, type Frame, type Thread } from "./store.ts";
+import { applyTimelineCorrections, DistillStore, timelineCorrectionKey, type Frame, type Thread, type TimelineCorrections } from "./store.ts";
 import { persistFrames } from "./frames.ts";
 import { DistillRules, projectByName } from "./rules.ts";
 import { DistillRequests, localDayStart, localDateString } from "./requests.ts";
@@ -22,9 +23,9 @@ import { gitMaterialKey, materialBody, uniqueMaterials } from "./material.ts";
 import { evidenceTime } from "./evidence-time.ts";
 import { SKELETON_SOURCES } from "./day-evidence.ts";
 import { resolveRepoRoot } from "./repos.ts";
-import { readGeneral } from "../general-settings.ts";
+import { readGeneral, readTimelineSettings } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
-import { composeReview, reviewPlan, reviewMaterial } from "./day-review.ts";
+import { composePolish, composeReview, incrementalReview, reviewPlan, reviewMaterial, type ReviewDetail } from "./day-review.ts";
 import { redactString } from "../redact.ts";
 import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
 
@@ -56,8 +57,6 @@ export const LIMITS = {
   conversationDays: 7, conversationsPerRound: 4, conversationChars: 24_000,
   // 合并重复线程：每天看一次最近的线程，模型把握不低于 0.8 才并。
   dedupThreads: 60, dedupConfidence: 0.8, dedupEvery: DAY,
-  // 打开时间线刚补整理过的今天，整点那轮不再紧接着重写。
-  todayFresh: 30 * MIN,
 };
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -737,7 +736,9 @@ export function lifecycleStep(store: DistillStore, now: number) {
 
 // ---------------- 7. 日记 ----------------
 
-export async function dayStep(d: Deps, store: DistillStore, date: string, now: number): Promise<{ calls: number; ok: boolean; error?: ModelErrorCode }> {
+type DayStepResult = { calls: number; ok: boolean; error?: ModelErrorCode };
+
+export async function dayStep(d: Deps, store: DistillStore, date: string, now: number): Promise<DayStepResult> {
   const start = localDayStart(date);
   if (start === null || start > now) return { calls: 0, ok: false, error: "bad_request" };
   const next = new Date(start);
@@ -777,6 +778,121 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
         d.log?.(JSON.stringify({ step: "day", category: "schema_mismatch", count: warnings.length }));
       }
     }
+    return { calls, ok: true };
+  }).immediate();
+}
+
+/** 今天的文本逐段发布。独立保存概述，保证概述失败时段落仍可读。 */
+async function todayStep(d: Deps, store: DistillStore, now: number, timing: "fast" | "hourly" | "manual"): Promise<DayStepResult> {
+  const date = localDate(now), start = startOfDay(now);
+  const { polish, overview } = readTimelineSettings(d.db);
+  const previous = (store.day(date)?.detail ?? null) as ReviewDetail | null;
+  const plan = incrementalReview(d.db, start, now, previous);
+  if (!previous && !plan.pending.length && !plan.omittedIds([], []).length) return { calls: 0, ok: true };
+
+  const revision = contentRevision(d.db);
+  const stillCurrent = (expected: ReviewDetail | null) => revision === contentRevision(d.db) &&
+    JSON.stringify(store.day(date)?.detail ?? null) === JSON.stringify(expected);
+  let calls = 0, error: ModelErrorCode | undefined;
+  const mayPolish = polish === "after_segment" || (polish === "hourly" && timing !== "fast");
+  const segments = mayPolish ? plan.segments() : [];
+  const recent = applyTimelineCorrections(plan.items.slice(-5), store.getState<TimelineCorrections>(timelineCorrectionKey(date)))
+    .map(({ title, description }) => ({ title, description }));
+  const result = segments.length ? await complete<P.DayOutput>(d, {
+    tier: "day", task: "day_polish", system: P.DAY_POLISH_SYSTEM, timeoutMs: 300_000,
+    prompt: P.dayPolishPrompt(date, reviewMaterial(segments), recent),
+    schema: P.DAY_SCHEMA, normalizeOutput: P.normalizeDayOutput,
+  }) : null;
+  const warnings: string[] = [];
+  const polished = result?.ok ? composePolish(segments, result.data, key => warnings.push(key)) : null;
+  if (result) {
+    calls++;
+    if (!result.ok) error = classifyModelError(result.error);
+    else if (!polished) error = "schema_mismatch";
+  }
+  const completed = polished ? plan.ready.map(entry => entry.snapshot) : [];
+  const processed = [...plan.preserved, ...completed];
+  const snapshots = [...processed.map(({ pending: _pending, ...entry }) => entry),
+    ...plan.pending.map(entry => entry.snapshot).filter(entry => entry.pending && !completed.includes(entry))]
+    .sort((a, b) => a.start - b.start);
+  const items = [...plan.items, ...(polished ?? [])].sort((a, b) => Date.parse(a.t_start) - Date.parse(b.t_start));
+  const detail: ReviewDetail = {
+    ...previous, items, summary: previous?.summary ?? null,
+    timeline: items.map(item => ({ start: item.t_start.slice(11, 16), end: item.t_end.slice(11, 16), text: item.title }))
+      .filter(item => item.start !== item.end),
+    cutoff: toLocalIso(Math.max(Date.parse(previous?.cutoff ?? "") || start,
+      ...(polished ? plan.ready.map(({ snapshot }) => snapshot.end) : []))),
+    omitted_record_ids: plan.omittedIds(items, processed),
+    polished_segments: snapshots,
+    record_ids: [],
+  };
+  detail.record_ids = [...new Set([...detail.omitted_record_ids, ...snapshots.flatMap(segment => segment.dependencies)])];
+
+  const saved = d.db.db.transaction(() => {
+    if (!stillCurrent(previous)) {
+      discardedCall(d.db, result?.call_id);
+      return false;
+    }
+    if (JSON.stringify(previous) !== JSON.stringify(detail) || polished) {
+      store.upsertDay({ date, detail, brief: detail.summary, needs_regen: 1,
+        ...(polished ? { updated_at: new Date(d.now?.() ?? now).toISOString() } : {}) });
+    }
+    if (result) {
+      store.setState(`day_failed:${date}`, error ? true : null);
+      if (polished) {
+        appliedCall(d.db, result.call_id);
+        if (warnings.length) {
+          if (result.call_id) d.db.db.prepare("UPDATE runtime_calls SET error='schema_mismatch' WHERE id=? AND content_state='available'").run(result.call_id);
+          d.log?.(JSON.stringify({ step: "day_polish", category: "schema_mismatch", count: warnings.length }));
+        }
+      } else discardedCall(d.db, result.call_id);
+    }
+    return true;
+  }).immediate();
+  if (!saved) return { calls, ok: false, error: "unknown" };
+
+  const overviewDue = overview !== "nightly" && timing !== "fast" &&
+    (timing === "manual" || overview === "hourly" || now - (detail.overview_checked_ms ?? 0) >= 3 * HOUR);
+  if (overviewDue) {
+    const headline = await overviewStep(d, store, date, now, detail, () => stillCurrent(detail));
+    calls += headline.calls;
+    error ??= headline.error;
+  }
+  return { calls, ok: !error, ...(error ? { error } : {}) };
+}
+
+async function overviewStep(d: Deps, store: DistillStore, date: string, now: number,
+  detail: ReviewDetail, stillCurrent: () => boolean): Promise<DayStepResult> {
+  const corrections = store.getState<TimelineCorrections>(timelineCorrectionKey(date));
+  const projects = new Map<string, string | null>();
+  const activities = applyTimelineCorrections(detail.items, corrections).filter(item => item.active_seconds > 0)
+    .map(({ title, description, project_id }) => {
+      if (project_id && !projects.has(project_id)) projects.set(project_id, store.project(project_id)?.name ?? null);
+      return { title, description, project: project_id ? projects.get(project_id) ?? null : null };
+    });
+  const prompt = P.dayOverviewPrompt(activities);
+  const input = createHash("sha256").update(prompt).digest("hex");
+  const changed = input !== detail.overview_input;
+  const result = changed && activities.length ? await complete<{ summary: string | null }>(d, {
+    tier: "day", task: "day_brief", system: P.DAY_OVERVIEW_SYSTEM, timeoutMs: 300_000,
+    prompt, schema: P.DAY_OVERVIEW_SCHEMA,
+  }) : null;
+  if (result?.ok === false) return { calls: 1, ok: false, error: classifyModelError(result.error) };
+  const summary = result?.data.summary === null || !result ? null : redactString(result.data.summary).text.trim();
+  const sentences = summary?.match(/[。！？!?]+|\.(?=\s|$)/gu)?.length ?? 0;
+  if (result && summary !== null && (sentences < 2 || sentences > 4 || Array.from(summary).length > P.MAX_DAY_SUMMARY_CHARS)) {
+    discardedCall(d.db, result.call_id);
+    return { calls: 1, ok: false, error: "schema_mismatch" };
+  }
+  const calls = Number(!!result);
+  return d.db.db.transaction((): DayStepResult => {
+    if (!stillCurrent()) {
+      discardedCall(d.db, result?.call_id);
+      return { calls, ok: false, error: "unknown" };
+    }
+    const next = { ...detail, summary: changed ? summary : detail.summary, overview_input: input, overview_checked_ms: now };
+    store.upsertDay({ date, detail: next, brief: next.summary, ...(result ? { updated_at: new Date(d.now?.() ?? now).toISOString() } : {}) });
+    appliedCall(d.db, result?.call_id);
     return { calls, ok: true };
   }).immediate();
 }
@@ -829,12 +945,15 @@ async function distillRoundInner(d: Deps, opts: RoundOptions, out: Record<string
   store.setState("last_round_at", toLocalIso(now));
   if (!out.stopped && opts.slow && opts.days !== "none") {
     const today = localDate(now);
-    const fresh = (date: string) => now - (Date.parse(store.day(date)?.updated_at ?? "") || 0) < LIMITS.todayFresh;
     const days = (d.db.db.prepare("SELECT date FROM days WHERE needs_regen=1 ORDER BY date").all() as { date: string }[])
-      .map(r => r.date).filter(date => date < today || (opts.days === "all" && !fresh(date)));
+      .map(r => r.date).filter(date => date < today);
     let calls = 0, done = 0;
     for (const date of days) { const r = await dayStep(d, store, date, now); calls += r.calls; if (r.ok) done++; }
     out.days = { calls, done, pending: days.length - done };
+  }
+  if (!out.stopped && opts.days === "all") {
+    const result = await todayStep(d, store, now, opts.slow ? "hourly" : "fast");
+    out.today = { ...result, failed: Number(!result.ok) };
   }
 }
 
@@ -908,7 +1027,10 @@ export async function distillTick(deps: Deps, state: LoopState, at?: number): Pr
         for (let i = req.progress?.done ?? 0; i < dates.length; i++) {
           const date = dates[i]!;
           try {
-            const result = await dayStep(work, store, date, clock());
+            const at = clock();
+            const result = date === localDate(at)
+              ? await todayStep(work, store, at, "manual")
+              : await dayStep(work, store, date, at);
             calls += result.calls;
             if (!result.ok) checkpoint.error ??= result.error ?? "unknown";
           } catch (cause) {
@@ -954,7 +1076,7 @@ async function regularRound(d: Deps, state: LoopState) {
   const now = d.now?.() ?? Date.now();
   // 失败也算跑过一轮，避免出错时每 5 秒重试一次。
   state.lastRound = now;
-  // 只有一个整点钟：快步骤每 15 分钟；到点后按顺序写事项、项目和日记（含今天）。
+  // 只有一个整点钟：快步骤每 15 分钟；到点后按顺序写事项、项目、当天概述与过往日期的日记。
   const slowDue = now - (store.getState<number>("slow_ms") ?? 0) >= HOUR;
   const result = await distillRound(d, { slow: slowDue, days: "all", enabledDefault: state.enabledDefault, wantedDigestsOnFast: true });
   log(JSON.stringify(result));

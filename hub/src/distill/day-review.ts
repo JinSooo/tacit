@@ -18,7 +18,7 @@ const LONGEST_RECORD = 48 * 60 * MINUTE;
 const terse = (text: string, max: number) => Array.from(text.replace(/\s+/g, " ").trim()).slice(0, max).join("");
 
 type ReviewRecord = DayReference & {
-  start: number; end: number; key: string; thread: string | null; projectId: string | null; session: string | null;
+  start: number; end: number; lastActivity: number; key: string; thread: string | null; projectId: string | null; session: string | null;
   projectName: string | null;
   related?: ReviewRecord[]; app: string | null; chat: string | null; evidence: UnnumberedEvidence[];
 };
@@ -44,7 +44,15 @@ export interface ReviewDetail {
   // 撤下含这些记录的派生文字，包括依据里没直接引用的记录。
   record_ids: string[];
   omitted_record_ids: string[];
+  polished_segments?: PolishedSegment[];
+  overview_input?: string;
+  overview_checked_ms?: number;
 }
+
+type PolishedSegment = {
+  id: string; anchor: string; start: number; end: number;
+  record_ids: string[]; dependencies: string[]; pending?: true;
+};
 
 // 采集成功不等于有值得阅读的内容。旧回顾在读取时也使用同一个筛选规则。
 const CAPTURE_ONLY = new Set([
@@ -57,7 +65,7 @@ export function isReadableReviewItem(item: { title?: unknown; description?: unkn
   return !!item.title.trim() && !!text && !CAPTURE_ONLY.has(text);
 }
 
-type DraftWindow = { cutoff?: number; covered: ReadonlySet<string> };
+type DraftWindow = { cutoff?: number; covered: ReadonlySet<string>; includeRelated?: boolean };
 
 function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow): ReviewRecord[] {
   type RawRow = {
@@ -102,11 +110,11 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
       row.body, !!row.corrected, evidenceStart, end);
     if (!evidence) continue;
     if (draft && !SKELETON_SOURCES.has(row.source) &&
-      (!evidence.length || (isSession && !evidence.some(entry => entry.role === "user")))) continue;
+      (!evidence.length || (isSession && !draft.includeRelated && !evidence.some(entry => entry.role === "user")))) continue;
     records.push({
       ...reference,
       start: Math.max(windowStart, row.t_start_ms), end: Math.min(end, finish),
-      key, thread: row.thread_id, projectId: row.project_id, projectName: row.project_name, session, evidence,
+      key, lastActivity: Math.min(end, finish), thread: row.thread_id, projectId: row.project_id, projectName: row.project_name, session, evidence,
       app: context?.app ? redactString(context.app).text : null, chat: context?.chat ? redactString(context.chat).text : null,
     });
   }
@@ -123,7 +131,8 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
       }
     }
   }
-  return presenceRecords(records.filter(r => !excluded.has(r.session ?? r.id)), windowStart, end);
+  const present = presenceRecords(records.filter(r => !excluded.has(r.session ?? r.id)), windowStart, end);
+  return draft?.includeRelated ? present.filter(record => !record.key.startsWith("autonomous:")) : present;
 }
 
 /** 批次只有首末时刻：按实际跨度计，每条真实输入最多支持 30 分钟。 */
@@ -431,28 +440,18 @@ function recordMembership(a: Candidate, overlapping: ReviewRecord[]) {
   return overlapping.filter(r => !a.activity.projectId || !r.projectId || r.projectId === a.activity.projectId);
 }
 
-export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 30) {
-  const rows = loadRecords(hub, start, end);
-  const gap = gapMinutes * MINUTE;
-  const allCandidates = cutCandidates(rows, gap);
-  const candidates = allCandidates.filter(a => a.primary.some(r =>
-    r.evidence.some(entry => evidenceInPiece(entry, r, a))));
-  const candidateCount = allCandidates.length, evidenceCount = candidates.length;
-  const activitySeconds = new Map<string, number>();
-  for (const c of candidates) activitySeconds.set(c.activity.key, (activitySeconds.get(c.activity.key) ?? 0) + c.seconds);
-  const leadingActivity = [...activitySeconds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  mergeAdjacent(candidates, gap);
-  const selected = limitCandidates(candidates, leadingActivity);
+function overlappingRecords(rows: ReviewRecord[], candidate: Candidate) {
+  return [...new Set(rows.filter(r => inPiece(r, candidate)).flatMap(r => [r, ...(r.related ?? [])]))]
+    .sort((x,y) => Date.parse(x.at)-Date.parse(y.at) || x.id.localeCompare(y.id));
+}
+
+function reviewSegments(rows: ReviewRecord[], selected: Candidate[], evidenceLimit?: number) {
   const projectNames = new Map(rows.flatMap(r => r.projectId && r.projectName ? [[r.projectId, r.projectName] as const] : []));
-  const baseLimit = Math.max(4, Math.floor(120 / Math.max(1, selected.length)));
+  const baseLimit = evidenceLimit ?? Math.max(4, Math.floor(120 / Math.max(1, selected.length)));
   const extraEvidence = longerConversationBudget(selected);
-  const dependencyRecordIds = new Set<string>();
-  const segments = selected.map((a, i) => {
+  return selected.map((a, i) => {
     const limit = baseLimit + (extraEvidence.get(a) ?? 0);
-    const id = segmentId(a);
-    const overlapping = [...new Set(rows.filter(r => inPiece(r, a))
-      .flatMap(r => [r, ...(r.related ?? [])]))].sort((x,y) => Date.parse(x.at)-Date.parse(y.at) || x.id.localeCompare(y.id));
-    for (const r of overlapping) dependencyRecordIds.add(r.id);
+    const overlapping = overlappingRecords(rows, a);
     const apps = [...new Map(overlapping.map(({ source, app }) => [JSON.stringify([source, app]), { source, app }])).values()];
     const records = recordMembership(a, overlapping);
     const primaryIds = new Set(a.primary.map(r => r.id));
@@ -465,8 +464,24 @@ export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
       .map((e, index) => ({ ...e, key: `r${index + 1}` }));
     const projectName = a.activity.projectId ? projectNames.get(a.activity.projectId) : undefined;
-    return { ...a, id, kind: a.activity.kind, key: `a${i + 1}`, projectName, records, apps, evidence };
+    return { ...a, id: segmentId(a), dependencies: [...new Set(overlapping.map(r => r.id))], kind: a.activity.kind, key: `a${i + 1}`, projectName, records, apps, evidence };
   });
+}
+
+export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 30) {
+  const rows = loadRecords(hub, start, end);
+  const gap = gapMinutes * MINUTE;
+  const allCandidates = cutCandidates(rows, gap);
+  const candidates = allCandidates.filter(a => a.primary.some(r =>
+    r.evidence.some(entry => evidenceInPiece(entry, r, a))));
+  const candidateCount = allCandidates.length, evidenceCount = candidates.length;
+  const activitySeconds = new Map<string, number>();
+  for (const c of candidates) activitySeconds.set(c.activity.key, (activitySeconds.get(c.activity.key) ?? 0) + c.seconds);
+  const leadingActivity = [...activitySeconds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  mergeAdjacent(candidates, gap);
+  const selected = limitCandidates(candidates, leadingActivity);
+  const segments = reviewSegments(rows, selected);
+  const dependencyRecordIds = new Set(segments.flatMap(segment => segment.dependencies));
   const selectedSet = new Set(selected), visibleIds = new Set(segments.flatMap(s => s.records.map(r => r.id)));
   const withoutEvidence = allCandidates.filter(a => !a.primary.some(r =>
     r.evidence.some(entry => evidenceInPiece(entry, r, a))));
@@ -484,37 +499,130 @@ export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 
 
 const draftSpeech = (entry: UnnumberedEvidence) => entry.role !== "assistant" && !requestOnly(entry.text);
 
-export function dayDrafts(hub: HubDB, start: number, end: number, window: DraftWindow): DraftItem[] {
-  if (window.cutoff !== undefined && window.cutoff >= end - 1) return [];
-  // 助手独自续跑的批次（含压缩和交接）不进入草稿的时间区间或原文成员。
-  const rows = loadRecords(hub, start, end, window);
-  const gap = 30 * MINUTE;
+const SEGMENT_QUIET_MS = 30 * MINUTE;
+const POLISH_EVIDENCE_PER_SEGMENT = 6;
+
+function draftCandidates(rows: ReviewRecord[]) {
   // 单条实质聊天或手记也可实时显示，无需等到模型整理的候选门槛。
-  const candidates = cutCandidates(rows, gap, (_kind, records) =>
+  const candidates = cutCandidates(rows, SEGMENT_QUIET_MS, (_kind, records) =>
     records.some(r => r.evidence.some(draftSpeech))).filter(a => a.primary.some(r =>
       r.evidence.some(e => draftSpeech(e) && evidenceInPiece(e, r, a))));
-  return mergeAdjacent(candidates, gap).map(a => {
-    const speaking = a.primary.flatMap(r => {
-      const entries = r.evidence.filter(e => draftSpeech(e) && evidenceInPiece(e, r, a));
-      return entries.length ? [{ record: r, entries }] : [];
-    });
-    const primary = speaking[0]!.record;
-    const entries = speaking.flatMap(s => s.entries);
-    const quote = entries.find(e => e.role === "user") ?? entries[0]!;
-    const sentence = redactString(quote.text).text.split(/(?<=[。！？!?])|(?<=\.)\s+|\r?\n/u, 1)[0]!;
-    const apps = [...new Map(speaking.map(({ record: { source, app } }) =>
-      [JSON.stringify([source, app]), { source, app }])).values()];
-    const members = recordMembership(a, rows.filter(r => inPiece(r, a)));
-    const threads = new Set(speaking.flatMap(({ record }) => record.thread ?? []));
-    const title = primary.source === "mac.audio" ? "一场对话"
-      : primary.chat || (SESSION_SOURCES.has(primary.source) ? primary.title : primary.app || primary.title);
-    return {
-      id: segmentId(a), t_start: toLocalIso(a.start), t_end: toLocalIso(a.end), active_seconds: a.seconds,
-      title, excerpt: terse(sentence, 60), sources: [...new Set(apps.map(app => app.source))], apps,
-      record_ids: [...new Set(members.map(r => r.id))], project_id: a.activity.projectId,
-      ...(threads.size === 1 ? { thread_id: [...threads][0]! } : {}),
-    };
+  return mergeAdjacent(candidates, SEGMENT_QUIET_MS);
+}
+
+function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
+  const speaking = a.primary.flatMap(r => {
+    const entries = r.evidence.filter(e => draftSpeech(e) && evidenceInPiece(e, r, a));
+    return entries.length ? [{ record: r, entries }] : [];
   });
+  const primary = speaking[0]!.record;
+  const entries = speaking.flatMap(s => s.entries);
+  const quote = entries.find(e => e.role === "user") ?? entries[0]!;
+  const sentence = redactString(quote.text).text.split(/(?<=[。！？!?])|(?<=\.)\s+|\r?\n/u, 1)[0]!;
+  const apps = [...new Map(speaking.map(({ record: { source, app } }) =>
+    [JSON.stringify([source, app]), { source, app }])).values()];
+  const threads = new Set(speaking.flatMap(({ record }) => record.thread ?? []));
+  const title = primary.source === "mac.audio" ? "一场对话"
+    : primary.chat || (SESSION_SOURCES.has(primary.source) ? primary.title : primary.app || primary.title);
+  return {
+    id, t_start: toLocalIso(a.start), t_end: toLocalIso(a.end), active_seconds: a.seconds,
+    title, excerpt: terse(sentence, 60), sources: [...new Set(apps.map(app => app.source))], apps,
+    record_ids: recordIds, project_id: a.activity.projectId,
+    ...(threads.size === 1 ? { thread_id: [...threads][0]! } : {}),
+  };
+}
+
+export function dayDrafts(hub: HubDB, start: number, end: number, window: DraftWindow): DraftItem[] {
+  if (window.cutoff !== undefined && window.cutoff >= end - 1) return [];
+  const rows = loadRecords(hub, start, end, { ...window, includeRelated: window.cutoff === undefined });
+  return draftCandidates(rows).map(a => {
+    const overlapping = rows.filter(r => inPiece(r, a)).flatMap(r => [r, ...(r.related ?? [])]);
+    return draftItem(a, segmentId(a), [...new Set(recordMembership(a, overlapping).map(r => r.id))]);
+  });
+}
+
+const sameIds = (a: string[], b: string[]) => a.length === b.length && a.every(id => b.includes(id));
+
+/** Cut the full day locally. Only pending, quiet candidates get evidence numbered for the model. */
+export function incrementalReview(hub: HubDB, start: number, now: number, detail: ReviewDetail | null) {
+  const rows = loadRecords(hub, start, now + 1, { covered: new Set(), includeRelated: true });
+  const previous = detail?.polished_segments ?? (detail?.items ?? []).filter(item => Array.isArray(item.record_ids))
+    .map(item => ({
+      id: item.id, anchor: item.id, start: Date.parse(item.t_start), end: Date.parse(item.t_end),
+      record_ids: item.record_ids, dependencies: item.record_ids,
+    } satisfies PolishedSegment));
+  const candidates = draftCandidates(rows).map(candidate => {
+    const overlapping = overlappingRecords(rows, candidate);
+    const anchor = segmentId(candidate);
+    const snapshot: PolishedSegment = {
+      id: anchor, anchor, start: candidate.start, end: candidate.end,
+      record_ids: [...new Set(recordMembership(candidate, overlapping).map(r => r.id))],
+      dependencies: [...new Set(overlapping.map(r => r.id))],
+    };
+    return { candidate, snapshot };
+  });
+  // Exact anchors win even when a late record splits a segment. Otherwise preserve the
+  // old ID on the first overlapping piece with surviving members (including a deleted anchor).
+  const matched = new Map<PolishedSegment, PolishedSegment>(), unused = new Set(previous);
+  const byId = new Map(previous.map(entry => [entry.id, entry]));
+  const byAnchor = new Map(previous.map(entry => [entry.anchor, entry]));
+  for (const index of [byId, byAnchor]) {
+    for (const { snapshot } of candidates) {
+      const old = index.get(snapshot.anchor);
+      if (old && unused.has(old) && !matched.has(snapshot)) {
+        matched.set(snapshot, old);
+        unused.delete(old);
+      }
+    }
+  }
+  for (const { snapshot } of candidates) {
+    if (matched.has(snapshot)) continue;
+    const old = [...unused].find(entry => entry.start <= snapshot.end && entry.end >= snapshot.start &&
+      entry.record_ids.some(id => snapshot.record_ids.includes(id)));
+    if (old) { matched.set(snapshot, old); unused.delete(old); }
+  }
+
+  const preserved: PolishedSegment[] = [], pending: typeof candidates = [];
+  const projects = new Map<string, string | null>();
+  const legacyOmitted = new Set(detail?.polished_segments ? [] : detail?.omitted_record_ids);
+  for (const entry of candidates) {
+    const { snapshot } = entry, old = matched.get(snapshot);
+    if (old) snapshot.id = old.id;
+    if ((old && !old.pending && old.start === snapshot.start && old.end === snapshot.end &&
+      sameIds(old.record_ids, snapshot.record_ids) && sameIds(old.dependencies, snapshot.dependencies)) ||
+      (!old && snapshot.record_ids.every(id => legacyOmitted.has(id)))) {
+      preserved.push(snapshot);
+      projects.set(snapshot.id, entry.candidate.activity.projectId);
+    } else {
+      if (old) snapshot.pending = true;
+      pending.push(entry);
+    }
+  }
+  const keep = new Set(preserved.map(segment => segment.id));
+  const items = (detail?.items ?? []).filter(item => keep.has(item.id)).map(item => {
+    const project_id = projects.get(item.id) ?? null;
+    return project_id === item.project_id ? item : { ...item, project_id };
+  });
+  const covered = new Set(candidates.flatMap(({ snapshot }) => snapshot.record_ids));
+  const otherIds = hub.db.prepare<[number, number], { id: string }>(
+    "SELECT id FROM records WHERE t_start_ms>=? AND t_start_ms<? ORDER BY t_start_ms,id"
+  ).all(start, now + 1).map(row => row.id).filter(id => !covered.has(id));
+  const omittedIds = (items: ReviewItem[], snapshots: PolishedSegment[]) => {
+    const visible = new Set([...items.flatMap(item => item.record_ids), ...pending
+      .filter(({ snapshot }) => !snapshots.includes(snapshot)).flatMap(({ snapshot }) => snapshot.record_ids)]);
+    return [...new Set([...otherIds, ...snapshots.flatMap(segment => segment.record_ids)])].filter(id => !visible.has(id));
+  };
+  const quietBefore = now - SEGMENT_QUIET_MS;
+  const ready = pending.filter(({ candidate }) => candidate.primary.every(record =>
+    record.lastActivity < quietBefore && (record.related ?? []).every(related => related.lastActivity < quietBefore)))
+    .slice(0, MAX_REVIEW_CANDIDATES);
+
+  return {
+    items, ready, preserved, pending, omittedIds,
+    drafts: () => pending.map(({ candidate, snapshot }) => draftItem(candidate, snapshot.id, snapshot.record_ids)),
+    segments: () => reviewSegments(rows, ready.map(entry => entry.candidate), POLISH_EVIDENCE_PER_SEGMENT)
+      .map((segment, index) => ({ ...segment, id: ready[index]!.snapshot.id })),
+  };
 }
 
 export function reviewInput(hub: HubDB, start: number, end: number, gapMinutes = 30) {
@@ -566,11 +674,10 @@ function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | und
   return { title, description, evidence };
 }
 
-export function composeReview(segments: ReviewSegment[], output: DayOutput, dayEnd: number, cutoff: string,
-  omitted: string[], dependencies: string[], warn: (activity: string) => void = () => {}): ReviewDetail | null {
+function reviewResults(segments: ReviewSegment[], output: DayOutput, warn: (activity: string) => void) {
   const written = new Map(output.items.map(item => [item.activity, item]));
   const omissions = new Map((output.omissions ?? []).map(item => [item.activity, item]));
-  let result = segments.flatMap(a => {
+  const result = segments.flatMap(a => {
     const item = written.get(a.key), omission = omissions.get(a.key);
     const excluded = !item || item.content === "request_only" || item.content === "empty";
     if (excluded && omission && ["request_only", "empty", "excluded_session"].includes(omission.reason)) return [];
@@ -589,6 +696,17 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
     return [{ a, segment, summaryKeys: !excluded && a.seconds > 0 ? [a.key] : [] }];
   });
   if (output.items.some(item => item.content !== "request_only" && item.content !== "empty") && !result.length) return null;
+  return result;
+}
+
+export function composePolish(segments: ReviewSegment[], output: DayOutput, warn: (activity: string) => void) {
+  return reviewResults(segments, output, warn)?.map(({ segment }) => segment) ?? null;
+}
+
+export function composeReview(segments: ReviewSegment[], output: DayOutput, dayEnd: number, cutoff: string,
+  omitted: string[], dependencies: string[], warn: (activity: string) => void = () => {}): ReviewDetail | null {
+  let result = reviewResults(segments, output, warn);
+  if (!result) return null;
   // 模型省略中间候选后可能产生新的相邻段；同事项按相同规则兜底，不凭项目猜事项。
   for (let i = 0; i + 1 < result.length;) {
     const x = result[i]!, y = result[i + 1]!;

@@ -268,13 +268,13 @@ export interface ProjectOutput { goal: string; status: string; people: string[] 
 export const MAX_DAY_SUMMARY_CHARS = 160;
 const MAX_DAY_SUMMARY_ACTIVITIES = 4;
 
-export const DAY_SYSTEM = `${DATA_RULES}
+const DAY_REVIEW_SYSTEM = `${DATA_RULES}
 
 任务：按当天实际发生的活动段，写给本人看。activities 每项是一段，有这段自己的 evidence。同一件事中断后再做会有两个编号。user 是本人，assistant 是 AI，other 是对方。
 - items 用 activity 返回给定的编号，同一编号只写一次。title 不超过 20 个字；description 用一两句写你做了什么、结果如何。没做完就直接写做到哪，例如“展板排好版，还没印”。用“你”或省略主语，不写“用户”“AI 报告”“助手报告”。
 - 先选内容，再写文字。只有打开应用、存在会话、催促继续、安排检查、安排提交等操作痕迹，没有具体对象的新变化时省略。不要写“有会话记录”“提出要求”“安排任务”来凑一条。明确的决定、范围调整、尝试中发现的问题仍值得保留，不要求每段都已经完成。
 - 每项 content 必须结构化判断为 result（具体行动、结果、发现或阻碍）、judgment（本人明确判断或决定）、request_only（仅提出要求、单纯同意、确认继续、催促、授权安装，无后续变化）、empty（无具体内容）。request_only 和 empty 写进 omissions，不返回 items。不能把一个请求擅自改写为“决定”。录音里的孤立点单、含糊提及，没有具体行动、结果或判断也省略。聊天里只有寒暄、玩笑、表情、转发或随口推荐，没有约定、决定、具体事务或要办的事，判为 empty。
-- 省略只允许三类：request_only（只有请求/同意/催促，且本段没有任何结果）、empty（没有具体内容，只证明采集存在）、excluded_session（评测/发布检查）。凡有完成的改动、定位到的原因或发现、测试/验证/复现结果、学习中答对或弄懂的具体点、本人明确判断或决定、明确阻碍，必须写成结果段或在相邻同活动结果段明确写出，不能判为 request_only/empty。每个未进入 items 的 activity 都必须在 omissions 给出 reason 类别，reason 只写类别名本身；若并入别段，仍在 items 为本段写出自己的结果，由程序合并。不得用“不够重要”“尚未完成”等理由省略。items 尽量最多 30 段，结果较多时完整返回，由程序处理上限。
+- 省略只允许三类：request_only（只有请求/同意/催促，且本段没有任何结果）、empty（没有具体内容，只证明采集存在）、excluded_session（评测/发布检查）。凡有完成的改动、定位到的原因或发现、测试/验证/复现结果、学习中答对或弄懂的具体点、本人明确判断或决定、明确阻碍，必须写成结果段或在相邻同活动结果段明确写出，不能判为 request_only/empty。每个未进入 items 的 activity 都必须在 omissions 给出 reason 类别，reason 只写类别名本身；若并入别段，仍在 items 为本段写出自己的结果，由程序合并。不得用“不够重要”“尚未完成”等理由省略。
 - 同一活动只有请求的前段，后面有结果时，把请求作为理解结果的上下文；续跑结果已并入发起段时输出发起段，否则只输出后面的结果段；没有后续结果就省略。明确判断本身值得成段，例如“认为图例的对比度不足”，不要写“提出设计优化诉求”。
 - AI 自动续跑结果可描述，但不意味着本人一直在场。active_minutes 是用户在场时间；summary_eligible=false 的段不能入选 highlight。
 - 标题写事情本身和变化，例如“入口改到北门”“展板完成试排”。描述补充结果或停在哪，避免再复述标题。不能把“要求改入口”改写成“入口已改”；只有本人明确作出决定才写决定，如“决定把入口移到北门，版式还没改”；仅提出实施请求不当作决定。
@@ -284,11 +284,37 @@ export const DAY_SYSTEM = `${DATA_RULES}
 - secondary=true 是同一时段的其他来源，只能在描述里补充，标题取主活动。refs 只填实际支持描述的编号，其中至少一条来自主活动。没有可写事实时可以省掉这段。时间和时长仅用于理解顺序和分量。
 - continues 指向同一事项的前一段。联系它理解进展，但本段只写新发生的变化；单纯重复、催促或重述之前的决定可以省略，不能搬用前一段的依据。
 - refs 原样复制本段 evidence.key（如 a3:r2），不要拆开、补写或引用其他段的编号。
-- highlight 是当天概述。按用户在场时间和结果内容选最多 ${MAX_DAY_SUMMARY_ACTIVITIES} 条主线，可跨项目，也包括聊天和录音中的工作沟通与生活。只依据 summary_eligible=true 且有结果或明确判断的 items，activities 填入支撑概述的 1–${MAX_DAY_SUMMARY_ACTIVITIES} 个 activity 编号。
-- highlight.text 用 2–4 句、合计不超过 ${MAX_DAY_SUMMARY_CHARS} 字。第一句点明最主要的主线，有项目时用 activities 对应段的 project 原文写出项目名，无项目时直接写事情，例如“学习 MCP”。每条主线写清具体对象（功能、文档、地点或版本）及结果或停在哪。
-- 涉及他人时，用相关记录中的称呼、evidence.speaker 或 evidence.chat（聊天名），只用于对应的消息或录音。不臆造真实姓名，不写“对方 1”这类编号。用“你”或省略主语，不写过程数字（测试条数、提交号、用量），不复述给 AI 的操作指令，不写建议或核实状态。没有可概括的内容返回 null。
 - ${STATUS_FIDELITY}
 输出用中文，专有名词保持原文。`;
+
+export const DAY_SYSTEM = `${DAY_REVIEW_SYSTEM}
+- items 尽量最多 30 段，结果较多时完整返回，由程序处理上限。
+- highlight 是当天概述。按用户在场时间和结果内容选最多 ${MAX_DAY_SUMMARY_ACTIVITIES} 条主线，可跨项目，也包括聊天和录音中的工作沟通与生活。只依据 summary_eligible=true 且有结果或明确判断的 items，activities 填入支撑概述的 1–${MAX_DAY_SUMMARY_ACTIVITIES} 个 activity 编号。
+- highlight.text 用 2–4 句、合计不超过 ${MAX_DAY_SUMMARY_CHARS} 字。第一句点明最主要的主线，有项目时用 activities 对应段的 project 原文写出项目名，无项目时直接写事情，例如“学习 MCP”。每条主线写清具体对象（功能、文档、地点或版本）及结果或停在哪。
+- 涉及他人时，用相关记录中的称呼、evidence.speaker 或 evidence.chat（聊天名），只用于对应的消息或录音。不臆造真实姓名，不写“对方 1”这类编号。用“你”或省略主语，不写过程数字（测试条数、提交号、用量），不复述给 AI 的操作指令，不写建议或核实状态。没有可概括的内容返回 null。`;
+
+export const DAY_POLISH_SYSTEM = `${DAY_REVIEW_SYSTEM}
+- recent 是今天近期已整理段的标题与描述，仅作上下文，不输出或引用它们。逐段返回结果或省略理由，合并由跨天整理处理。highlight 返回 null。`;
+
+export function dayPolishPrompt(date: string, activities: unknown, recent: { title: string; description: string }[]) {
+  return `日期：${date}\n\n<data>\n${json({ activities, recent })}\n</data>`;
+}
+
+export const DAY_OVERVIEW_SYSTEM = `${DATA_RULES}
+
+任务：只按给出的已润色活动段写当天概述。覆盖最多 4 条主线，可跨项目，包含当天有结果或明确判断的工作、沟通和生活。
+- summary 用 2–4 句，合计不超过 ${MAX_DAY_SUMMARY_CHARS} 字，有项目时第一句带上主线对应的项目名。
+- 写清具体对象、相关的人（沿用文中称呼）和结果或停在哪。不虚构姓名或成果。不写建议、核实状态或过程数字。
+- 没有可概括的内容时返回 null。输出用中文，专有名词保持原文。`;
+
+export const DAY_OVERVIEW_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["summary"],
+  properties: { summary: { type: ["string", "null"], maxLength: MAX_DAY_SUMMARY_CHARS } },
+} as const;
+
+export function dayOverviewPrompt(activities: { title: string; description: string; project: string | null }[]) {
+  return `<data>\n${json(activities)}\n</data>`;
+}
 
 export function dayPrompt(date: string, activities: unknown, cutoff: string): string {
   return `日期：${date}\n\n<data>\n${json({ activities, cutoff })}\n</data>`;

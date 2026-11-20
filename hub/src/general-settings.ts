@@ -38,7 +38,19 @@ export function updateGeneral(hub: HubDB, value: unknown): GeneralSettings {
   }
   return hub.db.transaction(() => {
     const next = { ...readGeneral(hub), ...body } as GeneralSettings;
-    hub.db.prepare("INSERT INTO distill_state VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(KEY, JSON.stringify(next));
+    hub.db.prepare("INSERT INTO distill_state VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(KEY, JSON.stringify({ ...stored(hub), ...next }));
     return next;
   }).immediate();
+}
+
+const POLISH_TIMINGS = ["after_segment", "hourly", "nightly"] as const;
+const OVERVIEW_TIMINGS = ["hourly", "every_3h", "nightly"] as const;
+
+/** 第 2 步只读取内部配置。通用设置 API 仍只读写已有公开字段。 */
+export function readTimelineSettings(hub: HubDB) {
+  const s = stored(hub);
+  return {
+    polish: POLISH_TIMINGS.find(value => value === s.timeline_polish) ?? "after_segment",
+    overview: OVERVIEW_TIMINGS.find(value => value === s.timeline_overview) ?? "hourly",
+  };
 }
