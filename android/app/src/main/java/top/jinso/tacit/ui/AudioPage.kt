@@ -17,6 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -49,8 +52,9 @@ import java.util.concurrent.CompletableFuture
     fun work(task:()->CompletableFuture<Unit>,success:String) {scope.launch{busy=true;try{withContext(Dispatchers.IO){task().get()};notify(success)}catch(_:Exception){notify("操作未完成，请检查状态后重试")};busy=false}}
     fun start() {try{app.prefs.setEnabled(AUDIO_SOURCE,true);audio.start(activity);state=audio.state()}catch(_:Exception){notify("无法开始录音，请先授权麦克风并继续采集")}}
     val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){result -> if(result[Manifest.permission.RECORD_AUDIO]==true || activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED) start() else notify("麦克风未授权，未开始录音")}
-    LaunchedEffect(resumed, includeIgnored) {
-        while (true) {
+    val owner = activity as? LifecycleOwner
+    LaunchedEffect(owner, resumed, includeIgnored) {
+        owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { while (true) {
             state = audio.state()
             if (!busy) {
                 val snapshot = withContext(Dispatchers.IO) {
@@ -69,7 +73,7 @@ import java.util.concurrent.CompletableFuture
                 loaded = true
             }
             delay(2000)
-        }
+        } }
     }
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {

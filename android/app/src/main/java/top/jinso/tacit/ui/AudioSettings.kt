@@ -1,6 +1,7 @@
 package top.jinso.tacit.ui
 
 import android.app.Activity
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -8,6 +9,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -36,8 +40,11 @@ import java.util.concurrent.CompletableFuture
         if (result.resultCode == Activity.RESULT_OK && uri != null)
             work({ audio.importModels(uri) }, "本地语音模型已就绪")
     }
-    LaunchedEffect(audio) {
-        while (true) { state = audio.state(); preparation = audio.modelPreparation(); delay(250) }
+    val owner = LocalActivity.current as? LifecycleOwner
+    LaunchedEffect(audio, owner) {
+        owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) { state = audio.state(); preparation = audio.modelPreparation(); delay(250) }
+        }
     }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(if(state.modelsReady)"模型已就绪" else "尚未安装语音模型",color=MaterialTheme.colorScheme.onSurfaceVariant)
@@ -83,16 +90,17 @@ import java.util.concurrent.CompletableFuture
     var clear by remember { mutableStateOf(false) }
     var days by remember { mutableStateOf(app.prefs.retentionDays.toString()) }
     var macDays by remember { mutableStateOf<Int?>(null) }
-    LaunchedEffect(audio, busy) {
+    val owner = LocalActivity.current as? LifecycleOwner
+    LaunchedEffect(audio, busy, owner) {
         if (busy) return@LaunchedEffect
         val vault = withContext(Dispatchers.IO) { runCatching { app.vault }.getOrNull() } ?: return@LaunchedEffect
-        vault.changes.collect {
+        owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { vault.changes.collect {
             withContext(Dispatchers.IO) {
                 runCatching {
                     vault.syncConnection()?.optJSONObject("audio")?.getInt("retention_days") to audio.listClips().get().size
                 }.getOrNull()
             }?.let { (retention, clips) -> macDays = retention; count = clips }
-        }
+        } }
     }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("本机保留 $count 段录音",color=MaterialTheme.colorScheme.onSurfaceVariant)
