@@ -55,6 +55,76 @@ class AccountingTests(unittest.TestCase):
             self.assertIsNone(r["roles"]["hub"]["cpu_percent_one_core"])
             self.assertIsNone(r["models"])
             self.assertFalse(r["normal_day_candidate"])
+            for state in ("idle", "active"):
+                self.assertEqual(r["collector_acceptance"][state]["status"], "数据不足")
+                self.assertIsNone(r["collector_acceptance"][state]["cpu_percent_one_core"])
+            self.assertEqual(r["collector_acceptance"]["unclassified_awake_s"], 5)
+            self.assertIsNone(r["audio_worker"]["peak_footprint_mb"])
+            self.assertAlmostEqual(r["audio_worker"]["all_collector_descendants_cpu_s"], .975)
+
+    def test_activity_uses_self_cpu_and_skips_transitions_and_gaps(self):
+        rows = []
+        for i, (idle, cpu) in enumerate([(290, 0), (295, .1), (300, 1), (305, 1.025),
+                                         (1, 3), (6, 3.2), (11, 9), (16, 99)]):
+            row = sample(100 + i, i * 5, locked=True)
+            row["hid_idle_s"] = idle
+            row["processes"]["collector"]["self_cpu_s"] = cpu
+            # The reporting clock advances without counting sleep in awake_s.
+            if i >= 6:
+                row["wall_s"] += 8
+            if i == 7:
+                row["run"] = "b"
+            rows.append(row)
+        # The two collector-own counters are still valid when a child can't be read.
+        del rows[3]["processes"]["collector"]["tree_cpu_s"]
+        result = perf.collector_acceptance(rows)
+        self.assertEqual(result["active"]["awake_s"], 10)
+        self.assertAlmostEqual(result["active"]["cpu_percent_one_core"], 3)
+        self.assertEqual(result["idle"]["awake_s"], 5)
+        self.assertAlmostEqual(result["idle"]["cpu_percent_one_core"], .5)
+        self.assertEqual(result["unclassified_awake_s"], 15)
+        self.assertEqual(result["missing_awake_s"], 5)
+        self.assertEqual(perf.acceptance(.5, .5), "不达标")
+        self.assertEqual(perf.acceptance(3, 3), "不达标")
+
+    def test_activity_does_not_guess_when_one_endpoint_is_missing(self):
+        for invalid in (None, False, -1, float("nan"), float("inf")):
+            with self.subTest(invalid=invalid):
+                a, b = sample(0, 0), sample(.01, 5)
+                a["hid_idle_s"], b["hid_idle_s"] = invalid, 305
+                self.assertIsNone(perf.activity_state(a, b, 5))
+
+    def test_memory_nearest_rank_p95_excludes_missing_snapshots(self):
+        rows = [sample(0, i * 5) for i in range(21)]
+        rows[0]["processes"]["collector"] = {"error": "unreadable"}
+        for n, row in enumerate(rows[1:], start=1):
+            row["processes"]["collector"]["footprint_mb"] = n * 10
+        rows[-1]["processes"]["collector"]["footprint_mb"] = 900
+        memory = perf.collector_acceptance(rows)["memory"]
+        self.assertEqual(memory["samples"], 20)
+        self.assertEqual(memory["p95_footprint_mb"], 190)
+        self.assertEqual(memory["peak_footprint_mb"], 900)
+        self.assertEqual(memory["status"], "达标")
+        self.assertEqual(perf.collector_acceptance(rows[:1])["memory"]["status"], "数据不足")
+
+    def test_worker_peak_is_named_and_cpu_uses_pid_and_start_time(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            path = folder / "cpu-2026-11-13.jsonl"
+            for i, (start, cpu, footprint) in enumerate([(10, .2, 100), (10, .7, 125), (20, 2, 110)]):
+                row = sample(i, i * 5)
+                row["type"] = "sample"
+                row["processes"]["collector"]["audio_workers"] = [
+                    {"identity": [101, start], "self_cpu_s": cpu, "footprint_mb": footprint}
+                ]
+                perf.append(path, row)
+            result = perf.report(folder, "2026-11-13")["audio_worker"]
+            self.assertAlmostEqual(result["cpu_s_observed_lower_bound"], .5)
+            self.assertEqual(result["cpu_delta_samples"], 1)
+            self.assertEqual(result["peak_footprint_mb"], 125)
+            self.assertEqual(result["all_collector_descendants_peak_sampled_process_footprint_mb"], 500)
+            self.assertIsNone(result["cpu_s_per_audio_hour"])
+            self.assertEqual(result["status"], "数据不足")
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS kernel counters")
     def test_kernel_cpu_units_match_getrusage(self):
