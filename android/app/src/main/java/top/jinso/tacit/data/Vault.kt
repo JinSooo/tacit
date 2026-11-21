@@ -10,6 +10,8 @@ import java.io.File
 import java.security.MessageDigest
 import org.json.JSONObject
 import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import top.jinso.tacit.sync.Change
 import top.jinso.tacit.sync.optionalString
 import top.jinso.tacit.sync.sendingCopy
@@ -49,7 +51,9 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
     }
     /** Same source/ref returns its original ID, so an interrupted audio publish can finish its metadata.
      * Permission and tombstone rejection still return null; duplicates never rewrite the original. */
-    @Synchronized fun ingest(draft: Draft): String? {
+    fun ingest(draft: Draft): String? = ingest(draft, ZoneOffset.UTC)
+
+    @Synchronized internal fun ingest(draft: Draft, offset: ZoneOffset): String? {
         val manual = draft.source in setOf(Sources.NOTE, Sources.CORRECTION, "system.pause")
         if (!manual && (draft.source !in Sources.UPLOADABLE || !prefs.allows(draft.source, draft.app))) return null
         require(draft.source.matches(Regex("[a-z0-9_]+(\\.[a-z0-9_]+)+")))
@@ -68,11 +72,13 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
         val redactions = title.count + body.count + (app?.count ?: 0)
         val sensitivity = if (draft.private) "private" else if (redactions > 0) "redacted" else "normal"
         val id = Ids.next()
+        fun time(value: Long): String = if (offset == ZoneOffset.UTC) iso(value)
+            else Instant.ofEpochMilli(value).atOffset(offset).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
         val wire = JSONObject().put("schema", 1).put("id", id).put("device", prefs.device).put("source", draft.source)
             .put("title", title.text).put("body", body.text).put("kind", if (draft.end == null) "event" else "span")
-            .put("t_start", iso(draft.start)).put("sensitivity", sensitivity).put("redactions", redactions)
+            .put("t_start", time(draft.start)).put("sensitivity", sensitivity).put("redactions", redactions)
             .put("capture", JSONObject().put("method", draft.method))
-        draft.end?.let { wire.put("t_end", iso(it)) }
+        draft.end?.let { wire.put("t_end", time(it)) }
         app?.let { wire.put("context", JSONObject().put("app", it.text)) }
         ref?.let { wire.put("source_ref", it) }
         draft.corrects?.let { wire.put("corrects", it) }

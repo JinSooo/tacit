@@ -327,7 +327,7 @@ internal class AudioRuntime private constructor(val context: Context) {
         AudioProcessor(store, lock, speech, voiceprint).drain({ allowed() && token == generation && policy == policyRevision }) { p ->
             app.vault.ingest(Draft(source = AUDIO_SOURCE, title = "对话记录", body = p.body,
                 start = p.start, end = p.end,
-                sourceRef = "audio:${p.clipId}", method = "asr"))
+                sourceRef = "audio:${p.clipId}", method = "asr"), offset = p.offset)
         }
         report(when {
             silenced -> "麦克风正由其他应用使用，等待系统恢复"

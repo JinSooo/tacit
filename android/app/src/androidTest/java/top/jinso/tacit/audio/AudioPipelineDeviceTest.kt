@@ -52,13 +52,13 @@ class AudioPipelineDeviceTest {
         ledger.markMe(meId(store)); run()
         assertEquals(listOf(first, second), publications.map { it.clipId })
         assertEquals(listOf(first, second), ledger.listConversations().single { it.recordIds.isNotEmpty() }.clipIds)
-        assertTrue(publications[0].body.startsWith("对方 1："))
-        assertTrue(publications[1].body.startsWith("对方 2："))
+        assertTrue(publications[0].body.substringAfter("] ").startsWith("对方 1："))
+        assertTrue(publications[1].body.substringAfter("] ").startsWith("我："))
         assertTrue(ledger.render("record:$second", "missing").startsWith("我："))
         val other = store.speakers().first { it.getString("id") != meId(store) }.getString("id")
         ledger.rename(other, "同事")
         assertTrue(ledger.render("record:$first", "missing").startsWith("同事："))
-        assertTrue(publications[0].body.startsWith("对方 1：")) // immutable published body
+        assertTrue(publications[0].body.substringAfter("] ").startsWith("对方 1：")) // immutable published body
         assertFalse(ledger.render("record:$first", "missing").contains("ghp_"))
         val restored = EncryptedAudioStore(context)
         assertEquals(ledger.render("record:$first", "missing"), AudioLedger(restored).render("record:$first", "missing"))
