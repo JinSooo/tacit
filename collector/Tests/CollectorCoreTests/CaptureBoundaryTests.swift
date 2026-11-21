@@ -37,3 +37,24 @@ import Testing
   #expect(PluginImport.outcomeText(ok: false, exitStatus: 1, accepted: nil, elapsed: 0, failure: "permission").contains("无权读取"))
   #expect(!PluginImport.outcomeText(ok: false, exitStatus: 1, accepted: nil, elapsed: 0, failure: "synthetic-secret").contains("synthetic-secret"))
 }
+
+// 2026-11-21：停在读不到正文的窗口上，画面没变也每 15 秒重识别，采集端多耗单核 1–2%。
+@Test func ocrBacksOffWhileWindowTextStaysTheSame() {
+  var schedule = OCRSchedule()
+  let start = Date(timeIntervalSince1970: 1_000)
+  func run(at seconds: TimeInterval, _ lines: [String]) -> Bool {
+    let now = start.addingTimeInterval(seconds)
+    guard schedule.due("w", now: now) else { return false }
+    schedule.started("w", now: now); schedule.finished("w", lines: lines); return true
+  }
+  #expect(run(at: 0, ["a"]))
+  #expect(!run(at: 15, ["a"]))
+  #expect(run(at: 16, ["a"]))         // 第二次相同：间隔变 30 秒
+  #expect(!run(at: 45, ["a"]))
+  #expect(run(at: 47, ["a"]))         // 60 秒
+  #expect(run(at: 108, ["a"]))        // 120 秒，到顶
+  #expect(!run(at: 228, ["a"]))
+  #expect(run(at: 229, ["b"]))        // 文字变了，回到 15 秒
+  #expect(run(at: 245, ["b"]))
+  #expect(schedule.due("other", now: start))
+}
