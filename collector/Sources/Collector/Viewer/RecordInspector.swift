@@ -38,7 +38,7 @@ struct RecordInspector: View {
     do {
       let d = try await store.api.record(id)
       // 读不到整场对话时退回显示这条记录的原文，不报错。
-      conversation = d.record.source == "mac.audio" ? try? await store.api.conversation(id) : nil
+      conversation = AudioSource.isAudio(d.record.source) ? try? await store.api.conversation(id) : nil
       detail = d; error = nil
     }
     catch is CancellationError {}
@@ -90,7 +90,7 @@ struct RecordInspector: View {
     let r = d.record
     let time = conversation.flatMap(conversationTime) ?? metadataTime(r.start, r.isSpan ? r.end : nil)
     return VStack(alignment: .leading, spacing: 8) {
-      Text(conversation.map { $0.title ?? "对话" } ?? RecordText.title(r, appShown: false)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
+      Text(conversation.map { $0.title ?? SourceInfo.name(r.source) } ?? RecordText.title(r, appShown: false)).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
         .fixedSize(horizontal: false, vertical: true).textSelection(.enabled).accessibilityAddTraits(.isHeader)
       HStack(spacing: 8) {
         SourceGlyph(source: r.source, app: r.contextText("app"), size: 20).accessibilityHidden(true)

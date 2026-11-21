@@ -397,6 +397,10 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
     #expect(down.boundingBoxOfPath.width > 0 && down.boundingBoxOfPath.height > 0)
     #expect(up.boundingBoxOfPath.width > 0 && up.boundingBoxOfPath.height > 0)
     #expect(PhosphorGlyphs.character("caret-down") != PhosphorGlyphs.character("caret-up"))
+    for name in ["microphone", "chat-circle-dots", "device-mobile"] {
+      let glyph = try #require(PhosphorGlyphs.path(name, font: font), "\(file) 缺少 \(name)")
+      #expect(glyph.boundingBoxOfPath.width > 0 && glyph.boundingBoxOfPath.height > 0)
+    }
     #expect(PhosphorGlyphs.path("no-such-icon", font: font) == nil)
   }
 }
@@ -543,4 +547,75 @@ private func placeRecord(_ id: String, _ source: String, _ title: String, second
   // 没有应用也没有仓库、目录的记录保持原样，不合。
   let bare = try (0..<2).map { try placeRecord("b\($0)", "mac.file", "文件 \($0)", seconds: -60 * $0) }
   #expect(RecentRuns.group(bare).count == 2)
+}
+
+@Test func androidSourcesMapToLanesAndCollapseLikeMacCounterparts() throws {
+  #expect(Lane.of("android.audio") == .voice)
+  #expect(Lane.of("android.notification") == .voice)
+  #expect(Lane.of("android.usage") == .screen)
+
+  let at = "2026-11-22T09:10:00+09:00"
+  let audio = try record("pa", "android.audio", "对话记录", at, "2026-11-22T09:15:00+09:00")
+  let chat = try record("pn", "android.notification", "温室值班群", at)
+  let usage = try record("pu", "android.usage", "笔记应用", at, "2026-11-22T09:12:00+09:00")
+  let screen = try record("ms", "mac.screen", "地图预览", at, "2026-11-22T09:12:00+09:00")
+
+  let mixed = ReviewActivity.segmentRecords([usage, chat, screen, audio])
+  #expect(mixed.visible.map(\.id) == ["pn", "pa"])
+  #expect(mixed.collapsed.map(\.id) == ["pu", "ms"])
+
+  let usageOnly = ReviewActivity.segmentRecords([usage])
+  #expect(usageOnly.visible.map(\.id) == ["pu"])
+  #expect(usageOnly.collapsed.isEmpty)
+
+  #expect(RecordTitles.display("对话记录", source: "android.audio") == "手机录音")
+  #expect(RecordTitles.display("对话 · 09:10–09:15 · 说话人 A", source: "android.audio") == "手机录音")
+  #expect(RecordTitles.display("温室值班群", source: "android.notification") == "温室值班群")
+  #expect(RecordTitles.display("项目甲 · 讨论组", source: "android.notification") == "项目甲 · 讨论组")
+  #expect(RecordTitles.display("笔记应用", source: "android.usage") == "笔记应用")
+
+  let audio2 = try record("pa2", "android.audio", "对话记录", "2026-11-22T09:18:00+09:00", "2026-11-22T09:22:00+09:00")
+  let conv = ConversationRef(id: "pa", recordIds: ["pa", "pa2"], startMs: 0, endMs: 0, title: "确认苗圃排班")
+  let collapsed = RecordRuns.collapse([audio2, usage, audio], conversations: [conv])
+  #expect(collapsed.map { $0.records.map(\.id) } == [["pa2", "pa"], ["pu"]])
+  #expect(collapsed[0].conversation == conv)
+}
+
+private func androidNotification(_ id: String, conversation: String, seconds: Int, app: String? = nil) throws -> HistoryRecord {
+  var payload: [String: Any] = [
+    "id": id, "device": "android-demo", "source": "android.notification", "kind": "event",
+    "title": conversation, "body": "林青：合成消息 \(id)",
+    "t_start": ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 1795222800 + TimeInterval(seconds))),
+  ]
+  if let app { payload["context"] = ["app": app] }
+  return try HubJSON.decoder().decode(HistoryRecord.self, from: JSONSerialization.data(withJSONObject: payload))
+}
+
+@Test func recentRunsMergeAndroidChatNotificationsByConversation() throws {
+  let rows = [
+    try androidNotification("n1", conversation: "温室 值班群", seconds: 180),
+    try androidNotification("n2", conversation: "温室值班群", seconds: 120),
+    try androidNotification("n3", conversation: "温室\u{3000}值班群", seconds: 60),
+    try androidNotification("n4", conversation: "林青", seconds: 0),
+  ]
+  let runs = RecentRuns.group(rows)
+  #expect(runs.map { $0.map(\.id) } == [["n1", "n2", "n3"], ["n4"]])
+  #expect(RecentRuns.chat(runs[0]) == "温室 值班群")
+  #expect(RecentRuns.chat(runs[1]) == "林青")
+
+  // 超过 5 分钟间隔不再合并。
+  let far = [rows[0], try androidNotification("far", conversation: "温室值班群", seconds: -200)]
+  #expect(RecentRuns.group(far).count == 2)
+
+  // 不同聊天应用的同名会话不合并，同应用合并。
+  let sameApp = [
+    try androidNotification("a1", conversation: "林青", seconds: 60, app: "org.example.chatA"),
+    try androidNotification("a2", conversation: "林青", seconds: 30, app: "org.example.chatA"),
+    try androidNotification("b1", conversation: "林青", seconds: 0, app: "org.example.chatB"),
+  ]
+  #expect(RecentRuns.group(sameApp).map { $0.map(\.id) } == [["a1", "a2"], ["b1"]])
+
+  // 不与 Mac 微信或屏幕记录错误合并。
+  let macChat = try recentRecord("mw", "mac.wechat", "微信 · 温室值班群 · 林青", app: "com.tencent.xinWeChat", seconds: 150, chat: "温室值班群")
+  #expect(RecentRuns.group([rows[0], macChat]).map { $0.map(\.id) } == [["n1"], ["mw"]])
 }

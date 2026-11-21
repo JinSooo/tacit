@@ -57,11 +57,12 @@ enum SampleNote {
   static func line(at: String?, said: String?) -> String { CollectorCore.SampleNote.line(stamp: Fmt.stamp(at), said: said) }
 }
 
-/// 一场对话在列表里的标题：有总结时用总结里的标题，否则只写"对话"（时长在行尾）。不再列"说话人 OK"这类编号。
+/// 一场对话在列表里的标题：有总结时用总结里的标题，否则只写"对话"/"手机录音"（时长在行尾）。不再列"说话人 OK"这类编号。
 enum ConversationText {
-  static func title(_ c: ConversationRef) -> String {
-    guard let t = c.title?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { return "对话" }
-    return "对话：\(t)"
+  static func title(_ c: ConversationRef, source: String = "mac.audio") -> String {
+    let label = source == "android.audio" ? "手机录音" : "对话"
+    guard let t = c.title?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { return label }
+    return "\(label)：\(t)"
   }
 }
 

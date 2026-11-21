@@ -19,7 +19,7 @@ import CollectorCore
   static func windows(_ block: SegmentBlock, limit: Int = 3) -> String? {
     // "无标题"和与应用名相同的窗口名（如"Claude · Claude"）不提供信息，不显示。
     var seen: Set<String> = ["无标题", "（无标题）", title(block)], out: [String] = []
-    for r in block.records where r.source != "mac.audio" {
+    for r in block.records where !AudioSource.isAudio(r.source) {
       guard let t = RecordTitles.display(r.title, source: r.source, appShown: true), seen.insert(t).inserted else { continue }
       out.append(t)
       if out.count == limit { break }
