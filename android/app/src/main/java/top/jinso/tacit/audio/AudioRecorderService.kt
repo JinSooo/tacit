@@ -107,7 +107,9 @@ class AudioRecorderService : Service() {
                 if (poll) {
                     allowed = runtime.allowed()
                     if (Build.VERSION.SDK_INT >= 29) input.activeRecordingConfiguration?.let { silence.update(it.isClientSilenced) }
-                    val playing = AudioPolicy.speakerPlayback(audioManager.isMusicActive,
+                    // Listing outputs is a heavy audioserver call; only pay for it while something is playing.
+                    val music = audioManager.isMusicActive
+                    val playing = music && AudioPolicy.speakerPlayback(true,
                         audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type })
                     if (playing != playingOut) {
                         playingOut = playing
