@@ -106,7 +106,7 @@ import java.util.concurrent.CompletableFuture
     }
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
     val candidate = if (speakers.any { it.isMe }) null else speakers
-        .filter { !it.ignored && it.sampleAvailable }.maxByOrNull { it.seconds }
+        .filter { !it.ignored && it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
     val days = remember(rows) { rows.groupBy { date(it.start, "yyyy-MM-dd") } }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp)) {

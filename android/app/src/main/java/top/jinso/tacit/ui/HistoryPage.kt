@@ -281,7 +281,7 @@ private fun TimelineRow(group: ActivityGroup, onSelect: (HistoryRecord) -> Unit,
                 }.padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(date(group.timelineStart, "HH:mm"), Modifier.width(56.dp), style = MaterialTheme.typography.bodySmall,
+            Text(date(group.timelineStart, "HH:mm"), Modifier.width(56.dp).padding(top = 3.dp), style = MaterialTheme.typography.bodySmall,
                 color = tacitColors.muted, textAlign = TextAlign.End)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -320,7 +320,7 @@ private fun TimelineRow(group: ActivityGroup, onSelect: (HistoryRecord) -> Unit,
 private fun Modifier.drawTimelineRail(rail: androidx.compose.ui.graphics.Color, paper: androidx.compose.ui.graphics.Color,
     dot: androidx.compose.ui.graphics.Color): Modifier = drawBehind {
     val x = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr) 95.dp.toPx() else size.width - 95.dp.toPx()
-    val center = androidx.compose.ui.geometry.Offset(x, 19.dp.toPx())
+    val center = androidx.compose.ui.geometry.Offset(x, 22.dp.toPx())
     drawLine(rail, androidx.compose.ui.geometry.Offset(x, 0f), androidx.compose.ui.geometry.Offset(x, size.height), 1.dp.toPx())
     drawCircle(paper, 6.5.dp.toPx(), center)
     drawCircle(dot, 3.5.dp.toPx(), center)
