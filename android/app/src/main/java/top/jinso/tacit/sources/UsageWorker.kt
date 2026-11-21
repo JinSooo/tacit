@@ -3,6 +3,8 @@ package top.jinso.tacit.sources
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +45,7 @@ class UsageWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             if (!allowed()) return Result.success()
             val stream = context.getSystemService(UsageStatsManager::class.java).queryEvents(from, now)
                 ?: return Result.retry()
+            val home = homePackages(context)
             val events = ArrayList<UsageEvent>()
             val event = UsageEvents.Event()
             var count = 0
@@ -64,7 +67,8 @@ class UsageWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                 if (!allowed()) return Result.success()
                 val packageName = event.packageName.orEmpty()
                 // Keep only a boundary for blocked/self apps; never extract their activity names.
-                val include = packageName.isNotBlank() && prefs.allows(source, packageName)
+                // The home screen is the gap between apps, not app use; it ends the previous interval like a block.
+                val include = packageName.isNotBlank() && packageName !in home && prefs.allows(source, packageName)
                 events += UsageEvent(event.timeStamp, kind, if (include) packageName else "",
                     if (include) event.className.orEmpty() else "")
             }
@@ -96,5 +100,13 @@ class UsageWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         }
     }
 
-    companion object { private val scanLock = Mutex() }
+    companion object {
+        private val scanLock = Mutex()
+
+        private fun homePackages(context: Context): Set<String> = runCatching {
+            context.packageManager.queryIntentActivities(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_ALL,
+            ).mapNotNull { it.activityInfo?.packageName }.toSet()
+        }.getOrDefault(emptySet())
+    }
 }

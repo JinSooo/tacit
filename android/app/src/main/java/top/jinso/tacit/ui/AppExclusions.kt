@@ -91,7 +91,7 @@ internal fun AppExclusions(app: TacitApp, resumed: Int, notify: (String) -> Unit
                     Caption("暂时无法读取应用列表，原有排除项已保留。", color = tacitColors.attention)
                     TonalButton("重试", { retry++ })
                 }
-                installed == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                installed == null -> ProgressLine()
                 else -> {
                     val term = query.trim()
                     val visible = installed.filter { it.name.contains(term, ignoreCase = true) || it.packageName.contains(term, ignoreCase = true) }

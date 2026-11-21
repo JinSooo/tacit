@@ -32,4 +32,23 @@ class UsageRunsTest {
         assertEquals(listOf(420_000L, 360_000L, 180_000L),
             folded.filter { it.first.source == Sources.USAGE }.map { usageDurationMillis(it.records) })
     }
+
+    @Test fun foldedRunStartsAtEarliestSessionAndListsAppsByTotalTime() {
+        fun usage(id: String, app: String, timestamp: String, minutes: Long): HistoryRecord {
+            val start = Instant.parse(timestamp).toEpochMilli()
+            return HistoryRecord(id, Sources.USAGE, app, "", start, start + minutes * 60_000, "example.$app", "normal", null, 0)
+        }
+        // Display order is newest first; the row must still show when the run began.
+        val run = ActivityGroup(listOf(
+            usage("a", "桌面", "2026-01-02T16:13:00Z", 1),
+            usage("b", "阅读", "2026-01-02T15:00:00Z", 40),
+            usage("c", "桌面", "2026-01-02T14:10:00Z", 2),
+            usage("d", "地图", "2026-01-02T13:30:00Z", 25),
+            usage("e", "阅读", "2026-01-02T13:00:00Z", 10),
+        ))
+
+        assertEquals(Instant.parse("2026-01-02T13:00:00Z").toEpochMilli(), timelineStart(run))
+        assertEquals(listOf("阅读" to 3_000_000L, "地图" to 1_500_000L, "桌面" to 180_000L),
+            usageByApp(run.records).map { it.record.title to it.millis })
+    }
 }

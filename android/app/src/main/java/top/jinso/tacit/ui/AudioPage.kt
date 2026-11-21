@@ -17,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -133,17 +134,17 @@ import java.util.concurrent.CompletableFuture
                         permission.launch(permissions.toTypedArray())
                     }
                 }
-                Caption("只转写有你声音的对话",
-                    Modifier.background(tacitColors.fill, MaterialTheme.shapes.small).padding(horizontal = 12.dp, vertical = 4.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    AudioChip(if (state.modelsReady) "语音模型 已就绪" else "语音模型 未准备", !state.modelsReady) {
+                Caption("只转写有你声音的对话")
+                FlowRow(itemVerticalAlignment = Alignment.CenterVertically) {
+                    AudioChip(if (state.modelsReady) "语音模型已就绪" else "语音模型未准备", !state.modelsReady) {
                         onOpenSettings(SettingsRoutes.SPEECH)
                     }
-                    AudioChip(if (macDays != null) "随 Mac" else "保留 ${retentionLabel(app.prefs.retentionDays)}") {
+                    Caption("·", color = tacitColors.faint)
+                    AudioChip(if (macDays != null) "保留期随 Mac" else "录音保留 ${retentionLabel(app.prefs.retentionDays)}") {
                         onOpenSettings(SettingsRoutes.RETENTION)
                     }
                 }
-                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (busy) ProgressLine()
             }
         }
         item(key = "recovery") { recovery() }
@@ -168,7 +169,7 @@ import java.util.concurrent.CompletableFuture
         item(key = "conversations-title") {
             SectionLabel("录下的对话", Modifier.padding(top = 24.dp, bottom = 8.dp))
         }
-        if (!loaded) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        if (!loaded) item { ProgressLine() }
         if (loadFailed) item {
             Caption("暂时无法读取录音，正在重试。", color = tacitColors.attention)
         } else if (loaded && rows.isEmpty() && waitingClips == 0) item {
@@ -182,8 +183,13 @@ import java.util.concurrent.CompletableFuture
                 SectionLabel(if (day == LocalDate.now().toString()) "今天" else date(scenes.first().start, "M 月 d 日"),
                     Modifier.padding(top = 12.dp, bottom = 4.dp))
             }
-            scenes.forEach { scene ->
+            scenes.filter { it.records.isNotEmpty() }.forEach { scene ->
                 item(key = "conversation-${scene.key}") { RecordedConversation(scene, onConversation) }
+            }
+            val untranscribed = scenes.count { it.records.isEmpty() }
+            if (untranscribed > 0) item(key = "untranscribed-$day") {
+                val other = if (scenes.any { it.records.isNotEmpty() }) "另有 " else ""
+                Caption("$other$untranscribed 段录音还没有文字", Modifier.padding(vertical = 8.dp))
             }
         }
     }
@@ -207,8 +213,8 @@ private fun RecordingButton(recording: Boolean, enabled: Boolean, onClick: () ->
 
 @Composable
 private fun AudioChip(label: String, problem: Boolean = false, onClick: () -> Unit) {
-    Surface(color = tacitColors.fill, shape = MaterialTheme.shapes.small, onClick = onClick) {
-        Box(Modifier.heightIn(min = 48.dp).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+    Surface(color = Color.Transparent, shape = MaterialTheme.shapes.small, onClick = onClick) {
+        Box(Modifier.heightIn(min = 48.dp).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
             Caption(label, color = if (problem) tacitColors.attention else tacitColors.muted)
         }
     }
@@ -240,9 +246,9 @@ private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () 
                     Icon(Icons.Outlined.PlayArrow, "试听")
                 }
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf(8, 16, 12, 24, 16, 8, 20, 12, 16, 8).forEach { height ->
-                        Box(Modifier.weight(1f).height(height.dp).background(tacitColors.faint, CircleShape))
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    listOf(6, 12, 18, 10, 22, 14, 8, 16, 24, 12, 6, 14, 20, 10, 16, 8, 12, 18, 10, 6).forEach { height ->
+                        Box(Modifier.width(3.dp).height(height.dp).background(tacitColors.faint, CircleShape))
                     }
                 }
                 seconds?.let { Caption("$it 秒") }

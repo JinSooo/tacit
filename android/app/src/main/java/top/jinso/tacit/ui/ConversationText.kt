@@ -40,7 +40,7 @@ internal fun ConversationDetail(
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp)) {
             val current = parts
             if (current == null) {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
+                ProgressLine()
                 return@Column
             }
             if (current.isEmpty()) {

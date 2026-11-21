@@ -135,8 +135,8 @@ fun TacitRoot(app: TacitApp, shared: String?, resumed: Int, quickNote: Int, cons
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
             val store = vault
             val recovery: @Composable () -> Unit = {
-                if (health != null && recoveryIssues(health).isNotEmpty()) {
-                    CollectionRecoveryNotice(health, ::settings, { tab = 1 }, ::notify)
+                if (health != null && recoveryIssues(health).any { tab != 1 || it.action != RecoveryAction.AUDIO }) {
+                    CollectionRecoveryNotice(health, ::settings, { tab = 1 }, ::notify, onAudioPage = tab == 1)
                 } else if (tab == 0 && health != null && enabledSourceCount(app, health) == 0) {
                     NoticeRow("还没有开启记录来源") { settings(SettingsRoutes.SOURCES) }
                 }

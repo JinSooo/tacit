@@ -10,8 +10,10 @@ internal fun CollectionRecoveryNotice(
     onOpenSource: (String?) -> Unit,
     onOpenAudio: () -> Unit,
     notify: (String) -> Unit,
+    onAudioPage: Boolean = false,
 ) {
-    val issues = recoveryIssues(health)
+    // The recording page already shows its own state, so a notice pointing back to it is noise there.
+    val issues = recoveryIssues(health).filterNot { onAudioPage && it.action == RecoveryAction.AUDIO }
     val first = issues.firstOrNull() ?: return
     val context = LocalContext.current
     val title = first.title + if (issues.size > 1) "，另有 ${issues.size - 1} 项" else ""

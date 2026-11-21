@@ -184,7 +184,6 @@ private fun SettingsHome(
         value = withContext(Dispatchers.IO) { runCatching { AudioController(app).state().modelsReady }.getOrNull() }
     }
     val count = enabledSourceCount(app, health)
-    Text("设置", style = MaterialTheme.typography.headlineMedium)
     GroupCard {
         SettingsRow(
             when { paused -> "已暂停"; count == 0 -> "未在记录"; else -> "正在记录" },
@@ -248,7 +247,7 @@ private fun SourceCards(app: TacitApp, health: CollectionHealth?, open: (String)
     GroupCard {
         SettingsRow(
             "录音", when { lackingMic -> "需要麦克风权限"; recording -> "录音中"; else -> "未在录音" },
-            problem = lackingMic || recording, icon = Icons.Outlined.Mic, onClick = { open(Sources.AUDIO) },
+            problem = lackingMic, icon = Icons.Outlined.Mic, onClick = { open(Sources.AUDIO) },
         )
         listOf(Sources.NOTIFICATION to Icons.Outlined.ChatBubbleOutline, Sources.USAGE to Icons.Outlined.GridView)
             .forEach { (id, icon) ->

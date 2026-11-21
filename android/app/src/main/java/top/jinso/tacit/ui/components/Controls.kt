@@ -184,3 +184,9 @@ internal fun PageBar(title: String, onBack: () -> Unit, close: Boolean = false, 
 internal fun PrivacyLock() {
     Icon(Icons.Outlined.Lock, "私密", Modifier.size(16.dp), tint = tacitColors.muted)
 }
+
+/** Thin accent progress line; the Material default is a heavy ink bar on this palette. */
+@Composable
+internal fun ProgressLine(modifier: Modifier = Modifier) {
+    LinearProgressIndicator(modifier.fillMaxWidth(), color = tacitColors.accent, trackColor = tacitColors.fill)
+}

@@ -129,7 +129,7 @@ import top.jinso.tacit.ui.components.*
     }
 
     (message ?: current?.error)?.let { Caption(it, color = tacitColors.attention) }
-    if (busy || (current == null && message == null)) LinearProgressIndicator(Modifier.fillMaxWidth())
+    if (busy || (current == null && message == null)) ProgressLine()
     if (current?.name != null) TextAction("断开连接", {
         action { app.sync.disconnect(); address = null; expanded = false }
     }, enabled = !busy, color = tacitColors.attention)

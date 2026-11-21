@@ -175,7 +175,7 @@ internal fun HistoryPage(
         }
 
         when {
-            records == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
+            records == null -> ProgressLine()
             days.isEmpty() -> {
                 val filtered = query.isNotBlank() || filter != null || day != null
                 EmptyState(
@@ -228,8 +228,7 @@ private fun TimelineChip(text: String, selected: Boolean, onClick: () -> Unit, c
     )
 }
 
-private val ActivityGroup.timelineStart: Long
-    get() = if (first.source == Sources.AUDIO) records.minOf { it.start } else first.start
+private val ActivityGroup.timelineStart: Long get() = timelineStart(this)
 
 @Composable
 private fun DayHeader(start: Long) {
@@ -254,7 +253,6 @@ private fun TimelineRow(group: ActivityGroup, onSelect: (HistoryRecord) -> Unit,
     var expanded by rememberSaveable { mutableStateOf(false) }
     val title = when {
         isAudio -> "${conversationTitle(isPrivate)}，${durationLabel(conversationDuration(group.records))}"
-        isUsage -> "应用使用 ${durationLabel(usageDurationMillis(group.records))}"
         else -> record.title
     }
     val preview = remember(group) {
@@ -264,6 +262,7 @@ private fun TimelineRow(group: ActivityGroup, onSelect: (HistoryRecord) -> Unit,
             else -> ""
         }
     }
+    val apps = remember(group) { if (isUsage) usageByApp(group.records) else emptyList() }
     val rail = tacitColors.line
     val paper = tacitColors.paper
     val dot = if (isPrimary) tacitColors.accent else tacitColors.faint
@@ -281,36 +280,46 @@ private fun TimelineRow(group: ActivityGroup, onSelect: (HistoryRecord) -> Unit,
                 }.padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(date(group.timelineStart, "HH:mm"), Modifier.width(56.dp).padding(top = 3.dp), style = MaterialTheme.typography.bodySmall,
-                color = tacitColors.muted, textAlign = TextAlign.End)
+            Text(date(group.timelineStart, "HH:mm"), Modifier.width(40.dp).padding(top = 3.dp), style = MaterialTheme.typography.bodySmall,
+                color = tacitColors.muted)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(title, Modifier.weight(1f, fill = !isUsage), fontWeight = if (isPrimary) FontWeight.Medium else FontWeight.Normal,
+                    if (isUsage) Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("应用使用", Modifier.weight(1f, fill = false), color = tacitColors.muted,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(durationLabel(usageDurationMillis(group.records)), color = tacitColors.muted, softWrap = false)
+                    } else Text(title, Modifier.weight(1f), fontWeight = if (isPrimary) FontWeight.Medium else FontWeight.Normal,
                         color = if (isPrimary) tacitColors.ink else tacitColors.muted)
-                    if (isUsage) group.records.distinctBy { it.app ?: it.title }.take(3).forEach {
-                        SourceIcon(it.source, it.app, description = it.title)
-                    }
-                    if (isUsage && isPrivate) PrivacyLock()
+                    if (isUsage) apps.take(3).forEach {
+                        SourceIcon(it.record.source, it.record.app, description = it.record.title)
+                    } else SourceIcon(record.source, record.app)
+                    if (record.corrects != null || record.source == Sources.CORRECTION) Caption("修正")
+                    if (isPrivate) PrivacyLock()
                     if (canExpand) Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                         null, Modifier.size(16.dp), tint = tacitColors.muted)
                 }
                 if (preview.isNotBlank()) Text(preview, color = tacitColors.readingBody, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (isChat && group.records.size > 1) Caption("另外 ${group.records.size - 1} 条")
-                if (!isUsage) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    SourceIcon(record.source, record.app)
-                    if (record.corrects != null || record.source == Sources.CORRECTION) Caption("修正")
-                    if (isPrivate) PrivacyLock()
-                }
             }
         }
-        if (expanded) group.records.forEach { part ->
+        if (expanded && isUsage) apps.forEach { usage ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(start = 98.dp, end = 20.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SourceIcon(usage.record.source, usage.record.app, description = usage.record.title)
+                Text(usage.record.title, Modifier.weight(1f), color = tacitColors.readingBody,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Caption(durationLabel(usage.millis))
+            }
+        }
+        if (expanded && !isUsage) group.records.forEach { part ->
             EvidenceRow(
                 time = date(part.start, "HH:mm"),
-                text = if (isUsage) "${part.title} ${durationLabel((part.end ?: part.start) - part.start)}"
-                    else part.body.ifBlank { part.title },
+                text = part.body.ifBlank { part.title },
                 private = part.sensitivity == "private",
-                modifier = Modifier.padding(start = 114.dp, end = 20.dp),
+                modifier = Modifier.padding(start = 98.dp, end = 20.dp),
                 onClick = { onSelect(part) },
             )
         }
@@ -319,7 +328,7 @@ private fun TimelineRow(group: ActivityGroup, onSelect: (HistoryRecord) -> Unit,
 
 private fun Modifier.drawTimelineRail(rail: androidx.compose.ui.graphics.Color, paper: androidx.compose.ui.graphics.Color,
     dot: androidx.compose.ui.graphics.Color): Modifier = drawBehind {
-    val x = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr) 95.dp.toPx() else size.width - 95.dp.toPx()
+    val x = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr) 79.dp.toPx() else size.width - 79.dp.toPx()
     val center = androidx.compose.ui.geometry.Offset(x, 22.dp.toPx())
     drawLine(rail, androidx.compose.ui.geometry.Offset(x, 0f), androidx.compose.ui.geometry.Offset(x, size.height), 1.dp.toPx())
     drawCircle(paper, 6.5.dp.toPx(), center)

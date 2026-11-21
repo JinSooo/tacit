@@ -30,3 +30,15 @@ internal fun foldUsageRuns(
     }
     flush()
 }
+
+/** Where a row starts on the timeline: folded usage runs and audio scenes begin at their earliest record. */
+internal fun timelineStart(group: ActivityGroup): Long =
+    if (group.first.source == Sources.AUDIO || group.first.source == Sources.USAGE) group.records.minOf { it.start }
+    else group.first.start
+
+internal data class AppUsage(val record: HistoryRecord, val millis: Long)
+
+/** One line per app for a folded run, longest first, so hundreds of short sessions stay readable. */
+internal fun usageByApp(records: List<HistoryRecord>): List<AppUsage> =
+    records.groupBy { it.app ?: it.title }.map { (_, sessions) -> AppUsage(sessions.first(), usageDurationMillis(sessions)) }
+        .sortedByDescending { it.millis }

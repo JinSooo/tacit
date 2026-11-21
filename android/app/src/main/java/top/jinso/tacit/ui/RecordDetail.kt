@@ -174,8 +174,8 @@ internal fun EvidenceRow(time: String, text: String, private: Boolean, modifier:
         Modifier.fillMaxWidth().clickable(onClick = onClick).then(modifier).heightIn(min = 48.dp).padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Caption(time)
-        Text(text, Modifier.weight(1f), color = tacitColors.readingBody, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        Caption(time, Modifier.alignByBaseline())
+        Text(text, Modifier.weight(1f).alignByBaseline(), color = tacitColors.readingBody, maxLines = 3, overflow = TextOverflow.Ellipsis)
         if (private) PrivacyLock()
     }
 }
