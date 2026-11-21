@@ -101,11 +101,18 @@ class AudioRecorderService : Service() {
             // cross-process call, so it and the preference-backed permission check run about once a second.
             var reads = 0
             var allowed = true
+            var playingOut = false
             while (running && runtime.requested && token == runtime.generation && allowed) {
                 val poll = reads++ % POLL_EVERY_READS == 0
                 if (poll) {
                     allowed = runtime.allowed()
                     if (Build.VERSION.SDK_INT >= 29) input.activeRecordingConfiguration?.let { silence.update(it.isClientSilenced) }
+                    val playing = AudioPolicy.speakerPlayback(audioManager.isMusicActive,
+                        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type })
+                    if (playing != playingOut) {
+                        playingOut = playing
+                        runtime.report(if (playing) "手机正在外放声音，暂不录音" else "正在录音，音频已加密保存")
+                    }
                 }
                 val n = input.read(block, 0, minOf(block.size, segment.size - used), AudioRecord.READ_BLOCKING)
                 if (n < 0) { if (!running) break else error("AudioRecord read failed") }
@@ -119,6 +126,11 @@ class AudioRecorderService : Service() {
                     continue
                 }
                 if (n == 0) continue
+                if (playingOut) {
+                    // Drop what the speaker played; the next kept audio starts a fresh segment.
+                    block.fill(0); segment.fill(0); used = 0; needsTimestamp = true
+                    continue
+                }
                 if (needsTimestamp) {
                     start = System.currentTimeMillis() - n * 1000L / SAMPLE_RATE
                     needsTimestamp = false

@@ -18,6 +18,15 @@ data class AudioConversation(val id: String, val start: Long, val end: Long,
 
 /** Pure policy, independently testable without microphone/native libraries. */
 internal object AudioPolicy {
+    /** Output types that keep media out of the microphone; anything else counts as the phone's own speaker. */
+    private val privateOutputs = setOf(
+        android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET, android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        android.media.AudioDeviceInfo.TYPE_USB_HEADSET, 26 /* TYPE_BLE_HEADSET */, 27 /* TYPE_BLE_SPEAKER */,
+    )
+    /** The phone playing video or music aloud would be recorded as other people's voices, so capture pauses. */
+    fun speakerPlayback(musicActive: Boolean, outputTypes: Collection<Int>) =
+        musicActive && outputTypes.none { it in privateOutputs }
     fun candidate(conversations: Int, seconds: Double) = (conversations >= 2 && seconds >= 15) || seconds >= 45
     fun adjacent(previousEnd: Long, nextStart: Long, previousContext: String, context: String) =
         previousContext == context && nextStart >= previousEnd && nextStart - previousEnd <= 600_000L

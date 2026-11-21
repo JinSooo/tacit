@@ -4,6 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AudioPolicyTest {
+    @Test fun phoneSpeakerPlaybackPausesCaptureButHeadphonesDoNot() {
+        val speaker = android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        val wired = android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+        val bluetooth = android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+        // Reported case: short videos played aloud became "is this your voice?" candidates.
+        assertTrue(AudioPolicy.speakerPlayback(true, listOf(speaker)))
+        assertFalse(AudioPolicy.speakerPlayback(true, listOf(speaker, wired)))
+        assertFalse(AudioPolicy.speakerPlayback(true, listOf(speaker, bluetooth)))
+        assertFalse(AudioPolicy.speakerPlayback(false, listOf(speaker)))
+    }
     @Test fun candidateRequiresDurationAsWellAsCount() {
         assertFalse(AudioPolicy.candidate(2, 14.99))
         assertFalse(AudioPolicy.candidate(1, 44.99))
