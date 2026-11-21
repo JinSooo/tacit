@@ -80,7 +80,16 @@ class QnnDeviceTest {
         val states=mutableListOf<String>()
         try {
             AcceleratedSpeechEngine(LocalSpeechEngine(cpu!!),context,model){states+=it}.use { engine ->
+                assertFalse("NPU must stay unloaded while the app only analyzes voices",states.contains("NPU 加速已启用"))
+                assertTrue(engine.segments(pcm).isNotEmpty())
+                assertFalse(states.contains("NPU 加速已启用"))
+                val accelerated=engine.transcribe(pcm)
+                assertTrue(accelerated,accelerated.contains("本地")||accelerated.contains("记录"))
                 assertTrue("First prove HTP loaded",states.contains("NPU 加速已启用"))
+                engine.finishTranscription()
+                states.clear()
+                assertEquals(accelerated,engine.transcribe(pcm))
+                assertTrue("A new batch must load HTP again",states.contains("NPU 加速已启用"))
                 val manager=context.getSystemService(android.app.ActivityManager::class.java)
                 val process=manager.runningAppProcesses.single { it.processName==context.packageName+":qnn" }
                 // Same UID, only our disposable inference process. Simulate Android memory reclamation.

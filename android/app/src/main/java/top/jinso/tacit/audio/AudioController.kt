@@ -22,8 +22,6 @@ import java.util.concurrent.CompletionException
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -163,10 +161,7 @@ internal class AudioRuntime private constructor(val context: Context) {
     val models = SpeechModels(context)
     val qnnModels = QnnModels(context)
     @Volatile var accelerationStatus = "使用 CPU"; private set
-    private val worker = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "tacit-local-audio") }
-    /** Worker-thread only. Unload the transcription and voiceprint models once they sit unused. */
-    private var idleRelease: ScheduledFuture<*>? = null
-    private var voiceprintRelease: ScheduledFuture<*>? = null
+    private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "tacit-local-audio") }
     private val modelWorker = Executors.newSingleThreadExecutor { r -> Thread(r, "tacit-model-download") }
     private val modelLock = Any()
     private var modelCancellation: ModelDownloadCancellation? = null
@@ -287,7 +282,7 @@ internal class AudioRuntime private constructor(val context: Context) {
     }, worker)
     /** For work that changes recordings or voices: signals pages even when the work fails halfway. */
     fun <T> change(block: () -> T): CompletableFuture<T> = submit { try { block() } finally { changed() } }
-    fun closeEngine() { idleRelease?.cancel(false); voiceprintRelease?.cancel(false); engine?.close(); engine = null; accelerationStatus = "使用 CPU" }
+    fun closeEngine() { engine?.close(); engine = null; accelerationStatus = "使用 CPU" }
     /**
      * Called on the microphone thread. Encryption and disk writes happen on the worker so a slow write
      * can never stall AudioRecord and drop audio; the caller may reuse [pcm] as soon as this returns.
@@ -340,10 +335,6 @@ internal class AudioRuntime private constructor(val context: Context) {
             recording -> "正在录音，本地转写中"
             else -> "本地音频处理完成"
         })
-        idleRelease?.cancel(false)
-        idleRelease = worker.schedule({ engine?.releaseIdle(ASR_IDLE_MS) }, ASR_IDLE_MS, TimeUnit.MILLISECONDS)
-        voiceprintRelease?.cancel(false)
-        voiceprintRelease = worker.schedule({ engine?.releaseIdleVoiceprint(VOICEPRINT_IDLE_MS) }, VOICEPRINT_IDLE_MS, TimeUnit.MILLISECONDS)
     }
     fun sample(id: String): Triple<String, Int, Int>? {
         for (clip in store.clips().asReversed()) for (u in clip.getJSONArray("utterances").objects()) {
@@ -366,10 +357,6 @@ internal class AudioRuntime private constructor(val context: Context) {
     }
     @Synchronized fun stopPlayback() { player?.let { runCatching { it.stop() }; it.release() }; player = null }
     companion object {
-        /** The CPU transcription model holds ~380 MB of native memory. */
-        const val ASR_IDLE_MS = 10 * 60_000L
-        /** Voiceprint + VAD hold ~120 MB once warmed; 1 min covers back-to-back clips of one conversation. */
-        const val VOICEPRINT_IDLE_MS = 60_000L
         @Volatile private var instance: AudioRuntime? = null
         fun get(context: Context): AudioRuntime = instance ?: synchronized(this) {
             instance ?: AudioRuntime(context.applicationContext).also { instance = it }

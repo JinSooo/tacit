@@ -67,27 +67,52 @@ internal class QnnClient(context: Context, private val models: File) : AutoClose
     }
 }
 
-internal class AcceleratedSpeechEngine(private val cpu: LocalSpeechEngine, context: Context,
-    models: File?, private val changed: (String) -> Unit) : SpeechEngine, AutoCloseable {
+internal class AcceleratedSpeechEngine(private val cpu: LocalSpeechEngine, private val context: Context,
+    private val models: File?, private val changed: (String) -> Unit) : SpeechEngine, AutoCloseable {
     private var qnn: QnnClient? = null
+    private var qnnAvailable = models != null && QnnCatalog.supported()
     init {
-        if (models != null && QnnCatalog.supported()) {
-            val candidate = QnnClient(context, models)
-            try { candidate.validate(); qnn = candidate; changed("NPU 加速已启用") }
-            catch (e: Exception) { fallback("validate", e); candidate.close();changed("加速不可用，使用 CPU") }
-            catch (e: LinkageError) { fallback("validate", e); candidate.close();changed("加速不可用，使用 CPU") }
-        } else changed("使用 CPU")
+        changed(if (qnnAvailable) "NPU 模型已就绪，等待转写" else "使用 CPU")
+    }
+    private fun qnnForTranscription(): QnnClient? {
+        qnn?.let { return it }
+        if (!qnnAvailable) return null
+        val candidate = QnnClient(context, checkNotNull(models))
+        try {
+            candidate.validate()
+        } catch (error: Exception) {
+            disableQnn(candidate, "validate", error, "加速不可用，使用 CPU")
+            return null
+        } catch (error: LinkageError) {
+            disableQnn(candidate, "validate", error, "加速不可用，使用 CPU")
+            return null
+        }
+        qnn = candidate
+        changed("NPU 加速已启用")
+        return candidate
     }
     override fun segments(pcm: FloatArray) = cpu.segments(pcm)
     override fun transcribe(samples: FloatArray): String {
-        val active = qnn ?: return cpu.transcribe(samples)
+        val active = qnnForTranscription() ?: return cpu.transcribe(samples)
         return try { QnnPolicy.transcribe(samples) { active.transcribe(it) } }
-        catch (e: Exception) { fallback("decode", e); active.close();qnn = null;changed("加速中断，使用 CPU");cpu.transcribe(samples) }
+        catch (error: Exception) {
+            disableQnn(active, "decode", error, "加速中断，使用 CPU")
+            cpu.transcribe(samples)
+        }
     }
-    fun releaseIdle(idleMs: Long) = cpu.releaseIdle(idleMs)
-    fun releaseIdleVoiceprint(idleMs: Long) = cpu.releaseIdleVoiceprint(idleMs)
+    override fun finishAnalysis() = cpu.finishAnalysis()
+    override fun finishTranscription() {
+        qnn?.close()
+        qnn = null
+        cpu.finishTranscription()
+    }
     /** Error class only: messages can carry paths, and nothing from a recording may reach logcat. */
-    private fun fallback(stage: String, error: Throwable) =
+    private fun disableQnn(client: QnnClient, stage: String, error: Throwable, status: String) {
         android.util.Log.w("TacitQnn", "NPU $stage failed: ${error.javaClass.simpleName}; using CPU")
-    override fun close() { qnn?.close();cpu.close() }
+        client.close()
+        qnn = null
+        qnnAvailable = false
+        changed(status)
+    }
+    override fun close() { finishAnalysis(); finishTranscription() }
 }
