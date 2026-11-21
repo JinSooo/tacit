@@ -4,13 +4,13 @@ import { contentRevision, appliedCall, discardedCall } from "../runtime-log.ts";
 // 模型调用都在事务之外；每一步落库用小事务，失败只影响这一步，下一轮再试。
 // 日志只写计数，不写任何记录内容或标题。
 import type { HubDB } from "../db.ts";
-import { chatKey } from "../chat.ts";
+import { chatApp, chatKey, recordChat } from "../chat.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { classifyModelError, type ModelErrorCode } from "../llm/error-category.ts";
 import { activeCooldown, ModelCooldown, withModelCooldown } from "./cooldown.ts";
 import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { applyTimelineCorrections, DistillStore, timelineCorrectionKey, type Frame, type Thread, type TimelineCorrections } from "./store.ts";
-import { persistFrames } from "./frames.ts";
+import { persistFrames, visibleFrame } from "./frames.ts";
 import { DistillRules, projectByName } from "./rules.ts";
 import { DistillRequests, localDayStart, localDateString } from "./requests.ts";
 import * as P from "./prompts.ts";
@@ -21,7 +21,8 @@ import { projectRequest, type ProjectModelOutput } from "./project-request.ts";
 import { groundedQuote } from "./quotes.ts";
 import { gitMaterialKey, materialBody, uniqueMaterials } from "./material.ts";
 import { evidenceTime } from "./evidence-time.ts";
-import { SKELETON_SOURCES } from "./day-evidence.ts";
+import { AUDIO_SOURCES, SKELETON_SOURCES, sourceList } from "../record-sources.ts";
+import { notificationsShadowedSince } from "./wechat-duplicates.ts";
 import { resolveRepoRoot } from "./repos.ts";
 import { readGeneral, readTimelineSettings } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
@@ -77,7 +78,7 @@ function markFrameReviewDays(store: DistillStore, frames: Frame[], before: numbe
   if (!frames.length) return;
   const dates = new Set(frames.map(f => localDate(f.t_start_ms)));
   const audio = store.hub.db.prepare(`SELECT DISTINCT r.t_start_ms,r.t_end FROM frame_records fr JOIN records r ON r.id=fr.record_id
-    WHERE fr.frame_id IN (SELECT value FROM json_each(?)) AND r.source='mac.audio' AND r.sensitivity<>'private' AND r.t_end IS NOT NULL`)
+    WHERE fr.frame_id IN (SELECT value FROM json_each(?)) AND r.source IN (${sourceList(AUDIO_SOURCES)}) AND r.sensitivity<>'private' AND r.t_end IS NOT NULL`)
     .all(JSON.stringify(frames.map(f => f.id))) as { t_start_ms: number; t_end: string }[];
   for (const record of audio) {
     const day = new Date(startOfDay(record.t_start_ms));
@@ -110,6 +111,7 @@ export function sliceStep(db: HubDB, backfill = false, now = Date.now(), enabled
     if (cursor === null) { cursor = now; store.setState("cursor_ms", cursor); }
     const enabled = store.getState<number>("enabled_ms") ?? enabledDefault;
     store.setState("enabled_ms", enabled);
+    for (const id of notificationsShadowedSince(db, store.getState<number>("last_rowid") ?? 0)) store.refreshNotification(id);
     let created = 0, assigned = 0;
     const touched: Frame[] = [];
     if (backfill && !store.getState<boolean>("backfill_done")) {
@@ -125,12 +127,13 @@ export function sliceStep(db: HubDB, backfill = false, now = Date.now(), enabled
     created += result.frames.length; touched.push(...result.frames);
     store.setState("cursor_ms", result.cursor_ms);
     markFrameReviewDays(store, touched, now + 1);
-    for (const frame of store.frames().filter(f => f.status === "new")) {
+    const pending = store.frames().filter(f => f.status === "new").map(f => visibleFrame(db, f)).filter(f => f !== null);
+    for (const frame of pending) {
       rules.projectForFrame(frame);
       const r = rules.assign(frame);
       if (r.status === "assigned") { assigned++; touchThread(store, r.thread_id, frame); }
     }
-    return { frames: created, assigned, unassigned: store.frames().filter(f => f.status === "new").length };
+    return { frames: created, assigned, unassigned: pending.length - assigned };
   })();
 }
 
@@ -158,13 +161,15 @@ export function touchThread(store: DistillStore, threadId: string, frame: Frame)
 /** 比较用规整键，给模型的名称仍取组内最新记录的原文。 */
 function displayFrameKey(store: DistillStore, f: Frame): string {
   if (!f.key.startsWith("chat:")) return f.key;
-  const latest = f.record_ids.map(id => store.hub.get(id)).filter(r => r?.context?.chat)
-    .sort((a, b) => Date.parse(b!.t_start) - Date.parse(a!.t_start) || b!.id.localeCompare(a!.id))
-    .find(r => chatKey(`chat:${r!.context!.app ?? r!.source}:${r!.context!.chat}`) === chatKey(f.key));
-  return latest ? `chat:${latest.context!.app ?? latest.source}:${latest.context!.chat}` : f.key;
+  const latest = f.record_ids.map(id => store.hub.get(id)).filter(r => r !== null).filter(r => !!recordChat(r))
+    .sort((a, b) => Date.parse(b.t_start) - Date.parse(a.t_start) || b.id.localeCompare(a.id))
+    .map(r => `chat:${chatApp(r)}:${recordChat(r)}`)
+    .find(key => chatKey(key) === chatKey(f.key));
+  return latest ?? f.key;
 }
 
-export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: number; excerpt: (source: string) => number; seenMaterials?: Set<string> }): P.FrameView {
+export function frameView(store: DistillStore, frame: Frame, opts: { maxRecords: number; excerpt: (source: string) => number; seenMaterials?: Set<string> }): P.FrameView {
+  const f = visibleFrame(store.hub, frame) ?? { ...frame, record_ids: [] };
   const projects = store.projects();
   // 保留原活动 ID 供后续查 effective；修正记录本身不能误当成独立活动再被过滤掉。
   const materials = uniqueMaterials(f.record_ids.flatMap(id => {
@@ -183,15 +188,16 @@ export function frameView(store: DistillStore, f: Frame, opts: { maxRecords: num
     const originalEffective = store.hub.effective(id)!;
     // private 记录的标题和正文都不发给模型；同一片段里的其他记录照常发送。
     if (originalEffective.sensitivity === "private") { hidden++; return []; }
-    if (originalEffective.source !== "manual.correction" && (original.source === "mac.screen" || original.source === "mac.browser")) {
-      // 屏幕与浏览器只提供活动时间和标题，正文留给 History 和主动查询。
+    if (SKELETON_SOURCES.has(original.source) && (originalEffective.source !== "manual.correction" || original.source === "android.usage")) {
+      // 骨架只提供活动时间和标题，正文留给 History 和主动查询。
       return [{ id, source: original.source, title: originalEffective.title, recorded_at: original.t_start,
         ...(original.t_end ? { recorded_until: original.t_end } : {}), excerpt: "" }];
     }
     const r = { ...originalEffective, body: materialBody(originalEffective) };
     // 对话开头常是寒暄和噪声，总结另附一次，不挤占每条原文的截断预算。
-    if (r.source === "mac.audio") {
-      const g = conversationsIn(store.hub, Date.parse(r.t_start), Date.parse(r.t_start)).find(g => g.record_ids.includes(r.id));
+    if (AUDIO_SOURCES.has(original.source)) {
+      const at = Date.parse(original.t_start);
+      const g = conversationsIn(store.hub, at, at, original.device).find(g => g.record_ids.includes(original.id));
       const s = g && storedSummary(store.hub, g);
       if (s && g) {
         const first = !conversations.has(g.id); conversations.add(g.id);
@@ -242,7 +248,8 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
     store.hub.db.prepare("UPDATE frames SET status='candidate' WHERE status='ignored' AND id IN (SELECT value FROM json_each(?))").run(live);
     saveCandidates();
   })();
-  const pending = loadFrames(store, "WHERE status='new' ORDER BY t_start_ms,id");
+  const pending = loadFrames(store, "WHERE status='new' ORDER BY t_start_ms,id")
+    .map(f => visibleFrame(store.hub, f)).filter(f => f !== null);
   // 用户说过"不属于"某些线程的片段按拒绝的线程分组单独成批：候选里直接去掉这些线程（只在提示里写不能选，
   // 模型仍会被片段里的字样带回原线程，2026-11-10 实测），片段带上被拒线程的标题，避免另起同名线程。
   const groups = new Map<string, { rejected: string[]; views: { f: Frame; v: P.FrameView }[] }>();
@@ -336,7 +343,8 @@ function factViews(store: DistillStore, field: "thread_id" | "project_id", id: s
 }
 
 function threadFrames(store: DistillStore, threadId: string): Frame[] {
-  return loadFrames(store, "WHERE id IN (SELECT frame_id FROM assignments WHERE thread_id=?) ORDER BY t_start_ms,id", threadId);
+  return loadFrames(store, "WHERE id IN (SELECT frame_id FROM assignments WHERE thread_id=?) ORDER BY t_start_ms,id", threadId)
+    .map(f => visibleFrame(store.hub, f)).filter(f => f !== null);
 }
 
 async function makeBrief(d: Deps, task: string, title: string, detail: unknown): Promise<{ text: string; call_id?: string } | null> {

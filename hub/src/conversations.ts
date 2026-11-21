@@ -1,8 +1,9 @@
 import type { HubDB } from "./db.ts";
 import { InputError } from "./db.ts";
+import { AUDIO_SOURCES, sourceList } from "./record-sources.ts";
 
 /**
- * 对话（mac.audio）给人看的样子：一场对话常被静音切成几条记录，按规则合成一组；
+ * 一场对话常被静音切成几条记录，按规则合成一组；
  * 转写原文按人合并、去掉识别噪声；每组另存一段模型写的总结。记录本身不改（AGENTS.md）。
  */
 
@@ -37,28 +38,46 @@ export const CONVERSATION_GAP_MS = 10 * 60_000;
 /** 转写整理后不到这么多字的不总结，看原文就够了。 */
 export const SUMMARY_MIN_CHARS = 200;
 
-export interface AudioRow { id: string; start_ms: number; end_ms: number; app: string | null; private: boolean }
+export interface AudioRow { id: string; start_ms: number; end_ms: number; app: string | null; private: boolean; device?: string; source?: string }
 export interface ConversationGroup { id: string; record_ids: string[]; start_ms: number; end_ms: number; app: string | null; private: boolean }
 
-/** rows 不要求有序。开会时同一个会议软件里的连成一场；不开会的按间隔连；开会和不开会的不连在一起。 */
+/** 在同一设备和来源内，按会议软件和间隔连成一场。 */
 export function groupConversations(rows: AudioRow[]): ConversationGroup[] {
   const sorted = rows.slice().sort((a, b) => a.start_ms - b.start_ms || a.id.localeCompare(b.id));
   const out: ConversationGroup[] = [];
+  const latest = new Map<string, ConversationGroup>();
   for (const r of sorted) {
-    const g = out.at(-1);
+    const key = JSON.stringify([r.device, r.source]);
+    const g = latest.get(key);
     if (g && g.app === r.app && r.start_ms - g.end_ms <= CONVERSATION_GAP_MS) {
       g.record_ids.push(r.id); g.end_ms = Math.max(g.end_ms, r.end_ms); g.private ||= r.private;
-    } else out.push({ id: r.id, record_ids: [r.id], start_ms: r.start_ms, end_ms: r.end_ms, app: r.app, private: r.private });
+    } else {
+      const group = { id: r.id, record_ids: [r.id], start_ms: r.start_ms, end_ms: r.end_ms, app: r.app, private: r.private };
+      out.push(group);
+      latest.set(key, group);
+    }
   }
   return out;
 }
 
 export interface Line { at_ms: number; label: string; text: string; clock?: string; speaker_id?: string | null }
 
+export function parseAndroidTranscript(body: string): Pick<Line, "label" | "text">[] {
+  const turns: Pick<Line, "label" | "text">[] = [];
+  for (const raw of body.split("\n")) {
+    const line = /^(我|对方(?:\s*\d+)?)[：:](.*)$/u.exec(raw.trim());
+    if (line) turns.push({ label: line[1]!, text: line[2]!.trim() });
+    else if (raw.trim() && turns.length) turns.at(-1)!.text += `\n${raw.trim()}`;
+  }
+  return turns;
+}
+
 /** 采集端写的正文每行是"[HH:MM:SS] 说话人：内容"，时间是本地钟点；跨过午夜的行算到第二天。 */
-export function parseTranscript(body: string, t_start: string): Line[] {
-  const m = /^(\d{4}-\d\d-\d\d)T(\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)$/.exec(t_start);
+export function parseTranscript(body: string, t_start: string, source?: string): Line[] {
   const start = Date.parse(t_start);
+  // Android 只上传话轮顺序和录音起止。用片段起点作引用位置。
+  if (source === "android.audio") return parseAndroidTranscript(body).map(turn => ({ ...turn, at_ms: start }));
+  const m = /^(\d{4}-\d\d-\d\d)T(\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)$/.exec(t_start);
   const out: Line[] = [];
   for (const raw of body.split("\n")) {
     const line = /^\[(\d\d:\d\d:\d\d)\]\s*([^：]+)：(.*)$/.exec(raw.trim());
@@ -142,20 +161,23 @@ export function speakerNamer(db: HubDB): () => (label: string, speakerId?: strin
 }
 
 interface RecordRow { id: string; t_start: string; t_start_ms: number; t_end: string | null; context: string | null; sensitivity: string; body: string }
+type AudioRecordRow = RecordRow & { source: string; device: string };
 
 function appOf(context: string | null): string | null {
   if (!context) return null;
   try { const app = (JSON.parse(context) as { app?: unknown }).app; return typeof app === "string" && app ? app : null; } catch { return null; }
 }
-function audioRows(db: HubDB, from: number, to: number): RecordRow[] {
-  return db.db.prepare("SELECT id,t_start,t_start_ms,t_end,context,sensitivity,body FROM records WHERE source='mac.audio' AND t_start_ms>=? AND t_start_ms<=? ORDER BY t_start_ms,id").all(from, to) as RecordRow[];
+function audioRows(db: HubDB, from: number, to: number, device?: string): AudioRecordRow[] {
+  return db.db.prepare<[number, number, ...string[]], AudioRecordRow>(`SELECT id,source,device,t_start,t_start_ms,t_end,context,sensitivity,body
+    FROM records WHERE source IN (${sourceList(AUDIO_SOURCES)}) AND t_start_ms>=? AND t_start_ms<=?${device ? " AND device=?" : ""}
+    ORDER BY t_start_ms,id`).all(from, to, ...(device ? [device] : []));
 }
-const toAudio = (r: RecordRow): AudioRow => ({ id: r.id, start_ms: r.t_start_ms, end_ms: Math.max(r.t_start_ms, r.t_end ? Date.parse(r.t_end) || r.t_start_ms : r.t_start_ms), app: appOf(r.context), private: r.sensitivity === "private" });
+const toAudio = (r: AudioRecordRow): AudioRow => ({ id: r.id, source: r.source, device: r.device, start_ms: r.t_start_ms, end_ms: Math.max(r.t_start_ms, r.t_end ? Date.parse(r.t_end) || r.t_start_ms : r.t_start_ms), app: appOf(r.context), private: r.sensitivity === "private" });
 
 /** 范围内的对话分组。范围两头各多读一段，免得把跨边界的一场切开。 */
-export function conversationsIn(db: HubDB, from: number, to: number): ConversationGroup[] {
+export function conversationsIn(db: HubDB, from: number, to: number, device?: string): ConversationGroup[] {
   const pad = 4 * 3600_000;
-  return groupConversations(audioRows(db, from - pad, to + pad).map(r => toAudio({ ...r, sensitivity: db.effective(r.id)?.sensitivity ?? r.sensitivity }))).filter(g => g.end_ms >= from && g.start_ms <= to);
+  return groupConversations(audioRows(db, from - pad, to + pad, device).map(r => toAudio({ ...r, sensitivity: db.effective(r.id)?.sensitivity ?? r.sensitivity }))).filter(g => g.end_ms >= from && g.start_ms <= to);
 }
 
 /** 用户写的修正优先于转写原文。 */
@@ -165,8 +187,11 @@ function bodyOf(db: HubDB, r: RecordRow): string {
 }
 
 export function groupTurns(db: HubDB, g: ConversationGroup, namer = speakerNamer(db)()): Turn[] {
-  const rows = g.record_ids.map(id => db.db.prepare("SELECT id,source_ref,t_start,t_start_ms,t_end,context,sensitivity,body FROM records WHERE id=?").get(id) as (RecordRow & { source_ref: string | null }) | undefined).filter((r): r is RecordRow & { source_ref: string | null } => !!r);
+  const record = db.db.prepare<[string], RecordRow & { source: string; source_ref: string | null }>(
+    "SELECT id,source,source_ref,t_start,t_start_ms,t_end,context,sensitivity,body FROM records WHERE id=?");
+  const rows = g.record_ids.map(id => record.get(id)).filter(r => !!r);
   return readableTurns(rows.flatMap(r => {
+    if (r.source === "android.audio") return parseTranscript(bodyOf(db, r), r.t_start, r.source);
     const overrides = new Map((db.db.prepare("SELECT at,speaker_id,hidden FROM conversation_lines WHERE conversation_ref=?").all(r.source_ref ?? "") as { at: string; speaker_id: string | null; hidden: number }[]).map(o => [o.at, o]));
     return parseTranscript(bodyOf(db, r), r.t_start).flatMap(l => {
       const o = l.clock ? overrides.get(l.clock) : undefined;
@@ -205,9 +230,10 @@ export function summaryState(g: ConversationGroup, turns: Turn[], summary: Summa
 
 /** 查看界面打开一条对话记录时用：它所在的整场对话、整理过的原文和总结。 */
 export function conversationDetail(db: HubDB, recordId: string, now = Date.now()) {
-  const r = db.db.prepare("SELECT t_start_ms FROM records WHERE id=? AND source='mac.audio'").get(recordId) as { t_start_ms: number } | undefined;
+  const r = db.db.prepare<[string], { t_start_ms: number; device: string }>(
+    `SELECT t_start_ms,device FROM records WHERE id=? AND source IN (${sourceList(AUDIO_SOURCES)})`).get(recordId);
   if (!r) throw new InputError("不是对话记录");
-  const g = conversationsIn(db, r.t_start_ms, r.t_start_ms).find(g => g.record_ids.includes(recordId))!;
+  const g = conversationsIn(db, r.t_start_ms, r.t_start_ms, r.device).find(g => g.record_ids.includes(recordId))!;
   const turns = groupTurns(db, g);
   const summary = storedSummary(db, g);
   // 原文：每条记录现在的正文（有修正时用修正），给"查看原文"用。
@@ -220,6 +246,6 @@ export function conversationDetail(db: HubDB, recordId: string, now = Date.now()
 }
 
 /** 列表用：每场对话的组成和标题（有总结时）。 */
-export function conversationList(db: HubDB, from: number, to: number) {
-  return conversationsIn(db, from, to).map(g => ({ id: g.id, record_ids: g.record_ids, start_ms: g.start_ms, end_ms: g.end_ms, app: g.app, title: storedSummary(db, g)?.title ?? null }));
+export function conversationList(db: HubDB, from: number, to: number, device?: string) {
+  return conversationsIn(db, from, to, device).map(g => ({ id: g.id, record_ids: g.record_ids, start_ms: g.start_ms, end_ms: g.end_ms, app: g.app, title: storedSummary(db, g)?.title ?? null }));
 }

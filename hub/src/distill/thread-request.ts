@@ -1,5 +1,5 @@
 import { threadPrompt, THREAD_SCHEMA, type FactView, type FrameView, type ProjectHint, type ThreadOutput } from "./prompts.ts";
-import { groundedQuote, sessionUserTexts, withUserStatements } from "./quotes.ts";
+import { groundedQuote, knownUserTexts, withUserStatements } from "./quotes.ts";
 
 export type ThreadModelOutput = Omit<ThreadOutput, "new_facts"> & {
   new_facts: (ThreadOutput["new_facts"][number] & { supports: { record_id: string; text: string }[] })[];
@@ -75,8 +75,8 @@ export function threadRequest(thread: { title: string; detail: unknown }, facts:
               && (!readRecord || !!readRecord(recordsByRef.get(s.record_id)!)?.body.includes(s.text)))
             && f.evidence.every(ref => current.has(ref) && supports.some(s => s.record_id === ref));
           const sourceRecords = f.evidence.flatMap(ref => excerpts.get(ref) ?? []);
-          const sessionsOnly = sourceRecords.length > 0 && sourceRecords.every(r => sessionUserTexts(r.source, r.body) !== null);
-          const confirmed = f.kind !== "decision" && f.kind !== "rejected" || !sessionsOnly || supports?.some(s => {
+          const rolesKnown = sourceRecords.length > 0 && sourceRecords.every(r => knownUserTexts(r.source, r.body) !== null);
+          const confirmed = f.kind !== "decision" && f.kind !== "rejected" || !rolesKnown || supports?.some(s => {
             const recordId = recordsByRef.get(s.record_id);
             const original = recordId ? readRecord?.(recordId) : undefined;
             return original ? groundedQuote(original, s.text) : excerpts.get(s.record_id)?.some(r => groundedQuote(r, s.text));

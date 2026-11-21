@@ -9,9 +9,11 @@ import { distillSchema, usageTaskSchema } from "./distill/schema.ts";
 import { requestsSchema, regenDaysRequestsSchema } from "./distill/requests.ts";
 import { conversationSchema, lineSchema } from "./conversations.ts";
 import { DistillStore } from "./distill/store.ts";
+import { wechatRecordForNotification, usedNotificationsMatching } from "./distill/wechat-duplicates.ts";
 import { createHash } from "node:crypto";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { redactRecord } from "./redact.ts";
+import { SKELETON_SOURCES, sourceList } from "./record-sources.ts";
 import { registerAgentAudit, stopAgentAudit } from "./agent-audit.ts";
 import { deviceSchema } from "./devices/store.ts";
 import { runtimeSchema, expireSnapshots, eraseSnapshots, sanitizeStoredModelErrors } from "./runtime-log.ts";
@@ -282,8 +284,8 @@ export class HubDB {
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new InputError("limit 必须是 1–500 的整数");
     const cursor = params.get("cursor");
     // Agent 独立使用 [来源层, 时间, id]；普通列表仍使用 [时间, id]。
-    const tierSql = "CASE WHEN r.source IN ('mac.screen','mac.browser','mac.app') THEN 1 ELSE 0 END";
-    const tierOf = (row: Row) => ["mac.screen", "mac.browser", "mac.app"].includes(String(row.source)) ? 1 : 0;
+    const tierSql = `CASE WHEN r.source IN (${sourceList(SKELETON_SOURCES)}) THEN 1 ELSE 0 END`;
+    const tierOf = (row: Row) => SKELETON_SOURCES.has(String(row.source)) ? 1 : 0;
     let position: [number, string] | undefined;
     let cursorTier = 0;
     if (cursor) {
@@ -393,6 +395,7 @@ export class HubDB {
       if (!rows.length) return 0;
       eraseSnapshots(this);
       const store = new DistillStore(this);
+      const notifications = usedNotificationsMatching(this, rows.filter(r => r.source === "mac.wechat").map(r => decode(r)));
       store.removeRecords(rows.map(r => ({ id: r.id as string, time: r.t_start as string })));
       const deleted = new Set(rows.map(r => r.id));
       const corrected = new Set<string>();
@@ -413,6 +416,9 @@ export class HubDB {
         if (r.corrects && !deleted.has(r.corrects)) corrected.add(r.corrects as string);
       }
       for (const id of corrected) store.correctRecord(id);
+      for (const [id, phone] of notifications) {
+        if (!deleted.has(id) && !wechatRecordForNotification(this, phone)) store.refreshNotification(id);
+      }
       return rows.length;
     })();
   }

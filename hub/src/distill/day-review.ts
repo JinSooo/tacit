@@ -1,10 +1,12 @@
 import { toLocalIso } from "../../../packages/record/index.ts";
-import { chatKey } from "../chat.ts";
+import { chatKey, recordChat, ANDROID_WECHAT } from "../chat.ts";
 import { groupConversations } from "../conversations.ts";
 import type { HubDB } from "../db.ts";
 import { unionSeconds } from "../durations.ts";
 import { redactString } from "../redact.ts";
-import { dayDisplayName, readDayEvidence, sampleDayEvidence, SKELETON_SOURCES, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
+import { dayDisplayName, readDayEvidence, sampleDayEvidence, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
+import { AUDIO_SOURCES, SKELETON_SOURCES, sourceList } from "../record-sources.ts";
+import { wechatRecordForNotification } from "./wechat-duplicates.ts";
 import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
 import { MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
@@ -20,7 +22,8 @@ const terse = (text: string, max: number) => Array.from(text.replace(/\s+/g, " "
 type ReviewRecord = DayReference & {
   start: number; end: number; lastActivity: number; key: string; thread: string | null; projectId: string | null; session: string | null;
   projectName: string | null;
-  related?: ReviewRecord[]; app: string | null; chat: string | null; evidence: UnnumberedEvidence[];
+  related?: ReviewRecord[]; app: string | null; chat: string | null; chatApp: string; device: string; evidence: UnnumberedEvidence[];
+  hasNotificationCopy?: true;
   /** AI 会话批次里一句“我”都没有：是上一条输入那一轮的回复，不是自动续跑。 */
   replyOnly?: boolean;
 };
@@ -72,13 +75,14 @@ type DraftWindow = { cutoff?: number; covered: ReadonlySet<string>; includeRelat
 function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow): ReviewRecord[] {
   type RawRow = {
     id: string; source: string; source_ref: string | null; title: string; t_start: string; t_start_ms: number; t_end: string | null;
-    context: string | null; key: string | null; thread_id: string | null; project_id: string | null; project_name: string | null;
-    body: string | null; corrected: number;
+    context: string | null; key: string | null; thread_id: string | null; project_id: string | null; project_name: string | null; device: string;
+    body: string | null; notification_body: string | null; corrected: number;
   };
   const cutoff = draft?.cutoff;
   const queryStart = cutoff === undefined ? start : Math.max(start, cutoff);
-  const rows = hub.db.prepare<unknown[], RawRow>(`SELECT r.id,r.source,r.source_ref,r.title,r.t_start,r.t_start_ms,r.t_end,r.context,f.key,a.thread_id,t.project_id,p.name AS project_name,
-    CASE WHEN r.source IN ('mac.screen','mac.browser','mac.app') THEN NULL ELSE COALESCE(c.body,r.body) END AS body,
+  const rows = hub.db.prepare<unknown[], RawRow>(`SELECT r.id,r.source,r.source_ref,r.title,r.t_start,r.t_start_ms,r.t_end,r.context,r.device,f.key,a.thread_id,t.project_id,p.name AS project_name,
+    CASE WHEN r.source IN (${sourceList(SKELETON_SOURCES)}) THEN NULL ELSE COALESCE(c.body,r.body) END AS body,
+    CASE WHEN r.source='android.notification' THEN r.body END AS notification_body,
     c.id IS NOT NULL AS corrected
     FROM records r
     LEFT JOIN frame_records fr ON fr.record_id=r.id LEFT JOIN frames f ON f.id=fr.frame_id
@@ -88,16 +92,18 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
       ORDER BY cc.t_start_ms DESC,cc.id DESC LIMIT 1)
     WHERE r.t_start_ms<? AND r.t_start_ms>=? AND (r.t_start_ms>=? OR (r.t_end IS NOT NULL AND julianday(r.t_end)>julianday(?)))
       AND r.sensitivity<>'private' AND COALESCE(c.sensitivity,'normal')<>'private'
-      AND (r.source IN ('mac.screen','mac.browser','mac.app','mac.audio','codex.session','claude_code.session','mac.wechat','manual.note')
+      AND (r.source IN (${sourceList(SKELETON_SOURCES)},${sourceList(AUDIO_SOURCES)},'codex.session','claude_code.session','mac.wechat','android.notification','manual.note')
         OR (r.source NOT IN ('mac.shell','mac.git','mac.file','mac.clipboard','manual.agent','manual.correction')
           AND json_type(r.context,'$.chat')='text' AND json_extract(r.context,'$.extra.from_me') IN (0,1)))
     ORDER BY r.t_start_ms,r.id`).iterate(end, queryStart - LONGEST_RECORD, queryStart, new Date(queryStart).toISOString());
   const records: ReviewRecord[] = [];
   const excluded = new Set<string>();
+  const representedNotifications = new Set<string>();
   const windowStart = Math.max(start, cutoff ?? start);
   const evidenceStart = cutoff === undefined ? start : Math.max(start, cutoff + 1);
   for (const row of rows) {
     const context = row.context ? JSON.parse(row.context) as Parameters<typeof frameKey>[0]["context"] : undefined;
+    const original = { ...row, context };
     const isSession = SESSION_SOURCES.has(row.source);
     const session = isSession && row.source_ref
       ? JSON.stringify([row.source, row.source_ref.split("#", 1)[0]]) : null;
@@ -105,10 +111,15 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
     const finish = Math.max(row.t_start_ms, Date.parse(row.t_end ?? "") || row.t_start_ms);
     if (cutoff !== undefined && (finish <= cutoff ||
       (row.t_start_ms >= cutoff && draft?.covered.has(row.id)))) continue;
-    const key = row.key ?? frameKey({ id: row.id, source: row.source, source_ref: row.source_ref, context } as Parameters<typeof frameKey>[0]);
+    const representative = row.notification_body === null ? null
+      : wechatRecordForNotification(hub, { ...original, body: row.notification_body });
+    if (representative) { representedNotifications.add(representative); continue; }
+    const key = row.key ?? frameKey({
+      id: row.id, source: row.source, source_ref: row.source_ref ?? undefined, title: row.title, context,
+    } as Parameters<typeof frameKey>[0]);
     const title = terse(redactString(row.title).text, 120) || "原始记录";
     const reference = { id: row.id, source: row.source, title, at: row.t_start };
-    const evidence = readDayEvidence(reference, { source: row.source, t_start: row.t_start, t_end: row.t_end, context },
+    const evidence = readDayEvidence(reference, original,
       row.body, !!row.corrected, evidenceStart, end);
     if (!evidence) continue;
     if (draft && !SKELETON_SOURCES.has(row.source) &&
@@ -118,9 +129,12 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
       start: Math.max(windowStart, row.t_start_ms), end: Math.min(end, finish),
       key, lastActivity: Math.min(end, finish), thread: row.thread_id, projectId: row.project_id, projectName: row.project_name, session, evidence,
       replyOnly: isSession && !/^\[我\] /m.test(row.body ?? ""),
-      app: context?.app ? redactString(context.app).text : null, chat: context?.chat ? redactString(context.chat).text : null,
+      app: context?.app ? redactString(context.app).text : null, chat: redactString(recordChat(original) ?? "").text || null,
+      chatApp: row.source !== "android.notification" ? row.source : context?.app === ANDROID_WECHAT ? "mac.wechat"
+        : `android.notification:${context?.app ?? ""}`, device: row.device,
     });
   }
+  for (const record of records) if (representedNotifications.has(record.id)) record.hasNotificationCopy = true;
   // 草稿只读截止之后的记录；评测或发布检查的标记可能只在截止前的批次里，只为截止后出现的会话补查。
   if (queryStart > start) {
     const earlier = hub.db.prepare<[string, string, string, string, number, number], { body: string | null; context: string | null }>(`
@@ -146,7 +160,7 @@ function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: numb
   for (const record of records) {
     if (!SESSION_SOURCES.has(record.source)) {
       // 聊天点先扩为在场窗口，统一用于裁决、覆盖率、排序与最终计时。
-      const point = record.chat && !SKELETON_SOURCES.has(record.source) && record.source !== "mac.audio" && record.start === record.end;
+      const point = record.chat && !SKELETON_SOURCES.has(record.source) && !AUDIO_SOURCES.has(record.source) && record.start === record.end;
       result.push(point ? { ...record, start: Math.max(dayStart, record.start - EVIDENCE_WINDOW),
         end: Math.min(dayEnd, record.end + EVIDENCE_WINDOW) } : record);
       continue;
@@ -183,8 +197,8 @@ function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: numb
 }
 
 function groupRecords(rows: ReviewRecord[], gap: number): Activity[] {
-  const audio = groupConversations(rows.filter(r => r.source === "mac.audio")
-    .map(r => ({ id: r.id, start_ms: r.start, end_ms: r.end, app: r.app, private: false })));
+  const audio = groupConversations(rows.filter(r => AUDIO_SOURCES.has(r.source))
+    .map(r => ({ id: r.id, source: r.source, device: r.device, start_ms: r.start, end_ms: r.end, app: r.app, private: false })));
   const lookup = new Map(rows.map(record => [record.id, record]));
   const voices = new Map<string, { id: string; thread: string | null }>();
   for (const conversation of audio) {
@@ -199,7 +213,7 @@ function groupRecords(rows: ReviewRecord[], gap: number): Activity[] {
     const kind = thread ? "thread" : voice ? "speech" : SESSION_SOURCES.has(row.source) ? "session"
       : row.chat && !SKELETON_SOURCES.has(row.source) ? "chat" : "misc";
     const key = row.key.startsWith("autonomous:") ? row.key : thread ? `thread:${thread}` : voice ? `speech:${voice.id}`
-      : kind === "chat" ? `${row.source}:${chatKey(row.chat!)}`
+      : kind === "chat" ? `${row.chatApp}:${chatKey(row.chat!)}`
       : kind === "session" ? (row.session ? `session:${row.session}` : `record:${row.id}`) : row.key;
     let group = open.get(key);
     if (!group || (row.start > group.end && (row.start > group.end + gap ||
@@ -259,7 +273,9 @@ function candidatesIn(piece: Piece): Candidate[] {
 }
 
 const eligible = (kind: Kind, records: ReviewRecord[], seconds: number) =>
-  kind === "thread" || kind === "speech" || kind === "session" || (kind === "chat" && records.length > 1) || seconds >= MISC_SECONDS;
+  kind === "thread" || kind === "speech" || kind === "session"
+  || (kind === "chat" && (records.length > 1 || records.some(r => r.source === "android.notification" || r.hasNotificationCopy)))
+  || seconds >= MISC_SECONDS;
 const byImportance = (a: { seconds: number; start: number }, b: { seconds: number; start: number }) =>
   b.seconds - a.seconds || a.start - b.start;
 
@@ -426,7 +442,7 @@ function longerConversationBudget(segments: Candidate[]) {
   let available = 24;
   for (const a of [...segments].sort(byImportance)) {
     if (!available || a.seconds < 20 * 60) break;
-    const hasConversation = a.primary.some(r => r.source === "mac.audio" || r.evidence.some(e => e.role === "other"));
+    const hasConversation = a.primary.some(r => AUDIO_SOURCES.has(r.source) || r.evidence.some(e => e.role === "other"));
     if (!hasConversation) continue;
     const bonus = Math.min(available, a.seconds >= 40 * 60 ? 4 : 2);
     extras.set(a, bonus);
@@ -532,7 +548,7 @@ function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
   const apps = [...new Map(speaking.map(({ record: { source, app } }) =>
     [JSON.stringify([source, app]), { source, app }])).values()];
   const threads = new Set(speaking.flatMap(({ record }) => record.thread ?? []));
-  const title = primary.source === "mac.audio" ? "一场对话"
+  const title = AUDIO_SOURCES.has(primary.source) ? "一场对话"
     : primary.chat || (SESSION_SOURCES.has(primary.source) ? primary.title : primary.app || primary.title);
   return {
     id, t_start: toLocalIso(a.start), t_end: toLocalIso(a.end), active_seconds: a.seconds,
