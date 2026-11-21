@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 class EditorDraftModel : ViewModel() {
     var correction by mutableStateOf<top.jinso.tacit.core.HistoryRecord?>(null)
     var detail by mutableStateOf<top.jinso.tacit.core.HistoryRecord?>(null)
+    var conversation by mutableStateOf<List<top.jinso.tacit.core.HistoryRecord>>(emptyList())
     var initial by mutableStateOf("")
     var sharedOrigin by mutableStateOf(false)
     var session by mutableStateOf<String?>(null)

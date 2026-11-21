@@ -1,9 +1,11 @@
 package top.jinso.tacit.ui
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -12,21 +14,53 @@ import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.AudioController
 import top.jinso.tacit.core.HistoryRecord
 import top.jinso.tacit.core.readableTranscript
+import top.jinso.tacit.data.Vault
+import top.jinso.tacit.sources.Sources
+import top.jinso.tacit.ui.components.*
 
-@Composable internal fun ConversationText(records:List<HistoryRecord>,app:TacitApp,onSelect:(HistoryRecord)->Unit) {
-    val ordered=remember(records){records.sortedBy{it.start}}
-    val transcript by produceState<String?>(null,ordered) {
-        value=withContext(Dispatchers.IO){val audio=AudioController(app);ordered.joinToString("\n\n"){record->
-            val correction=app.vault.corrections(record.id).maxWithOrNull(compareBy<HistoryRecord>{it.start}.thenBy{it.id})
-            correction?.body?:readableTranscript(runCatching{audio.renderTranscript(record.id,record.body).get()}.getOrDefault(record.body))
-        }}
+@Composable
+internal fun ConversationDetail(
+    records: List<HistoryRecord>, app: TacitApp, vault: Vault, onBack: () -> Unit, onSelect: (HistoryRecord) -> Unit,
+) {
+    val ordered = remember(records) { records.sortedBy { it.start } }
+    val changes by vault.changes.collectAsState()
+    val parts by produceState<List<Pair<HistoryRecord, String>>?>(null, ordered, changes) {
+        value = withContext(Dispatchers.IO) {
+            val audio = AudioController(app)
+            ordered.mapNotNull { previous ->
+                val record = vault.get(previous.id) ?: return@mapNotNull null
+                val latest = vault.corrections(record.id).maxWithOrNull(correctionOrder)
+                record to (latest?.body ?: readableTranscript(renderedTranscript(audio, record)))
+            }
+        }
     }
-    var evidence by remember {mutableStateOf(false)}
-    Column(Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        Text(date(ordered.first().start,"HH:mm")+" 至 "+date(ordered.last().end?:ordered.last().start,"HH:mm"),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-        val text=transcript
-        if(text==null)LinearProgressIndicator(Modifier.fillMaxWidth())else if(text.isBlank())Text("这一场没有需要展示的完整内容，可查看原始片段。",color=MaterialTheme.colorScheme.onSurfaceVariant)else SelectionContainer{Text(text)}
-        TextButton(onClick={evidence=!evidence}){Text(if(evidence)"收起原始片段" else "查看原始片段、修正或删除")}
-        if(evidence)ordered.forEach { record -> TextButton(onClick={onSelect(record)}){Text(date(record.start,"HH:mm:ss")+"  查看这段记录")} }
+    var expanded by rememberSaveable(ordered.first().id) { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        PageBar("", onBack)
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp)) {
+            val current = parts
+            if (current == null) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                return@Column
+            }
+            if (current.isEmpty()) {
+                Caption("这场对话的记录已移除。")
+                return@Column
+            }
+            val start = current.first().first.start
+            val end = current.maxOf { (record, _) -> record.end ?: record.start }
+            val private = current.any { (record, _) -> record.sensitivity == "private" }
+            DetailInfo(Sources.AUDIO, null, start, end, private)
+            DetailTitle(conversationTitle(private))
+            val body = current.joinToString("\n\n") { it.second }.trim()
+            if (body.isBlank()) Caption("这场对话没有可显示的完整转写。")
+            else ReadingBody(body, transcript = true)
+            Spacer(Modifier.height(12.dp))
+            DetailLink("原始片段 ${current.size} 段", expanded) { expanded = !expanded }
+            if (expanded) current.forEach { (record, _) ->
+                EvidenceRow(date(record.start, "HH:mm:ss"), firstSentence(record.body).ifBlank { record.title },
+                    record.sensitivity == "private", onClick = { onSelect(record) })
+            }
+        }
     }
 }

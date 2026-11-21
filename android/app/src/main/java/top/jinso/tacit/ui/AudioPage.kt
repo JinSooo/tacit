@@ -6,9 +6,11 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -16,6 +18,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.activity.compose.LocalActivity
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -27,6 +32,8 @@ import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.*
 import top.jinso.tacit.core.HistoryRecord
+import top.jinso.tacit.ui.components.*
+import java.time.LocalDate
 import java.util.concurrent.CompletableFuture
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -34,8 +41,10 @@ import java.util.concurrent.CompletableFuture
     app: TacitApp,
     resumed: Int,
     notify: (String) -> Unit,
-    onOpenSettings: (String) -> Unit = { notify("请在设置中打开语音转写或隐私与存储") },
-    onSelectRecord: (HistoryRecord) -> Unit = { notify("请在历史记录中打开这段录音") },
+    onOpenSettings: (String) -> Unit,
+    onConversation: (List<HistoryRecord>) -> Unit,
+    macDays: Int?,
+    recovery: @Composable () -> Unit,
 ) {
     val activity=LocalActivity.current ?: return
     val audio=remember{AudioController(app)};val scope=rememberCoroutineScope()
@@ -45,13 +54,35 @@ import java.util.concurrent.CompletableFuture
     var waitingClips by remember { mutableIntStateOf(0) }
     var loaded by remember { mutableStateOf(false) }
     var loadFailed by remember { mutableStateOf(false) }
-    var expanded by remember { mutableStateOf<String?>(null) }
-    var includeIgnored by remember { mutableStateOf(false) }
-    var naming by remember { mutableStateOf<String?>(null) }
-    var speakerName by remember { mutableStateOf("") }
-    fun work(task:()->CompletableFuture<Unit>,success:String) {scope.launch{busy=true;try{withContext(Dispatchers.IO){task().get()};notify(success)}catch(_:Exception){notify("操作未完成，请检查状态后重试")};busy=false}}
-    fun start() {try{app.prefs.setEnabled(AUDIO_SOURCE,true);audio.start(activity);state=audio.state()}catch(_:Exception){notify("无法开始录音，请先授权麦克风并继续采集")}}
-    val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){result -> if(result[Manifest.permission.RECORD_AUDIO]==true || activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED) start() else notify("麦克风未授权，未开始录音")}
+    val includeIgnored = false
+    fun work(task: () -> CompletableFuture<Unit>, success: String, after: () -> Unit = {}) {
+        scope.launch {
+            busy = true
+            try {
+                withContext(Dispatchers.IO) { task().get() }
+                after()
+                notify(success)
+            } catch (_: Exception) {
+                notify("操作未完成，请检查状态后重试")
+            } finally {
+                busy = false
+            }
+        }
+    }
+    fun start() {
+        try {
+            app.prefs.setEnabled(AUDIO_SOURCE, true)
+            audio.start(activity)
+            state = audio.state()
+        } catch (_: Exception) {
+            notify("无法开始录音，请先授权麦克风并继续采集")
+        }
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (result[Manifest.permission.RECORD_AUDIO] == true ||
+            activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        ) start() else notify("麦克风未授权，未开始录音")
+    }
     val owner = activity as? LifecycleOwner
     LaunchedEffect(owner, resumed, includeIgnored) {
         // Re-read only when recordings, voices or status change; nothing runs while the page is hidden.
@@ -74,69 +105,177 @@ import java.util.concurrent.CompletableFuture
         } }
     }
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item(key = "recording") { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)){
-            Icon(if(state.recording)Icons.Outlined.GraphicEq else Icons.Outlined.MicNone,null,Modifier.size(32.dp),tint=if(state.recording)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-            Column(Modifier.weight(1f)){Text(if(state.recording)"正在录音" else "记录身边的对话",style=MaterialTheme.typography.titleLarge);Text(state.message,color=MaterialTheme.colorScheme.onSurfaceVariant)}
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Button(onClick={if(state.recording){audio.stop();state=audio.state()}else{val permissions=mutableListOf(Manifest.permission.RECORD_AUDIO);if(Build.VERSION.SDK_INT>=33)permissions+=Manifest.permission.POST_NOTIFICATIONS;permission.launch(permissions.toTypedArray())}},enabled=!busy){Icon(if(state.recording)Icons.Outlined.Stop else Icons.Outlined.Mic,null,Modifier.size(20.dp));Spacer(Modifier.width(8.dp));Text(if(state.recording)"停止录音" else "开始录音")}
-        }
-        Text("录音加密保存在手机，只转写有你声音的对话。", style=MaterialTheme.typography.bodySmall, color=MaterialTheme.colorScheme.onSurfaceVariant)
-        FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick={onOpenSettings(SettingsRoutes.SPEECH)}) { Text(if(state.modelsReady) "语音转写" else "准备语音转写") }
-            TextButton(onClick={onOpenSettings(SettingsRoutes.RETENTION)}) { Text("保留与清理") }
-        }
+    val candidate = if (speakers.any { it.isMe }) null else speakers
+        .filter { !it.ignored && it.sampleAvailable }.maxByOrNull { it.seconds }
+    val days = remember(rows) { rows.groupBy { date(it.start, "yyyy-MM-dd") } }
 
-        if(busy)LinearProgressIndicator(Modifier.fillMaxWidth())
-        HorizontalDivider()
-        } }
-        item(key = "speakers-title") {
-        Row(verticalAlignment=Alignment.CenterVertically){Text("确认声音",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge);TextButton(onClick={includeIgnored=!includeIgnored}){Text(if(includeIgnored)"隐藏已忽略" else "查看已忽略")}}
-        }
-        if (speakers.isEmpty() && loaded && !loadFailed) item(key = "speakers-empty") {
-            Text("录到清晰的说话声后，会在这里请你试听确认。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        items(speakers, key = { "speaker-${it.id}" }) { speaker -> Column(verticalArrangement=Arrangement.spacedBy(4.dp)){
-            Text(if(speaker.isMe)"我" else speaker.name?:"待确认的声音 ${speakers.indexOf(speaker)+1}")
-            if(speaker.ignored)Text("已忽略",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-            FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
-                TextButton(onClick={work({audio.playSample(speaker.id)},"正在试听")},enabled=speaker.sampleAvailable&&!busy){Text("试听")}
-                if(!speaker.isMe && !speaker.ignored)TextButton(onClick={work({audio.markMe(speaker.id)},"已标记为我，将补转写保留期内的录音")},enabled=!busy){Text("这是我")}
-                if(speaker.isMe)TextButton(onClick={work({audio.unmarkMe(speaker.id)},"已取消本人标记")},enabled=!busy){Text("这不是我")}
-                if(!speaker.isMe)TextButton(onClick={work({audio.setIgnored(speaker.id,!speaker.ignored)},if(speaker.ignored)"已恢复这个声音" else "已忽略这个声音")},enabled=!busy){Text(if(speaker.ignored)"恢复" else "忽略")}
-                if(!speaker.isMe && !speaker.ignored)TextButton(onClick={naming=speaker.id;speakerName=speaker.name?:""},enabled=!busy){Text("设置称呼")}
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
+        item(key = "recording") {
+            Column(
+                Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    if (state.recording) "正在录音" else "未在录音",
+                    style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif,
+                    color = if (state.recording) tacitColors.attention else tacitColors.ink,
+                )
+                Text(state.message, style = MaterialTheme.typography.bodySmall, color = tacitColors.muted,
+                    textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                RecordingButton(state.recording, !busy) {
+                    if (state.recording) {
+                        audio.stop()
+                        state = audio.state()
+                    } else {
+                        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+                        if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.POST_NOTIFICATIONS
+                        permission.launch(permissions.toTypedArray())
+                    }
+                }
+                Caption("只转写有你声音的对话",
+                    Modifier.background(tacitColors.fill, MaterialTheme.shapes.small).padding(horizontal = 12.dp, vertical = 4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    AudioChip(if (state.modelsReady) "语音模型 已就绪" else "语音模型 未准备", !state.modelsReady) {
+                        onOpenSettings(SettingsRoutes.SPEECH)
+                    }
+                    AudioChip(if (macDays != null) "随 Mac" else "保留 ${retentionLabel(app.prefs.retentionDays)}") {
+                        onOpenSettings(SettingsRoutes.RETENTION)
+                    }
+                }
+                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
-
-            if(naming==speaker.id){OutlinedTextField(speakerName,{speakerName=it.take(80)},Modifier.fillMaxWidth(),label={Text("如何称呼")},singleLine=true);FlowRow{TextButton(onClick={work({audio.renameSpeaker(speaker.id,speakerName)},"称呼已更新");naming=null},enabled=!busy){Text("保存")};TextButton(onClick={naming=null}){Text("取消")}}}
-        }}
+        }
+        item(key = "recovery") { recovery() }
+        if (candidate != null) item(key = "voice-${candidate.id}") {
+            Column(Modifier.padding(top = 12.dp)) {
+                VoiceConfirmation(
+                    candidate, !busy,
+                    play = { work({ audio.playSample(candidate.id) }, "正在试听") },
+                    mark = {
+                        work({ audio.markMe(candidate.id) }, "已标记为我，将补转写保留期内的录音") {
+                            speakers = speakers.map { if (it.id == candidate.id) it.copy(isMe = true) else it }
+                        }
+                    },
+                    ignore = {
+                        work({ audio.setIgnored(candidate.id, true) }, "好的，换一段再问") {
+                            speakers = speakers.filterNot { it.id == candidate.id }
+                        }
+                    },
+                )
+            }
+        }
         item(key = "conversations-title") {
-            HorizontalDivider()
-            Text("录下的对话", Modifier.padding(top=20.dp), style=MaterialTheme.typography.titleLarge)
+            SectionLabel("录下的对话", Modifier.padding(top = 24.dp, bottom = 8.dp))
         }
         if (!loaded) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         if (loadFailed) item {
-            Text("暂时无法读取录音，正在重试。", color=MaterialTheme.colorScheme.error)
+            Caption("暂时无法读取录音，正在重试。", color = tacitColors.attention)
         } else if (loaded && rows.isEmpty() && waitingClips == 0) item {
-            Text("还没有录下的对话。", color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Caption("还没有录下的对话。")
         }
         if (waitingClips > 0) item(key = "waiting-clips") {
-            Text("已保存 $waitingClips 段录音，等待识别对话。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Caption("$waitingClips 段录音等待识别", Modifier.padding(vertical = 8.dp))
         }
-        items(rows, key = { "conversation-${it.key}" }) { scene ->
-            val sceneRecords = scene.records
-            Column {
-                Row(Modifier.fillMaxWidth().clickable(enabled=sceneRecords.isNotEmpty()) { expanded=if(expanded==scene.key)null else scene.key }.padding(vertical=12.dp),verticalAlignment=Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-                        Text(date(scene.start,"M 月 d 日 HH:mm")+if(scene.private)" 的私密对话" else " 的对话")
-                        Text(if(sceneRecords.isEmpty()) "已保存录音，暂无转写" else "已有 ${sceneRecords.size} 段文字",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if(sceneRecords.isNotEmpty()) Icon(if(expanded==scene.key)Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,if(expanded==scene.key)"收起对话" else "展开对话",tint=MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if(expanded==scene.key && sceneRecords.isNotEmpty()) ConversationText(sceneRecords,app,onSelectRecord)
-                HorizontalDivider()
+        days.forEach { (day, scenes) ->
+            item(key = "day-$day") {
+                SectionLabel(if (day == LocalDate.now().toString()) "今天" else date(scenes.first().start, "M 月 d 日"),
+                    Modifier.padding(top = 12.dp, bottom = 4.dp))
+            }
+            scenes.forEach { scene ->
+                item(key = "conversation-${scene.key}") { RecordedConversation(scene, onConversation) }
             }
         }
     }
+}
+
+@Composable
+private fun RecordingButton(recording: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val tint = if (recording) tacitColors.paper else tacitColors.accent
+    Surface(
+        onClick = onClick, enabled = enabled, modifier = Modifier.size(76.dp), shape = CircleShape,
+        color = if (recording) tacitColors.attention else tacitColors.paper,
+        border = if (recording) null else BorderStroke(2.dp, tint),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(if (recording) Icons.Outlined.Stop else Icons.Outlined.Mic,
+                if (recording) "停止录音" else "开始录音", Modifier.size(32.dp),
+                tint = if (enabled) tint else tint.copy(alpha = .55f))
+        }
+    }
+}
+
+@Composable
+private fun AudioChip(label: String, problem: Boolean = false, onClick: () -> Unit) {
+    Surface(color = tacitColors.fill, shape = MaterialTheme.shapes.small, onClick = onClick) {
+        Box(Modifier.heightIn(min = 48.dp).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+            Caption(label, color = if (problem) tacitColors.attention else tacitColors.muted)
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () -> Unit, mark: () -> Unit, ignore: () -> Unit) {
+    val context = LocalActivity.current ?: return
+    val seconds by produceState<Int?>(null, speaker.id, speaker.seconds) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val runtime = AudioRuntime.get(context)
+                synchronized(runtime.lock) {
+                    runtime.sample(speaker.id)?.let { (_, start, end) ->
+                        ((end - start + SAMPLE_RATE - 1) / SAMPLE_RATE).coerceAtLeast(1)
+                    }
+                }
+            }.getOrNull()
+        }
+    }
+    GroupCard {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("这是你的声音吗？", style = MaterialTheme.typography.titleLarge)
+            Caption("确认一次，之后自动认出你")
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FilledIconButton(onClick = play, enabled = enabled,
+                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = tacitColors.fill, contentColor = tacitColors.ink)) {
+                    Icon(Icons.Outlined.PlayArrow, "试听")
+                }
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(8, 16, 12, 24, 16, 8, 20, 12, 16, 8).forEach { height ->
+                        Box(Modifier.weight(1f).height(height.dp).background(tacitColors.faint, CircleShape))
+                    }
+                }
+                seconds?.let { Caption("$it 秒") }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PrimaryButton("是我", mark, enabled)
+                TonalButton("不是", ignore, enabled = enabled)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecordedConversation(scene: AudioConversationRow, onConversation: (List<HistoryRecord>) -> Unit) {
+    val records = scene.records
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .clickable(enabled = records.isNotEmpty()) { onConversation(records) }.padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Caption(date(scene.start, "HH:mm"), Modifier.width(44.dp))
+        Column(Modifier.weight(1f)) {
+            if (records.isEmpty()) Text("已保存录音，还没有文字", color = tacitColors.muted)
+            else {
+                val first = records.first()
+                Text(firstSentence(first.body).ifBlank { conversationTitle(scene.private) },
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Caption(durationLabel(conversationDuration(records)))
+                    if (scene.private) PrivacyLock()
+                }
+            }
+        }
+    }
+    GroupDivider()
 }

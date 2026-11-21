@@ -5,18 +5,9 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,8 +28,8 @@ import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.sync.MacStatus
 import top.jinso.tacit.sync.syncError
+import top.jinso.tacit.ui.components.*
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun MacConnectionPage(app: TacitApp) {
     val scope = rememberCoroutineScope()
     val activity = LocalActivity.current ?: return
@@ -88,57 +79,65 @@ import top.jinso.tacit.sync.syncError
         if (granted) scan() else message = "未允许相机访问，可以粘贴配对链接"
     }
 
+    var manualOpen by remember { mutableStateOf(false) }
     val current = status
     val connected = current?.name != null && !current.removed
     if (connected) {
-        Text("已连接 ${current.name}", style = MaterialTheme.typography.titleLarge)
-        Text(if (current.lastSync == 0L) "尚未同步" else "上次同步 ${date(current.lastSync, "M 月 d 日 HH:mm")}",
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("待发送 ${current.pending} 条")
-        val rejected = current.rejected.values.sum()
-        if (rejected > 0) {
-            TextButton(onClick = { expanded = !expanded }) {
-                Text("被拒 $rejected 条，${if (expanded) "收起原因" else "查看原因"}")
-            }
+        GroupCard {
+            SettingsRow(current.name.orEmpty())
+            GroupDivider()
+            SettingsRow("上次同步", value = if (current.lastSync == 0L) "尚未同步" else date(current.lastSync, "M 月 d 日 HH:mm"))
+            GroupDivider()
+            SettingsRow("待发送", value = "${current.pending} 条")
+            GroupDivider()
+            val rejected = current.rejected.values.sum()
+            SettingsRow("被拒", value = "$rejected 条",
+                expanded = expanded, onClick = if (rejected > 0) {{ expanded = !expanded }} else null)
             if (expanded) current.rejected.filterKeys(String::isNotEmpty).forEach { (reason, count) ->
-                Text("$count 条，$reason", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        } else Text("被拒 0 条", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        HorizontalDivider()
-    } else if (current?.removed == true) {
-        Text("已在 Mac 上移除，需重新配对", color = MaterialTheme.colorScheme.error)
-    } else if (current != null) {
-        Text("在 Mac 的 Tacit 设置中生成配对邀请。连接后，这台手机的记录会同步到 Mac。",
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-
-    if (current != null) {
-        OutlinedTextField(displayAddress, { address = it.take(512) }, Modifier.fillMaxWidth(),
-            enabled = !busy, label = { Text("Mac 地址（可选）") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-        if (connected) {
-            if (displayAddress != current.manual) {
-                Button(onClick = { action { app.sync.updateManual(displayAddress); address = null } }, enabled = !busy) {
-                    Text("保存地址")
-                }
-            }
-        } else {
-            OutlinedTextField(invite, { invite = it.take(16_400) }, Modifier.fillMaxWidth(),
-                enabled = !busy, label = { Text("配对链接") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { pair(invite) }, enabled = invite.isNotBlank() && !busy) { Text("连接") }
-                TextButton(onClick = {
-                    if (activity.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scan()
-                    else permission.launch(Manifest.permission.CAMERA)
-                }, enabled = !busy) { Text("扫码") }
+                GroupDivider()
+                SettingsRow(reason, value = "$count 条")
             }
         }
-        if (current.name != null) TextButton(onClick = {
-            action { app.sync.disconnect(); address = null; expanded = false }
-        }, enabled = !busy) { Text("断开连接", color = MaterialTheme.colorScheme.error) }
+        GroupCard {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MacAddressField(displayAddress, { address = it }, busy)
+                if (displayAddress != current.manual) {
+                    TonalButton("保存地址", { action { app.sync.updateManual(displayAddress); address = null } }, enabled = !busy)
+                }
+            }
+        }
+    } else if (current != null) {
+        if (current.removed) Caption("已在 Mac 上移除，需重新配对", color = tacitColors.attention)
+        Caption("在 Mac 的 Tacit 设置里生成配对邀请。")
+        PrimaryButton("扫码连接", {
+            if (activity.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scan()
+            else permission.launch(Manifest.permission.CAMERA)
+        }, enabled = !busy)
+        GroupCard {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(invite, { invite = it.take(16_400) }, Modifier.fillMaxWidth(),
+                    enabled = !busy, label = { Text("粘贴配对链接") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                TonalButton("连接", { pair(invite) }, enabled = invite.isNotBlank() && !busy)
+            }
+            GroupDivider()
+            SettingsRow(if (manualOpen) "收起 Mac 地址" else "手动填写 Mac 地址", expanded = manualOpen, onClick = { manualOpen = !manualOpen })
+            if (manualOpen) Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+                MacAddressField(displayAddress, { address = it }, busy)
+            }
+        }
     }
-    (message ?: current?.error)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-    if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+
+    (message ?: current?.error)?.let { Caption(it, color = tacitColors.attention) }
+    if (busy || (current == null && message == null)) LinearProgressIndicator(Modifier.fillMaxWidth())
+    if (current?.name != null) TextAction("断开连接", {
+        action { app.sync.disconnect(); address = null; expanded = false }
+    }, enabled = !busy, color = tacitColors.attention)
+}
+
+@Composable
+private fun MacAddressField(address: String, update: (String) -> Unit, busy: Boolean) {
+    OutlinedTextField(address, { update(it.take(512)) }, Modifier.fillMaxWidth(),
+        enabled = !busy, label = { Text("Mac 地址（可选）") }, singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
 }

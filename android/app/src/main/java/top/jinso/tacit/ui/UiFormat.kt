@@ -1,0 +1,65 @@
+package top.jinso.tacit.ui
+
+import top.jinso.tacit.TacitApp
+import top.jinso.tacit.core.HistoryRecord
+import top.jinso.tacit.core.readableTranscript
+import top.jinso.tacit.sources.Sources
+import top.jinso.tacit.ui.onboarding.CollectionHealth
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+
+internal fun date(time: Long, pattern: String): String = Instant.ofEpochMilli(time)
+    .atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern(pattern, Locale.SIMPLIFIED_CHINESE))
+
+internal fun sourceName(source: String): String = when (source) {
+    Sources.NOTE -> "补写"
+    Sources.CORRECTION -> "修正"
+    Sources.AUDIO -> "录音"
+    "system.pause" -> "采集状态"
+    // Historical labels for records still visible after an upgrade.
+    "android.share" -> "分享"
+    "android.screen" -> "屏幕文字"
+    "android.sms" -> "短信"
+    "android.calls" -> "通话"
+    "android.calendar" -> "日历"
+    "android.media" -> "照片与截图"
+    "android.files" -> "文件"
+    "android.location" -> "位置"
+    "android.recording_folder" -> "录音目录"
+    else -> Sources.descriptors.firstOrNull { it.id == source }?.title ?: source
+}
+
+internal fun durationLabel(millis: Long): String {
+    val minutes = millis / 60_000
+    return when {
+        minutes < 1 -> "不到 1 分钟"
+        minutes < 60 -> "$minutes 分钟"
+        else -> "${minutes / 60} 小时 ${minutes % 60} 分"
+    }
+}
+
+internal fun conversationDuration(records: List<HistoryRecord>) =
+    records.maxOf { it.end ?: it.start } - records.minOf { it.start }
+
+internal fun conversationTitle(private: Boolean) = if (private) "一场私密对话" else "一场对话"
+
+internal fun firstSentence(raw: String): String {
+    val first = readableTranscript(raw).lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+    val body = first.replaceFirst(Regex("^(?:我|对方(?:[ 　]*[0-9]+)?)[：:]\\s*"), "")
+    val ending = body.indexOfFirst { it in "。！？!?…" }
+    return if (ending < 0) body else body.take(ending + 1)
+}
+
+internal fun enabledSourceCount(app: TacitApp, health: CollectionHealth?): Int {
+    val sources = health?.sources?.count { it.enabled } ?: Sources.descriptors.count { app.prefs.enabled(it.id) }
+    return sources + if (health?.audioEnabled ?: app.prefs.enabled(Sources.AUDIO)) 1 else 0
+}
+
+internal fun syncAge(lastSync: Long, now: Long = System.currentTimeMillis()): String {
+    val elapsed = (now - lastSync).coerceAtLeast(0)
+    return if (elapsed < 60_000) "不到 1 分钟前" else durationLabel(elapsed) + "前"
+}
+
+internal fun retentionLabel(days: Int): String = if (days == 0) "不自动清除" else "$days 天"
