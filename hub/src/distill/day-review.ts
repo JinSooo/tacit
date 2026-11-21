@@ -21,6 +21,8 @@ type ReviewRecord = DayReference & {
   start: number; end: number; lastActivity: number; key: string; thread: string | null; projectId: string | null; session: string | null;
   projectName: string | null;
   related?: ReviewRecord[]; app: string | null; chat: string | null; evidence: UnnumberedEvidence[];
+  /** AI 会话批次里一句“我”都没有：是上一条输入那一轮的回复，不是自动续跑。 */
+  replyOnly?: boolean;
 };
 type Kind = "thread" | "speech" | "chat" | "session" | "misc";
 type Span = [number, number];
@@ -115,6 +117,7 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
       ...reference,
       start: Math.max(windowStart, row.t_start_ms), end: Math.min(end, finish),
       key, lastActivity: Math.min(end, finish), thread: row.thread_id, projectId: row.project_id, projectName: row.project_name, session, evidence,
+      replyOnly: isSession && !/^\[我\] /m.test(row.body ?? ""),
       app: context?.app ? redactString(context.app).text : null, chat: context?.chat ? redactString(context.chat).text : null,
     });
   }
@@ -138,6 +141,8 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
 /** 批次只有首末时刻：按实际跨度计，每条真实输入最多支持 30 分钟。 */
 function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: number): ReviewRecord[] {
   const result: ReviewRecord[] = [];
+  // 每个在场区间还能延到哪：区间内每条输入最多 30 分钟。只有 AI 回复的后续批次是上一条输入那一轮的回复，在这之内接着计时。
+  const reach = new Map<ReviewRecord, number>();
   for (const record of records) {
     if (!SESSION_SOURCES.has(record.source)) {
       // 聊天点先扩为在场窗口，统一用于裁决、覆盖率、排序与最终计时。
@@ -154,20 +159,25 @@ function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: numb
       if (initiator) {
         initiator.evidence.push(...record.evidence);
         (initiator.related ??= []).push(record);
+        const limit = Math.min(dayEnd, reach.get(initiator) ?? initiator.end);
+        if (record.replyOnly && record.start <= limit) initiator.end = Math.max(initiator.end, Math.min(record.end, limit));
       } else result.push({ ...record, key: `autonomous:${record.id}`, end: record.start });
       continue;
     }
     // within_batch 没有逐条时刻，不把占位 at 当成输入时刻。已知末条输入可支持末端的零时长点。
-    const spans: Span[] = record.end - record.start <= users.length * 30 * MINUTE
-      ? [[record.start, record.end]] : [];
+    const spans: [number, number, number][] = record.end - record.start <= users.length * 30 * MINUTE
+      ? [[record.start, record.end, record.start + users.length * 30 * MINUTE]] : [];
     for (const user of spans.length ? [] : users) {
       const at = user.position === "within_batch" ? record.start : Math.max(record.start, Date.parse(user.at));
       const last = spans.at(-1);
-      if (last && at <= last[1]) last[1] = Math.min(record.end, last[1] + 30 * MINUTE);
-      else spans.push([at, Math.min(record.end, at + 30 * MINUTE)]);
+      if (last && at <= last[1]) { last[2] += 30 * MINUTE; last[1] = Math.min(record.end, last[2]); }
+      else spans.push([at, Math.min(record.end, at + 30 * MINUTE), at + 30 * MINUTE]);
     }
-    for (const [start, end] of spans) result.push({ ...record,
-      start: Math.max(dayStart, start), end: Math.min(dayEnd, end) });
+    for (const [start, end, limit] of spans) {
+      const span = { ...record, start: Math.max(dayStart, start), end: Math.min(dayEnd, end) };
+      reach.set(span, limit);
+      result.push(span);
+    }
   }
   return result.sort((a,b) => a.start-b.start);
 }

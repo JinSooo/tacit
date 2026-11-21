@@ -9,6 +9,9 @@ import { messageBuffer, type Message } from "./message-buffer.ts";
 import { parseSessionEvent, type Provider } from "./session-events.ts";
 
 const HOUR = 3_600_000;
+// 会话安静满 3 分钟，或一批最早的消息已等了 15 分钟，就先输出这一批；同一小时后续内容用 #2、#3 接着编号。
+const QUIET = 3 * 60_000;
+const BATCH = 15 * 60_000;
 const RETENTION = 8 * 86400_000;
 const BODY_LIMIT = 150_000;
 const TRUNCATED = "…[已截断]";
@@ -179,7 +182,8 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
   const excluded = (options.excludeDirs ?? [path.join(process.env.RA_DATA_DIR ?? path.join(os.homedir(), "Library/Application Support/record-anything"), "distill-work")])
     .flatMap(dir => { const all = [path.resolve(dir)]; try { all.push(fs.realpathSync(dir)); } catch {} return all; });
   const isExcluded = (cwd: string | null) => !!cwd && excluded.some(dir => cwd === dir || cwd.startsWith(dir + path.sep));
-  const isClosed = (hour: string, session: Session) => now > Number(hour) + HOUR + 10 * 60_000 || now - session.mtime >= 30 * 60_000;
+  const isClosed = (hour: string, session: Session, id: number) => now > Number(hour) + HOUR + 10 * 60_000
+    || now - session.mtime >= QUIET || now - (getBuffer().size(id).first ?? now) >= BATCH;
   // 活动桶要随 checkpoint 保留。超限时在发送任何记录前结束本轮，
   // runner 保留旧游标，等桶关闭后重读；中途输出会改变分条边界。
   let pendingBytes = 0, pendingMessages = 0;
@@ -187,7 +191,7 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     if (isExcluded(session.cwd)) continue;
     for (const [hour, bucket] of Object.entries(session.buckets)) {
       const id = bucketIds.get(bucket);
-      if (id === undefined || isClosed(hour, session)) continue;
+      if (id === undefined || isClosed(hour, session, id)) continue;
       const size = getBuffer().size(id);
       pendingBytes += size.bytes;
       pendingMessages += size.count;
@@ -200,7 +204,7 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     for (const [hour, bucket] of Object.entries(session.buckets).sort(([a], [b]) => Number(a) - Number(b))) {
       const id = bucketIds.get(bucket);
       if (id === undefined) continue;
-      const closed = isClosed(hour, session);
+      const closed = isClosed(hour, session, id);
       const buffer = getBuffer();
       if (!excluded) {
         if (closed) await emitBucket(options, session, hour, bucket, buffer.messages(id));

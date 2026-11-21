@@ -275,7 +275,8 @@ private struct ReviewDayContent: View {
   private var footer: some View {
     HStack(alignment: .firstTextBaseline, spacing: 16) {
       if hasSegments, let at = cutoff {
-        Text("内容截至 \(ReviewTime.clock(at, on: day))\(failed ? "，最近一次整理失败" : "")")
+        // 有草稿时截止时间只代表润色到哪，草稿本身已经更新到最新。
+        Text("\(drafts.isEmpty ? "内容截至" : "已整理到") \(ReviewTime.clock(at, on: day))\(failed ? "，最近一次整理失败" : "")")
           .monospacedDigit().foregroundStyle(failed ? Palette.attention : Palette.muted)
       }
       Spacer(minLength: 0)

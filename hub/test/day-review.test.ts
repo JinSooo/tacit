@@ -504,6 +504,20 @@ test("续跑产出并回同日用户发起段，不拉长时间；摘要选有�
   } finally { ctx.cleanup(); }
 });
 
+test("只有 AI 回复的后续批次接着上一条输入计时，每条输入仍最多三十分钟", () => {
+  const ctx = setup();
+  try {
+    const ask = span(10, 25, { source: "codex.session", source_ref: "synthetic-reply#2026-11-16T01:00:00.000Z", body: "[我] 检查展板。\n\n[AI] 开始检查。" });
+    const reply = span(25, 33, { source: "codex.session", source_ref: "synthetic-reply#2026-11-16T01:00:00.000Z#2", body: "[AI] 展板已检查，图例补齐。" });
+    const late = span(45, 60, { source: "codex.session", source_ref: "synthetic-reply#2026-11-16T01:00:00.000Z#3", body: "[AI] 又补了一张导览图。" });
+    ctx.db.ingest([ask, reply, late]);
+    const plan = reviewPlan(ctx.db, base, base + 70 * min);
+    expect(plan.segments).toHaveLength(1);
+    expect(plan.segments[0]).toMatchObject({ start: base + 10 * min, end: base + 33 * min, seconds: 23 * 60 });
+    expect(plan.segments[0]!.records.map(r => r.id)).toEqual([ask.id, reply.id, late.id]);
+  } finally { ctx.cleanup(); }
+});
+
 test("结构化判断排除纯请求与空录音，保留后续结果和用户明确判断", () => {
   const ctx = setup();
   try {

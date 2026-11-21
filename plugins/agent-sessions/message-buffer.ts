@@ -29,7 +29,7 @@ export function messageBuffer() {
     const insert = db.query("INSERT INTO messages VALUES (?, ?, ?, ?, ?) ON CONFLICT(bucket, hash) DO NOTHING");
     const ordered = db.query<Row, [number]>("SELECT time, role, text FROM messages WHERE bucket = ? ORDER BY time, rowid");
     const hashes = db.query<{ hash: string }, [number]>("SELECT hash FROM messages WHERE bucket = ? AND hash IS NOT NULL");
-    const size = db.query<{ count: number; bytes: number }, [number]>(`SELECT count(*) AS count, COALESCE(sum(length(text) - ${HEADER_BYTES}), 0) AS bytes FROM messages WHERE bucket = ?`);
+    const size = db.query<{ count: number; bytes: number; first: number | null }, [number]>(`SELECT count(*) AS count, COALESCE(sum(length(text) - ${HEADER_BYTES}), 0) AS bytes, min(time) AS first FROM messages WHERE bucket = ?`);
     return {
       close: () => db.close(),
       add(bucket: number, message: Message, hash: string | null) {

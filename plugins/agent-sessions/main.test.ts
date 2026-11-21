@@ -98,6 +98,24 @@ test("整点分桶：结束十分钟后关闭，未改三十分钟也关闭，�
   expect((await s.run(base + 100 * 60_000, idle.state)).records).toHaveLength(0);
 });
 
+test("会话安静三分钟就输出，一直有新内容时一批最多等十五分钟，同小时后续用 #2", async () => {
+  const s = setup(); const file = s.file("claude");
+  s.write(file, [claude("user", "先问一句", base + 60_000), claude("assistant", "答了", base + 2 * 60_000)], base + 2 * 60_000);
+  const waiting = await s.run(base + 4 * 60_000); expect(waiting.records).toHaveLength(0);
+  const quiet = await s.run(base + 5 * 60_000, waiting.state);
+  expect(quiet.records.map(r => r.source_ref)).toEqual([`claude-session#${new Date(base).toISOString()}`]);
+  expect(quiet.records[0]!.body).toBe("[我] 先问一句\n\n[AI] 答了");
+  // 文件一直在写：不等安静，最早一条等满十五分钟就输出。
+  const busy = (time: number) => { fs.appendFileSync(file, JSON.stringify(claude("user", `接着 ${time}`, base + time * 60_000)) + "\n"); fs.utimesSync(file, (base + time * 60_000) / 1000, (base + time * 60_000) / 1000); };
+  busy(6); busy(20);
+  const notYet = await s.run(base + 20 * 60_000 + 59_000, quiet.state); expect(notYet.records).toHaveLength(0);
+  busy(21);
+  const capped = await s.run(base + 21 * 60_000, notYet.state);
+  expect(capped.records.map(r => r.source_ref)).toEqual([`claude-session#${new Date(base).toISOString()}#2`]);
+  expect(capped.records[0]!.body).toBe("[我] 接着 6\n\n[我] 接着 20\n\n[我] 接着 21");
+  expect((await s.run(base + 21 * 60_000, capped.state)).records).toHaveLength(0);
+});
+
 test("增量只读追加字节；同桶追加使用 #2，新桶单独输出，偏移按 UTF8 字节计", async () => {
   const s = setup(); const file = s.file("claude"); s.write(file, [claude("user", "首条中文")]);
   const first = (await s.run(base + 2 * 3_600_000)); expect(first.records).toHaveLength(1);
@@ -150,10 +168,10 @@ test("压缩归档、迁移去重、重跑和 AI 四千字截断", async () => {
   const s = setup(); const archive = path.join(s.codexDir, "archived_sessions/session.jsonl.zst"); fs.mkdirSync(path.dirname(archive), { recursive: true });
   const events = [meta(s.cwd), codex("user", "压缩请求"), codex("assistant", "答".repeat(4001), base + 120_000)];
   fs.writeFileSync(archive, zstdCompressSync(Buffer.from(events.map(e => JSON.stringify(e)).join("\n"))));
-  const first = (await s.run(base + 3_600_000)); expect(first.records).toHaveLength(0);
-  const closed = (await s.run(base + 3_600_000 + 600_001, first.state)); expect(closed.records).toHaveLength(1);
+  const first = (await s.run(base + 10 * 60_000)); expect(first.records).toHaveLength(0);
+  const closed = (await s.run(base + 16 * 60_000, first.state)); expect(closed.records).toHaveLength(1);
   expect(closed.records[0]!.body).toContain("答".repeat(4000) + "…[已截断]"); expect(closed.records[0]!.body).not.toContain("答".repeat(4001));
-  s.write(s.file("codex"), events); expect((await s.run(base + 3_600_000 + 600_001, closed.state)).records).toHaveLength(0);
+  s.write(s.file("codex"), events); expect((await s.run(base + 16 * 60_000, closed.state)).records).toHaveLength(0);
 });
 
 test("损坏完整行跳过；文件缩短或替换后去重重读", async () => {

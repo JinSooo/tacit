@@ -26,8 +26,10 @@ public struct ModelUsageSummary: Decodable, Equatable {
 
   public var line: String? {
     guard daysWithUsage > 0, let averageDailyTokens, let averageDailyTimelineTokens else { return nil }
+    // 十万以上取整数，以下最多一位小数：只用来感受量级，不当账单读。
     func units(_ tokens: Double) -> String {
-      (tokens / 10_000).formatted(.number.precision(.fractionLength(0...4)))
+      let units = tokens / 10_000
+      return units.formatted(.number.precision(.fractionLength(units >= 10 ? 0...0 : 0...1)))
     }
     return "最近 7 天平均每天约 \(units(averageDailyTokens)) 万 token，其中时间线约 \(units(averageDailyTimelineTokens)) 万；今天已用 \(units(Double(todayTokens))) 万"
   }

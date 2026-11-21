@@ -24,5 +24,9 @@ final class ModelUsageTests: XCTestCase {
       #"{"days_with_usage":2,"average_daily_tokens":40000,"average_daily_timeline_tokens":0,"today_tokens":10000}"#.utf8
     ))
     XCTAssertEqual(reported.line, "最近 7 天平均每天约 4 万 token，其中时间线约 0 万；今天已用 1 万")
+    let real = try decoder.decode(ModelUsageSummary.self, from: Data(
+      #"{"days_with_usage":7,"average_daily_tokens":6134650,"average_daily_timeline_tokens":508906,"today_tokens":94589}"#.utf8
+    ))
+    XCTAssertEqual(real.line, "最近 7 天平均每天约 613 万 token，其中时间线约 51 万；今天已用 9.5 万")
   }
 }
