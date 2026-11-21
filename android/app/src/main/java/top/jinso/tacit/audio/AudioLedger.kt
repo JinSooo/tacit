@@ -6,6 +6,11 @@ import top.jinso.tacit.sync.MacVoiceprint
 import top.jinso.tacit.core.Secrets
 import java.util.UUID
 
+internal fun transcriptSpeakerLabel(speaker: JSONObject?, number: () -> Int): String {
+    if (speaker?.optBoolean("me") == true) return "我"
+    return speaker?.optString("name")?.takeIf(String::isNotEmpty) ?: "对方 ${number()}"
+}
+
 /** Encrypted index operations. Caller holds AudioRuntime.lock; no content goes through Preferences. */
 internal class AudioLedger(private val store: EncryptedAudioStore) {
     private val conversations: JSONArray get() = store.index.optJSONArray("conversations")
@@ -151,7 +156,11 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
     fun ignore(id: String, ignored: Boolean) {
         store.saveSpeakers(listOf(speaker(id).put("ignored", ignored).apply { if (ignored) put("me", false) }))
     }
-    private fun speaker(id: String) = requireNotNull(store.speakers().firstOrNull { it.getString("id") == id }) { "说话人已不存在" }
+    private fun findSpeaker(id: String) = store.speakers().firstOrNull { it.getString("id") == id }
+    private fun speaker(id: String) = requireNotNull(findSpeaker(id)) { "说话人已不存在" }
+
+    fun transcriptLabel(clip: JSONObject, speakerId: String): String =
+        transcriptSpeakerLabel(findSpeaker(speakerId)) { label(clip, speakerId) }
 
     fun persistTranscript(clip: JSONObject, record: String) {
         if (store.transcripts().any { it.getString("recordId") == record }) return
@@ -170,12 +179,7 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
         val row = store.transcripts().firstOrNull { it.getString("recordId") == record } ?: return fallback
         val lines = row.getJSONArray("utterances").objects().mapNotNull { u ->
             val text = u.optString("text"); if (text.isBlank()) return@mapNotNull null
-            val s = store.speakers().firstOrNull { it.getString("id") == u.getString("speaker") }
-            val name = when {
-                s?.optBoolean("me") == true -> "我"
-                !s?.optString("name").isNullOrEmpty() -> s!!.getString("name")
-                else -> "对方 ${u.getInt("label") }"
-            }
+            val name = transcriptSpeakerLabel(findSpeaker(u.getString("speaker"))) { u.getInt("label") }
             "$name：$text"
         }
         return lines.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: fallback

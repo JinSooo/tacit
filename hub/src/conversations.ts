@@ -62,12 +62,22 @@ export function groupConversations(rows: AudioRow[]): ConversationGroup[] {
 
 export interface Line { at_ms: number; label: string; text: string; clock?: string; speaker_id?: string | null }
 
-export function parseAndroidTranscript(body: string): Pick<Line, "label" | "text">[] {
-  const turns: Pick<Line, "label" | "text">[] = [];
+type TranscriptTurn = Pick<Line, "label" | "text" | "clock">;
+
+function parseTimedTurn(raw: string): TranscriptTurn | null {
+  const line = /^\[(\d\d:\d\d:\d\d)\]\s*([^：]+)：(.*)$/.exec(raw);
+  return line ? { clock: line[1]!, label: line[2]!.trim(), text: line[3]!.trim() } : null;
+}
+
+export function parseAndroidTranscript(body: string): TranscriptTurn[] {
+  const turns: TranscriptTurn[] = [];
   for (const raw of body.split("\n")) {
-    const line = /^(我|对方(?:\s*\d+)?)[：:](.*)$/u.exec(raw.trim());
+    const text = raw.trim();
+    const timed = parseTimedTurn(text);
+    if (timed) { turns.push(timed); continue; }
+    const line = /^(我|对方(?:\s*\d+)?)[：:](.*)$/u.exec(text);
     if (line) turns.push({ label: line[1]!, text: line[2]!.trim() });
-    else if (raw.trim() && turns.length) turns.at(-1)!.text += `\n${raw.trim()}`;
+    else if (text && turns.length) turns.at(-1)!.text += `\n${text}`;
   }
   return turns;
 }
@@ -75,18 +85,15 @@ export function parseAndroidTranscript(body: string): Pick<Line, "label" | "text
 /** 采集端写的正文每行是"[HH:MM:SS] 说话人：内容"，时间是本地钟点；跨过午夜的行算到第二天。 */
 export function parseTranscript(body: string, t_start: string, source?: string): Line[] {
   const start = Date.parse(t_start);
-  // Android 只上传话轮顺序和录音起止。用片段起点作引用位置。
-  if (source === "android.audio") return parseAndroidTranscript(body).map(turn => ({ ...turn, at_ms: start }));
   const m = /^(\d{4}-\d\d-\d\d)T(\d\d:\d\d:\d\d)(?:\.\d+)?(Z|[+-]\d\d:\d\d)$/.exec(t_start);
-  const out: Line[] = [];
-  for (const raw of body.split("\n")) {
-    const line = /^\[(\d\d:\d\d:\d\d)\]\s*([^：]+)：(.*)$/.exec(raw.trim());
-    if (!line) continue;
-    let at = m ? Date.parse(`${m[1]}T${line[1]}${m[3]}`) : start;
+  const turns = source === "android.audio" ? parseAndroidTranscript(body)
+    : body.split("\n").map(raw => parseTimedTurn(raw.trim())).filter(turn => turn !== null);
+  return turns.map(turn => {
+    // 旧 Android 话轮没有逐句时间，仍引用片段起点。
+    let at = m && turn.clock ? Date.parse(`${m[1]}T${turn.clock}${m[3]}`) : start;
     if (Number.isFinite(start) && at < start - 60_000) at += 86_400_000;
-    out.push({ at_ms: Number.isFinite(at) ? at : start, label: line[2]!.trim(), text: line[3]!.trim(), clock: line[1]! });
-  }
-  return out;
+    return { ...turn, at_ms: Number.isFinite(at) ? at : start };
+  });
 }
 
 const FILLER = /^(嗯|啊|哦|噢|呃|额|唉|哎|诶|欸|嘿|喂|哈|呀|yeah|yes|yep|oh|ok|okay|hello|hi|hey|wei|uh|um|hmm|mm|bye)+$/i;

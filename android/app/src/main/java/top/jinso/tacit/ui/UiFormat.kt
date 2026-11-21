@@ -47,7 +47,7 @@ internal fun conversationTitle(private: Boolean) = if (private) "一场私密对
 
 internal fun firstSentence(raw: String): String {
     val first = readableTranscript(raw).lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
-    val body = first.replaceFirst(Regex("^(?:我|对方(?:[ 　]*[0-9]+)?)[：:]\\s*"), "")
+    val body = first.replaceFirst(Regex("^(?:(?:我|对方(?:[ 　]*[0-9]+)?)[：:]|[^：]+：)\\s*"), "")
     val ending = body.indexOfFirst { it in "。！？!?…" }
     return if (ending < 0) body else body.take(ending + 1)
 }

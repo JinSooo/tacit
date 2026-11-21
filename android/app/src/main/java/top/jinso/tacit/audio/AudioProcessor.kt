@@ -4,13 +4,39 @@ import org.json.JSONArray
 import org.json.JSONObject
 import top.jinso.tacit.core.Secrets
 import top.jinso.tacit.sync.MacVoiceprint
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 internal interface SpeechEngine {
     fun segments(pcm: FloatArray): List<VoiceSegment>
     fun transcribe(samples: FloatArray): String
 }
 internal data class AudioPublication(val clipId: String,
-    val body: String, val start: Long, val end: Long)
+    val body: String, val start: Long, val end: Long, val offset: ZoneOffset)
+
+private val transcriptClock = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT)
+private val transcriptLineBreak = Regex("\\R")
+
+internal fun audioPublication(clip: JSONObject, utterances: List<JSONObject>, zone: ZoneId,
+    speakerLabel: (String) -> String): AudioPublication? {
+    val start = clip.getLong("start")
+    // The hub reconstructs every clock time with the offset at the start of this clip.
+    val offset = zone.rules.getOffset(Instant.ofEpochMilli(start))
+    val body = utterances.mapNotNull { utterance ->
+        val text = utterance.optString("text").trim()
+        if (text.isEmpty()) return@mapNotNull null
+        val at = start + utterance.getInt("start") * 1000L / SAMPLE_RATE
+        val clock = Instant.ofEpochMilli(at).atOffset(offset).format(transcriptClock)
+        val label = speakerLabel(utterance.getString("speaker")).replace('：', ':')
+        "[$clock] $label：${text.replace(transcriptLineBreak, " ")}"
+    }.joinToString("\n")
+    if (body.isEmpty()) return null
+    return AudioPublication(clip.getString("id"), body, start,
+        start + clip.getInt("samples") * 1000L / SAMPLE_RATE, offset)
+}
 
 internal fun microphoneClip(clip: JSONObject): Boolean =
     clip.optString("origin", "microphone") == "microphone"
@@ -88,12 +114,8 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
             }
             synchronized(lock) {
                 if (!eligible(clip)) return
-                val body = utterances.filter { it.optString("text").isNotBlank() }.joinToString("\n") {
-                    "对方 ${ledger.label(clip, it.getString("speaker"))}：${it.getString("text")}"
-                }
-                val record = if (body.isNotEmpty()) publish(AudioPublication(clip.getString("id"),
-                    body, clip.getLong("start"),
-                    clip.getLong("start") + clip.getInt("samples") * 1000L / SAMPLE_RATE)) else null
+                val publication = audioPublication(clip, utterances, ZoneId.systemDefault()) { ledger.transcriptLabel(clip, it) }
+                val record = publication?.let(publish)
                 if (record != null) ledger.persistTranscript(clip, record)
                 utterances.forEach { u ->
                     if (record != null) u.put("record", record)

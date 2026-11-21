@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { AudioStore } from "../src/audio.ts";
 import { conversationDetail, groupConversations, isNoise, parseTranscript, readableTurns, speakerNamer, type Line } from "../src/conversations.ts";
+import { readDayEvidence } from "../src/distill/day-evidence.ts";
+import { groundedQuote } from "../src/distill/quotes.ts";
 import { conversationStep, conversationTranscript, type LLM } from "../src/distill/run.ts";
 import type { LLMRequest } from "../src/llm/index.ts";
 import { historySegments } from "../src/history.ts";
@@ -50,6 +52,34 @@ test("转写去掉语气词、假名碎片和两路录到的同一句，同一�
 test("跨过午夜的转写行算到第二天", () => {
   const lines = parseTranscript("[23:59:50] 我：快到十二点了\n[00:00:10] 我：过了十二点", "2026-11-10T23:59:40+09:00");
   expect(lines[1]!.at_ms - lines[0]!.at_ms).toBe(20_000);
+});
+
+test("手机录音使用记录偏移还原逐句时间，整理和引用都把“我”识别为用户", () => {
+  const t_start = "2026-11-10T23:59:58.750+05:30";
+  const body = "[23:59:59] 我：周五交第一版。\n[00:00:00] 小周：我来核对清单。";
+  const record = talk("10:00:00", "10:00:05", body, {
+    source: "android.audio", t_start, t_end: "2026-11-11T00:00:03+05:30",
+  });
+  const expected = ["2026-11-10T18:29:59Z", "2026-11-10T18:30:00Z"].map(Date.parse);
+  expect(parseTranscript(body, t_start, record.source)).toEqual([
+    { at_ms: expected[0], clock: "23:59:59", label: "我", text: "周五交第一版。" },
+    { at_ms: expected[1], clock: "00:00:00", label: "小周", text: "我来核对清单。" },
+  ]);
+  const entries = readDayEvidence({ id: record.id, source: record.source, title: record.title, at: t_start },
+    record, body, false, Date.parse(t_start), Date.parse(record.t_end!));
+  expect(entries?.map(entry => [entry.role, Date.parse(entry.at), entry.text])).toEqual([
+    ["user", expected[0], "周五交第一版。"], ["other", expected[1], "我来核对清单。"],
+  ]);
+  expect(groundedQuote(record, "周五交第一版。")).toBe(true);
+  expect(groundedQuote(record, "我来核对清单。")).toBe(false);
+});
+
+test("旧手机录音按片段起点引用，保留话轮的续行", () => {
+  const t_start = "2026-11-10T15:20:12.345Z";
+  expect(parseTranscript("对方 1：先看清单。\n周五定稿。\n对方 2: 我来核对。", t_start, "android.audio")).toEqual([
+    { at_ms: Date.parse(t_start), label: "对方 1", text: "先看清单。\n周五定稿。" },
+    { at_ms: Date.parse(t_start), label: "对方 2", text: "我来核对。" },
+  ]);
 });
 
 test("说话人按现在的状态叫：确认的写名字，并走的跟过去，没确认的按出场顺序编号", () => {
