@@ -1,14 +1,16 @@
-import { chatKey } from "../chat.ts";
+import { chatApp, chatKey, recordChat } from "../chat.ts";
 import type { RecordV1 } from "../../../packages/record/index.ts";
 import { ulid } from "../../../packages/record/index.ts";
 import type { HubDB } from "../db.ts";
 import { DistillStore, type Frame } from "./store.ts";
 import { gitMaterialKey } from "./material.ts";
 import { resolveRepoRoot } from "./repos.ts";
+import { AUDIO_SOURCES } from "../record-sources.ts";
+import { wechatRecordForNotification } from "./wechat-duplicates.ts";
 
 const gap = 10 * 60_000, maxDuration = 2 * 60 * 60_000;
 export function frameKey(record: RecordV1): string {
-  if (record.source === "mac.audio") return `audio:${record.source_ref}`;
+  if (AUDIO_SOURCES.has(record.source)) return `audio:${record.source_ref ?? record.id}`;
   const c = record.context;
   const git = gitMaterialKey(record);
   if (git) return `git:${git}`;
@@ -17,7 +19,8 @@ export function frameKey(record: RecordV1): string {
     const session = record.source_ref?.split("#")[0];
     return session ? `session:${record.source}:${session}` : `record:${record.id}`;
   }
-  if (c?.chat) return `chat:${c.app ?? record.source}:${chatKey(c.chat)}`;
+  const chat = recordChat(record);
+  if (chat) return `chat:${chatApp(record)}:${chatKey(chat)}`;
   if (c?.url) { try {
     const url = new URL(c.url);
     // Electron 内部 app://-/index.html 不是网页身份；同域网站的不同页面也必须分开。
@@ -31,6 +34,20 @@ export function frameKey(record: RecordV1): string {
   }
   if (c?.repo) return `repo:${c.repo}`;
   return `app:${c?.app ?? record.source}`;
+}
+
+/** 保留切片成员以便回退，只在整理读取时挑出当前代表。 */
+export function visibleFrame(db: HubDB, frame: Frame): Frame | null {
+  const notifications = db.db.prepare<[string], { id: string }>(`SELECT id FROM records
+    WHERE id IN (SELECT value FROM json_each(?)) AND source='android.notification'`).all(JSON.stringify(frame.record_ids));
+  const duplicates = new Set(notifications.filter(({ id }) => wechatRecordForNotification(db, db.get(id)!)).map(({ id }) => id));
+  if (!duplicates.size) return frame;
+  const visible = frame.record_ids.filter(id => !duplicates.has(id)).map(id => db.get(id)!);
+  if (!visible.length) return null;
+  return { ...frame, record_ids: visible.map(r => r.id),
+    t_start_ms: Math.min(...visible.map(r => Date.parse(r.t_start))),
+    t_end_ms: Math.min(frame.t_end_ms, Math.max(...visible.map(r => Date.parse(r.t_end ?? r.t_start)))),
+  };
 }
 interface Group { key: string; records: RecordV1[]; start: number; end: number; last: number }
 /** 不生成随机 ID，纯函数输出可直接用于边界测试。 */

@@ -1,5 +1,7 @@
 import { toLocalIso, type RecordV1 } from "../../../packages/record/index.ts";
 import { parseTranscript } from "../conversations.ts";
+import { notificationMessage, recordChat } from "../chat.ts";
+import { AUDIO_SOURCES } from "../record-sources.ts";
 import { redactString } from "../redact.ts";
 import { materialBody } from "./material.ts";
 import { excerpt } from "./prompts.ts";
@@ -16,7 +18,7 @@ export interface DayEvidence extends DayEvidenceInput {
 }
 export type UnnumberedEvidence = Omit<DayEvidence, "key">;
 type Spoken = Pick<UnnumberedEvidence, "at" | "role" | "text" | "position" | "chat" | "speaker">;
-type DayRecord = Pick<RecordV1, "source" | "t_start" | "t_end" | "context">;
+type DayRecord = Pick<RecordV1, "source" | "title" | "t_start" | "t_end" | "context">;
 
 /** 不把过长的标签截成另一个名字。正文和引用预算沿用原来的规则。 */
 export function dayDisplayName(value: unknown, maxChars = 80): string | undefined {
@@ -46,14 +48,19 @@ function spoken(record: Pick<RecordV1, "source" | "body" | "context">, original:
   }
   const body = materialBody(record);
   const context = original.context;
-  const chat = dayDisplayName(context?.chat);
+  const chat = dayDisplayName(recordChat(original));
   if (record.source === "manual.correction") return [{ role: "user", text: body, at, chat }];
   if (original.source === "manual.note") return [{ role: "user", text: body, at }];
-  if (original.source === "mac.audio") return parseTranscript(body, at).map(line => ({
+  if (AUDIO_SOURCES.has(original.source)) return parseTranscript(body, at, original.source).map(line => ({
     role: line.label === "我" ? "user" : "other", text: line.text, at: toLocalIso(line.at_ms),
-    speaker: /^(?:我|对方\s*\d*|说话人\s*[A-Z0-9]+|未知说话人|其他人)$/iu.test(line.label)
+    speaker: (original.source === "android.audio" ? line.label === "我"
+      : /^(?:我|对方\s*\d*|说话人\s*[A-Z0-9]+|未知说话人|其他人)$/iu.test(line.label))
       ? undefined : dayDisplayName(line.label),
   }));
+  if (original.source === "android.notification") {
+    const { sender, text } = notificationMessage(body);
+    return [{ role: "other", text, at, chat, speaker: dayDisplayName(sender) }];
+  }
   const fromMe = context?.extra?.from_me;
   if (context?.chat && (fromMe === 0 || fromMe === 1)) return [{
     role: fromMe === 1 ? "user" : "other", text: body, at, chat,
@@ -62,9 +69,7 @@ function spoken(record: Pick<RecordV1, "source" | "body" | "context">, original:
   return [];
 }
 
-export const SKELETON_SOURCES = new Set(["mac.screen", "mac.browser", "mac.app"]);
-
-/** 屏幕、浏览器即使有补写修正，也只提供时间骨架。 */
+/** 时间骨架即使有补写修正，也不提供正文。 */
 export function readDayEvidence({ id, at, source, title }: DayReference, original: DayRecord, body: string | null,
   corrected: boolean, start: number, end: number): UnnumberedEvidence[] | null {
   if (body === null) return [];

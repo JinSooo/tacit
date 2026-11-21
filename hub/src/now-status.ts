@@ -1,6 +1,7 @@
 import { toLocalIso } from "../../packages/record/index.ts";
 import type { HubDB } from "./db.ts";
 import { DistillStore, type Thread } from "./distill/store.ts";
+import { wechatRecordForNotification } from "./distill/wechat-duplicates.ts";
 
 const day = 24 * 3600_000;
 const emptyBrief = "最近 24 小时没有活跃的线程。";
@@ -22,15 +23,19 @@ export function nowSummary(store: DistillStore, clock: number) {
 
 function pendingActivity(store: DistillStore, clock: number) {
   const enabled = store.getState<number>("enabled_ms") ?? 0;
-  return !!store.hub.db.prepare(`SELECT 1 FROM records r
+  const pending = store.hub.db.prepare<[number, number, number, number], { id: string; source: string }>(`SELECT r.id,r.source FROM records r
     LEFT JOIN frame_records fr ON fr.record_id=r.id
     LEFT JOIN frames f ON f.id=fr.frame_id
     LEFT JOIN assignments a ON a.frame_id=f.id
     LEFT JOIN threads t ON t.id=a.thread_id
     WHERE r.t_start_ms>? AND r.t_start_ms<=? AND r.sensitivity!='private' AND r.source!='manual.correction'
     AND ((fr.frame_id IS NULL AND (r.t_start_ms>=? OR r.source GLOB 'manual.*')) OR f.status='new'
-      OR (t.status IN ('active','paused') AND t.last_ms>? AND t.needs_regen=1 AND COALESCE(trim(t.brief),'')='')) LIMIT 1`)
-    .get(clock - day, clock, enabled, clock - day);
+      OR (t.status IN ('active','paused') AND t.last_ms>? AND t.needs_regen=1 AND COALESCE(trim(t.brief),'')=''))`)
+    .iterate(clock - day, clock, enabled, clock - day);
+  for (const r of pending) {
+    if (r.source !== "android.notification" || !wechatRecordForNotification(store.hub, store.hub.get(r.id)!)) return true;
+  }
+  return false;
 }
 
 /** 在读取时计算，模型离线时也能看见状态；不把错误正文带到摘要中。 */

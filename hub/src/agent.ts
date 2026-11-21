@@ -13,6 +13,7 @@ import { ignoredRepo } from "./distill/rules.ts";
 import { readGeneral } from "./general-settings.ts";
 import { auditQueryExpiry, enqueueAgentAudit, flushAgentAudit } from "./agent-audit.ts";
 import { RuntimeLog, contentRevision } from "./runtime-log.ts";
+import { SKELETON_SOURCES } from "./record-sources.ts";
 
 const QUERY_AUDIT_CHARS = 200;
 const PAUSED_CONTEXT_MS = 3 * 86_400_000;
@@ -62,7 +63,7 @@ export function estimateTokens(text: string) {
 const line = (text: string) => text.replace(/\s+/g, " ").trim();
 const freshness = (item: { updated_at?: string; needs_regen?: number }) => `摘要截至 ${item.updated_at ? toLocalIso(Date.parse(item.updated_at)).slice(0,16).replace("T"," ") : "时间未知"}${item.needs_regen ? "，有新活动待整理" : ""}`;
 
-const recordTier = (source: string) => ["mac.screen", "mac.browser", "mac.app"].includes(source) ? 1 : 0;
+const recordTier = (source: string) => SKELETON_SOURCES.has(source) ? 1 : 0;
 function snippet(body: string, terms: string[]): string | undefined {
   const lower = body.toLowerCase();
   const matches = terms.map(term => lower.indexOf(term.toLowerCase())).filter(index => index >= 0);

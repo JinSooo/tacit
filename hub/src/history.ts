@@ -105,5 +105,5 @@ export function historySegments(hub: HubDB, params: URLSearchParams): { segments
   // 和 /v1/records 一致：新的在前。
   segments.sort((a,b) => b.start_ms-a.start_ms || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   // 对话按场合并（被静音切开的几条记录是同一场），列表里一场一行，标题用总结里的。
-  return { segments,conversations: conversationList(hub,from,to) };
+  return { segments,conversations: conversationList(hub,from,to,device ?? undefined) };
 }

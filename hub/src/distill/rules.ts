@@ -1,4 +1,4 @@
-import { chatKey } from "../chat.ts";
+import { chatApp, chatKey, recordChat } from "../chat.ts";
 import { basename, resolve } from "node:path";
 import { ulid, type RecordV1 } from "../../../packages/record/index.ts";
 import { DistillStore, type Frame, type Project, type ProjectKeys } from "./store.ts";
@@ -81,10 +81,11 @@ export class DistillRules {
     if (frame.key.startsWith("host:") && ignoredHost(frame.key.slice(5), ignored.hosts)) return true;
     return this.publicRecords(frame).some(record => {
       const path = recordRepo(record), context = record.context;
-      const chat = context?.chat && `${context.app ?? record.source}:${context.chat}`;
+      const name = recordChat(record);
+      const chat = name && `${chatApp(record)}:${name}`;
       const host = context?.url ? URL.parse(context.url)?.hostname : undefined;
       return (!!path && ignoredRepo(path, ignored.repos)) || ignoredChat(chat, ignored.chats)
-        || ignoredChat(context?.chat, ignored.chats) || ignoredHost(host, ignored.hosts);
+        || ignoredChat(name, ignored.chats) || ignoredHost(host, ignored.hosts);
     });
   }
 }

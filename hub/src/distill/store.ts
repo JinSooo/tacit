@@ -556,6 +556,22 @@ export class DistillStore {
     this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=date(?, 'localtime')").run(original.t_start);
   }
 
+  /** 首选的微信记录变动后，按目前可见的原文重新整理派生内容。 */
+  refreshNotification(id: string) {
+    this.correctRecord(id);
+    const frame = this.sql.prepare<[string], { frame_id: string }>(
+      "SELECT frame_id FROM frame_records WHERE record_id=?").get(id);
+    if (!frame) return;
+    const candidates = this.getState<{ frame_ids: string[] }[]>("candidates");
+    if (!candidates?.some(c => c.frame_ids.includes(frame.frame_id))) return;
+    this.setState("candidates", candidates.filter(c => {
+      if (!c.frame_ids.includes(frame.frame_id)) return true;
+      this.sql.prepare("UPDATE frames SET status='new' WHERE status='candidate' AND id IN (SELECT value FROM json_each(?))")
+        .run(JSON.stringify(c.frame_ids));
+      return false;
+    }));
+  }
+
   removeRecord(id: string, time: string) { this.removeRecords([{id,time}]); }
 
   removeRecords(records: { id: string; time: string }[]) {
