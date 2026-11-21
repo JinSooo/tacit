@@ -49,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var terminationSignal: TerminationSignal?
   var terminating = false
   var pausedUntil: Date?
-  var lastOCR: [String: Date] = [:]
+  var ocrSchedule = OCRSchedule()
   var clipboardCount = NSPasteboard.general.changeCount
   // 以下只在主线程读写，给"上次运行"用。
   var lastScreen: Date?
@@ -277,11 +277,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
       emit(segmenter.observe(o))
 
-      // 辅助功能几乎读不到正文时用 OCR 兜底，同一段至少隔 15 秒才再识别一次。
+      // 辅助功能几乎读不到正文时用 OCR 兜底，节奏见 OCRSchedule：画面文字没变就逐步放慢。
       let key = o.key
-      if ocrOn, keepText, (snap?.chars ?? 0) < 80, now.timeIntervalSince(lastOCR[key] ?? .distantPast) > 15, ocr.granted {
-        lastOCR[key] = now
-        if lastOCR.count > 500 { lastOCR = lastOCR.filter { now.timeIntervalSince($0.value) < 600 } }
+      if ocrOn, keepText, (snap?.chars ?? 0) < 80, ocrSchedule.due(key, now: now), ocr.granted {
+        ocrSchedule.started(key, now: now)
         ocr.recognizeLines(pid: pid, frame: snap?.frame) { [self] found, size, ms in
           let lines = found.filter { line in
             !ScreenTextPolicy.isEditableOCRPoint(CGPoint(x: line.midX, y: line.y + line.height / 2),
@@ -293,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             stats["ocrMsTotal", default: 0] += ms
             stats["ocrMsMax"] = max(stats["ocrMsMax"] ?? 0, ms)
             stats["ocrLines", default: 0] += lines.count
+            ocrSchedule.finished(key, lines: lines)
             emit(segmenter.appendIfCurrent(key: key, lines: lines, method: "ocr", time: Date()))
           }
         }
