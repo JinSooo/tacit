@@ -129,15 +129,22 @@ struct TimelineSourceIcons: View {
     }
   }
 
+  private func label(for app: DayDiary.Item.App) -> String {
+    let bundle = SourceApplication.bundle(app: app.app, source: app.source)
+    if let name = AppIcons.name(bundle) { return name }
+    if let raw = app.app, !raw.isEmpty, !raw.contains(".") { return raw }
+    return SourceInfo.name(app.source)
+  }
+
   var body: some View {
     HStack(spacing: size == 20 ? 8 : 6) {
       ForEach(Array(icons.prefix(3)), id: \.self) { app in
-        let label = AppIcons.name(SourceApplication.bundle(app: app.app, source: app.source)) ?? app.app ?? SourceInfo.name(app.source)
+        let text = label(for: app)
         SourceGlyph(source: app.source, app: SourceApplication.bundle(app: app.app, source: app.source), size: size, showsTile: true)
-          .help(label).accessibilityLabel(label)
+          .help(text).accessibilityLabel(text)
       }
     }
-    .help(icons.map { AppIcons.name(SourceApplication.bundle(app: $0.app, source: $0.source)) ?? $0.app ?? SourceInfo.name($0.source) }.joined(separator: "、"))
+    .help(icons.map(label(for:)).joined(separator: "、"))
   }
 }
 
@@ -224,7 +231,9 @@ struct TimelineSegmentRecords: View {
     guard TimelinePresence.repeatsTitle(recordCount: item.recordIds?.count ?? count,
       recordTitle: record.title, segmentTitle: item.title) else { return nil }
     let bundle = SourceApplication.bundle(app: record.contextText("app"), source: record.source)
-    return AppIcons.name(bundle) ?? record.contextText("app") ?? SourceInfo.name(record.source)
+    if let name = AppIcons.name(bundle) { return name }
+    if let raw = record.contextText("app"), !raw.contains(".") { return raw }
+    return SourceInfo.name(record.source)
   }
 
   private func load() async {

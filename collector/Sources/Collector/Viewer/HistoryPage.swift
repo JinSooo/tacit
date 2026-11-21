@@ -290,7 +290,7 @@ struct HistoryPage<Header: View>: View {
 
   /// 段里第一场有总结的对话的标题。
   func conversationNote(_ block: SegmentBlock) -> String? {
-    let ids = Set(block.records.filter { $0.source == "mac.audio" }.map(\.id))
+    let ids = Set(block.records.filter { AudioSource.isAudio($0.source) }.map(\.id))
     guard !ids.isEmpty else { return nil }
     return conversations.first { c in c.title != nil && c.recordIds.contains(where: ids.contains) }?.title
   }
@@ -379,7 +379,7 @@ struct RecordRow: View {
         .frame(width: 26)
         VStack(alignment: .leading, spacing: 2) {
           HStack(spacing: 8) {
-            Text(titleOverride ?? run?.conversation.map(ConversationText.title) ?? RecordText.title(record, appShown: !nested))
+            Text(titleOverride ?? run?.conversation.map { ConversationText.title($0, source: record.source) } ?? RecordText.title(record, appShown: !nested))
               .font(.system(size: TextSize.body, weight: nested ? .regular : .medium))
               .foregroundStyle(nested ? Palette.muted : Palette.ink)
               .lineLimit(1)

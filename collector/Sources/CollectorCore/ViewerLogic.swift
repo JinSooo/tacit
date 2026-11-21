@@ -2,6 +2,13 @@ import Foundation
 
 /// 客户端展示用的纯逻辑：时间解析与格式、连续片段合并、泳道归类、日记章节排布。
 
+/// 录音对话来源（Mac 与手机录音采用同一套对话展示规则）。
+public enum AudioSource {
+  public static func isAudio(_ source: String) -> Bool {
+    source == "mac.audio" || source == "android.audio"
+  }
+}
+
 /// 记录标题的显示写法。采集端存的标题是"应用 · 窗口""复制 · 文字""对话 · 时间 · 人""微信 · 会话 · 发言人"，
 /// 界面上不用中间点拼接：旁边已经有应用图标时去掉应用名，其余前缀改成冒号。空标题返回 nil，由调用方用来源名代替。
 public enum RecordTitles {
@@ -10,6 +17,8 @@ public enum RecordTitles {
     if t.isEmpty { return nil }
     // 对话标题里是转写当时的说话人编号（"说话人 OK"），对人没有意义；有总结时由调用方换成总结标题。
     if source == "mac.audio" { return "对话" }
+    if source == "android.audio" { return "手机录音" }
+    if source == "android.notification" || source == "android.usage" { return t }
     let parts = t.components(separatedBy: " · ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     guard parts.count > 1 else { return parts.first ?? t }
     let head = parts[0], rest = parts.dropFirst().joined(separator: "，")
@@ -154,7 +163,7 @@ public enum RecordRuns {
     let owner = Dictionary(conversations.flatMap { c in c.recordIds.map { ($0, c) } }, uniquingKeysWith: { a, _ in a })
     var runs: [[HistoryRecord]] = [], owners: [ConversationRef?] = [], placed: [String: Int] = [:]
     for r in records {
-      if r.source == "mac.audio", let c = owner[r.id] {
+      if AudioSource.isAudio(r.source), let c = owner[r.id] {
         if let i = placed[c.id] { runs[i].append(r) } else { placed[c.id] = runs.count; runs.append([r]); owners.append(c) }
         continue
       }
@@ -199,15 +208,32 @@ public enum RecentRuns {
     return out
   }
 
+  private static func chatName(of r: HistoryRecord) -> String? {
+    if let chat = r.contextText("chat") { return chat }
+    if r.source == "android.notification" {
+      let title = r.title.trimmingCharacters(in: .whitespacesAndNewlines)
+      return title.isEmpty ? nil : title
+    }
+    return nil
+  }
+
   public static func chat(_ run: [HistoryRecord]) -> String? {
     let activity = run.filter { $0.source != "mac.clipboard" }
-    return (activity.isEmpty ? run : activity).lazy.compactMap { $0.contextText("chat") }.first
+    return (activity.isEmpty ? run : activity).lazy.compactMap(chatName(of:)).first
   }
 
   static func joins(_ r: HistoryRecord, _ run: [HistoryRecord]) -> Bool {
     // 并入的剪贴板不改变这行所属的应用、聊天或来源。
     let activity = run.filter { $0.source != "mac.clipboard" }
     let run = activity.isEmpty ? run : activity
+    // 手机聊天通知没有 Mac 应用上下文，title 即会话名，按同一会话（忽略空白差异）合并。
+    if r.source == "android.notification" {
+      guard let c = chatName(of: r), let rc = chat(run) else { return false }
+      let app = r.contextText("app")
+      return run.allSatisfy { $0.source == "android.notification" && $0.contextText("app") == app }
+        && c.filter { !$0.isWhitespace } == rc.filter { !$0.isWhitespace }
+    }
+    if run.contains(where: { $0.source == "android.notification" }) { return false }
     // git 提交、终端命令、Agent 会话没有应用，按同一来源、同一仓库或目录合并（用户截图：连着 4 次提交各占一行）。
     if r.contextText("app") == nil, let place = r.contextText("repo") ?? r.contextText("cwd") {
       return run.allSatisfy { $0.source == r.source && $0.contextText("app") == nil && ($0.contextText("repo") ?? $0.contextText("cwd")) == place }
@@ -323,11 +349,11 @@ public enum Lane: Int, CaseIterable, Sendable {
   case screen, browser, agent, terminal, voice, other
   public static func of(_ source: String) -> Lane {
     switch source {
-    case "mac.screen", "mac.app": return .screen
+    case "mac.screen", "mac.app", "android.usage": return .screen
     case "mac.browser": return .browser
     case "claude_code.session", "codex.session": return .agent
     case "mac.shell", "mac.git": return .terminal
-    case "mac.audio", "mac.calendar", "mac.wechat": return .voice
+    case "mac.audio", "android.audio", "mac.calendar", "mac.wechat", "android.notification": return .voice
     default: return .other
     }
   }

@@ -13,10 +13,12 @@ enum SourceInfo {
   static let names: [String: String] = [
     "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板", "mac.file": "文件", "mac.calendar": "日历", "mac.wechat": "微信",
     "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
+    "android.audio": "手机录音", "android.notification": "手机聊天", "android.usage": "手机应用",
     "manual.note": "补写", "manual.correction": "修正", "manual.agent": "AI 补写",
   ]
-  static let order = ["mac.screen", "mac.browser", "claude_code.session", "codex.session", "mac.shell", "mac.git", "mac.audio",
-                      "mac.calendar", "mac.wechat", "mac.clipboard", "mac.file", "manual.note", "manual.agent"]
+  static let order = ["mac.screen", "mac.browser", "claude_code.session", "codex.session", "mac.shell", "mac.git",
+                      "mac.audio", "android.audio", "mac.calendar", "mac.wechat", "android.notification",
+                      "android.usage", "mac.clipboard", "mac.file", "manual.note", "manual.agent"]
   static func name(_ s: String) -> String { names[s] ?? s }
   /// Phosphor 图标名（见 PhosphorGlyphs）。
   static func symbol(_ s: String) -> String {
@@ -32,6 +34,9 @@ enum SourceInfo {
     case "mac.calendar": return "calendar-blank"
     case "mac.wechat": return "chat-circle"
     case "mac.audio": return "waveform"
+    case "android.audio": return "microphone"
+    case "android.notification": return "chat-circle-dots"
+    case "android.usage": return "device-mobile"
     case "manual.note", "manual.agent": return "pencil-simple-line"
     case "manual.correction": return "note-pencil"
     default: return "circle-dashed"

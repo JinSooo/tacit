@@ -152,6 +152,9 @@ struct DayWidgetView: View {
     case "mac.calendar": "calendar"
     case "mac.wechat": "bubble.left"
     case "mac.audio": "waveform"
+    case "android.audio": "mic"
+    case "android.notification": "phone.bubble"
+    case "android.usage": "apps.iphone"
     case "manual.note", "manual.agent", "manual.correction": "pencil"
     default: "circle.dashed"
     }
