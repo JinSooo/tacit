@@ -51,6 +51,8 @@ internal fun installTagging(dir: File, cancellation: ModelDownloadCancellation =
 
 internal fun installTaggingWith(dir: File, files: List<SpeechModelResource>, download: SpeechModelDownload,
     cancellation: ModelDownloadCancellation = ModelDownloadCancellation()) {
+    // A process killed mid-download skips the finally below; only this unique worker stages inside dir.
+    dir.listFiles()?.filter { it.isDirectory && Regex("[a-f0-9-]{36}").matches(it.name) }?.forEach { it.deleteRecursively() }
     val work = download.prepare(dir, cancellation) { _, _ -> }
     try {
         val unpacked = File(work, "audio-tagging").apply { mkdirs() }

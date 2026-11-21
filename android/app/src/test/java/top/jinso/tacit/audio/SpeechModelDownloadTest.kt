@@ -59,6 +59,7 @@ class SpeechModelDownloadTest {
         val catalog = SpeechModelCatalog.tagging
         assertEquals(listOf("audio-tagging/model.int8.onnx", "audio-tagging/class_labels_indices.csv"), catalog.map { it.path })
         val dir = temp.newFolder("current")
+        File(dir, "0a1b2c3d-0000-4000-8000-00000000abcd").mkdirs() // partial download left by a killed process
         fun install(body: ByteArray) = runCatching {
             installTaggingWith(dir, listOf(catalog[0].copy(bytes = model.size.toLong(), sha256 = sha(model)),
                 catalog[1].copy(bytes = labels.size.toLong(), sha256 = sha(labels))),
