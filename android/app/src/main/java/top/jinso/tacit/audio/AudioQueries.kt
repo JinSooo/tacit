@@ -5,7 +5,8 @@ internal class AudioQueries(private val store: EncryptedAudioStore, private val 
     private val retentionDays: () -> Int, private val sampleAvailable: (String) -> Boolean) {
     fun listClips(): List<AudioClip> {
         store.prune(retentionDays())
-        return store.clips().filter { store.exists(it.getString("id")) }.map { AudioClip(
+        // Every clip in the index has its PCM: load() drops metadata without audio, deletions drop both.
+        return store.clips().map { AudioClip(
             it.getString("id"), it.getLong("start"), it.getInt("samples") * 1000L / SAMPLE_RATE,
             it.getBoolean("analyzed"), it.optString("conversation").takeIf(String::isNotEmpty)) }
     }

@@ -85,11 +85,19 @@ class AudioQueriesDeviceTest {
         assertEquals(2, reloaded.transcripts().size)
         assertTrue(AudioLedger(reloaded).render(conversation.recordIds.first(), "missing").contains("保留的文字"))
     }
-    @Test fun orphanPcmCleanupDoesNotRewriteUnchangedMetadata() = prepared { file, store, read ->
+    @Test fun pageReadsNeverScanTheDirectoryAndLoadOrSweepRemovesOrphans() = isolated { context, store ->
+        legacyFixture(store)
+        val file = File(context.noBackupFilesDir, "audio/index.enc")
         val retained = store.clips().first().getString("id")
-        val orphan = File(file.parentFile, "${UUID.randomUUID()}.pcm.enc")
-        File(file.parentFile, "$retained.pcm.enc").copyTo(orphan)
-        stable(file) { read.listClips() }
-        assertFalse(orphan.exists())
+        fun orphan() = File(file.parentFile, "${UUID.randomUUID()}.pcm.enc").also { File(file.parentFile, "$retained.pcm.enc").copyTo(it) }
+        // The recording page polls these every 2 s; a full directory scan each time kept a core busy.
+        val read = queries(store).also { it.listConversations() } // first read persists associations once
+        val first = orphan()
+        stable(file) { read.listClips(); read.listSpeakers(); read.listConversations() }
+        assertTrue(first.exists())
+        stable(file) { assertEquals(2, EncryptedAudioStore(context).clips().size) }
+        assertFalse(first.exists())
+        val second = orphan(); store.sweep()
+        assertFalse(second.exists()); assertTrue(store.exists(retained))
     }
 }

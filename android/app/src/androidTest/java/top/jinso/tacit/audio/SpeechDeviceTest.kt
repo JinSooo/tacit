@@ -31,6 +31,28 @@ class SpeechDeviceTest {
             assertTrue(segments.all{it.vector.isNotEmpty()&&it.vector.all{v->v.isFinite()}})
             val text=engine.transcribe(pcm)
             assertTrue("Known phrase should contain 本地 or 记录",text.contains("本地")||text.contains("记录"))
+            // The ~380 MB transcription model is freed once idle and reloads on the next use.
+            assertTrue(engine.transcriberLoaded);assertFalse(engine.releaseIdle(60_000))
+            assertTrue(engine.releaseIdle(0));assertFalse(engine.transcriberLoaded)
+            assertEquals(text,engine.transcribe(pcm))
+            // The voiceprint arena (~170 MB once warmed) is freed after a minute idle; reload gives the same vectors.
+            assertTrue(engine.voiceprintLoaded);assertFalse(engine.releaseIdleVoiceprint(60_000))
+            assertTrue(engine.releaseIdleVoiceprint(0));assertFalse(engine.voiceprintLoaded)
+            val again=engine.segments(pcm)
+            assertEquals(segments.size,again.size)
+            segments.zip(again).forEach{(a,b)->assertEquals(a.start,b.start);assertTrue(a.vector.contentEquals(b.vector))}
+            // Regression: a 30 s span once grew the voiceprint arena by ~580 MB; chunked embedding stays bounded
+            // and still matches the same voice.
+            assertTrue(engine.releaseIdleVoiceprint(0))
+            val before=android.os.Debug.getNativeHeapAllocatedSize()
+            val long=FloatArray(SAMPLE_RATE*30){pcm[it%pcm.size]}
+            val longVector=requireNotNull(engine.voiceprint(long))
+            val grown=(android.os.Debug.getNativeHeapAllocatedSize()-before)/1048576
+            assertTrue("voiceprint arena grew $grown MB",grown<150)
+            val short=requireNotNull(engine.voiceprint(pcm))
+            val similarity=longVector.indices.sumOf{(longVector[it]*short[it]).toDouble()}
+            assertTrue("same voice similarity $similarity",similarity>0.8)
+            long.fill(0f)
         }
         pcm.fill(0f);bytes.fill(0)
     }

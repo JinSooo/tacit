@@ -88,7 +88,7 @@ class AudioRecorderService : Service() {
             }
             recorder = input; input.startRecording()
             check(input.recordingState == AudioRecord.RECORDSTATE_RECORDING)
-            synchronized(runtime.lock) {
+            synchronized(runtime.control) {
                 // A stop/pause may race the native start. Only a still-wanted, successful start persists intent.
                 if (!running || !runtime.requested || token != runtime.generation || !runtime.allowed()) return
                 runtime.app.prefs.audioCaptureWanted = true

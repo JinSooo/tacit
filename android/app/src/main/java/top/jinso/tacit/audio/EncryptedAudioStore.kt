@@ -36,7 +36,7 @@ internal class EncryptedAudioStore(context: Context) {
      * conversations and transcripts live in index.enc; each clip is `<id>.meta.enc` and each voice is
      * `<id>.speaker.enc`, so a save costs the same no matter how long recording has run.
      */
-    val index: JSONObject get() = loaded ?: load().also { loaded = it }
+    val index: JSONObject get() = loaded ?: load().also { loaded = it; dropUnusedSpeakers() }
     private fun load(): JSONObject {
         val head = if (indexFile.exists() || File(dir, "index.enc.bak").exists()) {
             val plain = read(indexFile)
@@ -52,6 +52,8 @@ internal class EncryptedAudioStore(context: Context) {
         val clips = items(META).filter { clip ->
             exists(clip.getString("id")).also { if (!it) removeMeta(clip.getString("id")) }
         }.sortedBy { it.getLong("start") }
+        // Orphans only come from a crash between writes, so one scan per load (plus sweep()) is enough.
+        removeUnindexedPcm(clips.map { it.getString("id") }.toSet())
         val speakers = items(SPEAKER).sortedWith(compareBy({ it.optLong("order") }, { it.getString("id") }))
         return head.put("clips", JSONArray(clips)).put("speakers", JSONArray(speakers))
     }
@@ -86,12 +88,14 @@ internal class EncryptedAudioStore(context: Context) {
     fun add(samples: ShortArray, start: Long): String {
         require(samples.isNotEmpty() && samples.size <= SAMPLE_RATE * 30)
         val id = UUID.randomUUID().toString()
+        // Load first: the load-time orphan scan must never see this PCM before its metadata exists.
+        val clips = index.getJSONArray("clips")
         val bytes = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
         samples.forEach { bytes.putShort(it) }
         try { write(file(id), bytes.array()) } finally { bytes.array().fill(0) }
         val clip = JSONObject().put("id", id).put("start", start)
             .put("samples", samples.size).put("analyzed", false).put("utterances", JSONArray())
-        index.getJSONArray("clips").put(clip)
+        clips.put(clip)
         writeItem(META, clip)
         return id
     }
@@ -106,14 +110,34 @@ internal class EncryptedAudioStore(context: Context) {
         } finally { bytes.fill(0) }
     }
     fun exists(id: String) = file(id).isFile
+    /** Cheap enough for every query: only touches the files of clips that just expired. */
     fun prune(days: Int) {
         val now = System.currentTimeMillis()
         // An unfinished legacy import has no committed recording.
-        val original = clips()
-        val keep = original.filterNot { it.optBoolean("pendingImport") || AudioPolicy.expired(it.getLong("start"), now, days) }
+        val (drop, keep) = clips().partition { it.optBoolean("pendingImport") || AudioPolicy.expired(it.getLong("start"), now, days) }
+        if (drop.isEmpty()) return
         // Published text lives in the head, not in retained PCM metadata, so dropping clip files is enough.
-        if (keep.size != original.size) index.put("clips", JSONArray(keep))
-        removeUnindexedPcm(keep.map { it.getString("id") }.toSet())
+        index.put("clips", JSONArray(keep))
+        drop.forEach { val id = it.getString("id"); removePcm(id); removeMeta(id) }
+        dropUnusedSpeakers()
+    }
+    /** Deletes PCM and metadata files no clip refers to; scans the whole directory. */
+    fun sweep() { removeUnindexedPcm(clips().map { it.getString("id") }.toSet()); dropUnusedSpeakers() }
+    /**
+     * A voice nobody confirmed is only useful while some retained clip still has it: without audio it can
+     * neither be played nor confirmed. "Me", named and ignored voices are user decisions and always stay.
+     * Published transcripts keep their own "对方 N" labels, so rendering does not depend on dropped voices.
+     */
+    private fun dropUnusedSpeakers() {
+        val heard = clips().flatMapTo(mutableSetOf()) { clip ->
+            clip.optJSONArray("utterances")?.objects().orEmpty().map { it.getString("speaker") }
+        }
+        val (drop, keep) = speakers().partition {
+            !it.optBoolean("me") && !it.optBoolean("ignored") && it.optString("name").isEmpty() && it.getString("id") !in heard
+        }
+        if (drop.isEmpty()) return
+        index.put("speakers", JSONArray(keep))
+        drop.forEach { removeAtomic(itemFile(it.getString("id"), SPEAKER)) }
     }
     fun deleteRecord(recordId: String, matchRef: (String) -> Boolean = { false }) {
         val transcriptClips = transcripts().filter { it.getString("recordId") == recordId }
@@ -136,7 +160,7 @@ internal class EncryptedAudioStore(context: Context) {
                 (before != null && start < before) || AudioPolicy.expired(start, now, days)
         }.map { it.getString("id") }.toSet()
         erase(removed) { matches(it, it.getString("clipId"), "conversationId") }
-        removeUnindexedPcm(clips().map { it.getString("id") }.toSet())
+        sweep()
     }
 
     private fun removeUnindexedPcm(retained: Set<String>) {

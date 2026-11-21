@@ -241,4 +241,27 @@ class AudioPipelineDeviceTest {
     }
 
 
+
+    @Test fun expiredUnconfirmedVoicesAreDroppedButUserDecisionsAndTextStay() = isolated { store, context ->
+        val day = 86_400_000L; val now = System.currentTimeMillis()
+        val old = add(store, now - 8 * day); val fresh = add(store, now)
+        fun heard(clip: String, vararg speakers: String) = store.clips().first { it.getString("id") == clip }
+            .put("analyzed", true).put("utterances", JSONArray(speakers.mapIndexed { n, s -> JSONObject()
+                .put("start", 0).put("length", SAMPLE_RATE).put("speaker", s).put("done", true)
+                .put("record", "record-$clip").put("text", "第 $n 句") }))
+        heard(old, "passer-by", "named", "ignored", "seed-me"); heard(fresh, "still-heard")
+        listOf("passer-by", "named", "ignored", "seed-me", "still-heard").forEach { id ->
+            store.index.getJSONArray("speakers").put(JSONObject().put("id", id).put("vector", JSONArray(listOf(1f, 0f)))
+                .put("seconds", 1.0).put("segments", 1).put("conversations", JSONArray()).apply {
+                    if (id == "named") put("name", "同事"); if (id == "ignored") put("ignored", true); if (id == "seed-me") put("me", true) })
+        }
+        val ledger = AudioLedger(store); store.commit(store.clips(), store.speakers()); ledger.prepare()
+        store.prune(7)
+        val kept = setOf("named", "ignored", "seed-me", "still-heard")
+        assertEquals(kept, store.speakers().map { it.getString("id") }.toSet())
+        assertFalse(File(context.noBackupFilesDir, "audio/passer-by.speaker.enc").exists())
+        assertEquals(kept, EncryptedAudioStore(context).speakers().map { it.getString("id") }.toSet())
+        // Published text keeps its own labels after the voice behind it is gone.
+        assertTrue(ledger.render("record-$old", "missing").contains("对方 1：第 0 句"))
+    }
 }

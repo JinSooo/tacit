@@ -1,5 +1,7 @@
 package top.jinso.tacit.audio
 
+import android.os.SystemClock
+
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -91,6 +93,7 @@ internal class SpeechModels(private val context: Context) {
 }
 
 internal data class VoiceSegment(val start: Int, val samples: FloatArray, val vector: FloatArray)
+private const val VOICEPRINT_CHUNK = 3 * SAMPLE_RATE
 internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechEngine {
     private var vad: Vad? = null
     private var speaker: SpeakerEmbeddingExtractor? = null
@@ -108,6 +111,28 @@ internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechE
         .also { recognizer = it }
     // Loading sessions validates model graph/schema; this never decodes user audio.
     fun validate() { vad(); speaker(); recognizer() }
+    /**
+     * The ONNX arena keeps its peak forever and grows with input length (30 s ≈ 600 MB, 3 s ≈ 100 MB), and
+     * real VAD spans run past maxSpeechDuration (p95 13 s). Long spans are embedded in ≤3 s chunks and averaged.
+     */
+    internal fun voiceprint(samples: FloatArray): FloatArray? {
+        if (samples.isEmpty()) return null
+        val extractor = speaker()
+        val chunks = (samples.size + VOICEPRINT_CHUNK - 1) / VOICEPRINT_CHUNK
+        val size = (samples.size + chunks - 1) / chunks
+        var sum: FloatArray? = null
+        for (from in 0 until samples.size step size) {
+            val stream = extractor.createStream()
+            val chunk = samples.copyOfRange(from, minOf(samples.size, from + size))
+            try {
+                stream.acceptWaveform(chunk, SAMPLE_RATE); stream.inputFinished()
+                if (!extractor.isReady(stream)) continue
+                val v = AudioPolicy.unit(extractor.compute(stream))
+                sum = sum?.also { acc -> v.indices.forEach { acc[it] += v[it] } } ?: v
+            } finally { stream.release(); chunk.fill(0f) }
+        }
+        return sum?.let { AudioPolicy.unit(it) }
+    }
     override fun segments(pcm: FloatArray): List<VoiceSegment> {
         val detector = vad(); detector.reset()
         val result = mutableListOf<VoiceSegment>()
@@ -115,12 +140,7 @@ internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechE
             while (!detector.empty()) {
                 val segment = detector.front(); detector.pop()
                 if (segment.samples.size < SAMPLE_RATE / 2) continue
-                val extractor = speaker(); val stream = extractor.createStream()
-                try {
-                    stream.acceptWaveform(segment.samples, SAMPLE_RATE); stream.inputFinished()
-                    if (extractor.isReady(stream)) result += VoiceSegment(segment.start.toInt(), segment.samples,
-                        AudioPolicy.unit(extractor.compute(stream)))
-                } finally { stream.release() }
+                voiceprint(segment.samples)?.let { result += VoiceSegment(segment.start.toInt(), segment.samples, it) }
             }
         }
         var offset = 0
@@ -131,17 +151,36 @@ internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechE
             detector.acceptWaveform(frame); drain(); offset = end
         }
         detector.flush(); drain()
+        lastSegmented = SystemClock.elapsedRealtime()
         return result.mapNotNull { segment ->
             val length = minOf(segment.samples.size, pcm.size - segment.start)
             if (length < SAMPLE_RATE / 2) null else segment.copy(samples = segment.samples.copyOf(length))
         }
     }
+    private var lastTranscribed = 0L
+    private var lastSegmented = 0L
     override fun transcribe(samples: FloatArray): String {
         val asr = recognizer(); val stream = asr.createStream()
         return try {
             stream.acceptWaveform(samples, SAMPLE_RATE); asr.decode(stream)
             asr.getResult(stream).text.replace(Regex("<\\|[^|]*\\|>"), "").trim()
-        } finally { stream.release() }
+        } finally { stream.release(); lastTranscribed = SystemClock.elapsedRealtime() }
     }
+    /** Frees the transcription model after [idleMs] without use; the next transcription reloads it. */
+    fun releaseIdle(idleMs: Long): Boolean {
+        val loaded = recognizer ?: return false
+        if (SystemClock.elapsedRealtime() - lastTranscribed < idleMs) return false
+        loaded.release(); recognizer = null
+        return true
+    }
+    /** Voiceprint + VAD hold ~120 MB once warmed (3 s chunks) and never shrink; reloading takes ~0.15 s. */
+    fun releaseIdleVoiceprint(idleMs: Long): Boolean {
+        if (speaker == null && vad == null) return false
+        if (SystemClock.elapsedRealtime() - lastSegmented < idleMs) return false
+        speaker?.release(); speaker = null; vad?.release(); vad = null
+        return true
+    }
+    internal val transcriberLoaded get() = recognizer != null
+    internal val voiceprintLoaded get() = speaker != null
     override fun close() { recognizer?.release(); speaker?.release(); vad?.release() }
 }

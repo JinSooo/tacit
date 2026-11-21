@@ -94,7 +94,7 @@ import java.util.concurrent.CompletableFuture
     LaunchedEffect(audio, busy, owner) {
         if (busy) return@LaunchedEffect
         val vault = withContext(Dispatchers.IO) { runCatching { app.vault }.getOrNull() } ?: return@LaunchedEffect
-        owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { vault.changes.collect {
+        owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { audio.changes.collect {
             withContext(Dispatchers.IO) {
                 runCatching {
                     vault.syncConnection()?.optJSONObject("audio")?.getInt("retention_days") to audio.listClips().get().size

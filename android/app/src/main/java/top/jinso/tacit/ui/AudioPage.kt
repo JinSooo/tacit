@@ -21,7 +21,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
@@ -54,10 +54,10 @@ import java.util.concurrent.CompletableFuture
     val permission=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){result -> if(result[Manifest.permission.RECORD_AUDIO]==true || activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED) start() else notify("麦克风未授权，未开始录音")}
     val owner = activity as? LifecycleOwner
     LaunchedEffect(owner, resumed, includeIgnored) {
-        owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { while (true) {
+        // Re-read only when recordings, voices or status change; nothing runs while the page is hidden.
+        owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { audio.changes.collectLatest {
             state = audio.state()
-            if (!busy) {
-                val snapshot = withContext(Dispatchers.IO) {
+            val snapshot = withContext(Dispatchers.IO) {
                     runCatching {
                         val voices = audio.listSpeakers(includeIgnored).get()
                         val scenes = audio.listConversations().get().sortedByDescending { it.start }
@@ -66,13 +66,11 @@ import java.util.concurrent.CompletableFuture
                         Triple(voices, audioConversationRows(scenes, text), waiting)
                     }
                 }
-                snapshot.onSuccess { (voices, conversations, waiting) ->
-                    speakers = voices; rows = conversations; waitingClips = waiting
-                }
-                loadFailed = snapshot.isFailure
-                loaded = true
+            snapshot.onSuccess { (voices, conversations, waiting) ->
+                speakers = voices; rows = conversations; waitingClips = waiting
             }
-            delay(2000)
+            loadFailed = snapshot.isFailure
+            loaded = true
         } }
     }
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}

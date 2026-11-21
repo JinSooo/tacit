@@ -74,15 +74,20 @@ internal class AcceleratedSpeechEngine(private val cpu: LocalSpeechEngine, conte
         if (models != null && QnnCatalog.supported()) {
             val candidate = QnnClient(context, models)
             try { candidate.validate(); qnn = candidate; changed("NPU 加速已启用") }
-            catch (_: Exception) { candidate.close();changed("加速不可用，使用 CPU") }
-            catch (_: LinkageError) { candidate.close();changed("加速不可用，使用 CPU") }
+            catch (e: Exception) { fallback("validate", e); candidate.close();changed("加速不可用，使用 CPU") }
+            catch (e: LinkageError) { fallback("validate", e); candidate.close();changed("加速不可用，使用 CPU") }
         } else changed("使用 CPU")
     }
     override fun segments(pcm: FloatArray) = cpu.segments(pcm)
     override fun transcribe(samples: FloatArray): String {
         val active = qnn ?: return cpu.transcribe(samples)
         return try { QnnPolicy.transcribe(samples) { active.transcribe(it) } }
-        catch (_: Exception) { active.close();qnn = null;changed("加速中断，使用 CPU");cpu.transcribe(samples) }
+        catch (e: Exception) { fallback("decode", e); active.close();qnn = null;changed("加速中断，使用 CPU");cpu.transcribe(samples) }
     }
+    fun releaseIdle(idleMs: Long) = cpu.releaseIdle(idleMs)
+    fun releaseIdleVoiceprint(idleMs: Long) = cpu.releaseIdleVoiceprint(idleMs)
+    /** Error class only: messages can carry paths, and nothing from a recording may reach logcat. */
+    private fun fallback(stage: String, error: Throwable) =
+        android.util.Log.w("TacitQnn", "NPU $stage failed: ${error.javaClass.simpleName}; using CPU")
     override fun close() { qnn?.close();cpu.close() }
 }
