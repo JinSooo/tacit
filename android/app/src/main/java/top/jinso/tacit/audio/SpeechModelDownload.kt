@@ -1,5 +1,7 @@
 package top.jinso.tacit.audio
 
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -28,6 +30,48 @@ internal object SpeechModelCatalog {
             "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b")
     )
     val totalBytes = resources.sumOf { it.bytes }
+
+    /** Optional music detector: without it recording works as before, it just cannot drop songs played elsewhere. */
+    const val taggingFolder = "sherpa-onnx-ced-tiny-audio-tagging-2024-04-19"
+    // GitHub, not Hugging Face: the latter is unreachable from mainland networks.
+    val taggingArchive = SpeechModelResource("audio-tagging.tar.bz2",
+        "$release/audio-tagging-models/$taggingFolder.tar.bz2", 28531989,
+        "84baf315b57d61aa69480c4fee878dab54cbc7be3e877db334e65d8b087e23c3")
+    val tagging = listOf(
+        SpeechModelResource("audio-tagging/model.int8.onnx", "", 6133417,
+            "73aa22e783115f6a4ae169b36089907e07d0fd44795595eddea9c1bfc74cc945"),
+        SpeechModelResource("audio-tagging/class_labels_indices.csv", "", 14675,
+            "cdd1049833c4b86127c2773ac0d14a2754b6a6d0d1798002ed5c66e699708429"),
+    )
+}
+
+/** Fetches the music detector archive and places its two verified files under `dir/audio-tagging` in one rename. */
+internal fun installTagging(dir: File, cancellation: ModelDownloadCancellation = ModelDownloadCancellation()) =
+    installTaggingWith(dir, SpeechModelCatalog.tagging, SpeechModelDownload(listOf(SpeechModelCatalog.taggingArchive)), cancellation)
+
+internal fun installTaggingWith(dir: File, files: List<SpeechModelResource>, download: SpeechModelDownload,
+    cancellation: ModelDownloadCancellation = ModelDownloadCancellation()) {
+    val work = download.prepare(dir, cancellation) { _, _ -> }
+    try {
+        val unpacked = File(work, "audio-tagging").apply { mkdirs() }
+        val wanted = files.associateBy { "${SpeechModelCatalog.taggingFolder}/${File(it.path).name}" }
+        val seen = mutableSetOf<String>()
+        TarArchiveInputStream(BZip2CompressorInputStream(File(work, SpeechModelCatalog.taggingArchive.path).inputStream().buffered())).use { tar ->
+            while (true) {
+                cancellation.check()
+                val entry = tar.nextEntry ?: break
+                val resource = wanted[entry.name] ?: continue
+                require(entry.isFile && !entry.isSymbolicLink && !entry.isLink && entry.size == resource.bytes && seen.add(entry.name)) {
+                    "音乐识别模型压缩包格式不符"
+                }
+                SpeechModelDownload.copyVerified(tar, File(unpacked, File(resource.path).name), resource, cancellation) { }
+            }
+        }
+        require(seen == wanted.keys) { "音乐识别模型文件不完整" }
+        val target = File(dir, "audio-tagging")
+        target.deleteRecursively()
+        check(unpacked.renameTo(target)) { "音乐识别模型保存失败" }
+    } finally { work.deleteRecursively() }
 }
 
 enum class SpeechPreparationPhase { IDLE, DOWNLOADING, VALIDATING, IMPORTING, READY, CANCELLED, ERROR }

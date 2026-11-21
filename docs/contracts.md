@@ -396,6 +396,13 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 | `sense-voice/model.int8.onnx` | `asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2` 内 | `c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51` |
 | `sense-voice/tokens.txt` | 同上 | `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc` |
 
+Android 另有一个可选的音乐识别模型（ced-tiny，AudioSet 527 类），只在已检出人声的片段上判断是不是歌，缺了它录音照常、只是不挡别处放的歌。新下载时随语音模型一起取，早先装好的由后台任务补下；同样逐个校验 sha256。来源是 `audio-tagging-models/sherpa-onnx-ced-tiny-audio-tagging-2024-04-19.tar.bz2`（28531989 字节，sha256 `84baf315b57d61aa69480c4fee878dab54cbc7be3e877db334e65d8b087e23c3`），只解出下面两个文件；不用 Hugging Face，因为国内网络连不上：
+
+| 文件 | sha256 |
+|---|---|
+| `audio-tagging/model.int8.onnx` | `73aa22e783115f6a4ae169b36089907e07d0fd44795595eddea9c1bfc74cc945` |
+| `audio-tagging/class_labels_indices.csv` | `cdd1049833c4b86127c2773ac0d14a2754b6a6d0d1798002ed5c66e699708429` |
+
 - SenseVoice 用 int8、4 线程（实验 2-A）。声纹向量 512 维，余弦相似度，向量先 L2 归一化。
 - app 需要：Info.plist 的 `NSMicrophoneUsageDescription`、`NSAudioCaptureUsageDescription`；hardened runtime 的 `com.apple.security.device.audio-input` entitlement；加载自带 dylib 需要的库校验设置（同证书签名，不行再加 `disable-library-validation`）。
 

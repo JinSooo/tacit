@@ -4,6 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AudioPolicyTest {
+    @Test fun songsAreDroppedEvenWhenSingingLooksLikeSpeech() {
+        // Reported case: songs played by the Mac became "is this your voice?" candidates on the phone.
+        assertTrue(AudioPolicy.music(mapOf(137 to .82f, 0 to .9f)))
+        assertTrue(AudioPolicy.music(mapOf(266 to .45f, 0 to .8f)))
+        // Real talking on the same phone peaked at .29 for music-like classes.
+        assertFalse(AudioPolicy.music(mapOf(0 to .77f, 137 to .29f)))
+        assertFalse(AudioPolicy.music(emptyMap()))
+    }
     @Test fun phoneSpeakerPlaybackPausesCaptureButHeadphonesDoNot() {
         val speaker = android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
         val wired = android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES

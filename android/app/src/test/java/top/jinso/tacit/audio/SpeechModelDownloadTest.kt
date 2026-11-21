@@ -36,7 +36,41 @@ class SpeechModelDownloadTest {
         assertEquals(4, SpeechModelCatalog.resources.size)
         val contract = generateSequence(File(requireNotNull(System.getProperty("user.dir")))) { it.parentFile }
             .map { File(it, "docs/contracts.md") }.first { it.isFile }.readText()
-        SpeechModelCatalog.resources.forEach { assertTrue("Hash drift: ${it.path}", contract.lineSequence().any { line -> line.contains(it.path) && line.contains(it.sha256) }) }
+        (SpeechModelCatalog.resources + SpeechModelCatalog.tagging).forEach { assertTrue("Hash drift: ${it.path}", contract.lineSequence().any { line -> line.contains(it.path) && line.contains(it.sha256) }) }
+        assertEquals(SpeechModels.tagging, SpeechModelCatalog.tagging.map { it.path })
+    }
+    @Test fun taggingInstallUnpacksOnlyVerifiedFilesAndCleansUp() {
+        val model = "model bytes".toByteArray(); val labels = "index,mid,display_name".toByteArray()
+        fun sha(b: ByteArray) = MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
+        fun archive(vararg files: Pair<String, ByteArray>): ByteArray {
+            val out = java.io.ByteArrayOutputStream()
+            org.apache.commons.compress.archivers.tar.TarArchiveOutputStream(
+                org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream(out)).use { tar ->
+                files.forEach { (name, body) ->
+                    tar.putArchiveEntry(org.apache.commons.compress.archivers.tar.TarArchiveEntry(name).apply { size = body.size.toLong() })
+                    tar.write(body); tar.closeArchiveEntry()
+                }
+            }
+            return out.toByteArray()
+        }
+        val folder = SpeechModelCatalog.taggingFolder
+        val good = archive("$folder/model.int8.onnx" to model, "$folder/class_labels_indices.csv" to labels, "$folder/test_wavs/1.wav" to model)
+        // The real catalog fixes sizes and hashes; substitute the synthetic files' values for this run.
+        val catalog = SpeechModelCatalog.tagging
+        assertEquals(listOf("audio-tagging/model.int8.onnx", "audio-tagging/class_labels_indices.csv"), catalog.map { it.path })
+        val dir = temp.newFolder("current")
+        fun install(body: ByteArray) = runCatching {
+            installTaggingWith(dir, listOf(catalog[0].copy(bytes = model.size.toLong(), sha256 = sha(model)),
+                catalog[1].copy(bytes = labels.size.toLong(), sha256 = sha(labels))),
+                SpeechModelDownload(listOf(SpeechModelResource("audio-tagging.tar.bz2", "https://models.example/a", body.size.toLong(), sha(body)))) { Connection(it, body) })
+        }
+        assertTrue(install(good).isSuccess)
+        assertArrayEquals(model, File(dir, "audio-tagging/model.int8.onnx").readBytes())
+        assertEquals(listOf("audio-tagging"), dir.list()!!.toList())
+
+        File(dir, "audio-tagging").deleteRecursively()
+        assertTrue(install(archive("$folder/model.int8.onnx" to model)).isFailure)
+        assertEquals(emptyList<String>(), dir.list()!!.toList())
     }
     @Test fun downloadsAllFilesWithMonotonicProgressAndClosesConnections() {
         val resources = listOf(resource(), resource("tokens.txt"))

@@ -69,7 +69,14 @@ internal class SpeechModels(private val context: Context) {
         return activate(stage)
     }
     fun download(cancellation: ModelDownloadCancellation, progress: (Long, String) -> Unit): File =
-        SpeechModelDownload().prepare(root, cancellation, progress)
+        SpeechModelDownload().prepare(root, cancellation, progress).also { stage ->
+            // Best effort: a failed 6 MB extra never blocks the speech models; the maintenance job retries.
+            runCatching { installTagging(stage, cancellation) }
+                .onFailure { if (it is java.util.concurrent.CancellationException) throw it }
+        }
+    /** True when the installed models lack the music detector, so a background fetch is worthwhile. */
+    fun taggingMissing(): Boolean = current()?.let { dir -> tagging.any { !File(dir, it).isFile } } == true
+    fun supplementTagging() { current()?.let { installTagging(it) } }
 
     fun activate(stage: File, cancellation: ModelDownloadCancellation = ModelDownloadCancellation()): File =
         activatePreparedSpeechModels(stage, cancellation, { LocalSpeechEngine(it).use { engine -> engine.validate() } }) {
@@ -89,15 +96,36 @@ internal class SpeechModels(private val context: Context) {
     companion object {
         val required = listOf("sense-voice/model.int8.onnx", "sense-voice/tokens.txt", "silero_vad.onnx",
             "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
+        val tagging = SpeechModelCatalog.tagging.map { it.path }
     }
 }
 
 internal data class VoiceSegment(val start: Int, val samples: FloatArray, val vector: FloatArray)
 private const val VOICEPRINT_CHUNK = 3 * SAMPLE_RATE
+private const val TAGGING_WINDOW = 3 * SAMPLE_RATE
 internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechEngine {
     private var vad: Vad? = null
     private var speaker: SpeakerEmbeddingExtractor? = null
     private var recognizer: OfflineRecognizer? = null
+    private var tagger: AudioTagging? = null
+    private val taggingFiles = SpeechModels.tagging.map { File(dir, it) }
+    private fun tagger() = tagger ?: if (!taggingFiles.all { it.isFile }) null else AudioTagging(config = AudioTaggingConfig(
+        model = AudioTaggingModelConfig(ced = taggingFiles[0].path, numThreads = 1, debug = false, provider = "cpu"),
+        labels = taggingFiles[1].path, topK = 10)).also { tagger = it }
+    /** AudioSet probabilities for one span, or null when the optional music detector is not installed. */
+    internal fun tags(samples: FloatArray): Map<Int, Float>? {
+        val detector = runCatching { tagger() }.getOrNull() ?: return null
+        // Like the voiceprint arena, ONNX memory follows input length; 3 s from the middle is enough to hear a song.
+        val from = maxOf(0, (samples.size - TAGGING_WINDOW) / 2)
+        val window = samples.copyOfRange(from, minOf(samples.size, from + TAGGING_WINDOW))
+        val stream = detector.createStream()
+        return try {
+            stream.acceptWaveform(window, SAMPLE_RATE)
+            detector.compute(stream, 10).associate { it.index to it.prob }
+        } finally { stream.release(); window.fill(0f) }
+    }
+    /** Songs from another device's speaker pass VAD; they must not become voices or transcripts. */
+    internal fun music(samples: FloatArray): Boolean = tags(samples)?.let(AudioPolicy::music) == true
     private fun vad() = vad ?: Vad(config = VadModelConfig(sileroVadModelConfig = SileroVadModelConfig(
         model = File(dir, "silero_vad.onnx").path, minSilenceDuration = .5f,
         minSpeechDuration = .5f, maxSpeechDuration = 5f))).also { vad = it }
@@ -133,14 +161,16 @@ internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechE
         }
         return sum?.let { AudioPolicy.unit(it) }
     }
-    override fun segments(pcm: FloatArray): List<VoiceSegment> {
+    /** VAD spans clamped to the recording, before any music or voiceprint decision. */
+    internal fun spans(pcm: FloatArray): List<Pair<Int, FloatArray>> {
         val detector = vad(); detector.reset()
-        val result = mutableListOf<VoiceSegment>()
+        val result = mutableListOf<Pair<Int, FloatArray>>()
         fun drain() {
             while (!detector.empty()) {
                 val segment = detector.front(); detector.pop()
-                if (segment.samples.size < SAMPLE_RATE / 2) continue
-                voiceprint(segment.samples)?.let { result += VoiceSegment(segment.start.toInt(), segment.samples, it) }
+                val start = segment.start.toInt()
+                val length = minOf(segment.samples.size, pcm.size - start)
+                if (length >= SAMPLE_RATE / 2) result += start to segment.samples.copyOf(length)
             }
         }
         var offset = 0
@@ -152,11 +182,12 @@ internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechE
         }
         detector.flush(); drain()
         lastSegmented = SystemClock.elapsedRealtime()
-        return result.mapNotNull { segment ->
-            val length = minOf(segment.samples.size, pcm.size - segment.start)
-            if (length < SAMPLE_RATE / 2) null else segment.copy(samples = segment.samples.copyOf(length))
-        }
+        return result
     }
+    override fun segments(pcm: FloatArray): List<VoiceSegment> = spans(pcm).mapNotNull { (start, samples) ->
+        if (music(samples)) { samples.fill(0f); null }
+        else voiceprint(samples)?.let { VoiceSegment(start, samples, it) }
+    }.also { lastSegmented = SystemClock.elapsedRealtime() }
     private var lastTranscribed = 0L
     private var lastSegmented = 0L
     override fun transcribe(samples: FloatArray): String {
@@ -175,12 +206,12 @@ internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechE
     }
     /** Voiceprint + VAD hold ~120 MB once warmed (3 s chunks) and never shrink; reloading takes ~0.15 s. */
     fun releaseIdleVoiceprint(idleMs: Long): Boolean {
-        if (speaker == null && vad == null) return false
+        if (speaker == null && vad == null && tagger == null) return false
         if (SystemClock.elapsedRealtime() - lastSegmented < idleMs) return false
-        speaker?.release(); speaker = null; vad?.release(); vad = null
+        speaker?.release(); speaker = null; vad?.release(); vad = null; tagger?.release(); tagger = null
         return true
     }
     internal val transcriberLoaded get() = recognizer != null
     internal val voiceprintLoaded get() = speaker != null
-    override fun close() { recognizer?.release(); speaker?.release(); vad?.release() }
+    override fun close() { recognizer?.release(); speaker?.release(); vad?.release(); tagger?.release() }
 }

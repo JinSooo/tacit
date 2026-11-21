@@ -24,6 +24,18 @@ internal object AudioPolicy {
         android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
         android.media.AudioDeviceInfo.TYPE_USB_HEADSET, 26 /* TYPE_BLE_HEADSET */, 27 /* TYPE_BLE_SPEAKER */,
     )
+    /**
+     * AudioSet indices from class_labels_indices.csv. Calibrated on this phone's retained audio (2026-11-21): real
+     * talking scored at most .29 for music-like classes, the voices that turned out to be songs mostly .4–.87.
+     * Singing also scores high on Speech, so speech is not used to veto; talking over loud music is dropped too.
+     */
+    fun music(probabilities: Map<Int, Float>): Boolean =
+        listOf(MUSIC, SINGING, SONG, VOCAL_MUSIC, POP_MUSIC).maxOf { probabilities[it] ?: 0f } >= .4f
+    private const val SINGING = 27
+    private const val MUSIC = 137
+    private const val POP_MUSIC = 216
+    private const val VOCAL_MUSIC = 254
+    private const val SONG = 266
     /** The phone playing video or music aloud would be recorded as other people's voices, so capture pauses. */
     fun speakerPlayback(musicActive: Boolean, outputTypes: Collection<Int>) =
         musicActive && outputTypes.none { it in privateOutputs }
