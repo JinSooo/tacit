@@ -20,4 +20,9 @@ class ChatPreviewTest {
             plainChatPreview("test.chat", "项目组", "项目组", "明天讨论"))
         assertNull(plainChatPreview(WECHAT_PACKAGE, "微信", null, " "))
     }
+
+    @Test fun weChatUnreadCountIsNotPartOfSenderOrText() {
+        assertEquals(ChatPreview("项目组", "小李", "明天讨论"), plainChatPreview(WECHAT_PACKAGE, "项目组", null, "[3条]小李: 明天讨论"))
+        assertEquals(ChatPreview("小李", "小李", "明天讨论"), plainChatPreview(WECHAT_PACKAGE, "小李", null, "[2条]明天讨论"))
+    }
 }

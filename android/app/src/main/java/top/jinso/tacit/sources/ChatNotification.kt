@@ -13,7 +13,9 @@ internal fun chatPreview(notification: Notification, packageName: String): ChatP
     if (notification.visibility == Notification.VISIBILITY_SECRET ||
         notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return null
     val extras = notification.extras ?: return null
-    if (extras.containsKey(Notification.EXTRA_REMOTE_INPUT_HISTORY)) return null
+    // An inline reply leaves history in the update. WeChat sends the key with a null value on every message,
+    // so only real history counts (reported: all 108 WeChat notifications were dropped on the key alone).
+    if (extras.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY)?.isNotEmpty() == true) return null
 
     if (extras.containsKey(Notification.EXTRA_MESSAGES)) {
         val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification) ?: return null
@@ -33,6 +35,7 @@ internal fun chatPreview(notification: Notification, packageName: String): ChatP
     )
 }
 
+private val weChatUnreadCount = Regex("^\\[\\d+条]\\s*")
 private val weChatSenderPrefix = Regex("^([^:\n：]{1,80})[:：]\\s+(.+)$", RegexOption.DOT_MATCHES_ALL)
 
 internal fun plainChatPreview(
@@ -41,7 +44,9 @@ internal fun plainChatPreview(
     val name = title?.toString()?.trim()?.take(256)?.takeIf(String::isNotEmpty)
     val group = conversationTitle?.toString()?.trim()?.take(256)?.takeIf(String::isNotEmpty)
     val conversation = group ?: name ?: return null
-    val message = text?.toString()?.trim()?.take(8_000)?.takeIf(String::isNotEmpty) ?: return null
+    // WeChat prefixes the unread count ("[3条]") when several messages wait; it is not part of the sender or text.
+    val message = text?.toString()?.trim()?.let { if (packageName == WECHAT_PACKAGE) it.replaceFirst(weChatUnreadCount, "") else it }
+        ?.take(8_000)?.takeIf(String::isNotEmpty) ?: return null
     val prefixed = if (packageName == WECHAT_PACKAGE && (group == null || group == name)) {
         weChatSenderPrefix.matchEntire(message)
     } else null

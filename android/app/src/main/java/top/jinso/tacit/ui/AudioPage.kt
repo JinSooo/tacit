@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.withResumed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -80,12 +81,16 @@ import java.util.concurrent.CompletableFuture
             notify("无法开始录音，请先授权麦克风并继续采集")
         }
     }
+    val owner = activity as? LifecycleOwner
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result[Manifest.permission.RECORD_AUDIO] == true ||
             activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        ) start() else notify("麦克风未授权，未开始录音")
+        ) {
+            // The result arrives before the page is resumed, and capture may only start from a visible page:
+            // starting here failed the first time ("无法开始录音") right after the permission dialogs.
+            scope.launch { owner?.lifecycle?.withResumed { start() } ?: start() }
+        } else notify("麦克风未授权，未开始录音")
     }
-    val owner = activity as? LifecycleOwner
     LaunchedEffect(owner, resumed, includeIgnored) {
         // Re-read only when recordings, voices or status change; nothing runs while the page is hidden.
         owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { audio.changes.collectLatest {

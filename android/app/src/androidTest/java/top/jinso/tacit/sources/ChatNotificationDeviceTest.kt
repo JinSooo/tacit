@@ -25,6 +25,14 @@ class ChatNotificationDeviceTest {
         assertEquals(ChatPreview("项目组", "小李", "新消息"), chatPreview(notification, WECHAT_PACKAGE))
     }
 
+    @Test fun weChatMessageWithEmptyReplyHistoryKeyIsKept() {
+        // Reported case: WeChat posts android.remoteInputHistory=null on every message notification.
+        val notification = builder().setContentTitle("项目组").setContentText("小李: 周五交稿")
+            .setVisibility(Notification.VISIBILITY_PRIVATE).build()
+        notification.extras.putCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY, null)
+        assertEquals(ChatPreview("项目组", "小李", "周五交稿"), chatPreview(notification, WECHAT_PACKAGE))
+    }
+
     @Test fun privateGroupSummaryInlineReplyAndOutgoingUpdatesDoNotBecomeRecords() {
         val text = builder().setContentTitle("项目组").setContentText("新消息")
         assertNull(chatPreview(text.setVisibility(Notification.VISIBILITY_SECRET).build(), WECHAT_PACKAGE))

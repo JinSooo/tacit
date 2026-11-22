@@ -14,10 +14,11 @@ internal class SpeechModels(private val context: Context) {
     private val root = File(context.noBackupFilesDir, "speech-models").apply { mkdirs() }
     private val pointer = AtomicFile(File(root, "current"))
     init {
-        // A killed download/import has no pointer. Remove only our orphan UUID directories.
+        // A killed download/import has no pointer. Remove only our orphan UUID directories, and only once they sit
+        // idle: another instance (the maintenance worker) may be downloading or validating into one right now.
         val active = current()
-        root.listFiles()?.filter { it.isDirectory && it != active && Regex("[a-f0-9-]{36}").matches(it.name) }
-            ?.forEach { it.deleteRecursively() }
+        root.listFiles()?.filter { it.isDirectory && it != active && Regex("[a-f0-9-]{36}").matches(it.name) &&
+            abandonedStage(it) }?.forEach { it.deleteRecursively() }
     }
     @Synchronized fun current(): File? = runCatching {
         val name = String(pointer.readFully(), Charsets.UTF_8)
@@ -94,6 +95,9 @@ internal class SpeechModels(private val context: Context) {
             }
         }
     companion object {
+        /** No file in the stage changed for an hour: a live download or validation always touches one sooner. */
+        internal fun abandonedStage(dir: File, now: Long = System.currentTimeMillis()): Boolean =
+            dir.walkTopDown().maxOf { it.lastModified() } < now - 60 * 60 * 1000L
         val required = listOf("sense-voice/model.int8.onnx", "sense-voice/tokens.txt", "silero_vad.onnx",
             "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
         val tagging = SpeechModelCatalog.tagging.map { it.path }
