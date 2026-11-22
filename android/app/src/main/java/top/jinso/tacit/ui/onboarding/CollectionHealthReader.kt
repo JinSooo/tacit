@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.AUDIO_SOURCE
 import top.jinso.tacit.audio.AudioRuntime
+import top.jinso.tacit.sources.NotificationSource
 import top.jinso.tacit.sources.Sources
 
 /** Read off main: initializing the existing audio runtime may open encrypted local storage. */
@@ -50,6 +51,8 @@ internal fun readCollectionHealth(app: TacitApp): CollectionHealth {
         batteryExempt = runCatching { power.isIgnoringBatteryOptimizations(app.packageName) }.getOrNull(),
         backgroundRestricted = runCatching { app.getSystemService(ActivityManager::class.java).isBackgroundRestricted }.getOrNull(),
         powerSave = runCatching { power.isPowerSaveMode }.getOrNull(),
+        notificationListenerConnected = if (!app.prefs.paused && sources.any { it.id == Sources.NOTIFICATION && it.enabled && it.granted })
+            NotificationSource.connected else null,
     )
 }
 

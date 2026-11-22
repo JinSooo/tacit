@@ -88,6 +88,8 @@ class NotificationSource : NotificationListenerService() {
 
     companion object {
         private var instance = WeakReference<NotificationSource>(null)
+        /** The system is actually delivering notifications; a granted permission alone does not mean this. */
+        internal val connected: Boolean get() = instance.get() != null
         internal fun unbind() { instance.get()?.let { it.queue.clear(); runCatching { it.requestUnbind() } } }
     }
 }

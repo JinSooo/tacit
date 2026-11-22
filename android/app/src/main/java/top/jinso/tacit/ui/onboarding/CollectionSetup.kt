@@ -1,5 +1,6 @@
 package top.jinso.tacit.ui.onboarding
 
+import top.jinso.tacit.sources.Sources
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 import top.jinso.tacit.ui.components.*
@@ -35,6 +36,7 @@ internal fun backgroundProblemCount(health: CollectionHealth): Int =
             health.batteryExempt == false,
             health.backgroundRestricted == true,
             health.powerSave == true,
+            health.notificationListenerConnected == false,
         ).count { it }
 
 @Composable
@@ -52,7 +54,9 @@ internal fun BackgroundChecklist(
     fun open(page: SystemPage) = openSystemPage(context, page, notify)
     GroupCard {
         health.sources.filter { it.enabled }.forEach { source ->
-            CheckItem(source.name, source.granted, "已允许", "需要授权", "去设置") { onOpenSource(source.id) }
+            if (source.id == Sources.NOTIFICATION && source.granted && health.notificationListenerConnected == false)
+                CheckItem(source.name, false, "已允许", "已允许，但系统没有接通，请打开自启动", "打开") { open(SystemPage.APP) }
+            else CheckItem(source.name, source.granted, "已允许", "需要授权", "去设置") { onOpenSource(source.id) }
             GroupDivider()
         }
         if (health.microphoneCaptureExpected) {
@@ -108,8 +112,15 @@ internal fun BackgroundChecklist(
             open(SystemPage.BATTERY_SAVER)
         }
         GroupDivider()
-        SettingsRow("自启动", "系统查不到，请自己确认", leading = { StatusMark(Mark.UNKNOWN) }) {
-            TonalButton("打开", { open(SystemPage.APP) })
+        // The system exposes no autostart flag; a delivered notification listener proves it on HyperOS.
+        when (health.notificationListenerConnected) {
+            true -> SettingsRow("自启动", "已允许", leading = { StatusMark(Mark.OK) })
+            false -> SettingsRow("自启动", "未允许，聊天通知收不到", problem = true, leading = { StatusMark(Mark.PROBLEM) }) {
+                TonalButton("打开", { open(SystemPage.APP) })
+            }
+            null -> SettingsRow("自启动", "系统查不到，请自己确认", leading = { StatusMark(Mark.UNKNOWN) }) {
+                TonalButton("打开", { open(SystemPage.APP) })
+            }
         }
         GroupDivider()
         SettingsRow("最近任务锁定", "在最近任务里按住 Tacit 卡片", leading = { StatusMark(Mark.UNKNOWN) })

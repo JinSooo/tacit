@@ -67,7 +67,9 @@ object Sources {
             !prefs.enabled(NOTIFICATION) -> "已停用"
             !prefs.allows(NOTIFICATION) -> "已暂停"
             !granted(context, NOTIFICATION) -> "等待系统授权"
-            else -> "等待新通知"
+            // HyperOS refuses to bind the listener without autostart even though access is granted.
+            NotificationSource.connected -> "等待新通知"
+            else -> "系统还没接通通知，请在后台运行里打开自启动"
         })
     }
 

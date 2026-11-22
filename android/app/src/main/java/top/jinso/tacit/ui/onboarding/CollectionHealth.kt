@@ -24,6 +24,8 @@ internal data class CollectionHealth(
     val batteryExempt: Boolean?,
     val backgroundRestricted: Boolean?,
     val powerSave: Boolean?,
+    /** null when chat notifications are off, paused or not granted; false when granted but never delivered. */
+    val notificationListenerConnected: Boolean? = null,
 ) {
     val microphoneCaptureExpected: Boolean
         get() = audioEnabled && (audioCaptureWanted || audioRunning == true || audioStarting)
@@ -38,6 +40,9 @@ internal fun recoveryIssues(health: CollectionHealth): List<RecoveryIssue> = bui
     if (health.paused) return@buildList
     health.sources.filter { it.enabled && !it.granted }.forEach {
         add(RecoveryIssue("${it.name}需要授权", "权限尚未允许或已经失效。检查后才会继续读取。", RecoveryAction.SOURCE, it.id))
+    }
+    if (health.notificationListenerConnected == false) {
+        add(RecoveryIssue("聊天通知没有接通", "请在设置 › 后台运行里打开 Tacit 的自启动。", RecoveryAction.SOURCE, "android.notification"))
     }
     if (health.microphoneCaptureExpected) {
         when {

@@ -13,6 +13,16 @@ class CollectionHealthTest {
         batteryExempt = true, backgroundRestricted = false, powerSave = false,
     )
 
+    @Test fun `granted chat access that the system never delivers is reported`() {
+        // Reported case: HyperOS refused to bind the listener without autostart; 108 WeChat notifications were lost
+        // while the checklist said "已允许".
+        assertTrue(recoveryIssues(ready.copy(notificationListenerConnected = true)).isEmpty())
+        val issue = recoveryIssues(ready.copy(notificationListenerConnected = false)).single()
+        assertEquals("聊天通知没有接通", issue.title)
+        assertTrue(issue.detail.contains("自启动"))
+        assertTrue(recoveryIssues(ready.copy(notificationListenerConnected = false, paused = true)).isEmpty())
+    }
+
     @Test fun `stopped audio never asks for microphone recording or its notification`() {
         val stopped = ready.copy(sources = emptyList(), audioCaptureWanted = false,
             audioRunning = false, microphoneGranted = false, notificationsEnabled = false,
