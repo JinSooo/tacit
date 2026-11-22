@@ -253,6 +253,27 @@ test("search 跨种类统一分页、时间范围及私密标记，timeline 无 
   expect((await read("/v1/agent/timeline?tool=codex&device=other")).records.map((r: any) => r.id)).toEqual([records[1]!.id]);
 });
 
+test("timeline 和 search 超过 MCP 单次长度时少给几条并能续读，不被截断", async () => {
+  // 回归（2026-11-22）：timeline limit=100 的结果超过 40000 字符，被 MCP 从中间截断，Agent 拿到坏 JSON 且丢了游标。
+  const records = Array.from({ length: 120 }, (_, i) => fixture({ title: `needle 合成长标题${i} ` + "长".repeat(180),
+    source: "manual.note", t_start: new Date(Date.parse("2026-11-08T10:00:00+09:00") + i * 60_000).toISOString() }));
+  expect(ctx.db.ingest(records).accepted).toBe(120);
+  for (const tool of ["timeline", "search"]) {
+    const seen: string[] = []; let cursor: string | null = null; let pages = 0;
+    do {
+      const response = await call(`/v1/agent/${tool}?tool=codex&limit=100${tool === "search" ? "&q=needle" : ""}${cursor ? `&cursor=${cursor}` : ""}`);
+      const text = await response.text();
+      expect(text.length).toBeLessThanOrEqual(40000);
+      const page = JSON.parse(text);
+      expect(page.records.length).toBeGreaterThan(0);
+      seen.push(...page.records.map((r: any) => r.id)); cursor = page.next_cursor; pages++;
+    } while (cursor && pages < 20);
+    expect(pages).toBeGreaterThan(1);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(new Set(seen)).toEqual(new Set(records.map(r => r.id)));
+  }
+});
+
 test("Agent 搜索为同一屏幕上下文选代表，翻页不会重新出现短片段", async () => {
   project("p", "/synthetic", "needle 项目");
   thread("t", { brief: "needle 事项" });

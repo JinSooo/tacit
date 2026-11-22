@@ -39,6 +39,10 @@ function decode(value: string, strict = false): unknown {
 function position(value: unknown): value is Position {
   return value === null || Array.isArray(value) && value.length === 2 && Number.isSafeInteger(value[0]) && typeof value[1] === "string" && value[1].length <= 128;
 }
+/** MCP 交给 Agent 的单次结果上限（mcp.ts 超出会截断）；留出游标和外层字段的余量。 */
+export const AGENT_TEXT_LIMIT = 40000;
+function fullPage(value: Item) { return JSON.stringify({ ...value,next_cursor: "x".repeat(160) }).length > AGENT_TEXT_LIMIT; }
+
 function limitOf(params: URLSearchParams) {
   const limit = Number(params.get("limit") ?? 20);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new InputError("limit 必须是 1–100 的整数");
@@ -248,12 +252,17 @@ export class AgentReads {
     const rank = { threads: 0, projects: 1, records: 2 } as const;
     candidates.sort((a,b) => rank[a.kind]-rank[b.kind] || (a.kind === "records" && b.kind === "records" ? recordTier(a.item.source)-recordTier(b.item.source) : 0) || b.ms-a.ms || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
     const page = candidates.slice(0,limit), result: Record<keyof SearchCursor, Item[]> = { threads: [],projects: [],records: [] };
+    let taken = 0;
     for (const entry of page) {
       result[entry.kind].push(entry.item);
+      // MCP 一次最多交给 Agent 40000 字符；装不下的条目留到下一页，不让结果被从中间截断、丢掉游标。
+      if (taken > 0 && fullPage({ notice,...result })) { result[entry.kind].pop(); break; }
+      taken++;
       if (entry.kind === "records") cursor.records = [recordTier(entry.item.source),entry.ms,entry.id];
       else cursor[entry.kind] = [entry.ms,entry.id];
     }
-    return { value: { notice,...result,next_cursor: more || candidates.length > limit ? encode(cursor) : null }, ids: page.map(e => e.id) };
+    const cut = taken < page.length;
+    return { value: { notice,...result,next_cursor: more || cut || candidates.length > limit ? encode(cursor) : null }, ids: page.slice(0,taken).map(e => e.id) };
   }
 
   private timeline(params: URLSearchParams) {
@@ -261,7 +270,15 @@ export class AgentReads {
     const query = new URLSearchParams({ limit: String(limit) });
     for (const key of ["from","to","device","cursor"]) if (params.has(key)) query.set(key,params.get(key)!);
     const page = this.hub.list(query);
-    return { value: { notice,...page,records: page.records.map(r => ({ ...r,...(r.sensitivity === "private" ? { private: true } : {}) })) }, ids: page.records.map(r => r.id!) };
+    const records = page.records.map(r => ({ ...r,...(r.sensitivity === "private" ? { private: true } : {}) }));
+    let next = page.next_cursor;
+    // 同搜索：超过一次能交给 Agent 的长度时少给几条，游标指向最后一条已给出的记录。
+    while (records.length > 1 && fullPage({ notice,records })) {
+      records.pop();
+      const last = records.at(-1)!;
+      next = Buffer.from(JSON.stringify([Date.parse(last.t_start!), last.id])).toString("base64url");
+    }
+    return { value: { notice,records,next_cursor: next }, ids: records.map(r => r.id!) };
   }
 
   async handle(kind: string, params: URLSearchParams): Promise<Response> {
