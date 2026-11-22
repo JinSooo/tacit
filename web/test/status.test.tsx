@@ -10,7 +10,7 @@ function emptyStatus(): HubStatus {
     generated_at,
     hub: { started_at: generated_at, uptime_s: 0, pid: 10, bun: null, schema_version: 12,
       busy: { since: generated_at, total: 0, by_route: { ingest: 0, agent: 0, web: 0 }, last_at: null } },
-    listen: { host: "127.0.0.1", port: 47823, localhost_only: true },
+    listen: { host: "127.0.0.1", port: 47823, localhost_only: true, lan_port: null },
     database: { file: "synthetic/history.db", bytes: 0 },
     records: { total: 0, tombstones: 0, by_source: [], by_device: [] },
     distill: {

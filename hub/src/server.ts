@@ -91,7 +91,7 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
     try {
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
-      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, busy: busy.snapshot() }));
+      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, lanPort: options.devices?.open ? options.devices.lanPort : null, busy: busy.snapshot() }));
       if (url.pathname.startsWith("/v1/settings/")) {
         const deviceResponse = await options.devices?.settings(method, url.pathname);
         if (deviceResponse) return deviceResponse;

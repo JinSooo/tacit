@@ -873,10 +873,12 @@ async function overviewStep(d: Deps, store: DistillStore, date: string, now: num
   detail: ReviewDetail, stillCurrent: () => boolean): Promise<DayStepResult> {
   const corrections = store.getState<TimelineCorrections>(timelineCorrectionKey(date));
   const projects = new Map<string, string | null>();
+  // 带上开始时刻并按时间排：同一件事后来解决了，模型才能分清哪句是最新状态。
   const activities = applyTimelineCorrections(detail.items, corrections).filter(item => item.active_seconds > 0)
-    .map(({ title, description, project_id }) => {
+    .sort((a, b) => Date.parse(a.t_start) - Date.parse(b.t_start))
+    .map(({ t_start, title, description, project_id }) => {
       if (project_id && !projects.has(project_id)) projects.set(project_id, store.project(project_id)?.name ?? null);
-      return { title, description, project: project_id ? projects.get(project_id) ?? null : null };
+      return { start: t_start.slice(11, 16), title, description, project: project_id ? projects.get(project_id) ?? null : null };
     });
   const prompt = P.dayOverviewPrompt(activities);
   const input = createHash("sha256").update(prompt).digest("hex");

@@ -51,7 +51,9 @@ test("状态只读、只给计数，按来源和设备统计，今天用量按�
   const json = JSON.stringify(status);
   for (const text of [secret, "合成标题"]) expect(json).not.toContain(text);
 
-  expect(status.listen).toEqual({ host: "127.0.0.1", port: 47823, localhost_only: true });
+  expect(status.listen).toEqual({ host: "127.0.0.1", port: 47823, localhost_only: true, lan_port: null });
+  // 2026-11-22：已配对手机时局域网端口开着，状态页却写死“只监听本机”。
+  expect(hubStatus(ctx.db, { port: 47823, lanPort: 47824, now }).listen).toEqual({ host: "127.0.0.1", port: 47823, localhost_only: false, lan_port: 47824 });
   expect(status.database.bytes).toBeGreaterThan(0);
   expect(status.records.total).toBe(3);
   expect(status.records.by_source).toEqual([

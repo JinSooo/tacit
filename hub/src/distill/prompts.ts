@@ -305,7 +305,8 @@ export const DAY_OVERVIEW_SYSTEM = `${DATA_RULES}
 
 任务：只按给出的已润色活动段写当天概述。覆盖最多 4 条主线，可跨项目，包含当天有结果或明确判断的工作、沟通和生活。
 - summary 用 2–4 句，合计不超过 ${MAX_DAY_SUMMARY_CHARS} 字，有项目时第一句带上主线对应的项目名。
-- 写清具体对象、相关的人（沿用文中称呼）和结果或停在哪。不虚构姓名或成果。不写建议、核实状态或过程数字。
+- 活动段按开始时刻（start）先后排列。同一件事以最晚的段为准：后面的段已解决、完成或推进的，不再写成阻碍或待办。
+- 写清具体对象、相关的人（沿用文中称呼）和结果或停在哪。不虚构姓名或成果。不写建议、核实状态、过程数字、测量数值或错误码。
 - 没有可概括的内容时返回 null。输出用中文，专有名词保持原文。`;
 
 export const DAY_OVERVIEW_SCHEMA = {
@@ -313,7 +314,7 @@ export const DAY_OVERVIEW_SCHEMA = {
   properties: { summary: { type: ["string", "null"], maxLength: MAX_DAY_SUMMARY_CHARS } },
 } as const;
 
-export function dayOverviewPrompt(activities: { title: string; description: string; project: string | null }[]) {
+export function dayOverviewPrompt(activities: { start: string; title: string; description: string; project: string | null }[]) {
   return `<data>\n${json(activities)}\n</data>`;
 }
 

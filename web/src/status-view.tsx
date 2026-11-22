@@ -74,6 +74,7 @@ export function StatusContent({ status, refreshFailed }: { status: HubStatus; re
       <Stats items={[
         ["已运行", <span title={`启动于 ${hub.started_at.slice(0, 16).replace("T", " ")}`}>{formatUptime(hub.uptime_s)}</span>],
         ["地址", <code>{listen.host}:{listen.port}</code>],
+        ...(listen.lan_port ? [["手机连接端口", <code>{listen.lan_port}</code>] as [string, React.ReactNode]] : []),
         ["数据库大小", <span title={database.file}>{formatBytes(database.bytes)}</span>],
         ["记录", `${formatNumber(records.total)} 条`],
         ["已删除", `${formatNumber(records.tombstones)} 条`],
