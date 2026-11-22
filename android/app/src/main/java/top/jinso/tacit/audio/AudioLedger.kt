@@ -27,6 +27,28 @@ internal fun transcriptSpeakerLabel(speaker: JSONObject?, mac: MacVoiceprint? = 
     return speaker?.optString("name")?.takeIf(String::isNotEmpty) ?: "对方 ${number()}"
 }
 
+/** A voice heard this long has a stable center; shorter ones only attach to such voices (as on the Mac). */
+internal const val PARTICIPANT_BIG_SECONDS = 6.0
+internal const val PARTICIPANT_JOIN = 0.5
+internal const val PARTICIPANT_ATTACH = 0.3
+
+internal data class Participant(val number: Int, val center: FloatArray, val seconds: Double)
+
+/**
+ * Which participant of this conversation a newly heard voice belongs to, or null for a new one. Per-span voices
+ * split one person into dozens (a 3-hour call on 2026-11-22 had 226 "对方"); the Mac re-merges each conversation
+ * with the same thresholds (AudioWorkerLogic.consolidate). Short voices join only long participants.
+ */
+internal fun joinParticipant(participants: List<Participant>, center: FloatArray, seconds: Double,
+    join: Double = PARTICIPANT_JOIN, attach: Double = PARTICIPANT_ATTACH): Int? {
+    val big = seconds >= PARTICIPANT_BIG_SECONDS
+    val v = AudioPolicy.unit(center)
+    return participants.filter { it.seconds >= PARTICIPANT_BIG_SECONDS }
+        .map { it.number to AudioPolicy.cosine(AudioPolicy.unit(it.center), v) }
+        .filter { it.second >= if (big) join else attach }
+        .maxByOrNull { it.second }?.first
+}
+
 /** Encrypted index operations. Caller holds AudioRuntime.lock; no content goes through Preferences. */
 internal class AudioLedger(private val store: EncryptedAudioStore) {
     private val conversations: JSONArray get() = store.index.optJSONArray("conversations")
@@ -110,8 +132,36 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
 
     private fun participantLabel(conversation: JSONObject, speaker: String): Int {
         val labels = conversation.getJSONObject("labels")
-        if (!labels.has(speaker)) labels.put(speaker, labels.length() + 1)
+        if (labels.has(speaker)) return labels.getInt(speaker)
+        val voices = store.speakers().associateBy { it.getString("id") }
+        val numbers = labels.keys().asSequence().map { it to labels.getInt(it) }.toList()
+        val participants = numbers.groupBy({ it.second }, { voices[it.first] }).mapNotNull { (number, members) ->
+            val known = members.filterNotNull().mapNotNull { m ->
+                m.vectorOrNull("vector")?.let { AudioPolicy.unit(it) to m.optDouble("seconds", 0.0) }
+            }
+            if (known.isEmpty()) return@mapNotNull null
+            val size = known.first().first.size
+            if (known.any { it.first.size != size }) return@mapNotNull null
+            val sum = FloatArray(size)
+            for ((v, w) in known) for (i in 0 until size) sum[i] += (v[i] * w).toFloat()
+            val seconds = known.sumOf { it.second }
+            if (seconds <= 0) null else Participant(number, sum, seconds)
+        }
+        val own = voices[speaker]
+        val center = own?.vectorOrNull("vector")
+        val joined = if (center != null && participants.all { it.center.size == center.size })
+            joinParticipant(participants, center, own.optDouble("seconds", 0.0)) else null
+        labels.put(speaker, joined ?: ((numbers.maxOfOrNull { it.second } ?: 0) + 1))
         return labels.getInt(speaker)
+    }
+
+    /** One participant may hold several voices: it is "我" when any of them is, else the first name given to one. */
+    private fun participantName(conversation: JSONObject?, number: Int, speaker: String, mac: MacVoiceprint?): String {
+        val labels = conversation?.optJSONObject("labels")
+        val members = labels?.keys()?.asSequence()?.filter { labels.getInt(it) == number }?.toList().orEmpty()
+        val voices = (listOf(speaker) + (members - speaker)).mapNotNull(::findSpeaker)
+        if (voices.any { isMeSpeaker(it, mac) }) return "我"
+        return transcriptSpeakerLabel(voices.firstOrNull { it.optString("name").isNotEmpty() } ?: findSpeaker(speaker), mac) { number }
     }
     fun label(clip: JSONObject, speaker: String): Int = participantLabel(
         conversations.objects().first { it.getString("id") == clip.getString("conversation") }, speaker)
@@ -178,7 +228,9 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
     private fun speaker(id: String) = requireNotNull(findSpeaker(id)) { "说话人已不存在" }
 
     fun transcriptLabel(clip: JSONObject, speakerId: String, mac: MacVoiceprint? = null): String =
-        transcriptSpeakerLabel(findSpeaker(speakerId), mac) { label(clip, speakerId) }
+        participantName(conversation(clip.getString("conversation")), label(clip, speakerId), speakerId, mac)
+
+    private fun conversation(id: String) = conversations.objects().firstOrNull { it.getString("id") == id }
 
     fun persistTranscript(clip: JSONObject, record: String) {
         if (store.transcripts().any { it.getString("recordId") == record }) return
@@ -197,7 +249,7 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
         val row = store.transcripts().firstOrNull { it.getString("recordId") == record } ?: return fallback
         val lines = row.getJSONArray("utterances").objects().mapNotNull { u ->
             val text = u.optString("text"); if (text.isBlank()) return@mapNotNull null
-            val name = transcriptSpeakerLabel(findSpeaker(u.getString("speaker")), mac) { u.getInt("label") }
+            val name = participantName(conversation(row.getString("conversationId")), u.getInt("label"), u.getString("speaker"), mac)
             "$name：$text"
         }
         return lines.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: fallback
