@@ -5,7 +5,7 @@ import { DistillStore } from "../src/distill/store.ts";
 import { DistillRules } from "../src/distill/rules.ts";
 import { frameView, LIMITS } from "../src/distill/run.ts";
 import { cleanUserText } from "../../plugins/agent-sessions/filters.ts";
-import { materialBody, uniqueMaterials } from "../src/distill/material.ts";
+import { materialBody } from "../src/distill/material.ts";
 
 const start = Date.parse("2026-11-13T08:00:00Z");
 const at = (n: number) => new Date(start + n * 60000).toISOString();
@@ -81,13 +81,6 @@ test("归属概览保留多项请求的具体平台与目标，不只剩开场�
     const view = frameView(new DistillStore(ctx.db), { ...split([r])[0]!, id: "f" }, { maxRecords: LIMITS.assignRecords, excerpt: () => LIMITS.assignExcerpt });
     expect(view.records[0]!.excerpt).toContain("请修复 Mac 设置里的名字输入和维护页面。");
   } finally { ctx.cleanup(); }
-});
-
-test("相同仓库提交副本只进入整理一次，跨仓库与修正正文仍保留", () => {
-  const r = (repo: string, body = "同一提交内容") => fixture({ source: "mac.git", body, context: { repo, extra: { hash: "a".repeat(40) } } });
-  const a = r("/project"), b = r("/worktree"), c = r("/unrelated"), d = r("/project", "用户修正后的提交内容");
-  expect(uniqueMaterials([a, b, c, d], repo => repo === "/worktree" ? "/project" : repo)).toEqual([a, c, d]);
-  expect(split([a, b, c, d]).flatMap(f => f.record_ids)).toHaveLength(4);
 });
 
 test("中文账号密码在入库与全文索引之前脱敏，其他正文保留且重读不重复脱敏", () => {

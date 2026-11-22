@@ -92,8 +92,9 @@ public enum ReviewActivity {
   private static let collectorID = [
     "mac.screen": "screen", "mac.app": "screen", "mac.browser": "browser",
     "claude_code.session": "agent-sessions", "codex.session": "agent-sessions",
-    "mac.audio": "audio", "mac.calendar": "calendar", "mac.wechat": "wechat",
-    "mac.shell": "shell", "mac.git": "git", "mac.file": "files", "mac.clipboard": "clipboard",
+    "mac.audio": "audio", "mac.wechat": "wechat",
+    // 已撤下的来源：开关不再存在，旧记录不进活动条，仍可搜索。
+    "mac.calendar": "calendar", "mac.shell": "shell", "mac.git": "git", "mac.file": "files", "mac.clipboard": "clipboard",
   ]
 }
 

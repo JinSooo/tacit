@@ -1,6 +1,6 @@
 import { toLocalIso, type RecordV1 } from "../../../packages/record/index.ts";
 import { parseTranscript } from "../conversations.ts";
-import { notificationMessage, recordChat } from "../chat.ts";
+import { recordChat } from "../chat.ts";
 import { AUDIO_SOURCES } from "../record-sources.ts";
 import { redactString } from "../redact.ts";
 import { materialBody } from "./material.ts";
@@ -57,10 +57,6 @@ function spoken(record: Pick<RecordV1, "source" | "body" | "context">, original:
       : /^(?:我|对方\s*\d*|说话人\s*[A-Z0-9]+|未知说话人|其他人)$/iu.test(line.label))
       ? undefined : dayDisplayName(line.label),
   }));
-  if (original.source === "android.notification") {
-    const { sender, text } = notificationMessage(body);
-    return [{ role: "other", text, at, chat, speaker: dayDisplayName(sender) }];
-  }
   const fromMe = context?.extra?.from_me;
   if (context?.chat && (fromMe === 0 || fromMe === 1)) return [{
     role: fromMe === 1 ? "user" : "other", text: body, at, chat,

@@ -17,13 +17,13 @@ import Testing
 
 @Test func catalogRegistersAllSourcesWithLegacyKeys() {
   let ids = DataSourceCatalog.all.map(\.id)
-  #expect(ids == ["screen", "ocr", "clipboard", "audio", "files", "calendar", "wechat", "agent-sessions", "browser", "shell", "git"])
+  #expect(ids == ["screen", "ocr", "audio", "wechat", "agent-sessions", "browser"])
   #expect(Set(ids).count == ids.count)
-  #expect(DataSourceCatalog.plugins.map(\.id) == ["agent-sessions", "browser", "shell", "git"])
+  #expect(DataSourceCatalog.plugins.map(\.id) == ["agent-sessions", "browser"])
   // 升级后沿用原来的开关键，用户之前关掉的 OCR / 录音不会被打开。
   #expect(DataSourceCatalog.descriptor("ocr")?.defaultsKey == "ocrEnabled")
   #expect(DataSourceCatalog.descriptor("audio")?.defaultsKey == "recordingEnabled")
-  #expect(DataSourceCatalog.descriptor("git")?.defaultsKey == "source.git.enabled")
+  #expect(DataSourceCatalog.descriptor("browser")?.defaultsKey == "source.browser.enabled")
 }
 
 @Test func togglesPersistAndKeepLegacyValues() {
@@ -42,13 +42,13 @@ import Testing
   #expect(!reloaded.isEnabled("unknown"))
 }
 
-@Test func cleanInstallEnablesPrimarySourcesAndHidesFrozenEntries() {
+@Test func cleanInstallEnablesPrimarySourcesAndHidesExtensions() {
   let toggles = SourceToggles(store: MemorySettings())
   #expect(DataSourceCatalog.all.filter { toggles.isEnabled($0.id) }.map(\.id) == [
-    "screen", "audio", "calendar", "agent-sessions", "browser",
+    "screen", "audio", "agent-sessions", "browser",
   ])
   #expect(DataSourceCatalog.all.filter { DataSourceCatalog.isVisible($0.id) }.map(\.id) == [
-    "screen", "ocr", "audio", "calendar", "wechat", "agent-sessions", "browser",
+    "screen", "ocr", "audio", "wechat", "agent-sessions", "browser",
   ])
   #expect(!DataSourceCatalog.isVisible("ext-example"))
 }
@@ -71,27 +71,27 @@ private final class Probe {
 }
 
 @Test func registryStartsOnlyEnabledSourcesAndHonorsPause() {
-  let store = MemorySettings(["source.files.enabled": false])
+  let store = MemorySettings(["source.wechat.enabled": false])
   let registry = DataSourceRegistry(toggles: SourceToggles(store: store))
   let probe = Probe()
   // 注册顺序打乱，结果仍按目录顺序。
-  registry.register(probe.source("files"))
+  registry.register(probe.source("wechat"))
   registry.register(probe.source("screen", permission: .denied))
-  #expect(registry.sources.map(\.descriptor.id) == ["screen", "files"])
+  #expect(registry.sources.map(\.descriptor.id) == ["screen", "wechat"])
 
   registry.launch(paused: false)
-  #expect(probe.events == ["screen.enable(false)", "screen.start", "files.stop"])
+  #expect(probe.events == ["screen.enable(false)", "screen.start", "wechat.stop"])
 
   probe.events = []
   registry.applyAll(paused: true)
-  #expect(probe.events == ["screen.stop", "files.stop"])
+  #expect(probe.events == ["screen.stop", "wechat.stop"])
 
   probe.events = []
-  registry.setEnabled("files", true, paused: false)
-  #expect(probe.events == ["files.enable(true)", "files.start"])
-  #expect(store.values["source.files.enabled"] as? Bool == true)
+  registry.setEnabled("wechat", true, paused: false)
+  #expect(probe.events == ["wechat.enable(true)", "wechat.start"])
+  #expect(store.values["source.wechat.enabled"] as? Bool == true)
   // 重复设置同一个值不触发启动。
-  registry.setEnabled("files", true, paused: false)
+  registry.setEnabled("wechat", true, paused: false)
   #expect(probe.events.count == 2)
 
   probe.events = []
@@ -104,16 +104,16 @@ private final class Probe {
 }
 
 @Test func statusesSkipPermissionProbeForDisabledSources() {
-  let store = MemorySettings(["source.calendar.enabled": false])
+  let store = MemorySettings(["ocrEnabled": false])
   let registry = DataSourceRegistry(toggles: SourceToggles(store: store))
   let probe = Probe()
-  registry.register(probe.source("calendar", permission: .denied, runnable: true))
+  registry.register(probe.source("ocr", permission: .denied, runnable: true))
   registry.register(probe.source("screen", permission: .denied))
   let rows = registry.statuses()
   #expect(probe.permissionChecks == 1)
-  let calendar = rows.first { $0.id == "calendar" }!, screen = rows.first { $0.id == "screen" }!
-  #expect(!calendar.enabled && !calendar.needsPermission && !calendar.canRunNow && calendar.lastRun == nil)
-  #expect(calendar.detail == "已停用")
+  let ocr = rows.first { $0.id == "ocr" }!, screen = rows.first { $0.id == "screen" }!
+  #expect(!ocr.enabled && !ocr.needsPermission && !ocr.canRunNow && ocr.lastRun == nil)
+  #expect(ocr.detail == "已停用")
   #expect(screen.enabled && screen.needsPermission && screen.lastRun != nil)
   #expect(probe.events.isEmpty)
 }
@@ -127,8 +127,6 @@ private final class Probe {
   #expect(PluginImport.rfc3339(PluginImport.allHistorySince) == "1990-01-01T00:00:00Z")
   #expect(PluginImport.arguments(plugin: "browser", since: PluginImport.allHistorySince) == ["--since", "1990-01-01T00:00:00Z"])
   #expect(PluginImport.arguments(plugin: "browser", since: nil) == [])
-  // shell 只读缓冲，传 --since 会丢掉缓冲里更早的命令。
-  #expect(PluginImport.arguments(plugin: "shell", since: now) == [])
   #expect(PluginImport.timeout(since: nil) == 180)
   #expect(PluginImport.timeout(since: now) == 1800)
 }
@@ -159,27 +157,6 @@ private final class Probe {
   #expect(r[1].statusText == "排队中，等后台整理进程处理")
   #expect(r[2].statusText.hasSuffix("没有成功：整理进程中断了") && r[2].finished)
   #expect(r[3].statusText.hasSuffix("完成，这段日期里没有要整理的记录"))
-}
-
-@Test func shellHookAddsAndRemovesOnlyItsOwnLine() {
-  let repo = "/Users/合成/record anything"
-  let original = "export PATH=$HOME/bin:$PATH\n# 用户自己的注释\nalias ll='ls -l'\n"
-  let added = ShellHook.adding(to: original, repo: repo)
-  #expect(ShellHook.installed(in: added))
-  #expect(added.hasPrefix(original))
-  #expect(added.contains("source \"/Users/合成/record anything/plugins/shell/hook.zsh\""))
-  // 重复开启不重复加；关闭后和原文一字不差。
-  #expect(ShellHook.adding(to: added, repo: repo) == added)
-  #expect(ShellHook.removing(from: added) == original)
-  // 注释掉的不算已加；仓库挪了位置时换成新路径，只留一行。
-  #expect(!ShellHook.installed(in: "# source \"/old/plugins/shell/hook.zsh\"\n"))
-  let moved = ShellHook.adding(to: "source \"/old/plugins/shell/hook.zsh\"\n", repo: repo)
-  #expect(moved.components(separatedBy: "hook.zsh").count == 2 && moved.contains(repo))
-  #expect(ShellHook.adding(to: "", repo: repo) == "# record-anything：记录终端命令\n" + ShellHook.line(repo: repo) + "\n")
-  // 回归：旧版说明写进去的是带存在判断的一行，设置页曾误报"还没有记录钩子"，关掉时也删不掉。
-  let legacy = original + "# record-anything：记录终端命令（卸载时删掉这两行）\n[ -f \"/old/plugins/shell/hook.zsh\" ] && source \"/old/plugins/shell/hook.zsh\"\n"
-  #expect(ShellHook.installed(in: legacy))
-  #expect(ShellHook.removing(from: legacy) == original)
 }
 
 @Test func installedExtensionDefaultsOffAndPersistsIndependently() {

@@ -3,17 +3,12 @@ import type { RecordV1 } from "../../../packages/record/index.ts";
 import { ulid } from "../../../packages/record/index.ts";
 import type { HubDB } from "../db.ts";
 import { DistillStore, type Frame } from "./store.ts";
-import { gitMaterialKey } from "./material.ts";
-import { resolveRepoRoot } from "./repos.ts";
 import { AUDIO_SOURCES } from "../record-sources.ts";
-import { wechatRecordForNotification } from "./wechat-duplicates.ts";
 
 const gap = 10 * 60_000, maxDuration = 2 * 60 * 60_000;
 export function frameKey(record: RecordV1): string {
   if (AUDIO_SOURCES.has(record.source)) return `audio:${record.source_ref ?? record.id}`;
   const c = record.context;
-  const git = gitMaterialKey(record);
-  if (git) return `git:${git}`;
   // 仓库只是项目线索；并行会话即使工作目录相同，也不是同一件事。
   if (record.source === "codex.session" || record.source === "claude_code.session") {
     const session = record.source_ref?.split("#")[0];
@@ -36,25 +31,11 @@ export function frameKey(record: RecordV1): string {
   return `app:${c?.app ?? record.source}`;
 }
 
-/** 保留切片成员以便回退，只在整理读取时挑出当前代表。 */
-export function visibleFrame(db: HubDB, frame: Frame): Frame | null {
-  const notifications = db.db.prepare<[string], { id: string }>(`SELECT id FROM records
-    WHERE id IN (SELECT value FROM json_each(?)) AND source='android.notification'`).all(JSON.stringify(frame.record_ids));
-  const duplicates = new Set(notifications.filter(({ id }) => wechatRecordForNotification(db, db.get(id)!)).map(({ id }) => id));
-  if (!duplicates.size) return frame;
-  const visible = frame.record_ids.filter(id => !duplicates.has(id)).map(id => db.get(id)!);
-  if (!visible.length) return null;
-  return { ...frame, record_ids: visible.map(r => r.id),
-    t_start_ms: Math.min(...visible.map(r => Date.parse(r.t_start))),
-    t_end_ms: Math.min(frame.t_end_ms, Math.max(...visible.map(r => Date.parse(r.t_end ?? r.t_start)))),
-  };
-}
 interface Group { key: string; records: RecordV1[]; start: number; end: number; last: number }
 /** 不生成随机 ID，纯函数输出可直接用于边界测试。 */
 export function sliceFrames(records: RecordV1[], cursor_ms: number, now = Date.now()): { frames: Omit<Frame,"id">[]; cursor_ms: number } {
   const sorted = records.filter(r => r.source !== "manual.correction").sort((a,b) => Date.parse(a.t_start)-Date.parse(b.t_start) || a.id.localeCompare(b.id));
   const groups: Group[] = [], current = new Map<string,Group>();
-  const auxiliary = (r: RecordV1) => r.source === "mac.clipboard" || r.source === "mac.file";
   const add = (r: RecordV1, key: string) => {
     const start = Date.parse(r.t_start), end = Math.max(start,Date.parse(r.t_end ?? r.t_start));
     let g = current.get(key);
@@ -64,14 +45,7 @@ export function sliceFrames(records: RecordV1[], cursor_ms: number, now = Date.n
     }
     g.records.push(r); g.end = Math.min(Math.max(g.end,end),g.start+maxDuration); g.last = end;
   };
-  for (const r of sorted) if (!auxiliary(r)) add(r,frameKey(r));
-  for (const r of sorted) if (auxiliary(r)) {
-    const at = Date.parse(r.t_start);
-    // 多个活动重叠时，跟随开始时间最近的一个。
-    const g = groups.filter(g => g.start <= at && at <= g.end).sort((a,b) => b.start-a.start || a.key.localeCompare(b.key))[0];
-    if (g) g.records.push(r);
-    else add(r,`app:${r.context?.app ?? r.source}`);
-  }
+  for (const r of sorted) add(r,frameKey(r));
   const open = groups.filter(g => now-g.last < gap);
   const next = Math.max(cursor_ms, open.length ? Math.min(...open.map(g => g.start))-1 : Math.max(cursor_ms,...sorted.map(r => Date.parse(r.t_start))));
   return {
@@ -91,13 +65,7 @@ export function persistFrames(db: HubDB, cursor: number, now = Date.now(), befor
     const rows = (before !== undefined
       ? db.db.prepare(`SELECT id FROM records r WHERE t_start_ms>? AND t_start_ms<? AND NOT EXISTS(SELECT 1 FROM frame_records fr WHERE fr.record_id=r.id) ORDER BY t_start_ms,id`).all(cursor,before)
       : db.db.prepare(`SELECT id FROM records r WHERE (r.rowid>? OR t_start_ms>?) AND (t_start_ms>=? OR source GLOB 'manual.*') AND NOT EXISTS(SELECT 1 FROM frame_records fr WHERE fr.record_id=r.id) ORDER BY t_start_ms,id`).all(lastRowid,Math.max(enabled-1,now-48*3600000),enabled)) as { id: string }[];
-    const projects = store.projects();
-    const result = sliceFrames(rows.map(r => {
-      const record = db.get(r.id)!;
-      if (record.source !== "mac.git" || !record.context?.repo) return record;
-      const repo = resolveRepoRoot(record.context.repo, projects) ?? record.context.repo;
-      return { ...record, context: { ...record.context, repo } };
-    }),cursor,now);
+    const result = sliceFrames(rows.map(r => db.get(r.id)!),cursor,now);
     const frames = result.frames.map(f => ({ ...f,id: ulid() }));
     for (const frame of frames) store.createFrame(frame);
     if (before === undefined) {

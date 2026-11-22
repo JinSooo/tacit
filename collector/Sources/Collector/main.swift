@@ -16,10 +16,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   lazy var hub = HubClient(config: config)
   lazy var api = HubAPI(base: { [config] in config.hubURL }, token: { [config] in config.token })
   @MainActor private lazy var deviceDiscovery = DeviceDiscovery(advertiser: BonjourDeviceAdvertiser())
-  lazy var files = FileCollector(device: config.device, isPaused: { [weak self] in self.map { $0.paused || !$0.enabled("files") } ?? true },
-                                send: { [weak self] in self?.hub.enqueue($0) })
-  lazy var calendar = CalendarCollector(device: config.device, isPaused: { [weak self] in self.map { $0.paused || !$0.enabled("calendar") } ?? true },
-                                       send: { [weak self] in self?.hub.enqueue($0) })
   lazy var audio = AudioCoordinator(config: config)
   lazy var plugins = PluginScheduler(config: config)
   lazy var viewer: ViewerWindow = MainActor.assumeIsolated {
@@ -50,20 +46,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var terminating = false
   var pausedUntil: Date?
   var ocrSchedule = OCRSchedule()
-  var clipboardCount = NSPasteboard.general.changeCount
   // 以下只在主线程读写，给"上次运行"用。
   var lastScreen: Date?
   var lastOCRRun: Date?
-  var lastClipboard: Date?
   /// 维护任务（同步、导入）的进行状态，只在主线程读写。
   var jobs: [MaintenanceTask: CaptureSnapshot.Job] = [:]
-  var shellHookError: String?
   var managingPlugins = Set<String>()
 
   // 只计数，不含任何内容；写到 collector-status.json 便于排查和验收。
   var stats: [String: Int] = ["ticks": 0, "scanMsTotal": 0, "scanMsMax": 0, "truncated": 0,
                               "ocrRuns": 0, "ocrMsTotal": 0, "ocrLines": 0, "screenRecords": 0,
-                              "clipboardRecords": 0, "skippedPolicy": 0, "skippedSecureInput": 0]
+                              "skippedPolicy": 0, "skippedSecureInput": 0]
 
   func enabled(_ id: String) -> Bool { toggles.isEnabled(id) }
 
@@ -86,12 +79,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     timers = [
       Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.tick() },
-      Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.pollClipboard() },
+      Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateAudio() },
       Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.hub.flush() },
       Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.writeStatus() },
       Timer.scheduledTimer(withTimeInterval: config.pluginInterval, repeats: true) { [weak self] _ in self?.plugins.runAll() },
-      Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateFiles() },
-      Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in self?.calendar.poll() },
     ]
     DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.plugins.runAll() }
 
@@ -131,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   /// 把各采集器接到统一的数据源接口上。顺序以 DataSourceCatalog 为准。
   func registerSources() {
-    let ocr = ocr, files = files, calendar = calendar
+    let ocr = ocr
     sources.register(BlockSource("screen") { s in
       s.permissionName = "辅助功能"
       s.permissionCheck = { AXIsProcessTrusted() ? .granted : .denied }
@@ -148,9 +139,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s.last = { [weak self] in self?.lastOCRRun }
       s.describe = { [weak self] in self?.enabled("screen") == false ? ("要先打开“屏幕文字”", false) : ("", true) }
     })
-    sources.register(BlockSource("clipboard") { s in
-      s.last = { [weak self] in self?.lastClipboard }
-    })
     sources.register(BlockSource("audio") { s in
       s.permissionName = "麦克风"
       s.permissionCheck = SystemPermissions.microphone
@@ -163,14 +151,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return (line, !["失败", "崩溃", "不可用", "缺少", "跟不上"].contains { line.contains($0) })
       }
     })
-    sources.register(BlockSource("files") { s in
-      s.onApply = { active in if active { files.start() } else { files.stop() } }
-      s.last = { files.last }
-      s.describe = {
-        files.unavailable ? ("读不到文件夹的变化，重新打开这个数据源试试", false)
-          : (files.recoveredFromDrop ? "中间漏过一些变化，已经补上" : "正在记录 \(FileDirectories(store: UserDefaults.standard).list.count) 个文件夹", true)
-      }
-    })
     let wechat = wechat
     sources.register(BlockSource("wechat") { s in
       s.permissionName = "录屏"
@@ -179,14 +159,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s.onEnable = { _ in if !ocr.granted { ocr.requestAccess() } }
       s.last = { wechat.last }
       s.describe = { (wechat.lastSummary, true) }
-    })
-    sources.register(BlockSource("calendar") { s in
-      s.permissionName = "日历"
-      s.permissionCheck = SystemPermissions.calendar
-      s.request = { calendar.requestAccess() }
-      s.onEnable = { _ in calendar.start() }
-      s.last = { calendar.last }
-      s.run = { calendar.poll() }
     })
     plugins.isEnabled = { [toggles] in toggles.isEnabled($0) }
     for name in DataSourceCatalog.plugins.map(\.id) { sources.register(PluginSource(name, scheduler: plugins)) }
@@ -213,8 +185,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       deviceDiscovery.update(nil)
     }
     timers.forEach { $0.invalidate() }
-    files.flush(force: true)
-    files.stop()
     audio.shutdown()
     captureQueue.sync { emit(segmenter.flush()) }
     let deadline = Date().addingTimeInterval(3)
@@ -309,36 +279,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     hub.enqueue(records)
   }
 
-  // MARK: 剪贴板
+  // MARK: 录音
 
   func updateAudio() {
+    guard !terminating else { return }
     audio.update(enabled: enabled("audio") && !paused)
   }
 
-  func pollClipboard() {
-    guard !terminating else { return }
-    updateAudio()
-    let pb = NSPasteboard.general
-    guard pb.changeCount != clipboardCount else { return }
-    clipboardCount = pb.changeCount
-    guard !paused, enabled("clipboard") else { return }
-    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-    if let front, CapturePolicy.shouldSkip(bundleID: front, window: "") { return }
-    let types = pb.types?.map(\.rawValue) ?? []
-    if let r = ClipboardPolicy.record(text: pb.string(forType: .string), types: types, app: front,
-                                       time: Date(), device: config.device) {
-      lastClipboard = Date()
-      captureQueue.async { [self] in stats["clipboardRecords", default: 0] += 1 }
-      hub.enqueue([r])
-    }
-  }
-
   // MARK: 菜单
-
-  func updateFiles() {
-    if paused || !enabled("files") { files.stop() }
-    else { files.start(); files.flush() }
-  }
 
   /// 屏幕文字停用时不需要辅助功能权限，不显示缺权限。
   var missingAX: Bool { enabled("screen") && !AXIsProcessTrusted() }
@@ -460,7 +408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     pause(until: cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date()))!)
   }
   func pause(until: Date) { pausedUntil = until; sources.applyAll(paused: true); updateIcon() }
-  @objc func resume() { pausedUntil = nil; sources.applyAll(paused: false); updateFiles(); updateIcon() }
+  @objc func resume() { pausedUntil = nil; sources.applyAll(paused: false); updateIcon() }
   @objc func toggleSource(_ sender: NSMenuItem) {
     guard let id = sender.representedObject as? String else { return }
     setSource(id, !enabled(id))
@@ -468,12 +416,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func setSource(_ id: String, _ on: Bool) {
     if on && managingPlugins.contains(id) { return }
     sources.setEnabled(id, on, paused: paused); updateIcon()
-    // 终端命令的开关同时管 ~/.zshrc 里那一行（AGENTS.md 2026-11-10）。
-    if id == "shell" { setShellHook(on) }
-  }
-  func setShellHook(_ on: Bool) {
-    do { try ShellHookFile.set(on, repo: config.repo); shellHookError = nil }
-    catch { shellHookError = "没能修改 ~/.zshrc：\(error.localizedDescription)" }
   }
   @objc func requestSourcePermission(_ sender: NSMenuItem) {
     guard let id = sender.representedObject as? String else { return }
@@ -495,7 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     guard plugins.available else { jobs[task] = .init(running: false, text: "找不到 bun 或安装目录，插件不能运行"); return }
     let names = plugins.plugins.filter(enabled)
     jobs[task] = .init(running: true, text: task == .syncAll ? "正在同步…" : "正在导入…")
-    if task == .syncAll { hub.flush(); files.flush(); calendar.poll() }
+    if task == .syncAll { hub.flush() }
     let api = api
     plugins.run(names, since: PluginImport.since(task)) { [weak self] results in
       let accepted = results.values.reduce(0) { $0 + $1.accepted }
@@ -624,9 +566,6 @@ extension AppDelegate: CaptureControlling {
     c.microphones = microphoneChoices(setting: c.microphone)
     c.pluginsAvailable = plugins.available
     c.jobs = jobs
-    c.fileDirectories = FileDirectories(store: UserDefaults.standard).list
-    c.shellHook = ShellHookFile.installed
-    c.shellHookError = shellHookError
     return c
   }
 
@@ -639,14 +578,8 @@ extension AppDelegate: CaptureControlling {
     case .setSource(let id, let on): setSource(id, on)
     case .requestPermission(let id): sources.source(id)?.requestPermission()
     case .runSource(let id): sources.source(id)?.runNow()
-    case .installShellHook: setShellHook(true)
     case .maintenance(let task): runMaintenance(task)
     case .selectMicrophone(let setting): audio.selectMicrophone(setting)
-    case .setFileDirectories(let dirs):
-      FileDirectories(store: UserDefaults.standard).save(dirs)
-      // 重建监听流；停用或暂停时 start() 自己不会启动。
-      files.flush(force: true); files.stop()
-      if !paused && enabled("files") { files.start() }
     }
   }
 }

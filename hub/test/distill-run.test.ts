@@ -534,20 +534,6 @@ test("本地模型实测回归：错误推测、事实ID证据和作废用户事
   expect(facts.find(f => f.id === "user-correction")?.origin).toBe("user");
 });
 
-test('详细整理跨活动片段去重相同提交，内容不同的提交材料仍进入模型', async()=>{
-  const records=['同一提交材料','同一提交材料','用户修正后的不同材料'].map((body,i)=>fixture({source:'mac.git',source_ref:'git-'+i,body,t_start:iso(base+i*MIN),context:{repo,extra:{hash:'a'.repeat(40)}}}));
-  ctx.db.ingest(records);store.upsertThread({id:'git-thread',title:'提交工作',status:'active',needs_regen:1});
-  for(const [i,r] of records.entries()){const f={id:'git-f'+i,key:'repo:'+repo,record_ids:[r.id],t_start_ms:base+i*MIN,t_end_ms:base+i*MIN,chars:r.body.length,private:0,status:'new' as const};store.createFrame(f);store.assign(f.id,'git-thread','llm',1);}
-  const {llm,calls}=fakeLLM();await digestStep({db:ctx.db,llm},store,base+3600000);
-  const later=fixture({source:'mac.git',source_ref:'git-later',body:'同一提交材料',t_start:iso(base+4*MIN),context:{repo,extra:{hash:'a'.repeat(40)}}});ctx.db.ingest([later]);
-  store.createFrame({id:'git-later',key:'repo:'+repo,record_ids:[later.id],t_start_ms:base+4*MIN,t_end_ms:base+4*MIN,chars:later.body.length,private:0,status:'new'});store.assign('git-later','git-thread','llm',1);store.upsertThread({...store.thread('git-thread')!,needs_regen:1});
-  await digestStep({db:ctx.db,llm},store,base+2*3600000);
-  const inputs=calls.filter(c=>c.kind==='thread').flatMap(c=>framesIn(c.req.prompt).flatMap(f=>f.records??[]));
-  expect(inputs.filter(r=>r.excerpt==='同一提交材料')).toHaveLength(1);expect(inputs.filter(r=>r.excerpt==='用户修正后的不同材料')).toHaveLength(1);
-  expect(records.every(r=>!!ctx.db.get(r.id))).toBe(true);expect(store.getState<{frames:string[]}>('digest:git-thread')?.frames).toHaveLength(4);
-});
-
-// 用户反馈：新会话带入的事项摘要停在前一天（“摘要截至 00:23，有新活动待整理”），和时间线不同步。
 test("整点那轮重写所有待更新线程（含今天仍在进行的），快轮只处理按需请求", async () => {
   const now = base + 120 * MIN, dayStart = Date.parse("2026-11-08T00:00:00+08:00");
   const threads = [["today", "旧摘要", now - 10 * MIN], ["yesterday", "旧摘要", dayStart - 60 * MIN], ["first", null, now - 5 * MIN]] as const;

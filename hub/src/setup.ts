@@ -7,7 +7,8 @@ import { spawnSync } from "node:child_process";
 import { dataDirOf, resolvePort } from "./hub-json.ts";
 
 const SYSTEM = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
-const FROZEN_SOURCES = ["git", "shell", "files", "clipboard"];
+/** 已撤下的采集来源（2026-11-22）：升级时清掉它们在采集端留下的开关和配置。 */
+const REMOVED_SETTINGS = ["git", "shell", "files", "clipboard", "calendar"].map(s => `source.${s}.enabled`).concat("files.directories");
 export const JOBS = ["hub", "distill", "collector"] as const;
 type Job = typeof JOBS[number];
 const label = (job: Job) => `dev.record-anything.${job}`;
@@ -104,7 +105,7 @@ export interface SetupOptions {
   shellPath?: () => string[];
   initialize?: () => Promise<void>;
   relocate?: (runtime: string, bun: string, home: string) => string[];
-  disableFrozen?: () => void;
+  dropRemovedSettings?: () => void;
   version?: (app: string) => string;
   log?: (message: string) => void;
 }
@@ -156,8 +157,8 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     // 连接迁移失败不能挡住后台启动；用户可以在设置里重新连接。
     try { log(`已更新 ${relocate(runtime, bun, home).length} 份 AI 工具连接配置。`); }
     catch { log("AI 工具连接没有迁移，请在 设置 › AI 工具 里重新连接。"); }
-    (o.disableFrozen ?? (() => {
-      for (const s of FROZEN_SOURCES) spawnSync("/usr/bin/defaults", ["write", "dev.record-anything.collector", `source.${s}.enabled`, "-bool", "false"]);
+    (o.dropRemovedSettings ?? (() => {
+      for (const key of REMOVED_SETTINGS) spawnSync("/usr/bin/defaults", ["delete", "dev.record-anything.collector", key], { stdio: "ignore" });
     }))();
   }
 

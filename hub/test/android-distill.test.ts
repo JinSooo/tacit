@@ -42,21 +42,14 @@ const view = (id: string) => {
   return frameView(store, frame, { maxRecords: 10, excerpt: () => 1000 });
 };
 
-test("手机单条聊天通知提供会话、发送人和正文，按消息前后两分钟计时", () => {
+// 手机只录音（0.4.2）：已经传上来的旧聊天通知能搜到，但不再进时间线、草稿，也不和 Mac 微信比对去重。
+test("旧的手机聊天通知不进时间线和草稿，原文仍在库里", () => {
   const first = notification(60, "林灯：一号温室已更换传感器。", "温室小组");
-  const second = notification(61, "陶雨：新的校准报告已归档。", "温室小组");
-  const lone = notification(100, "校准报告已送审。", "合成收件箱");
-  expect(ctx.db.ingest([first, second, lone], phone).accepted).toBe(3);
-  const segments = review().segments;
-  expect(segments.map(s => s.seconds)).toEqual([300, 240]);
-  expect(segments[0]!.evidence).toMatchObject([
-    { at: first.t_start, role: "other", chat: first.title, speaker: "林灯", text: "一号温室已更换传感器。" },
-    { at: second.t_start, role: "other", chat: first.title, speaker: "陶雨", text: "新的校准报告已归档。" },
-  ]);
-  expect(segments[1]!.evidence[0]).toMatchObject({ role: "other", chat: lone.title, text: lone.body });
-  expect(dayDrafts(ctx.db, start, Date.parse(at(120)), { covered: new Set() })[0]).toMatchObject({
-    title: "温室小组", excerpt: "一号温室已更换传感器。", sources: ["android.notification"],
-  });
+  const pay = notification(100, "¥12.00 paid", "Weixin Pay");
+  expect(ctx.db.ingest([first, pay], phone).accepted).toBe(2);
+  expect(review().segments).toEqual([]);
+  expect(dayDrafts(ctx.db, start, Date.parse(at(120)), { covered: new Set() })).toEqual([]);
+  expect(ctx.db.get(first.id)?.body).toBe(first.body);
 });
 
 test("事项整理能用通知说明进展，只有明确标为我的手机录音才能支撑用户决定和原话", async () => {
@@ -89,93 +82,6 @@ test("事项整理能用通知说明进展，只有明确标为我的手机录�
     ["decision", "试验用白色试验箱。"], ["open", "决定改用绿色试验箱。"],
   ]);
   expect(store.thread("experiment")?.detail).toMatchObject({ quotes: [{ record_id: spoken.id, text: "试验用白色试验箱。" }] });
-});
-
-test("微信跨端仅在会话、发件人、正文及两分钟同时匹配时优先使用 Mac 记录", async () => {
-  const body = "温室浇灌控制器已经完成校准，下午交接。";
-  const fromMac = macMessage(60, body);
-  const otherMac = macMessage(61, "校准附件也发给大家了。");
-  const directMac = macMessage(160, "说明：合成批号已经改了。", "合成乙", "合成乙");
-  const exact = notification(60, `合成甲：${body}`, "温室小组（7）", wechat);
-  const truncated = notification(62, "合成甲：温室浇灌控制器已经完成…");
-  const prefix = notification(61, "合成甲：温室浇灌控制器已经完成");
-  const direct = notification(160, directMac.body, "合成乙");
-  const keep = [
-    notification(60, `合成乙：${body}`),
-    notification(60, `合成甲：${body}`, "道具小组"),
-    notification(60, "合成甲：温室浇灌控制器已经拆除。"),
-    notification(60, "合成甲：温室…"),
-    notification(62.001, `合成甲：${body}`),
-    notification(61, `合成甲：${body}`, "温室小组（7）", "example.other.chat"),
-  ];
-  const dropped = [exact, truncated, prefix, direct];
-  ctx.db.ingest([fromMac, otherMac, directMac]);
-  expect(ctx.db.ingest([...dropped, ...keep], phone).accepted).toBe(dropped.length + keep.length);
-  const plan = review();
-  const selected = plan.segments.flatMap(s => s.records.map(r => r.id));
-  for (const r of dropped) expect(selected).not.toContain(r.id);
-  expect(evidence().map(e => e.reference.id)).toContain(fromMac.id);
-  expect(evidence().map(e => e.reference.id)).toContain(directMac.id);
-  for (const r of keep) expect(selected).toContain(r.id);
-  framesAt(190);
-  const modelsSee = store.frames().flatMap(f => frameView(store, f, { maxRecords: 10, excerpt: () => 1000 }).records.map(r => r.id));
-  for (const r of dropped) expect(modelsSee).not.toContain(r.id);
-  for (const r of keep) expect(modelsSee).toContain(r.id);
-  const search = await new AgentReads(ctx.db).handle("search", new URLSearchParams({ tool: "codex", q: "温室浇灌控制器" }));
-  const result = await search.json();
-  expect(result.records.map((r: { id: string }) => r.id)).toContain(exact.id);
-  expect(ctx.db.get(truncated.id)?.body).toBe(truncated.body);
-});
-
-test("Mac 微信迟到后撤下已整理的手机副本，Mac 删除后原通知可再次作为材料", async () => {
-  const mobile = notification(60, "合成甲：试验的蓝色托盘已收齐。", "温室 小组", wechat);
-  ctx.db.ingest([mobile], phone);
-  framesAt(90);
-  const frame = store.frames()[0]!;
-  store.upsertThread({ id: "phone-thread", title: "合成托盘", status: "active", brief: "旧摘要" });
-  store.assign(frame.id, "phone-thread", "llm", 0.9);
-  expect(view(mobile.id).records).toHaveLength(1);
-  const late = macMessage(61, "试验的蓝色托盘已收齐。");
-  ctx.db.ingest([late]);
-  framesAt(95);
-  expect(store.thread("phone-thread")?.brief).toBeNull();
-  expect(view(mobile.id).records).toEqual([]);
-  const llm: LLM = { async complete() { throw new Error("重复帧不应调用模型"); } };
-  expect((await digestStep({ db: ctx.db, llm }, store, Date.parse(at(96)))).calls).toBe(0);
-  expect(ctx.db.delete(late.id)).toBe(true);
-  expect(view(mobile.id).records.map(r => r.id)).toEqual([mobile.id]);
-  expect(evidence().map(e => e.reference.id)).toContain(mobile.id);
-  expect(store.thread("phone-thread")?.needs_regen).toBe(1);
-});
-
-test("晚到的 Mac 微信替换手机副本后，旧候选和此刻待整理状态均不计重复帧", async () => {
-  const mobile = notification(60, "合成甲：白色试验箱已入库。");
-  ctx.db.ingest([mobile], phone);
-  framesAt(85);
-  const mobileFrame = store.frames()[0]!;
-  const assign = (expectedFrame: string, ignore: boolean): LLM => ({ async complete<T>(req: LLMRequest) {
-    expect(req.refs).toEqual({ s1: expectedFrame });
-    return { ok: true, ms: 1, data: { items: [
-      { frame_id: "s1", thread_id: null, new_thread_title: "合成试验箱", ignore, confidence: 0.9 },
-    ] } as T };
-  } });
-  expect((await assignStep({ db: ctx.db, llm: assign(mobileFrame.id, false) }, store, Date.parse(at(85)))).candidates).toBe(1);
-  const mac = macMessage(61, "白色试验箱已入库。");
-  ctx.db.ingest([mac]);
-  framesAt(86);
-  const macFrame = store.frames().find(f => f.record_ids.includes(mac.id))!;
-  expect((await assignStep({ db: ctx.db, llm: assign(macFrame.id, true) }, store, Date.parse(at(86)))).candidates).toBe(0);
-  expect(currentNow(ctx.db, Date.parse(at(86)))?.brief).not.toBe("有新活动待整理。");
-});
-
-test("有应用包名的手机微信沿用 Mac 微信会话的项目归属", () => {
-  store.upsertProject({ id: "greenhouse", name: "合成温室项目", keys: { repos: [], hosts: [], chats: [`${macApp}:温室小组`] } });
-  store.upsertThread({ id: "assigned", status: "active", title: "合成校准", project_id: "greenhouse", last_ms: Date.parse(at(55)) });
-  const record = notification(60, "合成甲：已完成控制器校准。", "温室 小组", wechat);
-  ctx.db.ingest([record], phone);
-  expect(framesAt(80).assigned).toBe(1);
-  expect(view(record.id)).toMatchObject({ key: `chat:${macApp}:温室 小组`, records: [{ id: record.id, excerpt: record.body }] });
-  expect(review().segments[0]?.projectName).toBe("合成温室项目");
 });
 
 test("只有手机应用使用记录时没有时间线正文或新事项，Agent 搜索排在录音和聊天之后", async () => {

@@ -34,7 +34,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSLocalNetworkUsageDescription</key><string>让手机在局域网内找到这台 Mac。</string>
   <key>NSMicrophoneUsageDescription</key><string>录制麦克风中的人声，在本机加密保存并整理对话记录。</string>
   <key>NSAudioCaptureUsageDescription</key><string>录制系统播放的人声，在本机加密保存并整理对话记录。</string>
-  <key>NSCalendarsFullAccessUsageDescription</key><string>读取已结束的日程，将标题、地点和参会人整理成活动记录。</string>
   <key>NSDesktopFolderUsageDescription</key><string>记录桌面中新出现的文件名和路径，不读取文件内容。</string>
   <key>NSDocumentsFolderUsageDescription</key><string>记录文稿中新出现的文件名和路径，不读取文件内容。</string>
   <key>NSDownloadsFolderUsageDescription</key><string>记录下载完成的文件名、路径和来源，不读取文件内容。</string>
@@ -96,8 +95,7 @@ cat > build/audio.entitlements <<'PLIST'
   <key>com.apple.security.device.audio-input</key><true/>
 </dict></plist>
 PLIST
-# Hardened Runtime 下缺这项时，日历授权请求会被直接拒绝，不弹窗。
-sed 's#</dict>#  <key>com.apple.security.personal-information.calendars</key><true/>\n</dict>#' build/audio.entitlements > build/app.entitlements
+cp build/audio.entitlements build/app.entitlements
 # 回归检查：构建 SDK 被记成部署目标时，系统让 SwiftUI 按 macOS 14 的兼容行为运行（工具栏图标偏上），见 swift.sh。
 for bin in "$APP/Contents/MacOS/Tacit" "$APP/Contents/MacOS/ra-audio-worker"; do
   [ -f "$bin" ] || continue
@@ -119,5 +117,3 @@ codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlem
 codesign -d -r- "$APP" 2>&1 | grep designated
 codesign --verify --deep --strict "$APP"
 codesign -d --entitlements - "$APP"
-# 回归检查：日历 entitlement 丢了不会报错，只会让授权按钮失效。
-codesign -d --entitlements - "$APP" 2>/dev/null | grep -q personal-information.calendars || { echo "缺少日历 entitlement" >&2; exit 1; }

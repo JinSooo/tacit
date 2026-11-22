@@ -23,7 +23,7 @@ function fixture() {
     shellPath: () => [],
     initialize: async () => { events.push("init"); },
     relocate: () => { events.push("relocate"); return []; },
-    disableFrozen: () => { events.push("frozen"); },
+    dropRemovedSettings: () => { events.push("frozen"); },
     version: () => version,
     log: () => {},
     wait: async () => {},

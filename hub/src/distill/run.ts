@@ -10,7 +10,7 @@ import { classifyModelError, type ModelErrorCode } from "../llm/error-category.t
 import { activeCooldown, ModelCooldown, withModelCooldown } from "./cooldown.ts";
 import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { applyTimelineCorrections, DistillStore, timelineCorrectionKey, type Frame, type Thread, type TimelineCorrections } from "./store.ts";
-import { persistFrames, visibleFrame } from "./frames.ts";
+import { persistFrames } from "./frames.ts";
 import { DistillRules, projectByName } from "./rules.ts";
 import { DistillRequests, localDayStart, localDateString } from "./requests.ts";
 import * as P from "./prompts.ts";
@@ -19,11 +19,9 @@ import { threadRequest, type ThreadModelOutput } from "./thread-request.ts";
 import { assignRequest } from "./assign-request.ts";
 import { projectRequest, type ProjectModelOutput } from "./project-request.ts";
 import { groundedQuote } from "./quotes.ts";
-import { gitMaterialKey, materialBody, uniqueMaterials } from "./material.ts";
+import { materialBody } from "./material.ts";
 import { evidenceTime } from "./evidence-time.ts";
 import { AUDIO_SOURCES, SKELETON_SOURCES, sourceList } from "../record-sources.ts";
-import { notificationsShadowedSince } from "./wechat-duplicates.ts";
-import { resolveRepoRoot } from "./repos.ts";
 import { readGeneral, readTimelineSettings } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
 import { composePolish, composeReview, incrementalReview, reviewPlan, reviewMaterial, type ReviewDetail } from "./day-review.ts";
@@ -111,7 +109,6 @@ export function sliceStep(db: HubDB, backfill = false, now = Date.now(), enabled
     if (cursor === null) { cursor = now; store.setState("cursor_ms", cursor); }
     const enabled = store.getState<number>("enabled_ms") ?? enabledDefault;
     store.setState("enabled_ms", enabled);
-    for (const id of notificationsShadowedSince(db, store.getState<number>("last_rowid") ?? 0)) store.refreshNotification(id);
     let created = 0, assigned = 0;
     const touched: Frame[] = [];
     if (backfill && !store.getState<boolean>("backfill_done")) {
@@ -127,7 +124,7 @@ export function sliceStep(db: HubDB, backfill = false, now = Date.now(), enabled
     created += result.frames.length; touched.push(...result.frames);
     store.setState("cursor_ms", result.cursor_ms);
     markFrameReviewDays(store, touched, now + 1);
-    const pending = store.frames().filter(f => f.status === "new").map(f => visibleFrame(db, f)).filter(f => f !== null);
+    const pending = store.frames().filter(f => f.status === "new");
     for (const frame of pending) {
       rules.projectForFrame(frame);
       const r = rules.assign(frame);
@@ -168,16 +165,10 @@ function displayFrameKey(store: DistillStore, f: Frame): string {
   return latest ?? f.key;
 }
 
-export function frameView(store: DistillStore, frame: Frame, opts: { maxRecords: number; excerpt: (source: string) => number; seenMaterials?: Set<string> }): P.FrameView {
-  const f = visibleFrame(store.hub, frame) ?? { ...frame, record_ids: [] };
-  const projects = store.projects();
+export function frameView(store: DistillStore, frame: Frame, opts: { maxRecords: number; excerpt: (source: string) => number }): P.FrameView {
+  const f = frame;
   // 保留原活动 ID 供后续查 effective；修正记录本身不能误当成独立活动再被过滤掉。
-  const materials = uniqueMaterials(f.record_ids.flatMap(id => {
-    const r = store.hub.effective(id);
-    return r ? [{ ...r, id }] : [];
-  }), repo => resolveRepoRoot(repo, projects) ?? repo, opts.seenMaterials);
-  const materialIDs = materials.map(r => r.id);
-  // 去重先于抽样，不能让多个 worktree 的副本挤掉独立提交。
+  const materialIDs = f.record_ids.filter(id => store.hub.effective(id));
   const ids = materialIDs.length <= opts.maxRecords ? materialIDs
     : Array.from({ length: opts.maxRecords }, (_, i) => materialIDs[Math.round(i * (materialIDs.length - 1) / (opts.maxRecords - 1))]!);
   let hidden = 0;
@@ -248,8 +239,7 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
     store.hub.db.prepare("UPDATE frames SET status='candidate' WHERE status='ignored' AND id IN (SELECT value FROM json_each(?))").run(live);
     saveCandidates();
   })();
-  const pending = loadFrames(store, "WHERE status='new' ORDER BY t_start_ms,id")
-    .map(f => visibleFrame(store.hub, f)).filter(f => f !== null);
+  const pending = loadFrames(store, "WHERE status='new' ORDER BY t_start_ms,id");
   // 用户说过"不属于"某些线程的片段按拒绝的线程分组单独成批：候选里直接去掉这些线程（只在提示里写不能选，
   // 模型仍会被片段里的字样带回原线程，2026-11-10 实测），片段带上被拒线程的标题，避免另起同名线程。
   const groups = new Map<string, { rejected: string[]; views: { f: Frame; v: P.FrameView }[] }>();
@@ -343,8 +333,7 @@ function factViews(store: DistillStore, field: "thread_id" | "project_id", id: s
 }
 
 function threadFrames(store: DistillStore, threadId: string): Frame[] {
-  return loadFrames(store, "WHERE id IN (SELECT frame_id FROM assignments WHERE thread_id=?) ORDER BY t_start_ms,id", threadId)
-    .map(f => visibleFrame(store.hub, f)).filter(f => f !== null);
+  return loadFrames(store, "WHERE id IN (SELECT frame_id FROM assignments WHERE thread_id=?) ORDER BY t_start_ms,id", threadId);
 }
 
 async function makeBrief(d: Deps, task: string, title: string, detail: unknown): Promise<{ text: string; call_id?: string } | null> {
@@ -507,21 +496,7 @@ export async function digestStep(d: Deps, store: DistillStore, now: number, sele
     let rebuild = !mark || mark.frames.some(f => !present.has(f)) || countOf(new Set(mark.frames)) < mark.records;
     const done = new Set(rebuild ? [] : mark!.frames);
     let fresh = frames.filter(f => !done.has(f.id));
-    const toPieces = () => {
-      const seenMaterials = new Set<string>();
-      const freshIDs = new Set(fresh.map(f => f.id)), views: P.FrameView[] = [], projects = store.projects();
-      // 续跑时也从已读片段恢复去重集合，不能让同一副本因跨批次重新变成正文。
-      for (const f of frames) {
-        if (freshIDs.has(f.id)) views.push(frameView(store, f, { maxRecords: Infinity, excerpt: () => Infinity, seenMaterials }));
-        else for (const id of f.record_ids) {
-          const r = store.hub.effective(id);
-          if (!r) continue;
-          const key = gitMaterialKey(r, r.context?.repo ? resolveRepoRoot(r.context.repo, projects) ?? r.context.repo : undefined);
-          if (key) seenMaterials.add(key);
-        }
-      }
-      return digestPieces(views, LIMITS.digestChars);
-    };
+    const toPieces = () => digestPieces(fresh.map(f => frameView(store, f, { maxRecords: Infinity, excerpt: () => Infinity })), LIMITS.digestChars);
     let pieces = toPieces();
     // 部分成功后原记录被删除/移走时，旧分段摘要也必须从头重建。
     if (!rebuild && mark?.parts?.some(key => !pieces.some(p => p.key === key))) {

@@ -19,7 +19,7 @@
 |---|---|
 | `mac.screen` | Mac 采集端（AX / OCR） |
 | `mac.app` | 保留，v1 不用：应用使用记录并入 `mac.screen` 时段（读不到正文时也照样记应用、窗口标题和时长） |
-| `mac.clipboard`、`mac.file`、`mac.calendar` | Mac 采集端 |
+| `mac.clipboard`、`mac.file`、`mac.calendar`、`mac.shell`、`mac.git` | 已撤下（2026-11-22），只剩旧记录 |
 | `mac.wechat` | Mac 采集端"微信对话"数据源（默认关闭）：读微信窗口聊天区，一条消息一条记录，格式见下 |
 | `mac.shell` | plugins/shell |
 | `mac.git` | plugins/git |
@@ -418,7 +418,7 @@ Android 另有一个可选的音乐识别模型（ced-tiny，AudioSet 527 类）
 - 密钥：钥匙串 service `record-anything`、account `audio-key-hex`，32 字节的十六进制，首次使用时生成。只通过 `/usr/bin/security` 读写（和 hub 的 `db-key` 一样），10 秒超时；旧版 account `audio-key`（SecItem 存的二进制）在第一次读取时迁移过来并删除。
 - `meta.json`：`{ id, t_start, t_end（未结束为 null）, segments: [{ file, track: "mic"|"sys", t_start, t_end, dbfs }], meeting_apps: [bundle id], status, updated_at }`。
   - `status`：`open`（还在录）→ `closed`（等转写进程）→ `waiting_me`（还没有"我"的声纹，只留本机）/ `skipped`（判定没有"我"，不留记录）/ `done`（已写 History）/ `failed`（附 `error`，下次重试，最多 3 次）。
-  - `meeting_apps`：对话期间**正在用麦克风**的会议软件（腾讯会议、飞书、Zoom、Teams、FaceTime、微信；用 Core Audio 进程对象的 `kAudioProcessPropertyIsRunningInput` 判断，只开着不算），用于"有会就保留"例外。（2026-11-09 真机验证：微信通话、腾讯会议都能识别）日历例外（2026-11-09 补上）：对话关闭时，采集端用 EventKit 查和对话时间有重叠、非全天、未拒绝、未取消的日程，有就往 `meeting_apps` 里加 `com.apple.iCal`；日历没授权时跳过。转写进程的判断逻辑不变。
+  - `meeting_apps`：对话期间**正在用麦克风**的会议软件（腾讯会议、飞书、Zoom、Teams、FaceTime、微信；用 Core Audio 进程对象的 `kAudioProcessPropertyIsRunningInput` 判断，只开着不算），用于"有会就保留"例外。（2026-11-09 真机验证：微信通话、腾讯会议都能识别）日历例外（2026-11-09 补上）已随日历来源在 2026-11-22 撤下，旧元数据里的 `com.apple.iCal` 仍按会议处理。转写进程的判断逻辑不变。
 - 写文件先写临时文件再改名；meta.json 只由当时持有该对话的一方写（采集端写 `open`/`closed`，之后由转写进程写）。
 - 清理：`t_end` 早于"现在 − 保留天数"的对话目录整体删除，不管状态。一键清理删掉 `t_end` 早于清理时刻的全部目录（还在录的不删）。删除用普通删除，不另外覆写。
 - 麦克风权限检查：录音开着、连续 10 分钟麦克风这路 < −70 dBFS 时，菜单显示"麦克风可能没有权限"。
@@ -597,6 +597,6 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 - 手机上删的记录先进本地删除队列，经 `delete` 发出、成功后出队；本地墓碑阻止同一条再次上传。
 - 触发：有新记录后 30 秒、打开应用、网络恢复，以及 WorkManager 每 15 分钟一次（要求有网络）。连不上就指数退避，最长 1 小时；手机可以攒几天数据。
 - `android.audio` 的 `body` 按话轮顺序存放，每句一行 `[HH:MM:SS] 标签：文字`。钟点取该句在录音中的起点，使用手机本地时区在片段起点的偏移，该偏移也写入 `t_start`。标签以发布时为准，本人写「我」，已起名的写名字，其余写「对方 N」。中枢按 `t_start` 的日期和偏移还原每句话的时间，跨午夜的钟点算到次日。旧格式「对方 N：文字」仍用录音片段起点引用。中枢按同一设备的录音间隔成场、写总结。
-- `android.notification` 和 `android.usage` 只有 0.4.1 及以前的手机会产出，0.4.2 起手机只录音；中枢仍按下面的规则处理已收到的这两类记录。
+- `android.notification` 和 `android.usage` 只有 0.4.1 及以前的手机会产出，0.4.2 起手机只录音。旧的 `android.notification` 只可搜索，不进时间线和整理，不再和 Mac 微信比对去重；下面两条是旧版的约定。
 - `android.notification` 的 `title` 是会话名，`body` 是「发送人：正文」或仅正文。中枢把它当作收到的聊天。整理时在前后各两分钟内按会话、发送人和正文比对 Mac 微信，手机预览可为足够长的正文前缀；命中时使用 Mac 记录，手机原文仍可搜索。通知有应用包名时仅微信参与比对，否则用其余条件判断。
 - `android.usage` 只提供应用名和使用时段。

@@ -28,19 +28,13 @@ public enum DataSourceCatalog {
   public static let all: [DataSourceDescriptor] = [
     .init(id: "screen", title: "屏幕文字"),
     .init(id: "ocr", title: "截图识字", defaultsKey: "ocrEnabled", defaultEnabled: false),
-    .init(id: "clipboard", title: "剪贴板", defaultEnabled: false),
     .init(id: "audio", title: "录音", defaultsKey: "recordingEnabled"),
-    .init(id: "files", title: "文件", defaultEnabled: false),
-    .init(id: "calendar", title: "日历"),
     // 读微信窗口的聊天区拆成消息，默认关闭（AGENTS.md 2026-11-10）。
     .init(id: "wechat", title: "微信对话", defaultEnabled: false),
     .init(id: "agent-sessions", title: "AI 会话", kind: .plugin),
     .init(id: "browser", title: "浏览器", kind: .plugin),
-    .init(id: "shell", title: "终端命令", defaultEnabled: false, kind: .plugin),
-    .init(id: "git", title: "Git 提交", defaultEnabled: false, kind: .plugin),
   ]
-  private static let frozen = Set(["clipboard", "files", "shell", "git"])
-  public static func isVisible(_ id: String) -> Bool { !frozen.contains(id) && !id.hasPrefix("ext-") }
+  public static func isVisible(_ id: String) -> Bool { !id.hasPrefix("ext-") }
   public static var plugins: [DataSourceDescriptor] { all.filter { $0.kind == .plugin } }
   public static func descriptor(_ id: String) -> DataSourceDescriptor? { all.first { $0.id == id } }
 }
@@ -114,7 +108,7 @@ public enum MaintenanceTask: String, CaseIterable, Sendable {
 
 public enum PluginImport {
   public static let recentDays = 7
-  /// "全部历史"的起点：早于任何浏览器、AI 会话和 git 的可能记录，又不会被 git 当成无效时间。
+  /// "全部历史"的起点：早于任何浏览器和 AI 会话的可能记录。
   public static let allHistorySince = Date(timeIntervalSince1970: 631_152_000)  // 1990-01-01T00:00:00Z
 
   public static func since(_ task: MaintenanceTask, now: Date = Date()) -> Date? {
@@ -125,9 +119,9 @@ public enum PluginImport {
     }
   }
 
-  /// 插件额外参数。shell 插件只读缓冲文件、没有可回溯的历史，传 --since 反而会把缓冲里更早的命令丢掉，所以不传。
+  /// 插件额外参数。
   public static func arguments(plugin: String, since: Date?) -> [String] {
-    guard let since, plugin != "shell" else { return [] }
+    guard let since else { return [] }
     return ["--since", rfc3339(since)]
   }
 

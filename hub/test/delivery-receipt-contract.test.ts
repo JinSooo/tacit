@@ -5,7 +5,7 @@ import { fixture, setup } from "./helpers.ts";
 
 test("Mac 确认契约来自真实 HTTP 入库，包含接受、重复和明确拒收", async () => {
   const ctx = setup();
-  const duplicate = fixture(), fresh = fixture(), invalid = fixture({ source: "mac.git" });
+  const duplicate = fixture(), fresh = fixture(), invalid = fixture({ source: "mac.browser" });
   ctx.db.ingest([duplicate]);
   const server = startServer({ db: ctx.db, token: ctx.config.token, port: 0 });
   try {

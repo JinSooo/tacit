@@ -21,7 +21,7 @@
 
 每次从“应用程序”打开，应用都在后台运行一次 `bun runtime/hub/src/cli.ts setup --app <应用路径>`，输出写到 `logs/setup.log`（`hub/src/setup.ts`）：
 
-- 应用路径或构建号与 `app-setup.json` 记录的不同（首次打开、升级）时完整准备：创建数据目录，在钥匙串里创建或读取数据库密钥并试开数据库，更新 `collector.json`，把已连接的 Claude Code、Codex 迁到新路径，关闭冻结的 Git、终端、文件、剪贴板来源。
+- 应用路径或构建号与 `app-setup.json` 记录的不同（首次打开、升级）时完整准备：创建数据目录，在钥匙串里创建或读取数据库密钥并试开数据库，更新 `collector.json`，把已连接的 Claude Code、Codex 迁到新路径，清掉已删除的 Git、终端、文件、剪贴板、日历来源留下的开关。
 - 写三个 LaunchAgent：`dev.record-anything.hub`、`dev.record-anything.distill` 和 `dev.record-anything.collector`。内容有变化或刚完整准备过时，重启后台服务和整理，等后台健康检查通过；没有变化时什么都不做。
 - 后台服务和整理的 PATH 先取用户登录 shell 的 PATH，再补常见位置，用来找到本机已登录的 `codex`、`claude`。优先用稳定的同名入口，CLI 升级只改链接目标时不用重新准备。后来才装 CLI 的，重新打开 Tacit 即可。
 - 关闭登录启动时，启动项保存在数据目录的 `launch-agents/`，升级沿用这个选择。

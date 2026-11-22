@@ -9,7 +9,6 @@ import { distillSchema, usageTaskSchema } from "./distill/schema.ts";
 import { requestsSchema, regenDaysRequestsSchema } from "./distill/requests.ts";
 import { conversationSchema, lineSchema } from "./conversations.ts";
 import { DistillStore } from "./distill/store.ts";
-import { wechatRecordForNotification, usedNotificationsMatching } from "./distill/wechat-duplicates.ts";
 import { createHash } from "node:crypto";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { redactRecord } from "./redact.ts";
@@ -225,7 +224,7 @@ export class HubDB {
           if (errors.length) { result.rejected.push({ index: i, errors }); return; }
         }
         // schema 不表达来源特有的约束，按契约在入库边界补充校验。
-        if (["mac.shell", "mac.git", "mac.browser", "claude_code.session", "codex.session"].includes(r.source) && !r.source_ref) {
+        if (["mac.browser", "claude_code.session", "codex.session"].includes(r.source) && !r.source_ref) {
           result.rejected.push({ index: i, errors: ["/source_ref 重读外部存储的来源必须提供稳定键"] }); return;
         }
         if (r.source === "manual.correction" && !r.corrects) {
@@ -395,7 +394,6 @@ export class HubDB {
       if (!rows.length) return 0;
       eraseSnapshots(this);
       const store = new DistillStore(this);
-      const notifications = usedNotificationsMatching(this, rows.filter(r => r.source === "mac.wechat").map(r => decode(r)));
       store.removeRecords(rows.map(r => ({ id: r.id as string, time: r.t_start as string })));
       const deleted = new Set(rows.map(r => r.id));
       const corrected = new Set<string>();
@@ -416,9 +414,6 @@ export class HubDB {
         if (r.corrects && !deleted.has(r.corrects)) corrected.add(r.corrects as string);
       }
       for (const id of corrected) store.correctRecord(id);
-      for (const [id, phone] of notifications) {
-        if (!deleted.has(id) && !wechatRecordForNotification(this, phone)) store.refreshNotification(id);
-      }
       return rows.length;
     })();
   }

@@ -12,9 +12,9 @@ public enum SourceCategory: String, CaseIterable, Codable, Sendable {
   }
   public static func forID(_ id: String) -> SourceCategory {
     switch id {
-    case "screen", "ocr", "clipboard", "browser", "files": return .activity
-    case "audio", "calendar", "wechat": return .communication
-    case "agent-sessions", "shell", "git": return .development
+    case "screen", "ocr", "browser": return .activity
+    case "audio", "wechat": return .communication
+    case "agent-sessions": return .development
     default: return .extensions
     }
   }

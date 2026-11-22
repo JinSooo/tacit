@@ -1,12 +1,11 @@
 import { toLocalIso } from "../../../packages/record/index.ts";
-import { chatKey, recordChat, ANDROID_WECHAT } from "../chat.ts";
+import { chatKey, recordChat } from "../chat.ts";
 import { groupConversations } from "../conversations.ts";
 import type { HubDB } from "../db.ts";
 import { unionSeconds } from "../durations.ts";
 import { redactString } from "../redact.ts";
 import { dayDisplayName, readDayEvidence, sampleDayEvidence, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
 import { AUDIO_SOURCES, SKELETON_SOURCES, sourceList } from "../record-sources.ts";
-import { wechatRecordForNotification } from "./wechat-duplicates.ts";
 import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
 import { MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
@@ -23,7 +22,6 @@ type ReviewRecord = DayReference & {
   start: number; end: number; lastActivity: number; key: string; thread: string | null; projectId: string | null; session: string | null;
   projectName: string | null;
   related?: ReviewRecord[]; app: string | null; chat: string | null; chatApp: string; device: string; evidence: UnnumberedEvidence[];
-  hasNotificationCopy?: true;
   /** AI 会话批次里一句“我”都没有：是上一条输入那一轮的回复，不是自动续跑。 */
   replyOnly?: boolean;
 };
@@ -76,13 +74,12 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
   type RawRow = {
     id: string; source: string; source_ref: string | null; title: string; t_start: string; t_start_ms: number; t_end: string | null;
     context: string | null; key: string | null; thread_id: string | null; project_id: string | null; project_name: string | null; device: string;
-    body: string | null; notification_body: string | null; corrected: number;
+    body: string | null; corrected: number;
   };
   const cutoff = draft?.cutoff;
   const queryStart = cutoff === undefined ? start : Math.max(start, cutoff);
   const rows = hub.db.prepare<unknown[], RawRow>(`SELECT r.id,r.source,r.source_ref,r.title,r.t_start,r.t_start_ms,r.t_end,r.context,r.device,f.key,a.thread_id,t.project_id,p.name AS project_name,
     CASE WHEN r.source IN (${sourceList(SKELETON_SOURCES)}) THEN NULL ELSE COALESCE(c.body,r.body) END AS body,
-    CASE WHEN r.source='android.notification' THEN r.body END AS notification_body,
     c.id IS NOT NULL AS corrected
     FROM records r
     LEFT JOIN frame_records fr ON fr.record_id=r.id LEFT JOIN frames f ON f.id=fr.frame_id
@@ -92,13 +89,12 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
       ORDER BY cc.t_start_ms DESC,cc.id DESC LIMIT 1)
     WHERE r.t_start_ms<? AND r.t_start_ms>=? AND (r.t_start_ms>=? OR (r.t_end IS NOT NULL AND julianday(r.t_end)>julianday(?)))
       AND r.sensitivity<>'private' AND COALESCE(c.sensitivity,'normal')<>'private'
-      AND (r.source IN (${sourceList(SKELETON_SOURCES)},${sourceList(AUDIO_SOURCES)},'codex.session','claude_code.session','mac.wechat','android.notification','manual.note')
-        OR (r.source NOT IN ('mac.shell','mac.git','mac.file','mac.clipboard','manual.agent','manual.correction')
+      AND (r.source IN (${sourceList(SKELETON_SOURCES)},${sourceList(AUDIO_SOURCES)},'codex.session','claude_code.session','mac.wechat','manual.note')
+        OR (r.source NOT IN ('mac.shell','mac.git','mac.file','mac.clipboard','android.notification','manual.agent','manual.correction')
           AND json_type(r.context,'$.chat')='text' AND json_extract(r.context,'$.extra.from_me') IN (0,1)))
     ORDER BY r.t_start_ms,r.id`).iterate(end, queryStart - LONGEST_RECORD, queryStart, new Date(queryStart).toISOString());
   const records: ReviewRecord[] = [];
   const excluded = new Set<string>();
-  const representedNotifications = new Set<string>();
   const windowStart = Math.max(start, cutoff ?? start);
   const evidenceStart = cutoff === undefined ? start : Math.max(start, cutoff + 1);
   for (const row of rows) {
@@ -111,9 +107,6 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
     const finish = Math.max(row.t_start_ms, Date.parse(row.t_end ?? "") || row.t_start_ms);
     if (cutoff !== undefined && (finish <= cutoff ||
       (row.t_start_ms >= cutoff && draft?.covered.has(row.id)))) continue;
-    const representative = row.notification_body === null ? null
-      : wechatRecordForNotification(hub, { ...original, body: row.notification_body });
-    if (representative) { representedNotifications.add(representative); continue; }
     const key = row.key ?? frameKey({
       id: row.id, source: row.source, source_ref: row.source_ref ?? undefined, title: row.title, context,
     } as Parameters<typeof frameKey>[0]);
@@ -130,11 +123,9 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
       key, lastActivity: Math.min(end, finish), thread: row.thread_id, projectId: row.project_id, projectName: row.project_name, session, evidence,
       replyOnly: isSession && !/^\[我\] /m.test(row.body ?? ""),
       app: context?.app ? redactString(context.app).text : null, chat: redactString(recordChat(original) ?? "").text || null,
-      chatApp: row.source !== "android.notification" ? row.source : context?.app === ANDROID_WECHAT ? "mac.wechat"
-        : `android.notification:${context?.app ?? ""}`, device: row.device,
+      chatApp: row.source, device: row.device,
     });
   }
-  for (const record of records) if (representedNotifications.has(record.id)) record.hasNotificationCopy = true;
   // 草稿只读截止之后的记录；评测或发布检查的标记可能只在截止前的批次里，只为截止后出现的会话补查。
   if (queryStart > start) {
     const earlier = hub.db.prepare<[string, string, string, string, number, number], { body: string | null; context: string | null }>(`
@@ -274,7 +265,7 @@ function candidatesIn(piece: Piece): Candidate[] {
 
 const eligible = (kind: Kind, records: ReviewRecord[], seconds: number) =>
   kind === "thread" || kind === "speech" || kind === "session"
-  || (kind === "chat" && (records.length > 1 || records.some(r => r.source === "android.notification" || r.hasNotificationCopy)))
+  || (kind === "chat" && records.length > 1)
   || seconds >= MISC_SECONDS;
 const byImportance = (a: { seconds: number; start: number }, b: { seconds: number; start: number }) =>
   b.seconds - a.seconds || a.start - b.start;

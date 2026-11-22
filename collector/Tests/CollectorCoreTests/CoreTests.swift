@@ -194,15 +194,6 @@ func screenSegmentsForDedicatedSourcesKeepOnlyWindowMetadata(bundle: String) {
   #expect(CapturePolicy.shouldSkip(bundleID: "x.bank", window: "", extraBlocked: ["x.bank"]))
 }
 
-@Test func clipboardSkipsConcealedAndRecordsText() {
-  #expect(ClipboardPolicy.record(text: "hunter2", types: ["public.utf8-plain-text", "org.nspasteboard.ConcealedType"],
-                                 app: nil, time: t0, device: "mac") == nil)
-  let r = ClipboardPolicy.record(text: "第一行\n第二行", types: ["public.utf8-plain-text"], app: "com.x", time: t0, device: "mac")!
-  #expect(r.kind == "event" && r.source == "mac.clipboard" && r.title == "复制 · 第一行" && r.body == "第一行\n第二行")
-  #expect(ClipboardPolicy.record(text: nil, types: ["public.png"], app: nil, time: t0, device: "mac")?.title == "复制了一张图片")
-  #expect(ClipboardPolicy.record(text: "  ", types: ["public.utf8-plain-text"], app: nil, time: t0, device: "mac") == nil)
-}
-
 @Test func queueDropsOldestOverCapacity() {
   let q = OutboundQueue(capacity: 2)
   let mk = { (i: Int) in Record(device: "mac", source: "mac.clipboard", kind: "event", start: t0, context: nil,

@@ -46,4 +46,3 @@ case "$answer" in
     echo "数据和密钥已删除。" ;;
   *) echo "数据保留在 ${DATA}（含语音模型 models/、加密音频 audio/），密钥保留在钥匙串（record-anything / db-key、audio-key-hex）。两者要一起保留，缺一个数据就打不开。" ;;
 esac
-echo "如果在 ~/.zshrc 里加过 plugins/shell/hook.zsh，请手动删掉那一行。"

@@ -481,31 +481,6 @@ private func recentRecord(_ id: String, _ source: String = "mac.screen", _ title
   #expect(RecentRuns.group(browserFirst).count == 1)
 }
 
-@Test func recentRunsBridgeOnlyAnIsolatedClipboardWithinGap() throws {
-  let newer = try recentRecord("new", seconds: 600)
-  // 从微信复制的内容不应抢走该行的应用和正文。
-  let clipboard = try recentRecord("clip", "mac.clipboard", "合成文本", app: "com.tencent.xinWeChat", seconds: 300)
-  let older = try recentRecord("old", "mac.screen", "ChatGPT · 我先查看关联会话，确认企业级大屏对应的接口范围。", seconds: 0)
-  let continued = try recentRecord("continued", seconds: -60)
-  let runs = RecentRuns.group([newer, clipboard, older, continued], gap: 300, limit: 1)
-  #expect(runs.map { $0.map(\.id) } == [["new", "clip", "old", "continued"]])
-  #expect(runs.first?.first?.id == "new")
-  #expect(RecentRuns.chat(runs[0]) == nil)
-  let other = try recentRecord("other", app: "other.app", seconds: 0)
-  #expect(RecentRuns.group([newer, clipboard, other]).map { $0.map(\.id) } == [["new"], ["clip"], ["other"]])
-  #expect(RecentRuns.group([clipboard]).map { $0.map(\.id) } == [["clip"]])
-  #expect(RecentRuns.group([clipboard, older]).count == 2)
-  #expect(RecentRuns.group([newer, clipboard]).count == 2)
-  let clip2 = try recentRecord("clip2", "mac.clipboard", "合成文本", app: "com.tencent.xinWeChat", seconds: 299)
-  #expect(RecentRuns.group([newer, clipboard, clip2, older]).map { $0.map(\.id) } == [["new"], ["clip", "clip2"], ["old"]])
-  // 两侧各自都必须满足 gap；不要求跨剪贴板的总间隔小于 gap。
-  #expect(RecentRuns.group([newer, clipboard, older], gap: 299).count == 3)
-  let lateClip = try recentRecord("late", "mac.clipboard", "合成文本", app: "com.tencent.xinWeChat", seconds: 301)
-  let earlyClip = try recentRecord("early", "mac.clipboard", "合成文本", app: "com.tencent.xinWeChat", seconds: 299)
-  #expect(RecentRuns.group([newer, lateClip, older]).count == 3)
-  #expect(RecentRuns.group([newer, earlyClip, older]).count == 3)
-}
-
 @Test func recentRunsIgnoreChatWhitespaceButKeepOtherSourceRules() throws {
   let chats = [
     try recentRecord("a", "mac.wechat", "微信", app: "com.tencent.xinWeChat", seconds: 60, chat: "C 王家琪"),
@@ -579,43 +554,4 @@ private func placeRecord(_ id: String, _ source: String, _ title: String, second
   let collapsed = RecordRuns.collapse([audio2, usage, audio], conversations: [conv])
   #expect(collapsed.map { $0.records.map(\.id) } == [["pa2", "pa"], ["pu"]])
   #expect(collapsed[0].conversation == conv)
-}
-
-private func androidNotification(_ id: String, conversation: String, seconds: Int, app: String? = nil) throws -> HistoryRecord {
-  var payload: [String: Any] = [
-    "id": id, "device": "android-demo", "source": "android.notification", "kind": "event",
-    "title": conversation, "body": "林青：合成消息 \(id)",
-    "t_start": ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 1795222800 + TimeInterval(seconds))),
-  ]
-  if let app { payload["context"] = ["app": app] }
-  return try HubJSON.decoder().decode(HistoryRecord.self, from: JSONSerialization.data(withJSONObject: payload))
-}
-
-@Test func recentRunsMergeAndroidChatNotificationsByConversation() throws {
-  let rows = [
-    try androidNotification("n1", conversation: "温室 值班群", seconds: 180),
-    try androidNotification("n2", conversation: "温室值班群", seconds: 120),
-    try androidNotification("n3", conversation: "温室\u{3000}值班群", seconds: 60),
-    try androidNotification("n4", conversation: "林青", seconds: 0),
-  ]
-  let runs = RecentRuns.group(rows)
-  #expect(runs.map { $0.map(\.id) } == [["n1", "n2", "n3"], ["n4"]])
-  #expect(RecentRuns.chat(runs[0]) == "温室 值班群")
-  #expect(RecentRuns.chat(runs[1]) == "林青")
-
-  // 超过 5 分钟间隔不再合并。
-  let far = [rows[0], try androidNotification("far", conversation: "温室值班群", seconds: -200)]
-  #expect(RecentRuns.group(far).count == 2)
-
-  // 不同聊天应用的同名会话不合并，同应用合并。
-  let sameApp = [
-    try androidNotification("a1", conversation: "林青", seconds: 60, app: "org.example.chatA"),
-    try androidNotification("a2", conversation: "林青", seconds: 30, app: "org.example.chatA"),
-    try androidNotification("b1", conversation: "林青", seconds: 0, app: "org.example.chatB"),
-  ]
-  #expect(RecentRuns.group(sameApp).map { $0.map(\.id) } == [["a1", "a2"], ["b1"]])
-
-  // 不与 Mac 微信或屏幕记录错误合并。
-  let macChat = try recentRecord("mw", "mac.wechat", "微信 · 温室值班群 · 林青", app: "com.tencent.xinWeChat", seconds: 150, chat: "温室值班群")
-  #expect(RecentRuns.group([rows[0], macChat]).map { $0.map(\.id) } == [["n1"], ["mw"]])
 }

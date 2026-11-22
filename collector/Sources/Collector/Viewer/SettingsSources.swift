@@ -78,15 +78,10 @@ struct SourceDetail: View {
   static let summaries: [String: String] = [
     "screen": "正在用的窗口：应用、标题、网址，以及窗口里新出现的文字。",
     "ocr": "有些应用读不到文字（例如微信、Zed），就在本机截图识别。截图只留在内存里，识别完就丢掉。",
-    "clipboard": "复制的文字。从密码管理器复制的跳过；复制图片只记一句“复制了图片”。",
     "audio": "麦克风和系统声音。有你说话的对话在本机转成文字；原始音频加密存在本机，保留期限由你设置。",
-    "files": "下面这些文件夹里新出现的文件。只记文件名、位置和下载来源，不读文件内容。",
-    "calendar": "已经结束的日程：标题、地点和参会人。录音也靠它判断你是不是在开会。",
     "wechat": "微信在最前面时，读聊天区里看到的消息，按会话分开记。没打开的会话、没往上翻的历史记不到。打开后“截图识字”不再重复读微信。",
     "agent-sessions": "Claude Code 和 Codex 的会话，只记你说的话和它最后的回答。",
     "browser": "Chrome、Arc、Safari 等浏览器的访问记录。",
-    "shell": "在终端里运行的命令、所在目录、是否成功和用时。",
-    "git": "在终端和 AI 会话里用过的代码仓库，记它们的新提交。",
   ]
 
   var body: some View {
@@ -124,12 +119,7 @@ struct SourceDetail: View {
       }
       if let plugin = store.extensions.plugins.first(where: { $0.id == s.id }) { ExtensionDetailSettings(plugin: plugin) }
       // 先配置、再启用；查看或修改配置不读取来源，也不申请系统权限。
-      switch s.id {
-      case "shell": if s.enabled { ShellHookSettings() }
-      case "audio": AudioSourceSettings()
-      case "files": FileDirectorySettings()
-      default: EmptyView()
-      }
+      if s.id == "audio" { AudioSourceSettings() }
     }
   }
 
@@ -138,23 +128,6 @@ struct SourceDetail: View {
     case .granted, .notNeeded: return "已授权"
     case .notDetermined: return "未授权"
     case .denied: return "没有打开"
-    }
-  }
-}
-
-/// 终端命令：开关同时管 ~/.zshrc 里那一行；开关开着但那一行不在时（例如老用户），给一个按钮补上。
-private struct ShellHookSettings: View {
-  @Environment(ViewerStore.self) private var store
-  var body: some View {
-    let c = store.capture
-    Section {
-      SettingsRow("~/.zshrc") {
-        if c.shellHook { Text("已加上，新开的终端窗口开始记录").foregroundStyle(Palette.muted) }
-        else { Button("加上记录钩子") { store.perform(.installShellHook) } }
-      }
-      if let e = c.shellHookError { SettingsMessage(text: e) }
-    } footer: {
-      Note("目前支持 zsh；命令以空格开头时不记录。关掉这个数据源时，会把这一行从 ~/.zshrc 里删掉。")
     }
   }
 }
@@ -238,60 +211,5 @@ private struct AudioSourceSettings: View {
   func purge() async {
     do { try await store.api.purgeAudio(); status = "Mac 下次同步时删除"; error = nil }
     catch { self.error = error.localizedDescription }
-  }
-}
-
-/// 文件：监听哪些目录。只接受主目录下的目录。
-private struct FileDirectorySettings: View {
-  @Environment(ViewerStore.self) private var store
-  @State private var error: String?
-
-  var body: some View {
-    let dirs = store.capture.fileDirectories
-    Section {
-      ForEach(dirs, id: \.self) { d in
-        SettingsRow {
-          Button { set(dirs.filter { $0 != d }) } label: { PhIcon("minus-circle", size: 15) }
-            .buttonStyle(.borderless).help("移除").accessibilityLabel("移除 \(d)")
-        } label: {
-          Text("~/" + d).font(.mono(TextSize.body))
-        }
-      }
-      if dirs.isEmpty { Text("没有记录任何文件夹").foregroundStyle(Palette.muted) }
-      HStack {
-        Button("添加文件夹…") { add(dirs) }
-        if dirs != FileSourcePolicy.directories { Button("恢复默认") { set(FileSourcePolicy.directories) } }
-      }
-      if let error { SettingsMessage(text: error) }
-    } header: {
-      Text("记录这些文件夹")
-    } footer: {
-      Note("里面的子文件夹也会记录。隐藏文件夹和密码管理器的文件夹不记录。")
-    }
-  }
-
-  func set(_ dirs: [String]) {
-    error = nil
-    store.perform(.setFileDirectories(dirs))
-    store.capture.fileDirectories = FileDirectories.normalized(dirs)
-  }
-
-  func add(_ dirs: [String]) {
-    let panel = NSOpenPanel()
-    panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
-    panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
-    panel.prompt = "添加"
-    // 不用 runModal：模态循环期间采集端的定时器（屏幕、剪贴板、发送）全部停摆，选择框开多久就漏采多久。
-    let handle: (NSApplication.ModalResponse) -> Void = { response in
-      guard response == .OK, let url = panel.url else { return }
-      guard let rel = FileSourcePolicy.relative(url.path, home: FileManager.default.homeDirectoryForCurrentUser.path) else {
-        error = "只能选个人文件夹里的文件夹，不能是个人文件夹本身、资源库或隐藏文件夹。"; return
-      }
-      if let parent = FileDirectories.covering(rel, in: dirs) {
-        error = parent == rel ? "~/\(rel) 已经在记录了。" : "~/\(rel) 在 ~/\(parent) 里面，已经在记录了。"; return
-      }
-      set(dirs + [rel])
-    }
-    if let window = NSApp.keyWindow { panel.beginSheetModal(for: window, completionHandler: handle) } else { panel.begin(completionHandler: handle) }
   }
 }

@@ -54,31 +54,6 @@ test("迁移后的连接在设置页显示为已连接（路径不含需要引�
   expect(states.filter(s => s.id !== "claude-desktop").map(s => [s.id, s.connected, s.partial])).toEqual([["claude-code", true, false], ["codex", true, false]]);
 });
 
-test("升级停用旧终端钩子，保留配置链接和缓冲过的历史，旧进程无法继续追加", () => {
-  const home = temp(), config = join(home, "dotfiles/zshrc"), link = join(home, ".zshrc");
-  const before = '# keep\n# record-anything：记录终端命令\nsource "/old/repo/plugins/shell/hook.zsh"\n'
-    + '[ -f "/old/repo/plugins/shell/hook.zsh" ] && . "/old/repo/plugins/shell/hook.zsh"\n'
-    + 'source "/user/plugin.zsh"\nexport OTHER=1\n';
-  write(config, before);
-  symlinkSync(config, link);
-  const buffer = join(home, "Library/Application Support/record-anything/buffer/shell.jsonl");
-  write(buffer, "synthetic-pending\n");
-  expect(relocateInstall("/runtime", process.execPath, home)).toEqual([realpathSync(config)]);
-  expect(lstatSync(link).isSymbolicLink()).toBe(true);
-  expect(readFileSync(link, "utf8")).toBe('# keep\nsource "/user/plugin.zsh"\nexport OTHER=1\n');
-  expect(statSync(buffer).mode & 0o777).toBe(0o400);
-  expect(readdirSync(dirname(config)).some(name =>
-    name.startsWith("zshrc.ra-backup-") && readFileSync(join(dirname(config), name), "utf8") === before)).toBe(true);
-  if (process.getuid?.() !== 0) {
-    const hook = resolve(import.meta.dir, "../../plugins/shell/hook.zsh");
-    const stale = spawnSync("/bin/zsh", ["-f", "-c", 'source "$1"; _ra_shell_preexec "synthetic"; _ra_shell_precmd', "tacit-test", hook],
-      { env: { ...process.env, RA_SHELL_LOG: buffer }, encoding: "utf8" });
-    expect(stale.status).toBe(0);
-  }
-  expect(readFileSync(buffer, "utf8")).toBe("synthetic-pending\n");
-  expect(relocateInstall("/runtime", process.execPath, home)).toEqual([]);
-});
-
 test("配置预检失败时不迁移任何文件；不覆盖同名非本应用 MCP", () => {
   const home = temp(), file = join(home, ".claude/settings.json");
   write(file, { hooks: { SessionStart: [{ hooks: [{ command: "/bun /old/hub/src/cli.ts hook session-start --tool claude-code" }] }] } });
