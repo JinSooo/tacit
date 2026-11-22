@@ -6,7 +6,6 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
@@ -17,10 +16,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -38,15 +36,17 @@ import top.jinso.tacit.ui.components.*
 import java.time.LocalDate
 import java.util.concurrent.CompletableFuture
 
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * The phone's one page: what was said, by day. Recording is always meant to be on, like a Mac source, so it has no
+ * control here; the page only speaks up when recording is off or something needs the user.
+ */
 @Composable fun AudioPage(
     app: TacitApp,
     resumed: Int,
     notify: (String) -> Unit,
-    onOpenSettings: (String) -> Unit,
+    onOpenSettings: (String?) -> Unit,
     onConversation: (List<HistoryRecord>) -> Unit,
-    macDays: Int?,
-    synced: String?,
+    macProblem: String?,
     recovery: @Composable () -> Unit,
 ) {
     val activity=LocalActivity.current ?: return
@@ -54,7 +54,6 @@ import java.util.concurrent.CompletableFuture
     var state by remember{mutableStateOf(audio.state())};var speakers by remember{mutableStateOf(emptyList<AudioSpeaker>())}
     var busy by remember { mutableStateOf(false) }
     var rows by remember { mutableStateOf(emptyList<AudioConversationRow>()) }
-    var waitingClips by remember { mutableIntStateOf(0) }
     var loaded by remember { mutableStateOf(false) }
     var macVoice by remember { mutableStateOf(false) }
     var loadFailed by remember { mutableStateOf(false) }
@@ -73,24 +72,16 @@ import java.util.concurrent.CompletableFuture
             }
         }
     }
-    fun start() {
-        try {
-            app.prefs.setEnabled(AUDIO_SOURCE, true)
-            audio.start(activity)
-            state = audio.state()
-        } catch (_: Exception) {
-            notify("无法开始录音，请先授权麦克风并继续采集")
-        }
-    }
     val owner = activity as? LifecycleOwner
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result[Manifest.permission.RECORD_AUDIO] == true ||
+    val startRecording = rememberRecordingStarter(app, audio, notify) { state = audio.state() }
+    LaunchedEffect(owner, resumed) {
+        // Opening Tacit picks recording back up after a reboot or a system stop, unless the user turned it off.
+        if (app.prefs.audioCaptureWanted && !audio.state().recording &&
             activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        ) {
-            // The result arrives before the page is resumed, and capture may only start from a visible page:
-            // starting here failed the first time ("无法开始录音") right after the permission dialogs.
-            scope.launch { owner?.lifecycle?.withResumed { start() } ?: start() }
-        } else notify("麦克风未授权，未开始录音")
+        ) owner?.lifecycle?.withResumed {
+            runCatching { app.prefs.setEnabled(AUDIO_SOURCE, true); audio.start(activity) }
+            state = audio.state()
+        }
     }
     LaunchedEffect(owner, resumed, includeIgnored) {
         // Re-read only when recordings, voices or status change; nothing runs while the page is hidden.
@@ -102,12 +93,11 @@ import java.util.concurrent.CompletableFuture
                         val mac = audio.macVoiceKnown().get()
                         val scenes = audio.listConversations().get().sortedByDescending { it.start }
                         val text = scenes.flatMap { it.recordIds }.distinct().mapNotNull { app.vault.get(it) }.associateBy { it.id }
-                        val waiting = audio.listClips().get().count { it.conversationId == null && !it.analyzed }
-                        Triple(voices to mac, audioConversationRows(scenes, text), waiting)
+                        (voices to mac) to audioConversationRows(scenes, text)
                     }
                 }
-            snapshot.onSuccess { (voices, conversations, waiting) ->
-                speakers = voices.first; macVoice = voices.second; rows = conversations; waitingClips = waiting
+            snapshot.onSuccess { (voices, conversations) ->
+                speakers = voices.first; macVoice = voices.second; rows = conversations
             }
             loadFailed = snapshot.isFailure
             loaded = true
@@ -116,52 +106,32 @@ import java.util.concurrent.CompletableFuture
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
     val candidate = if (macVoice || speakers.any { it.isMe }) null else speakers
         .filter { !it.ignored && it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
-    val days = remember(rows) { rows.groupBy { date(it.start, "yyyy-MM-dd") } }
+    val today = LocalDate.now()
+    val days = remember(rows) { rows.groupBy { LocalDate.parse(date(it.start, "yyyy-MM-dd")) } }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
-        item(key = "recording") {
-            Column(
-                Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    if (state.recording) "正在录音" else "未在录音",
-                    style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif,
-                    color = if (state.recording) tacitColors.attention else tacitColors.ink,
-                )
-                Text(state.message, style = MaterialTheme.typography.bodySmall, color = tacitColors.muted,
-                    textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                RecordingButton(state.recording, !busy) {
-                    if (state.recording) {
-                        audio.stop()
-                        state = audio.state()
-                    } else {
-                        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
-                        if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.POST_NOTIFICATIONS
-                        permission.launch(permissions.toTypedArray())
-                    }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 8.dp, bottom = 32.dp)) {
+        item(key = "today") {
+            Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 4.dp), verticalAlignment = Alignment.Top) {
+                DayHeading(today, today, Modifier.weight(1f).padding(top = 8.dp), stacked = true)
+                IconButton(onClick = { onOpenSettings(null) }) {
+                    Icon(Icons.Outlined.Settings, "设置", tint = tacitColors.muted)
                 }
-                Caption("只转写有你声音的对话")
-                FlowRow(itemVerticalAlignment = Alignment.CenterVertically) {
-                    AudioChip(if (state.modelsReady) "语音模型已就绪" else "语音模型未准备", !state.modelsReady) {
-                        onOpenSettings(SettingsRoutes.SPEECH)
-                    }
-                    Caption("·", color = tacitColors.faint)
-                    AudioChip(if (macDays != null) "保留期随 Mac" else "录音保留 ${retentionLabel(app.prefs.retentionDays)}") {
-                        onOpenSettings(SettingsRoutes.RETENTION)
-                    }
-                    if (synced != null) {
-                        Caption("·", color = tacitColors.faint)
-                        AudioChip(synced) { onOpenSettings(SettingsRoutes.MAC) }
-                    }
-                }
-                if (busy) ProgressLine()
             }
         }
-        item(key = "recovery") { recovery() }
+        val notice = recordingNotice(state, app.prefs.audioCaptureWanted, macProblem)
+        if (notice != null) item(key = "notice") {
+            Box(Modifier.padding(end = 12.dp, top = 8.dp)) {
+                val route = notice.route
+                when {
+                    notice.start -> NoticeAction(notice.text, "开启", !busy, startRecording)
+                    route != null -> NoticeRow(notice.text) { onOpenSettings(route) }
+                    else -> NoticeText(notice.text)
+                }
+            }
+        }
+        item(key = "recovery") { Box(Modifier.padding(end = 12.dp)) { recovery() } }
         if (candidate != null) item(key = "voice-${candidate.id}") {
-            Column(Modifier.padding(top = 12.dp)) {
+            Column(Modifier.padding(top = 12.dp, end = 12.dp)) {
                 VoiceConfirmation(
                     candidate, !busy,
                     play = { work({ audio.playSample(candidate.id) }, "正在试听") },
@@ -178,22 +148,17 @@ import java.util.concurrent.CompletableFuture
                 )
             }
         }
-        item(key = "conversations-title") {
-            SectionLabel("录下的对话", Modifier.padding(top = 24.dp, bottom = 8.dp))
-        }
-        if (!loaded) item { ProgressLine() }
+        if (!loaded || busy) item { ProgressLine(Modifier.padding(end = 12.dp, top = 8.dp)) }
         if (loadFailed) item {
-            Caption("暂时无法读取录音，正在重试。", color = tacitColors.attention)
-        } else if (loaded && rows.isEmpty() && waitingClips == 0) item {
-            Caption("还没有录下的对话。")
-        }
-        if (waitingClips > 0) item(key = "waiting-clips") {
-            Caption("$waitingClips 段录音等待识别", Modifier.padding(vertical = 8.dp))
+            Caption("暂时无法读取录音，正在重试。", Modifier.padding(top = 16.dp), color = tacitColors.attention)
+        } else if (loaded && rows.isEmpty()) item(key = "empty") {
+            Text("说过的话，会按天写在这里。", Modifier.padding(top = 48.dp, end = 12.dp),
+                style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
+                fontWeight = FontWeight.Normal, color = tacitColors.muted)
         }
         days.forEach { (day, scenes) ->
-            item(key = "day-$day") {
-                SectionLabel(if (day == LocalDate.now().toString()) "今天" else date(scenes.first().start, "M 月 d 日"),
-                    Modifier.padding(top = 12.dp, bottom = 4.dp))
+            if (day != today) item(key = "day-$day") {
+                DayHeading(day, today, Modifier.padding(top = 32.dp, bottom = 4.dp))
             }
             scenes.filter { it.records.isNotEmpty() }.forEach { scene ->
                 item(key = "conversation-${scene.key}") { RecordedConversation(scene, onConversation) }
@@ -201,34 +166,100 @@ import java.util.concurrent.CompletableFuture
             val untranscribed = scenes.count { it.records.isEmpty() }
             if (untranscribed > 0) item(key = "untranscribed-$day") {
                 val other = if (scenes.any { it.records.isNotEmpty() }) "另有 " else ""
-                Caption("$other$untranscribed 段录音还没有文字", Modifier.padding(vertical = 8.dp))
+                Row(Modifier.padding(vertical = 12.dp)) {
+                    Box(Modifier.width(56.dp).padding(top = 9.dp)) {
+                        Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
+                    }
+                    Caption("$other$untranscribed 段没认出你的声音，未转写")
+                }
             }
         }
     }
 }
 
+/** One tap does both system prompts and the start, because capture may only begin from a visible page. */
 @Composable
-private fun RecordingButton(recording: Boolean, enabled: Boolean, onClick: () -> Unit) {
-    val tint = if (recording) tacitColors.paper else tacitColors.accent
-    Surface(
-        onClick = onClick, enabled = enabled, modifier = Modifier.size(76.dp), shape = CircleShape,
-        color = if (recording) tacitColors.attention else tacitColors.paper,
-        border = if (recording) null else BorderStroke(2.dp, tint),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(if (recording) Icons.Outlined.Stop else Icons.Outlined.Mic,
-                if (recording) "停止录音" else "开始录音", Modifier.size(32.dp),
-                tint = if (enabled) tint else tint.copy(alpha = .55f))
+internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, notify: (String) -> Unit, after: () -> Unit): () -> Unit {
+    val activity = LocalActivity.current ?: return {}
+    val owner = activity as? LifecycleOwner
+    val scope = rememberCoroutineScope()
+    fun start() {
+        try {
+            app.prefs.setEnabled(AUDIO_SOURCE, true)
+            audio.start(activity)
+        } catch (_: Exception) {
+            notify("无法开启录音，请先允许麦克风")
+        }
+        after()
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+        if (result[Manifest.permission.RECORD_AUDIO] == true ||
+            activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        ) {
+            // The result arrives before the page is resumed, and capture may only start from a visible page:
+            // starting here failed the first time ("无法开始录音") right after the permission dialogs.
+            scope.launch { owner?.lifecycle?.withResumed { start() } ?: start() }
+        } else notify("麦克风未允许，录音没有开启")
+    }
+    return {
+        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.POST_NOTIFICATIONS
+        permission.launch(permissions.toTypedArray())
+    }
+}
+
+internal data class RecordingNotice(val text: String, val route: String?, val start: Boolean = false)
+
+/** Routine recorder messages restate that recording works; anything else is worth one line. */
+private val ROUTINE_MESSAGES = setOf(
+    "正在录音，音频已加密保存", "正在录音，本地转写中", "本地音频处理完成", "本地语音模型已就绪",
+    "录音未启动", "录音已停止", "录音和声纹已清理",
+)
+
+internal fun recordingNotice(state: AudioState, wanted: Boolean, macProblem: String?): RecordingNotice? = when {
+    !state.recording && !wanted -> RecordingNotice("录音没有开启", null, start = true)
+    // Wanted but not running is either the start in flight (say nothing) or a failed start (say why, offer retry).
+    !state.recording && state.message !in ROUTINE_MESSAGES -> RecordingNotice(state.message, null, start = true)
+    !state.modelsReady -> RecordingNotice("语音模型未准备，录音暂时不能转写", SettingsRoutes.SPEECH)
+    state.message !in ROUTINE_MESSAGES -> RecordingNotice(state.message, null)
+    macProblem != null -> RecordingNotice(macProblem, SettingsRoutes.MAC)
+    else -> null
+}
+
+@Composable
+private fun NoticeAction(text: String, action: String, enabled: Boolean, onClick: () -> Unit) {
+    Surface(color = tacitColors.fill, shape = MaterialTheme.shapes.medium) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 16.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(text, Modifier.weight(1f), color = tacitColors.ink)
+            PrimaryButton(action, onClick, enabled)
         }
     }
 }
 
+/** A passing condition the user can't act on (the phone is playing sound, another app holds the mic). */
 @Composable
-private fun AudioChip(label: String, problem: Boolean = false, onClick: () -> Unit) {
-    Surface(color = Color.Transparent, shape = MaterialTheme.shapes.small, onClick = onClick) {
-        Box(Modifier.heightIn(min = 48.dp).padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-            Caption(label, color = if (problem) tacitColors.attention else tacitColors.muted)
-        }
+private fun NoticeText(text: String) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(16.dp), tint = tacitColors.attention)
+        Text(text, color = tacitColors.muted)
+    }
+}
+
+/** Serif date as the day's anchor; today also carries the weekday under it. */
+@Composable
+private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Modifier, stacked: Boolean = false) {
+    val relative = when (day) { today -> "今天"; today.minusDays(1) -> "昨天"; else -> null }
+    val weekday = "星期" + "一二三四五六日"[day.dayOfWeek.value - 1]
+    val note = listOfNotNull(relative, weekday).joinToString(" · ")
+    val title = if (day.year == today.year) "${day.monthValue} 月 ${day.dayOfMonth} 日" else "${day.year} 年 ${day.monthValue} 月 ${day.dayOfMonth} 日"
+    if (stacked) Column(modifier) {
+        Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)
+        Caption(note)
+    } else Row(modifier, verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)
+        Caption(note, Modifier.padding(bottom = 4.dp))
     }
 }
 
@@ -277,22 +308,18 @@ private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () 
 private fun RecordedConversation(scene: AudioConversationRow, onConversation: (List<HistoryRecord>) -> Unit) {
     val records = scene.records
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp)
-            .clickable(enabled = records.isNotEmpty()) { onConversation(records) }.padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        Modifier.fillMaxWidth().heightIn(min = 56.dp)
+            .clickable(enabled = records.isNotEmpty()) { onConversation(records) }.padding(top = 12.dp, bottom = 12.dp, end = 12.dp),
     ) {
-        Caption(date(scene.start, "HH:mm"), Modifier.width(44.dp))
-        Column(Modifier.weight(1f)) {
-            if (records.isEmpty()) Text("已保存录音，还没有文字", color = tacitColors.muted)
-            else {
-                Text(firstSentence(records).ifBlank { conversationTitle(scene.private) },
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Caption(durationLabel(conversationDuration(records)))
-                    if (scene.private) PrivacyLock()
-                }
+        Caption(date(scene.start, "HH:mm"), Modifier.width(56.dp).padding(top = 5.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(firstSentence(records).ifBlank { conversationTitle(scene.private) },
+                style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Caption(durationLabel(conversationDuration(records)))
+                if (scene.private) PrivacyLock()
             }
         }
     }
-    GroupDivider()
 }

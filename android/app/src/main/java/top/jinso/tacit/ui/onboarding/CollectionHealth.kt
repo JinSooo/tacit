@@ -25,10 +25,10 @@ internal data class RecoveryIssue(val title: String, val detail: String, val act
 internal fun recoveryIssues(health: CollectionHealth): List<RecoveryIssue> = buildList {
     if (health.microphoneCaptureExpected) {
         when {
-            !health.microphoneGranted -> add(RecoveryIssue("麦克风尚未允许", "请在设置中允许麦克风，再到录音页手动开始。", RecoveryAction.MICROPHONE))
+            !health.microphoneGranted -> add(RecoveryIssue("麦克风尚未允许", "请在设置中允许麦克风，录音会自动接上。", RecoveryAction.MICROPHONE))
             health.audioRunning == null -> add(RecoveryIssue("暂时无法检查录音", "请到录音页检查权限、模型和存储状态。", RecoveryAction.AUDIO))
             health.audioSilenced -> add(RecoveryIssue("录音暂时收不到声音", "检查其他应用是否占用麦克风，或系统是否关闭了麦克风访问。录音服务会等待系统恢复。", RecoveryAction.AUDIO))
-            !health.audioRunning && !health.audioStarting -> add(RecoveryIssue("录音当前未运行", "重启或系统停止后，需要回到录音页手动开始。已有录音仍保留。", RecoveryAction.AUDIO))
+            !health.audioRunning && !health.audioStarting -> add(RecoveryIssue("录音当前未运行", "打开 Tacit 时会自动接上，已有录音仍保留。", RecoveryAction.AUDIO))
         }
     }
 

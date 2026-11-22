@@ -11,12 +11,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -35,7 +35,7 @@ internal fun SettingsPage(
     notify: (String) -> Unit,
     selected: String?,
     setRoute: (String?) -> Unit,
-    onOpenAudio: () -> Unit,
+    onClose: () -> Unit,
     health: CollectionHealth?,
     mac: MacStatus?,
     macDays: Int?,
@@ -50,7 +50,7 @@ internal fun SettingsPage(
             Sources.AUDIO -> activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
             else -> app.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
         }
-        notify(if (granted) "权限已更新，录音仍需手动开始" else "尚未允许权限，可打开应用信息检查")
+        notify(if (granted) "权限已更新" else "尚未允许权限，可打开应用信息检查")
         pendingPermission = null
     }
     fun appInfo() = openSystemPage(activity, SystemPage.APP, notify)
@@ -74,10 +74,10 @@ internal fun SettingsPage(
         setRoute(parent)
         parent = null
     }
-    val title = if (selected == Sources.AUDIO) "麦克风" else SettingsRoutes.title(selected)
-    BackHandler(selected != null) { back() }
+    val title = if (selected == Sources.AUDIO) "麦克风" else SettingsRoutes.title(selected) ?: "设置"
+    BackHandler { if (selected != null) back() else onClose() }
     Column(Modifier.fillMaxSize().imePadding()) {
-        if (selected != null) PageBar(title.orEmpty(), ::back)
+        PageBar(title, onBack = { if (selected != null) back() else onClose() })
         key(selected) {
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
@@ -89,7 +89,6 @@ internal fun SettingsPage(
                     SettingsRoutes.RETENTION -> AudioStorageSettings(app, notify)
                     SettingsRoutes.BACKGROUND -> BackgroundChecklist(health, ::openMicrophone, ::requestNotifications, notify)
                     Sources.AUDIO -> {
-                        Caption("只在你点开始后录音。")
                         val granted = health?.microphoneGranted
                         GroupCard {
                             SettingsRow(
@@ -101,11 +100,9 @@ internal fun SettingsPage(
                             }
                             GroupDivider()
                             SettingsRow("系统麦克风开关", onClick = { openSystemPage(activity, SystemPage.PRIVACY, notify) })
-                            GroupDivider()
-                            SettingsRow("去录音页", onClick = { setRoute(null); onOpenAudio() })
                         }
                     }
-                    else -> SettingsHome(app, health, mac, macDays, resumed, setRoute)
+                    else -> SettingsHome(app, health, mac, macDays, resumed, notify, setRoute)
                 }
             }
         }
@@ -114,37 +111,44 @@ internal fun SettingsPage(
 
 @Composable
 private fun SettingsHome(
-    app: TacitApp, health: CollectionHealth?, mac: MacStatus?, macDays: Int?, resumed: Int, open: (String) -> Unit,
+    app: TacitApp, health: CollectionHealth?, mac: MacStatus?, macDays: Int?, resumed: Int, notify: (String) -> Unit,
+    open: (String) -> Unit,
 ) {
     val ready by produceState<Boolean?>(null, app, resumed) {
         value = withContext(Dispatchers.IO) { runCatching { AudioController(app).state().modelsReady }.getOrNull() }
     }
+    // Rows say something only when it is a choice the user made or needs their hand; "正常" is the default.
+    val audio = remember(app) { AudioController(app) }
+    // On is the default and stays on across reboots; this switch is the one place to turn it off besides the notification.
+    var on by remember { mutableStateOf(app.prefs.audioCaptureWanted || audio.state().recording) }
+    LaunchedEffect(audio) { audio.changes.collect { on = app.prefs.audioCaptureWanted || audio.state().recording } }
+    val start = rememberRecordingStarter(app, audio, notify) { on = app.prefs.audioCaptureWanted || audio.state().recording }
     GroupCard {
-        val status = when {
-            mac == null -> "正在读取"
-            mac.removed -> "已在 Mac 上移除"
+        // The whole row is the switch, so it is one large target and reads as one control.
+        SettingsRow("录音", onClick = { if (on) { audio.stop(); on = false } else start() }, trailing = {
+            Switch(on, null, Modifier.semantics { contentDescription = if (on) "录音已开启" else "录音已关闭" },
+                colors = SwitchDefaults.colors(checkedTrackColor = tacitColors.accent, checkedThumbColor = tacitColors.paper))
+        })
+    }
+    GroupCard {
+        val macValue = when {
+            mac == null -> null
+            mac.removed -> "已移除"
             mac.name == null -> "未连接"
-            mac.lastSync == 0L -> "已连接，尚未同步"
-            else -> "已连接，${syncAge(mac.lastSync)}同步"
+            else -> mac.name
         }
-        SettingsRow("连接 Mac", status, problem = mac?.removed == true, icon = Icons.Outlined.Computer,
+        SettingsRow("连接 Mac", value = macValue, problem = mac?.removed == true || (mac != null && mac.name == null),
             onClick = { open(SettingsRoutes.MAC) })
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        GroupCard {
-            SettingsRow("语音转写", value = when (ready) { true -> "已就绪"; false -> "未准备"; null -> null },
-                onClick = { open(SettingsRoutes.SPEECH) })
-            GroupDivider()
-            val retention = retentionLabel(macDays ?: app.prefs.retentionDays)
-            SettingsRow("录音保留", value = if (macDays != null && macDays != 0) "$retention，随 Mac" else retention,
-                onClick = { open(SettingsRoutes.RETENTION) })
-        }
-        Caption("录音和转写加密保存在这台手机上。")
-    }
-    GroupCard {
-        val problems = health?.let(::backgroundProblemCount)
-        SettingsRow("后台运行", value = when (problems) { null -> null; 0 -> "正常"; else -> "$problems 项要处理" },
-            problem = (problems ?: 0) > 0, onClick = { open(SettingsRoutes.BACKGROUND) })
+        GroupDivider()
+        SettingsRow("语音转写", value = if (ready == false) "未准备" else null, problem = ready == false,
+            onClick = { open(SettingsRoutes.SPEECH) })
+        GroupDivider()
+        SettingsRow("录音保留", value = retentionLabel(macDays ?: app.prefs.retentionDays),
+            onClick = { open(SettingsRoutes.RETENTION) })
+        GroupDivider()
+        val problems = health?.let(::backgroundProblemCount) ?: 0
+        SettingsRow("后台运行", value = if (problems > 0) "$problems 项要处理" else null, problem = problems > 0,
+            onClick = { open(SettingsRoutes.BACKGROUND) })
     }
     Caption("Tacit ${BuildConfig.VERSION_NAME}")
 }

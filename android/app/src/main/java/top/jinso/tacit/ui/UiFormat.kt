@@ -59,9 +59,4 @@ internal fun firstSentence(raw: String): String {
 internal fun firstSentence(records: List<top.jinso.tacit.core.HistoryRecord>): String =
     records.sortedBy { it.start }.asSequence().map { firstSentence(it.body) }.firstOrNull(String::isNotEmpty).orEmpty()
 
-internal fun syncAge(lastSync: Long, now: Long = System.currentTimeMillis()): String {
-    val elapsed = (now - lastSync).coerceAtLeast(0)
-    return if (elapsed < 60_000) "不到 1 分钟前" else durationLabel(elapsed) + "前"
-}
-
 internal fun retentionLabel(days: Int): String = if (days == 0) "不自动清除" else "$days 天"
