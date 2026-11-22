@@ -536,6 +536,17 @@ function draftCandidates(rows: ReviewRecord[]) {
   return mergeAdjacent(candidates, SEGMENT_QUIET_MS);
 }
 
+const firstSentence = (text: string) => redactString(text).text.split(/(?<=[。！？!?])|(?<=\.)\s+|\r?\n/u, 1)[0]!;
+const comparable = (text: string) => terse(text, 60).replace(/[\s。！？!?，,.…]+$/u, "");
+// 记录标题有长度上限，长输入在标题里只剩开头，也算重复。
+const repeats = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 8 && (a.startsWith(b) || b.startsWith(a)));
+/** AI 会话记录标题是“工具 · 项目 · 首条输入”；工具已由图标表示、项目按当天项目数另标，草稿只用首条输入。 */
+function sessionTopic(title: string) {
+  const parts = title.split(" · ");
+  const topic = parts.length >= 3 ? terse(firstSentence(parts.slice(2).join(" · ")), 60) : "";
+  return topic || title;
+}
+
 function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
   const speaking = a.primary.flatMap(r => {
     const entries = r.evidence.filter(e => draftSpeech(e) && evidenceInPiece(e, r, a));
@@ -543,16 +554,18 @@ function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
   });
   const primary = speaking[0]!.record;
   const entries = speaking.flatMap(s => s.entries);
-  const quote = entries.find(e => e.role === "user") ?? entries[0]!;
-  const sentence = redactString(quote.text).text.split(/(?<=[。！？!?])|(?<=\.)\s+|\r?\n/u, 1)[0]!;
   const apps = [...new Map(speaking.map(({ record: { source, app } }) =>
     [JSON.stringify([source, app]), { source, app }])).values()];
   const threads = new Set(speaking.flatMap(({ record }) => record.thread ?? []));
   const title = AUDIO_SOURCES.has(primary.source) ? "一场对话"
-    : primary.chat || (SESSION_SOURCES.has(primary.source) ? primary.title : primary.app || primary.title);
+    : primary.chat || (SESSION_SOURCES.has(primary.source) ? sessionTopic(primary.title) : primary.app || primary.title);
+  // 标题已经是某句原话（AI 会话标题就是首条输入）时换一句，没有别的就不重复。
+  const quotes = [...entries.filter(e => e.role === "user"), ...entries.filter(e => e.role !== "user")]
+    .map(e => terse(firstSentence(e.text), 60));
+  const excerpt = quotes.find(q => comparable(q) && !repeats(comparable(q), comparable(title))) ?? "";
   return {
     id, t_start: toLocalIso(a.start), t_end: toLocalIso(a.end), active_seconds: a.seconds,
-    title, excerpt: terse(sentence, 60), sources: [...new Set(apps.map(app => app.source))], apps,
+    title, excerpt, sources: [...new Set(apps.map(app => app.source))], apps,
     record_ids: recordIds, project_id: a.activity.projectId,
     ...(threads.size === 1 ? { thread_id: [...threads][0]! } : {}),
   };

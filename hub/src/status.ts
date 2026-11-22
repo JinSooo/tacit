@@ -121,7 +121,7 @@ function recordGroups(hub: HubDB) {
   return { bySource: merge("source") as { source: string; count: number; last_received: string | null }[], byDevice: merge("device") as { device: string; count: number; last_received: string | null }[], tombstones };
 }
 
-export function hubStatus(hub: HubDB, options: { port: number; now?: number; busy?: ReturnType<BusyResponses["snapshot"]> }) {
+export function hubStatus(hub: HubDB, options: { port: number; lanPort?: number | null; now?: number; busy?: ReturnType<BusyResponses["snapshot"]> }) {
   const sql = hub.db;
   const now = options.now ?? Date.now();
   const counts = (query: string, ...args: unknown[]): Counts =>
@@ -202,8 +202,8 @@ export function hubStatus(hub: HubDB, options: { port: number; now?: number; bus
       busy: options.busy ?? new BusyResponses().snapshot(),
       schema_version: sql.pragma("user_version", { simple: true }) as number,
     },
-    // 还没有局域网配对：服务固定只绑定 127.0.0.1。
-    listen: { host: "127.0.0.1", port: options.port, localhost_only: true },
+    // 本机接口只绑定 127.0.0.1；有配对邀请或已配对设备时，另开一个只收加密设备请求的局域网端口。
+    listen: { host: "127.0.0.1", port: options.port, localhost_only: !options.lanPort, lan_port: options.lanPort ?? null },
     database: { file, bytes },
     records: {
       total: bySource.reduce((n, r) => n + r.count, 0),

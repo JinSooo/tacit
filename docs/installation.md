@@ -52,7 +52,7 @@
 
 ## 发布安装包
 
-1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）。提交并打 `v<版本号>` tag。
+1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）、`android/app/build.gradle.kts` 的 `versionName`（`versionCode` 加 1）；`scripts/release-version.test.ts` 检查这几处一致。提交并打 `v<版本号>` tag。
 2. 在这台有签名证书的 Mac 上运行 `scripts/release-dmg.sh`。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
 3. 推送 tag，用 `gh release create` 建 Release 并上传这两个文件。
 

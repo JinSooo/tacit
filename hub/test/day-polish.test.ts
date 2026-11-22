@@ -123,6 +123,25 @@ test("迟到成员只重润色一段，落在截止前空档的独立记录也�
   covers(610, [first, second, late, inGap]);
 });
 
+test("AI 会话草稿标题只留首条输入，描述不重复标题", () => {
+  const session = (minute: number, source_ref: string, body: string, title = "Claude Code · 合成苗圃 · 核对东边苗床。还要补图例") => fixture({
+    kind: "span", source: "claude_code.session", source_ref, t_start: toLocalIso(at(minute)),
+    t_end: toLocalIso(at(minute + 1)), title, body,
+  });
+  const single = session(480, "garden#1", "[我] 核对东边苗床。还要补图例\n\n[AI] 已核对。");
+  const followed = session(560, "garden#2", "[我] 核对东边苗床。\n\n[AI] 已核对。\n\n[我] 那就把花苗移过去。");
+  // 记录标题被截短时只剩长输入的开头。
+  const clipped = session(640, "garden#3", "[我] 把东边苗床的花苗、豆苗和春苗都重新排一遍并标上名字\n\n[AI] 已排好。",
+    "Claude Code · 合成苗圃 · 把东边苗床的花苗、豆苗和春苗都重新排");
+  save(single, followed, clipped);
+  const drafts = view(650).drafts;
+  expect(drafts.map((item: { title: string; excerpt: string }) => [item.title, item.excerpt])).toEqual([
+    ["核对东边苗床。", ""],
+    ["核对东边苗床。", "那就把花苗移过去。"],
+    ["把东边苗床的花苗、豆苗和春苗都重新排", ""],
+  ]);
+});
+
 test("迟到的 AI 续跑结果只归回发起段，孤立续跑不成段", async () => {
   const session = (minute: number, source_ref: string, body: string) => fixture({
     kind: "span", source: "codex.session", source_ref, t_start: toLocalIso(at(minute)),
@@ -196,7 +215,7 @@ test("概述只读已润色正时长段，不随快轮重写，失败也保留�
 
   failOverview = true;
   await round(540, true);
-  expect(data(overviewCalls()[0]!)).toEqual([{ title: "苗圃进展", description: "小禾确认了这处苗床的安排。", project: "虚构苗圃" }]);
+  expect(data(overviewCalls()[0]!)).toEqual([{ start: "07:58", title: "苗圃进展", description: "小禾确认了这处苗床的安排。", project: "虚构苗圃" }]);
   expect(view(540).detail.summary).toBeNull();
   expect(view(540).detail.items).toHaveLength(1);
 
@@ -207,6 +226,9 @@ test("概述只读已润色正时长段，不随快轮重写，失败也保留�
   expect(overviewCalls()).toHaveLength(2);
   await round(615, true);
   expect(overviewCalls()).toHaveLength(3);
+  // 2026-11-22：概述把上午的“配对受阻”当成现状，下午已解决。输入按时刻排，提示写明以最晚的段为准。
+  expect(data(overviewCalls()[2]!).map((a: { start: string }) => a.start)).toEqual(["07:58", "08:53"]);
+  expect(overviewCalls()[2]!.system).toContain("同一件事以最晚的段为准");
   await round(675, true);
   expect(overviewCalls()).toHaveLength(3);
 });

@@ -100,10 +100,12 @@ struct TimelineSegmentRow: View {
     }
   }
 
-  private var description: some View {
-    Text(item.description).font(.system(size: TextSize.body))
-      .lineSpacing(TextSize.lineSpacing(TextSize.body) + 2)
-      .foregroundStyle(Palette.readingBody)
+  @ViewBuilder private var description: some View {
+    if !item.description.isEmpty {
+      Text(item.description).font(.system(size: TextSize.body))
+        .lineSpacing(TextSize.lineSpacing(TextSize.body) + 2)
+        .foregroundStyle(Palette.readingBody)
+    }
   }
 
   @ViewBuilder private var projectLabel: some View {

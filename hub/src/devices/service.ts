@@ -65,6 +65,7 @@ export class DeviceService {
   }
 
   get open() { return this.listener !== undefined; }
+  get lanPort() { return this.port; }
   private get sql() { return this.hub.db; }
   private get name() { return this.deps.name ?? computerName(); }
   private get addresses() { return [...new Set((this.deps.addresses ?? ipv4)())].map(ip => `${ip}:${this.port}`); }
