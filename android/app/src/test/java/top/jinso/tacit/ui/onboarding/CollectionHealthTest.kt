@@ -42,10 +42,10 @@ class CollectionHealthTest {
         assertEquals(RecoveryAction.AUDIO, recoveryIssues(stopped.copy(audioCaptureWanted = true)).single().action)
     }
 
-    @Test fun `audio stopped or cold process gets explicit manual recovery`() {
+    @Test fun `audio stopped or cold process says opening Tacit resumes it`() {
         val issue = recoveryIssues(ready.copy(audioRunning = false)).single()
         assertEquals(RecoveryAction.AUDIO, issue.action)
-        assertTrue(issue.detail.contains("手动开始"))
+        assertTrue(issue.detail.contains("打开 Tacit"))
         assertFalse(issue.title.contains("系统停止")) // We do not know why it stopped.
     }
 

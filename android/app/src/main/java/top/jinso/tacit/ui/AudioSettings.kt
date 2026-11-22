@@ -52,9 +52,10 @@ import java.util.concurrent.CompletableFuture
             while (true) { state = audio.state(); preparation = audio.modelPreparation(); delay(250) }
         }
     }
-    SectionLabel("语音模型")
     GroupCard {
-        SettingsRow(if (state.modelsReady) "已就绪" else "未安装", "共 279.8 MB，在手机上转写")
+        // Installed is the normal case; only a missing model gets words.
+        SettingsRow("语音模型", status = if (state.modelsReady) null else "未安装，下载后在手机上转写",
+            problem = !state.modelsReady, value = "279.8 MB")
         GroupDivider()
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (preparation.busy) {
@@ -159,11 +160,9 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
         } else {
             val named = current.filter { !it.ignored && (it.isMe || !it.name.isNullOrBlank()) }
             val ignored = current.filter { it.ignored }
-            if (named.isEmpty()) {
-                SettingsRow("尚未确认你的声音", "录到清晰的说话声后，可以在录音页确认。")
-                GroupDivider()
-            }
-            named.forEach { speaker ->
+            if (named.isEmpty()) SettingsRow("尚未确认你的声音", "录到清晰的说话声后，可以在首页确认。")
+            named.forEachIndexed { index, speaker ->
+                if (index > 0) GroupDivider()
                 SettingsRow(if (speaker.isMe) "我" else speaker.name.orEmpty()) {
                     Row {
                         SpeakerPlay(speaker, !busy) { work({ audio.playSample(speaker.id) }, "正在试听", update = false) }
@@ -176,16 +175,19 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
                         }, enabled = !busy)
                     }
                 }
-                GroupDivider()
             }
-            SettingsRow("已忽略的声音", value = "${ignored.size} 个",
-                expanded = expanded, onClick = if (ignored.isNotEmpty()) {{ expanded = !expanded }} else null)
-            if (expanded) ignored.forEachIndexed { index, speaker ->
+            // No ignored voices is the normal case, not a row.
+            if (ignored.isNotEmpty()) {
                 GroupDivider()
-                SettingsRow(speaker.name ?: "声音 ${index + 1}") {
-                    Row {
-                        SpeakerPlay(speaker, !busy) { work({ audio.playSample(speaker.id) }, "正在试听", update = false) }
-                        TextAction("恢复", { work({ audio.setIgnored(speaker.id, false) }, "已恢复这个声音") }, enabled = !busy)
+                SettingsRow("已忽略的声音", value = "${ignored.size} 个",
+                    expanded = expanded, onClick = { expanded = !expanded })
+                if (expanded) ignored.forEachIndexed { index, speaker ->
+                    GroupDivider()
+                    SettingsRow(speaker.name ?: "声音 ${index + 1}") {
+                        Row {
+                            SpeakerPlay(speaker, !busy) { work({ audio.playSample(speaker.id) }, "正在试听", update = false) }
+                            TextAction("恢复", { work({ audio.setIgnored(speaker.id, false) }, "已恢复这个声音") }, enabled = !busy)
+                        }
                     }
                 }
             }

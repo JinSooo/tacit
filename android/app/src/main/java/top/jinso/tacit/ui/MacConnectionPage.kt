@@ -84,22 +84,28 @@ import top.jinso.tacit.ui.components.*
     val connected = current?.name != null && !current.removed
     if (connected) {
         GroupCard {
-            SettingsRow(current.name.orEmpty())
-            GroupDivider()
-            SettingsRow("上次同步", value = if (current.lastSync == 0L) "尚未同步" else date(current.lastSync, "M 月 d 日 HH:mm"))
-            GroupDivider()
-            SettingsRow("待发送", value = "${current.pending} 条")
-            GroupDivider()
-            val rejected = current.rejected.values.sum()
-            SettingsRow("被拒", value = "$rejected 条",
-                expanded = expanded, onClick = if (rejected > 0) {{ expanded = !expanded }} else null)
-            if (expanded) current.rejected.filterKeys(String::isNotEmpty).forEach { (reason, count) ->
+            SettingsRow(current.name.orEmpty(),
+                status = if (current.lastSync == 0L) "尚未同步" else date(current.lastSync, "M 月 d 日 HH:mm") + " 同步")
+            // Zero waiting and zero rejected is the normal case, not news.
+            if (current.pending > 0) {
                 GroupDivider()
-                SettingsRow(reason, value = "$count 条")
+                SettingsRow("待发送", value = "${current.pending} 条")
             }
-        }
-        GroupCard {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val rejected = current.rejected.values.sum()
+            if (rejected > 0) {
+                GroupDivider()
+                SettingsRow("被拒", value = "$rejected 条", problem = true,
+                    expanded = expanded, onClick = { expanded = !expanded })
+                if (expanded) current.rejected.filterKeys(String::isNotEmpty).forEach { (reason, count) ->
+                    GroupDivider()
+                    SettingsRow(reason, value = "$count 条")
+                }
+            }
+            GroupDivider()
+            SettingsRow("Mac 地址", value = current.manual.ifBlank { "自动" }, expanded = manualOpen,
+                onClick = { manualOpen = !manualOpen })
+            if (manualOpen) Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MacAddressField(displayAddress, { address = it }, busy)
                 if (displayAddress != current.manual) {
                     TonalButton("保存地址", { action { app.sync.updateManual(displayAddress); address = null } }, enabled = !busy)

@@ -3,14 +3,11 @@ package top.jinso.tacit.ui
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStoreOwner
@@ -26,9 +23,6 @@ import top.jinso.tacit.sync.MacStatus
 import top.jinso.tacit.ui.components.*
 import top.jinso.tacit.ui.onboarding.*
 
-private const val RECORDING_TAB = 0
-private const val SETTINGS_TAB = 1
-
 @Composable
 fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     val scope = rememberCoroutineScope()
@@ -36,7 +30,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     val reading = remember(activity) { ViewModelProvider(activity)[ReadingModel::class.java] }
     var vault by remember { mutableStateOf<Vault?>(null) }
     var locked by remember { mutableStateOf(false) }
-    var tab by rememberSaveable { mutableIntStateOf(RECORDING_TAB) }
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var hubRoute by rememberSaveable { mutableStateOf<String?>(null) }
     var healthRefresh by remember { mutableIntStateOf(0) }
     val health = rememberCollectionHealth(app, resumed, healthRefresh)
@@ -47,7 +41,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     fun notify(text: String) { scope.launch { snackbar.showSnackbar(text) } }
     fun settings(route: String?) {
         hubRoute = route
-        tab = SETTINGS_TAB
+        settingsOpen = true
     }
     fun back() {
         if (detail != null) reading.detail = null else reading.conversation = emptyList()
@@ -58,40 +52,17 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     }
     val open = detail != null || conversation.isNotEmpty()
     BackHandler(open) { back() }
-    val showTabs = !open && (tab != SETTINGS_TAB || hubRoute == null)
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = tacitColors.paper,
         contentWindowInsets = WindowInsets.safeDrawing,
-        bottomBar = {
-            if (showTabs) {
-                Column {
-                    GroupDivider()
-                    NavigationBar(containerColor = tacitColors.paper, tonalElevation = 0.dp) {
-                        listOf("录音" to Icons.Outlined.Mic, "设置" to Icons.Outlined.Settings)
-                            .forEachIndexed { index, (name, icon) ->
-                                NavigationBarItem(
-                                    selected = tab == index, onClick = { tab = index },
-                                    icon = { Icon(icon, null) },
-                                    label = { Text(name, fontWeight = if (tab == index) FontWeight.Medium else FontWeight.Normal) },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = tacitColors.accent, selectedTextColor = tacitColors.ink,
-                                        indicatorColor = tacitColors.accentContainer,
-                                        unselectedIconColor = tacitColors.muted, unselectedTextColor = tacitColors.muted,
-                                    ),
-                                )
-                            }
-                    }
-                }
-            }
-        },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
             val store = vault
             val recovery: @Composable () -> Unit = {
                 if (health != null) CollectionRecoveryNotice(
-                    health, { settings(Sources.AUDIO) }, { tab = RECORDING_TAB }, ::notify,
-                    onAudioPage = tab == RECORDING_TAB,
+                    health, { settings(Sources.AUDIO) }, { settingsOpen = false }, ::notify,
+                    onAudioPage = !settingsOpen,
                 )
             }
             when {
@@ -117,19 +88,20 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                     },
                 )
                 conversation.isNotEmpty() -> ConversationDetail(conversation, app, store, ::back) { reading.detail = it }
-                tab == RECORDING_TAB -> {
-                    val synced = mac?.status?.let {
+                !settingsOpen -> {
+                    // A healthy connection is the default, and a failed sync away from home just waits for the Mac;
+                    // the recording page only names a connection that needs the user.
+                    val macProblem = mac?.status?.let {
                         when {
-                            it.removed -> "已在 Mac 上移除"
+                            it.removed -> "已在 Mac 上移除，需重新连接"
                             it.name == null -> "未连接 Mac"
-                            it.lastSync == 0L -> "尚未同步到 Mac"
-                            else -> "${syncAge(it.lastSync)}同步到 Mac"
+                            else -> null
                         }
                     }
-                    AudioPage(app, resumed, ::notify, ::settings, { reading.conversation = it }, mac?.retentionDays, synced, recovery)
+                    AudioPage(app, resumed, ::notify, ::settings, { reading.conversation = it }, macProblem, recovery)
                 }
                 else -> SettingsPage(
-                    app, resumed, ::notify, hubRoute, { hubRoute = it }, { tab = RECORDING_TAB },
+                    app, resumed, ::notify, hubRoute, { hubRoute = it }, { settingsOpen = false; hubRoute = null },
                     health, mac?.status, mac?.retentionDays, { healthRefresh++ },
                 )
             }
