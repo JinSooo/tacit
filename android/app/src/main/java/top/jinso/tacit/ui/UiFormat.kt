@@ -1,10 +1,8 @@
 package top.jinso.tacit.ui
 
-import top.jinso.tacit.TacitApp
 import top.jinso.tacit.core.HistoryRecord
 import top.jinso.tacit.core.readableTranscript
 import top.jinso.tacit.sources.Sources
-import top.jinso.tacit.ui.onboarding.CollectionHealth
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -17,8 +15,10 @@ internal fun sourceName(source: String): String = when (source) {
     Sources.NOTE -> "补写"
     Sources.CORRECTION -> "修正"
     Sources.AUDIO -> "录音"
-    "system.pause" -> "采集状态"
     // Historical labels for records still visible after an upgrade.
+    Sources.NOTIFICATION -> "聊天通知"
+    Sources.USAGE -> "应用使用"
+    "system.pause" -> "采集状态"
     "android.share" -> "分享"
     "android.screen" -> "屏幕文字"
     "android.sms" -> "短信"
@@ -28,7 +28,7 @@ internal fun sourceName(source: String): String = when (source) {
     "android.files" -> "文件"
     "android.location" -> "位置"
     "android.recording_folder" -> "录音目录"
-    else -> Sources.descriptors.firstOrNull { it.id == source }?.title ?: source
+    else -> source
 }
 
 internal fun durationLabel(millis: Long): String {
@@ -58,11 +58,6 @@ internal fun firstSentence(raw: String): String {
 /** First sentence across a conversation's records in time order. */
 internal fun firstSentence(records: List<top.jinso.tacit.core.HistoryRecord>): String =
     records.sortedBy { it.start }.asSequence().map { firstSentence(it.body) }.firstOrNull(String::isNotEmpty).orEmpty()
-
-internal fun enabledSourceCount(app: TacitApp, health: CollectionHealth?): Int {
-    val sources = health?.sources?.count { it.enabled } ?: Sources.descriptors.count { app.prefs.enabled(it.id) }
-    return sources + if (health?.audioEnabled ?: app.prefs.enabled(Sources.AUDIO)) 1 else 0
-}
 
 internal fun syncAge(lastSync: Long, now: Long = System.currentTimeMillis()): String {
     val elapsed = (now - lastSync).coerceAtLeast(0)

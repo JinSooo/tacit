@@ -50,7 +50,7 @@ internal fun ConversationDetail(
             val start = current.first().first.start
             val end = current.maxOf { (record, _) -> record.end ?: record.start }
             val private = current.any { (record, _) -> record.sensitivity == "private" }
-            DetailInfo(Sources.AUDIO, null, start, end, private)
+            DetailInfo(Sources.AUDIO, start, end, private)
             DetailTitle(conversationTitle(private))
             val body = current.joinToString("\n\n") { it.second }.trim()
             if (body.isBlank()) Caption("这场对话没有可显示的完整转写。")

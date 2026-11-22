@@ -37,7 +37,7 @@ internal val correctionOrder = compareBy<HistoryRecord> { it.start }.thenBy { it
 @Composable
 internal fun RecordDetail(
     record: HistoryRecord, vault: Vault, app: TacitApp, onBack: () -> Unit, notify: (String) -> Unit,
-    onSelect: (HistoryRecord) -> Unit, onCorrect: (HistoryRecord) -> Unit, onDelete: (HistoryRecord) -> Unit,
+    onSelect: (HistoryRecord) -> Unit, onDelete: (HistoryRecord) -> Unit,
 ) = key(record.id) {
     var deleting by remember { mutableStateOf(false) }
     var raw by rememberSaveable { mutableStateOf(false) }
@@ -74,7 +74,7 @@ internal fun RecordDetail(
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp),
         ) {
-            DetailInfo(record.source, record.app, record.start, record.end, record.sensitivity == "private", includeYear = true)
+            DetailInfo(record.source, record.start, record.end, record.sensitivity == "private", includeYear = true)
             DetailTitle(record.title)
             if (body.isNotBlank()) ReadingBody(body, isAudio)
             else Caption("这一段没有可显示的完整内容。")
@@ -97,9 +97,8 @@ internal fun RecordDetail(
         GroupDivider()
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.End,
         ) {
-            TextAction("修正", { onCorrect(record) }, color = tacitColors.ink, icon = Icons.Outlined.Edit)
             TextAction("删除", { deleting = true }, color = tacitColors.attention)
         }
     }
@@ -122,11 +121,11 @@ internal fun EmptyState(title: String, message: String) {
 }
 
 @Composable
-internal fun DetailInfo(source: String, app: String?, start: Long, end: Long?, private: Boolean, includeYear: Boolean = false) {
+internal fun DetailInfo(source: String, start: Long, end: Long?, private: Boolean, includeYear: Boolean = false) {
     val startLabel = date(start, if (includeYear) "yyyy 年 M 月 d 日 HH:mm" else "M 月 d 日 HH:mm")
     val label = if (end == null) startLabel else "$startLabel–${date(end, "HH:mm")} · ${durationLabel(end - start)}"
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        SourceIcon(source, app, 20.dp)
+        SourceIcon(source, 20.dp)
         Caption("${sourceName(source)} · $label", Modifier.weight(1f, fill = false))
         if (private) PrivacyLock()
     }

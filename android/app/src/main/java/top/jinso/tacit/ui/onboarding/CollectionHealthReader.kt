@@ -20,16 +20,10 @@ import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.AUDIO_SOURCE
 import top.jinso.tacit.audio.AudioRuntime
-import top.jinso.tacit.sources.NotificationSource
-import top.jinso.tacit.sources.Sources
 
 /** Read off main: initializing the existing audio runtime may open encrypted local storage. */
 internal fun readCollectionHealth(app: TacitApp): CollectionHealth {
     fun has(permission: String) = app.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
-    val sources = Sources.descriptors.map { source ->
-        val granted = Sources.granted(app, source.id)
-        SourceHealth(source.id, source.title, app.prefs.enabled(source.id), granted, if (granted) "系统权限已允许" else "系统权限尚未允许", app.prefs.status(source.id))
-    }
     val audioEnabled = app.prefs.enabled(AUDIO_SOURCE)
     val runtime = if (audioEnabled) runCatching { AudioRuntime.get(app) }.getOrNull() else null
     val notifications = app.getSystemService(NotificationManager::class.java)
@@ -40,7 +34,6 @@ internal fun readCollectionHealth(app: TacitApp): CollectionHealth {
     }.getOrDefault(ChannelAccess.UNKNOWN)
     val power = app.getSystemService(PowerManager::class.java)
     return CollectionHealth(
-        paused = app.prefs.paused, sources = sources,
         microphoneGranted = has(Manifest.permission.RECORD_AUDIO), audioEnabled = audioEnabled,
         audioCaptureWanted = app.prefs.audioCaptureWanted,
         audioRunning = if (audioEnabled) runtime?.recording else false,
@@ -51,8 +44,6 @@ internal fun readCollectionHealth(app: TacitApp): CollectionHealth {
         batteryExempt = runCatching { power.isIgnoringBatteryOptimizations(app.packageName) }.getOrNull(),
         backgroundRestricted = runCatching { app.getSystemService(ActivityManager::class.java).isBackgroundRestricted }.getOrNull(),
         powerSave = runCatching { power.isPowerSaveMode }.getOrNull(),
-        notificationListenerConnected = if (!app.prefs.paused && sources.any { it.id == Sources.NOTIFICATION && it.enabled && it.granted })
-            NotificationSource.connected else null,
     )
 }
 

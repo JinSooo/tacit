@@ -54,8 +54,9 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
     fun ingest(draft: Draft): String? = ingest(draft, ZoneOffset.UTC)
 
     @Synchronized internal fun ingest(draft: Draft, offset: ZoneOffset): String? {
-        val manual = draft.source in setOf(Sources.NOTE, Sources.CORRECTION, "system.pause")
-        if (!manual && (draft.source !in Sources.UPLOADABLE || !prefs.allows(draft.source, draft.app))) return null
+        // 手机只采集录音；补写和修正是用户或 Mac 写的。其他来源只剩旧版本留下的记录，不再接收新的。
+        val manual = draft.source in setOf(Sources.NOTE, Sources.CORRECTION)
+        if (!manual && (draft.source != Sources.AUDIO || !prefs.enabled(draft.source))) return null
         require(draft.source.matches(Regex("[a-z0-9_]+(\\.[a-z0-9_]+)+")))
         require(draft.body.length <= 200000 && draft.title.isNotBlank())
         require(draft.end == null || draft.end >= draft.start)

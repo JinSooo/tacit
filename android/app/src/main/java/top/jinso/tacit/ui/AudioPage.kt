@@ -46,6 +46,7 @@ import java.util.concurrent.CompletableFuture
     onOpenSettings: (String) -> Unit,
     onConversation: (List<HistoryRecord>) -> Unit,
     macDays: Int?,
+    synced: String?,
     recovery: @Composable () -> Unit,
 ) {
     val activity=LocalActivity.current ?: return
@@ -149,6 +150,10 @@ import java.util.concurrent.CompletableFuture
                     Caption("·", color = tacitColors.faint)
                     AudioChip(if (macDays != null) "保留期随 Mac" else "录音保留 ${retentionLabel(app.prefs.retentionDays)}") {
                         onOpenSettings(SettingsRoutes.RETENTION)
+                    }
+                    if (synced != null) {
+                        Caption("·", color = tacitColors.faint)
+                        AudioChip(synced) { onOpenSettings(SettingsRoutes.MAC) }
                     }
                 }
                 if (busy) ProgressLine()

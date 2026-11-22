@@ -279,9 +279,9 @@ internal class AudioRuntime private constructor(val context: Context) {
     @Volatile var message = "录音未启动"
     private var engine: AcceleratedSpeechEngine? = null
     private var player: AudioTrack? = null
-    fun allowed() = app.prefs.allows(AUDIO_SOURCE)
+    fun allowed() = app.prefs.enabled(AUDIO_SOURCE)
     fun invalidatePolicy() { policyRevisions.incrementAndGet() }
-    fun report(text: String) { message = text; app.prefs.setStatus(AUDIO_SOURCE, text); changed() }
+    fun report(text: String) { message = text; changed() }
     fun <T> submit(block: () -> T): CompletableFuture<T> = CompletableFuture.supplyAsync({
         try { block() } catch (e: Throwable) { report("本地音频处理失败，请检查模型、空间和权限后重试"); throw e }
     }, worker)

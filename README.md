@@ -158,7 +158,7 @@ Tacit 不保存截图，也不做画面回放。它关心的是“你做了什�
 <details>
 <summary><b>支持 Intel Mac、Windows 或手机吗？</b></summary>
 
-目前只有 Apple 芯片 Mac 版。Android（录音、聊天通知、应用使用时长，汇总到 Mac）排在 Mac 版验收完成之后。
+目前只有 Apple 芯片 Mac 版。Android（只录音，汇总到 Mac）排在 Mac 版验收完成之后。
 
 </details>
 

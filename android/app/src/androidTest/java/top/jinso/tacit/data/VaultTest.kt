@@ -12,7 +12,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import top.jinso.tacit.core.Draft
 import top.jinso.tacit.sources.Sources
-import top.jinso.tacit.sources.WECHAT_PACKAGE
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import java.io.File
 import java.util.UUID
@@ -38,11 +37,11 @@ class VaultTest {
         created.clear()
     }
     @Test fun encryptedRoundTripRedactionDedupCorrectionAndTrueDelete() {
-        val context=isolated();val prefs=Preferences(context);prefs.setEnabled("android.notification",true)
+        val context=isolated();val prefs=Preferences(context);prefs.setEnabled(Sources.AUDIO,true)
         var vault=Vault(context,prefs)
         try {
             val secret="sk-"+"abcdefghijklmnop1234567890"
-            val draft=Draft("android.notification","test-secret","内容 $secret",sourceRef="repeat",app="test.app")
+            val draft=Draft(Sources.AUDIO,"test-secret","内容 $secret",sourceRef="repeat")
             val id=vault.ingest(draft)!!
             assertEquals(id,vault.ingest(draft))
             assertEquals(id,vault.ingest(draft.copy(body="different retry text")))
@@ -61,14 +60,18 @@ class VaultTest {
             vault.close();vault=Vault(context,prefs);assertEquals(0L,vault.count());assertNull(vault.ingest(draft))
         } finally {vault.close();context.noBackupFilesDir.deleteRecursively()}
     }
-    @Test fun disabledPausedAndBlockedSourcesNeverPersist() {
+    // 手机只录音（0.4.2）：旧版本的聊天通知、应用使用即使开关还开着，也不能再写进新记录。
+    @Test fun onlyEnabledRecordingAndManualRecordsPersist() {
         val context=isolated();val prefs=Preferences(context);val vault=Vault(context,prefs)
         try {
-            val draft=Draft(Sources.USAGE,"title","body",app="test.blocked")
-            assertNull(vault.ingest(draft));prefs.setEnabled(draft.source,true);prefs.paused=true;assertNull(vault.ingest(draft))
-            assertNotNull(vault.ingest(Draft("manual.note","手动","暂停时仍可补写",method="manual")))
-            prefs.paused=false;prefs.blockedApps=setOf("test.blocked");assertNull(vault.ingest(draft))
-            assertEquals(1L,vault.count())
+            val audio=Draft(Sources.AUDIO,"title","body")
+            assertNull(vault.ingest(audio));prefs.setEnabled(Sources.AUDIO,true);assertNotNull(vault.ingest(audio))
+            for (legacy in listOf(Sources.NOTIFICATION, Sources.USAGE)) {
+                prefs.setEnabled(legacy,true)
+                assertNull(vault.ingest(Draft(legacy,"旧来源","不再采集",app="test.app")))
+            }
+            assertNotNull(vault.ingest(Draft("manual.note","手动","手动记录",method="manual")))
+            assertEquals(2L,vault.count())
         } finally {vault.close();context.noBackupFilesDir.deleteRecursively()}
     }
     @Test fun missingWrappedKeyDoesNotReplaceExistingDatabase() {
@@ -113,41 +116,18 @@ class VaultTest {
             assertTrue(vault.list(source="android.audio").isEmpty())
             assertEquals(listOf(fix,latest),vault.corrections(original).map{it.id})
             assertEquals(listOf("manual.correction", "manual.note"),vault.sources())
-            prefs.setPause(true, System.currentTimeMillis()-1)
-            assertFalse(prefs.paused)
-            prefs.setPause(true, 0)
-            assertTrue(prefs.paused)
-            assertNotNull(vault.ingest(Draft("system.pause","采集已暂停","暂停期间不自动记录。",method="manual")))
         } finally {vault.close();context.noBackupFilesDir.deleteRecursively()}
-    }
-
-    @Test fun chatSelectionDefaultsToWeChatAndExplicitEmptySelectionSurvivesReopen() {
-        val context = isolated()
-        val prefs = Preferences(context)
-        prefs.setEnabled(Sources.NOTIFICATION, true)
-        assertEquals(setOf(WECHAT_PACKAGE), prefs.chatApps)
-        assertTrue(prefs.allowsChatNotification(WECHAT_PACKAGE))
-        assertFalse(prefs.allowsChatNotification("test.chat"))
-        prefs.chatApps = setOf("test.chat")
-        assertTrue(prefs.allowsChatNotification("test.chat"))
-        assertFalse(prefs.allowsChatNotification(WECHAT_PACKAGE))
-        prefs.blockedApps = setOf("test.chat")
-        assertFalse(prefs.allowsChatNotification("test.chat"))
-        prefs.chatApps = emptySet()
-        assertTrue(Preferences(context).chatApps.isEmpty())
-        context.noBackupFilesDir.deleteRecursively()
     }
 
     @Test fun legacyRecordsRemainLocalAndTheirCorrectionsCannotEnterSync() {
         val context = isolated()
         val prefs = Preferences(context)
-        prefs.setEnabled(Sources.NOTIFICATION, true)
         prefs.setEnabled(Sources.AUDIO, true)
         try {
             val (oldChat, oldAudio, removed) = Vault(context, prefs).let { vault ->
                 try {
                     Triple(
-                        vault.ingest(Draft(Sources.NOTIFICATION, "旧通知", "旧正文"))!!,
+                        vault.ingest(Draft(Sources.AUDIO, "旧通知", "旧正文", sourceRef = "old-chat"))!!,
                         vault.ingest(Draft(Sources.AUDIO, "旧录音", "旧转写"))!!,
                         vault.ingest(Draft(Sources.NOTE, "旧屏幕记录", "仅本地"))!!,
                     )
@@ -159,6 +139,7 @@ class VaultTest {
                 SQLiteDatabase.openOrCreateDatabase(file, key, null, null).use { db ->
                     db.execSQL("ALTER TABLE records DROP COLUMN capture_scope")
                     db.execSQL("UPDATE records SET source = 'android.screen' WHERE id = ?", arrayOf(removed))
+                    db.execSQL("UPDATE records SET source = '${Sources.NOTIFICATION}' WHERE id = ?", arrayOf(oldChat))
                 }
             } finally { key.fill(0) }
             val vault = Vault(context, prefs)
@@ -173,7 +154,7 @@ class VaultTest {
                 }
                 prefs.setEnabled("android.screen", true)
                 assertNull(vault.ingest(Draft("android.screen", "旧来源", "不可继续采集")))
-                val current = vault.ingest(Draft(Sources.NOTIFICATION, "项目组", "小李：新消息", sourceRef = "new-chat"))!!
+                val current = vault.ingest(Draft(Sources.AUDIO, "一场对话", "我：新录音", sourceRef = "new-audio"))!!
                 val correction = vault.ingest(Draft(Sources.CORRECTION, "修正", "更新", corrects = current))!!
                 assertEquals(vault.wire(current), vault.uploadableWire(current))
                 assertEquals(vault.wire(correction), vault.uploadableWire(correction))
