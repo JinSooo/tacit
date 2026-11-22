@@ -13,10 +13,13 @@ final class HubAPI: @unchecked Sendable {
   var base: URL { baseURL() }
   private let tokenProvider: () -> String?
   private let session: URLSession
+  private let busyRetryDelays: [TimeInterval]
 
-  init(base: @escaping () -> URL, token: @escaping () -> String?, configuration: URLSessionConfiguration = .ephemeral) {
+  init(base: @escaping () -> URL, token: @escaping () -> String?, configuration: URLSessionConfiguration = .ephemeral,
+       busyRetryDelays: [TimeInterval] = [1, 2]) {
     self.baseURL = base
     self.tokenProvider = token
+    self.busyRetryDelays = busyRetryDelays
     configuration.timeoutIntervalForRequest = 20
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
     session = URLSession(configuration: configuration)
@@ -39,11 +42,17 @@ final class HubAPI: @unchecked Sendable {
       r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
     if let body { r.httpBody = body; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-    let data: Data, response: URLResponse
-    do { (data, response) = try await session.data(for: r) }
-    catch let e as URLError where e.code == .cancelled { throw CancellationError() }
-    catch { throw HubError(message: "连不上后台服务：\(error.localizedDescription)", status: 0) }
-    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    var data = Data(), status = 0
+    // 503 表示撞上整理进程的写锁、整笔已回滚，重试不会重复写入；稍等再试，不让删除这类操作直接失败。
+    for wait in busyRetryDelays.map(Optional.some) + [nil] {
+      let response: URLResponse
+      do { (data, response) = try await session.data(for: r) }
+      catch let e as URLError where e.code == .cancelled { throw CancellationError() }
+      catch { throw HubError(message: "连不上后台服务：\(error.localizedDescription)", status: 0) }
+      status = (response as? HTTPURLResponse)?.statusCode ?? 0
+      guard status == 503, let wait else { break }
+      try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+    }
     guard (200..<300).contains(status) else {
       let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
       throw HubError(message: msg ?? "请求失败（\(status)）", status: status)
