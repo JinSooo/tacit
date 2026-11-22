@@ -27,7 +27,8 @@ internal fun audioPublication(clip: JSONObject, utterances: List<JSONObject>, zo
     val offset = zone.rules.getOffset(Instant.ofEpochMilli(start))
     val body = utterances.mapNotNull { utterance ->
         val text = utterance.optString("text").trim()
-        if (text.isEmpty()) return@mapNotNull null
+        // Recognition of noise often yields only punctuation such as "。"; it says nothing, so it gets no line.
+        if (text.none(Char::isLetterOrDigit)) return@mapNotNull null
         val at = start + utterance.getInt("start") * 1000L / SAMPLE_RATE
         val clock = Instant.ofEpochMilli(at).atOffset(offset).format(transcriptClock)
         val label = speakerLabel(utterance.getString("speaker")).replace('：', ':')

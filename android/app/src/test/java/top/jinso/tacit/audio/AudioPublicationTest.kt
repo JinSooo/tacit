@@ -22,6 +22,9 @@ class AudioPublicationTest {
             row("self", 4_000, "周五交第一版。"),
             row("named", 20_000, "我来核对清单。"),
             row("unknown", 38_400, "我会准备投影。"),
+            // Reported case: about half of the uploaded lines were a lone "。" from recognized noise.
+            row("unknown", 40_000, "。"),
+            row("unknown", 41_000, " . ？"),
         )
 
         val publication = requireNotNull(audioPublication(clip, rows, ZoneId.of("Asia/Tokyo")) {
@@ -34,5 +37,11 @@ class AudioPublicationTest {
             "[23:59:59] 我：周五交第一版。\n[00:00:00] 小周：我来核对清单。\n[00:00:01] 对方 3：我会准备投影。",
             publication.body,
         )
+    }
+
+    @Test fun clipWithOnlyPunctuationPublishesNothing() {
+        val clip = JSONObject().put("id", "clip").put("start", 0L).put("samples", SAMPLE_RATE)
+        val rows = listOf(JSONObject().put("speaker", "a").put("start", 0).put("text", "。"))
+        assertEquals(null, audioPublication(clip, rows, ZoneId.of("Asia/Tokyo")) { "对方 1" })
     }
 }
