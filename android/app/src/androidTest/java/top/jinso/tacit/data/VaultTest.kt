@@ -19,13 +19,23 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class VaultTest {
+    private val base get()=InstrumentationRegistry.getInstrumentation().targetContext
+    private val created=mutableListOf<Pair<String,MutableSet<String>>>()
     private fun isolated():Context {
-        val base=InstrumentationRegistry.getInstrumentation().targetContext
         val unique="test-"+UUID.randomUUID()
+        val names=mutableSetOf<String>().also { created+=unique to it }
         return object:ContextWrapper(base) {
             override fun getNoBackupFilesDir():File=File(base.noBackupFilesDir,unique).apply{mkdirs()}
-            override fun getSharedPreferences(name:String,mode:Int)=base.getSharedPreferences("$unique-$name",mode)
+            override fun getSharedPreferences(name:String,mode:Int)=base.getSharedPreferences("$unique-$name".also(names::add),mode)
         }
+    }
+    // Isolated stores must not pile up in the real app's data directory (110 were left on a test phone).
+    @org.junit.After fun removeIsolatedStores() {
+        for ((unique,names) in created) {
+            File(base.noBackupFilesDir,unique).deleteRecursively()
+            names.forEach(base::deleteSharedPreferences)
+        }
+        created.clear()
     }
     @Test fun encryptedRoundTripRedactionDedupCorrectionAndTrueDelete() {
         val context=isolated();val prefs=Preferences(context);prefs.setEnabled("android.notification",true)

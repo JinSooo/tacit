@@ -14,6 +14,8 @@ data class HistoryRecord(
     val id: String, val source: String, val title: String, val body: String,
     val start: Long, val end: Long?, val app: String?, val sensitivity: String,
     val corrects: String?, val redactions: Int,
+    /** Display only: the list shows this record with its latest correction's text. */
+    val corrected: Boolean = false,
 )
 object Ids {
     private val random = SecureRandom()

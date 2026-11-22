@@ -101,7 +101,7 @@ internal fun HistoryPage(
         }
     }
     val records by produceState<List<HistoryRecord>?>(null, vault, query, filter, revision, limit, from, until) {
-        value = withContext(Dispatchers.IO) { vault.list(query, filter, limit, from, until) }
+        value = withContext(Dispatchers.IO) { foldCorrections(vault.list(query, filter, limit, from, until)) }
     }
     val days = remember(records, conversations, zone) {
         val grouped = groupActivities(records.orEmpty(), conversations).flatMap { group ->
@@ -257,7 +257,7 @@ private fun TimelineRow(group: ActivityGroup, onSelect: (HistoryRecord) -> Unit,
     }
     val preview = remember(group) {
         when {
-            isAudio -> firstSentence(group.records.minBy { it.start }.body)
+            isAudio -> firstSentence(group.records)
             isPrimary -> record.body
             else -> ""
         }
@@ -294,7 +294,7 @@ private fun TimelineRow(group: ActivityGroup, onSelect: (HistoryRecord) -> Unit,
                     if (isUsage) apps.take(3).forEach {
                         SourceIcon(it.record.source, it.record.app, description = it.record.title)
                     } else SourceIcon(record.source, record.app)
-                    if (record.corrects != null || record.source == Sources.CORRECTION) Caption("修正")
+                    if (record.corrected || record.corrects != null || record.source == Sources.CORRECTION) Caption("修正")
                     if (isPrivate) PrivacyLock()
                     if (canExpand) Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                         null, Modifier.size(16.dp), tint = tacitColors.muted)

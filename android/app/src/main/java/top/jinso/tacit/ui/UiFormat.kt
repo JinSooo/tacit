@@ -45,12 +45,19 @@ internal fun conversationDuration(records: List<HistoryRecord>) =
 
 internal fun conversationTitle(private: Boolean) = if (private) "一场私密对话" else "一场对话"
 
+private val speakerPrefix = Regex("^(?:(?:我|对方(?:[ 　]*[0-9]+)?)[：:]|[^：]+：)\\s*")
+
+/** The first line that says something; a line of only punctuation (recognized noise) is skipped. */
 internal fun firstSentence(raw: String): String {
-    val first = readableTranscript(raw).lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
-    val body = first.replaceFirst(Regex("^(?:(?:我|对方(?:[ 　]*[0-9]+)?)[：:]|[^：]+：)\\s*"), "")
+    val body = readableTranscript(raw).lineSequence().map { it.trim().replaceFirst(speakerPrefix, "") }
+        .firstOrNull { line -> line.any(Char::isLetterOrDigit) }.orEmpty()
     val ending = body.indexOfFirst { it in "。！？!?…" }
     return if (ending < 0) body else body.take(ending + 1)
 }
+
+/** First sentence across a conversation's records in time order. */
+internal fun firstSentence(records: List<top.jinso.tacit.core.HistoryRecord>): String =
+    records.sortedBy { it.start }.asSequence().map { firstSentence(it.body) }.firstOrNull(String::isNotEmpty).orEmpty()
 
 internal fun enabledSourceCount(app: TacitApp, health: CollectionHealth?): Int {
     val sources = health?.sources?.count { it.enabled } ?: Sources.descriptors.count { app.prefs.enabled(it.id) }

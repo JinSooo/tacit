@@ -14,7 +14,7 @@ internal const val MAC_ME_MIN_SECONDS = 6.0
  * single utterance) that matches the Mac voiceprint. Labels and transcription consent both use this.
  */
 internal fun isMeSpeaker(speaker: JSONObject?, mac: MacVoiceprint?): Boolean {
-    if (speaker == null || speaker.optBoolean("ignored")) return false
+    if (speaker == null || speaker.optBoolean("ignored") || speaker.optBoolean("notMe")) return false
     if (speaker.optBoolean("me")) return true
     if (mac == null || speaker.optDouble("seconds", 0.0) < MAC_ME_MIN_SECONDS) return false
     val center = speaker.vectorOrNull("vector") ?: return false
@@ -166,9 +166,11 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
     fun markMe(id: String) {
         val target = speaker(id)
         store.speakers().forEach { it.put("me", it === target) }
+        target.remove("notMe")
         target.put("ignored", false); store.saveSpeakers(store.speakers())
     }
-    fun unmarkMe(id: String) { store.saveSpeakers(listOf(speaker(id).put("me", false))) }
+    /** Also overrides a Mac voiceprint match, so "this is not me" sticks for a voice the Mac claimed. */
+    fun unmarkMe(id: String) { store.saveSpeakers(listOf(speaker(id).put("me", false).put("notMe", true))) }
     fun ignore(id: String, ignored: Boolean) {
         store.saveSpeakers(listOf(speaker(id).put("ignored", ignored).apply { if (ignored) put("me", false) }))
     }

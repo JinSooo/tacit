@@ -20,5 +20,8 @@ class ReadableTranscriptTest {
         assertEquals("先看清单，周五定稿。", firstSentence(legacy))
         assertEquals("先看清单，周五定稿。", firstSentence(timestamped))
         assertEquals("周五定稿。", firstSentence("对方 1: 周五定稿。"))
+        // Reported case: a conversation previewed as a lone "。" from recognized noise.
+        assertEquals("周五定稿。", firstSentence("[20:20:01] 对方 1：。\n[20:20:05] 我：周五定稿。"))
+        assertEquals("", firstSentence("对方 1：。"))
     }
 }

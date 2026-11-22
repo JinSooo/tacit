@@ -92,6 +92,8 @@ class AudioRecorderService : Service() {
                 // A stop/pause may race the native start. Only a still-wanted, successful start persists intent.
                 if (!running || !runtime.requested || token != runtime.generation || !runtime.allowed()) return
                 runtime.app.prefs.audioCaptureWanted = true
+                // Set the text before the flag: a page that sees "recording" must never show the startup text.
+                runtime.message = "正在录音，音频已加密保存"
                 runtime.recording = true
             }
             runtime.report("正在录音，音频已加密保存")
@@ -152,6 +154,9 @@ class AudioRecorderService : Service() {
                 val tail=segment.copyOf(used)
                 try { runtime.captured(tail,start,token,final=true) } catch (_: Exception) { runtime.report("最后一段录音未能保存") } finally { tail.fill(0) }
             }
+            // Same order on the way out: never "not recording" above a recording-time status.
+            if (runtime.message.startsWith("正在录音") || runtime.message.startsWith("手机正在外放") ||
+                runtime.message.startsWith("麦克风正由")) runtime.message = "录音已停止"
             running = false; runtime.recording = false; runtime.silenced = false
             if (token == runtime.generation) runtime.requested = false
             segment.fill(0); block.fill(0)

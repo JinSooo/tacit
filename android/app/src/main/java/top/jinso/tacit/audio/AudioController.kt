@@ -70,6 +70,9 @@ class AudioController(context: Context) {
     fun renderTranscript(recordId: String, fallbackBody: String): CompletableFuture<String> = runtime.submit {
         synchronized(runtime.lock) { runtime.ledger.render(recordId, fallbackBody, runtime.macVoiceprint()) }
     }
+    fun macVoiceKnown(): CompletableFuture<Boolean> = runtime.submit {
+        synchronized(runtime.lock) { runtime.queries.macVoiceKnown() }
+    }
     fun listSpeakers(includeIgnored: Boolean = false): CompletableFuture<List<AudioSpeaker>> = runtime.submit {
         synchronized(runtime.lock) { runtime.queries.listSpeakers(includeIgnored) }
     }
@@ -130,7 +133,7 @@ internal class AudioRuntime private constructor(val context: Context) {
     val control = Any()
     val store = EncryptedAudioStore(context)
     val ledger = AudioLedger(store)
-    val queries = AudioQueries(store, ledger, ::retentionDays, { sample(it) != null })
+    val queries = AudioQueries(store, ledger, ::retentionDays, { sample(it) != null }, ::macVoiceprint)
 
     fun retentionDays(): Int = macPolicy()?.getInt("retention_days") ?: app.prefs.retentionDays
     private fun macPolicy() = app.vault.syncConnection()?.optJSONObject("audio")

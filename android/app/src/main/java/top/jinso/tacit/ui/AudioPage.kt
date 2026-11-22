@@ -54,6 +54,7 @@ import java.util.concurrent.CompletableFuture
     var rows by remember { mutableStateOf(emptyList<AudioConversationRow>()) }
     var waitingClips by remember { mutableIntStateOf(0) }
     var loaded by remember { mutableStateOf(false) }
+    var macVoice by remember { mutableStateOf(false) }
     var loadFailed by remember { mutableStateOf(false) }
     val includeIgnored = false
     fun work(task: () -> CompletableFuture<Unit>, success: String, after: () -> Unit = {}) {
@@ -92,21 +93,22 @@ import java.util.concurrent.CompletableFuture
             val snapshot = withContext(Dispatchers.IO) {
                     runCatching {
                         val voices = audio.listSpeakers(includeIgnored).get()
+                        val mac = audio.macVoiceKnown().get()
                         val scenes = audio.listConversations().get().sortedByDescending { it.start }
                         val text = scenes.flatMap { it.recordIds }.distinct().mapNotNull { app.vault.get(it) }.associateBy { it.id }
                         val waiting = audio.listClips().get().count { it.conversationId == null && !it.analyzed }
-                        Triple(voices, audioConversationRows(scenes, text), waiting)
+                        Triple(voices to mac, audioConversationRows(scenes, text), waiting)
                     }
                 }
             snapshot.onSuccess { (voices, conversations, waiting) ->
-                speakers = voices; rows = conversations; waitingClips = waiting
+                speakers = voices.first; macVoice = voices.second; rows = conversations; waitingClips = waiting
             }
             loadFailed = snapshot.isFailure
             loaded = true
         } }
     }
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
-    val candidate = if (speakers.any { it.isMe }) null else speakers
+    val candidate = if (macVoice || speakers.any { it.isMe }) null else speakers
         .filter { !it.ignored && it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
     val days = remember(rows) { rows.groupBy { date(it.start, "yyyy-MM-dd") } }
 
@@ -273,8 +275,7 @@ private fun RecordedConversation(scene: AudioConversationRow, onConversation: (L
         Column(Modifier.weight(1f)) {
             if (records.isEmpty()) Text("已保存录音，还没有文字", color = tacitColors.muted)
             else {
-                val first = records.first()
-                Text(firstSentence(first.body).ifBlank { conversationTitle(scene.private) },
+                Text(firstSentence(records).ifBlank { conversationTitle(scene.private) },
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Caption(durationLabel(conversationDuration(records)))
