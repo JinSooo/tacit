@@ -68,7 +68,7 @@ class AudioController(context: Context) {
         synchronized(runtime.lock) { runtime.queries.listConversations() }
     }
     fun renderTranscript(recordId: String, fallbackBody: String): CompletableFuture<String> = runtime.submit {
-        synchronized(runtime.lock) { runtime.ledger.render(recordId, fallbackBody) }
+        synchronized(runtime.lock) { runtime.ledger.render(recordId, fallbackBody, runtime.macVoiceprint()) }
     }
     fun listSpeakers(includeIgnored: Boolean = false): CompletableFuture<List<AudioSpeaker>> = runtime.submit {
         synchronized(runtime.lock) { runtime.queries.listSpeakers(includeIgnored) }
@@ -134,6 +134,8 @@ internal class AudioRuntime private constructor(val context: Context) {
 
     fun retentionDays(): Int = macPolicy()?.getInt("retention_days") ?: app.prefs.retentionDays
     private fun macPolicy() = app.vault.syncConnection()?.optJSONObject("audio")
+    /** Caller holds [lock]. */
+    fun macVoiceprint() = macPolicy()?.optJSONObject("voiceprint")?.voiceprint()
 
     fun applyMacAudio(audio: AudioSync, persist: () -> Unit) {
         synchronized(lock) {
@@ -319,7 +321,7 @@ internal class AudioRuntime private constructor(val context: Context) {
         val (policy, voiceprint) = synchronized(lock) {
             val mac = macPolicy()
             store.prune(mac?.getInt("retention_days") ?: app.prefs.retentionDays)
-            policyRevision to mac?.optJSONObject("voiceprint")?.voiceprint()
+            policyRevision to macVoiceprint()
         }
         if (!allowed()) return
         val dir = models.current() ?: run { report("录音已加密保存，等待准备本地模型"); return }

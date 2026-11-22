@@ -21,6 +21,32 @@ internal data class UsageEvent(val time: Long, val kind: UsageKind, val app: Str
 internal data class UsageInterval(val app: String, val start: Long, val end: Long)
 internal data class UsageScan(val intervals: List<UsageInterval>, val cursor: Long)
 
+/** Leaving an app for less than this and coming back keeps one interval, as on the Mac. */
+internal const val USAGE_BOUNCE_MS = 15_000L
+
+private class UsagePiece(val app: String, val start: Long, var end: Long, val afterBoundary: Boolean)
+
+/**
+ * Only the app and its duration matter: page changes inside one app and short visits elsewhere do not split it.
+ * Blocked apps, the home screen, locks and reboots stay boundaries; nothing is merged across them.
+ */
+private fun mergeUsage(pieces: List<UsagePiece>): List<UsageInterval> {
+    val merged = mutableListOf<UsagePiece>()
+    for (piece in pieces) {
+        val last = merged.lastOrNull()
+        val before = merged.getOrNull(merged.size - 2)
+        when {
+            last != null && !piece.afterBoundary && last.app == piece.app -> last.end = piece.end
+            before != null && last != null && !piece.afterBoundary && !last.afterBoundary &&
+                before.app == piece.app && last.end - last.start < USAGE_BOUNCE_MS -> {
+                merged.removeAt(merged.lastIndex); before.end = piece.end
+            }
+            else -> merged += UsagePiece(piece.app, piece.start, piece.end, piece.afterBoundary)
+        }
+    }
+    return merged.map { UsageInterval(it.app, it.start, it.end) }
+}
+
 /** Replay the unfinished interval next time; never invent an end at the polling boundary. */
 internal fun usageIntervals(events: List<UsageEvent>, from: Long, until: Long): UsageScan {
     require(until >= from)
@@ -28,22 +54,24 @@ internal fun usageIntervals(events: List<UsageEvent>, from: Long, until: Long): 
     var locked = false
     var lockStart: Long? = null
     var previous = from
-    val intervals = mutableListOf<UsageInterval>()
+    var boundary = false
+    val pieces = mutableListOf<UsagePiece>()
     fun finish(time: Long) {
-        active?.let { if (time > it.time) intervals += UsageInterval(it.app, it.time, time) }
+        active?.let { if (time > it.time) { pieces += UsagePiece(it.app, it.time, time, boundary); boundary = false } }
         active = null
     }
+    fun boundary(time: Long) { finish(time); boundary = true }
     events.forEach { event ->
         require(event.time >= previous) { "Usage events must be chronological" }
         previous = event.time
         if (event.time < from || event.time >= until) return@forEach
         when (event.kind) {
-            UsageKind.LOCK -> { finish(event.time); locked = true; lockStart = event.time }
+            UsageKind.LOCK -> { boundary(event.time); locked = true; lockStart = event.time }
             UsageKind.UNLOCK -> { locked = false; lockStart = null }
-            UsageKind.RESET -> { finish(event.time); locked = true; lockStart = event.time }
+            UsageKind.RESET -> { boundary(event.time); locked = true; lockStart = event.time }
             UsageKind.RESUME -> if (!locked) {
                 if (event.app.isBlank()) {
-                    finish(event.time) // A blocked app still ends the preceding allowed interval.
+                    boundary(event.time) // A blocked app still ends the preceding allowed interval.
                 } else if (active?.app != event.app || active?.activity != event.activity) {
                     finish(event.time); active = event
                 }
@@ -51,5 +79,5 @@ internal fun usageIntervals(events: List<UsageEvent>, from: Long, until: Long): 
             UsageKind.PAUSE -> if (active?.app == event.app && active?.activity == event.activity) finish(event.time)
         }
     }
-    return UsageScan(intervals, active?.time ?: lockStart ?: until)
+    return UsageScan(mergeUsage(pieces), active?.time ?: lockStart ?: until)
 }

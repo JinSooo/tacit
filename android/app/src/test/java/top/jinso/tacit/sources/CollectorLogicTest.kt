@@ -30,7 +30,24 @@ class CollectorLogicTest {
         val result = usageIntervals(listOf(event(10, UsageKind.RESUME), event(12, UsageKind.RESUME),
             event(20, UsageKind.RESUME, activity = "other"), event(21, UsageKind.PAUSE),
             event(25, UsageKind.PAUSE, activity = "other")), 0, 30)
-        assertEquals(listOf(UsageInterval("reader", 10, 20), UsageInterval("reader", 20, 25)), result.intervals)
+        assertEquals(listOf(UsageInterval("reader", 10, 25)), result.intervals)
+    }
+
+    @Test fun pageChangesAndShortVisitsElsewhereKeepOneInterval() {
+        // Reported case: 1745 of 2754 phone usage records were under 5 seconds, mostly page changes in one app.
+        val s = 1_000L
+        val result = usageIntervals(listOf(event(0, UsageKind.RESUME), event(3 * s, UsageKind.RESUME, activity = "note"),
+            event(6 * s, UsageKind.RESUME, "chat"), event(20 * s, UsageKind.RESUME),
+            event(40 * s, UsageKind.RESUME, "chat"), event(60 * s, UsageKind.RESUME), event(70 * s, UsageKind.PAUSE)), 0, 80 * s)
+        // The second visit to chat lasts the full 15 seconds, so it is its own interval.
+        assertEquals(listOf(UsageInterval("reader", 0, 40 * s), UsageInterval("chat", 40 * s, 60 * s),
+            UsageInterval("reader", 60 * s, 70 * s)), result.intervals)
+    }
+
+    @Test fun homeScreenStillSeparatesVisitsToTheSameApp() {
+        val result = usageIntervals(listOf(event(0, UsageKind.RESUME), event(5_000, UsageKind.RESUME, "", ""),
+            event(8_000, UsageKind.RESUME), event(9_000, UsageKind.PAUSE)), 0, 10_000)
+        assertEquals(listOf(UsageInterval("reader", 0, 5_000), UsageInterval("reader", 8_000, 9_000)), result.intervals)
     }
 
     @Test fun noStartBeforeEnableOrResumeBoundaryIsFabricated() {

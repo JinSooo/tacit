@@ -114,7 +114,7 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
             }
             synchronized(lock) {
                 if (!eligible(clip)) return
-                val publication = audioPublication(clip, utterances, ZoneId.systemDefault()) { ledger.transcriptLabel(clip, it) }
+                val publication = audioPublication(clip, utterances, ZoneId.systemDefault()) { ledger.transcriptLabel(clip, it, macVoiceprint) }
                 val record = publication?.let(publish)
                 if (record != null) ledger.persistTranscript(clip, record)
                 utterances.forEach { u ->

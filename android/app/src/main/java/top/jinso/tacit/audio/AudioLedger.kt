@@ -6,8 +6,24 @@ import top.jinso.tacit.sync.MacVoiceprint
 import top.jinso.tacit.core.Secrets
 import java.util.UUID
 
-internal fun transcriptSpeakerLabel(speaker: JSONObject?, number: () -> Int): String {
-    if (speaker?.optBoolean("me") == true) return "我"
+/** A Mac voiceprint only claims a voice heard for at least this long, so one stray short span cannot pass. */
+internal const val MAC_ME_MIN_SECONDS = 6.0
+
+/**
+ * Whether [speaker] is the user: marked "me" on this phone, or a whole voice (its cluster center, never a
+ * single utterance) that matches the Mac voiceprint. Labels and transcription consent both use this.
+ */
+internal fun isMeSpeaker(speaker: JSONObject?, mac: MacVoiceprint?): Boolean {
+    if (speaker == null || speaker.optBoolean("ignored")) return false
+    if (speaker.optBoolean("me")) return true
+    if (mac == null || speaker.optDouble("seconds", 0.0) < MAC_ME_MIN_SECONDS) return false
+    val center = speaker.vectorOrNull("vector") ?: return false
+    if (center.size != mac.vector.size) return false
+    return AudioPolicy.cosine(AudioPolicy.unit(center), AudioPolicy.unit(mac.vector)) >= mac.threshold
+}
+
+internal fun transcriptSpeakerLabel(speaker: JSONObject?, mac: MacVoiceprint? = null, number: () -> Int): String {
+    if (isMeSpeaker(speaker, mac)) return "我"
     return speaker?.optString("name")?.takeIf(String::isNotEmpty) ?: "对方 ${number()}"
 }
 
@@ -128,14 +144,14 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
      */
     fun eligible(clip: JSONObject, allowed: Boolean, mac: MacVoiceprint? = null,
         voice: FloatArray? = meVoice(mac), presence: MutableMap<String, Boolean> = mutableMapOf()): Boolean {
-        val threshold = mac?.threshold ?: .6
         val conversation = clip.optString("conversation")
-        val present = voice != null && conversation.isNotEmpty() && presence.getOrPut(conversation) {
+        // Judge whole voices, as the Mac does: comparing each short utterance with a low threshold let hours of
+        // speaker playback through on a single chance match.
+        val present = voice != null && allowed && conversation.isNotEmpty() && presence.getOrPut(conversation) {
+            val speakers = store.speakers().associateBy { it.getString("id") }
             store.clips().any { other ->
                 other.optString("conversation") == conversation && store.exists(other.getString("id")) &&
-                    utterances(other).any { u -> u.vectorOrNull("vector")?.let {
-                        AudioPolicy.mayTranscribe(voice, it, allowed, threshold)
-                    } == true }
+                    utterances(other).any { u -> isMeSpeaker(speakers[u.getString("speaker")], mac) }
             }
         }
         return store.exists(clip.getString("id")) && AudioPolicy.conversationAllowed(
@@ -159,8 +175,8 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
     private fun findSpeaker(id: String) = store.speakers().firstOrNull { it.getString("id") == id }
     private fun speaker(id: String) = requireNotNull(findSpeaker(id)) { "说话人已不存在" }
 
-    fun transcriptLabel(clip: JSONObject, speakerId: String): String =
-        transcriptSpeakerLabel(findSpeaker(speakerId)) { label(clip, speakerId) }
+    fun transcriptLabel(clip: JSONObject, speakerId: String, mac: MacVoiceprint? = null): String =
+        transcriptSpeakerLabel(findSpeaker(speakerId), mac) { label(clip, speakerId) }
 
     fun persistTranscript(clip: JSONObject, record: String) {
         if (store.transcripts().any { it.getString("recordId") == record }) return
@@ -175,11 +191,11 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
             .put("utterances", JSONArray(rows)))
     }
 
-    fun render(record: String, fallback: String): String {
+    fun render(record: String, fallback: String, mac: MacVoiceprint? = null): String {
         val row = store.transcripts().firstOrNull { it.getString("recordId") == record } ?: return fallback
         val lines = row.getJSONArray("utterances").objects().mapNotNull { u ->
             val text = u.optString("text"); if (text.isBlank()) return@mapNotNull null
-            val name = transcriptSpeakerLabel(findSpeaker(u.getString("speaker"))) { u.getInt("label") }
+            val name = transcriptSpeakerLabel(findSpeaker(u.getString("speaker")), mac) { u.getInt("label") }
             "$name：$text"
         }
         return lines.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: fallback

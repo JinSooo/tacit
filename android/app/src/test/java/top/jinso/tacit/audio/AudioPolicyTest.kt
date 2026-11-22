@@ -2,6 +2,7 @@ package top.jinso.tacit.audio
 
 import org.junit.Assert.*
 import org.junit.Test
+import top.jinso.tacit.sync.MacVoiceprint
 
 class AudioPolicyTest {
     @Test fun songsAreDroppedEvenWhenSingingLooksLikeSpeech() {
@@ -29,12 +30,19 @@ class AudioPolicyTest {
         assertTrue(AudioPolicy.candidate(1, 45.0))
     }
     @Test fun unknownAndOtherSpeakersMustNeverPassTheUserGate() {
-        val me = AudioPolicy.unit(floatArrayOf(1f, 0f))
-        assertFalse(AudioPolicy.mayTranscribe(null, me, true))
-        assertFalse(AudioPolicy.mayTranscribe(me, me, false))
-        assertFalse(AudioPolicy.mayTranscribe(me, floatArrayOf(0f, 1f), true))
-        assertFalse(AudioPolicy.mayTranscribe(me, floatArrayOf(1f), true))
-        assertTrue(AudioPolicy.mayTranscribe(me, me, true))
+        val mac = MacVoiceprint(floatArrayOf(2f, 0f), .49)
+        fun voice(x: Float, y: Float, seconds: Double) =
+            org.json.JSONObject().putVector("vector", floatArrayOf(x, y)).put("seconds", seconds)
+        assertFalse(isMeSpeaker(null, mac))
+        assertFalse(isMeSpeaker(voice(1f, 0f, 30.0), null))
+        assertFalse(isMeSpeaker(voice(0f, 1f, 30.0), mac))
+        assertFalse(isMeSpeaker(voice(1f, 0f, 30.0).put("ignored", true), mac))
+        assertTrue(isMeSpeaker(voice(1f, 0f, 30.0), mac))
+        assertTrue(isMeSpeaker(voice(0f, 1f, 1.0).put("me", true), null))
+        // Reported case: one short playback voice that happened to resemble the user unlocked hours of video audio.
+        assertFalse(isMeSpeaker(voice(1f, 0f, MAC_ME_MIN_SECONDS - .1), mac))
+        assertEquals("我", transcriptSpeakerLabel(voice(1f, .2f, 30.0), mac) { 1 })
+        assertEquals("对方 2", transcriptSpeakerLabel(voice(0f, 1f, 30.0), mac) { 2 })
     }
     @Test fun retentionUsesCaptureTimeAndExactBoundary() {
         val now = 20 * 86_400_000L
