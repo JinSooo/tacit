@@ -1043,7 +1043,29 @@ export function backfillRange(db: HubDB, from: string, to: string, opts: { enabl
 }
 
 /** 状态写入遇到库忙时，下一次先补写完成或重新排队。 */
-export interface LoopState { lastRound: number; enabledDefault: number; unfinished?: { id: string; error?: string; at: number; requeue?: boolean } }
+export interface LoopState {
+  lastRound: number; enabledDefault: number; unfinished?: { id: string; error?: string; at: number; requeue?: boolean };
+  /** 每台设备已经触发过总结的最后一段录音结束时刻，以及上次检查时刻（见 conversationsDue）。 */
+  conversationEnds?: Record<string, number>; conversationCheckAt?: number;
+}
+
+/**
+ * 某台设备的最后一段录音刚满 10 分钟（这场不会再接上）就为真，不必等下一个 15 分钟的常规轮次；
+ * 每个结束点只触发一次，每分钟最多查一次（2026-11-23 用户反馈手机录音的总结要等太久）。
+ */
+function conversationsDue(db: HubDB, state: LoopState, now: number) {
+  if (now - (state.conversationCheckAt ?? 0) < MIN) return false;
+  state.conversationCheckAt = now;
+  const rows = db.db.prepare<[number], { device: string; start: number; t_end: string | null }>(`SELECT device, MAX(t_start_ms) AS start, t_end
+    FROM records WHERE source IN (${sourceList(AUDIO_SOURCES)}) AND t_start_ms>? GROUP BY device`).all(now - DAY);
+  const ends = state.conversationEnds ??= {};
+  let due = false;
+  for (const row of rows) {
+    const end = Math.max(row.start, Date.parse(row.t_end ?? "") || 0);
+    if (now - end >= CONVERSATION_GAP_MS && end > (ends[row.device] ?? 0)) { ends[row.device] = end; due = true; }
+  }
+  return due;
+}
 /** 常驻循环的一步：有排队请求就领取执行；否则到时间了跑常规一轮。返回这一步做了什么。 */
 export async function distillTick(deps: Deps, state: LoopState, at?: number): Promise<"request" | "round" | "idle"> {
   const clock = deps.now ?? (at === undefined ? Date.now : () => at);
@@ -1129,7 +1151,13 @@ export async function distillTick(deps: Deps, state: LoopState, at?: number): Pr
     settleRequest();
     return "request";
   }
-  if (now - state.lastRound < 15 * MIN) return "idle";
+  if (now - state.lastRound < 15 * MIN) {
+    // 两轮之间只补写刚满 10 分钟的对话总结；其余整理仍等常规轮次。
+    if (configError || activeCooldown(store, now) || !conversationsDue(d.db, state, now)) return "idle";
+    try { log(JSON.stringify({ at: toLocalIso(now), conversations: await conversationStep({ ...d, llm: withModelCooldown(d.llm, store, clock) }, now) })); }
+    catch (error) { if (!(error instanceof ModelCooldown)) log(JSON.stringify({ error: classifyModelError(error) })); }
+    return "round";
+  }
   try { await regularRound(d, state); }
   catch (error) { log(JSON.stringify({ error: classifyModelError(error) })); }
   return "round";

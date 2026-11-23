@@ -3,7 +3,7 @@ import { AudioStore } from "../src/audio.ts";
 import { conversationDetail, groupConversations, isNoise, parseTranscript, readableTurns, speakerNamer, type Line } from "../src/conversations.ts";
 import { readDayEvidence } from "../src/distill/day-evidence.ts";
 import { groundedQuote } from "../src/distill/quotes.ts";
-import { conversationStep, conversationTranscript, type LLM } from "../src/distill/run.ts";
+import { conversationStep, conversationTranscript, distillTick, type LLM, type LoopState } from "../src/distill/run.ts";
 import type { LLMRequest } from "../src/llm/index.ts";
 import { historySegments } from "../src/history.ts";
 import { fixture, setup } from "./helpers.ts";
@@ -131,6 +131,24 @@ test("对话结束 10 分钟后才写总结；太短、私密的不写；写完�
   expect(list.map(c => c.title)).toEqual(["线上面试复盘", null, null]);
   // 已有总结的不再调用。
   expect((await conversationStep({ db: ctx.db, llm }, now)).calls).toBe(0);
+});
+
+// 回归（2026-11-23 用户反馈）：手机录音结束后要等到下一个 15 分钟常规轮次才写总结，太久。
+test("对话一满 10 分钟就在两轮之间写总结，不等下一个常规轮次；同一个结束点只写一次", async () => {
+  ctx.db.ingest([talk("10:00:00", "10:20:00", [long("我", "10:00:05"), long("说话人 A", "10:01:00")].join("\n"))]);
+  const { llm, calls } = fakeLLM();
+  const lines: string[] = [];
+  const state: LoopState = { lastRound: Date.parse(at("10:25:00")), enabledDefault: 0 };
+  const tick = (clock: string) => distillTick({ db: ctx.db, llm, log: line => lines.push(line) }, state, Date.parse(at(clock)));
+  expect(await tick("10:28:00")).toBe("idle");
+  expect(calls).toHaveLength(0);
+  expect(await tick("10:31:00")).toBe("round");
+  expect(calls.map(c => c.task)).toEqual(["conversation_summary"]);
+  const first = ctx.db.db.prepare("SELECT id FROM records WHERE t_start=?").get(at("10:00:00")) as { id: string };
+  expect(conversationDetail(ctx.db, first.id, Date.parse(at("10:31:00"))).title).toBe("线上面试复盘");
+  expect(await tick("10:33:00")).toBe("idle");
+  expect(calls).toHaveLength(1);
+  expect(lines.some(line => line.includes('"conversations"'))).toBe(true);
 });
 
 test("删掉其中一条记录时总结一起删，下一轮按剩下的重写；模型失败不写", async () => {
