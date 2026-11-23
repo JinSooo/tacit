@@ -358,6 +358,9 @@ export class DeviceService {
         hub_id: this.boundHubID() ?? null,
         lan: { open: this.open, port: this.lanPort, addrs: this.addresses },
         pairing: invite ? { expires_at: new Date(invite.expires).toISOString(), role: invite.role } : null,
+        current_device_id: actor?.device ?? this.sql.prepare<[], { id: string }>(
+          "SELECT id FROM devices WHERE platform='mac' AND local_only=1 ORDER BY paired_at DESC, id DESC LIMIT 1",
+        ).get()?.id ?? null,
         devices: deviceList(this.hub),
       }));
     }
@@ -753,7 +756,7 @@ export class DeviceService {
         this.sql.prepare("DELETE FROM distill_state WHERE k=?").run(inviteKey);
         this.sql.prepare("INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,role) VALUES(?,?,?,?,?,?,?)")
           .run(device_id, name, platform, publicKey, at, at, invite.role);
-        auditSecurity(this.sql, "pair.complete", { target: device_id, code: invite.role, now: this.clock() });
+        auditSecurity(this.sql, "pair.complete", { actor: device_id, target: device_id, code: invite.role, now: this.clock() });
         if (projectionRoles(invite.role)) touchProjectionDay(this.sql, localDateString(this.clock()));
         if (provisioned) this.relay.setState(provisioned.box, "active");
         if (context) {
@@ -903,7 +906,7 @@ export class DeviceService {
     }
     const route = viewerOperation(op, body);
     if (route && !route.native && this.viewerHandler) {
-      return () => this.runViewerOperation(route, { device, fromRelay, relayLocked: fromRelay || viewerOperationNeedsRelayLock(op) });
+      return () => this.runViewerOperation(route, { device, remote: local_only === 0, fromRelay, relayLocked: fromRelay || viewerOperationNeedsRelayLock(op) });
     }
     const remove = (ids: string[]) => this.deleteRecords(device, ids, role !== "admin", local_only === 1);
     switch (op) {

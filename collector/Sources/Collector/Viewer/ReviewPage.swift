@@ -45,6 +45,7 @@ private struct ReviewDayContent: View {
   @State private var picking = false
   @State private var setup: (health: DistillHealth, tools: [AgentToolState])?
   @State private var startupMessage: String?
+  @State private var securityEvents = TimelineSecurityEventState()
   @Binding var day: Date
   let today: Date
   let now: Date
@@ -96,6 +97,12 @@ private struct ReviewDayContent: View {
         if await catchUp() { continue }
         await WindowVisibility.pause(.seconds(TimelineCatchUp.isRunning(store.catchUpRequest) ? 10 : 30))
       } while !Task.isCancelled
+    }
+    .task(id: refresh) {
+      while !Task.isCancelled {
+        await securityEvents.refresh(using: store.api)
+        await WindowVisibility.pause(.seconds(15))
+      }
     }
     .task(id: refresh) {
       let dataDir = Config.load().dataDir
@@ -156,6 +163,13 @@ private struct ReviewDayContent: View {
         }
         .font(.system(size: TextSize.body))
       } else {
+        if let event = securityEvents.events.first {
+          TimelineSecurityEventLine(event: event) {
+            Task { await securityEvents.acknowledge(event, using: store.api) }
+          }
+          .disabled(securityEvents.acknowledging)
+          if let error = securityEvents.error { SettingsMessage(text: error) }
+        }
         if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools) }
         if !store.pending.isEmpty { TimelinePendingLine() }
       }

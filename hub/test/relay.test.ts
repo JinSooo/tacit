@@ -311,7 +311,7 @@ test("v13 加密数据库升级到 v16，保留配对记录并清理迁移备份
     ctx.db.close();
     const db = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(db.db.pragma("user_version", { simple: true })).toBe(17);
+      expect(db.db.pragma("user_version", { simple: true })).toBe(18);
       expect(db.db.prepare("SELECT id FROM devices").all()).toEqual([{ id: "android-abcd2345" }]);
       expect(db.db.prepare("SELECT * FROM device_nonces").all()).toEqual([]);
       expect(existsSync(ctx.file + ".migration-v13.bak")).toBe(false);

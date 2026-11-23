@@ -48,6 +48,7 @@ export function removeDeviceRoleSchema(db: HubDB["db"]) {
   db.exec(`
     ALTER TABLE devices DROP COLUMN bootstrap_agent_id;
     ALTER TABLE devices DROP COLUMN local_only;
+    DROP TABLE security_event_acknowledgements;
     DROP TABLE security_audit;
     ALTER TABLE devices DROP COLUMN role;
     ALTER TABLE devices DROP COLUMN role_revision;

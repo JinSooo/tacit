@@ -700,8 +700,8 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
       return HubError(message: "连不上后台服务：\(msg)", status: 0)
     case .hubBusy(let msg):
       return HubError(message: msg ?? "数据库忙，稍后再试", status: 503)
-    case .operationError(_, 403, _), .plaintextError(403, _):
-      return HubError(message: "当前设备权限不足", status: 403)
+    case .operationError(_, 403, let msg), .plaintextError(403, let msg):
+      return HubError(message: msg ?? "当前设备权限不足", status: 403)
     case .operationError(_, let status, let msg), .plaintextError(let status, let msg):
       return HubError(message: msg ?? "请求失败（\(status)）", status: status)
     case .envelopeTooLarge(let msg):

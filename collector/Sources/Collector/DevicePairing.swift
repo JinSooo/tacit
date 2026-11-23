@@ -11,7 +11,23 @@ struct DeviceSettings: Decodable {
 
   struct Pairing: Decodable { let expiresAt: String }
 
-  var phones: [Device] { devices.filter { $0.platform == "android" } }
+  enum Role: String, Decodable {
+    case collect, view, admin, agent
+
+    var title: String {
+      switch self {
+      case .collect: "采集"
+      case .view: "查看"
+      case .admin: "管理"
+      case .agent: "AI 工具"
+      }
+    }
+  }
+
+  var displayedDevices: [Device] {
+    let visible = devices.filter { $0.role != nil && $0.role != .agent && ["mac", "android"].contains($0.platform) }
+    return visible.filter { $0.id == currentDeviceId } + visible.filter { $0.id != currentDeviceId }
+  }
 
   struct Device: Decodable, Identifiable {
     let id: String
@@ -21,12 +37,28 @@ struct DeviceSettings: Decodable {
     let lastSeen: String?
     let records: Int
     let pendingChanges: Int
+    var role: Role?
+
+    func offeredRoles(isCurrent: Bool) -> [Role] {
+      guard !isCurrent, platform == "mac" else { return [] }
+      return switch role {
+      case .admin: [.view, .collect]
+      case .view: [.collect]
+      case .collect: [.view]
+      case .agent, nil: []
+      }
+    }
+
+    func canRemove(isCurrent: Bool) -> Bool {
+      !isCurrent && role != nil && role != .agent
+    }
   }
 
   let hubId: String?
   let lan: LAN
   let pairing: Pairing?
   let devices: [Device]
+  var currentDeviceId: String?
 }
 
 struct DeviceInvitation: Decodable {

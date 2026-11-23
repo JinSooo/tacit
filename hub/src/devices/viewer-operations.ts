@@ -2,6 +2,7 @@ import { InputError } from "../db.ts";
 import { localDayStart } from "../distill/requests.ts";
 import { GENERAL_DEFAULTS } from "../general-settings.ts";
 import { KEY_PROVIDERS } from "../llm/config.ts";
+import { securityEventID } from "../security-audit.ts";
 import { deviceID } from "./envelope.ts";
 
 type PathCheck = (value: string) => boolean;
@@ -45,6 +46,8 @@ const routes: ReadonlyMap<string, Route> = new Map<string, Route>([
   ["runtime.call", { method: "GET", path: "/v1/runtime/calls/:id", params: { id: safeID } }],
   ["runtime.background", { method: "GET", path: "/v1/runtime/background", query: { source: "string" } }],
   ["audit.list", { method: "GET", path: "/v1/audit", query: { ...pagination, tool: "string" } }],
+  ["settings.security-events.list", { method: "GET", path: "/v1/settings/security-events" }],
+  ["settings.security-events.ack", { method: "POST", path: "/v1/settings/security-events/:id/ack", params: { id: securityEventID } }],
   ["settings.hub.get", { method: "GET", path: "/v1/settings/hub" }],
   ["settings.hub.put", { method: "PUT", path: "/v1/settings/hub", body: ["port"] }],
   ["settings.models.get", { method: "GET", path: "/v1/settings/models" }],
@@ -102,4 +105,4 @@ export function viewerOperation(op: string, body: Record<string, unknown>): View
   return { method: route.method, url, input, native: !!route.native, binary: !!route.binary };
 }
 
-export type ViewerActor = { device: string; relayLocked: boolean; fromRelay: boolean };
+export type ViewerActor = { device: string; remote: boolean; relayLocked: boolean; fromRelay: boolean };
