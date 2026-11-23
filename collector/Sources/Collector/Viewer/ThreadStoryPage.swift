@@ -33,7 +33,7 @@ struct ThreadStoryPage: View {
   private func load() async {
     let revision = store.revision
     await title.run {
-      let thread = try await store.api.thread(id, level: "brief")
+      let thread = try await store.dataSource.thread(id, level: "brief")
       try Task.checkCancellation()
       guard revision == store.revision else { throw CancellationError() }
       return thread.title ?? "这件事的经过"
@@ -105,7 +105,7 @@ struct StoryUpdates: View {
       var days: [HubAPI.TimelineResult.Day] = []
       var before: String?
       repeat {
-        let page = try await store.api.timeline(threadId: threadId, before: before)
+        let page = try await store.dataSource.timeline(threadId: threadId, before: before)
         try Task.checkCancellation()
         guard revision == store.revision else { throw CancellationError() }
         days += page.days

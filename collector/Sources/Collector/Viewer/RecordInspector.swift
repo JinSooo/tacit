@@ -36,9 +36,9 @@ struct RecordInspector: View {
 
   func load() async {
     do {
-      let d = try await store.api.record(id)
+      let d = try await store.dataSource.record(id)
       // 读不到整场对话时退回显示这条记录的原文，不报错。
-      conversation = AudioSource.isAudio(d.record.source) ? try? await store.api.conversation(id) : nil
+      conversation = AudioSource.isAudio(d.record.source) ? try? await store.dataSource.conversation(id) : nil
       detail = d; error = nil
     }
     catch is CancellationError {}

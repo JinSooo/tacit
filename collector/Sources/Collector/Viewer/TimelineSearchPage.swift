@@ -143,7 +143,7 @@ struct TimelineSearchPage: View {
       var labeledDays = previous?.labeledProjectDays ?? []
       for day in foundSegments?.days ?? [] {
         guard let date = TimelineDay.date(day.date) else { continue }
-        let allItems = try await store.api.diary(date)?.detail?.items ?? day.items
+        let allItems = try await store.dataSource.diary(date)?.detail?.items ?? day.items
         if TimelineProjectLabels.showsNames(in: allItems) { labeledDays.insert(day.date) }
       }
       try Task.checkCancellation()
@@ -164,7 +164,7 @@ struct TimelineSearchPage: View {
 
   private func segmentPage(_ text: String, more: Bool, cursor: String?) async throws -> HubAPI.TimelineResult? {
     if more && cursor == nil { return nil }
-    return try await store.api.timeline(query: text, before: cursor)
+    return try await store.dataSource.timeline(query: text, before: cursor)
   }
 
   private func recordPage(_ text: String, more: Bool, cursor: String?) async throws -> RecordPage? {
@@ -173,7 +173,7 @@ struct TimelineSearchPage: View {
     q.q = text
     q.limit = 50
     q.body = true
-    return try await store.api.records(q, cursor: cursor)
+    return try await store.dataSource.records(q, cursor: cursor)
   }
 
   private func showRecord(_ record: HistoryRecord) async {
@@ -184,7 +184,7 @@ struct TimelineSearchPage: View {
     openError = nil
     defer { if id == request { openingRecord = nil } }
     do {
-      let location = try await store.api.timelineLocation(record: record.id)
+      let location = try await store.dataSource.timelineLocation(record: record.id)
       guard id == request, query == text, store.section == .search else { return }
       let day = TimelineDay.date(location.date) ?? record.start
       store.showDayRecords(day, record: record.id)

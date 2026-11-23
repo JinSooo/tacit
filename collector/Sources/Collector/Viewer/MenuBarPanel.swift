@@ -57,20 +57,20 @@ struct MenuBarPanel: View {
   }
 
   func load() async {
-    let api = store.api
+    let data = store.dataSource
     let date = Date()
     let iso = ISO8601DateFormatter()
     iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    async let a: Void = now.run { try await api.now() }
+    async let a: Void = now.run { try await data.now() }
     let from = iso.string(from: date.addingTimeInterval(-Self.lookback)), since = date.addingTimeInterval(-Self.window)
     async let b: Void = hour.run {
       var q = HubAPI.RecordQuery(); q.from = from; q.limit = 500
-      return try await api.records(q, cursor: nil).records.filter { ($0.end ?? $0.start) >= since }
+      return try await data.records(q, cursor: nil).records.filter { ($0.end ?? $0.start) >= since }
     }
     async let c: Void = recent.run {
       // 同一件事的几条合成一行，多取一些才凑得满 5 行。
       var q = HubAPI.RecordQuery(); q.limit = 40; q.body = true
-      return try await api.records(q, cursor: nil).records
+      return try await data.records(q, cursor: nil).records
     }
     async let d: Void = store.refreshShared()
     _ = await (a, b, c, d)
@@ -378,6 +378,7 @@ struct PanelButtonStyle: ButtonStyle {
 
   private let store: ViewerStore
   private let open: (ViewerEntry) -> Void
+  var onVisibilityChange: ((Bool) -> Void)?
   private var panel: Panel?
   private weak var button: NSStatusBarButton?
   private var monitors: [Any] = []
@@ -418,6 +419,7 @@ struct PanelButtonStyle: ButtonStyle {
     p.makeKeyAndOrderFront(nil)
     button.highlight(true)
     installMonitors()
+    onVisibilityChange?(true)
   }
 
   func close() {
@@ -428,6 +430,7 @@ struct PanelButtonStyle: ButtonStyle {
     for m in monitors { NSEvent.removeMonitor(m) }
     monitors = []
     if let o = spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(o); spaceObserver = nil }
+    onVisibilityChange?(false)
   }
 
   static let cornerRadius: CGFloat = Radius.floating

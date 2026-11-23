@@ -118,6 +118,15 @@ public final class RawReadMemoryCache: @unchecked Sendable {
     }
   }
 
+  /// 清空全部列表/查询类缓存项（不影响按 ID 缓存的单条不可变记录）。
+  public func evictQueries() {
+    lock.lock(); defer { lock.unlock() }
+    let toRemove = map.values.filter(\.invalidateOnAnyRecordGone)
+    for node in toRemove {
+      removeNodeLocked(node)
+    }
+  }
+
   /// 清空全部内存缓存（锁屏、关窗、设备移除或重置时调用）。
   public func clear() {
     lock.lock(); defer { lock.unlock() }
@@ -717,6 +726,8 @@ public actor ProjectionSync {
   private let clock: @Sendable () -> Date
   private let onWipe: (@Sendable (ProjectionWipeReason) async -> Void)?
   private let onRelayMoved: (@Sendable (DeviceRelayConfig?) async -> Void)?
+  private let onUpdate: (@Sendable (ProjectionSyncResult) async -> Void)?
+  private var initialSyncTask: Task<Void, Error>?
   private var loopTask: Task<Void, Never>?
   private var sleepWakeTask: Task<Void, Never>?
   private var sleepContinuation: CheckedContinuation<Void, Never>?
@@ -733,7 +744,8 @@ public actor ProjectionSync {
     windowDays: Int = 90,
     clock: @escaping @Sendable () -> Date = { Date() },
     onWipe: (@Sendable (ProjectionWipeReason) async -> Void)? = nil,
-    onRelayMoved: (@Sendable (DeviceRelayConfig?) async -> Void)? = nil
+    onRelayMoved: (@Sendable (DeviceRelayConfig?) async -> Void)? = nil,
+    onUpdate: (@Sendable (ProjectionSyncResult) async -> Void)? = nil
   ) {
     self.client = client
     self.cache = cache
@@ -747,6 +759,7 @@ public actor ProjectionSync {
     self.clock = clock
     self.onWipe = onWipe
     self.onRelayMoved = onRelayMoved
+    self.onUpdate = onUpdate
   }
 
   /// 当前有效的轮询间隔（前台 30 秒，后台 5 分钟）。
@@ -766,6 +779,21 @@ public actor ProjectionSync {
   /// 清空按需原文内存 LRU（锁屏或关闭窗口时调用）。
   public func clearMemory() {
     rawCache.clear()
+  }
+
+  /// 确保冷启动至少完成一轮拉取；已有游标时立即返回，并发调用合并为同一次拉取。
+  public func ensureInitialSync() async throws {
+    if try cache.cursor().epoch > 0 { return }
+    if let existing = initialSyncTask {
+      try await existing.value
+      return
+    }
+    let task = Task {
+      _ = try await self.pullToLatest()
+    }
+    initialSyncTask = task
+    defer { initialSyncTask = nil }
+    try await task.value
   }
 
   /// 核对当前中枢 `hub_id`；若检测到变化则整库 `wipe()` 并清空内存缓存。
@@ -885,7 +913,7 @@ public actor ProjectionSync {
 
     _ = try cache.prune(now: clock())
     let finalCursor = try cache.cursor()
-    return ProjectionSyncResult(
+    let result = ProjectionSyncResult(
       pagesFetched: pagesFetched,
       upsertedCount: totalUpserted,
       deletedCount: totalDeleted,
@@ -893,6 +921,11 @@ public actor ProjectionSync {
       cursor: finalCursor,
       didReset: didReset
     )
+    if totalUpserted > 0 || totalDeleted > 0 || !allGone.isEmpty || didReset {
+      rawCache.evictQueries()
+      await onUpdate?(result)
+    }
+    return result
   }
 
   /// 处理单条 WebSocket 推送事件：若世代变化、序号推进或标记紧急，立即触发拉取。
@@ -1141,7 +1174,11 @@ public actor ProjectionSync {
   // MARK: - 按需原文读取（6.9.3，结果仅入内存 LRU，不落盘）
 
   /// 读取 1–50 条原文；自动命中内存 LRU，未命中时自动处理 `records.get` 码点分页与 409 重试。
-  public func getRecords(ids: [String], includeCorrections: Bool = false) async throws -> RawRecordsGetResult {
+  public func getRecords(
+    ids: [String],
+    includeCorrections: Bool = false,
+    includePrivate: Bool = false
+  ) async throws -> RawRecordsGetResult {
     _ = try await verifyHubIdentity()
     let uniqueIDs = Array(NSOrderedSet(array: ids).compactMap { $0 as? String })
     guard !uniqueIDs.isEmpty, uniqueIDs.count <= 50 else {
@@ -1155,7 +1192,7 @@ public actor ProjectionSync {
     var resolved: [String: DeviceJSON] = [:]
     var toFetch: [String] = []
     for id in uniqueIDs {
-      let cacheKey = Self.recordCacheKey(id: id, includeCorrections: includeCorrections)
+      let cacheKey = Self.recordCacheKey(id: id, includeCorrections: includeCorrections, includePrivate: includePrivate)
       if let cachedData = rawCache.get(cacheKey),
          let decoded = try? decoder.decode(DeviceJSON.self, from: cachedData) {
         resolved[id] = decoded
@@ -1186,6 +1223,9 @@ public actor ProjectionSync {
         ]
         if includeCorrections {
           reqBody["include_corrections"] = .bool(true)
+        }
+        if includePrivate {
+          reqBody["include_private"] = .bool(true)
         }
         if let cursor {
           reqBody["cursor"] = .string(cursor)
@@ -1257,7 +1297,7 @@ public actor ProjectionSync {
         fetched[id] = value
         if let encoded = try? encoder.encode(value) {
           rawCache.set(
-            Self.recordCacheKey(id: id, includeCorrections: includeCorrections),
+            Self.recordCacheKey(id: id, includeCorrections: includeCorrections, includePrivate: includePrivate),
             data: encoded,
             recordIDs: [id],
             invalidateOnAnyRecordGone: false
@@ -1271,9 +1311,9 @@ public actor ProjectionSync {
     return RawRecordsGetResult(records: resolved, missing: Array(missing).sorted())
   }
 
-  /// 按需调用 `records.list`，结果缓存在内存 LRU（任一 `record_gone` 到达时失效）。
-  public func listRecords(_ params: [String: DeviceJSON] = [:]) async throws -> DeviceResponsePayload {
-    try await cachedRead(op: "records.list", body: params, invalidateOnAnyRecordGone: true)
+  /// 按需调用 `records.list`，结果缓存在内存 LRU（任一 `record_gone` 到达时失效）。`useCache` 为 false 时跳过内存读写（用于实时列表）。
+  public func listRecords(_ params: [String: DeviceJSON] = [:], useCache: Bool = true) async throws -> DeviceResponsePayload {
+    try await cachedRead(op: "records.list", body: params, invalidateOnAnyRecordGone: true, useCache: useCache)
   }
 
   /// 按需调用 `history.segments`，结果缓存在内存 LRU。
@@ -1310,15 +1350,18 @@ public actor ProjectionSync {
 
   // MARK: - 内部辅助
 
-  private static func recordCacheKey(id: String, includeCorrections: Bool) -> String {
-    includeCorrections ? "record:\(id):corr" : "record:\(id)"
+  private static func recordCacheKey(id: String, includeCorrections: Bool, includePrivate: Bool = false) -> String {
+    let corr = includeCorrections ? ":corr" : ""
+    let priv = includePrivate ? ":priv" : ""
+    return "record:\(id)\(corr)\(priv)"
   }
 
   private func cachedRead(
     op: String,
     body: [String: DeviceJSON],
     extraRecordIDs: Set<String> = [],
-    invalidateOnAnyRecordGone: Bool
+    invalidateOnAnyRecordGone: Bool,
+    useCache: Bool = true
   ) async throws -> DeviceResponsePayload {
     _ = try await verifyHubIdentity()
     let encoder = JSONEncoder()
@@ -1326,7 +1369,8 @@ public actor ProjectionSync {
     let keyBytes = (try? encoder.encode(DeviceJSON.object(body))) ?? Data()
     let cacheKey = "\(op):\(String(decoding: keyBytes, as: UTF8.self))"
 
-    if let cachedData = rawCache.get(cacheKey),
+    if useCache,
+       let cachedData = rawCache.get(cacheKey),
        let decoded = try? JSONDecoder().decode([String: DeviceJSON].self, from: cachedData) {
       return DeviceResponsePayload(status: 200, body: decoded, bodyData: cachedData)
     }
@@ -1343,18 +1387,20 @@ public actor ProjectionSync {
       throw error
     }
 
-    var recordIDs = extraRecordIDs
-    if let ids = payload.body["record_ids"]?.arrayValue {
-      for item in ids {
-        if let id = item.stringValue { recordIDs.insert(id) }
+    if useCache {
+      var recordIDs = extraRecordIDs
+      if let ids = payload.body["record_ids"]?.arrayValue {
+        for item in ids {
+          if let id = item.stringValue { recordIDs.insert(id) }
+        }
       }
+      rawCache.set(
+        cacheKey,
+        data: payload.bodyData,
+        recordIDs: recordIDs,
+        invalidateOnAnyRecordGone: invalidateOnAnyRecordGone
+      )
     }
-    rawCache.set(
-      cacheKey,
-      data: payload.bodyData,
-      recordIDs: recordIDs,
-      invalidateOnAnyRecordGone: invalidateOnAnyRecordGone
-    )
     return payload
   }
 

@@ -694,7 +694,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 - 中枢下推整理结果（星形第二步）复用 `down`，协议草案见 6.9。
 - Mac 采集端和中枢拆开后，Mac 也作为一台设备走本节，本机快路及剩余迁移见 6.10，权限分级与独立部署见 6.11。
 
-### 6.9 中枢下推整理结果（中枢已实现，查看端待接入）
+### 6.9 中枢下推整理结果（中枢与 Mac 查看端读路径已接入）
 
 中枢按星形同步将整理结果下推给有查看权限的设备，第一个使用方是 Mac 查看窗口；查看窗口不再直接调用中枢的本机管理读接口，离线时也能浏览已同步的整理结果与小组件，原始记录只在点开时按需向中枢取。本节复用 6.2 加密信封与 6.8 中转信箱。
 
@@ -833,15 +833,18 @@ CREATE TABLE project_context_cache (
 
 - **要改的模块和公共接口**：
   - 中枢：`hub/src/db.ts`（`user_version` 迁移新增 `projection_changes`、`project_context_cache` 及 `devices` 游标列；`deleteMany`/`ingest` 写变更钩子）、`hub/src/distill/store.ts` & `hub/src/distill/run.ts`（写入 `days`/`threads`/`projects`/`now` 与纠错时调用投影变更写入器）、`hub/src/agent.ts`（复用 `projectContext` 写 `project_context_cache`）、新增 `hub/src/devices/projection.ts`（下推序列化、私密过滤、体积切分）、`hub/src/devices/service.ts`（新增 `projection.*`、`records.*`、`history.segments`、`conversations.detail`、`timeline.*` 及 `/v1/device/events`）、`hub/src/devices/relay.ts`（`down` 主动推送与单条覆盖背压）。
-  - Mac 端：新增 `collector/Sources/CollectorCore/ProjectionCache.swift`（系统 SQLite + 逐行 AES-GCM 缓存与清理）、`collector/Sources/CollectorCore/ProjectionSync.swift`（拉取/确认循环、`/v1/device/events` 订阅与轮询退避、信箱 `down` 处理及按需原文内存 LRU）；后续再接入 `collector/Sources/Collector/Viewer/HubAPI.swift`、`ViewerStore.swift` 与 `WidgetSnapshotPublisher.swift`。
+  - Mac 端：`collector/Sources/CollectorCore/ProjectionCache.swift`（系统 SQLite + 逐行 AES-GCM 缓存与清理）、`collector/Sources/CollectorCore/ProjectionSync.swift`（拉取/确认循环、`/v1/device/events` 订阅与轮询退避、信箱 `down` 处理及按需原文内存 LRU）、`collector/Sources/Collector/Viewer/ViewerDataSource.swift`（`ViewerDataSource` 抽象、HTTP 实现、缓存/设备协议实现与自适应路由器），已接入 `ViewerStore.swift`、`ReviewPage.swift`、`ProjectPage.swift`、`ThreadStoryPage.swift`、`DistillViews.swift`、`MenuBarPanel.swift`、`HistoryPage.swift`、`TimelineSegmentRow.swift`、`RecordInspector.swift`、`TimelineSearchPage.swift`、`ViewerWindow.swift`、`WidgetSnapshotPublisher.swift` 与 `main.swift`。
   - **实现与草案偏差说明**：
     1. 6.9.6 缓存加密从 SQLCipher 改为系统 `SQLite3` + 每行 `AES.GCM`（AAD 绑定 `kind` + `entity_id`），`kind` 与 `entity_id` 明文存储以支持按天清理和索引，密钥仍存钥匙串 `record-anything` / `viewer-cache-key`。
-    2. 6.9.1 中枢本机监听（`127.0.0.1:<port>`）目前尚未挂载 `GET /v1/device/hello`（仅挂载了 `POST /v1/device` 与 `GET /v1/device/events`，`hello` 仅在局域网端口可用）；同机自动引导（`local-bootstrap`）及查看窗口接入留待 6.10 阶段完成。
+    2. 中枢按需读接口中仅 `records.get` 与 `records.list` 已支持管理设备的 `include_private: true`，`history.segments`、`conversations.detail`、`timeline.locate` 目前仍硬编码过滤私密记录。为保证本机 `admin` 在详细档、私密录音详情与搜索定位中不丢失私密内容，Mac 查看端在缓存模式下：`history.segments` 暂退回 HTTP，`conversations.detail` 与 `timeline.locate` 在设备 op 返回 404 时退回 HTTP；待中枢补齐 `include_private` 后再切回设备协议。
+    3. 下推 `day` 实体不含 `detail.timeline`（章节）与 `detail.omitted_record_ids`（仅下推 `omitted_count`）。Mac 端在解码本地 `day` 缓存时按 `detail.items` 自动合成章节供详细档时间轴使用；详细档“未入时间线”角标在缓存模式下暂不显示逐条标记。
+    4. 开放区间或覆盖当前时刻的 `records.list` 查询（如菜单栏面板最近记录与当天详细档）绕过 10 分钟内存 LRU 缓存，避免新采集记录滞后展示；单条原文（`records.get`）与历史日期列表照常使用内存 LRU，锁屏与关窗时调用 `clearMemory()` 清空。
+    5. 事项 `level=evidence` 层与超过 30 天已从本地缓存清理的归档事项详情按需退回 HTTP。
 - **对现有用户的影响**：单机用户界面和交互无变化；打开时间线、项目页和菜单栏面板的响应更快（本地缓存直出），中枢忙于写库（503）时查看窗口不再白屏报错；原有 `history.db` 在首次升级时自动无损迁移并自动备份。
 - **迁移步骤**：
-  1. 中枢先合入表结构、变更写入钩子与 `projection.*` 设备接口（保留现有 `/v1/*` 管理读接口不变）。
-  2. 中枢新增同机测试覆盖私密过滤、删除即刻失效与信箱 640 KiB 拆包。
-  3. Mac 查看窗口先在同机上切到 `ProjectionCache` + 设备读接口（写接口和设置页暂留原路，到 6.10/6.11 迁移），灰度验收一周后关闭旧的直接读路径。
+  1. 中枢已合入表结构、变更写入钩子与 `projection.*` 设备接口（保留现有 `/v1/*` 管理读接口不变）。
+  2. 中枢与 Mac 端均已补齐私密过滤、删除即刻失效、信箱 640 KiB 拆包及真实中枢等价性测试。
+  3. Mac 查看窗口与桌面小组件读路径已接入 `ProjectionCache` + 设备按需读接口：存在有效 `collector-link.json` 时自动启用，无连接文件、冷启动设备通道不可用或收到 401/403（执行 `wipe()` 后）静默退回 HTTP；写接口、待确认与设置页暂留原路，待 6.10.4 剩余设备 op 补齐后迁移。
 - **主要风险**：
   - 私密记录漏过过滤链进入下推（缓解：在 `projection.ts` 出口做统一白名单过滤 + 针对混合私密事项/修正转私密的专项单测）。
   - 中枢高频写草稿导致信箱请求暴涨或撑爆空间（缓解：30 秒合并节流 + `down` 单条替换 + 离线 24h 转轻量 `hint`）。
@@ -886,10 +889,17 @@ CREATE TABLE project_context_cache (
 - **音频转写（`AudioCoordinator` + `ra-audio-worker`），待迁移**：改走 6.5 已有的 `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`、`audio.samples`、`audio.lines`；`ra-audio-worker` 通过宿主代理发出请求，不再自己读 `token` 调 `127.0.0.1`。
 - **采集健康上报（解耦 `collector-status.json`），待迁移**：新增 `op: "collector.status"`，采集端每 60 秒或出错时上报 `{ time, transcription, outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak }`，中枢按 `device_id` 保存在内存/状态表，不再读共享目录的 `collector-status.json`。
 
-#### 6.10.4 查看窗口读写迁到设备协议
+#### 6.10.4 查看窗口读写迁到设备协议（读路径已切换，写路径与设置页待迁移）
 
-- 读路径（时间线、项目、事项、“此刻”、小组件）：全部改读 6.9 的本地 `viewer-cache.db` 与按需原文 op。
-- 写路径与管理操作（均经 `DeviceClient` 发送，受 6.11 权限控制）：
+- **读路径（已实施）**：通过 `ViewerDataSource`（`HTTPViewerDataSource` / `CachedViewerDataSource` / `AdaptiveViewerDataSource`）统一封装；应用启动或 `local-bootstrap` 写出 `collector-link.json` 后即启动 `ProjectionSync`（窗口或菜单栏面板前台 30 秒、后台 5 分钟轮询，同时订阅 `/v1/device/events`）：
+  - **已切到本地 `viewer-cache.db`**：时间线简约档与当天概述（`day`）、侧栏项目列表与项目页一句话概况（`project`）、项目页“正在推进”（`project_context`）、项目页“最近的进展”与事项经过（`day` 本地筛选，跨出 90 天窗口按需走 `timeline.query`）、事项标题与详细版（`thread`）、菜单栏“此刻”（`now`）、桌面小组件快照（`day`，只含当天、不含私密、跨天即删）。
+  - **已切到设备协议按需读（仅留内存 LRU，锁屏/关窗调 `clearMemory()`）**：展开段落查看原文与单条记录详情（`records.get`，本机 `admin` 带 `include_private: true`）、详细档全天记录、菜单栏近 1 小时活动条/最近记录与原文搜索（`records.list`，本机 `admin` 带 `include_private: true`）、时间线搜索与超 90 天历史（`timeline.query`）、非私密录音整场详情（`conversations.detail`）、非私密记录定位（`timeline.locate`）。
+  - **失效与回退**：收到 401（设备被移除）或 403（角色降级）时立即调用 `wipe()` 删除 `viewer-cache.db` 与小组件快照（401 同时移除 `collector-link.json`）并静默退回 HTTP；无连接文件时默认走 HTTP，界面不新增状态提示。
+  - **与原文的出入（暂留 HTTP 的读接口）**：
+    - `history.segments`：中枢该 op 目前未支持 `include_private: true` 且过滤私密记录与私密对话，缓存模式下暂退回 HTTP 以防详细档丢私密内容；`conversations.detail` 与 `timeline.locate` 遇 404 时退回 HTTP（同因）。
+    - 事项详细页“依据”标签（`level=evidence`，下推 `thread` 不含完整 `frame_records` 列表）及超过 30 天已清理的归档事项详情退回 HTTP。
+    - 待确认（`/v1/pending`、音频样本）、说话人（`/v1/speakers`）、首次准备清单（`/v1/status`、`/v1/settings/agents`）、运行记录（`/v1/runtime/*`）、审计日志（`/v1/audit`）与设置页读接口随写操作一并留待下阶段迁移。
+- **写路径与管理操作（待迁移，仍走本机 HTTP）**（规划均经 `DeviceClient` 发送，受 6.11 权限控制）：
 
 | 类别 | 设备 `op` | 对应原 HTTP 接口 |
 |---|---|---|

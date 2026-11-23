@@ -241,13 +241,16 @@ struct TimelineSegmentRecords: View {
   private func load() async {
     await records.run {
       guard let ids = item.recordIds else { return [] }
-      let idSet = Set(ids)
-      let source: [HistoryRecord]
-      if let dayRecords { source = dayRecords }
-      else { source = try await store.api.day(day) }
-      let found = source.filter { idSet.contains($0.id) }
-      let missing = try await store.api.missingRecords(ids, from: found)
-      return (found + missing).filter { !isDraft || $0.sensitivity != "private" }
+      let rows: [HistoryRecord]
+      if let dayRecords {
+        let idSet = Set(ids)
+        let found = dayRecords.filter { idSet.contains($0.id) }
+        let missing = try await store.dataSource.missingRecords(ids, from: found)
+        rows = found + missing
+      } else {
+        rows = try await store.dataSource.recordsByIDs(ids)
+      }
+      return rows.filter { !isDraft || $0.sensitivity != "private" }
         .sorted { ($0.start, $0.id) > ($1.start, $1.id) }
     }
   }

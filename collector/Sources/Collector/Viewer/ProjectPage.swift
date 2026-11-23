@@ -134,7 +134,7 @@ struct ProjectPage: View {
 
   private func loadOverview() async {
     let revision = store.revision
-    let project = try? await store.api.project(id, level: "detail")
+    let project = try? await store.dataSource.project(id, level: "detail")
     guard !Task.isCancelled, revision == store.revision else { return }
     let brief = project?.brief?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     overview = brief.isEmpty ? nil : (revision, brief)
@@ -143,7 +143,7 @@ struct ProjectPage: View {
   private func loadContext() async {
     let revision = store.revision
     await context.run {
-      let threads = try await store.api.projectContext(id)
+      let threads = try await store.dataSource.projectContext(id)
       try Task.checkCancellation()
       guard revision == store.revision else { throw CancellationError() }
       return threads
@@ -156,7 +156,7 @@ struct ProjectPage: View {
     let revision = store.revision
     if !current { timeline.value = nil }
     await timeline.run {
-      let page = try await store.api.timeline(projectId: id)
+      let page = try await store.dataSource.timeline(projectId: id)
       try Task.checkCancellation()
       guard revision == store.revision else { throw CancellationError() }
       return page
@@ -171,7 +171,7 @@ struct ProjectPage: View {
     defer { loadingMore = false }
     let revision = store.revision
     do {
-      let page = try await store.api.timeline(projectId: id, before: before)
+      let page = try await store.dataSource.timeline(projectId: id, before: before)
       guard !Task.isCancelled, revision == store.revision, timeline.value?.nextCursor == before else { return }
       timeline.value = HubAPI.TimelineResult(days: previous.days + page.days, nextCursor: page.nextCursor)
     } catch is CancellationError {

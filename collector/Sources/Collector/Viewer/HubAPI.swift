@@ -171,8 +171,8 @@ final class HubAPI: @unchecked Sendable {
     try await send("DELETE", "/v1/days/\(TimelineDay.key(day))/segments/\(id)", ["record_ids": recordIds])
   }
 
-  struct TimelineResult: Decodable, Sendable {
-    struct Day: Decodable, Identifiable, Sendable {
+  struct TimelineResult: Decodable, Equatable, Sendable {
+    struct Day: Decodable, Identifiable, Equatable, Sendable {
       let date: String
       let items: [DayDiary.Item]
       var id: String { date }
@@ -185,7 +185,7 @@ final class HubAPI: @unchecked Sendable {
     try await get(TimelineResult.self, "/v1/timeline", ["project_id": projectId, "thread_id": threadId, "q": query, "before": before])
   }
 
-  struct TimelineLocation: Decodable, Sendable {
+  struct TimelineLocation: Decodable, Equatable, Sendable {
     let date: String
     let segmentId: String?
   }

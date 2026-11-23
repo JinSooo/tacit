@@ -5,9 +5,13 @@ import AppKit
 @MainActor enum WindowVisibility {
   private(set) static var visible = false
   private static var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+  static var onChange: ((Bool) -> Void)?
 
   static func update(_ window: NSWindow) {
-    visible = window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
+    let next = window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
+    let changed = next != visible
+    visible = next
+    if changed { onChange?(next) }
     guard visible, !waiters.isEmpty else { return }
     let ready = waiters.values; waiters = [:]
     ready.forEach { $0.resume() }
