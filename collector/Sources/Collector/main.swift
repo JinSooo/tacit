@@ -13,19 +13,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   init(config: Config) { self.config = config }
   let toggles = SourceToggles(store: UserDefaults.standard)
   lazy var sources = DataSourceRegistry(toggles: toggles)
-  lazy var hub = HubClient(config: config)
+  lazy var hub = HubClient(config: config) { [weak self] _ in
+    self?.viewerDataSource.activateIfLinked()
+  }
   lazy var api = HubAPI(base: { [config] in config.hubURL }, token: { [config] in config.token })
+  lazy var viewerDataSource: AdaptiveViewerDataSource = {
+    let widgetURL = WidgetSnapshot.fileURL.flatMap { file in
+      file.deletingLastPathComponent().deletingLastPathComponent().path == config.dataDir.standardizedFileURL.path ? file : nil
+    }
+    return AdaptiveViewerDataSource(
+      http: HTTPViewerDataSource(api: api),
+      dataDir: config.dataDir,
+      originProvider: { [config] in config.hubURL },
+      widgetSnapshotURL: widgetURL,
+      onUpdate: { [weak self] result in
+        let delegate = self
+        await MainActor.run {
+          guard let delegate, !delegate.terminating else { return }
+          delegate.widgetPublisher?.refresh()
+          let needsReload = result.deletedCount > 0 || !result.goneRecordIDs.isEmpty || result.didReset
+          delegate.viewer.store.applyRemoteSync(reloadViews: needsReload)
+        }
+      },
+      onWipe: { [weak self] _ in
+        let delegate = self
+        await MainActor.run {
+          guard let delegate, !delegate.terminating else { return }
+          delegate.widgetPublisher?.clearSnapshot()
+        }
+      }
+    )
+  }()
   @MainActor private lazy var deviceDiscovery = DeviceDiscovery(advertiser: BonjourDeviceAdvertiser())
   lazy var audio = AudioCoordinator(config: config)
   lazy var plugins = PluginScheduler(config: config)
   lazy var viewer: ViewerWindow = MainActor.assumeIsolated {
-    let store = ViewerStore(api: api, device: config.device, controls: self)
-    store.onRevision = { [weak self] in self?.widgetPublisher?.refresh(invalidate: true) }
+    let store = ViewerStore(api: api, dataSource: viewerDataSource, device: config.device, controls: self)
+    store.onRevision = { [weak self] in
+      self?.viewerDataSource.notifyLocalWrite()
+      self?.widgetPublisher?.refresh(invalidate: true)
+    }
     store.onDeviceSettingsUpdate = { [weak self] settings, invitationHubId in
       guard let self, !self.terminating else { return }
       self.deviceDiscovery.update(settings, invitationHubId: invitationHubId)
     }
-    return ViewerWindow(store: store)
+    let window = ViewerWindow(store: store)
+    window.onClose = { [weak self] in
+      self?.viewerDataSource.clearMemory()
+      self?.updateSyncForeground()
+    }
+    return window
   }
   private var widgetPublisher: WidgetSnapshotPublisher?
   private var readyForTimelineURL = false
@@ -39,7 +76,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var statusItem: NSStatusItem!
   let statusMenu = NSMenu()
   lazy var panel: StatusPanel = MainActor.assumeIsolated {
-    StatusPanel(store: viewer.store) { [weak self] page in self?.viewer.show(page) }
+    let p = StatusPanel(store: viewer.store) { [weak self] page in self?.viewer.show(page) }
+    p.onVisibilityChange = { [weak self] visible in
+      guard let self else { return }
+      if !visible && !WindowVisibility.visible { self.viewerDataSource.clearMemory() }
+      self.updateSyncForeground()
+    }
+    return p
+  }
+
+  @MainActor private func updateSyncForeground() {
+    viewerDataSource.setForeground(WindowVisibility.visible || panel.isShown)
   }
   var timers: [Timer] = []
   var terminationSignal: TerminationSignal?
@@ -64,6 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     terminationSignal = TerminationSignal { NSApp.terminate(nil) }
     let startup = LoginStartup(home: FileManager.default.homeDirectoryForCurrentUser, dataDir: config.dataDir)
     guard AppSetup.start(config: config, startup: startup) else { return }
+    MainActor.assumeIsolated {
+      WindowVisibility.onChange = { [weak self] _ in self?.updateSyncForeground() }
+    }
+    viewerDataSource.activateIfLinked()
     hub.flush()
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     // 左键弹面板，右键（或按住 control 点）弹菜单。菜单不常驻在 statusItem 上，否则左键也会弹菜单。
@@ -93,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
        let plugins = Bundle.main.builtInPlugInsURL,
        FileManager.default.fileExists(atPath: plugins.appendingPathComponent("TacitWidget.appex").path) {
       MainActor.assumeIsolated {
-        widgetPublisher = WidgetSnapshotPublisher(api: api, file: file)
+        widgetPublisher = WidgetSnapshotPublisher(dataSource: viewerDataSource, file: file)
         widgetPublisher?.refresh()
       }
       ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -111,10 +162,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.updateAudio() }
     ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.tick() }
     for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
-      ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.closeSegment() }
+      ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+        self?.closeSegment()
+        self?.viewerDataSource.clearMemory()
+      }
     }
     DistributedNotificationCenter.default().addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
       self?.closeSegment()
+      self?.viewerDataSource.clearMemory()
     }
     DistributedNotificationCenter.default().addObserver(forName: .init(Self.showWindowNotification), object: nil, queue: .main) { [weak self] _ in
       self?.openHistory()
@@ -185,6 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       widgetPublisher?.stop()
       deviceDiscovery.update(nil)
     }
+    viewerDataSource.stop()
     timers.forEach { $0.invalidate() }
     audio.shutdown()
     captureQueue.sync { emit(segmenter.flush()) }

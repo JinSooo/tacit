@@ -108,8 +108,8 @@ struct ThreadPage: View {
     .task(id: depth) { if depth == 2, evidence.value == nil { await loadEvidence() } }
   }
 
-  func load() async { await detail.run { try await store.api.thread(id, level: "detail") } }
-  func loadEvidence() async { await evidence.run { try await store.api.thread(id, level: "evidence").records ?? [] } }
+  func load() async { await detail.run { try await store.dataSource.thread(id, level: "detail") } }
+  func loadEvidence() async { await evidence.run { try await store.dataSource.thread(id, level: "evidence").records ?? [] } }
 
   func content(_ d: EntityDetail) -> some View {
     VStack(alignment: .leading, spacing: 24) {
@@ -140,7 +140,7 @@ struct ThreadPage: View {
           .overlay(alignment: .leading) { Rectangle().fill(Palette.hairline).frame(width: 2) }
       case 1:
         DetailBody(detail: d, progressLabel: "进展", progress: d.detail?.progress)
-        FactsView(facts: d.facts ?? [], loadEvidence: { try await store.api.thread(id, level: "evidence").records ?? [] }) { Task { await load() } }
+        FactsView(facts: d.facts ?? [], loadEvidence: { try await store.dataSource.thread(id, level: "evidence").records ?? [] }) { Task { await load() } }
       default:
         EvidenceList(loader: evidence) { Task { await loadEvidence() } }
       }

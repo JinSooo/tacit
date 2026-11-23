@@ -72,9 +72,9 @@ final class HubClient {
   private var deliveryMetrics = HubDeliveryMetrics()
   var hubBusy: Int { lock.lock(); defer { lock.unlock() }; return deliveryMetrics.hubBusy }
 
-  init(config: Config) {
+  init(config: Config, onLinked: (@Sendable (LocalDeviceLink) -> Void)? = nil) {
     self.config = config
-    upload = CollectorUpload(config: config)
+    upload = CollectorUpload(config: config, onLinked: onLinked)
     queue = OutboundQueue()
     buffer = OutboxBuffer(memory: queue, open: { try OutboxStore(dataDirectory: config.dataDir) })
     io.async { [self] in retryOutbox() }

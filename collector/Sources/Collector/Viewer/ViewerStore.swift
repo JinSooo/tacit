@@ -75,6 +75,7 @@ enum Route: Hashable {
 
 @MainActor @Observable final class ViewerStore {
   let api: HubAPI
+  let dataSource: any ViewerDataSource
   /// 本机补写、修正记录时用的设备名（与采集端一致）。
   let device: String
   weak var controls: CaptureControlling?
@@ -104,32 +105,63 @@ enum Route: Hashable {
   /// 进入详细时间线后要定位的原始记录。
   var historyFocus: String?
   /// 记录被删除、补写或修正后递增，各页据此重新读取。
-  var revision = 0 { didSet { onRevision?() } }
+  var revision = 0 {
+    didSet {
+      if !suppressRevisionCallback { onRevision?() }
+    }
+  }
+  @ObservationIgnored private var suppressRevisionCallback = false
   @ObservationIgnored var onRevision: (() -> Void)?
   @ObservationIgnored var onDeviceSettingsUpdate: ((DeviceSettings?, String?) -> Void)?
 
-  init(api: HubAPI, device: String, controls: CaptureControlling?) {
+  init(api: HubAPI, dataSource: (any ViewerDataSource)? = nil, device: String, controls: CaptureControlling?) {
     self.api = api
+    self.dataSource = dataSource ?? HTTPViewerDataSource(api: api)
     self.device = device
     self.controls = controls
+  }
+
+  /// 远程下推同步到达后刷新侧栏项目；有删除或重置时递增 revision 触发界面重读（不反触发本地写回调）。
+  func applyRemoteSync(reloadViews: Bool) {
+    if reloadViews {
+      suppressRevisionCallback = true
+      revision += 1
+      suppressRevisionCallback = false
+    }
+    Task {
+      if let latestProjects = try? await dataSource.projects() {
+        projects = latestProjects
+      }
+    }
   }
 
   func refreshShared() async {
     sharedRequest += 1
     let request = sharedRequest
+    var projectError: String?
     do {
-      async let p = api.projects()
-      async let q = api.pending()
-      async let s = api.speakers()
-      let latest = try await (p, q, s)
+      let latestProjects = try await dataSource.projects()
       try Task.checkCancellation()
       guard request == sharedRequest else { return }
-      (projects, pending, speakers) = latest
-      sharedError = nil
+      projects = latestProjects
+    } catch is CancellationError {
+      return
+    } catch {
+      guard request == sharedRequest else { return }
+      projectError = error.localizedDescription
+    }
+    do {
+      async let q = api.pending()
+      async let s = api.speakers()
+      let latest = try await (q, s)
+      try Task.checkCancellation()
+      guard request == sharedRequest else { return }
+      (pending, speakers) = latest
+      sharedError = projectError
     } catch is CancellationError {
     } catch {
       guard request == sharedRequest else { return }
-      sharedError = error.localizedDescription
+      sharedError = projectError ?? error.localizedDescription
     }
   }
 

@@ -90,7 +90,7 @@ public struct HistoryRecord: Decodable, Identifiable, Hashable, Sendable {
   public var seconds: TimeInterval { end.map { max(0, $0.timeIntervalSince(start)) } ?? 0 }
 }
 
-public struct RecordDetail: Decodable, Sendable {
+public struct RecordDetail: Decodable, Equatable, Sendable {
   public let record: HistoryRecord
   public let corrections: [HistoryRecord]
   enum CodingKeys: String, CodingKey { case corrections }
@@ -104,7 +104,13 @@ public struct RecordDetail: Decodable, Sendable {
   }
 }
 
-public struct RecordPage: Decodable, Sendable { public let records: [HistoryRecord]; public let nextCursor: String? }
+public struct RecordPage: Decodable, Sendable {
+  public let records: [HistoryRecord]
+  public let nextCursor: String?
+  public init(records: [HistoryRecord], nextCursor: String?) {
+    self.records = records; self.nextCursor = nextCursor
+  }
+}
 
 public struct Fact: Decodable, Identifiable, Hashable, Sendable {
   public let id: String
@@ -160,8 +166,8 @@ public struct Project: Decodable, Identifiable, Hashable, Sendable {
 }
 
 /// 线程和项目的详细版共用：线程有 progress，项目有 status 和 people。
-public struct EntityDetail: Decodable, Sendable {
-  public struct Body: Decodable, Sendable {
+public struct EntityDetail: Decodable, Equatable, Sendable {
+  public struct Body: Decodable, Equatable, Sendable {
     public let goal: String?
     public let progress: String?
     public let status: String?
@@ -232,7 +238,7 @@ public struct AuditRead: Decodable, Identifiable, Hashable, Sendable {
   public var date: Date? { ViewerTime.parse(at) }
 }
 
-public struct NowState: Decodable, Sendable {
+public struct NowState: Decodable, Equatable, Sendable {
   public let feedback: String?
   public let brief: String?
   public let updatedAt: String?
@@ -259,7 +265,14 @@ public struct NowState: Decodable, Sendable {
 }
 
 public struct DayDiary: Decodable, Equatable, Sendable {
-  public struct Chapter: Decodable, Hashable, Sendable { public let start: String; public let end: String; public let text: String }
+  public struct Chapter: Decodable, Hashable, Sendable {
+    public let start: String
+    public let end: String
+    public let text: String
+    public init(start: String, end: String, text: String) {
+      self.start = start; self.end = end; self.text = text
+    }
+  }
   public struct Reference: Decodable, Identifiable, Hashable, Sendable {
     public let id: String; public let at: String; public let source: String; public let title: String
   }
@@ -316,12 +329,20 @@ public struct DayDiary: Decodable, Equatable, Sendable {
     public let items: [Item]?
     public let omittedRecordIds: [String]?
     public let cutoff: String?
+    public init(summary: String?, timeline: [Chapter]?, items: [Item]?, omittedRecordIds: [String]?, cutoff: String?) {
+      self.summary = summary; self.timeline = timeline; self.items = items
+      self.omittedRecordIds = omittedRecordIds; self.cutoff = cutoff
+    }
   }
   public let date: String
   public let detail: Body?
   public let drafts: [Draft]?
   public let needsRegen: FlexBool?
   public let failed: FlexBool?
+
+  public init(date: String, detail: Body?, drafts: [Draft]?, needsRegen: FlexBool?, failed: FlexBool?) {
+    self.date = date; self.detail = detail; self.drafts = drafts; self.needsRegen = needsRegen; self.failed = failed
+  }
 
   public var summary: String? {
     guard detail?.items != nil, let text = detail?.summary?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -353,7 +374,7 @@ public struct ConversationRef: Decodable, Hashable, Sendable {
 }
 
 /// 一场对话的整理结果（hub 的 /v1/conversations/:id）：整理过的原文和总结。
-public struct ConversationDetail: Decodable, Sendable {
+public struct ConversationDetail: Decodable, Equatable, Sendable {
   public struct Turn: Decodable, Hashable, Sendable { public let at: String; public let speaker: String; public let text: String }
   public let id: String
   public let recordIds: [String]

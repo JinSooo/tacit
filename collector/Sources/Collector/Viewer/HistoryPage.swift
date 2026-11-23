@@ -153,8 +153,8 @@ struct HistoryPage<Header: View>: View {
 
   private func loadActivity(_ key: LoadKey) async {
     await activity.run {
-      async let grouped = store.api.segments(day)
-      async let missing = store.api.missingRecords(key.missing, from: [])
+      async let grouped = store.dataSource.segments(day)
+      async let missing = store.dataSource.missingRecords(key.missing, from: [])
       let (groups, extras) = try await (grouped, missing)
       try Task.checkCancellation()
       return Activity(segments: groups.segments, conversations: groups.conversations, missing: extras)

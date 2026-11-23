@@ -5,6 +5,7 @@ import CollectorCore
 /// 主窗口。采集端平时只在菜单栏；打开窗口时临时出现在 Dock 和 ⌘Tab 里，关掉窗口后退回菜单栏。
 @MainActor final class ViewerWindow: NSObject, NSWindowDelegate, NSMenuItemValidation, NSMenuDelegate {
   let store: ViewerStore
+  var onClose: (() -> Void)?
   private var window: NSWindow?
 
   init(store: ViewerStore) {
@@ -54,6 +55,7 @@ import CollectorCore
   }
 
   func windowWillClose(_ notification: Notification) {
+    onClose?()
     DispatchQueue.main.async { [weak self] in
       NSApp.setActivationPolicy(.accessory)
       if let window = self?.window { WindowVisibility.update(window) }

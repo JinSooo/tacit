@@ -23,6 +23,7 @@ actor CollectorUpload {
   private let keys: LocalDeviceLink.Keys
   private let session: URLSession
   private let log: (String) -> Void
+  private let onLinked: (@Sendable (LocalDeviceLink) -> Void)?
   private var preparing = false
   private var prepareAfter = 0.0
   private var prepareStopped = false
@@ -30,12 +31,14 @@ actor CollectorUpload {
   private var active: (link: LocalDeviceLink, origin: URL, client: DeviceClient)?
 
   init(config: Config, files: LocalDeviceLink.Files? = nil, keys: LocalDeviceLink.Keys = .keychain,
-       session: URLSession = .shared, log: @escaping (String) -> Void = { NSLog("record-anything: %@", $0) }) {
+       session: URLSession = .shared, log: @escaping (String) -> Void = { NSLog("record-anything: %@", $0) },
+       onLinked: (@Sendable (LocalDeviceLink) -> Void)? = nil) {
     self.config = config
     self.files = files ?? .init(directory: config.dataDir)
     self.keys = keys
     self.session = session
     self.log = log
+    self.onLinked = onLinked
   }
 
   func prepare() async {
@@ -48,7 +51,10 @@ actor CollectorUpload {
     do {
       let link = try await LocalDeviceLink.bootstrap(origin: config.hubURL, token: config.token, files: files, keys: keys,
         http: { try await LocalDeviceLink.request($0, session: self.session) })
-      if link != nil { prepareStopped = true }
+      if let link {
+        prepareStopped = true
+        onLinked?(link)
+      }
     } catch LocalDeviceLink.Failure.conflict {
       log("local-bootstrap: key_conflict")
       prepareStopped = true

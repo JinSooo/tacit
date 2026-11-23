@@ -53,6 +53,7 @@ private struct ReviewDayContent: View {
   private struct LoadKey: Equatable {
     let refresh: Int
     let revision: Int
+    let density: TimelineDensity
   }
 
   private var showsSetup: Bool {
@@ -88,7 +89,7 @@ private struct ReviewDayContent: View {
         }
       }
     }
-    .task(id: LoadKey(refresh: refresh, revision: store.revision)) {
+    .task(id: LoadKey(refresh: refresh, revision: store.revision, density: density)) {
       repeat {
         await load()
         if !isToday { break }
@@ -249,11 +250,12 @@ private struct ReviewDayContent: View {
   }
 
   @ViewBuilder private var compactStatus: some View {
-    if current, let error = diary.error ?? records.error {
+    let hasContent = hasSegments || !drafts.isEmpty
+    if current, let error = diary.error ?? (hasContent ? nil : records.error) {
       Placeholder(kind: .error(error) { Task { await load() } })
     } else if failed && !hasSegments {
       status("最近一次整理失败", color: Palette.attention)
-    } else if !current || diary.value == nil || records.value == nil {
+    } else if !current || diary.value == nil || (!hasContent && records.value == nil) {
       ProgressView().controlSize(.small).accessibilityLabel("正在读取时间线")
     } else if !drafts.isEmpty {
       EmptyView()
@@ -330,18 +332,24 @@ private struct ReviewDayContent: View {
       records.value = nil
       records.error = nil
     }
-    async let review: Void = diary.run {
-      let value = try await store.api.diary(day)
-      try Task.checkCancellation()
-      return value
-    }
-    async let activity: Void = records.run {
-      let value = try await store.api.day(day)
-      try Task.checkCancellation()
-      return value
-    }
     async let readiness: Void = loadSetup()
-    _ = await (review, activity, readiness)
+    await diary.run {
+      let value = try await store.dataSource.diary(day)
+      try Task.checkCancellation()
+      return value
+    }
+    let loaded = diary.value ?? nil
+    let hasDiaryItems = loaded?.detail?.items?.allSatisfy { $0.recordIds != nil } == true
+    let hasDiaryDrafts = isToday && !(loaded?.drafts ?? []).isEmpty
+    // 简约档已有整理段或草稿时不拉整天原文，展开单段再按需读取；详细档或空天再拉当天原始记录。
+    if density == .detailed || (!hasDiaryItems && !hasDiaryDrafts) {
+      await records.run {
+        let value = try await store.dataSource.day(day)
+        try Task.checkCancellation()
+        return value
+      }
+    }
+    _ = await readiness
     if !Task.isCancelled, revision == store.revision { loadedRevision = revision }
   }
 }
@@ -455,6 +463,6 @@ struct ReviewItemPage: View {
 
   private func load() async {
     item.value = nil
-    await item.run { try await store.api.diary(day)?.detail?.items?.first { $0.id == id } }
+    await item.run { try await store.dataSource.diary(day)?.detail?.items?.first { $0.id == id } }
   }
 }
