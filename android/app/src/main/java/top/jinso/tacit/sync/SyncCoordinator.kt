@@ -17,7 +17,7 @@ import java.io.IOException
 
 internal data class MacStatus(
     val name: String?, val manual: String, val removed: Boolean, val lastSync: Long,
-    val pending: Int, val rejected: Map<String, Int>, val error: String?,
+    val pending: Int, val rejected: Map<String, Int>, val error: String?, val relayDisabled: Boolean = false,
 )
 
 internal class SyncCoordinator(private val app: TacitApp) {
@@ -30,7 +30,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
             data?.optBoolean("removed") == true, data?.optLong("lastSync") ?: 0L,
             if (data == null) 0 else vault.pendingCount(),
             if (data == null) emptyMap() else vault.rejectedReasons(includeReasons),
-            data?.optionalString("error"))
+            data?.optionalString("error"), data?.optBoolean("relayDisabled") == true)
     }
 
     suspend fun pair(uri: String, address: String) = withContext(Dispatchers.IO) {
@@ -40,17 +40,20 @@ internal class SyncCoordinator(private val app: TacitApp) {
             val invite = Invitation.parse(uri)
             val manual = parseAddress(address)
             val last = previous?.takeIf { it.optString("hub") == invite.hubId }?.optionalString("last")
-            val origin = MacDiscovery(app).find(invite.hubId, last, invite.addresses, manual)
             val keys = DeviceEnvelope.generate()
             val public = DeviceEnvelope.public(keys).base64url()
             val secret = DeviceEnvelope.secret(keys)
             val wrapped = try { Keys(app).wrapDeviceKey(secret, public).base64url() } finally { secret.fill(0) }
-            val device = DeviceClient(invite.publicKey, keys, { deviceHttp(origin, it) })
-                .pair(invite, Build.MODEL.take(200).ifBlank { "Android" })
-            vault.saveSyncConnection(JSONObject().put("device", device).put("hub", invite.hubId)
-                .put("name", invite.macName).put("hubKey", invite.publicKey).put("private", wrapped)
-                .put("public", public)
-                .put("addresses", JSONArray(invite.addresses)).put("last", origin).put("manual", manual))
+            val phoneName = Build.MODEL.take(200).ifBlank { "Android" }
+            pairWithAvailableTransport(invite, keys, phoneName, findMac = {
+                MacDiscovery(app).find(invite.hubId, last, invite.addresses, manual)
+            }) { paired, origin ->
+                vault.saveSyncConnection(JSONObject().put("device", paired.id).put("hub", invite.hubId)
+                    .put("name", invite.macName).put("hubKey", invite.publicKey).put("private", wrapped)
+                    .put("public", public)
+                    .put("addresses", JSONArray(invite.addresses)).put("last", origin).put("manual", manual)
+                    .put("relay", paired.relay?.json()))
+            }
             SyncWorker.schedulePeriodic(app)
             SyncWorker.enqueue(app)
         }
@@ -83,62 +86,76 @@ internal class SyncCoordinator(private val app: TacitApp) {
         }
         val ctx = currentCoroutineContext()
         try {
-            val origin = MacDiscovery(app).find(data.getString("hub"), data.optionalString("last"),
-                data.getJSONArray("addresses").strings(), data.optionalString("manual"))
+            val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
+            var unavailable: MacUnavailable? = null
+            val origin = try {
+                MacDiscovery(app).find(data.getString("hub"), data.optionalString("last"),
+                    data.getJSONArray("addresses").strings(), data.optionalString("manual"))
+            } catch (error: MacUnavailable) {
+                unavailable = error
+                null
+            }
             val device = data.getString("device")
             val public = data.getString("public")
             val secret = Keys(app).unwrapDeviceKey(data.getString("private").decode64(), public)
             val keys = try { DeviceEnvelope.restore(secret, public.decode64(32)) } finally { secret.fill(0) }
-            val client = DeviceClient(data.getString("hubKey"), keys, { request ->
-                ctx.ensureActive()
-                deviceHttp(origin, request)
-            }, device)
-            val runtime by lazy { AudioRuntime.get(app) }
-            pullChanges({ op, body -> client.send(op, body).also { data.put("last", origin) } }) { page ->
-                val audioDeletes = page.filterIsInstance<Change.Delete>().filter { it.source == "android.audio" }
-                if (audioDeletes.isEmpty()) vault.applyChanges(page)
-                else runtime.applyRecordChanges(page, audioDeletes)
+            val hubKey = data.getString("hubKey")
+            val protocol = DeviceMessages(hubKey, keys, device)
+            fun receipt(delivery: RelayJournal.Delivery, reply: JSONObject) {
+                when (delivery.op) {
+                    "ingest" -> vault.applyReceipt(delivery.ids, uploadReceipt(reply, delivery.ids.size))
+                    "delete" -> confirmDeletes(delivery.ids, reply)
+                }
+                data.put("lastSync", System.currentTimeMillis())
             }
-            // Fetch policy before sending queued records or doing any audio backfill.
-            val audio = AudioSync.parse(client.send("audio.sync"))
-            if (audio.purgeBefore != null || audio.deleted.isNotEmpty() || data.optJSONObject("audio")?.toString() != audio.policy.toString()) {
-                runtime.applyMacAudio(audio) {
-                    data.put("audio", audio.policy)
-                    vault.saveSyncConnection(data)
+
+            fun exchange(mailbox: RelayMailbox) = RelayExchange(protocol, journal, mailbox, ::receipt,
+                canResubmit = { it.op != "ingest" || it.ids.all { id -> vault.wire(id) != null } })
+            fun drain(config: RelayConfig, required: Boolean, allowMove: Boolean) {
+                try {
+                    ctx.ensureActive()
+                    journal.useMailbox(config) { exchange(RelayMailbox(config)).drain(allowMove) }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    if (required) throw error
                 }
             }
-            check(client.send("audio.sync.ack", audio.ack()).get("acknowledged") == true)
-            while (true) {
-                val ids = vault.pendingDeletes()
-                if (ids.isEmpty()) break
-                val count = client.send("delete", JSONObject().put("ids", JSONArray(ids))).integer("deleted")
-                require(count in 0..ids.size.toLong())
-                vault.confirmDeletes(ids)
+            val startingRelay = journal.active
+            if (startingRelay != null && !journal.disabled &&
+                (origin == null || journal.deliveries().any { it.box == startingRelay.down && it.ids.isNotEmpty() })) {
+                drain(startingRelay, origin == null, allowMove = true)
             }
-            while (true) {
-                val batch = vault.uploadBatch(device)
-                if (batch.isEmpty()) break
-                val records = JSONArray(batch.map { it.second })
-                val receipt = uploadReceipt(client.send("ingest", JSONObject().put("records", records)), batch.size)
-                vault.applyReceipt(batch.map { it.first }, receipt)
+            for (retired in journal.retired().filter { it != startingRelay }) drain(retired, required = false, allowMove = false)
+            journal.prune()
+
+            if (origin != null) {
+                val client = DeviceClient(hubKey, keys, { request ->
+                    ctx.ensureActive()
+                    deviceHttp(origin, request)
+                }, device)
+                journal.finishRound()
+                refreshRelay(client, journal)
+                data.put("last", origin)
+                pullFromMac(data, client::send)
+                sendDirect(device, client, journal)
+                syncSummaries(System.currentTimeMillis(), client::send)
+            } else {
+                val config = journal.active?.takeUnless { journal.disabled } ?: throw requireNotNull(unavailable)
+                val mailbox = RelayMailbox(config)
+                val relay = exchange(mailbox)
+                journal.useMailbox(config) {
+                    if (config != startingRelay) relay.drain()
+                    if (journal.active != config) throw RelayWaiting()
+                    // Deposit queued writes before making a pull that needs the Mac to be awake.
+                    relay.resumeWrites()
+                    sendThroughRelay(device, protocol, journal, mailbox, relay)
+                    pullFromMac(data, relay::send)
+                    syncSummaries(journal.roundTime(), relay::send, relay = true)
+                    journal.finishRound()
+                }
             }
-            // Summaries are an extra: an older Mac without these ops must not fail the whole sync.
-            try {
-                // Tell the Mac whether this phone writes its own summaries, so the Mac does not pay for a second one.
-                val summarizing = vault.summaryModel()?.optBoolean("enabled") == true
-                val unsent = vault.unsentSummaries()
-                val reply = client.send("conversations.put", JSONObject().put("summarizing", summarizing).put("summaries", JSONArray(unsent.map { s ->
-                    JSONObject().put("id", s.id).put("record_ids", JSONArray(s.recordIds)).put("title", s.title)
-                        .put("summary", s.summary).put("points", JSONArray(s.points))
-                })))
-                vault.markSummariesSent(reply.getJSONArray("saved").strings(), reply.getJSONArray("stale").strings())
-            } catch (error: CancellationException) { throw error } catch (error: DeviceRemoved) { throw error } catch (_: Exception) { }
-            try {
-                val now = System.currentTimeMillis(); val from = now - SUMMARY_WINDOW
-                val got = client.send("conversations", JSONObject().put("from", from).put("to", now))
-                vault.saveMacSummaries(from, now, got.getJSONArray("conversations"))
-            } catch (error: CancellationException) { throw error } catch (error: DeviceRemoved) { throw error } catch (_: Exception) { }
-            data.put("lastSync", System.currentTimeMillis()).put("last", origin)
+            data.put("lastSync", System.currentTimeMillis())
             data.remove("error")
             data.remove("retryAt")
             data.remove("failures")
@@ -148,6 +165,11 @@ internal class SyncCoordinator(private val app: TacitApp) {
         } catch (_: DeviceRemoved) {
             data.put("removed", true)
             data.remove("private")
+            data.remove("relay")
+            data.remove("relayDisabled")
+            data.remove("relayRetired")
+            data.remove("relayJournal")
+            data.remove("relayRoundAt")
             data.remove("audio")
             data.remove("error")
             forgetAudioPolicy { vault.saveSyncConnection(data) }
@@ -155,10 +177,124 @@ internal class SyncCoordinator(private val app: TacitApp) {
         } catch (error: Exception) {
             val failures = (data.optInt("failures") + 1).coerceAtMost(8)
             val delay = (30_000L shl (failures - 1)).coerceAtMost(MAX_RETRY)
-            data.put("error", syncError(error)).put("failures", failures).put("retryAt", System.currentTimeMillis() + delay)
+            data.put("error", if (data.optBoolean("relayDisabled")) null else syncError(error)).put("failures", failures).put("retryAt", System.currentTimeMillis() + delay)
             vault.saveSyncConnection(data)
             SyncWorker.retry(app, delay)
         }
+    }
+
+    private fun refreshRelay(client: DeviceClient, journal: RelayJournal) {
+        val reply = try { client.send("relay") } catch (error: DeviceStatus) {
+            if (error.status in setOf(400, 404)) return // Older Mac.
+            throw error
+        }
+        journal.config(if (reply.isNull("relay")) null else RelayConfig.parse(reply.getJSONObject("relay")))
+    }
+
+    private suspend fun pullFromMac(data: JSONObject, send: suspend (String, JSONObject) -> JSONObject) {
+        val runtime by lazy { AudioRuntime.get(app) }
+        pullChanges({ op, body -> send(op, body) }) { page ->
+            val audioDeletes = page.filterIsInstance<Change.Delete>().filter { it.source == "android.audio" }
+            if (audioDeletes.isEmpty()) vault.applyChanges(page)
+            else runtime.applyRecordChanges(page, audioDeletes)
+        }
+        // Fetch policy before audio backfill.
+        val audio = AudioSync.parse(send("audio.sync", JSONObject()))
+        if (audio.purgeBefore != null || audio.deleted.isNotEmpty() || data.optJSONObject("audio")?.toString() != audio.policy.toString()) {
+            runtime.applyMacAudio(audio) {
+                data.put("audio", audio.policy)
+                vault.saveSyncConnection(data)
+            }
+        }
+        check(send("audio.sync.ack", audio.ack()).get("acknowledged") == true)
+    }
+
+    private fun sendDirect(device: String, client: DeviceClient, journal: RelayJournal) {
+        while (true) {
+            val ids = vault.pendingDeletes(journal.inFlight("delete") + journal.inFlight("ingest"))
+            if (ids.isEmpty()) break
+            confirmDeletes(ids, client.send("delete", deleteBody(ids)))
+        }
+        while (true) {
+            val batch = vault.uploadBatch(device, journal.inFlight("ingest"))
+            if (batch.isEmpty()) break
+            val receipt = uploadReceipt(client.send("ingest", JSONObject().put("records", JSONArray(batch.map { it.second }))), batch.size)
+            vault.applyReceipt(batch.map { it.first }, receipt)
+        }
+    }
+
+    private suspend fun sendThroughRelay(
+        device: String, protocol: DeviceMessages, journal: RelayJournal, mailbox: RelayMailbox, relay: RelayExchange,
+    ) {
+        while (true) {
+            val ids = vault.pendingDeletes(journal.inFlight("delete") + journal.inFlight("ingest"))
+            if (ids.isEmpty()) break
+            var count = ids.size
+            while (true) {
+                val request = protocol.request("delete", deleteBody(ids.take(count)))
+                try {
+                    relay.sendWrite("delete", request, ids.take(count))
+                    break
+                } catch (error: EnvelopeTooLarge) {
+                    if (count == 1) throw error
+                    count /= 2
+                }
+            }
+        }
+        val oversized = mutableSetOf<String>()
+        var limit = mailbox.messageBytes
+        while (true) {
+            val batch = vault.uploadBatch(device, journal.inFlight("ingest") + oversized)
+            if (batch.isEmpty()) break
+            val upload = relayUpload(protocol, batch, limit)
+            if (upload == null) {
+                // A record too large for this mailbox can still go directly to the Mac.
+                oversized += batch.first().first
+                continue
+            }
+            try {
+                relay.sendWrite("ingest", upload.request, batch.take(upload.count).map { it.first })
+            } catch (error: EnvelopeTooLarge) {
+                // A self-hosted limit can change between hello and PUT.
+                limit = minOf(limit, upload.request.json.size - 1)
+            }
+        }
+    }
+
+    private fun deleteBody(ids: List<String>) = JSONObject().put("ids", JSONArray(ids))
+
+    private fun confirmDeletes(ids: List<String>, reply: JSONObject) {
+        require(reply.integer("deleted") in 0..ids.size.toLong())
+        vault.confirmDeletes(ids)
+    }
+
+    private suspend fun syncSummaries(
+        now: Long, send: suspend (String, JSONObject) -> JSONObject, relay: Boolean = false,
+    ) {
+        // Older Macs do not have these operations. A mailbox transport failure still ends the round.
+        try {
+            val summarizing = vault.summaryModel()?.optBoolean("enabled") == true
+            val unsent = vault.unsentSummaries()
+            val reply = send("conversations.put", JSONObject().put("summarizing", summarizing).put("summaries", JSONArray(unsent.map { s ->
+                JSONObject().put("id", s.id).put("record_ids", JSONArray(s.recordIds)).put("title", s.title)
+                    .put("summary", s.summary).put("points", JSONArray(s.points))
+            })))
+            vault.markSummariesSent(reply.getJSONArray("saved").strings(), reply.getJSONArray("stale").strings())
+        } catch (error: Exception) {
+            if (!ignoreSummaryError(error, relay)) throw error
+        }
+        try {
+            val from = now - SUMMARY_WINDOW
+            val got = send("conversations", JSONObject().put("from", from).put("to", now))
+            vault.saveMacSummaries(from, now, got.getJSONArray("conversations"))
+        } catch (error: Exception) {
+            if (!ignoreSummaryError(error, relay)) throw error
+        }
+    }
+
+    private fun ignoreSummaryError(error: Exception, relay: Boolean): Boolean {
+        if (error is CancellationException || error is DeviceRemoved) return false
+        return !relay || (error is DeviceStatus && error.status in setOf(400, 404))
     }
 
     private fun forgetAudioPolicy(persist: () -> Unit) {

@@ -175,6 +175,7 @@ class VaultTest {
                 vault.saveSyncConnection(JSONObject().put("device", pairedId))
                 val batch = vault.uploadBatch(pairedId)
                 assertEquals(listOf(original, rejected, deleted), batch.map { it.first })
+                assertEquals(listOf(rejected, deleted), vault.uploadBatch(pairedId, setOf(original)).map { it.first })
                 assertEquals(pairedId, batch.first().second.getString("device"))
                 assertEquals(prefs.device, JSONObject(vault.wire(original)!!).getString("device"))
                 vault.applyReceipt(batch.map { it.first }, mapOf(1 to "测试拒绝"))
@@ -185,6 +186,7 @@ class VaultTest {
         val vault = Vault(context, prefs)
         try {
             assertEquals(listOf(deleted), vault.pendingDeletes())
+            assertTrue(vault.pendingDeletes(setOf(deleted)).isEmpty())
             assertEquals(mapOf("测试拒绝" to 1), vault.rejectedReasons(includeReasons = true))
             assertEquals(0, vault.pendingCount())
             val originalWire = JSONObject(vault.wire(original)!!)

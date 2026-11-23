@@ -1,5 +1,6 @@
 package top.jinso.tacit.sync
 
+import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -87,5 +88,52 @@ class HubE2eTest {
         request("/v1/settings/devices/pairing", "POST")
         request("/v1/settings/devices/$device", "DELETE")
         assertThrows(DeviceRemoved::class.java) { phone.send("sync", JSONObject().put("cursor", 0)) }
+
+        // The advertised address now points to the relay, which cannot answer the hub's LAN hello.
+        val relayUrl = requireNotNull(System.getenv("TACIT_E2E_RELAY"))
+        val relayInviteUri = request("/v1/settings/devices/pairing", "POST").getString("uri")
+        val invitationData = JSONObject(URI(relayInviteUri).rawQuery.removePrefix("d=").decode64().toString(Charsets.UTF_8))
+            .put("addrs", JSONArray(listOf(relayUrl)))
+        val relayInvite = Invitation.parse("tacit://pair?d=${invitationData.toString().toByteArray().base64url()}")
+        val relayKeys = DeviceEnvelope.generate()
+        runBlocking {
+            lateinit var paired: PairedDevice
+            pairWithAvailableTransport(relayInvite, relayKeys, "信箱测试手机", findMac = {
+                relayInvite.addresses.firstOrNull { matchesHub(it, relayInvite.hubId) }
+                    ?: throw MacUnavailable(false)
+            }) { pairedDevice, directOrigin ->
+                assertNull(directOrigin)
+                paired = pairedDevice
+            }
+            val config = requireNotNull(paired.relay)
+            assertNotEquals(relayInvite.relay, config)
+            val protocol = DeviceMessages(relayInvite.publicKey, relayKeys, paired.id)
+            val mailbox = RelayMailbox(config)
+            val state = JSONObject().put("relay", config.json())
+            val journal = RelayJournal(state, {})
+            val record = note("android.audio").put("device", paired.id).put("source_ref", "fixture:relay-audio")
+                .put("t_end", Instant.now().plusSeconds(1).toString())
+                .put("body", "[10:00:00] 我：这是合成的测试录音。")
+            val id = record.getString("id")
+            val batch = listOf(id to record)
+            val upload = requireNotNull(relayUpload(protocol, batch, mailbox.messageBytes))
+            var confirmed = false
+            val exchange = RelayExchange(protocol, journal, mailbox, { delivery, receipt ->
+                assertEquals(listOf(id), delivery.ids)
+                assertTrue(uploadReceipt(receipt, delivery.ids.size).isEmpty())
+                confirmed = true
+            })
+            exchange.drain()
+            val receipt = exchange.sendWrite("ingest", upload.request, listOf(id))
+            assertEquals(1, receipt.getInt("accepted"))
+            assertTrue(confirmed)
+            assertTrue(journal.deliveries().isEmpty())
+            assertNull(mailbox.get(upload.request.nonce))
+            assertFalse(exchange.send("sync", JSONObject().put("cursor", 0)).getBoolean("more"))
+            val policy = AudioSync.parse(exchange.send("audio.sync"))
+            assertTrue(exchange.send("audio.sync.ack", policy.ack()).getBoolean("acknowledged"))
+            assertEquals(0, exchange.send("conversations.put", JSONObject().put("summarizing", false).put("summaries", JSONArray()))
+                .getJSONArray("saved").length())
+        }
     }
 }

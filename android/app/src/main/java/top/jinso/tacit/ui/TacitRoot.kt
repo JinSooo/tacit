@@ -94,7 +94,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                     val macProblem = mac?.status?.let {
                         when {
                             it.removed -> "已在 Mac 上移除，需重新连接"
-                            it.name == null -> "未连接 Mac"
+                            it.name == null || it.relayDisabled -> "未连接 Mac"
                             else -> null
                         }
                     }

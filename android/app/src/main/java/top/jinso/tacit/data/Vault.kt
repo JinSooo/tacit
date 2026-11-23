@@ -292,22 +292,24 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
             if (it.moveToFirst()) it.getString(0) else null
         }
 
-    private fun pendingIds(limit: Int): List<String> {
+    private fun pendingIds(limit: Int, excluded: Set<String> = emptySet()): List<String> {
         val sources = Sources.UPLOADABLE
         val placeholders = sources.joinToString(",") { "?" }
         return db.rawQuery(
             """SELECT records.id FROM records LEFT JOIN sync_records USING(id)
                WHERE sync_records.id IS NULL AND source IN ($placeholders)
-               ORDER BY records.rowid LIMIT ?""", (sources.toList() + limit.toString()).toTypedArray(),
+               AND records.id NOT IN (SELECT value FROM json_each(?))
+               ORDER BY records.rowid LIMIT ?""",
+            (sources.toList() + JSONArray(excluded).toString() + limit.toString()).toTypedArray(),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
     }
 
-    @Synchronized internal fun uploadBatch(device: String): List<Pair<String, JSONObject>> = buildList {
+    @Synchronized internal fun uploadBatch(device: String, excluded: Set<String> = emptySet()): List<Pair<String, JSONObject>> = buildList {
         var bytes = 0
         // Base64url expansion, timestamp, nonce and JSON framing also count toward the limit.
         val bodyBudget = (MAX_ENVELOPE - 1024) / 4 * 3
         while (size < 200) {
-            val candidates = pendingIds(200).filter { candidate -> none { it.first == candidate } }
+            val candidates = pendingIds(200, excluded).filter { candidate -> none { it.first == candidate } }
             if (candidates.isEmpty()) break
             for (id in candidates) {
                 val wire = uploadableWire(id)
@@ -345,8 +347,9 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
         changes.value++
     }
 
-    @Synchronized internal fun pendingDeletes(): List<String> =
-        db.rawQuery("SELECT id FROM sync_deletes ORDER BY rowid LIMIT 100", emptyArray<String>()).use { c ->
+    @Synchronized internal fun pendingDeletes(excluded: Set<String> = emptySet()): List<String> =
+        db.rawQuery("SELECT id FROM sync_deletes WHERE id NOT IN (SELECT value FROM json_each(?)) ORDER BY rowid LIMIT 100",
+            arrayOf(JSONArray(excluded).toString())).use { c ->
             buildList { while (c.moveToNext()) add(c.getString(0)) }
         }
 

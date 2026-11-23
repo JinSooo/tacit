@@ -27,7 +27,7 @@ internal class EnvelopeTooLarge : Exception()
 
 internal data class Invitation(
     val hubId: String, val macName: String, val publicKey: String, val code: String,
-    val addresses: List<String>, val expiresAt: Instant,
+    val addresses: List<String>, val expiresAt: Instant, val relay: RelayConfig? = null,
 ) {
     companion object {
         fun parse(input: String, now: Instant = Instant.now()): Invitation {
@@ -44,7 +44,8 @@ internal data class Invitation(
             val expires = Instant.parse(json.getString("expires_at"))
             if (!expires.isAfter(now)) throw InviteExpired()
             return Invitation(hubId, json.getString("name").also { require(it.isNotBlank()) }, pk, code,
-                json.getJSONArray("addrs").strings().mapNotNull { runCatching { macOrigin(it) }.getOrNull() }.distinct(), expires)
+                json.getJSONArray("addrs").strings().mapNotNull { runCatching { macOrigin(it) }.getOrNull() }.distinct(), expires,
+                json.optJSONObject("relay")?.let(RelayConfig::parse))
         }
     }
 }
@@ -121,9 +122,10 @@ internal class DeviceClient(
     private val device: String? = null,
 ) {
     private var removed = false
+    private val protocol = DeviceMessages(hub, keys, device)
     fun send(op: String, body: JSONObject = JSONObject()): JSONObject {
         if (removed) throw DeviceRemoved()
-        val request = DeviceEnvelope.request(device, hub, keys, op, body)
+        val request = protocol.request(op, body)
         if (request.json.size > MAX_ENVELOPE) throw EnvelopeTooLarge()
         val reply = post(request.json)
         if (reply.status == 401 && device != null) {
@@ -131,20 +133,50 @@ internal class DeviceClient(
             throw DeviceRemoved()
         }
         if (reply.status != 200) throw DeviceStatus(reply.status, op)
-        val response = JSONObject(DeviceEnvelope.open(JSONObject(reply.body.toString(Charsets.UTF_8)),
-            DeviceEnvelope.RESPONSE_INFO, request.nonce, keys, hub))
-        val status = response.integer("status")
-        if (status != 200L) throw DeviceStatus(status.toInt(), op)
-        return response.getJSONObject("body")
+        return protocol.response(op, protocol.open(reply.body, request.nonce))
     }
 
-    fun pair(invite: Invitation, phoneName: String): String {
-        if (!invite.expiresAt.isAfter(Instant.now())) throw InviteExpired()
-        val response = send("pair", JSONObject().put("code", invite.code)
-            .put("device_pk", DeviceEnvelope.public(keys).base64url()).put("name", phoneName).put("platform", "android"))
-        require(response.getString("hub_id") == invite.hubId)
-        return response.getString("device_id").also { require(deviceIdPattern.matches(it)) }
+    fun pair(invite: Invitation, phoneName: String): String = pairDevice(invite, keys, phoneName, ::send).id
+}
+
+internal class DeviceMessages(
+    private val hub: String,
+    private val keys: AsymmetricCipherKeyPair,
+    private val device: String? = null,
+) {
+    fun request(op: String, body: JSONObject) = DeviceEnvelope.request(device, hub, keys, op, body)
+
+    fun open(wire: ByteArray, nonce: String) = JSONObject(DeviceEnvelope.open(
+        JSONObject(wire.toString(Charsets.UTF_8)), DeviceEnvelope.RESPONSE_INFO, nonce, keys, hub))
+
+    fun response(op: String, message: JSONObject): JSONObject {
+        val status = message.integer("status")
+        require(status in 100..599)
+        if (status != 200L) throw DeviceStatus(status.toInt(), op)
+        return message.getJSONObject("body")
     }
+}
+
+internal data class PairedDevice(val id: String, val relay: RelayConfig?)
+
+internal fun pairDevice(
+    invite: Invitation,
+    keys: AsymmetricCipherKeyPair,
+    phoneName: String,
+    send: (String, JSONObject) -> JSONObject,
+): PairedDevice {
+    if (!invite.expiresAt.isAfter(Instant.now())) throw InviteExpired()
+    return pairedDevice(invite, send("pair", pairBody(invite, keys, phoneName)))
+}
+
+internal fun pairBody(invite: Invitation, keys: AsymmetricCipherKeyPair, phoneName: String): JSONObject =
+    JSONObject().put("code", invite.code).put("device_pk", DeviceEnvelope.public(keys).base64url())
+        .put("name", phoneName).put("platform", "android")
+
+internal fun pairedDevice(invite: Invitation, response: JSONObject): PairedDevice {
+    require(response.getString("hub_id") == invite.hubId)
+    val id = response.getString("device_id").also { require(deviceIdPattern.matches(it)) }
+    return PairedDevice(id, response.optJSONObject("relay")?.let(RelayConfig::parse))
 }
 
 internal fun sendingCopy(wire: String, deviceId: String): JSONObject = JSONObject(wire).put("device", deviceId)
@@ -171,7 +203,7 @@ internal sealed interface Change {
     data class Correction(val record: JSONObject) : Change
 }
 
-internal fun pullChanges(send: (String, JSONObject) -> JSONObject, apply: (List<Change>) -> Unit) {
+internal inline fun pullChanges(send: (String, JSONObject) -> JSONObject, apply: (List<Change>) -> Unit) {
     var cursor = 0L
     do {
         val page = send("sync", JSONObject().put("cursor", cursor))
