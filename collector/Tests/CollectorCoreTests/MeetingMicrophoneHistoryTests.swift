@@ -85,3 +85,29 @@ import Testing
   history.sample(enabled: true, speaking: true, at: t0.addingTimeInterval(12), read: read)
   #expect(reads == 4)
 }
+
+@Test func idleWithoutActiveConversationSkipsMeetingProbeAndSupportsOnDemandCheck() {
+  var history = MeetingMicrophoneHistory(), reads = 0
+  let read = { reads += 1; return Set(["us.zoom.xos"]) }
+  // 无活跃人声且无进行中对话时，不触发 CoreAudio 进程枚举。
+  history.sample(enabled: true, active: false, speaking: false, at: t0, read: read)
+  history.sample(enabled: true, active: false, speaking: false, at: t0.addingTimeInterval(30), read: read)
+  #expect(reads == 0)
+  #expect(!history.hasSample(since: t0, through: t0.addingTimeInterval(30)))
+
+  // 说话开始后立即采样；进入对话后维持 10 秒轮询。
+  history.sample(enabled: true, active: false, speaking: true, at: t0.addingTimeInterval(31), read: read)
+  #expect(reads == 1)
+  #expect(history.hasSample(since: t0.addingTimeInterval(31), through: t0.addingTimeInterval(32)))
+  #expect(history.apps(since: t0.addingTimeInterval(31), through: t0.addingTimeInterval(32)) == ["us.zoom.xos"])
+
+  history.sample(enabled: true, active: true, speaking: false, at: t0.addingTimeInterval(40), read: read)
+  #expect(reads == 1)
+  history.sample(enabled: true, active: true, speaking: false, at: t0.addingTimeInterval(41), read: read)
+  #expect(reads == 2)
+
+  // 关闭录音时仍立即清空样本。
+  history.sample(enabled: false, active: true, speaking: true, at: t0.addingTimeInterval(42), read: read)
+  #expect(reads == 2)
+  #expect(history.apps(since: t0.addingTimeInterval(31), through: t0.addingTimeInterval(42)).isEmpty)
+}

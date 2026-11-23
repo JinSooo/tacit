@@ -144,3 +144,52 @@ private func format(_ rate: Double, _ channels: UInt32, planar: Bool = false, in
   try guardrail.attempt { #expect(RecordingStartGuard(dataDirectory: dir).blocked) }
   #expect(!RecordingStartGuard(dataDirectory: dir).blocked)
 }
+
+@Test func pcmBatcherCoalescesChunksPreservesHostAndHandlesDiscontinuity() {
+  var batcher = PCMBatcher(targetDuration: 0.1, maxDiscontinuity: 0.05, maxTrailingSilence: 0.2)
+  let rate = 1000.0, tps = 1_000_000.0
+  var emitted: [(count: Int, rate: Double, host: UInt64)] = []
+  let collect: ([Float], Double, UInt64) -> Void = { emitted.append(($0.count, $1, $2)) }
+
+  // 4 个 30ms 小块拼满 100ms 才派发一次，保留首块 hostTime。
+  for i in 0..<3 {
+    batcher.append([Float](repeating: 0.1, count: 30), rate: rate, host: UInt64(i * 30_000), ticksPerSecond: tps, emit: collect)
+  }
+  #expect(emitted.isEmpty)
+  batcher.append([Float](repeating: 0.1, count: 30), rate: rate, host: 90_000, ticksPerSecond: tps, emit: collect)
+  #expect(emitted.count == 1)
+  #expect(emitted[0].count == 120 && emitted[0].host == 0)
+
+  // 时间跳变超过阈值时先刷出旧缓冲，再从新 hostTime 起算。
+  batcher.append([Float](repeating: 0.2, count: 30), rate: rate, host: 120_000, ticksPerSecond: tps, emit: collect)
+  batcher.append([Float](repeating: 0.2, count: 30), rate: rate, host: 500_000, ticksPerSecond: tps, emit: collect)
+  #expect(emitted.count == 2)
+  #expect(emitted[1].count == 30 && emitted[1].host == 120_000)
+  batcher.flush(emit: collect)
+  #expect(emitted.count == 3)
+  #expect(emitted[2].count == 30 && emitted[2].host == 500_000)
+}
+
+@Test func pcmBatcherSuppressesIdleZeroFramesAfterTrailingSilence() {
+  var batcher = PCMBatcher(targetDuration: 0.1, maxDiscontinuity: 0.05, maxTrailingSilence: 0.2)
+  let rate = 1000.0, tps = 1_000_000.0
+  var emitted: [(samples: [Float], host: UInt64)] = []
+  let collect: ([Float], Double, UInt64) -> Void = { emitted.append(($0, $2)) }
+
+  // 从未有非零声音时，全零静音直接跳过。
+  for i in 0..<10 {
+    batcher.appendZeroFrames(count: 50, rate: rate, host: UInt64(i * 50_000), ticksPerSecond: tps, emit: collect)
+  }
+  #expect(emitted.isEmpty)
+
+  // 出现声音后，最多补送 200ms 尾部静音让 VAD 收尾，再之后的连续静音不再派发。
+  batcher.append([Float](repeating: 0.25, count: 50), rate: rate, host: 1_000_000, ticksPerSecond: tps, emit: collect)
+  for i in 1...10 {
+    batcher.appendZeroFrames(count: 50, rate: rate, host: UInt64(1_000_000 + i * 50_000), ticksPerSecond: tps, emit: collect)
+  }
+  let totalSamples = emitted.reduce(0) { $0 + $1.samples.count }
+  #expect(totalSamples == 250) // 50 non-zero + 200 trailing zero
+  let beforeMore = emitted.count
+  batcher.appendZeroFrames(count: 500, rate: rate, host: 2_000_000, ticksPerSecond: tps, emit: collect)
+  #expect(emitted.count == beforeMore)
+}

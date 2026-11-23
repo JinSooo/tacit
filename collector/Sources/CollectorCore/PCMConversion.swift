@@ -38,6 +38,7 @@ public let supplyPCMInput: AudioConverterComplexInputDataProc = { _, packets, da
 
 public final class PCMResampler {
   private let converter: AudioConverterRef
+  private var chunk = [Float](repeating: 0, count: 4096)
   // 与系统错误码分开；表示本批数据已用完，但流尚未结束。
   private static let needsInput: OSStatus = 0x72616e64
   public init(rate: Double) throws {
@@ -56,8 +57,7 @@ public final class PCMResampler {
       var input = PCMConversionInput(samples: samples, exhaustedStatus: Self.needsInput)
       var result: [Float] = []
       while true {
-        var chunk = [Float](repeating: 0, count: 4096)
-        var count: UInt32 = 4096
+        var count: UInt32 = UInt32(chunk.count)
         let status = chunk.withUnsafeMutableBytes { bytes in
           var list = AudioBufferList(mNumberBuffers: 1,
             mBuffers: AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(bytes.count), mData: bytes.baseAddress))

@@ -33,14 +33,19 @@ final class AudioPipeline {
   }
   deinit { SherpaOnnxDestroyVoiceActivityDetector(vad); free(model); free(provider) }
 
+  private static let secondsPerTick: Double? = {
+    var timebase = mach_timebase_info_data_t()
+    guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom > 0 else { return nil }
+    return Double(timebase.numer) / Double(timebase.denom) / 1_000_000_000
+  }()
+
   func accept(_ samples: [Float], rate: Double, host: UInt64) throws {
     guard !samples.isEmpty else { return }
     guard rate.isFinite, (8000...384000).contains(rate), samples.count <= Int(UInt32.max) / 4 else {
       throw AudioCaptureError("音频采样率或帧数不可用")
     }
-    var timebase = mach_timebase_info_data_t()
-    guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.denom > 0 else { throw AudioCaptureError("无法读取 hostTime 时基") }
-    let seconds = Double(host) * Double(timebase.numer) / Double(timebase.denom) / 1_000_000_000
+    guard let secondsPerTick = Self.secondsPerTick else { throw AudioCaptureError("无法读取 hostTime 时基") }
+    let seconds = Double(host) * secondsPerTick
     let start = Date().addingTimeInterval(seconds - ProcessInfo.processInfo.systemUptime)
     let end = start.addingTimeInterval(Double(samples.count) / rate)
     level(Self.dbfs(samples), start, end)
