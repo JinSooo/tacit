@@ -64,8 +64,7 @@ private struct DayWidgetEntryView: View {
   let entry: DayEntry
 
   var body: some View {
-    DayWidgetView(family: family, date: entry.date, snapshot: entry.snapshot,
-                  iconDirectory: WidgetSnapshot.fileURL.map(WidgetSnapshot.iconDirectory(for:)))
+    DayWidgetView(family: family, date: entry.date, snapshot: entry.snapshot)
   }
 }
 

@@ -188,11 +188,11 @@ struct MenuBarPanel: View {
         Text("还没有记录").font(.system(size: TextSize.body)).foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, minHeight: 60)
       } else {
+        let runs = RecentRuns.group(rows)
         VStack(spacing: 0) {
-          ForEach(RecentRuns.group(rows), id: \.first!.id) { run in
-            let row = RecentRow(run: run)
-            RecentRow(run: run) {
-              open(.record(row.record.id, row.record.start))
+          ForEach(Array(runs.enumerated()), id: \.element[0].id) { index, run in
+            RecentRow(run: run, index: index, last: index == runs.count - 1) { record in
+              open(.record(record.id, record.start))
             }
           }
         }
@@ -234,34 +234,42 @@ struct MenuBarPanel: View {
   }
 }
 
-/// 最近的一段（见 RecentRuns）：来源图标、标题、最新的时间，下面一行最新的内容。微信按聊天合成一行，标题是聊天名。
+/// 最近的一段（见 RecentRuns）：开始时刻、时间轴节点、标题，下面一行最新的内容。微信按聊天合成一行，标题是聊天名。
 struct RecentRow: View {
   /// 带正文的一行大约的高度，读取前占位用。
   static let height: CGFloat = 46
   let run: [HistoryRecord]
-  var action: () -> Void = {}
+  let index: Int
+  let last: Bool
+  let action: (HistoryRecord) -> Void
+  private let timeWidth: CGFloat = 34
+  private let columnSpacing: CGFloat = 8
+  private let verticalInset: CGFloat = 6
   /// 代表这一行的记录：微信取最新的一条消息，其他取最新的一条。
   var record: HistoryRecord { run.first { $0.contextText("chat") != nil } ?? run[0] }
   var chat: String? { RecentRuns.chat(run) }
   @State private var hovering = false
 
   var body: some View {
-    Button(action: action) {
-      HStack(alignment: .top, spacing: 10) {
-        SourceGlyph(source: record.source, app: record.contextText("app"), size: 20).padding(.top, 1)
+    Button { action(record) } label: {
+      HStack(alignment: .top, spacing: columnSpacing) {
+        Text(ViewerFormat.clock(run.last?.start ?? record.start))
+          .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+          .frame(width: timeWidth, alignment: .leading)
+          .padding(.top, 2)
+        Color.clear.frame(width: 10, height: 0).accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 2) {
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title)
-              .font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
-            Spacer(minLength: 4)
-            Text(ViewerFormat.clock(run[0].start)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(.secondary)
-          }
+          Text(title)
+            .font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
           if let line = snippet, line != title {
-            Text(line).font(.system(size: TextSize.caption)).foregroundStyle(.secondary).lineLimit(1)
+            Text(line).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).lineLimit(1)
           }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
-      .padding(.horizontal, 10).padding(.vertical, 6)
+      .padding(.vertical, verticalInset)
+      .background { axis }
+      .padding(.horizontal, 10)
       // 面板圆角 14，行在 6 的内边距里：悬停底色圆角 14 − 6 = 8。
       .background(RoundedRectangle(cornerRadius: StatusPanel.cornerRadius - 6, style: .continuous).fill(.quaternary.opacity(hovering ? 1 : 0)))
       .contentShape(Rectangle())
@@ -270,8 +278,31 @@ struct RecentRow: View {
     .onHover { hovering = $0 }
   }
 
-  /// 图标已经说明是哪个应用，标题不再重复应用名。剪贴板记录的标题是复制内容的开头，
-  /// 和下面一行重复，所以改说从哪个应用复制。
+  private var axis: some View {
+    Canvas { context, size in
+      let x = timeWidth + columnSpacing + 5
+      let y = verticalInset + 8
+      let top = index == 0 ? y + 4 : 0
+      let bottom = last ? y : size.height
+      if bottom > top {
+        let rail = CGRect(x: x - 0.5, y: top, width: 1, height: bottom - top)
+        context.fill(Path(rail), with: .color(Palette.muted.opacity(0.32)))
+      }
+      if index == 0 {
+        let ring = CGRect(x: x - 3.5, y: y - 3.5, width: 7, height: 7)
+        context.stroke(Path(ellipseIn: ring), with: .color(Palette.accent), lineWidth: 1.5)
+        let core = CGRect(x: x - 1, y: y - 1, width: 2, height: 2)
+        context.fill(Path(ellipseIn: core), with: .color(Palette.dynamic(0xB8B0A5, 0xF2EFEA)))
+      } else {
+        let dot = CGRect(x: x - 2, y: y - 2, width: 4, height: 4)
+        let tone = Palette.dynamic(0x6E6860, 0xF2EFEA).opacity(0.86 - Double(index - 1) * 0.16)
+        context.fill(Path(ellipseIn: dot), with: .color(tone))
+      }
+    }
+    .accessibilityHidden(true)
+  }
+
+  /// 剪贴板记录的标题是复制内容的开头，和下面一行重复，所以改说从哪个应用复制。
   var title: String {
     if let chat { return chat }
     if record.source == "mac.clipboard", record.body?.isEmpty == false {
@@ -302,20 +333,26 @@ struct HourBar: View {
   var body: some View {
     let span = range.upperBound.timeIntervalSince(range.lowerBound)
     VStack(spacing: 3) {
-      GeometryReader { geo in
-        let w = geo.size.width
-        let x = { (d: Date) in CGFloat(min(max(d.timeIntervalSince(range.lowerBound) / span, 0), 1)) * w }
-        ZStack(alignment: .leading) {
-          Rectangle().fill(.quaternary)
-          ForEach(records) { r in
-            let a = x(r.start), b = x(r.end ?? r.start)
-            Rectangle().fill(.secondary)
-              .frame(width: max(1.5, b - a)).offset(x: a)
-          }
+      Canvas { context, size in
+        guard span > 0 else { return }
+        let position = { (date: Date) in
+          CGFloat(min(max(date.timeIntervalSince(range.lowerBound) / span, 0), 1)) * size.width
         }
-        .clipShape(RoundedRectangle(cornerRadius: Radius.control))
+        for record in records {
+          let end = record.end ?? record.start
+          guard end >= range.lowerBound, record.start <= range.upperBound else { continue }
+          let startX = position(record.start)
+          let width = position(end) - startX
+          let inset = min(1, max(0, width) / 4)
+          let markWidth = max(1.5, width - 2 * inset)
+          let x = max(0, min(startX + inset, size.width - markWidth))
+          let rect = CGRect(x: x, y: 0, width: markWidth, height: size.height)
+          context.fill(Capsule().path(in: rect), with: .color(Palette.accent))
+        }
       }
-      .frame(height: 12)
+      .frame(height: 6)
+      .background(.quaternary, in: Capsule())
+      .accessibilityHidden(true)
       HStack {
         Text(ViewerFormat.clock(range.lowerBound))
         Spacer()

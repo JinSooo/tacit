@@ -5,11 +5,19 @@ struct DayWidgetView: View {
   let family: WidgetFamily
   let date: Date
   let snapshot: WidgetSnapshot
-  let iconDirectory: URL?
 
   private var large: Bool { family == .systemLarge }
+  private let timeWidth: CGFloat = 34
+  private let columnSpacing: CGFloat = 8
 
   var body: some View {
+    content
+      .containerBackground(Palette.paper, for: .widget)
+      .widgetURL(snapshot.timelineURL)
+  }
+
+  // 文档示意图也用这段布局，圆角与挂件背景由各自的容器负责。
+  var content: some View {
     // 大号放不下时先少一段，不压缩间距。
     ViewThatFits(in: .vertical) {
       contents(recentCount: large ? 4 : 3)
@@ -19,8 +27,6 @@ struct DayWidgetView: View {
     .padding(.horizontal, large ? 18 : 16)
     .padding(.vertical, large ? 18 : 12)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .containerBackground(Palette.paper, for: .widget)
-    .widgetURL(snapshot.timelineURL)
   }
 
   /// 大号分三块：日期和概述、活动条、最近几段，块间留白比块内大，读起来不挤。
@@ -45,9 +51,10 @@ struct DayWidgetView: View {
 
       if let range = snapshot.activityRange(at: date) {
         activityStrip(range)
-        VStack(alignment: .leading, spacing: large ? 12 : 4) {
-          ForEach(Array(snapshot.segments.prefix(recentCount).enumerated()), id: \.offset) { _, segment in
-            recentRow(segment)
+        let segments = snapshot.segments.prefix(recentCount)
+        VStack(alignment: .leading, spacing: 0) {
+          ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+            recentRow(segment, index: index, last: index == segments.count - 1)
           }
         }
       } else if snapshot.summary == nil {
@@ -70,7 +77,10 @@ struct DayWidgetView: View {
         for segment in snapshot.segments where segment.end > segment.start {
           let x = segment.start.timeIntervalSince(range.lowerBound) / span * size.width
           let width = segment.end.timeIntervalSince(segment.start) / span * size.width
-          context.fill(Path(CGRect(x: x, y: 0, width: width, height: size.height)), with: .color(Palette.accent))
+          // 两端各让出一点，首尾相接的活动也看得出分界。
+          let inset = min(1, width / 4)
+          let rect = CGRect(x: x + inset, y: 0, width: width - 2 * inset, height: size.height)
+          context.fill(Capsule().path(in: rect), with: .color(Palette.accent))
         }
       }
       .frame(height: 6)
@@ -91,23 +101,20 @@ struct DayWidgetView: View {
     .accessibilityValue("\(start) 至 \(end)")
   }
 
-  private func recentRow(_ segment: WidgetSnapshot.Segment) -> some View {
-    HStack(alignment: .top, spacing: 10) {
-      sourceIcon(segment)
-        .accessibilityHidden(true)
-
+  private func recentRow(_ segment: WidgetSnapshot.Segment, index: Int, last: Bool) -> some View {
+    let verticalInset: CGFloat = large ? 5 : 2
+    return HStack(alignment: .top, spacing: columnSpacing) {
+      Text(clock(segment.start))
+        .font(.system(size: TextSize.caption).monospacedDigit())
+        .foregroundStyle(Palette.muted)
+        .frame(width: timeWidth, alignment: .leading)
+        .padding(.top, 2)
+      Color.clear.frame(width: 10, height: 0).accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text(segment.title)
-            .font(.system(size: TextSize.body, weight: .medium))
-            .foregroundStyle(Palette.ink)
-            .lineLimit(1)
-          Spacer(minLength: 0)
-          Text(clock(segment.start))
-            .font(.system(size: TextSize.caption).monospacedDigit())
-            .foregroundStyle(Palette.muted)
-            .fixedSize()
-        }
+        Text(segment.title)
+          .font(.system(size: TextSize.body, weight: .medium))
+          .foregroundStyle(Palette.ink)
+          .lineLimit(1)
         if large && !segment.description.isEmpty {
           Text(segment.description)
             .font(.system(size: TextSize.caption))
@@ -115,41 +122,36 @@ struct DayWidgetView: View {
             .lineLimit(1)
         }
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .padding(.vertical, verticalInset)
+    .background {
+      Canvas { context, size in
+        let x = timeWidth + columnSpacing + 5
+        let y = verticalInset + 8
+        let top = index == 0 ? y + 4 : 0
+        let bottom = last ? y : size.height
+        if bottom > top {
+          let rail = CGRect(x: x - 0.5, y: top, width: 1, height: bottom - top)
+          context.fill(Path(rail), with: .color(Palette.muted.opacity(0.32)))
+        }
+        if index == 0 {
+          let ring = CGRect(x: x - 3.5, y: y - 3.5, width: 7, height: 7)
+          context.stroke(Path(ellipseIn: ring), with: .color(Palette.accent), lineWidth: 1.5)
+          let core = CGRect(x: x - 1, y: y - 1, width: 2, height: 2)
+          context.fill(Path(ellipseIn: core), with: .color(Palette.dynamic(0xB8B0A5, 0xF2EFEA)))
+        } else {
+          let dot = CGRect(x: x - 2, y: y - 2, width: 4, height: 4)
+          let tone = Palette.dynamic(0x6E6860, 0xF2EFEA).opacity(0.86 - Double(index - 1) * 0.16)
+          context.fill(Path(ellipseIn: dot), with: .color(tone))
+        }
+      }
+      .accessibilityHidden(true)
     }
     .accessibilityElement(children: .combine)
   }
 
-  @ViewBuilder private func sourceIcon(_ segment: WidgetSnapshot.Segment) -> some View {
-    ZStack {
-      if let iconDirectory, let name = segment.icon,
-         let file = WidgetSnapshot.iconURL(named: name, in: iconDirectory),
-         let image = NSImage(contentsOf: file) {
-        Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
-      } else {
-        RoundedRectangle(cornerRadius: 4).fill(Palette.fill)
-        Image(systemName: symbol(for: segment.source))
-          .font(.system(size: TextSize.caption))
-          .foregroundStyle(Palette.muted)
-      }
-    }
-    .frame(width: 16, height: 16)
-  }
-
   private func clock(_ date: Date) -> String {
     date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(Locale(identifier: "zh_CN")))
-  }
-
-  private func symbol(for source: String?) -> String {
-    switch source {
-    case "mac.screen", "mac.app": "macwindow"
-    case "mac.browser": "globe"
-    case "claude_code.session": "asterisk"
-    case "codex.session": "chevron.left.forwardslash.chevron.right"
-    case "mac.wechat": "bubble.left"
-    case "mac.audio": "waveform"
-    case "android.audio": "mic"
-    case "manual.note", "manual.agent", "manual.correction": "pencil"
-    default: "circle.dashed"
-    }
   }
 }
