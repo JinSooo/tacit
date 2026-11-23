@@ -979,14 +979,17 @@ CREATE TABLE project_context_cache (
 
 #### 6.11.3 中枢独立部署：密钥存放、远程认证与只走 API 模型
 
-- **统一密钥后端（`hub/src/secrets/`，`SecretStore` 接口）**：
-  - 覆盖全部 4 类中枢密钥：`db-key`、`device-key`、`provider:<name>`、`relay-space-<space>`。（`audio-key-hex` 仅属于 Mac 采集端，中枢不持有。）
-  - **macOS 默认后端 `keychain`**：沿用现有 `/usr/bin/security`，与老用户 100% 兼容。
-  - **非 macOS / 独立部署默认后端 `sealed-file`**：
-    - 启动时从**数据目录之外**的只读文件读取唯一 32 字节根密钥（路径由 `RA_MASTER_KEY_FILE` 指定，如 Docker secret `/run/secrets/tacit_master_key` 或 systemd `LoadCredential`，权限要求 `0400`/`0600`、拒绝位于 `RA_DATA_DIR` 内）；仅开发测试允许 `RA_MASTER_KEY` 环境变量（日志输出告警）。
-    - 其余全部中枢密钥按条目名经 HKDF-SHA256 从根密钥派生子密钥，使用 AES-256-GCM 加密保存在 `<数据目录>/secrets.enc`（`0600`，原子替换），支持运行期远程更新模型 API Key 与动态轮换信箱令牌。
-    - 启动保护同 Mac：若 `history.db` 或 `secrets.enc` 已存在但根密钥缺失或解密失败，立即以 `db_key_missing` / `master_key_unreadable` 退出，绝不生成新密钥。
-    - `tacit-hub keys export` 输出根密钥备份指引；文档明确写明“数据库文件与根密钥必须分开备份，丢了根密钥无法恢复”。
+- **统一密钥后端（`hub/src/secrets/`，`SecretStore` 接口，2026-11-23 已实现，其余 6.11 仍是草案）**：
+  - 接口（同步）：`read(account)`（不存在返回 `null`，读不出来抛错）、`has`、`write`（覆盖）、`create`（只在不存在时写入，返回是否由本次创建）、`remove`。失败一律抛 `SecretError`，只带固定类别（`reason`）和启动诊断用的 `code`：根密钥与 `secrets.enc` 的问题为 `master_key_unreadable`，其余为 `secret_unreadable` / `secret_write_failed` / `secret_invalid`；消息不含密钥、账号名或路径。
+  - 账号名白名单：`db-key`、`device-key`、`provider:<小写名称>`、`relay-space-<22 位空间编号>`，以及仅 `keychain` 后端可用的 `audio-key-hex`（音频密钥只属于 Mac 采集端和本机钥匙串，`sealed-file` 一律拒绝）。其他名字、路径穿越写法一律拒绝；写入时再按账号检查值的格式（十六进制密钥、可见 ASCII 的 API key、信箱令牌）。
+  - **后端选择**：环境变量 `RA_SECRET_BACKEND=keychain|sealed-file`；不设时 macOS 用 `keychain`，其他系统用 `sealed-file`，写错值直接报错。
+  - **`keychain`（Mac 默认）**：行为不变，只经 `/usr/bin/security`，service `record-anything`，账号名同上；写入走 `security -i` 从标准输入读命令，密钥不出现在进程参数里，以读回为准确认（`-i` 的退出码不可靠）；`create` 不带 `-U`，不会覆盖已有条目（数据库密钥、设备密钥靠它防并发覆盖）。
+  - **`sealed-file`（服务器）**：
+    - 根密钥 32 字节，来自数据目录**之外**的文件（`RA_MASTER_KEY_FILE`，必须绝对路径，如 Docker secret `/run/secrets/tacit_master_key` 或 systemd `LoadCredential`）。内容为 64 位十六进制（可带换行）或 32 字节原始内容。启动硬校验：必须是普通文件；权限不能有组或其他用户位（只允许 `0400`/`0600`）；字面路径和解开符号链接后的真实路径都不能落在 `RA_DATA_DIR` 内。仅开发测试允许 `RA_MASTER_KEY`（64 位十六进制），使用时向标准错误输出一行告警（不含密钥）。两者都没有则失败，**根密钥永远由运维提供，中枢不会生成**。
+    - 其余全部密钥合并成一份内容，经 HKDF-SHA256（信息串 `tacit-hub/secrets.enc/v1`）从根密钥派生出文件密钥，用 AES-256-GCM 整份加密，保存在 `<数据目录>/secrets.enc`（`0600`）。文件格式：4 字节头 `TSE1`（同时作 AEAD 附加认证数据）+ 12 字节随机数 + 密文 + 16 字节认证标签；明文是 `{"v":1,"entries":{账号:值}}`，账号名和条目数量也不外露。（与最初草案“按条目名分别派生子密钥”的出入：整份加密能在条目为空时也验出错的根密钥，且不暴露信箱空间编号等条目名；仍满足运行期远程更新模型 API Key、动态轮换信箱令牌。）
+    - 写入：读-改-写期间持有 `secrets.enc.lock`（`serve` 与 `distill` 两个进程都可能写；超过 30 秒的锁视为崩溃遗留，等待超过 5 秒报错），同目录临时文件 + `fsync` + 原子替换，任何时刻磁盘上都是完整的旧文件或新文件；写入失败清掉临时文件。
+    - 启动保护同 Mac：若 `secrets.enc` 已存在但根密钥缺失或解不开（错根密钥、被截断或篡改），立即以 `master_key_unreadable` 退出；数据库已存在而 `secrets.enc` 里没有 `db-key` 时以 `db_key_missing` 退出。任何一种都**绝不生成新密钥**，也不改动 `secrets.enc`。为沿用 Mac 端启动诊断的固定类别表，`serve` 把 `master_key_unreadable` 记为 `db_key_unreadable`，具体 `reason` 只出现在命令行输出的类别里。
+    - `tacit-hub keys export` 在这个后端下只输出备份指引，不打印任何密钥：根密钥文件与数据目录必须分开备份、存放在不同地方，“丢了根密钥无法恢复”，并列出 `db-key`、`device-key` 是否已在 `secrets.enc` 里。
 - **远程查询认证与网络暴露**：
   - 独立部署模式（`RA_HUB_MODE=server`，非 macOS 默认启用）下：
     - **关闭** `127.0.0.1` 本机明文管理/网页端口（或仅显式传 `--local-status-port` 时绑定 `127.0.0.1` 供 SSH 隧道排障），**绝不在 `0.0.0.0` 暴露任何 Bearer token 管理接口**。
