@@ -44,9 +44,20 @@ export function networkDenied(): Promise<boolean> {
   });
 }
 
+export function removeDeviceRoleSchema(db: HubDB["db"]) {
+  db.exec(`
+    DROP TABLE security_audit;
+    ALTER TABLE devices DROP COLUMN role;
+    ALTER TABLE devices DROP COLUMN role_revision;
+    ALTER TABLE devices DROP COLUMN projection_reset;
+    ALTER TABLE relay_mailboxes DROP COLUMN role_revision;
+  `);
+}
+
 /** Migration fixtures start from setup() and then remove the schema newer than the version under test. */
 export function removeProjectionSchema(db: HubDB["db"]) {
   db.transaction(() => {
+    removeDeviceRoleSchema(db);
     const triggers = db.prepare<[], { name: string }>("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB 'projection_*'").all();
     for (const { name } of triggers) db.exec(`DROP TRIGGER "${name}"`);
     db.exec(`

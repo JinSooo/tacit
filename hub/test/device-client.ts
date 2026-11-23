@@ -1,8 +1,9 @@
+import type { PairingRole } from "../src/devices/permissions.ts";
 import { randomBytes } from "node:crypto";
 import { requestInfo, responseInfo, suite, utf8 } from "../src/devices/envelope.ts";
 
 export interface Pairing {
-  v: 1; name: string; hub_id: string; pk: string; code: string; addrs: string[]; expires_at: string;
+  v: 1; role: PairingRole; name: string; hub_id: string; pk: string; code: string; addrs: string[]; expires_at: string;
 }
 export interface DevicePlaintext {
   op: string; ts: string; nonce: string; body: object;
@@ -61,8 +62,8 @@ export class DeviceClient {
     return this.open<T>(await response.json() as ResponseEnvelope, input.nonce);
   }
 
-  async pair(pairing: Pairing) {
-    const result = await this.send<{ device_id: string }>("pair", await this.pairingBody(pairing));
+  async pair(pairing: Pairing, platform = "android") {
+    const result = await this.send<{ device_id: string }>("pair", { ...await this.pairingBody(pairing), platform });
     if (result.status === 200) this.device = result.body.device_id;
     return result;
   }

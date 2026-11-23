@@ -1,3 +1,4 @@
+import { auditSecurity, securityAudit } from "./security-audit.ts";
 // 设置接口：/v1/settings/{hub,models,keys/:provider,models/test,general,agents}。契约见 docs/contracts.md 第 3.1 节。
 // API key 只进钥匙串：不进响应、错误信息、日志和文件。
 import { createServer } from "node:net";
@@ -154,20 +155,34 @@ export function createSettings(deps: SettingsDeps) {
       } finally { testing = false; }
     }
 
+    if (pathname === "/v1/settings/security-audit" && method === "GET") {
+      return Response.json({ events: securityAudit(ctx.db.db) }, { headers: { "Cache-Control": "no-store" } });
+    }
+
     const key = /^\/v1\/settings\/keys\/([^/]+)$/.exec(pathname);
     if (key && (method === "PUT" || method === "DELETE")) {
       const provider = key[1] as KeyProvider;
       if (!KEY_PROVIDERS.includes(provider)) throw new InputError("只能为 anthropic、openai-compatible 设置 API key");
       if (method === "DELETE") {
-        try { return Response.json({ provider, deleted: await keychain.remove(provider) }); }
-        catch { return fail(500, "删除钥匙串条目失败"); }
+        let deleted: boolean;
+        try { deleted = await keychain.remove(provider); }
+        catch {
+          auditSecurity(ctx.db.db, "key.delete", { target: provider, ok: false, code: "secret_error" });
+          return fail(500, "删除钥匙串条目失败");
+        }
+        auditSecurity(ctx.db.db, "key.delete", { target: provider, code: deleted ? "deleted" : "absent" });
+        return Response.json({ provider, deleted });
       }
       const body = object(await ctx.readJSON());
       if (Object.keys(body).some(k => k !== "key")) throw new InputError("只接受 key");
       const value = typeof body.key === "string" ? body.key.trim() : "";
       if (!KEY_PATTERN.test(value)) throw new InputError("API key 必须是 8–1024 个可见 ASCII 字符，不能含空格、双引号或反斜杠");
       try { await keychain.set(provider, value); }
-      catch { return fail(500, "写入钥匙串失败"); }
+      catch {
+        auditSecurity(ctx.db.db, "key.set", { target: provider, ok: false, code: "secret_error" });
+        return fail(500, "写入钥匙串失败");
+      }
+      auditSecurity(ctx.db.db, "key.set", { target: provider });
       return Response.json({ provider, set: true });
     }
 

@@ -9,7 +9,11 @@ import { logFailure } from "../diagnostics.ts";
 import { deviceKeychain, relayKeychain, type DeviceKeyStorage, type RelayKeyStorage } from "../keys.ts";
 import { base32, base64url, deviceID, identityFromRaw, invalidEnvelope, object,
   openRequest, readEnvelope, responseSealer, suite, unpaired, validateRequest, WireError } from "./envelope.ts";
-import { deviceList } from "./store.ts";
+import { deviceAccess, deviceList, removeDevice, updateDeviceRole } from "./store.ts";
+import { auditOp, devicePermissionDenied, isPairingRole, operationAccess, projectionReads, projectionRoles, type DeviceRole, type PairingRole } from "./permissions.ts";
+import { auditSecurity, remoteDeleteLimit, reserveRemoteDelete } from "../security-audit.ts";
+import { deleteTimelineSegment } from "../timeline.ts";
+import { DistillStore } from "../distill/store.ts";
 import { RelayService } from "./relay.ts";
 import { Projection } from "./projection.ts";
 import { directProjectionBytes, flushProjectionDraft, projectionHead, relayProjectionBytes, touchProjectionDay } from "./projection-store.ts";
@@ -18,14 +22,17 @@ import { dayMs, type RelayConfig, type RelayRequest } from "./relay-store.ts";
 
 const invitationMs = 10 * 60_000;
 const idPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-const viewerReads = new Set(["records.get", "records.list", "history.segments", "conversations.detail", "timeline.query", "timeline.locate"]);
 const identityKey = "device_hub_id";
 type Identity = Awaited<ReturnType<typeof identityFromRaw>>;
-type Invitation = { code: Buffer; expires: number; relay: RelayConfig | null; viewer: boolean };
-type EventSocket = { device?: string; authenticating?: boolean; timer?: ReturnType<typeof setTimeout> };
+type Invitation = { code: Buffer; expires: number; relay: RelayConfig | null; role: PairingRole };
+type EventSocket = { lastSeq?: number; device?: string; revision?: number; authenticating?: boolean; timer?: ReturnType<typeof setTimeout> };
 type Result = { status: number; body: object };
 const ok = (body: object): Result => ({ status: 200, body });
 const fail = (status: number, error: string): Result => ({ status, body: { error } });
+
+class RemoteDeleteLimited extends WireError {
+  constructor(readonly count: number) { super(429, remoteDeleteLimit); }
+}
 
 function json(result: Result) {
   return Response.json(result.body, { status: result.status, headers: { "Cache-Control": "no-store" } });
@@ -60,6 +67,7 @@ export class DeviceService {
   private retry?: ReturnType<typeof setTimeout>;
   private listener?: Bun.Server<EventSocket>;
   private projectionTimer?: ReturnType<typeof setInterval>;
+  private devicePoll?: ReturnType<typeof setInterval>;
   private projectionSeen?: ReturnType<typeof projectionHead>;
   private readonly subscribers = new Set<Bun.ServerWebSocket<EventSocket>>();
   private identity?: Promise<Identity | null>;
@@ -97,13 +105,37 @@ export class DeviceService {
     this.reconcile();
     this.relay.start();
     this.reconcileProjectionEvents();
+    // The local device CLI writes through another connection.
+    let version = this.sql.pragma("data_version", { simple: true });
+    this.devicePoll = setInterval(() => {
+      try {
+        const next = this.sql.pragma("data_version", { simple: true });
+        if (next === version) return;
+        version = next;
+        this.devicePermissionsChanged();
+      } catch (error) { if (!isDatabaseBusy(error)) logFailure("devices.reconcile", error); }
+    }, 1_000);
+    this.devicePoll.unref();
+  }
+
+  private devicePermissionsChanged() {
+    this.reconcile();
+    this.reconcileProjectionEvents();
+    this.relay.kickProjection();
   }
 
   private reconcileProjectionEvents() {
     for (const socket of this.subscribers) {
-      if (socket.data.device && !this.viewer(socket.data.device)) socket.close(1008, "设备已移除");
+      if (!socket.data.device) continue;
+      const access = deviceAccess(this.sql, socket.data.device);
+      if (access?.role_revision === socket.data.revision) continue;
+      if (access?.projection_reset) {
+        const { epoch, seq } = projectionHead(this.sql);
+        socket.send(JSON.stringify({ epoch, seq, urgent: true }));
+      }
+      socket.close(1008, "设备权限已变更");
     }
-    if (!this.sql.prepare("SELECT 1 FROM devices WHERE viewer=1 LIMIT 1").get()) {
+    if (!this.sql.prepare("SELECT 1 FROM devices WHERE role IN ('view','admin','agent') LIMIT 1").get()) {
       clearInterval(this.projectionTimer);
       this.projectionTimer = undefined;
       this.projectionSeen = undefined;
@@ -122,6 +154,7 @@ export class DeviceService {
     clearTimeout(this.expiry);
     clearTimeout(this.retry);
     clearInterval(this.projectionTimer);
+    clearInterval(this.devicePoll);
     for (const socket of this.subscribers) socket.close(1001, "中枢正在关闭");
     const listener = this.listener;
     this.listener = undefined;
@@ -188,6 +221,9 @@ export class DeviceService {
       if (this.boundHubID() !== identity.hubID) {
         this.sql.prepare("DELETE FROM device_changes").run();
         this.relay.revokeDevice();
+        for (const { id } of this.sql.prepare<[], { id: string }>("SELECT id FROM devices").all()) {
+          auditSecurity(this.sql, "device.remove", { target: id, code: "hub_identity_changed", now: this.clock() });
+        }
         this.sql.prepare("DELETE FROM devices").run();
         this.sql.prepare("INSERT INTO distill_state(k,v) VALUES (?,json_quote(?)) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
           .run(identityKey, identity.hubID);
@@ -212,29 +248,34 @@ export class DeviceService {
       return json(ok({
         hub_id: this.boundHubID() ?? null,
         lan: { open: this.open, port: this.port, addrs: this.addresses },
-        pairing: invite ? { expires_at: new Date(invite.expires).toISOString() } : null,
+        pairing: invite ? { expires_at: new Date(invite.expires).toISOString(), role: invite.role } : null,
         devices: deviceList(this.hub),
       }));
     }
     if (method === "POST" && path === root + "/pairing") {
-      const input = readJSON ? object(await readJSON()) : null;
-      if (input?.viewer !== undefined && input.viewer !== true && input.viewer !== false) throw new InputError("viewer 必须是布尔值");
-      const viewer = input?.viewer === true;
+      const input = readJSON ? object(await readJSON()) : {};
+      if (!input) throw new InputError("配对邀请必须是 JSON 对象");
+      if (input.viewer !== undefined && input.viewer !== true && input.viewer !== false) throw new InputError("viewer 必须是布尔值");
+      const role = input.role === undefined ? input.viewer === true ? "view" : "collect" : input.role;
+      if (!isPairingRole(role)) throw new InputError("设备角色无效");
+      const audit = (success: boolean, code: string = role) =>
+        auditSecurity(this.sql, "pair.create", { ok: success, code, now: this.clock() });
       return await this.relay.run(async () => {
         const identity = await this.ensureIdentity();
         if (this.stopped) return json(fail(503, "中枢正在关闭"));
         try { this.listen(); }
-        catch { return json(fail(409, "局域网端口无法监听")); }
-        const code = randomBytes(16), expires = this.clock() + invitationMs;
+        catch { audit(false, "listen_failed"); return json(fail(409, "局域网端口无法监听")); }
+        const code = randomBytes(16), expires = this.clock() + (role === "admin" ? 5 * 60_000 : invitationMs);
         let relay: RelayConfig | null;
         try { relay = await this.relay.provisionInvite(expires); }
         catch (error) {
           this.reconcile();
           logFailure("relay.invite", error);
+          audit(false, "relay_failed");
           return json(fail(502, "无法创建配对信箱"));
         }
         this.clearInvite();
-        this.invite = { code, expires, relay, viewer };
+        this.invite = { code, expires, relay, role };
         this.expiry = setTimeout(() => {
           void this.relay.run(() => {
             if (!this.currentInvite()) this.clearInvite();
@@ -245,36 +286,35 @@ export class DeviceService {
         const expires_at = new Date(expires).toISOString();
         const payload = {
           v: 1, hub_id: identity.hubID, name: this.name, pk: identity.publicKey.toString("base64url"),
-          code: code.toString("base64url"), addrs: this.addresses, expires_at, ...(relay ? { relay } : {}), ...(viewer ? { viewer } : {}),
+          code: code.toString("base64url"), addrs: this.addresses, expires_at, role, ...(relay ? { relay } : {}),
         };
+        audit(true);
         return json(ok({ uri: `tacit://pair?d=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`, expires_at }));
       });
     }
-    if (method !== "DELETE") return null;
-    if (path === root + "/pairing") {
+    if (method === "DELETE" && path === root + "/pairing") {
       await this.relay.run(() => {
         this.clearInvite();
         this.reconcile();
       });
       return json(ok({ ok: true }));
     }
-    const id = path.slice(root.length + 1);
-    if (!path.startsWith(root + "/") || !deviceID.test(id)) return null;
-    const deleted = await this.relay.run(async () => {
-      const removed = this.sql.transaction(() => {
-        this.sql.prepare("DELETE FROM device_changes WHERE device=?").run(id);
-        const removed = this.sql.prepare("DELETE FROM devices WHERE id=?").run(id).changes > 0;
-        if (removed) this.relay.revokeDevice(id);
-        return removed;
-      }).immediate();
-      this.reconcile();
-      if (removed) {
-        this.reconcileProjectionEvents();
-        await this.relay.flushRevocations(id);
-      }
-      return removed;
+    if (!path.startsWith(root + "/")) return null;
+    const [id, suffix, extra] = path.slice(root.length + 1).split("/");
+    if (!id || !deviceID.test(id) || extra !== undefined) return null;
+    if (method === "PUT" && suffix === "role") {
+      const input = readJSON && object(await readJSON());
+      const updated = await this.relay.run(() => updateDeviceRole(this.sql, id, input && input.role, { now: this.clock() }));
+      this.devicePermissionsChanged();
+      return json(ok(updated));
+    }
+    if (method !== "DELETE" || suffix !== undefined) return null;
+    return await this.relay.run(async () => {
+      const removed = removeDevice(this.sql, id, { now: this.clock() });
+      this.devicePermissionsChanged();
+      await this.relay.flushRevocations(id);
+      return json(ok(removed));
     });
-    return json(deleted ? ok({ deleted }) : fail(404, "设备不存在"));
   }
 
   private clearInvite() {
@@ -316,31 +356,51 @@ export class DeviceService {
     },
   };
 
-  private viewer(device: string) {
-    return !!this.sql.prepare("SELECT 1 FROM devices WHERE id=? AND viewer=1").get(device);
+  private denied(device: string, op: string) {
+    auditSecurity(this.sql, "auth.denied", { actor: device, code: auditOp(op), ok: false, now: this.clock() });
+    return fail(403, devicePermissionDenied);
+  }
+
+  private projectionEvent(role: DeviceRole, head: ReturnType<typeof projectionHead>) {
+    if (role !== "agent") return head;
+    return this.sql.prepare<[], { seq: number; urgent: number }>(`SELECT
+      COALESCE(MAX(seq),0) AS seq, COALESCE(MAX(urgent_seq),0) AS urgent
+      FROM projection_changes WHERE kind='project_context'`).get()!;
   }
 
   private async subscribe(socket: Bun.ServerWebSocket<EventSocket>, message: string) {
     const envelope = await readEnvelope(new Response(message, { headers: { "Content-Type": "application/json" } }));
     const device = envelope.device;
-    if (!device || !this.viewer(device)) throw unpaired();
+    if (!device) throw unpaired();
     const identity = await this.activeIdentity();
     const registered = this.sql.prepare<[string], { public_key: Buffer }>("SELECT public_key FROM devices WHERE id=?").get(device);
     if (!identity || !registered) throw unpaired();
     const sender = await suite.kem.deserializePublicKey(registered.public_key);
     const input = await openRequest(envelope, identity.keys, sender);
     const { op } = validateRequest(input, this.clock());
-    if (op !== "events.subscribe" || this.stopped || !this.subscribers.has(socket) || !this.viewer(device)) throw unpaired();
-    this.sql.transaction(() => {
+    if (op !== "events.subscribe" || this.stopped || !this.subscribers.has(socket)) throw unpaired();
+    const { access, denied } = this.sql.transaction(() => {
       if (!this.sql.prepare("INSERT OR IGNORE INTO device_nonces VALUES (?,?,?)").run(device, input!.nonce, this.clock()).changes) {
         throw invalidEnvelope();
       }
       this.touch(device, registered.public_key);
+      const access = deviceAccess(this.sql, device)!;
+      const denied = operationAccess(access.role, op) === "deny" ? this.denied(device, op) : null;
+      return { access, denied };
     }).immediate();
+    if (denied) {
+      const seal = await responseSealer(identity.keys, sender, input!.nonce as string);
+      socket.send(JSON.stringify(await seal(denied)));
+      socket.close(1008, devicePermissionDenied);
+      return;
+    }
     clearTimeout(socket.data.timer);
     socket.data.device = device;
-    const { seq, epoch } = projectionHead(this.sql);
-    socket.send(JSON.stringify({ seq, epoch, urgent: false }));
+    socket.data.revision = access.role_revision;
+    const head = projectionHead(this.sql);
+    const { seq } = this.projectionEvent(access.role, head);
+    socket.send(JSON.stringify({ seq, epoch: head.epoch, urgent: false }));
+    socket.data.lastSeq = seq;
   }
 
   private notifyProjection() {
@@ -359,13 +419,16 @@ export class DeviceService {
     if (seen?.seq === next.seq && seen.epoch === next.epoch) return;
     this.projectionSeen = next;
     this.relay.kickProjection();
-    const message = JSON.stringify({ seq: next.seq, epoch: next.epoch,
-      urgent: next.epoch !== seen?.epoch || next.urgent > (seen?.seq ?? 0) });
+    this.reconcileProjectionEvents();
     for (const socket of this.subscribers) {
       const device = socket.data.device;
       if (!device) continue;
-      if (this.viewer(device)) socket.send(message);
-      else socket.close(1008, "设备已移除");
+      const access = deviceAccess(this.sql, device);
+      if (!access || access.role === "collect" || access.role_revision !== socket.data.revision) continue;
+      const { seq, urgent } = this.projectionEvent(access.role, next);
+      if (seq === socket.data.lastSeq && next.epoch === seen?.epoch) continue;
+      socket.send(JSON.stringify({ seq, epoch: next.epoch, urgent: next.epoch !== seen?.epoch || urgent > (socket.data.lastSeq ?? 0) }));
+      socket.data.lastSeq = seq;
     }
   }
 
@@ -419,13 +482,20 @@ export class DeviceService {
         context && createHash("sha256").update(envelope.enc).update(envelope.ct).digest("hex"));
     };
     // 邮件取信和设置已经在同一队列里，直连配对也在此队列里分配信箱。
-    const reading = device !== null && (input?.op === "projection.pull" || typeof input?.op === "string" && viewerReads.has(input.op));
+    const reading = device !== null && (input?.op === "projection.pull" || typeof input?.op === "string" && projectionReads.has(input.op));
     const before = reading ? projectionHead(this.sql) : null;
-    const result = device === null && !context ? await this.relay.run(execute) : await execute();
+    const revision = reading ? deviceAccess(this.sql, device!)?.role_revision : undefined;
+    const serialized = !context && (device === null || input?.op === "devices.role.update" || input?.op === "devices.remove");
+    const result = serialized ? await this.relay.run(execute) : await execute();
     if (!result) return null;
     const sealed = await seal(result);
     if (before && result.status === 200) {
-      if (!this.viewer(device!)) throw unpaired();
+      const current = deviceAccess(this.sql, device!);
+      if (!current) throw unpaired();
+      if (current.role_revision !== revision) {
+        const reseal = await responseSealer(identity.keys, sender!, nonce);
+        return await reseal(this.denied(device!, input!.op as string));
+      }
       const after = projectionHead(this.sql);
       if (before.epoch !== after.epoch || before.urgent !== after.urgent) {
         const retry = fail(409, "读取期间内容已撤下，请重试");
@@ -433,7 +503,7 @@ export class DeviceService {
         return await reseal(retry);
       }
     }
-    if (context && before && result.status === 200) context.projectionRead = before;
+    if (context && before && result.status === 200) context.projectionRead = { ...before, revision: revision! };
     return sealed;
   }
 
@@ -472,16 +542,21 @@ export class DeviceService {
         if (this.sql.prepare("SELECT 1 FROM device_nonces WHERE device='' AND nonce=?").get(nonce)) return replay();
         return await this.pair(body, pairKey!, hubID, context, claim, remember);
       }
-      return this.sql.transaction(() => {
+      const result = this.sql.transaction(() => {
         if (!claim()) return replay();
         try {
           return remember(device === null ? fail(400, "配对信封只允许 pair") : this.dispatch(device, op, body, !!context));
         } catch (error) {
           if (error instanceof InputError) return remember(fail(400, error.message));
+          if (error instanceof RemoteDeleteLimited) {
+            auditSecurity(this.sql, "remote.delete", { actor: device, ok: false, code: String(error.count), now });
+          }
           if (error instanceof WireError) return remember(fail(error.status, error.message));
           throw error;
         }
       }).immediate();
+      if (result?.status === 200 && (op === "devices.role.update" || op === "devices.remove")) this.devicePermissionsChanged();
+      return result;
     } catch (error) {
       if (error instanceof InputError || error instanceof WireError) return remember(fail(400, error.message));
       if (isDatabaseBusy(error)) throw error;
@@ -495,12 +570,17 @@ export class DeviceService {
     const invite = this.currentInvite(), code = base64url(body.code, 16);
     const valid = invite && code && timingSafeEqual(code, invite.code) &&
       (!context || invite.relay?.space === context.mailbox.space && invite.relay.up === context.mailbox.up);
-    const commitError = (result: Result) => this.sql.transaction(() => { claim(); return remember(result); }).immediate();
-    if (!valid) return commitError(fail(403, "配对邀请无效或已过期"));
-    const platform = invite.viewer ? "mac" : "android";
-    if (body.platform !== platform || typeof body.name !== "string" || !body.name.trim() || body.name.length > 200) {
-      return commitError(fail(400, "设备名称或平台无效"));
+    const commitError = (result: Result, code: string) => this.sql.transaction(() => {
+      if (!claim()) return context ? null : fail(400, "请求 nonce 已使用");
+      auditSecurity(this.sql, "pair.complete", { ok: false, code, now: this.clock() });
+      return remember(result);
+    }).immediate();
+    if (!valid) return commitError(fail(403, "配对邀请无效或已过期"), "invite_invalid");
+    const platform = body.platform;
+    if ((platform !== "android" && platform !== "mac") || typeof body.name !== "string" || !body.name.trim() || body.name.length > 200) {
+      return commitError(fail(400, "设备名称或平台无效"), "platform_or_name_invalid");
     }
+    if (platform === "android" && invite.role !== "collect") return commitError(fail(403, devicePermissionDenied), "platform_role");
     const name = body.name.trim();
     const allocate = this.sql.prepare("INSERT OR IGNORE INTO issued_device_ids VALUES(?)");
     let device_id: string;
@@ -509,29 +589,34 @@ export class DeviceService {
     try { provisioned = await this.relay.provisionDevice(device_id); }
     catch (error) {
       logFailure("relay.pair", error);
-      return commitError(fail(503, "无法创建设备信箱，稍后再试"));
+      return commitError(fail(503, "无法创建设备信箱，稍后再试"), "relay_failed");
     }
     if (this.currentInvite() !== invite || this.stopped) {
       if (provisioned) this.relay.revokeDevice(device_id);
-      return commitError(fail(403, "配对邀请无效或已过期"));
+      return commitError(fail(403, "配对邀请无效或已过期"), "invite_invalid");
     }
     const at = new Date(this.clock()).toISOString();
     try {
       const result = this.sql.transaction(() => {
-        claim();
-        this.sql.prepare("INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,viewer) VALUES(?,?,?,?,?,?,?)")
-          .run(device_id, name, platform, publicKey, at, at, Number(invite.viewer));
-        if (invite.viewer) touchProjectionDay(this.sql, localDateString(this.clock()));
+        if (!claim()) return context ? null : fail(400, "请求 nonce 已使用");
+        this.sql.prepare("INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,role) VALUES(?,?,?,?,?,?,?)")
+          .run(device_id, name, platform, publicKey, at, at, invite.role);
+        auditSecurity(this.sql, "pair.complete", { target: device_id, code: invite.role, now: this.clock() });
+        if (projectionRoles(invite.role)) touchProjectionDay(this.sql, localDateString(this.clock()));
         if (provisioned) this.relay.setState(provisioned.box, "active");
         if (context) {
           this.sql.prepare("UPDATE relay_mailboxes SET state='pair_reply', device=?, token=NULL WHERE space=? AND up=?")
             .run(device_id, context.mailbox.space, context.mailbox.up);
         } else this.relay.revokeInvite(invite.relay);
-        return remember(ok({ device_id, hub_id: hubID, name, ...(provisioned ? { relay: provisioned.relay } : {}) }));
+        return remember(ok({ device_id, hub_id: hubID, name, role: invite.role, ...(provisioned ? { relay: provisioned.relay } : {}) }));
       }).immediate();
+      if (result?.status !== 200) {
+        if (provisioned) this.relay.revokeDevice(device_id);
+        return result;
+      }
       this.invite = null;
       clearTimeout(this.expiry);
-      if (invite.viewer) this.reconcileProjectionEvents();
+      if (projectionRoles(invite.role)) this.reconcileProjectionEvents();
       return result;
     } catch (error) {
       if (provisioned) this.relay.revokeDevice(device_id);
@@ -581,17 +666,36 @@ export class DeviceService {
     }).immediate();
   }
 
+  private deleteAsAdmin(device: string, ids: string[]) {
+    return this.hub.deleteMany(ids, undefined, rows => {
+      const requested = new Set(ids);
+      const cross = new Set(rows.filter(row => row.device !== device && requested.has(row.id)).map(row => row.id));
+      const count = rows.filter(row => cross.has(row.id) || (row.corrects !== null && cross.has(row.corrects))).length;
+      if (!reserveRemoteDelete(this.sql, device, count, this.clock())) throw new RemoteDeleteLimited(count);
+    });
+  }
+
   private dispatch(device: string, op: string, body: Record<string, unknown>, fromRelay: boolean): Result {
-    const viewer = this.viewer(device);
-    if (op === "projection.pull" || op === "projection.ack" || viewerReads.has(op)) {
-      if (!viewer) return fail(403, "需要查看设备");
+    const access = deviceAccess(this.sql, device);
+    if (!access) throw unpaired();
+    const { role, projection_reset } = access;
+    // Former viewers can pull the withdrawal control message, with no data or usable cursor.
+    if (op === "projection.pull" && role === "collect" && projection_reset) {
+      return ok({ kind: "projection.reset", epoch: projectionHead(this.sql).epoch, reset: true,
+        changes: [], cursor: 0, more: false, server_time: new Date(this.clock()).toISOString() });
+    }
+    const permission = operationAccess(role, op);
+    if (permission === "deny") return this.denied(device, op);
+    if (permission === "unknown") return fail(400, "设备操作无效");
+    if (op === "projection.pull" || op === "projection.ack" || projectionReads.has(op)) {
       const projection = new Projection(this.hub, this.clock());
       const max = fromRelay ? relayProjectionBytes : directProjectionBytes;
-      if (op === "projection.pull") return ok(projection.pull(device, body, max));
+      if (op === "projection.pull") return ok(projection.pull(device, body, max, role === "agent"));
       if (op === "projection.ack") return ok(projection.ack(device, body));
-      return ok(projection.read(op, body, max));
+      const includePrivate = (op === "records.get" || op === "records.list") && role === "admin" && body.include_private === true;
+      if (includePrivate && fromRelay) return this.denied(device, op);
+      return ok(projection.read(op, body, max, includePrivate));
     }
-    if (viewer && op !== "relay") return fail(403, "查看设备无此权限");
     switch (op) {
       case "ingest":
         if (!Array.isArray(body.records) || body.records.length > 200) throw new InputError("records 必须是最多 200 条的数组");
@@ -599,7 +703,21 @@ export class DeviceService {
       case "delete":
         if (!Array.isArray(body.ids) || body.ids.length < 1 || body.ids.length > 100 ||
           !body.ids.every(id => typeof id === "string" && idPattern.test(id))) throw new InputError("每次删除需要 1–100 个有效记录 id");
-        return ok({ deleted: this.hub.deleteMany(body.ids, device) });
+        return ok({ deleted: role === "admin" ? this.deleteAsAdmin(device, body.ids) : this.hub.deleteMany(body.ids, device) });
+      case "segment.delete": {
+        if (typeof body.date !== "string" || typeof body.id !== "string") throw new InputError("缺少日期或段编号");
+        const deleted = deleteTimelineSegment(new DistillStore(this.hub), body.date, body.id, body, ids => this.deleteAsAdmin(device, ids));
+        if (!deleted) return fail(404, "内容不存在");
+        if (deleted.changed) return fail(409, "这段记录已更新，请刷新后再确认删除");
+        return ok(deleted);
+      }
+      case "devices.role.update":
+        try { return ok(updateDeviceRole(this.sql, body.id, body.role, { actor: device, now: this.clock() })); }
+        catch (error) {
+          if (error instanceof WireError && error.status === 403) return this.denied(device, op);
+          throw error;
+        }
+      case "devices.remove": return ok(removeDevice(this.sql, body.id, { actor: device, now: this.clock() }));
       case "relay": return ok({ relay: this.relay.config(device) });
       case "sync": return ok(this.hub.deviceChanges(device, cursorOf(body.cursor)));
       case "sync.ack":

@@ -60,6 +60,7 @@ export interface Mailbox {
   move_id: string | null;
   move_body: string | null;
   pending: number | null;
+  role_revision: number;
   push_msg_id: string | null;
   push_seq: number | null;
   push_epoch: number | null;
@@ -71,7 +72,7 @@ export interface Mailbox {
 export interface RelayRequest {
   mailbox: Mailbox;
   id: string;
-  projectionRead?: { seq: number; urgent: number; epoch: number };
+  projectionRead?: { seq: number; urgent: number; epoch: number; revision: number };
 }
 
 export function relayConfig(space: Space, box: Mailbox): RelayConfig {

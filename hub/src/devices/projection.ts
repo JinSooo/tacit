@@ -263,7 +263,7 @@ export class Projection {
 
   private serverTime() { return new Date(this.clock).toISOString(); }
 
-  pull(device: string, body: Record<string, unknown>, max = directProjectionBytes): ProjectionPage {
+  pull(device: string, body: Record<string, unknown>, max = directProjectionBytes, contextOnly = false): ProjectionPage {
     const cursor = integer(body.cursor, 0, Number.MAX_SAFE_INTEGER, "cursor");
     const head = projectionHead(this.sql);
     const epoch = body.epoch === undefined && cursor === 0 ? head.epoch : integer(body.epoch, 1, Number.MAX_SAFE_INTEGER, "epoch");
@@ -281,7 +281,8 @@ export class Projection {
     const state = this.sql.prepare<[string], { projection_window_from: string | null; projection_window_until: number | null }>(
       "SELECT projection_window_from,projection_window_until FROM devices WHERE id=?").get(device);
     const rows = this.sql.prepare<[number, number], ChangeRow>(
-      "SELECT * FROM projection_changes WHERE seq>? ORDER BY seq LIMIT ?").all(cursor, limit + 1);
+      `SELECT * FROM projection_changes WHERE seq>? ${contextOnly ? "AND kind='project_context'" : ""} ORDER BY seq LIMIT ?`)
+      .all(cursor, limit + 1);
     const page: ProjectionPage = { epoch, reset: false, changes: [], cursor, more: false, server_time: this.serverTime() };
     let total = 0;
     for (const row of rows.slice(0, limit)) {
@@ -335,12 +336,12 @@ export class Projection {
     return { ok: true };
   }
 
-  read(op: string, body: Record<string, unknown>, max: number): object {
+  read(op: string, body: Record<string, unknown>, max: number, includePrivate = false): object {
     const allowedItem = (date: string, item: ReviewItem) => this.dayItem(date, item);
     let result: object;
     switch (op) {
-      case "records.get": return this.recordsGet(body, max);
-      case "records.list": return this.recordsList(body, max);
+      case "records.get": return this.recordsGet(body, max, includePrivate);
+      case "records.list": return this.recordsList(body, max, includePrivate);
       case "history.segments": {
         const history = historySegments(this.hub, parameters(body, ["from", "to", "device"]), id => this.public(id));
         for (const segment of history.segments) {
@@ -388,9 +389,9 @@ export class Projection {
     return result;
   }
 
-  private recordsList(body: Record<string, unknown>, max: number) {
+  private recordsList(body: Record<string, unknown>, max: number, includePrivate: boolean) {
     const p = parameters(body, ["from", "to", "device", "source", "q", "limit", "cursor", "body"]);
-    const list = this.hub.list(p, { recordFilter: publicRecord });
+    const list = this.hub.list(p, { recordFilter: includePrivate ? "" : publicRecord });
     const records: Partial<StoredRecord>[] = [];
     let used = 0;
     const budget = max - 1024;
@@ -413,7 +414,7 @@ export class Projection {
     return { ...list, records };
   }
 
-  private recordsGet(body: Record<string, unknown>, max: number) {
+  private recordsGet(body: Record<string, unknown>, max: number, includePrivate: boolean) {
     if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > 50) throw new InputError("ids 必须是 1–50 个记录 ID");
     const ids = [...new Set(body.ids.map(recordID))];
     const corrections = body.include_corrections === true;
@@ -421,7 +422,7 @@ export class Projection {
     const records: object[] = [];
     let used = 0;
     const budget = max - 2048; // Up to 50 missing IDs, plus the wrapper and cursor.
-    const key = createHash("sha256").update(JSON.stringify([ids, corrections])).digest("base64url");
+    const key = createHash("sha256").update(JSON.stringify(includePrivate ? [ids, corrections, true] : [ids, corrections])).digest("base64url");
     const revision = this.store.getState<number>("content_revision") ?? 0;
     let index = 0, part = 0, offset = 0;
     const cursor = (i: number, p: number, at: number) => encode([key, revision, i, p, at]);
@@ -437,11 +438,11 @@ export class Projection {
     for (; index < ids.length; index++, part = 0, offset = 0) {
       const id = ids[index]!, record = this.hub.get(id);
       if (!record) { missing.push(id); continue; }
-      const versions = this.public(id) && corrections ? [record, ...record.corrections] : [record];
+      const versions = (includePrivate || this.public(id)) && corrections ? [record, ...record.corrections] : [record];
       if (part >= versions.length) throw new InputError("cursor 无效");
       for (; part < versions.length; part++, offset = 0) {
         const entry = versions[part]!;
-        const visible = this.public(entry.id);
+        const visible = includePrivate || this.public(entry.id);
         const { id: version, device, source, kind, t_start, t_end, title, source_ref, context, people, capture, sensitivity, redactions, corrects, t_received } = entry;
         const meta = visible ? { id: version, device, source, kind, t_start, t_end, title, source_ref, context, people, capture, sensitivity, redactions, corrects, t_received, schema: entry.schema }
           : { id: version, redacted_private: true };
