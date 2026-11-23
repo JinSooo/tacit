@@ -25,7 +25,7 @@ CLOUDFLARE_ACCOUNT_ID=<账号 ID> CLOUDFLARE_API_TOKEN=<从钥匙串读取> \
 
 不要在仓库根目录运行 wrangler：它会自动生成 `wrangler.jsonc`、`vite.config.ts`，改写 `package.json` 和 `bun.lock`，并试图把仓库当成 Worker 构建。项目已存在，不需要也不要再加 `--force`。
 
-仓库是私有的，在它公开以前，页面上的下载按钮和 GitHub 链接对访客是 404。
+仓库是私有的。公开以前，下载按钮显示为不可点的“Mac 版即将开放”（`.btn-soon`），页面上不放 GitHub、版本记录和许可证链接。公开时把 `sections/hero.html`、`sections/download.html` 里的按钮换回 `https://github.com/JinSooo/tacit/releases/latest` 的 `btn-primary` 链接，恢复 `index.html` 页脚的三个链接和“下载”一节末尾的 GitHub 链接。
 
 ## 区块
 
