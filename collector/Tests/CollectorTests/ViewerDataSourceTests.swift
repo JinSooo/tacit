@@ -1240,12 +1240,12 @@ private func locateBun() -> String? {
     malformed["body"] = 42
     let rejected = try await api.call([String: DeviceJSON].self, "POST", "/v1/records", malformed)
     #expect(rejected["accepted"] == .int(0) && rejected["rejected"]?.arrayValue?.count == 1)
-    do {
-      try await actions.saveManual(malformed)
-      Issue.record("设备协议应拒绝格式错误的手动记录")
-    } catch let error as HubError {
-      #expect(error.status == 400 && error.localizedDescription == "手动记录格式无效")
+    // 两条通道都由中枢 ingest 校验，报出同样的逐字段原因（不再是设备协议独有的一句 400）。
+    func saveError(_ client: HubAPI) async -> HubError? {
+      do { try await client.saveManual(malformed); return nil } catch let error as HubError { return error } catch { return nil }
     }
+    let httpError = await saveError(api), deviceError = await saveError(actions)
+    #expect(httpError != nil && httpError?.localizedDescription == deviceError?.localizedDescription && deviceError?.status == httpError?.status)
     try await api.saveManual(correction(for: ids.recY1, id: httpCorrectionID))
     try await actions.saveManual(correction(for: ids.recY2, id: deviceCorrectionID))
     #expect(try await api.record(ids.recY1).current.body == "确认潮位 15 厘米。")
