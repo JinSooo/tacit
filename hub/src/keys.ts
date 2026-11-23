@@ -1,4 +1,8 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { SecretError, SECRETS_FILE, defaultSecretStore, openSecretStore, relayAccount as relaySecretAccount, runSystemSecurity, secretBackendOf, type SecretStore } from "./secrets/index.ts";
+import { verifyDbKey } from "./db.ts";
+import { dataDirOf } from "./hub-json.ts";
 
 /** 备份数据库、音频和已创建的中枢设备身份。 */
 export const DEVICE_KEY_ACCOUNT = "device-key";
@@ -110,4 +114,33 @@ export function exportSealedFileGuide(env: NodeJS.ProcessEnv = process.env, toda
 /** 按当前后端导出：keychain 给恢复命令，sealed-file 给备份指引。 */
 export function exportKeysForBackend(env: NodeJS.ProcessEnv = process.env): { text: string; missing: string[] } {
   return secretBackendOf(env) === "keychain" ? exportKeys() : exportSealedFileGuide(env);
+}
+
+/** 从外部迁移时把原 db-key 导入当前密钥后端；绝不回显密钥，也不覆盖已有不同的密钥。 */
+export function importDbKey(
+  rawKey: string,
+  options: { env?: NodeJS.ProcessEnv; dataDir?: string; store?: SecretStore } = {},
+): { backend: SecretStore["backend"]; status: "imported" | "unchanged" } {
+  const key = rawKey.trim().toLowerCase();
+  if (!/^[0-9a-f]{32,128}$/.test(key)) {
+    throw Object.assign(new Error("数据库密钥格式无效，必须是 32–128 位十六进制字符"), { code: "invalid_key" });
+  }
+  const env = options.env ?? process.env;
+  const dataDir = options.dataDir ?? dataDirOf(env);
+  const dbFile = join(dataDir, "history.db");
+  if (existsSync(dbFile) && !verifyDbKey(dbFile, key)) {
+    throw Object.assign(new Error("提供的数据库密钥无法打开现有 history.db，已中止导入"), { code: "db_key_mismatch" });
+  }
+  const store = options.store ?? openSecretStore({ env, dataDir });
+  const existing = store.read("db-key");
+  if (existing !== null) {
+    if (existing.toLowerCase() === key) return { backend: store.backend, status: "unchanged" };
+    throw Object.assign(new Error("密钥存储里已有不同的数据库密钥；为防覆盖现有数据，拒绝写入"), { code: "db_key_exists" });
+  }
+  if (!store.create("db-key", key)) {
+    const raced = store.read("db-key");
+    if (raced?.toLowerCase() === key) return { backend: store.backend, status: "unchanged" };
+    throw Object.assign(new Error("密钥存储里已有不同的数据库密钥；为防覆盖现有数据，拒绝写入"), { code: "db_key_exists" });
+  }
+  return { backend: store.backend, status: "imported" };
 }

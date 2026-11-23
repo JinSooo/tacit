@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { dataDirOf } from "./hub-json.ts";
+import { fileURLToPath } from "node:url";
+import { applyTimezone, dataDirOf, timezoneStatus } from "./hub-json.ts";
 import type { HubDB as Database } from "./db.ts";
 
 /** 错误消息可能夹带路径、凭据或记录正文。 */
@@ -55,22 +56,39 @@ function reportStartupFailure(dataDir: string, code: StartupCode): void {
   } catch { process.stderr.write(diagnostic); }
 }
 
-async function serve(): Promise<void> {
+function parseLocalStatusPort(args: string[]): number | undefined {
+  if (args.length === 0) return undefined;
+  if (args.length === 2 && args[0] === "--local-status-port") {
+    const raw = args[1] ?? "";
+    const port = Number(raw);
+    if (!raw.trim() || !Number.isInteger(port) || port < 0 || port > 65535) {
+      throw new Error("--local-status-port 必须是 0–65535 的整数");
+    }
+    return port;
+  }
+  throw new Error("用法：serve [--local-status-port <port>] | run [--local-status-port <port>]");
+}
+
+async function serve(args: string[] = []): Promise<void> {
   const dataDir = dataDirOf();
   let db: Database | undefined;
   let stopLogs: (() => void) | undefined;
   let failure: StartupCode = "unknown";
   try {
+    const localStatusPort = parseLocalStatusPort(args);
+    applyTimezone(process.env, dataDir);
     const [{ loadConfig }, { HubDB }, { startServer }, { startLogRetention }] = await Promise.all([
       import("./config.ts"), import("./db.ts"), import("./server.ts"), import("./log-retention.ts"),
     ]);
     const config = loadConfig();
+    const tz = timezoneStatus({ mode: config.mode, dataDir: config.dataDir });
+    if (tz.warning) process.stderr.write(`[warn] ${tz.warning}\n`);
     failure = "db_open_failed";
     const database = db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
     // 中枢单线程，同步等锁会阻塞所有请求，因此迁移完成后只短暂等锁。
     database.db.pragma("busy_timeout=300");
     failure = "unknown";
-    stopLogs = startLogRetention(dataDir);
+    stopLogs = startLogRetention(config.dataDir);
     const cleanup = () => { stopLogs?.(); database.close(); };
     let stopping = false;
     const stop = async () => {
@@ -83,10 +101,18 @@ async function serve(): Promise<void> {
     };
     // 改端口后退出，launchd 的 KeepAlive 用 hub.json 里的新端口重新拉起。
     const restart = () => { console.log("端口已改，中枢退出以便用新端口重启"); void stop(); };
-    const server = startServer({ db: database, token: config.token, agentToken: config.agentToken, port: config.port, settings: { dataDir, restart } });
-    try { rmSync(startupFile(dataDir), { force: true }); }
+    const server = startServer({
+      db: database, token: config.token, agentToken: config.agentToken,
+      port: config.port, lanPort: config.lanPort, mode: config.mode, localStatusPort,
+      settings: { dataDir: config.dataDir, mode: config.mode, restart },
+    });
+    try { rmSync(startupFile(config.dataDir), { force: true }); }
     catch { console.error(JSON.stringify({ code: "startup_marker_remove_failed" })); }
-    console.log(`Hub 已启动：http://127.0.0.1:${server.port}`);
+    if (config.mode === "server") {
+      console.log(`Hub 已启动（server 模式）：设备端口 0.0.0.0:${server.lanPort}${server.port !== null ? `，本地排障端口 http://127.0.0.1:${server.port}` : ""}`);
+    } else {
+      console.log(`Hub 已启动：http://127.0.0.1:${server.port}`);
+    }
     process.once("exit", cleanup);
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
@@ -105,7 +131,60 @@ async function serve(): Promise<void> {
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, name] = argv;
-  if (command === "serve") return serve();
+  if (command === "serve") return serve(argv.slice(1));
+  if (command === "run") {
+    const localStatusPort = parseLocalStatusPort(argv.slice(1));
+    const dataDir = dataDirOf();
+    applyTimezone(process.env, dataDir);
+    const [{ loadConfig }, { HubDB }, { runSupervisor }] = await Promise.all([
+      import("./config.ts"), import("./db.ts"), import("./supervisor.ts"),
+    ]);
+    // 启动前先做硬校验（根密钥、db-key、库完整性与迁移），避免根密钥缺失时进入崩溃重启死循环。
+    const config = loadConfig();
+    new HubDB(join(config.dataDir, "history.db"), config.dbKey).close();
+    const entry = fileURLToPath(import.meta.url);
+    const serveCmd = [process.execPath, entry, "serve", ...(localStatusPort !== undefined ? ["--local-status-port", String(localStatusPort)] : [])];
+    const distillCmd = [process.execPath, entry, "distill"];
+    await runSupervisor({ specs: [{ name: "serve", command: serveCmd }, { name: "distill", command: distillCmd }] });
+    return;
+  }
+  if (command === "pair") {
+    let role: string | undefined;
+    let relayUrl: string | undefined;
+    for (let i = 1; i < argv.length; i++) {
+      const flag = argv[i];
+      if (flag === "--role") {
+        if (role !== undefined || i + 1 >= argv.length) throw new Error("用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]");
+        role = argv[++i];
+      } else if (flag === "--relay") {
+        if (relayUrl !== undefined || i + 1 >= argv.length) throw new Error("用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]");
+        relayUrl = argv[++i];
+      } else {
+        throw new Error("用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]");
+      }
+    }
+    if (!role) throw new Error("用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]");
+    applyTimezone(process.env, dataDirOf());
+    const [{ loadConfig }, { HubDB, InputError }, { DeviceService }, { WireError }] = await Promise.all([
+      import("./config.ts"), import("./db.ts"), import("./devices/service.ts"), import("./devices/envelope.ts"),
+    ]);
+    const config = loadConfig();
+    const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
+    const devices = new DeviceService(db, config.lanPort);
+    try {
+      const invite = await devices.createPairing({ role, relayUrl, openListener: false });
+      console.log(invite.uri);
+      process.stderr.write(`已创建 ${invite.role} 配对邀请，有效期至 ${invite.expires_at}（仅可使用一次）\n`);
+    } catch (error) {
+      if (!(error instanceof WireError) && !(error instanceof InputError)) throw error;
+      console.error(error.message);
+      process.exitCode = 1;
+    } finally {
+      await devices.stop(true);
+      db.close();
+    }
+    return;
+  }
   // Agent 侧薄进程不能加载数据库、提炼或模型模块。
   if (command === "mcp" || command === "hook") {
     const { runAgentCommand } = await import("./agent-cli/index.ts");
@@ -207,12 +286,32 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "keys") {
-    if (name !== "export" || argv.length !== 2) throw new Error("用法：bun hub/src/cli.ts keys export");
-    const { exportKeysForBackend } = await import("./keys.ts");
-    const { text, missing } = exportKeysForBackend();
-    console.log(text);
-    if (missing.length) { console.error(`没有导出：${missing.join("、")}密钥`); process.exitCode = 1; }
-    return;
+    if (name === "export" && argv.length === 2) {
+      const { exportKeysForBackend } = await import("./keys.ts");
+      const { text, missing } = exportKeysForBackend();
+      console.log(text);
+      if (missing.length) { console.error(`没有导出：${missing.join("、")}密钥`); process.exitCode = 1; }
+      return;
+    }
+    if (name === "import-db-key" && argv.length === 2) {
+      const { importDbKey } = await import("./keys.ts");
+      const raw = await Bun.stdin.text();
+      try {
+        const result = importDbKey(raw);
+        const target = result.backend === "keychain" ? "钥匙串" : "secrets.enc";
+        console.log(result.status === "unchanged" ? `数据库密钥已在 ${target} 中且一致，无需修改。` : `已导入数据库密钥到 ${target}。`);
+      } catch (error) {
+        const code = errorCode(error);
+        if (code === "invalid_key" || code === "db_key_mismatch" || code === "db_key_exists") {
+          console.error((error as Error).message);
+          process.exitCode = 1;
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
+    throw new Error("用法：bun hub/src/cli.ts keys export | keys import-db-key");
   }
   const { loadConfig } = await import("./config.ts");
   const { HubDB } = await import("./db.ts");
@@ -260,6 +359,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     // --from/--to 只配合 --backfill：按范围重复整理，不看 backfill_done。
     if (range && (!range.from || !range.to || range.from > range.to || !flags.includes("--backfill"))) throw new Error("--from/--to 需要同时给出、from 不晚于 to，并配合 --backfill");
+    applyTimezone(process.env, dataDirOf());
     const config = loadConfig();
     const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
     // 回滚日志模式下 hub 连续写入时，等锁 5 秒常常轮不上；提炼是后台进程，等久一点无妨。
@@ -275,12 +375,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       return;
     }
     const store = new DistillStore(db);
-    const llm = createLLM({ dataDir: config.dataDir, journal: new RuntimeLog(db), recordUsage: row => store.writeUsage({ ...row, input_tokens: row.input_tokens ?? undefined, output_tokens: row.output_tokens ?? undefined, error: row.error ?? undefined }) });
-    try { await runDistill({ db, llm, once: flags.includes("--once"), backfill: flags.includes("--backfill"), range }); }
+    const llm = createLLM({ dataDir: config.dataDir, mode: config.mode, journal: new RuntimeLog(db), recordUsage: row => store.writeUsage({ ...row, input_tokens: row.input_tokens ?? undefined, output_tokens: row.output_tokens ?? undefined, error: row.error ?? undefined }) });
+    try { await runDistill({ db, llm, once: flags.includes("--once"), backfill: flags.includes("--backfill"), range, dataDir: config.dataDir, mode: config.mode }); }
     finally { db.close(); }
     return;
   }
-  if (command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts serve | init | open [--print] | keys export | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
+  if (command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts run | serve [--local-status-port <port>] | pair --role <collect|view|admin> [--relay <url>] | devices list|set-role|remove | init | open [--print] | keys export|import-db-key | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
   if (command === "run-plugin") {
     let hub: string | undefined, tokenFile: string | undefined;

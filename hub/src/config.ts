@@ -2,9 +2,9 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, rea
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { SecretError, openSecretStore, type SecretStore } from "./secrets/index.ts";
-import { dataDirOf, resolvePort } from "./hub-json.ts";
+import { dataDirOf, hubModeOf, resolveLanPort, resolvePort, resolveTimezone, type HubMode } from "./hub-json.ts";
 
-export interface HubConfig { dataDir: string; dbKey: string; token: string; agentToken: string; port: number }
+export interface HubConfig { dataDir: string; dbKey: string; token: string; agentToken: string; port: number; lanPort: number; mode: HubMode }
 
 const unreadableKey = () => Object.assign(new Error("无法读取或保存数据库密钥"), { code: "db_key_unreadable" });
 /** 根密钥和 secrets.enc 的问题保留固定类别（master_key_unreadable）；其余存取失败统一成 db_key_unreadable。 */
@@ -16,7 +16,10 @@ export function loadConfig(
   secrets?: SecretStore,
 ): HubConfig {
   const dataDir = dataDirOf(env);
+  const mode = hubModeOf(env);
   const { port } = resolvePort(env, dataDir);
+  const lanPort = resolveLanPort(dataDir, env);
+  resolveTimezone(env, dataDir);
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   let dbKey = env.RA_DB_KEY;
   if (dbKey === undefined) {
@@ -40,7 +43,7 @@ export function loadConfig(
   }
   if (!dbKey) throw unreadableKey();
   const token = localToken(dataDir, "token"), agentToken = localToken(dataDir, "agent-token");
-  return { dataDir, dbKey, token, agentToken, port };
+  return { dataDir, dbKey, token, agentToken, port, lanPort, mode };
 }
 function localToken(dataDir: string, name: string): string {
   const tokenFile = join(dataDir, name);

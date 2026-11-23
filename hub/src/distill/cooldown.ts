@@ -10,7 +10,7 @@ const KEY = "llm_cooldown";
 const MIN = 60_000;
 const MAX_COOLDOWN = 6 * 60 * MIN;
 const duration = { rate_limited: 30 * MIN, quota: 120 * MIN, network: 15 * MIN };
-export type CooldownKind = keyof typeof duration | "budget";
+export type CooldownKind = keyof typeof duration | "budget" | "config_error";
 type Cooldown = { until: string; kind: CooldownKind };
 
 /** 用量冷却随今天的用量和当前上限现算，与提供商冷却独立。 */
@@ -64,6 +64,7 @@ export function withModelCooldown(llm: LLM, store: DistillStore, now: () => numb
         return result;
       }
       const error = classifyModelError(result.error), category = modelErrorCategory(error);
+      if (category === "config_error") throw new ModelCooldown("config_error");
       networkFailures = category === "network" || category === "timeout" ? networkFailures + 1 : 0;
       const kind = category === "quota" || category === "rate_limited" ? category : networkFailures >= 2 ? "network" : null;
       if (kind) {

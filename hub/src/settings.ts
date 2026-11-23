@@ -3,8 +3,8 @@ import { auditSecurity, securityAudit } from "./security-audit.ts";
 // API key 只进钥匙串：不进响应、错误信息、日志和文件。
 import { createServer } from "node:net";
 import { InputError, type HubDB } from "./db.ts";
-import { resolvePort, writeHubPort, PORT_MIN, PORT_MAX } from "./hub-json.ts";
-import { DEFAULT_TIERS, KEY_PROVIDERS, PROVIDERS, TIERS, loadConfig, saveConfig, validateTier, validateTiers, type KeyProvider } from "./llm/config.ts";
+import { hubModeOf, resolvePort, writeHubPort, PORT_MIN, PORT_MAX, type HubMode } from "./hub-json.ts";
+import { DEFAULT_TIERS, KEY_PROVIDERS, PROVIDERS, TIERS, isCliProvider, loadConfig, saveConfig, validateTier, validateTiers, type KeyProvider } from "./llm/config.ts";
 import { KEY_PATTERN, systemKeychain, type Keychain } from "./llm/keychain.ts";
 import { createLLM, type ModelConfig, type ReadKey, type Spawn, type Tier } from "./llm/index.ts";
 import { GENERAL_DEFAULTS, GENERAL_RANGES, readGeneral, updateGeneral } from "./general-settings.ts";
@@ -17,6 +17,7 @@ import { agentStatus, connectAgent, type AgentTool, type InstallEnvironment } fr
 export interface SettingsDeps {
   dataDir: string;
   env?: NodeJS.ProcessEnv;
+  mode?: HubMode;
   keychain?: Keychain;
   /** 试绑定端口，失败时抛出（code 为 EADDRINUSE 表示被占用）。 */
   probePort?: (port: number) => Promise<void>;
@@ -64,6 +65,8 @@ const fail = (status: number, error: string) => Response.json({ error }, { statu
 
 export function createSettings(deps: SettingsDeps) {
   const env = deps.env ?? process.env;
+  const mode = deps.mode ?? hubModeOf(env);
+  const providers = mode === "server" ? PROVIDER_INFO.filter(p => !isCliProvider(p.id)) : PROVIDER_INFO;
   const keychain = deps.keychain ?? systemKeychain;
   let testing = false;
 
@@ -72,9 +75,10 @@ export function createSettings(deps: SettingsDeps) {
     return Object.fromEntries(entries) as Record<KeyProvider, boolean | null>;
   }
   async function models() {
-    let tiers: Record<Tier, ModelConfig> = structuredClone(DEFAULT_TIERS), config_error: string | null = null;
-    try { tiers = await loadConfig(deps.dataDir); } catch (error) { config_error = error instanceof Error ? error.message : "models.json 无效"; }
-    return { tiers, config_error, keys: await keyStatus(), providers: PROVIDER_INFO, tier_info: TIER_INFO };
+    let tiers: Record<Tier, ModelConfig> | null = mode === "server" ? null : structuredClone(DEFAULT_TIERS);
+    let config_error: string | null = null;
+    try { tiers = await loadConfig(deps.dataDir, { mode }); } catch (error) { config_error = error instanceof Error ? error.message : "models.json 无效"; }
+    return { tiers, config_error, keys: await keyStatus(), providers, tier_info: TIER_INFO };
   }
   function general(hub: HubDB) {
     return { ...readGeneral(hub), defaults: GENERAL_DEFAULTS, ranges: GENERAL_RANGES, model_usage: readModelUsage(hub) };
@@ -114,8 +118,8 @@ export function createSettings(deps: SettingsDeps) {
         const body = object(await ctx.readJSON());
         if (Object.keys(body).some(k => k !== "tiers")) throw new InputError("只接受 tiers");
         // 先校验（和读取 models.json 同一套规则），通过了才写文件。
-        const tiers = asInput(() => validateTiers(body.tiers));
-        try { await saveConfig(deps.dataDir, tiers); }
+        const tiers = asInput(() => validateTiers(body.tiers, "tiers", { mode }));
+        try { await saveConfig(deps.dataDir, tiers, { mode }); }
         catch { return fail(500, "无法写入 models.json"); }
         return Response.json(await models());
       }
@@ -124,7 +128,7 @@ export function createSettings(deps: SettingsDeps) {
     if (pathname === "/v1/settings/models/local" && method === "POST") {
       const body = object(await ctx.readJSON());
       if (Object.keys(body).some(k => k !== "base_url") || typeof body.base_url !== "string") throw new InputError("只接受 base_url");
-      const config = asInput(() => validateTier({ provider: "openai-compatible", model: "list", base_url: body.base_url }, "config"));
+      const config = asInput(() => validateTier({ provider: "openai-compatible", model: "list", base_url: body.base_url }, "config", { mode }));
       if (!isLoopback(config.base_url)) throw new InputError("模型列表只接受本机 HTTP(S) 地址");
       try { return Response.json({ models: await localModels(config.base_url!) }); }
       catch (error) { return fail(503, error instanceof Error ? error.message : "读取本机模型列表失败"); }
@@ -136,9 +140,9 @@ export function createSettings(deps: SettingsDeps) {
       if (!TIERS.includes(body.tier as Tier)) throw new InputError("tier 必须是 minute、hour 或 day");
       const tier = body.tier as Tier;
       let config: ModelConfig;
-      if (body.config !== undefined) config = asInput(() => validateTier(body.config, "config"));
+      if (body.config !== undefined) config = asInput(() => validateTier(body.config, "config", { mode }));
       else {
-        try { config = (await loadConfig(deps.dataDir))[tier]; }
+        try { config = (await loadConfig(deps.dataDir, { mode }))[tier]; }
         catch (error) { throw new InputError(error instanceof Error ? error.message : "models.json 无效"); }
       }
       if (testing) return fail(409, "上一次测试还没结束");
@@ -146,8 +150,8 @@ export function createSettings(deps: SettingsDeps) {
       try {
         // 不记进 llm_usage：用量表统计的是提炼的消耗，测试调用不混进去。
         const llm = createLLM({
-          dataDir: deps.dataDir, recordUsage: () => {}, journal: new RuntimeLog(ctx.db), ...deps.llm,
-          configs: async () => ({ ...structuredClone(DEFAULT_TIERS), [tier]: config }),
+          dataDir: deps.dataDir, mode, recordUsage: () => {}, journal: new RuntimeLog(ctx.db), ...deps.llm,
+          configs: async () => ({ minute: config, hour: config, day: config }),
         });
         const result = await llm.complete<{ ok: boolean }>({ tier, task: "connection_test", system: "这是连接测试。只按 schema 返回 {\"ok\": true}。", prompt: "连接测试：返回 ok=true。", schema: TEST_SCHEMA, timeoutMs: TEST_TIMEOUT_MS });
         if (result.ok) appliedCall(ctx.db,result.call_id);
