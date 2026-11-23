@@ -1,6 +1,6 @@
 import type { HubDB } from "./db.ts";
 import { InputError } from "./db.ts";
-import { AUDIO_SOURCES, recordDeviceFilter, sourceList } from "./record-sources.ts";
+import { AUDIO_SOURCES, audioDeviceGroup, audioEquivalentDevices, recordDeviceFilter, sourceList } from "./record-sources.ts";
 
 /**
  * 一场对话常被静音切成几条记录，按规则合成一组；
@@ -42,12 +42,12 @@ export interface AudioRow { id: string; start_ms: number; end_ms: number; app: s
 export interface ConversationGroup { id: string; record_ids: string[]; start_ms: number; end_ms: number; app: string | null; private: boolean; device?: string }
 
 /** 在同一设备和来源内，按会议软件和间隔连成一场。 */
-export function groupConversations(rows: AudioRow[]): ConversationGroup[] {
+export function groupConversations(rows: AudioRow[], normalizeDevice?: (device: string | undefined) => string | undefined): ConversationGroup[] {
   const sorted = rows.slice().sort((a, b) => a.start_ms - b.start_ms || a.id.localeCompare(b.id));
   const out: ConversationGroup[] = [];
   const latest = new Map<string, ConversationGroup>();
   for (const r of sorted) {
-    const key = JSON.stringify([r.device, r.source]);
+    const key = JSON.stringify([normalizeDevice ? normalizeDevice(r.device) : r.device, r.source]);
     const g = latest.get(key);
     if (g && g.app === r.app && r.start_ms - g.end_ms <= CONVERSATION_GAP_MS) {
       g.record_ids.push(r.id); g.end_ms = Math.max(g.end_ms, r.end_ms); g.private ||= r.private;
@@ -175,19 +175,31 @@ function appOf(context: string | null): string | null {
   try { const app = (JSON.parse(context) as { app?: unknown }).app; return typeof app === "string" && app ? app : null; } catch { return null; }
 }
 function audioRows(db: HubDB, from: number, to: number, device?: string, matchDeviceGroup = false): AudioMetaRow[] {
+  let deviceClause = "";
+  let deviceArgs: string[] = [];
+  if (device) {
+    if (matchDeviceGroup) {
+      deviceClause = ` AND ${recordDeviceFilter(device)}`;
+      deviceArgs = [device];
+    } else {
+      deviceArgs = audioEquivalentDevices(db, device);
+      deviceClause = deviceArgs.length === 1 ? " AND r.device=?" : ` AND r.device IN (${deviceArgs.map(() => "?").join(",")})`;
+    }
+  }
   return db.db.prepare<[number, number, ...string[]], AudioMetaRow>(`SELECT r.id,r.source,r.device,r.t_start,r.t_start_ms,r.t_end,r.context,
     CASE WHEN r.sensitivity='private' OR COALESCE(c.sensitivity,'normal')='private' THEN 'private' ELSE COALESCE(c.sensitivity,r.sensitivity) END AS sensitivity
     FROM records r
     LEFT JOIN records c ON c.id=(SELECT cc.id FROM records cc WHERE cc.corrects=r.id AND cc.source='manual.correction' ORDER BY cc.t_start_ms DESC,cc.id DESC LIMIT 1)
-    WHERE r.source IN (${sourceList(AUDIO_SOURCES)}) AND r.t_start_ms>=? AND r.t_start_ms<=?${device ? " AND " + (matchDeviceGroup ? recordDeviceFilter(device) : "r.device=?") : ""}
-    ORDER BY r.t_start_ms,r.id`).all(from, to, ...(device ? [device] : []));
+    WHERE r.source IN (${sourceList(AUDIO_SOURCES)}) AND r.t_start_ms>=? AND r.t_start_ms<=?${deviceClause}
+    ORDER BY r.t_start_ms,r.id`).all(from, to, ...deviceArgs);
 }
 const toAudio = (r: AudioMetaRow): AudioRow => ({ id: r.id, source: r.source, device: r.device, start_ms: r.t_start_ms, end_ms: Math.max(r.t_start_ms, r.t_end ? Date.parse(r.t_end) || r.t_start_ms : r.t_start_ms), app: appOf(r.context), private: r.sensitivity === "private" });
 
 /** 范围内的对话分组。范围两头各多读一段，免得把跨边界的一场切开。 */
 export function conversationsIn(db: HubDB, from: number, to: number, device?: string, matchDeviceGroup = false): ConversationGroup[] {
   const pad = 4 * 3600_000;
-  return groupConversations(audioRows(db, from - pad, to + pad, device, matchDeviceGroup).map(toAudio)).filter(g => g.end_ms >= from && g.start_ms <= to);
+  return groupConversations(audioRows(db, from - pad, to + pad, device, matchDeviceGroup).map(toAudio), audioDeviceGroup(db))
+    .filter(g => g.end_ms >= from && g.start_ms <= to);
 }
 
 /** 用户写的修正优先于转写原文。 */

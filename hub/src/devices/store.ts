@@ -131,6 +131,7 @@ export function removeDevice(sql: SQL, id: unknown, options: Actor = {}) {
     clearDeviceReceipts(sql, target.id, false);
     sql.prepare(`UPDATE relay_mailboxes SET state='revoked', token=NULL, move_body=NULL, move_id=NULL WHERE device=?`).run(target.id);
     sql.prepare("DELETE FROM devices WHERE id=?").run(target.id);
+    sql.prepare("DELETE FROM distill_state WHERE k=?").run(`collector_status:${target.id}`);
     auditSecurity(sql, "device.remove", { ...options, target: target.id });
     return { deleted: true };
   }).immediate();

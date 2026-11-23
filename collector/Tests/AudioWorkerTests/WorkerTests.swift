@@ -401,3 +401,65 @@ func clusterProbe() throws {
   #expect(try await worker.run() == 0)
   #expect(try store.conversations().first?.status == .done)
 }
+
+@Test func workerRunsOverStdioProxyWithoutTokenFile() async throws {
+  let step = 2.0 * Double.pi * 440.0 / 16000.0
+  let synthetic: [Float] = (0..<96000).map { Float(sin(Double($0) * step) * 0.2) }
+  let (root, store, _) = try fixture([synthetic], encode: { _ in Data([1, 2, 3]) })
+  defer { try? FileManager.default.removeItem(at: root) }
+  // 目录内没有 token 文件，验证子进程完全走宿主代理。
+  #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("token").path))
+
+  let workerToHost = Pipe()
+  let hostToWorker = Pipe()
+  let hostChannel = StdioLineChannel(
+    readFD: workerToHost.fileHandleForReading.fileDescriptor,
+    writeFD: hostToWorker.fileHandleForWriting.fileDescriptor
+  )
+  let workerChannel = StdioLineChannel(
+    readFD: hostToWorker.fileHandleForReading.fileDescriptor,
+    writeFD: workerToHost.fileHandleForWriting.fileDescriptor
+  )
+
+  var ops: [String] = []
+  var ingestedDevices: [String] = []
+  let proxyTask = Task.detached {
+    await AudioProxy.serve(channel: hostChannel, deviceID: "mac-abcd2345") { op, body in
+      ops.append(op)
+      let replyObj: [String: Any]
+      switch op {
+      case "audio.sync":
+        let vector: [Double] = [1.0] + Array(repeating: 0.0, count: 511)
+        replyObj = [
+          "retention_days": 7,
+          "voiceprint": ["vector": vector, "threshold": 0.49],
+          "sample_requests": [],
+          "delete_conversations": [],
+          "purge_before": NSNull(),
+        ]
+      case "ingest":
+        let recs = try #require(body["records"]?.arrayValue)
+        ingestedDevices.append(contentsOf: recs.compactMap { $0["device"]?.stringValue })
+        replyObj = ["accepted": recs.count, "duplicates": 0, "rejected": []]
+      default:
+        replyObj = [:]
+      }
+      let data = try JSONSerialization.data(withJSONObject: replyObj)
+      let decoded = try JSONDecoder().decode([String: DeviceJSON].self, from: data)
+      return DeviceResponsePayload(status: 200, body: decoded, bodyData: data)
+    }
+  }
+
+  let worker = Worker(store: store, hub: StdioHubTransport(channel: workerChannel), device: "mac-abcd2345", decode: { _ in synthetic }) { FakeModels() }
+  let failures = try await worker.run()
+  try workerToHost.fileHandleForWriting.close()
+  await proxyTask.value
+  try? workerToHost.fileHandleForReading.close()
+  try? hostToWorker.fileHandleForReading.close()
+  try? hostToWorker.fileHandleForWriting.close()
+
+  #expect(failures == 0)
+  #expect(try store.conversations().first?.status == .done)
+  #expect(ops == ["audio.sync", "ingest"])
+  #expect(ingestedDevices == ["mac-abcd2345"])
+}

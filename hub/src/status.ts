@@ -57,8 +57,54 @@ function isoTimestamp(value: unknown): string | null {
 const nonnegativeCount = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
-function collectorSnapshot(databaseFile: string, now: number) {
-  const unavailable = { transcription: null, transcription_disabled: false, collector: null };
+type CollectorStatusSnapshot = {
+  transcription: { pending: number; failed: number; updated_at: string; stale: boolean } | null;
+  transcription_disabled: boolean;
+  collector: {
+    outbox_bytes: number; outbox_dropped: number; outbox_degraded: boolean;
+    hub_busy?: number; queue_peak?: number; updated_at: string; stale: boolean;
+  } | null;
+};
+
+function reportedCollectorSnapshot(sql: HubDB["db"], now: number): CollectorStatusSnapshot | null {
+  const rows = sql.prepare<[], { id: string; platform: string; local_only: number; v: string }>(`
+    SELECT d.id, d.platform, d.local_only, s.v
+    FROM distill_state s
+    JOIN devices d ON s.k = 'collector_status:' || d.id
+  `).all();
+  const parsed = rows.flatMap(row => {
+    try {
+      const snapshot = JSON.parse(row.v) as Record<string, unknown>;
+      const updated_at = isoTimestamp(snapshot?.time);
+      if (!updated_at) return [];
+      const { transcription, outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak } = snapshot;
+      if (!nonnegativeCount(outbox_bytes) || !nonnegativeCount(outbox_dropped) || typeof outbox_degraded !== "boolean"
+        || !nonnegativeCount(hub_busy) || !nonnegativeCount(queue_peak)) return [];
+      const stale = now - Date.parse(updated_at) > 120_000;
+      const pending = (transcription as Record<string, unknown> | null)?.pending;
+      const failed = (transcription as Record<string, unknown> | null)?.failed;
+      const rank = row.platform === "mac" && row.local_only === 1 ? 0 : row.platform === "mac" ? 1 : 2;
+      return [{
+        id: row.id,
+        rank,
+        timeMs: Date.parse(updated_at),
+        result: {
+          transcription: nonnegativeCount(pending) && nonnegativeCount(failed) ? { pending, failed, updated_at, stale } : null,
+          transcription_disabled: transcription === null && !stale,
+          collector: { outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak, updated_at, stale },
+        } satisfies CollectorStatusSnapshot,
+      }];
+    } catch { return []; }
+  });
+  if (!parsed.length) return null;
+  parsed.sort((a, b) => a.rank - b.rank || b.timeMs - a.timeMs || a.id.localeCompare(b.id));
+  return parsed[0]!.result;
+}
+
+function collectorSnapshot(sql: HubDB["db"], databaseFile: string, now: number): CollectorStatusSnapshot {
+  const reported = reportedCollectorSnapshot(sql, now);
+  if (reported) return reported;
+  const unavailable: CollectorStatusSnapshot = { transcription: null, transcription_disabled: false, collector: null };
   if (!databaseFile || databaseFile === ":memory:") return unavailable;
   // history.db 与采集端快照放在同一个已解析的数据目录中。
   try {
@@ -151,7 +197,7 @@ export function hubStatus(hub: HubDB, options: {
   const modelCheck = dataDir ? inspectModelConfig(dataDir, { mode, env: options.env }) : { ok: true as const };
   const modelConfigError = modelCheck.ok ? null : modelCheck.error;
   const timezone = timezoneStatus({ env: options.env, dataDir, mode, processTimezone: options.processTimezone });
-  const { transcription, transcription_disabled, collector } = collectorSnapshot(file, now);
+  const { transcription, transcription_disabled, collector } = collectorSnapshot(sql, file, now);
 
   const { bySource, byDevice, tombstones } = recordGroups(hub);
 

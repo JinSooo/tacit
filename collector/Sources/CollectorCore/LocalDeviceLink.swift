@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 
 /// 同机登记使用的公开连接信息。写入 collector 文件表示两份配置均已准备好。
-public struct LocalDeviceLink: Codable, Equatable {
+public struct LocalDeviceLink: Codable, Equatable, Sendable {
   public let hub_id: String
   public let hub_pk: String
   public let device_id: String

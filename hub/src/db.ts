@@ -269,7 +269,7 @@ export class HubDB {
           result.rejected.push({ index: i, errors: ["/t_start 无法转换为可排序的时间"] }); return;
         }
         if (exists.get(r.id, r.source, r.source_ref ?? null, r.id, r.source, r.source_ref ?? null)) { result.duplicates++; return; }
-        if (device !== undefined && r.source === "android.audio" && r.source_ref) {
+        if (device !== undefined && (r.source === "android.audio" || r.source === "mac.audio") && r.source_ref) {
           try { new AudioStore(this).assertDeviceConversation(r.source_ref, device); }
           catch (error) {
             if (!(error instanceof InputError)) throw error;

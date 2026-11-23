@@ -13,8 +13,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   init(config: Config) { self.config = config }
   let toggles = SourceToggles(store: UserDefaults.standard)
   lazy var sources = DataSourceRegistry(toggles: toggles)
-  lazy var hub = HubClient(config: config) { [weak self] _ in
-    self?.viewerDataSource.activateIfLinked()
+  lazy var deviceSession = HostDeviceSession(
+    origin: { [config] in config.hubURL },
+    files: LocalDeviceLink.Files(directory: config.dataDir),
+    keys: .keychain
+  )
+  lazy var hub = HubClient(config: config, deviceSession: deviceSession, onHealthEvent: { [weak self] in
+    nonisolated(unsafe) let delegate = self
+    DispatchQueue.main.async { delegate?.writeStatus() }
+  }) { [weak self] _ in
+    nonisolated(unsafe) let delegate = self
+    delegate?.viewerDataSource.activateIfLinked()
+    DispatchQueue.main.async { delegate?.writeStatus(forceReport: true) }
   }
   lazy var api = HubAPI(base: { [config] in config.hubURL }, token: { [config] in config.token })
   lazy var viewerDataSource: AdaptiveViewerDataSource = {
@@ -45,8 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     )
   }()
   @MainActor private lazy var deviceDiscovery = DeviceDiscovery(advertiser: BonjourDeviceAdvertiser())
-  lazy var audio = AudioCoordinator(config: config)
-  lazy var plugins = PluginScheduler(config: config)
+  lazy var audio = AudioCoordinator(config: config, deviceSession: deviceSession)
+  lazy var plugins = PluginScheduler(config: config, deviceSession: deviceSession)
   lazy var viewer: ViewerWindow = MainActor.assumeIsolated {
     let store = ViewerStore(api: api, dataSource: viewerDataSource, device: config.device, controls: self)
     store.onRevision = { [weak self] in
@@ -514,22 +524,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
   }
 
-  func writeStatus() {
+  private var statusThrottle = CollectorStatusThrottle()
+  private var statusReporting = false
+
+  func writeStatus(forceReport: Bool = false) {
     MainActor.assumeIsolated { deviceDiscovery.refreshIfDue(api: api) }
     let enabledSources = Dictionary(uniqueKeysWithValues: DataSourceCatalog.all.map { ($0.id, enabled($0.id)) })
     captureQueue.async { [self] in
+      let nowDate = Date()
+      let timeText = LocalTime.iso(nowDate)
+      let outbox = hub.outboxStatus
+      let hubBusy = hub.hubBusy
+      let queuePeak = hub.queuePeak
+      let hubError = hub.lastError
+      let transcription = enabledSources["audio"] == true ? audio.transcriptionStatus() : nil
       var s: [String: Any] = stats
       s["queue"] = hub.pendingCount; s["dropped"] = hub.queue.dropped
-      s["hubBusy"] = hub.hubBusy; s["queuePeak"] = hub.queuePeak
-      s["sent"] = hub.sent; s["rejected"] = hub.rejected; s["hubError"] = hub.lastError ?? NSNull()
+      s["hubBusy"] = hubBusy; s["queuePeak"] = queuePeak
+      s["sent"] = hub.sent; s["rejected"] = hub.rejected; s["hubError"] = hubError ?? NSNull()
       s["axTrusted"] = AXIsProcessTrusted(); s["ocrEnabled"] = enabledSources["ocr"] ?? false; s["ocrGranted"] = ocr.granted
       s["sources"] = enabledSources
       s["paused"] = pausedUntil != nil; s["plugins"] = plugins.status()
       s["footprintMB"] = Int(footprintMB()); s["cpuSeconds"] = Int(cpuSeconds())
-      s["time"] = LocalTime.iso(Date())
+      s["time"] = timeText
       if enabledSources["audio"] == true { s["micQuietLevels"] = audio.microphoneQuietLevels().json }
-      CollectorStatus.write(s, transcription: enabledSources["audio"] == true ? audio.transcriptionStatus() : nil,
-                            outbox: hub.outboxStatus, to: config.dataDir.appendingPathComponent("collector-status.json"))
+      CollectorStatus.write(s, transcription: transcription,
+                            outbox: outbox, to: config.dataDir.appendingPathComponent("collector-status.json"))
+
+      let report = CollectorStatusReport(
+        time: timeText,
+        transcription: transcription,
+        outbox: outbox,
+        hubBusy: hubBusy,
+        queuePeak: queuePeak
+      )
+      let uptime = ProcessInfo.processInfo.systemUptime
+      let hasError = hubError != nil
+      guard !statusReporting, statusThrottle.shouldSend(report, hasError: hasError, force: forceReport, now: uptime) else { return }
+      statusReporting = true
+      let deviceSession = self.deviceSession
+      nonisolated(unsafe) weak var weakSelf = self
+      Task {
+        let sent = (try? await deviceSession.send(op: "collector.status", body: report)) != nil
+        weakSelf?.captureQueue.async {
+          guard let self = weakSelf else { return }
+          self.statusReporting = false
+          if sent { self.statusThrottle.recordSent(report, hasError: hasError, at: ProcessInfo.processInfo.systemUptime) }
+        }
+      }
     }
   }
 }

@@ -273,6 +273,7 @@ export class DeviceService {
           auditSecurity(this.sql, "device.remove", { target: id, code: "hub_identity_changed", now: this.clock() });
         }
         this.sql.prepare("DELETE FROM devices").run();
+        this.sql.prepare("DELETE FROM distill_state WHERE k GLOB 'collector_status:*'").run();
         this.sql.prepare("INSERT INTO distill_state(k,v) VALUES (?,json_quote(?)) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
           .run(identityKey, identity.hubID);
       }
@@ -816,6 +817,40 @@ export class DeviceService {
     }).immediate();
   }
 
+  private saveCollectorStatus(device: string, body: Record<string, unknown>) {
+    const allowed = new Set(["time", "transcription", "outbox_bytes", "outbox_dropped", "outbox_degraded", "hub_busy", "queue_peak"]);
+    for (const key of Object.keys(body)) {
+      if (!allowed.has(key)) throw new InputError("采集状态包含未知字段");
+    }
+    const time = body.time;
+    if (typeof time !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(time) || !Number.isFinite(Date.parse(time))) {
+      throw new InputError("采集状态 time 无效");
+    }
+    const nonneg = (value: unknown, field: string) => {
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new InputError(`采集状态 ${field} 无效`);
+      return value;
+    };
+    let transcription: { pending: number; failed: number } | null;
+    if (body.transcription === null) {
+      transcription = null;
+    } else {
+      const t = object(body.transcription);
+      if (!t || Object.keys(t).some(k => k !== "pending" && k !== "failed")) throw new InputError("采集状态 transcription 无效");
+      transcription = { pending: nonneg(t.pending, "transcription.pending"), failed: nonneg(t.failed, "transcription.failed") };
+    }
+    const outbox_bytes = nonneg(body.outbox_bytes, "outbox_bytes");
+    const outbox_dropped = nonneg(body.outbox_dropped, "outbox_dropped");
+    if (typeof body.outbox_degraded !== "boolean") throw new InputError("采集状态 outbox_degraded 无效");
+    const hub_busy = nonneg(body.hub_busy, "hub_busy");
+    const queue_peak = nonneg(body.queue_peak, "queue_peak");
+    const payload = {
+      time, transcription, outbox_bytes, outbox_dropped, outbox_degraded: body.outbox_degraded, hub_busy, queue_peak,
+    };
+    this.sql.prepare("INSERT INTO distill_state(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
+      .run(`collector_status:${device}`, JSON.stringify(payload));
+    return { ok: true };
+  }
+
   private deleteRecords(device: string, ids: string[], ownOnly: boolean, local: boolean) {
     return this.hub.deleteMany(ids, ownOnly ? device : undefined, rows => {
       if (!rows.length) return;
@@ -906,6 +941,7 @@ export class DeviceService {
       case "audio.lines": return ok(this.audio.lines({ ...body, device }, device));
       case "conversations": return ok({ conversations: this.conversations(device, body) });
       case "conversations.put": return ok(this.putConversations(device, body));
+      case "collector.status": return ok(this.saveCollectorStatus(device, body));
       case "status.get": {
         if (this.deps.getStatus) return ok(this.deps.getStatus(role));
         const snapshot = this.viewerStatus?.() ?? hubStatus(this.hub, { port: null, lanPort: this.open ? this.lanPort : null, now: this.clock(), relay: this.relay.status() });
