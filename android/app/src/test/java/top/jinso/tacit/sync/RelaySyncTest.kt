@@ -173,6 +173,61 @@ class RelaySyncTest {
         assertEquals(listOf("relay", "projection.pull", "projection.pull", "projection.pull"), sent)
     }
 
+    // 回归（2026-11-24 第 3 轮审查第 1–3 条）：已知地址同时探测，几个连不上的地址不再把时间叠加耗尽；按优先顺序取。
+    @Test fun knownAddressesAreProbedAtOnceAndChosenInOrder() = runBlocking {
+        val started = System.nanoTime()
+        val found = firstReachable(listOf("http://dead-1", "http://dead-2", "http://dead-3", "http://mac", "http://manual"), 300) { origin, timeout ->
+            if (origin.contains("dead")) { Thread.sleep(timeout.toLong()); false } else true
+        }
+        val elapsed = (System.nanoTime() - started) / 1_000_000
+        assertEquals("http://mac", found)
+        assertTrue("probes ran one after another: ${elapsed}ms", elapsed < 800)
+    }
+
+    // 回归（2026-11-24 第 3 轮审查第 4 条）：确认回执一直失败时进入冷却，不再被拉取成功清零后和拉取来回交替。
+    @Test fun persistentAckFailureCoolsDown() {
+        val cache = testCache()
+        val timeline = TimelineSync(cache)
+        val sent = mutableListOf<String>()
+        fake.onPut = { _, wire ->
+            val request = JSONObject(DeviceEnvelope.open(JSONObject(wire.toString(Charsets.UTF_8)),
+                DeviceEnvelope.REQUEST_INFO, "android-aebagbaf", hub, DeviceEnvelope.public(phone).base64url()))
+            sent += request.getString("op")
+        }
+        fun round() {
+            val data = JSONObject(saved)
+            val journal = journal(data)
+            val state = RelayTimeline(data, config.down, cache, timeline, { saved = data.toString() }, { now })
+            val mailbox = fake.client()
+            val exchange = RelayExchange(protocol, journal, mailbox, { _, _ -> fail() })
+            exchange.drain(timelineRequestIds = state.replyIds,
+                onTimelineReply = { nonce, message -> state.reply(nonce, message, protocol) }, projection = state::push)
+            state.postDue(protocol, mailbox::put)
+        }
+        fun reply(status: Int, body: JSONObject) {
+            val nonce = fake.puts.last()
+            fake.down[nonce] = seal(nonce, JSONObject().put("status", status).put("body", body))
+        }
+        round()
+        reply(200, JSONObject().put("role", "view"))
+        round()
+        reply(200, JSONObject("""{"epoch":1,"cursor":5,"more":false,"reset":false,"changes":[]}"""))
+        round()
+        repeat(14) {
+            when (sent.last()) {
+                "projection.ack" -> reply(500, JSONObject().put("error", "failed"))
+                "projection.pull" -> reply(200, JSONObject("""{"epoch":1,"cursor":5,"more":false,"reset":false,"changes":[]}"""))
+            }
+            now += 30_000
+            round()
+        }
+        val acks = sent.count { it == "projection.ack" }
+        assertTrue("ack retried without a cooldown: $sent", acks in 1..4)
+        val before = sent.size
+        repeat(3) { now += 30_000; round() }
+        assertEquals("sent during the cooldown: ${sent.drop(before)}", before, sent.size)
+    }
+
     // 回归（2026-11-24 第 2 轮审查第 2 条）：时间预算耗尽、没试完所有途径的发现不算失败，不进退避。
     @Test fun discoveryCutShortByTheBudgetDoesNotStartTheBackoff() = runBlocking {
         val backoff = DirectDiscoveryBackoff { now }

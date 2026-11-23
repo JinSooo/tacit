@@ -60,6 +60,7 @@ internal class RelayTimeline(
                 "projection.ack" -> if (view) {
                     timeline.confirmAck(cursor, body)
                     state.remove("retries")
+                    state.remove("ackRetries")
                 }
             }
         } catch (error: DeviceStatus) {
@@ -67,8 +68,9 @@ internal class RelayTimeline(
                 403 -> role("collect")
                 409 -> retryPull()
                 // A busy or failing hub must not abort the whole mailbox drain and hold back recording uploads;
-                // drop this reply and pull again on the next round (2026-11-24 review).
-                else -> retryPull()
+                // drop this reply and try again later (2026-11-24 review). A failing ack keeps its own count: a
+                // successful pull in between used to reset the shared one, so pull and ack alternated forever.
+                else -> if (op == "projection.ack") retryAck() else retryPull()
             }
         } finally {
             pending.remove(op)
@@ -136,6 +138,14 @@ internal class RelayTimeline(
         if (state.optString("role") == current && time - state.optLong("roleAt") < TIMELINE_RECHECK) return
         state.put("role", current).put("roleAt", time)
         save()
+    }
+
+    private fun retryAck() {
+        val retries = state.optInt("ackRetries") + 1
+        if (retries > RETRY_LIMIT) {
+            state.remove("ackRetries")
+            state.put("retryAt", now() + TIMELINE_RECHECK)
+        } else state.put("ackRetries", retries)
     }
 
     private fun retryPull() {

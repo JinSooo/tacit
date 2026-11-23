@@ -527,7 +527,8 @@ internal class SyncCoordinator(private val app: TacitApp) {
 
     private companion object {
         const val MAX_RETRY = 3_600_000L
-        const val NETWORK_BUDGET = 7_000L
+        // Enough for one full pass: known addresses in parallel (2 s), then Bonjour (5 s).
+        const val NETWORK_BUDGET = 7_500L
         /** The Mac accepts at most 32 days per request. */
         const val SUMMARY_WINDOW = 31 * 86_400_000L
     }

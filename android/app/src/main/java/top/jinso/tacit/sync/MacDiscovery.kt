@@ -6,7 +6,11 @@ import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.InetAddress
@@ -25,17 +29,21 @@ internal class MacDiscovery(private val context: Context) {
         var exhausted = false
         fun valid(origin: String): Boolean {
             val remaining = remainingMillis()
-            if (remaining <= 0) { exhausted = true; return false }
-            return checked.add(origin) && matchesHub(origin, hubId, minOf(2_500, remaining))
+            // A probe shorter than usual proves nothing about the address (2026-11-24 review).
+            if (remaining < PROBE_MILLIS) { exhausted = true; if (remaining <= 0) return false }
+            return checked.add(origin) && matchesHub(origin, hubId, minOf(PROBE_MILLIS, remaining))
         }
-        // The last working address, then Bonjour and the hand-entered address, and only then the rest of the
-        // invitation's addresses: a few unreachable VPN or container addresses used to eat the whole budget
-        // before Bonjour ran (2026-11-24 review).
-        if (last != null && valid(last)) return last
-        if (remainingMillis() <= 0) exhausted = true
-        discover(hubId, minOf(5_000, remainingMillis()).toLong(), ::valid)?.let { return it }
-        if (manual != null && valid(manual)) return manual
-        invited.firstOrNull(::valid)?.let { return it }
+        // Order stays as in contracts 6.3 (last → invitation → Bonjour → hand-entered), but the known addresses are
+        // probed at once: one by one, a few unreachable VPN or container addresses ate the whole budget (2026-11-24).
+        val known = (listOfNotNull(last) + invited + listOfNotNull(manual)).distinct()
+        if (remainingMillis() < PROBE_MILLIS) exhausted = true
+        val probe = minOf(PROBE_MILLIS, remainingMillis())
+        if (probe > 0) {
+            checked += known
+            firstReachable(known, probe) { origin, timeout -> matchesHub(origin, hubId, timeout) }?.let { return it }
+        }
+        if (remainingMillis() < BONJOUR_MILLIS) exhausted = true
+        discover(hubId, minOf(BONJOUR_MILLIS.toInt(), remainingMillis()).toLong(), ::valid)?.let { return it }
         val active = connectivity.activeNetwork
         val capabilities = connectivity.getNetworkCapabilities(active)
         val links = connectivity.getLinkProperties(active)?.linkAddresses.orEmpty()
@@ -111,3 +119,13 @@ internal class MacDiscovery(private val context: Context) {
         }
     }
 }
+
+internal const val PROBE_MILLIS = 2_000
+internal const val BONJOUR_MILLIS = 5_000L
+
+/** Probes every candidate at once and returns the first one, in the given order of preference, that answers. */
+internal suspend fun firstReachable(candidates: List<String>, timeout: Int, probe: (String, Int) -> Boolean): String? =
+    coroutineScope {
+        val results = candidates.map { origin -> async(Dispatchers.IO) { probe(origin, timeout) } }.awaitAll()
+        candidates.zip(results).firstOrNull { it.second }?.first
+    }

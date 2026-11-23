@@ -548,7 +548,7 @@ Mac 中枢和 Android 之间唯一的通道。采集权限下只传手机自己�
 - 中枢在本机监听之外另起一个监听：`0.0.0.0:<lan_port>`，`lan_port` 读 `hub.json` 的 `lan_port`，默认 47824，允许 1024–65535 的整数。本机 `GET /v1/settings/hub` 的 `lan` 为局域网端口实际监听状态。**只有**存在未过期的配对邀请或至少一台 `local_only=0` 的已配对设备时才监听，最后一台远程设备移除且无邀请时关闭。
 - 这个监听只接受 `POST /v1/device` 和 `GET /v1/device/hello`（无需加密，返回 `{ "hub_id", "v": 1 }`，供手机确认地址上是不是自己的 Mac），其他路径 404，不提供网页、MCP 和管理接口，也不做 Host 校验（安全靠信封）。
 - Bonjour：Mac 采集端在中枢局域网监听开着时登记 `_tacit._tcp`，端口 `lan_port`，TXT `hub=<hub_id>`；中枢在 `GET /v1/settings/devices` 里给出 `lan.open`、`lan.port` 和 `hub_id`。
-- 手机找 Mac 的顺序：上次成功的地址 → 配对邀请里的地址 → Bonjour 按 `hub_id` 解析 → 用户在手机设置里填的地址（任意 `http(s)://host:port`，例如 Tailscale）。每个地址先调 `hello` 核对 `hub_id`。
+- 手机找 Mac 的顺序：上次成功的地址 → 配对邀请里的地址 → Bonjour 按 `hub_id` 解析 → 用户在手机设置里填的地址（任意 `http(s)://host:port`，例如 Tailscale）。每个地址先调 `hello` 核对 `hub_id`。2026-11-24 起，已知地址（上次成功、邀请里的、手填的）同时探测、每个最多 2 秒，按上面的顺序取第一个通的，都不通再做 5 秒 Bonjour；带时间预算的前台刷新总预算 7.5 秒，预算不够、没试完的那次不算失败，不进 5 分钟退避。
 
 ### 6.4 配对
 
