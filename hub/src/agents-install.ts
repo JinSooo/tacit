@@ -205,7 +205,7 @@ function codexApprovals(file: string, install: boolean, preserved: string[] = []
   return { file, existed, before, after, preserved: sections.filter(section => ours(section.path)).map(section => before.slice(section.start, section.end)) };
 }
 
-export function runAgents(argv: string[], env: InstallEnvironment = {}) {
+export function runAgents(argv: string[], env: InstallEnvironment = {}, registerIdentity?: () => Promise<unknown>) {
   const [action, ...flags] = argv;
   if (action !== "install" && action !== "uninstall") throw new Error("用法：agents <install|uninstall> [--tool claude-code|codex|claude-desktop] [--yes]");
   let selected: AgentTool | undefined, yes = false;
@@ -239,41 +239,45 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}) {
   }
   // Desktop 配置含其他连接器及用户偏好，预览不输出原文或凭据。
   if (desktopPlan) print(`${desktopPlan.file}：${desktopPlan.before === desktopPlan.after ? "无需改动" : `${action === "install" ? "登记" : "移除"} Tacit 查询服务（保留其他配置）`}`);
-  for (const { tool, command } of commands) {
-    if (!command) { print(`找不到 ${tool === "codex" ? "codex" : "claude"}，跳过 MCP 注册/移除`); continue; }
-    const remove = (name: string) => tool === "codex" ? ["mcp", "remove", name] : ["mcp", "remove", "--scope", "user", name];
-    const add = ["mcp", "add", ...(tool === "codex" ? [] : ["--scope", "user"]), SERVER, "--", bun, cli, "mcp", "--tool", tool];
-    const get = (name: string) => ["mcp", "get", name];
-    print(`$ ${[command, ...get(SERVER)].map(quote).join(" ")}`);
-    print(`已注册时执行：${[command, ...remove(SERVER)].map(quote).join(" ")}`);
-    print(`旧名称已注册时执行：${[command, ...remove(LEGACY_SERVER)].map(quote).join(" ")}`);
-    if (action === "install") print(`$ ${[command, ...add].map(quote).join(" ")}`);
-    if (tool === "codex" && !yes && approvalPlan && approvalPlan.before !== approvalPlan.after) print(approvalDiff(approvalPlan));
-    if (yes) {
-      const registered = (name: string) => {
-        const result = run(command, get(name), home);
-        if (result.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(result.stderr + result.stdout)) throw new Error(`${tool} MCP 查询失败，未继续注册`);
-        return result.status === 0;
-      };
-      const current = registered(SERVER), legacy = registered(LEGACY_SERVER);
-      if (tool === "codex" && approvalPlan?.existed) backupConnection(codexFile);
-      for (const args of [...(legacy ? [remove(LEGACY_SERVER)] : []), ...(current ? [remove(SERVER)] : []), ...(action === "install" ? [add] : [])]) {
-        if (run(command, args, home).status !== 0) throw new Error(`${tool} MCP ${args[1]} 失败，请检查该工具配置后重试`);
-      }
-      if (tool === "codex") {
-        // 依次读取并保存：第二步必须基于第一步写入后的文件。
-        for (const next of [() => codexApprovals(codexFile, false, [], LEGACY_SERVER), () => codexApprovals(codexFile, action === "install", [...(approvalPlan?.preserved ?? []), ...legacyApprovals])]) {
-          const plan = next();
-          if (plan.before !== plan.after) { print(approvalDiff(plan)); saveConnectionPlan(plan); }
+  const apply = () => {
+    for (const { tool, command } of commands) {
+      if (!command) { print(`找不到 ${tool === "codex" ? "codex" : "claude"}，跳过 MCP 注册/移除`); continue; }
+      const remove = (name: string) => tool === "codex" ? ["mcp", "remove", name] : ["mcp", "remove", "--scope", "user", name];
+      const add = ["mcp", "add", ...(tool === "codex" ? [] : ["--scope", "user"]), SERVER, "--", bun, cli, "mcp", "--tool", tool];
+      const get = (name: string) => ["mcp", "get", name];
+      print(`$ ${[command, ...get(SERVER)].map(quote).join(" ")}`);
+      print(`已注册时执行：${[command, ...remove(SERVER)].map(quote).join(" ")}`);
+      print(`旧名称已注册时执行：${[command, ...remove(LEGACY_SERVER)].map(quote).join(" ")}`);
+      if (action === "install") print(`$ ${[command, ...add].map(quote).join(" ")}`);
+      if (tool === "codex" && !yes && approvalPlan && approvalPlan.before !== approvalPlan.after) print(approvalDiff(approvalPlan));
+      if (yes) {
+        const registered = (name: string) => {
+          const result = run(command, get(name), home);
+          if (result.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(result.stderr + result.stdout)) throw new Error(`${tool} MCP 查询失败，未继续注册`);
+          return result.status === 0;
+        };
+        const current = registered(SERVER), legacy = registered(LEGACY_SERVER);
+        if (tool === "codex" && approvalPlan?.existed) backupConnection(codexFile);
+        for (const args of [...(legacy ? [remove(LEGACY_SERVER)] : []), ...(current ? [remove(SERVER)] : []), ...(action === "install" ? [add] : [])]) {
+          if (run(command, args, home).status !== 0) throw new Error(`${tool} MCP ${args[1]} 失败，请检查该工具配置后重试`);
         }
-        pruneConnectionBackups(codexFile);
+        if (tool === "codex") {
+          // 依次读取并保存：第二步必须基于第一步写入后的文件。
+          for (const next of [() => codexApprovals(codexFile, false, [], LEGACY_SERVER), () => codexApprovals(codexFile, action === "install", [...(approvalPlan?.preserved ?? []), ...legacyApprovals])]) {
+            const plan = next();
+            if (plan.before !== plan.after) { print(approvalDiff(plan)); saveConnectionPlan(plan); }
+          }
+          pruneConnectionBackups(codexFile);
+        }
       }
     }
-  }
-  if (yes) for (const plan of plans) if (plan.before !== plan.after) saveConnectionPlan(plan);
-  if (yes && desktopPlan && desktopPlan.before !== desktopPlan.after) saveConnectionPlan(desktopPlan);
-  if (desktopPlan) print("完全退出并重新打开 Claude Desktop 后生效；连接后可让它查询历史记录。");
-  if (action === "install" && tools.includes("codex")) print("Codex 新 hook 需要在 Codex 里批准一次（trusted_hash）才会生效。");
+    if (yes) for (const plan of plans) if (plan.before !== plan.after) saveConnectionPlan(plan);
+    if (yes && desktopPlan && desktopPlan.before !== desktopPlan.after) saveConnectionPlan(desktopPlan);
+    if (desktopPlan) print("完全退出并重新打开 Claude Desktop 后生效；连接后可让它查询历史记录。");
+    if (action === "install" && tools.includes("codex")) print("Codex 新 hook 需要在 Codex 里批准一次（trusted_hash）才会生效。");
+  };
+  if (yes && action === "install" && cliTools.length && registerIdentity) return registerIdentity().then(apply);
+  apply();
 }
 
 export interface AgentState {

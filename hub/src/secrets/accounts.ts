@@ -8,6 +8,7 @@ interface Rule { account: RegExp; value: RegExp; macOnly?: boolean }
 // 账号名白名单（docs/contracts.md 6.11.3）。value 只在写入时校验，读取原样返回。
 const RULES: Rule[] = [
   { account: /^db-key$/, value: /^[0-9a-f]{32,128}$/ },
+  { account: /^agent-(?:device|context-cache)-key$/, value: /^[0-9a-f]{64}$/, macOnly: true },
   { account: /^device-key$/, value: /^[0-9a-f]{64}$/ },
   { account: /^provider:[a-z][a-z0-9-]{0,39}$/, value: PROVIDER_KEY_PATTERN },
   { account: /^relay-space-[A-Za-z0-9_-]{22}$/, value: /^[A-Za-z0-9_-]{43}$/ },

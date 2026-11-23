@@ -106,15 +106,15 @@ export class HubDB {
       setCipher(this.db, key);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 16) throw new Error("数据库版本比当前 hub 新");
+      if (version > 17) throw new Error("数据库版本比当前 hub 新");
       this.db.pragma("secure_delete=ON");
       // 保留回滚日志模式；加密 WAL 也可能保留已删除内容的旧加密页。
       this.db.pragma("journal_mode=DELETE");
       // 必须先拿写锁再读取版本，等待另一进程迁移完成后才能决定迁移步骤。
       this.db.transaction(() => {
         const version = this.db.pragma("user_version", { simple: true }) as number;
-        if (version > 16) throw new Error("数据库版本比当前 hub 新");
-        migrating = version < 16;
+        if (version > 17) throw new Error("数据库版本比当前 hub 新");
+        migrating = version < 17;
         if (version > 0 && migrating && file !== ":memory:") ensureMigrationBackup(file, key, version);
         if (version === 0) {
           this.db.exec(`
@@ -177,10 +177,15 @@ export class HubDB {
         if (version < 14) this.db.exec(relaySchema);
         if (version < 15) this.db.exec(projectionSchema);
         if (version < 16) this.db.exec(deviceRoleSchema);
+        if (version < 17) {
+          this.db.exec(`ALTER TABLE devices ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE devices ADD COLUMN bootstrap_agent_id TEXT;
+            PRAGMA user_version=17;`);
+        }
       }).immediate();
       migrating = false;
       const backups = file === ":memory:" ? [] : readdirSync(dirname(file)).filter(name =>
-        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|1[0-5])\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
+        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|1[0-6])\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
       if (backups.length) {
         if (this.db.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("迁移后完整性检查失败，已保留备份");
         for (const backup of backups) {
@@ -210,7 +215,7 @@ export class HubDB {
   }
   close(): void { clearInterval(this.snapshotTimer); if (this.db.open) { stopAgentAudit(this); this.db.close(); } }
 
-  ingest(records: unknown[], device?: string): IngestResult {
+  ingest(records: unknown[], device?: string, platform = "android", crossDeviceCorrections = false): IngestResult {
     return this.db.transaction(() => {
       const result: IngestResult = { accepted: 0, duplicates: 0, rejected: [] };
       const exists = this.db.prepare(`SELECT 1 FROM records WHERE id=? OR (source=? AND source_ref=?)
@@ -230,8 +235,10 @@ export class HubDB {
           const errors = [];
           if (r.device !== device) errors.push("/device 必须与配对设备一致");
           if (r.source === "manual.correction") {
-            if (!r.corrects || !owner.get(r.corrects, device)) errors.push("/corrects 必须指向本设备的记录");
-          } else if (r.source !== "manual.note" && !r.source.startsWith("android.")) {
+            if (!crossDeviceCorrections && (!r.corrects || !owner.get(r.corrects, device))) errors.push("/corrects 必须指向本设备的记录");
+          } else if (r.source !== "manual.note" && !(platform === "mac"
+            ? r.source.startsWith("mac.") || r.source.startsWith("plugin.ext_") || ["claude_code.session", "codex.session"].includes(r.source)
+            : platform === "android" && r.source.startsWith("android."))) {
             errors.push("/source 不支持此设备来源");
           }
           if (errors.length) { result.rejected.push({ index: i, errors }); return; }

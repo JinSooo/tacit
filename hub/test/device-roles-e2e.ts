@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PairingRole } from "../src/devices/permissions.ts";
-import { decodePairing, DeviceClient } from "./device-client.ts";
+import { decodePairing, DeviceClient } from "../src/devices/client.ts";
 import { fixture } from "./helpers.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "tacit-device-roles-"));

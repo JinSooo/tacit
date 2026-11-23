@@ -114,7 +114,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === "agents") {
     const { runAgents } = await import("./agents-install.ts");
-    try { runAgents(argv.slice(1)); }
+    try {
+      await runAgents(argv.slice(1), {}, async () => {
+        const { ensureAgentIdentity } = await import("./agent-cli/identity.ts");
+        await ensureAgentIdentity();
+      });
+    }
     catch (error) { console.error(error instanceof Error ? error.message : "Agent 注册失败"); process.exitCode = 1; }
     return;
   }

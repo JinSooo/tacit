@@ -66,3 +66,33 @@ export function keychainStore(run: SecurityRun = runSystemSecurity): SecretStore
     },
   };
 }
+
+/** 短命钩子可以取消钥匙串读取。秘密只走子进程管道。 */
+export async function readKeychainAsync(account: string, signal: AbortSignal): Promise<string | null> {
+  checkAccount(account, "keychain");
+  const { status, stdout } = await runSecurityAsync(
+    ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"], signal,
+  );
+  if (status === 44) return null;
+  if (status !== 0 || !stdout.trim()) throw new SecretError("keychain_read");
+  return stdout.trim();
+}
+
+export async function createKeychainAsync(account: string, value: string, signal: AbortSignal): Promise<void> {
+  checkAccount(account, "keychain");
+  checkValue(account, value);
+  // 不覆盖并发进程先生成的密钥，调用方写后重读。
+  await runSecurityAsync(["-i"], signal, `add-generic-password -s ${KEYCHAIN_SERVICE} -a ${account} -w "${value}"\n`);
+}
+
+async function runSecurityAsync(args: string[], signal: AbortSignal, input?: string) {
+  signal.throwIfAborted();
+  const child = Bun.spawn([SECURITY, ...args], { stdin: input === undefined ? "ignore" : Buffer.from(input), stdout: "pipe", stderr: "ignore" });
+  const cancel = () => { child.kill("SIGKILL"); };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    const [status, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+    signal.throwIfAborted();
+    return { status, stdout };
+  } finally { signal.removeEventListener("abort", cancel); }
+}

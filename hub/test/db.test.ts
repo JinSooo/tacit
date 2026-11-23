@@ -32,7 +32,7 @@ test("SQLCipher 实际文件加密，错误密钥拒绝，正确密钥重开及�
   const reopened = new HubDB(ctx.file, ctx.config.dbKey);
   try {
     expect(reopened.get(record.id)?.body).toBe(record.body);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(16);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(17);
   } finally { reopened.close(); }
 });
 
@@ -159,8 +159,8 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
       }
       writeFileSync(gate, "go");
       const results = await Promise.all(children.map(async child => ({ code: await child.exited, error: await new Response(child.stderr).text(), output: await new Response(child.stdout).text() })));
-      expect(results).toEqual([{ code: 0, error: "", output: "16\n" }, { code: 0, error: "", output: "16\n" }]);
-      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(16);
+      expect(results).toEqual([{ code: 0, error: "", output: "17\n" }, { code: 0, error: "", output: "17\n" }]);
+      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(17);
       expect(ctx.db.db.pragma("table_info(threads)")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "domain" }), expect.objectContaining({ name: "project_hint" })]));
       expect(ctx.db.db.pragma("table_info(agent_reads)")).toHaveLength(8);
       expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'agent_reads_%'").all()).toHaveLength(2);
@@ -178,7 +178,7 @@ test("v8 用量升级到 v9：task 列可空，旧行不变，重开幂等", () 
   for (let i = 0; i < 2; i++) {
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(16);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(17);
       expect((upgraded.db.pragma("table_info(llm_usage)") as { name: string; type: string }[]).filter(c => c.name === "task")).toMatchObject([{ name: "task", type: "TEXT" }]);
       expect(upgraded.db.prepare("SELECT id,tier,input_tokens,ok,task FROM llm_usage WHERE id=?").get("legacy-usage")).toEqual({ id: "legacy-usage", tier: "hour", input_tokens: 123, ok: 1, task: null });
     } finally { upgraded.close(); }
@@ -204,7 +204,7 @@ test("v9 声纹升级 v10：mic 列按现有声纹回填，重开及已有列幂
   for (let i = 0; i < 3; i++) {
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(16);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(17);
       expect((upgraded.db.pragma("table_info(speakers)") as { name: string }[]).filter(c => c.name === "mic"))
         .toMatchObject([{ name: "mic", type: "INTEGER", notnull: 1, dflt_value: "0" }]);
       expect(upgraded.db.prepare("SELECT mic FROM speakers WHERE id=?").get(mic)).toEqual({ mic: 1 });
@@ -241,7 +241,7 @@ test("v14 迁移保留 Android 身份并索引已有整理，投影写入失败�
 
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(16);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(17);
       expect(existsSync(ctx.file + ".migration-v14.bak")).toBe(false);
       expect(upgraded.db.prepare("SELECT role,projection_cursor,projection_epoch FROM devices").get())
         .toEqual({ role: "collect", projection_cursor: 0, projection_epoch: 0 });
@@ -254,5 +254,29 @@ test("v14 迁移保留 Android 身份并索引已有整理，投影写入失败�
       expect(upgraded.get(record.id)?.body).toBe(record.body);
       expect(index.all()).toEqual(before);
     } finally { upgraded.close(); }
+  } finally { ctx.cleanup(); }
+});
+
+test("v16 → v17 保留已配对设备和历史 Mac 记录，默认仍是远程设备", () => {
+  const ctx = setup();
+  try {
+    const row = fixture();
+    ctx.db.ingest([row]);
+    ctx.db.db.exec(`
+      ALTER TABLE devices DROP COLUMN bootstrap_agent_id;
+      ALTER TABLE devices DROP COLUMN local_only;
+      INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,role)
+      VALUES ('mac-abcd2345','测试 Mac','mac',X'00','2026-11-23','2026-11-23','admin');
+      PRAGMA user_version=16;
+    `);
+    ctx.db.close();
+    const migrated = new HubDB(ctx.file, ctx.config.dbKey);
+    try {
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(17);
+      expect(migrated.db.prepare("SELECT id,role,local_only,bootstrap_agent_id FROM devices").get()).toEqual({
+        id: "mac-abcd2345", role: "admin", local_only: 0, bootstrap_agent_id: null,
+      });
+      expect(migrated.get(row.id)?.device).toBe("mac");
+    } finally { migrated.close(); }
   } finally { ctx.cleanup(); }
 });

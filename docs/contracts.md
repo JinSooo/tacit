@@ -315,7 +315,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 
 ### 4.6 Agent 读取接口与审计（`user_version` 3）
 
-hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。都要 Bearer token 和 Host 校验；都带 `tool`（非空、≤32 字符、无空白），缺失或非法返回 400。
+旧版和未登记设备身份的 hook、stdio MCP 进程使用以下接口。已登记的 Claude Code / Codex 用 6.10.5，同样不直接读中枢数据库。以下 HTTP 接口要 Bearer token 和 Host 校验，都带 `tool`（非空、≤32 字符、无空白），缺失或非法返回 400。
 
 | 方法 | 路径 | 返回 |
 |---|---|---|
@@ -331,7 +331,7 @@ hook 和 stdio MCP 进程只调用这些接口，自己不读库、不过滤。�
 - 会话带入只读当前项目的事项简略版。带入进行中的事项，以及近 3 天内有活动的暂停事项；排除生活事项和全私密事项，优先保留最近活动，逐项标注摘要截至时间及待整理状态。预算沿用 `inject_tokens`（默认 800 估算 token）。找不到项目或没有合适事项时留空；MCP 主动查询仍可用。审计的 `result_ids` 对应带入的事项 id。
 - 未识别出项目时返回 `text: ""`、`project_id: null` 和 `tokens_est: 0`，Agent 可照常主动查询。
 - Agent 搜索在命中的屏幕记录里按设备、应用、窗口、页面和标题选最新一条，私密记录单独选。按搜索时间范围筛选后选代表，选完再分页。完整的活动仍可从 `timeline`、History 或原始记录 ID 查到。
-- **追加（`append`）**：写一条 `source=manual.agent`、`kind=event`、`device=mac` 的记录，`source_ref` 取 Agent 给的外部标识（如 Notion 页面 URL / ID），没给就用脱敏后标题和正文的 `sha256:<hex>`；`t_start` 取 `occurred_at`（须带时区），默认现在；`context.app` = `tool`，`context.url` 取 `url`（没给且 `source_ref` 是 http(s) 链接时用它），`project`、`tags` 进 `context.extra`；`sensitivity` 只能是 `normal` / `private`。同一事务里按 `(manual.agent, source_ref)` 判断：
+- **追加（`append`）**：写一条 `source=manual.agent`、`kind=event` 的记录，旧令牌接口的 `device=mac`，设备操作的 `device` 为调用方的设备 ID，`source_ref` 取 Agent 给的外部标识（如 Notion 页面 URL / ID），没给就用脱敏后标题和正文的 `sha256:<hex>`；`t_start` 取 `occurred_at`（须带时区），默认现在；`context.app` = `tool`，`context.url` 取 `url`（没给且 `source_ref` 是 http(s) 链接时用它），`project`、`tags` 进 `context.extra`；`sensitivity` 只能是 `normal` / `private`。同一事务里按 `(manual.agent, source_ref)` 判断：
   - 有墓碑 → `result: "deleted"`，不写；
   - 不存在 → 走 ingest（校验、拦密钥）写入，`result: "created"`；
   - 存在且脱敏后的标题、正文与最新版本（最后一条 `manual.correction`，没有就是原记录）相同 → `result: "unchanged"`；
@@ -545,7 +545,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 
 ### 6.3 局域网监听
 
-- 中枢在本机监听之外另起一个监听：`0.0.0.0:<lan_port>`，`lan_port` 读 `hub.json` 的 `lan_port`，默认 47824，允许 1024–65535 的整数。本机 `GET /v1/settings/hub` 的 `lan` 为局域网端口实际监听状态。**只有**存在未过期的配对邀请或至少一台已配对设备时才监听，最后一台设备移除且无邀请时关闭。
+- 中枢在本机监听之外另起一个监听：`0.0.0.0:<lan_port>`，`lan_port` 读 `hub.json` 的 `lan_port`，默认 47824，允许 1024–65535 的整数。本机 `GET /v1/settings/hub` 的 `lan` 为局域网端口实际监听状态。**只有**存在未过期的配对邀请或至少一台 `local_only=0` 的已配对设备时才监听，最后一台远程设备移除且无邀请时关闭。
 - 这个监听只接受 `POST /v1/device` 和 `GET /v1/device/hello`（无需加密，返回 `{ "hub_id", "v": 1 }`，供手机确认地址上是不是自己的 Mac），其他路径 404，不提供网页、MCP 和管理接口，也不做 Host 校验（安全靠信封）。
 - Bonjour：Mac 采集端在中枢局域网监听开着时登记 `_tacit._tcp`，端口 `lan_port`，TXT `hub=<hub_id>`；中枢在 `GET /v1/settings/devices` 里给出 `lan.open`、`lan.port` 和 `hub_id`。
 - 手机找 Mac 的顺序：上次成功的地址 → 配对邀请里的地址 → Bonjour 按 `hub_id` 解析 → 用户在手机设置里填的地址（任意 `http(s)://host:port`，例如 Tailscale）。每个地址先调 `hello` 核对 `hub_id`。
@@ -573,7 +573,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 
 | op | body | 返回 | 说明 |
 |---|---|---|---|
-| `ingest` | `{ records }` | 同 `/v1/ingest` | 额外规则：`record.device` 必须等于调用方；`source` 必须以 `android.` 开头，或是 `manual.note`，或是 `manual.correction` 且 `corrects` 指向本设备的记录；不符合的那一条进 `rejected` |
+| `ingest` | `{ records }` | 同 `/v1/ingest` | 额外规则：`record.device` 必须等于调用方；`source` 与修正范围按 6.10.1 检查，不符合的那一条进 `rejected` |
 | `delete` | `{ ids }`（1–100） | `{ deleted }` | `collect` 和 `view` 只删除本设备的记录，忽略已知属于其他设备的 id。中枢还没有的 id 留一个不含内容的墓碑，之后同 id 的记录到达时按重复处理。`admin` 可以删除任意已入库记录，跨设备删除受 6.11.4 限额。所有路径走真删流程，连带删除目标的修正。 |
 | `sync` | `{ cursor }`（首次 0） | `{ changes, cursor, more }` | 中枢下发给这台设备的变更，按 `seq` 升序，每页最多 200 条；见 6.6 |
 | `sync.ack` | `{ cursor }` | `{ ok: true }` | 删除 `seq ≤ cursor` 的待下发变更 |
@@ -692,7 +692,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 
 - 存储型信箱（WebDAV、S3 兼容）：按目录放同样的上下行信箱，排在最后。通用存储一般不能按设备限权，被移除的设备伪造不了数据，但还能乱删或塞满信箱，所以移除时要提示用户更换存储密码。
 - 中枢下推整理结果（星形第二步）复用 `down`，协议草案见 6.9。
-- Mac 采集端和中枢拆开后，Mac 也作为一台设备走本节，协议草案见 6.10；权限分级与独立部署草案见 6.11。
+- Mac 采集端和中枢拆开后，Mac 也作为一台设备走本节，本机快路及剩余迁移见 6.10，权限分级与独立部署见 6.11。
 
 ### 6.9 中枢下推整理结果（中枢已实现，查看端待接入）
 
@@ -853,30 +853,25 @@ CREATE TABLE project_context_cache (
 
 ---
 
-### 6.10 Mac 采集端和 AI 工具接入改走设备协议（草案，待用户确认，未实施）
+### 6.10 Mac 采集端和 AI 工具接入改走设备协议（中枢与 agent-cli 已实施，Swift 端待接入）
 
-将 Mac 采集端上传、插件运行、音频转写同步、查看窗口全量读写以及 Claude Code / Codex 的接入（Claude Desktop 已冻结，不在范围内），从当前的“本机明文令牌 + `127.0.0.1` HTTP”统一迁到第 6 节设备协议；中枢与 Mac 同机时走本机快路，体验与单机版一致；中枢离线时新会话带入改读本机缓存。
+中枢已提供本机登记和设备接入，Claude Code / Codex 可经设备协议查询、追加与带入项目上下文。Mac 采集、插件与音频代理、查看窗口和设置页的迁移见 6.10.3–6.10.4。Claude Desktop 沿用旧接入。
 
 #### 6.10.1 身份扩展与历史兼容
 
-- **设备编号与平台**：
-  - `device_id` 正则由 `^android-[a-z2-7]{8}$` 扩展为 `^(android|mac|agent|linux|windows)-[a-z2-7]{8}$`。
-  - `devices` 表增加 `local_only INTEGER NOT NULL DEFAULT 0`（同机绑定为 1，远程配对为 0）。
-- **按平台限制写入来源（`ingest`）**：
-  - `android`：`android.*`、`manual.note`、`manual.correction`（仅指向本设备记录）。
-  - `mac`：`mac.*`、`claude_code.session`、`codex.session`、`plugin.ext_*`、`manual.note`、`manual.correction`。
-  - `agent`：禁止调用 `ingest`；仅允许 `agent.append`（写入 `source = "manual.agent"`，`device` 填调用方 `device_id`，取代 `hub/src/agent.ts` 中写死的 `"mac"`）。
-- **历史 `device = "mac"` 记录**：
-  - 遵循 `AGENTS.md` “记录写入后不再修改”：升级后**不改写**已有记录的 `device = "mac"`，历史记录继续正常展示、搜索与整理；新采集的 Mac 记录使用新分配的 `mac-<8位base32>`（例如 `mac-k7m2p3q4`；字符集同 `hub_id`，`a–z` 加 `2–7`）；原 Mac 升级后作为 `admin` 设备可直接删除或修正历史 `device = "mac"` 记录。
+- 信封中的 `device_id` 支持 `^(?:android|mac|agent)-[a-z2-7]{8}$`。Android / Mac 邀请以配对请求的已校验平台决定前缀。
+- v17 增加 `devices.local_only INTEGER NOT NULL DEFAULT 0` 和可空的 `bootstrap_agent_id TEXT`。已有设备默认保留远程连接能力。双身份登记时，Mac 行关联同一次登记的 Agent ID。
+- `ingest` 按已登记的平台检查来源：
+  - `android` 允许 `android.*`、`manual.note`、`manual.correction`（仅指向本设备记录）。
+  - `mac` 允许 `mac.*`、`claude_code.session`、`codex.session`、`plugin.ext_*`、`manual.note`、`manual.correction`。采集和查看角色的修正只可指向自己的记录，管理设备也可以修正其他记录。
+  - `agent` 的写入走 `agent.append`，调用 `ingest` 返回加密 403。创建的 `manual.agent` 及其后续修正都用调用方 `device_id`。旧 HTTP 接口仍写历史身份 `"mac"`。
+- 历史 `device = "mac"` 的记录照常展示、搜索与整理。今后走设备协议采集的 Mac 记录使用 `mac-<8 位 base32>`。Mac 管理设备可删除和修正历史 `device = "mac"` 的记录。
 
 #### 6.10.2 同机时的本机快路
 
-- **端点与加密**：中枢在现有的本机监听 `127.0.0.1:<port>` 上同时挂载 `POST /v1/device`、`GET /v1/device/hello` 和 `GET /v1/device/events`。同机 Mac 客户端优先连 `http://127.0.0.1:<port>`，**仍使用 6.2 完整 HPKE 加密信封与 6.5 操作分发**（Apple Silicon 单次封包/解包 < 0.3 ms），不设明文旁路。
-- **不误开局域网端口**：遵守 `AGENTS.md` “配对设备后才开放局域网接收端口”。`DeviceService.reconcile()` 改为仅当存在未过期邀请或至少一台 **`local_only = 0`** 的远程设备时，才监听 `0.0.0.0:<lan_port>`。纯单机 Mac 用户升级后不会对外暴露局域网端口。
-- **连接选择顺序**（同机与远端统一）：
-  1. 本机快路（仅当配置了同机中枢 `mode = "local"` 时，直连 `http://127.0.0.1:<port>`）；
-  2. 上次成功地址 → 配对邀请地址 → Bonjour（`_tacit._tcp` 按 `hub_id` 核对）→ 用户手填 URL（均先调 `hello` 校验 `hub_id`）；
-  3. 6.8 中转信箱（上述直连均不通且已配置信箱时）。
+- 本机监听 `127.0.0.1:<port>` 提供 `POST /v1/device`、`GET /v1/device/hello` 和 `GET /v1/device/events`。设备请求仍用 6.2 的 HPKE 信封与相同权限分发。已生成中枢身份时，`hello` 返回 `{ hub_id, v: 1 }`，否则返回 401。
+- 只有未过期邀请或至少一台 `local_only=0` 的设备才打开 `0.0.0.0:<lan_port>`。本机登记的设备仅能通过本机监听认证，局域网监听拒绝它们的身份，信箱也不给它们分配地址。
+- agent-cli 使用 `agent-link.json` 中的直连地址。本机登记的地址是 `http://127.0.0.1:<port>`，当前有效的 `RA_PORT` 或 `hub.json.port` 可让客户端跟随端口变更。通过 HPKE 校验回复的中枢身份。Mac 采集端将按本机快路、已知直连地址、Bonjour 或手填地址、中转信箱的顺序接入。远程 Agent 身份签发及信箱查询留待后续。
 
 #### 6.10.3 Mac 采集端、插件与音频迁到设备协议
 
@@ -908,45 +903,44 @@ CREATE TABLE project_context_cache (
 
 #### 6.10.5 AI 工具接入（MCP 与新会话带入）与离线缓存
 
-- **独立受限 `agent` 身份**：
-  - 遵守 `AGENTS.md` “AI 查询与追加使用独立受限令牌，不能用于删除或设置管理”。AI 工具接入不复用 Mac 的 `admin` 设备私钥，而是持有独立的 `agent-<8位base32>` 密钥对（私钥存钥匙串 `agent-device-key`；Linux/无头编码机用 `0600` 密钥文件）。
-  - 同机一键接入 AI 工具（设置页开关或 `cli.ts agents install`）时，自动完成本地 `agent` 身份签发与绑定，用户无额外配对步骤。
-  - 新增设备 `op`（仅允许 `agent` / `view` / `admin` 调用，参数与返回完全沿用 4.6）：`agent.context`、`agent.now`、`agent.get`、`agent.search`、`agent.timeline`、`agent.append`，另增 `agent.audit_sync`（上报离线缓存命中审计）。
-- **新会话带入（`SessionStart`）在中枢连不上时读本机缓存**：
-  - `hub/src/agent-cli/index.ts` 保持 **2000 ms** 总超时上限，执行顺序：
-    1. 若存在直连地址（本机快路、局域网或自定义 URL），发起 `agent.context` 请求，设 **800 ms** 独立超时；成功则直接输出并异步刷新本地 `project_context` 缓存。
-    2. 若直连不可达、超时超过 800 ms，或当前仅配置了中转信箱（信箱往返 0.7–3.5 秒，不在 SessionStart 阻塞等待）：立即读取本地缓存的 `project_context`（由同机 `Tacit.app` 的 6.9 同步维护，或无 `Tacit.app` 时由 `agent-cli` 后台定时拉取 `projection.pull(kinds: ["project_context"])`）。
-    3. **本地 `cwd` 匹配项目**：先按 4.7 用 `git rev-parse --git-common-dir`（500 ms 超时）找主仓库，先按 `keys.repos` 路径边界最长匹配；未命中且为远端中枢/多台 Mac 时，再按归一化的 git remote（如 `github.com/acme/sunny-ledger`）匹配 `keys.remotes`；命中 `ignored_repos` 时返回空。
-    4. **时效与过期**：缓存同步时间在 **7 天内**时照常带入，并在开头标注 `（离线缓存，同步于 YYYY-MM-DD HH:mm）`；超过 7 天未同步则不再自动带入（返回空），避免过时摘要误导 Agent。
-    5. **审计回补**：命中离线缓存时，将一条不含正文的元数据审计 `{ at, tool, session, cwd, project_id, result_ids, cached: true }` 追加到本机待补报队列（上限 500 条），下次 MCP 查询或同步连上中枢时经 `agent.audit_sync` 上报。
-- **MCP 主动查询**：`now`、`get`、`search`、`timeline`、`history_append` 始终实时经设备协议访问中枢（本机快路 → 直连 → 信箱，单次超时直连 10 秒、经信箱 20 秒）；中枢完全离线时明确返回错误“当前无法连接 Tacit 中枢”，不用陈旧缓存充当实时搜索。
+- `agent.now`、`agent.get`、`agent.search`、`agent.timeline`、`agent.context`、`agent.append` 沿用 4.6 的字段和返回。原查询参数平铺在设备操作的 `body` 中，`limit` 可传整数或数字字符串。追加的正文参数同样平铺，加上 `tool`。沿用 6.11.1 矩阵，只允许 `agent`、`view`、`admin` 直连调用。中枢审计的 `args.agent_device` 来自已验证的设备身份。
+- `agent.context` 可加 `remote`（已归一化的仓库标识）和 `cache: true`。中枢优先按 4.7 匹配 `cwd`；未找到时，`remote` 只有唯一匹配才采用。找到项目且请求了缓存数据时，返回额外的 `cache: { keys: { repos, remotes? }, ignored_repos, result_ids, synced_at }`。其中 `result_ids` 为带入的事项 ID，`synced_at` 是中枢的 UTC ISO 时间。无匹配时仍返回空上下文，额外字段省略。
+- `agent.audit_sync` 接收 `{ entries: [{ id, at, tool, session?, cwd, project_id, result_ids, cached: true }] }`，最多 500 条。客户端为每条记录生成 ULID `id` 并在重试中复用，`at` 用 UTC ISO 时间，`project_id` 和 `result_ids` 为 ULID，`cwd` 为绝对路径。服务端按 ID 去重，成功返回 `{ accepted }`，重复项也计入确认条数。入库为 `kind=context`，`args` 含 `cached: true` 和调用设备，`bytes=0`，无响应正文。
 
-#### 6.10.6 迁移期间老版本共存
+**SessionStart** 在读输入、发请求和本地操作合计 2000 ms 内执行。
 
-- **双栈期**：中枢同时保留旧的本机 `127.0.0.1:<port>/v1/*`（Bearer `token` / `agent-token`）与新的 `127.0.0.1:<port>/v1/device`。
-- **同机自动引导**：新版 `Tacit.app` 升级启动时，若发现存在本地 `token` 且尚未有 `collector-link.json`，自动调用一次本机引导接口 `POST /v1/settings/devices/local-bootstrap`（仅 `127.0.0.1` + 管理令牌可用），在同一事务生成本机 `mac-<id>`（`role = "admin"`, `local_only = 1`）与 `agent-<id>`（`role = "agent"`, `local_only = 1`），无需扫码，升级无感。请求体是 `{ mac_pk, agent_pk }`：两把公钥由 `Tacit.app` 先在本机生成、私钥先写进钥匙串再发请求，私钥从不离开本机。按公钥幂等：同一对公钥已登记过就原样返回已有的两个 `device_id`，所以崩溃后重试不会多出设备；只有一把对得上或公钥属于别的设备时返回 409，客户端丢弃本地密钥重新生成后再试。
-- **运行中的旧 MCP 进程**：升级时不重启用户已打开的 Claude Code / Codex 会话；旧 MCP 进程继续经 `agent-token` 访问 `/v1/agent/*`，直到会话重启后切入新版设备协议。
-- **旧版采集端/网页状态页**：老版 `Tacit.app` 若回滚仍可走原 `/v1/*`；本机网页状态页在同机模式下继续工作，不强制中断。
+1. 有设备身份时，使用直连 `agent.context`，单独限时 800 ms。得到响应就输出上下文，并在剩余时间刷新缓存，线上空结果仍生效。无设备身份时仍用旧令牌接口。
+2. 直连失败、超时或中枢暂时不可用时，读取本地缓存。鉴权、权限或请求格式被拒时返回错误。缓存只由成功的 `agent.context` 刷新，不从 Swift 或后台投影拉取。每个项目要至少在线带入过一次。
+3. 本地先匹配 `keys.repos` 的路径边界，取最长匹配。未命中时用 `git rev-parse --git-common-dir` 识别 worktree 的主仓库，再按唯一匹配的 `keys.remotes` 查找。忽略的仓库路径不带入。Remote 取 Git 的 `remote.origin.url`，保留主机和仓库路径，舍弃凭据、查询参数、默认端口和末尾 `.git`，如 `github.com/acme/sunny-ledger`。中枢识别项目时将该标识记到项目 `keys.remotes`。
+4. 自中枢同步时间起最多保留 7 天的可带入时效。命中时在开头标注 `（离线缓存，同步于 YYYY-MM-DD HH:mm）`，按本地时间显示。离线期间发生的中枢删除无法立即反映在本地，项目下次在线带入时刷新或撤下旧内容。
+5. 离线带入前落盘一条不含正文的待补报审计，保留最新 500 条。下次 SessionStart 或 MCP 成功直连后用 `agent.audit_sync` 补报，收到确认后才移除待发记录。
 
-#### 6.10.7 模块变更、影响、迁移、风险与推荐做法
+**MCP 主动查询**。每次直连请求限时 10 秒，查询与追加均使用实时结果。连不上时提示“当前无法连接 Tacit 中枢”。旧 HTTP 回退见 6.10.6，信箱传输待实现。
 
-- **要改的模块和公共接口**：
-  - 中枢：`hub/src/devices/envelope.ts`（`deviceID` 放宽为 `^(android|mac|agent)-[a-z2-7]{8}$`；`pair()` 按邀请里的平台分配前缀，不再写死 `android-`）、`hub/src/devices/service.ts`（扩展 `dispatch` 覆盖查看/管理/Agent/采集状态 op，新增 `/v1/device/events` 和 `local-bootstrap`）、`hub/src/server.ts`（在 `127.0.0.1:<port>` 挂载 `/v1/device*`）、`hub/src/db.ts`（按平台放行 `mac.*`/会话来源）、`hub/src/agent.ts`（`AGENT_DEVICE` 改为调用方 `device_id`，新增 `agent.audit_sync`）、`hub/src/status.ts`（改为读设备上报的采集状态，兼容回落 `collector-status.json`）、`hub/src/distill/repos.ts`（项目 `keys` 可选记录 `remotes`）、`hub/src/run-plugin.ts`（增加宿主代理发送模式）、`hub/src/agent-cli/`（`client.ts`、`index.ts`、`mcp.ts` 接入设备协议与离线 `project_context` 缓存）。
-  - Mac 端：新增 `collector/Sources/CollectorCore/DeviceClient.swift`，改造 `Hub.swift`、`AudioCoordinator.swift`、`AudioWorker`、`Viewer/HubAPI.swift`、`Viewer/DiagnosticSettings.swift`、`WidgetSnapshotPublisher.swift`。
-- **对现有用户的影响**：单机用户升级全自动无感，不需要重新配对、不需要重装 AI 工具钩子、不会打开局域网监听；中枢短暂重启或远端断网时，新开编程会话仍能拿到近 7 天内的项目上下文。
-- **迁移步骤**：
-  1. 中枢上线双栈支持 + `local-bootstrap` + 全量设备 op，验证所有新 op 与原 `/v1/*` 语义等价。
-  2. Mac 采集端与查看窗口切到 `DeviceClient`（经 `127.0.0.1` 快路），验证屏幕/微信/录音/插件/纠错/设置全链路。
-  3. `agent-cli` 切到独立 `agent` 设备身份 + 离线缓存，完成真机 Claude Code / Codex 断网与在线回归。
-  4. 稳定后将原 `/v1/*` 标为仅同机兼容层，独立部署模式（6.11）下默认关闭。
-- **主要风险**：
-  - Swift `CryptoKit.HPKE` 与 Bun `@hpke/core` 在边界参数（AAD、info、auth 模式）不互通（缓解：先用 `schema/fixtures/device-envelope.json` 跑通 Swift 单测再接业务）。
-  - 外部插件经代理发送时若宿主崩溃，需保证 `state.json` 与 `release` 缓冲不提前删除（缓解：严格保留“收到中枢完整回执才写 state 和删缓冲”的不变量）。
-  - 同机升级引导若误把 `local_only` 置 0，会悄悄打开 `0.0.0.0:47824`（缓解：单测硬断言单机引导后 `devices.open === false`）。
-- **推荐做法与理由**：
-  - **同机快路**：推荐走 **`127.0.0.1:<port>/v1/device` + 完整 HPKE**，而非另做一套无加密 Unix Socket 协议。理由：Swift `URLSession` 和 Bun `fetch` 原生支持，单次加密 < 0.3 ms，且保持本地与远端 100% 同一条鉴权/权限代码路径。
-  - **AI 工具身份**：推荐**独立 `agent` 设备密钥对**，而非共用 Mac 的 `admin` 私钥。理由：与 `AGENTS.md` “AI 查询与追加使用独立受限令牌”一致，也支持在未装 `Tacit.app` 的远程开发机上独立接入 MCP。
-  - **插件发送**：推荐由 `Tacit.app` 代理发送，而非把设备私钥分发给插件 runner。理由：私钥不扩散，且自然复用 `OutboxStore` 与信箱回退。
+**本机缓存格式**。根目录为数据目录下的 `agent-context-cache/`，每个 `<hub_id>-<device_id>/` 子目录有 `<project_id>.enc` 和 `audit/<entry_id>.enc`。文件为 `0x01 | 12 字节随机 nonce | 16 字节 GCM tag | 密文`，以独立的 32 字节 AES-256-GCM 密钥加密。AAD 是 UTF-8 的 `tacit:agent-context:v1:<hub_id>-<device_id>:<相对文件名>`。项目文件明文结构为 `{ project_id, text, cache: { keys, ignored_repos, result_ids, synced_at } }`，审计文件为一条 `entries` 元数据。Mac 的密钥放在钥匙串 `record-anything` 服务下，账户 `agent-context-cache-key`，其他系统用数据目录下同名的 `0600` 文件。密钥按 64 位十六进制字符保存。
+
+#### 6.10.6 本机登记与迁移期间老版本共存
+
+两个接口只在本机监听接受 `127.0.0.1` Host 和管理 Bearer token。公钥是 32 字节 X25519 公钥的无填充 base64url，客户端应在请求前生成密钥并保存私钥。
+
+| 方法 | 路径 | 请求体 | 成功返回（HTTP 200） |
+|---|---|---|---|
+| POST | `/v1/settings/devices/local-bootstrap` | `{ mac_pk, agent_pk }`（两把不同公钥） | `{ mac_device_id, agent_device_id, hub_id, hub_pk, endpoint }` |
+| POST | `/v1/settings/devices/local-agent` | `{ agent_pk }` | `{ agent_device_id, hub_id, hub_pk, endpoint }` |
+
+- `hub_pk` 同为 X25519 公钥的无填充 base64url，`endpoint` 为完整的 `http://127.0.0.1:<port>/v1/device`。
+- `local-bootstrap` 同一事务创建 `mac-<id>`（`admin`）和 `agent-<id>`（`agent`）。两行均为 `local_only=1`。同一对公钥重试时返回已登记的两台设备 ID。只有一把公钥匹配、两把来自不同登记、或公钥属于其他设备时返回 409。
+- `local-agent` 单独创建本机 Agent，供 `agents install --yes` 在 Tacit.app 尚未登记时使用。已登记的本机 Agent 公钥（包括双登记里的 Agent）返回原 ID，其他设备的公钥返回 409。先单独登记的公钥不能与新的 Mac 公钥配成一对来重试双登记。写入 `security_audit` 的事件为 `device.local_register`，包含创建和冲突结果。
+- 无效 JSON、公钥编码错误或不可用的 X25519 公钥返回 400，缺失或无效令牌返回 401，受限令牌或本机监听上用 `localhost` Host 返回 403，其他 Host 返回 421。局域网监听上的登记路径返回 404。中枢忙时返回 503。
+- agent-cli 在数据目录中读取 `agent-link.json`，JSON 为 `{ hub_id, hub_pk, device_id, address }`，`address` 是 `endpoint` 的 origin，不含路径。Agent 私钥是 32 字节十六进制值。macOS 经系统 `/usr/bin/security -i` 从标准输入写入服务 `record-anything`、账户 `agent-device-key`，其他系统写数据目录下同名 `0600` 文件。文件中没有管理令牌。正式安装 Claude Code 或 Codex 接入时，如果没有连接文件，先登记再写工具配置。预览和卸载只处理工具配置。
+- 已登记的 Claude Code / Codex 新进程走设备协议。没有连接文件的进程、仍运行的旧版 MCP 以及 Claude Desktop 沿用 4.6 的 `agent-token` 路径。旧版采集端和本机网页继续使用原 HTTP 接口。
+- Swift 升级引导、Mac 设置页联动及 `collector-link.json` 的建立留待后续。Swift 需要读取本节的返回字段，并协调已单独登记的 Agent，避免把同一把公钥与新 Mac 公钥一起提交。
+
+#### 6.10.7 后续迁移
+
+1. Mac 采集端与查看窗口切到 Swift `DeviceClient`，用 `schema/fixtures/device-envelope.json` 检查 HPKE 互通，再验收屏幕、微信、录音、插件、纠错及设置。
+2. 实现采集状态上报、插件宿主代理、6.10.4 剩余写操作和设置操作。插件仅在完整送达回执后提交状态和清除缓冲。
+3. 验证已安装的 Claude Code / Codex 在线、超时和离线场景。远端 Agent 签发、通过信箱查询、独立部署及兼容接口下线安排留待后续。
 
 ---
 
@@ -956,7 +950,7 @@ CREATE TABLE project_context_cache (
 
 #### 6.11.1 三级设备权限（与独立 `agent` 身份）
 
-库升级到 `user_version = 16`。设备角色为 `collect`、`view`、`admin`、`agent`，默认 `collect`。v15 中 `viewer=1` 的设备迁为 `view`，其余迁为 `collect`，本机旧的管理令牌不对应设备身份。旧 `viewer` 列仅为迁移保留，新代码不再读写。面向用户的采集／查看／管理三级界面及独立 `agent` 身份签发待接入。
+库升级到 `user_version = 16`。设备角色为 `collect`、`view`、`admin`、`agent`，默认 `collect`。v15 中 `viewer=1` 的设备迁为 `view`，其余迁为 `collect`，本机旧的管理令牌不对应设备身份。旧 `viewer` 列仅为迁移保留，新代码不再读写。面向用户的采集／查看／管理三级界面待接入。本机 `agent` 身份签发已由 6.10.6 提供。
 
 | 操作类别 | `collect`（采集） | `view`（查看） | `admin`（管理） | `agent`（AI 工具） |
 |---|---|---|---|---|
@@ -970,7 +964,7 @@ CREATE TABLE project_context_cache (
 | 状态查看（`status.get`、`diagnostics.get`） | 禁止 | 允许（只读概况） | 允许（完整） | 禁止 |
 | 设置、密钥、审计、设备管理（`settings.*`、`devices.*`、`runtime.*`、`audit.list`、`audio.settings.*`） | 禁止 | 禁止 | 允许 | 禁止 |
 
-- 权限校验统一在 `DeviceService.dispatch` 入口执行（基于信封解开后已验证的 `device` 对应数据库中的 `role`），越权一律返回加密的 `status: 403`（`{ "error": "当前设备权限不足" }`）并写入安全审计。已实现的设备 op 包括 6.5、6.9 的读写操作，以及 `segment.delete`、`devices.role.update`、`devices.remove`。`agent` 的拉取只含 `project_context`，订阅只提示该类变更。表中其余 op 预留权限，获准调用后因尚无处理器返回 400。私密原文只在中枢内存中生成回复，查看端的内存展示与清理待接入。
+- 权限校验统一在 `DeviceService.dispatch` 入口执行（基于信封解开后已验证的 `device` 对应数据库中的 `role`），越权一律返回加密的 `status: 403`（`{ "error": "当前设备权限不足" }`）并写入安全审计。已实现的设备 op 包括 6.5、6.9 的读写操作、6.10.5 的 Agent 直连操作，以及 `segment.delete`、`devices.role.update`、`devices.remove`。`agent` 的拉取只含 `project_context`，订阅只提示该类变更。表中其余 op 预留权限，获准调用后因尚无处理器返回 400。私密原文只在中枢内存中生成回复，查看端的内存展示与清理待接入。
 
 #### 6.11.2 权限授予与变更流程
 
@@ -983,7 +977,7 @@ CREATE TABLE project_context_cache (
 
 - **统一密钥后端（`hub/src/secrets/`，`SecretStore` 接口，2026-11-23 已实现，其余 6.11 仍是草案）**：
   - 接口（同步）：`read(account)`（不存在返回 `null`，读不出来抛错）、`has`、`write`（覆盖）、`create`（只在不存在时写入，返回是否由本次创建）、`remove`。失败一律抛 `SecretError`，只带固定类别（`reason`）和启动诊断用的 `code`：根密钥与 `secrets.enc` 的问题为 `master_key_unreadable`，其余为 `secret_unreadable` / `secret_write_failed` / `secret_invalid`；消息不含密钥、账号名或路径。
-  - 账号名白名单：`db-key`、`device-key`、`provider:<小写名称>`、`relay-space-<22 位空间编号>`，以及仅 `keychain` 后端可用的 `audio-key-hex`（音频密钥只属于 Mac 采集端和本机钥匙串，`sealed-file` 一律拒绝）。其他名字、路径穿越写法一律拒绝；写入时再按账号检查值的格式（十六进制密钥、可见 ASCII 的 API key、信箱令牌）。
+  - 账号名白名单：`db-key`、`device-key`、`provider:<小写名称>`、`relay-space-<22 位空间编号>`，以及仅 `keychain` 后端可用的 `agent-device-key`、`agent-context-cache-key`、`audio-key-hex`（音频密钥只属于 Mac 采集端和本机钥匙串，`sealed-file` 一律拒绝）。其他名字、路径穿越写法一律拒绝；写入时再按账号检查值的格式（十六进制密钥、可见 ASCII 的 API key、信箱令牌）。
   - **后端选择**：环境变量 `RA_SECRET_BACKEND=keychain|sealed-file`；不设时 macOS 用 `keychain`，其他系统用 `sealed-file`，写错值直接报错。
   - **`keychain`（Mac 默认）**：行为不变，只经 `/usr/bin/security`，service `record-anything`，账号名同上；写入走 `security -i` 从标准输入读命令，密钥不出现在进程参数里，以读回为准确认（`-i` 的退出码不可靠）；`create` 不带 `-U`，不会覆盖已有条目（数据库密钥、设备密钥靠它防并发覆盖）。
   - **`sealed-file`（服务器）**：
@@ -1016,7 +1010,7 @@ CREATE TABLE project_context_cache (
    - 预留的 `project.remove` 沿用 `AGENTS.md` 规则：只解除归属、绝不删除原始记录。
 2. **安全审计表（`security_audit`）**：
    - 新增持久化审计表 `security_audit(id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_device TEXT, action TEXT NOT NULL, target TEXT, ok INTEGER NOT NULL, detail_code TEXT)`（不含任何记录正文），定期清理超过 **90 天** 的事件。本机管理令牌可读 `GET /v1/settings/security-audit`，返回 `{ events }`（最近 200 条）。
-   - 记录事件：`pair.create`、`pair.complete`、`device.remove`、`device.role_change`、`key.set`、`key.delete`、`relay.change`、`remote.delete`（仅记条数，用成功事件计算限额）、`auth.denied`（403 越权，记录已知操作名，未登记的名称记为 `unknown_op`）。事件不含原文、凭据、信箱 URL 或邀请内容。
+   - 记录事件：`pair.create`、`pair.complete`、`device.local_register`、`device.remove`、`device.role_change`、`key.set`、`key.delete`、`relay.change`、`remote.delete`（仅记条数，用成功事件计算限额）、`auth.denied`（403 越权，记录已知操作名，未登记的名称记为 `unknown_op`）。事件不含原文、凭据、信箱 URL 或邀请内容。
    - 发生新的 `admin` 配对、权限变更或模型密钥更换时，计划在所有在线 `admin` Mac 的时间线顶部出现一行可确认消去的提示（沿用现有顶部一行提示机制，不弹系统通知）。
 3. **测试与上线前验收门槛**（对应 `docs/design.md` 2.1）：
    - 涉及远程删除、权限分级与 `sealed-file` 密钥的代码上线前，必须在真实跨进程/跨主机（或容器）测试环境看到完整实测结果：验证 403 越权拦截、删除后已下推缓存与小组件清除、限流 429 触发、最后一台 `admin` 保护、以及拔掉根密钥后拒绝建新库。

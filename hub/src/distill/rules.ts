@@ -3,7 +3,7 @@ import { basename, resolve } from "node:path";
 import { ulid, type RecordV1 } from "../../../packages/record/index.ts";
 import { DistillStore, type Frame, type Project, type ProjectKeys } from "./store.ts";
 
-import { repoContainsPath, resolveRepository } from "./repos.ts";
+import { projectForRemote, repoContainsPath, repositoryRemote, resolveRepository } from "./repos.ts";
 
 function recordRepo(record: RecordV1) {
   return record.context?.repo ?? ((record.source === "codex.session" || record.source === "claude_code.session") ? record.context?.cwd : null);
@@ -26,22 +26,25 @@ export class DistillRules {
   constructor(readonly store: DistillStore) {}
   projectForRepo(path: string): Project | null {
     const discovered = resolveRepository(path, []);
+    const remote = discovered ? repositoryRemote(discovered.worktree) : null;
     return this.store.hub.db.transaction(() => {
       const ignored = this.store.ignoredProjectKeys();
-      if (ignoredRepo(path, ignored.repos, discovered)) return null;
+      if (ignoredRepo(path, ignored.repos, discovered) || (remote && ignored.remotes?.includes(remote))) return null;
       const projects = this.store.projects();
       const repository = discovered ?? resolveRepository(path, projects);
       if (!repository || ignoredRepo(path, ignored.repos, repository)) return null;
       const { root: repo, worktree } = repository;
-      const existing = projects.find(p => p.keys.repos.some(key => resolve(key) === repo));
+      const existing = projects.find(p => p.keys.repos.some(key => resolve(key) === repo)) ?? projectForRemote(remote, projects);
       if (existing) {
-        if (!existing.keys.repos.includes(worktree)) {
-          existing.keys.repos.push(worktree);
+        const repos = [...new Set([...existing.keys.repos, repo, worktree])];
+        const remotes = remote && !existing.keys.remotes?.includes(remote) ? [...(existing.keys.remotes ?? []), remote] : undefined;
+        if (repos.length !== existing.keys.repos.length || remotes) {
+          existing.keys = { ...existing.keys, repos, ...(remotes ? { remotes } : {}) };
           this.store.upsertProject(existing);
         }
         return existing;
       }
-      const project: Project = { id: ulid(),name: basename(repo),confirmed: 0,keys: { repos: [...new Set([repo, worktree])],hosts: [],chats: [] } };
+      const project: Project = { id: ulid(),name: basename(repo),confirmed: 0,keys: { repos: [...new Set([repo, worktree])],hosts: [],chats: [], ...(remote ? { remotes: [remote] } : {}) } };
       this.store.upsertProject(project);
       this.store.createPending({ id: ulid(),kind: "project",payload: { project_id: project.id },created_at: new Date().toISOString() });
       return project;
