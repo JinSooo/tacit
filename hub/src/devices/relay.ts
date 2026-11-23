@@ -3,6 +3,8 @@ import type { HubDB } from "../db.ts";
 import { logFailure } from "../diagnostics.ts";
 import type { RelayKeyStorage } from "../keys.ts";
 import { base64url, object, WireError } from "./envelope.ts";
+import { Projection } from "./projection.ts";
+import { projectionHead, pruneProjection, relayProjectionBytes, type ChangeRow } from "./projection-store.ts";
 import { dayMs, relayConfig, type Mailbox, type RelayRequest, type Space } from "./relay-store.ts";
 
 const tickMs = 5_000;
@@ -16,7 +18,7 @@ const RelayWebSocket = WebSocket as typeof WebSocket & {
 const randomID = () => randomBytes(16).toString("base64url");
 
 type Receive = (response: Response, context: RelayRequest) => Promise<object | null>;
-type Move = (publicKey: Buffer, id: string, relay: ReturnType<typeof relayConfig> | null) => Promise<object>;
+type Seal = (publicKey: Buffer, id: string, payload: object) => Promise<object>;
 type Message = { id: string; size: number };
 
 class RelayHTTPError extends Error {
@@ -53,8 +55,8 @@ export class RelayService {
   private readonly hints = new Map<string, Set<string>>();
   private maintenance?: Promise<void>;
 
-  constructor(hub: HubDB, private readonly keys: RelayKeyStorage, private readonly clock: () => number,
-              private readonly receive: Receive, private readonly move: Move) {
+  constructor(private readonly hub: HubDB, private readonly keys: RelayKeyStorage, private readonly clock: () => number,
+              private readonly receive: Receive, private readonly seal: Seal) {
     this.sql = hub.db;
   }
 
@@ -247,7 +249,7 @@ export class RelayService {
           const device = devices.find(d => d.id === box.device);
           if (!device) continue;
           const id = randomID();
-          const body = await this.move(device.public_key, id, configs.get(device.id) ?? null);
+          const body = await this.seal(device.public_key, id, { kind: "relay.moved", relay: configs.get(device.id) ?? null });
           moves.push({ box, id, body: JSON.stringify(body) });
         }
       }
@@ -384,6 +386,11 @@ export class RelayService {
   }
 
   private full = false;
+  private projectionPending = false;
+  kickProjection() {
+    this.projectionPending = true;
+    return this.kick();
+  }
   kick(full = false, space?: string, box?: string) {
     if (this.shutdown.signal.aborted) return Promise.resolve();
     if (space) {
@@ -396,13 +403,14 @@ export class RelayService {
         const all = this.full;
         const hints = new Map(this.hints);
         this.full = false;
+        this.projectionPending = false;
         this.hints.clear();
         await this.round(all, hints);
       }).catch(error => {
         if (!this.shutdown.signal.aborted) logFailure("relay.poll", error);
       }).finally(() => {
         this.maintenance = undefined;
-        if (this.full || this.hints.size) this.kick();
+        if (this.full || this.hints.size || this.projectionPending) this.kick();
       });
     }
     return this.maintenance;
@@ -413,6 +421,8 @@ export class RelayService {
     if (now - this.lastPrune >= pollMs) {
       this.sql.prepare("DELETE FROM device_nonces WHERE seen_at<?").run(now - 31 * dayMs);
       this.sql.prepare("DELETE FROM relay_receipts WHERE seen_at<?").run(now - 31 * dayMs);
+      this.sql.prepare("DELETE FROM relay_projection_replies WHERE created_at<?").run(now - 30 * dayMs);
+      pruneProjection(this.sql, now);
       this.lastPrune = now;
     }
     const spaces = this.sql.prepare<[], Space>("SELECT * FROM relay_spaces").all();
@@ -422,7 +432,9 @@ export class RelayService {
       const notify = hints.get(id);
       const due = now - (this.lastPoll.get(id) ?? -Infinity) >= pollMs;
       const inventory = now - (this.lastInventory.get(id) ?? -Infinity) >= inventoryMs;
-      if (!(full || notify || due || inventory)) continue;
+      const haveProjection = this.sql.prepare(`SELECT 1 FROM relay_mailboxes b JOIN devices d ON d.id=b.device
+        WHERE b.space=? AND b.state='active' AND d.viewer=1 LIMIT 1`).get(id);
+      if (!(full || notify || due || inventory || haveProjection)) continue;
       if (due) this.lastPoll.set(id, now);
       if (inventory) this.lastInventory.set(id, now);
       try {
@@ -431,6 +443,7 @@ export class RelayService {
           continue;
         }
         const token = this.token(space);
+        if (haveProjection) await this.pushProjections(space, token);
         const watched = this.watches.get(id)?.readyState === WebSocket.OPEN;
         if (due || full) this.openWatch(space, token);
         const scan = full || notify?.has("") || due && !watched || inventory;
@@ -444,6 +457,87 @@ export class RelayService {
         this.connected.set(id, false);
         logFailure("relay.space", error);
       }
+    }
+  }
+
+  private async pushProjections(space: Space, token: string) {
+    const boxes = this.sql.prepare<[string], Mailbox & {
+      public_key: Buffer; last_seen: string; projection_cursor: number; projection_epoch: number;
+    }>(`SELECT b.*,d.public_key,d.last_seen,d.projection_cursor,d.projection_epoch
+      FROM relay_mailboxes b JOIN devices d ON d.id=b.device
+      WHERE b.space=? AND b.state='active' AND d.viewer=1`).all(space.space);
+    const recovery = this.sql.prepare<[], { v: string }>("SELECT v FROM distill_state WHERE k='projection_relay_purge_epoch'").get();
+    const recoverEpoch = Number(recovery?.v ?? 0);
+    for (const box of boxes) {
+      const head = projectionHead(this.sql), now = this.clock();
+      const down = `/boxes/${box.down}/messages/`;
+      const clear = async (id: string) => { await this.remove(space, token, down + id, 404); };
+      if (recoverEpoch > (box.projection_purged_epoch ?? 0)) {
+        // A copied older DB cannot know about messages sent after its snapshot.
+        for await (const message of this.messages(space, token, box.down)) await clear(message.id);
+        this.sql.prepare("DELETE FROM relay_projection_replies WHERE space=? AND up=?").run(box.space, box.up);
+        this.sql.prepare(`UPDATE relay_mailboxes SET projection_purged_epoch=?,push_msg_id=NULL,push_epoch=NULL,push_seq=NULL,push_at=NULL,push_kind=NULL
+          WHERE space=? AND up=?`).run(recoverEpoch, box.space, box.up);
+        box.push_msg_id = box.push_epoch = box.push_seq = box.push_at = box.push_kind = null;
+      }
+      const stale = this.sql.prepare<[string, string, number, number], { id: string }>(
+        "SELECT id FROM relay_projection_replies WHERE space=? AND up=? AND (epoch<>? OR seq<?)")
+        .all(box.space, box.up, head.epoch, head.urgent);
+      for (const { id } of stale) {
+        await clear(id);
+        this.sql.prepare("DELETE FROM relay_projection_replies WHERE space=? AND up=? AND id=?").run(box.space, box.up, id);
+      }
+
+      const cursor = box.projection_epoch === head.epoch ? box.projection_cursor : 0;
+      const sent = box.push_epoch === head.epoch ? box.push_seq ?? 0 : 0;
+      const retiring = space.state !== "current";
+      const offline = now - Date.parse(box.last_seen) > dayMs;
+      const expireDelta = offline && box.push_kind === "projection.delta" && !!box.push_msg_id && cursor < sent;
+      const reset = box.projection_epoch > 0 && (box.projection_epoch !== head.epoch || cursor > head.seq || cursor > 0 && cursor < head.floor);
+      const urgent = head.urgent > Math.max(cursor, sent);
+      const revoke = box.push_msg_id && (retiring || box.push_epoch !== head.epoch || urgent || cursor >= sent);
+      if (revoke) {
+        await clear(box.push_msg_id!);
+        this.sql.prepare("UPDATE relay_mailboxes SET push_msg_id=NULL WHERE space=? AND up=?").run(box.space, box.up);
+      }
+      if (retiring) continue;
+      if (!expireDelta && (reset ? box.push_epoch === head.epoch && box.push_seq === head.seq : head.seq <= Math.max(cursor, sent))) continue;
+      if (!urgent && !reset && !expireDelta && now - (box.push_at ?? -Infinity) < 5 * 60_000) continue;
+
+      let payload: { kind: string } & Record<string, unknown>;
+      if (reset) payload = { kind: "projection.reset", epoch: head.epoch };
+      else if (urgent) {
+        const rows = this.sql.prepare<[number], ChangeRow>(`SELECT kind,entity_id FROM projection_changes
+          WHERE urgent_seq>0 AND urgent_seq>? ORDER BY urgent_seq LIMIT 1001`).all(cursor);
+        payload = rows.length > 1000 ? { kind: "projection.reset", epoch: head.epoch } :
+          { kind: "projection.invalidate", epoch: head.epoch, to_seq: head.seq, items: rows.map(row => ({ kind: row.kind, id: row.entity_id })) };
+      } else {
+        const hint = { kind: "projection.hint", epoch: head.epoch, latest_seq: head.seq };
+        if (offline || cursor === 0) payload = hint;
+        else {
+          const page = this.sql.transaction(() => new Projection(this.hub, now)
+            .pull(box.device!, { cursor, epoch: head.epoch }, relayProjectionBytes)).immediate();
+          payload = page.reset ? { kind: "projection.reset", epoch: page.epoch } : page.more ? hint :
+            { kind: "projection.delta", epoch: page.epoch, from_seq: cursor, to_seq: page.cursor, changes: page.changes, more: page.more };
+        }
+      }
+      if (Buffer.byteLength(JSON.stringify(payload)) > relayProjectionBytes) payload = { kind: "projection.reset", epoch: head.epoch };
+
+      const id = randomID();
+      const sealed = await this.seal(box.public_key, id, payload);
+      const beforePut = projectionHead(this.sql);
+      if (head.epoch !== beforePut.epoch || head.urgent !== beforePut.urgent) { this.projectionPending = true; continue; }
+      if (box.push_msg_id && !revoke) await clear(box.push_msg_id);
+      const afterDelete = projectionHead(this.sql);
+      if (head.epoch !== afterDelete.epoch || head.urgent !== afterDelete.urgent) { this.projectionPending = true; continue; }
+      // Persist the ID first: crash or uncertain PUT can be retried without leaving an untracked message.
+      this.sql.prepare("UPDATE relay_mailboxes SET push_msg_id=?,push_seq=NULL,push_epoch=NULL,push_kind=NULL WHERE space=? AND up=?")
+        .run(id, box.space, box.up);
+      await this.send(space, token, "PUT", down + id, sealed);
+      this.sql.prepare("UPDATE relay_mailboxes SET push_seq=?,push_epoch=?,push_at=?,push_kind=? WHERE space=? AND up=?")
+        .run(head.seq, head.epoch, now, payload.kind, box.space, box.up);
+      const afterPut = projectionHead(this.sql);
+      if (head.epoch !== afterPut.epoch || head.urgent !== afterPut.urgent) this.projectionPending = true;
     }
   }
 
@@ -474,6 +568,7 @@ export class RelayService {
     this.sql.transaction(() => {
       this.sql.prepare("DELETE FROM relay_receipts WHERE space=? AND up=?").run(box.space, box.up);
       this.sql.prepare("DELETE FROM relay_mailboxes WHERE space=? AND up=?").run(box.space, box.up);
+      this.sql.prepare("DELETE FROM relay_projection_replies WHERE space=? AND up=?").run(box.space, box.up);
     }).immediate();
   }
 
@@ -559,15 +654,23 @@ export class RelayService {
     const up = `/boxes/${mailbox.up}/messages/${id}`;
     let discarded = false;
     let result: object | null = null;
+    const context: RelayRequest = { mailbox, id };
     try {
       const response = await this.spaceRequest(space, token, "GET", up);
-      try { result = await this.receive(response, { mailbox, id }); }
+      try { result = await this.receive(response, context); }
       finally { if (!response.bodyUsed) await response.body?.cancel().catch(() => {}); }
     } catch (error) {
       if (error instanceof WireError && [400, 401, 413].includes(error.status)) discarded = true;
       else if (!(error instanceof RelayHTTPError) || error.status !== 404) throw error;
     }
+    if (result && context.projectionRead) {
+      const read = context.projectionRead, head = projectionHead(this.sql);
+      if (read.epoch !== head.epoch || read.urgent !== head.urgent) result = null;
+      else this.sql.prepare("INSERT OR REPLACE INTO relay_projection_replies VALUES (?,?,?,?,?,?)")
+        .run(mailbox.space, mailbox.up, id, read.seq, read.epoch, this.clock());
+    }
     if (result) await this.send(space, token, "PUT", `/boxes/${mailbox.down}/messages/${id}`, result);
+    if (context.projectionRead && projectionHead(this.sql).urgent > context.projectionRead.seq) this.projectionPending = true;
     await this.remove(space, token, up, 404);
     this.sql.transaction(() => {
       this.sql.prepare("DELETE FROM relay_receipts WHERE space=? AND up=? AND id=?").run(mailbox.space, mailbox.up, id);

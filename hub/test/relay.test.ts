@@ -5,10 +5,14 @@ import { join } from "node:path";
 import { startRelay } from "../../relay/src/bun.ts";
 import { defaultLimits } from "../../relay/src/core.ts";
 import { HubDB } from "../src/db.ts";
+import { DistillStore } from "../src/distill/store.ts";
+import { localDateString } from "../src/distill/requests.ts";
+import { projectionHead, pruneProjection, resetProjection, relayProjectionBytes } from "../src/devices/projection-store.ts";
+import type { ProjectionPage } from "../src/devices/projection.ts";
 import { dayMs, type RelayConfig } from "../src/devices/relay-store.ts";
 import { startServer } from "../src/server.ts";
 import { decodePairing, DeviceClient, type ResponseEnvelope } from "./device-client.ts";
-import { fixture, setup } from "./helpers.ts";
+import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 
 const path = "/v1/settings/relay";
 const id = () => randomBytes(16).toString("base64url");
@@ -40,15 +44,20 @@ async function hubFixture() {
     method, headers: { Authorization: `Bearer ${ctx.config.token}`, "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  async function invite() {
-    const response = await admin("/v1/settings/devices/pairing", "POST");
+  async function invite(viewer = false) {
+    const response = await admin("/v1/settings/devices/pairing", "POST", viewer ? { viewer } : undefined);
     expect(response.status).toBe(200);
     const pairing = decodePairing((await response.json() as { uri: string }).uri);
     return { pairing: pairing as typeof pairing & { relay?: RelayConfig }, phone: await DeviceClient.fromInvite(pairing, lan) };
   }
-  async function pair() {
-    const { pairing, phone } = await invite();
-    expect((await phone.pair(pairing)).status).toBe(200);
+  async function pair(viewer = false, loopback = false) {
+    const { pairing, phone: lanDevice } = await invite(viewer);
+    const phone = loopback ? await DeviceClient.fromInvite(pairing, server.url.origin) : lanDevice;
+    if (viewer) {
+      const result = await phone.send<{ device_id: string }>("pair", { ...await phone.pairingBody(pairing), platform: "mac" });
+      expect(result.status).toBe(200);
+      phone.device = result.body.device_id;
+    } else expect((await phone.pair(pairing)).status).toBe(200);
     return phone;
   }
   return {
@@ -73,8 +82,8 @@ const remote = (relay: RelayConfig, box: string, method = "GET", nonce?: string,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-async function eventually<T>(get: () => Promise<T | undefined> | T | undefined) {
-  const deadline = Date.now() + 3_000;
+async function eventually<T>(get: () => Promise<T | undefined> | T | undefined, timeout = 3_000) {
+  const deadline = Date.now() + timeout;
   do {
     const value = await get();
     if (value !== undefined) return value;
@@ -290,9 +299,10 @@ test("回执还没投出去时删掉记录，回执随删除清掉，原请求�
   } finally { await hub.dispose(); relay.stop(true); }
 });
 
-test("v13 加密数据库升级到 v14，保留配对记录并清理迁移备份", () => {
+test("v13 加密数据库升级到 v15，保留配对记录并清理迁移备份", () => {
   const ctx = setup();
   try {
+    removeProjectionSchema(ctx.db.db);
     ctx.db.db.exec(`
       DROP TABLE device_nonces; DROP TABLE relay_mailboxes; DROP TABLE relay_spaces; DROP TABLE relay_receipts;
       INSERT INTO devices VALUES ('android-abcd2345','测试手机','android',X'00','2026-11-23','2026-11-23');
@@ -301,7 +311,7 @@ test("v13 加密数据库升级到 v14，保留配对记录并清理迁移备份
     ctx.db.close();
     const db = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(db.db.pragma("user_version", { simple: true })).toBe(14);
+      expect(db.db.pragma("user_version", { simple: true })).toBe(15);
       expect(db.db.prepare("SELECT id FROM devices").all()).toEqual([{ id: "android-abcd2345" }]);
       expect(db.db.prepare("SELECT * FROM device_nonces").all()).toEqual([]);
       expect(existsSync(ctx.file + ".migration-v13.bak")).toBe(false);
@@ -338,3 +348,289 @@ test("信箱离线时移除设备并保留待吊销项，重连时吊销并删�
     if (online) relay.stop(true);
   }
 });
+
+function projectionItem(record: ReturnType<typeof fixture>, project_id: string | null = null) {
+  return {
+    id: record.id, record_ids: [record.id], project_id,
+    title: record.title, description: record.body, t_start: record.t_start, t_end: record.t_start,
+    active_seconds: 60, sources: [record.source], apps: [],
+    evidence: [{ id: record.id, at: record.t_start, source: record.source, title: record.title }],
+  };
+}
+
+function projectionDay(store: DistillStore, date: string, records: ReturnType<typeof fixture>[]) {
+  store.upsertDay({ date, brief: "苗圃安排", needs_regen: 0, updated_at: new Date().toISOString(), detail: {
+    summary: "苗圃安排", cutoff: records.at(-1)?.t_start, items: records.map(record => projectionItem(record, "garden")),
+    record_ids: records.map(r => r.id), omitted_record_ids: [],
+  } });
+}
+
+function projectionThread(store: DistillStore, id: string, rows: ReturnType<typeof fixture>[], title = "整理苗圃") {
+  store.upsertThread({ id, project_id: "garden", status: "active", domain: "work", title, brief: "已经检查苗圃",
+    detail: { goal: "规划新苗床", progress: "核对完图纸", internal: "内部字段不传" },
+    last_ms: Date.now() - 60_000, needs_regen: 0, updated_at: new Date().toISOString() });
+  const time = Date.parse(rows[0]!.t_start);
+  const frame = `frame-${id}`;
+  store.createFrame({ id: frame, key: frame, t_start_ms: time, t_end_ms: time, record_ids: rows.map(r => r.id),
+    chars: 10, private: Number(rows.some(r => r.sensitivity === "private")), status: "new" });
+  store.assign(frame, id, "rule", 1);
+}
+
+test("查看邀请限定 Mac；Android 和伪装请求无权读取，WebSocket 只发鉴权后的删除序号", async () => {
+  const hub = await hubFixture();
+  let socket: WebSocket | undefined;
+  try {
+    const android = await hub.pair();
+    const unauthorized = await hub.invite();
+    const attempted = await unauthorized.phone.send("pair", { ...await unauthorized.phone.pairingBody(unauthorized.pairing), platform: "mac", viewer: true });
+    expect(attempted.status).toBe(400);
+    const viewer = await hub.pair(true, true);
+    expect(viewer.device).toMatch(/^mac-/);
+    expect((await android.send("projection.pull", { cursor: 0, device: viewer.device })).status).toBe(403);
+    expect((await android.send("records.list", {})).status).toBe(403);
+    expect((await viewer.send("delete", { ids: [fixture().id] })).status).toBe(403);
+    const record = fixture({ title: "测试折叠温室" });
+    hub.db.ingest([record]);
+
+    const envelope = await viewer.envelope({ op: "events.subscribe", body: {}, ts: hub.time(), nonce: id() });
+    const events: { seq: number; epoch: number; urgent: boolean }[] = [];
+    const url = new URL("/v1/device/events", hub.url());
+    url.protocol = "ws:";
+    socket = new WebSocket(url);
+    socket.onopen = () => socket?.send(JSON.stringify(envelope));
+    socket.onmessage = event => events.push(JSON.parse(String(event.data)));
+    await eventually(() => events[0]);
+    const before = projectionHead(hub.db.db).seq;
+    const worker = new HubDB(hub.file, hub.config.dbKey);
+    try { expect(worker.delete(record.id)).toBe(true); } finally { worker.close(); }
+    const event = await eventually(() => events.find(event => event.urgent && event.seq > before));
+    expect(Object.keys(event).sort()).toEqual(["epoch", "seq", "urgent"]);
+    const page = await viewer.send<ProjectionPage>("projection.pull", { cursor: before, epoch: event.epoch });
+    expect(page.body.changes).toContainEqual(expect.objectContaining({ kind: "record_gone", id: record.id, op: "delete" }));
+  } finally { socket?.close(); await hub.dispose(); }
+});
+
+test("投影与按需读取撤掉私密内容，混合事项仅保留有公开依据的事实", async () => {
+  const hub = await hubFixture();
+  try {
+    const viewer = await hub.pair(true);
+    const now = Date.parse(hub.time()), date = localDateString(now - 2 * dayMs);
+    const t_start = date + "T12:00:00Z";
+    const pub = fixture({ t_start, source: "manual.note", title: "公开苗床", body: "公开苗床已贴标签" });
+    const mixed = fixture({ t_start, source: "manual.note", title: "公开外侧苗床", body: "公开外侧苗床已清理" });
+    const hidden = fixture({ t_start, title: "私密水池名称", body: "私密水池正文", sensitivity: "private" });
+    const entirely = fixture({ t_start, title: "私密花盆名称", body: "私密花盆正文", sensitivity: "private" });
+    hub.db.ingest([pub, mixed, hidden, entirely]);
+    const store = new DistillStore(hub.db);
+    store.upsertProject({ id: "garden", name: "试验苗圃", confirmed: 1, keys: { repos: [], hosts: [], chats: [] }, brief: "混合的项目概况" });
+    projectionThread(store, "public", [pub]);
+    projectionThread(store, "mixed", [mixed, hidden], "私密水池派生标题");
+    projectionThread(store, "hidden", [entirely], "私密花盆派生标题");
+    const factBase = { kind: "open" as const, origin: "user" as const, thread_id: "mixed", project_id: "garden", valid_at: t_start, created_at: t_start };
+    store.writeFact({ ...factBase, id: "mixed-private", evidence: [hidden.id, mixed.id], text: "私密水池派生事实" });
+    store.writeFact({ ...factBase, id: "mixed-public", evidence: [mixed.id], text: "外侧苗床待补标签" });
+    projectionDay(store, date, [pub, hidden]);
+    const first = (await viewer.send<ProjectionPage>("projection.pull", { cursor: 0 })).body;
+    const firstWire = JSON.stringify(first);
+    for (const secret of ["私密", hidden.id, entirely.id, "混合的项目概况", "内部字段不传"]) expect(firstWire).not.toContain(secret);
+    expect(firstWire).toContain("外侧苗床待补标签");
+    expect(firstWire).toContain("整理苗圃");
+    expect(first.changes.find(change => change.kind === "thread" && change.id === "mixed")).toMatchObject({ data: { brief: null, detail: null } });
+    expect(first.changes.find(change => change.kind === "thread" && change.id === "hidden")).toMatchObject({ op: "delete" });
+
+    const correction = fixture({ source: "manual.correction", corrects: pub.id, sensitivity: "private", title: "新私密标题", body: "新私密修正文", t_start: hub.time() });
+    expect(hub.db.ingest([correction]).accepted).toBe(1);
+    const next = (await viewer.send<ProjectionPage>("projection.pull", { cursor: first.cursor, epoch: first.epoch })).body;
+    expect(next.changes).toContainEqual(expect.objectContaining({ kind: "record_gone", id: pub.id, op: "delete" }));
+    expect(next.changes).toContainEqual(expect.objectContaining({ kind: "thread", id: "public", op: "delete" }));
+    expect(JSON.stringify(next)).not.toContain("公开苗床已贴标签");
+    expect(JSON.stringify(next)).not.toContain("新私密");
+    const { body: reads } = await viewer.send("records.get", { ids: [pub.id, hidden.id, mixed.id], include_private: true, include_corrections: true });
+    expect(reads.records).toMatchObject([{ id: pub.id, redacted_private: true }, { id: hidden.id, redacted_private: true }, { id: mixed.id, body: mixed.body }]);
+    expect((await viewer.send("records.list", { q: "私密", body: true })).body.records).toEqual([]);
+    expect((await viewer.send("records.list", { q: "公开苗床", body: true })).body.records).toEqual([]);
+    expect((await viewer.send("timeline.locate", { record_id: pub.id })).status).toBe(404);
+    const query = await viewer.send("timeline.query", { q: "私密" });
+    expect(query.body.days).toEqual([]);
+    const segments = await viewer.send("history.segments", { from: date + "T00:00:00Z", to: date + "T23:59:59Z" });
+    expect(segments.status).toBe(200);
+    expect(JSON.stringify(segments)).not.toContain(hidden.id);
+    expect(JSON.stringify(segments)).not.toContain(pub.id);
+    expect(JSON.stringify(segments)).toContain(mixed.id);
+  } finally { await hub.dispose(); }
+});
+
+test("游标分页跨越冷启动窗口，确认单调且 epoch 重置后全量重拉", async () => {
+  const hub = await hubFixture();
+  try {
+    const viewer = await hub.pair(true);
+    const store = new DistillStore(hub.db);
+    const now = Date.parse(hub.time());
+    const days = [5, 1, 8, 2, 20].map(age => localDateString(now - age * dayMs));
+    for (const date of days) store.upsertDay({ date, needs_regen: 0 });
+    let page = (await viewer.send<ProjectionPage>("projection.pull", { cursor: 0, limit: 1, window_days: 4 })).body;
+    const seen = new Set<string>();
+    const initialEpoch = page.epoch;
+    for (let count = 0; ; count++) {
+      expect(count).toBeLessThan(20);
+      for (const change of page.changes) if (change.kind === "day") seen.add(change.id);
+      if (!page.more) break;
+      const previous = page.cursor;
+      page = (await viewer.send<ProjectionPage>("projection.pull", { cursor: previous, epoch: initialEpoch, limit: 1 })).body;
+      expect(page.cursor).toBeGreaterThan(previous);
+    }
+    expect(seen.has(days[1]!)).toBe(true);
+    expect(seen.has(days[3]!)).toBe(true);
+    for (const index of [0, 2, 4]) expect(seen.has(days[index]!)).toBe(false);
+    expect((await viewer.send("projection.ack", { cursor: page.cursor, epoch: initialEpoch })).status).toBe(200);
+    expect((await viewer.send("projection.ack", { cursor: page.cursor - 1, epoch: initialEpoch })).status).toBe(200);
+    expect(hub.db.db.prepare("SELECT projection_cursor FROM devices WHERE id=?").get(viewer.device)).toEqual({ projection_cursor: page.cursor });
+    const gone = fixture({ t_start: hub.time() });
+    hub.db.ingest([gone]);
+    expect(hub.db.delete(gone.id)).toBe(true);
+    const latestSeq = projectionHead(hub.db.db).seq;
+    expect((await viewer.send("projection.ack", { cursor: latestSeq, epoch: initialEpoch })).status).toBe(200);
+    pruneProjection(hub.db.db, now + 31 * dayMs);
+    expect(projectionHead(hub.db.db).floor).toBeGreaterThan(page.cursor);
+    expect(hub.db.db.prepare("SELECT 1 FROM projection_changes WHERE entity_id=?").get(gone.id)).toBeUndefined();
+    const reset = (await viewer.send<ProjectionPage>("projection.pull", { cursor: page.cursor, epoch: initialEpoch })).body;
+    expect(reset).toMatchObject({ reset: true, cursor: 0, more: true, epoch: initialEpoch + 1, changes: [] });
+    expect((await viewer.send("projection.ack", { cursor: page.cursor, epoch: initialEpoch })).status).toBe(409);
+    const latest = (await viewer.send<ProjectionPage>("projection.pull", { cursor: 0, epoch: reset.epoch })).body;
+    expect(latest.reset).toBe(false);
+    expect(latest.changes).toContainEqual(expect.objectContaining({ kind: "day", id: days[4] }));
+  } finally { await hub.dispose(); }
+});
+
+test("长原文含引号、换行和非 BMP 字符时按码点续读", async () => {
+  const hub = await hubFixture();
+  try {
+    const viewer = await hub.pair(true);
+    const text = '𠮷行"\n'.repeat(23_000);
+    const record = fixture({ source: "manual.note", body: text });
+    expect(hub.db.ingest([record]).accepted).toBe(1);
+    const correction = fixture({ source: "manual.correction", corrects: record.id, body: "清点完成" });
+    expect(hub.db.ingest([correction]).accepted).toBe(1);
+    let cursor: string | null = null, restored = "", corrected = "";
+    const count = Array.from(text).length;
+    for (let pages = 0; ; pages++) {
+      expect(pages).toBeLessThan(20);
+      const result: { status: number; body: {
+        records: { body?: string; body_range?: { start: number; end: number; total: number }; corrections?: { body: string }[] }[];
+        next_cursor: string | null;
+      } } = await viewer.send("records.get", { ids: [record.id], include_corrections: true, ...(cursor ? { cursor } : {}) });
+      expect(result.status).toBe(200);
+      const page = result.body;
+      for (const row of page.records) {
+        expect(JSON.stringify(row).length).toBeLessThanOrEqual(38_000);
+        if (row.corrections) corrected += row.corrections[0]!.body;
+        else {
+          expect(row.body_range).toEqual({ start: Array.from(restored).length, end: Array.from(restored + row.body).length, total: count });
+          restored += row.body;
+        }
+      }
+      cursor = page.next_cursor;
+      if (!cursor) break;
+    }
+    expect(restored).toEqual(text);
+    expect(corrected).toBe(correction.body);
+  } finally { await hub.dispose(); }
+});
+
+test("真实信箱分页和主动推送：先撤回旧下行正文，再放无正文的删除通知", async () => {
+  const relay = relayFixture(), hub = await hubFixture();
+  try {
+    await configure(hub, relay.url);
+    const { pairing, phone: viewer } = await hub.invite(true);
+    const inviteBox = pairing.relay!;
+    const pairId = await submit(inviteBox, viewer, "pair", { ...await viewer.pairingBody(pairing), platform: "mac" }, hub.time());
+    const paired = await reply<{ device_id: string; relay: RelayConfig }>(viewer, inviteBox, pairId);
+    expect(paired.status).toBe(200);
+    viewer.device = paired.body.device_id;
+    const config = paired.body.relay;
+    const store = new DistillStore(hub.db);
+    const baseline = (await viewer.send<ProjectionPage>("projection.pull", { cursor: 0 })).body;
+    expect((await viewer.send("projection.ack", { cursor: baseline.cursor, epoch: baseline.epoch })).status).toBe(200);
+    hub.advance(5 * 60_000);
+    const date = localDateString(Date.parse(hub.time()) - 2 * dayMs);
+    const record = fixture({ source: "manual.note", title: "等待撤回的苗床", body: "清点种植架完成。", t_start: date + "T08:00:00Z" });
+    hub.db.ingest([record]);
+    projectionDay(store, date, [record]);
+    const pushed = async (kind: string, timeout?: number) => await eventually(async () => {
+      for (const message of await list(config)) {
+        const response = await remote(config, config.down, "GET", message.id);
+        if (response.status !== 200) continue;
+        const value = await viewer.openPayload<Record<string, unknown>>(await response.json() as ResponseEnvelope, message.id);
+        if (value.kind === kind) return { message, value };
+      }
+    }, timeout);
+    const delta = await pushed("projection.delta");
+    expect(JSON.stringify(delta.value)).toContain(record.body);
+    expect(await list(config)).toHaveLength(1);
+
+    const readId = await submit(config, viewer, "records.get", { ids: [record.id] }, hub.time());
+    expect((await reply<{ records: { body: string }[] }>(viewer, config, readId)).body.records[0]?.body).toBe(record.body);
+    expect(hub.db.delete(record.id)).toBe(true);
+    const withdrawal = await pushed("projection.invalidate");
+    expect(withdrawal.value.items).toContainEqual({ kind: "record_gone", id: record.id });
+    expect(JSON.stringify(withdrawal.value)).not.toContain(record.body);
+    expect((await remote(config, config.down, "GET", delta.message.id)).status).toBe(404);
+    expect((await remote(config, config.down, "GET", readId)).status).toBe(404);
+    expect(await list(config)).toEqual([withdrawal.message]);
+
+    store.upsertProject({ id: "garden", name: "试验苗圃", confirmed: 1, keys: { repos: [], hosts: [], chats: [] } });
+    const publicRows = Array.from({ length: 12 }, (_, index) => fixture({ source: "manual.note", t_start: date + "T10:00:00Z", title: `苗床编号 ${index}` }));
+    hub.db.ingest(publicRows);
+    const writeMany = hub.db.db.transaction(() => {
+      for (const [i, row] of publicRows.entries()) {
+        projectionThread(store, `large-${i}`, [row]);
+        store.upsertThread({ ...store.thread(`large-${i}`)!, detail: { goal: "测试展示".repeat(16_000) } });
+      }
+    });
+    writeMany();
+    const pulledId = await submit(config, viewer, "projection.pull", { cursor: baseline.cursor, epoch: baseline.epoch, limit: 200 }, hub.time());
+    const page = await reply<ProjectionPage>(viewer, config, pulledId);
+    expect(page.status).toBe(200);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(relayProjectionBytes);
+    expect(page.body.more).toBe(true);
+    const secondId = await submit(config, viewer, "projection.pull", { cursor: page.body.cursor, epoch: page.body.epoch, limit: 200 }, hub.time());
+    const second = await reply<ProjectionPage>(viewer, config, secondId);
+    expect(second.body.cursor).toBeGreaterThan(page.body.cursor);
+    expect(Buffer.byteLength(JSON.stringify(second))).toBeLessThanOrEqual(relayProjectionBytes);
+
+    const longRecords = Array.from({ length: 20 }, () => fixture({ source: "manual.note", body: "𠮷".repeat(17_000) }));
+    expect(hub.db.ingest(longRecords).accepted).toBe(20);
+    const ids = longRecords.map(record => record.id);
+    const rawId = await submit(config, viewer, "records.get", { ids }, hub.time());
+    const raw = await reply<{ next_cursor: string; records: { id: string; body_range: { start: number; end: number; total: number } }[] }>(viewer, config, rawId);
+    expect(raw.status).toBe(200);
+    expect(raw.body.next_cursor).toBeTruthy();
+    expect(Buffer.byteLength(JSON.stringify(raw))).toBeLessThanOrEqual(relayProjectionBytes);
+    const restId = await submit(config, viewer, "records.get", { ids, cursor: raw.body.next_cursor }, hub.time());
+    const rest = await reply<{ next_cursor: string; records: { id: string; body_range: { start: number } }[] }>(viewer, config, restId);
+    expect(rest.status).toBe(200);
+    const boundary = raw.body.records.at(-1)!;
+    if (boundary.body_range.end < boundary.body_range.total) {
+      expect(rest.body.records[0]?.id).toBe(boundary.id);
+      expect(rest.body.records[0]?.body_range.start).toBe(boundary.body_range.end);
+    } else expect(rest.body.records[0]?.id).toBe(ids[raw.body.records.length]);
+
+    // A restored backup may have no local metadata for a still-pending older reply.
+    hub.db.db.prepare("DELETE FROM relay_projection_replies WHERE id=?").run(restId);
+    resetProjection(hub.db.db, Date.now());
+    const reset = await pushed("projection.reset");
+    expect(reset.value.epoch).toBeGreaterThan(baseline.epoch);
+    expect((await remote(config, config.down, "GET", restId)).status).toBe(404);
+
+    const restart = (await viewer.send<ProjectionPage>("projection.pull", { cursor: 0 }, { ts: hub.time() })).body;
+    expect((await viewer.send("projection.ack", { cursor: restart.cursor, epoch: restart.epoch }, { ts: hub.time() })).status).toBe(200);
+    hub.advance(5 * 60_000);
+    projectionDay(store, date, [publicRows[0]!]);
+    const active = await pushed("projection.delta");
+    // Mark the viewer inactive and let the relay maintenance loop inspect the existing push.
+    hub.db.db.prepare("UPDATE devices SET last_seen=? WHERE id=?").run(new Date(Date.parse(hub.time()) - 2 * dayMs).toISOString(), viewer.device);
+    const wake = await pushed("projection.hint", 6_000);
+    expect(wake.value.latest_seq).toBe(active.value.to_seq);
+    expect(await list(config)).toEqual([wake.message]);
+  } finally { await hub.dispose(); relay.stop(true); }
+}, 12_000);

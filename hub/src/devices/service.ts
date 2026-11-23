@@ -11,13 +11,18 @@ import { base32, base64url, deviceID, identityFromRaw, invalidEnvelope, object,
   openRequest, readEnvelope, responseSealer, suite, unpaired, validateRequest, WireError } from "./envelope.ts";
 import { deviceList } from "./store.ts";
 import { RelayService } from "./relay.ts";
+import { Projection } from "./projection.ts";
+import { directProjectionBytes, flushProjectionDraft, projectionHead, relayProjectionBytes, touchProjectionDay } from "./projection-store.ts";
+import { localDateString } from "../distill/requests.ts";
 import { dayMs, type RelayConfig, type RelayRequest } from "./relay-store.ts";
 
 const invitationMs = 10 * 60_000;
 const idPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const viewerReads = new Set(["records.get", "records.list", "history.segments", "conversations.detail", "timeline.query", "timeline.locate"]);
 const identityKey = "device_hub_id";
 type Identity = Awaited<ReturnType<typeof identityFromRaw>>;
-type Invitation = { code: Buffer; expires: number; relay: RelayConfig | null };
+type Invitation = { code: Buffer; expires: number; relay: RelayConfig | null; viewer: boolean };
+type EventSocket = { device?: string; authenticating?: boolean; timer?: ReturnType<typeof setTimeout> };
 type Result = { status: number; body: object };
 const ok = (body: object): Result => ({ status: 200, body });
 const fail = (status: number, error: string): Result => ({ status, body: { error } });
@@ -53,7 +58,10 @@ export class DeviceService {
   private invite: Invitation | null = null;
   private expiry?: ReturnType<typeof setTimeout>;
   private retry?: ReturnType<typeof setTimeout>;
-  private listener?: Bun.Server<undefined>;
+  private listener?: Bun.Server<EventSocket>;
+  private projectionTimer?: ReturnType<typeof setInterval>;
+  private projectionSeen?: ReturnType<typeof projectionHead>;
+  private readonly subscribers = new Set<Bun.ServerWebSocket<EventSocket>>();
   private identity?: Promise<Identity | null>;
   private creatingIdentity?: Promise<Identity>;
   private stopped = false;
@@ -68,11 +76,11 @@ export class DeviceService {
     this.keys = deps.keys ?? deviceKeychain;
     this.relay = new RelayService(hub, deps.relayKeys ?? relayKeychain, this.clock,
       (request, context) => this.receive(request, context),
-      async (publicKey, id, relay) => {
+      async (publicKey, id, payload) => {
         const identity = await this.activeIdentity();
         if (!identity) throw unpaired();
         const seal = await responseSealer(identity.keys, await suite.kem.deserializePublicKey(publicKey), id);
-        return await seal({ kind: "relay.moved", relay });
+        return await seal(payload);
       });
   }
 
@@ -88,12 +96,33 @@ export class DeviceService {
   start() {
     this.reconcile();
     this.relay.start();
+    this.reconcileProjectionEvents();
+  }
+
+  private reconcileProjectionEvents() {
+    for (const socket of this.subscribers) {
+      if (socket.data.device && !this.viewer(socket.data.device)) socket.close(1008, "设备已移除");
+    }
+    if (!this.sql.prepare("SELECT 1 FROM devices WHERE viewer=1 LIMIT 1").get()) {
+      clearInterval(this.projectionTimer);
+      this.projectionTimer = undefined;
+      this.projectionSeen = undefined;
+      return;
+    }
+    if (this.projectionTimer) return;
+    this.projectionTimer = setInterval(() => {
+      try { this.notifyProjection(); }
+      catch (error) { if (!isDatabaseBusy(error)) logFailure("projection.notify", error); }
+    }, 250);
+    this.projectionTimer.unref();
   }
 
   async stop(force = false) {
     this.stopped = true;
     clearTimeout(this.expiry);
     clearTimeout(this.retry);
+    clearInterval(this.projectionTimer);
+    for (const socket of this.subscribers) socket.close(1001, "中枢正在关闭");
     const listener = this.listener;
     this.listener = undefined;
     await Promise.all([listener?.stop(force), this.relay.stop()]);
@@ -124,7 +153,11 @@ export class DeviceService {
       hostname: "0.0.0.0", port: this.port,
       // 由 readEnvelope 按流限长，保证超限返回契约指定的 JSON 413。
       maxRequestBodySize: Number.MAX_SAFE_INTEGER,
-      fetch: request => this.lanRequest(request),
+      websocket: this.events,
+      fetch: (request, server) => {
+        const routed = this.route(request, server);
+        return routed === null ? this.lanRequest(request) : routed;
+      },
     });
   }
 
@@ -162,10 +195,11 @@ export class DeviceService {
       if (raw === null) this.keys.write(hex);
     }).immediate();
     this.identity = Promise.resolve(identity);
+    this.reconcileProjectionEvents();
     return identity;
   }
 
-  async settings(method: string, path: string): Promise<Response | null> {
+  async settings(method: string, path: string, readJSON?: () => Promise<unknown>): Promise<Response | null> {
     const root = "/v1/settings/devices";
     if (method === "GET" && path === root) {
       const invite = this.currentInvite();
@@ -183,6 +217,9 @@ export class DeviceService {
       }));
     }
     if (method === "POST" && path === root + "/pairing") {
+      const input = readJSON ? object(await readJSON()) : null;
+      if (input?.viewer !== undefined && input.viewer !== true && input.viewer !== false) throw new InputError("viewer 必须是布尔值");
+      const viewer = input?.viewer === true;
       return await this.relay.run(async () => {
         const identity = await this.ensureIdentity();
         if (this.stopped) return json(fail(503, "中枢正在关闭"));
@@ -197,7 +234,7 @@ export class DeviceService {
           return json(fail(502, "无法创建配对信箱"));
         }
         this.clearInvite();
-        this.invite = { code, expires, relay };
+        this.invite = { code, expires, relay, viewer };
         this.expiry = setTimeout(() => {
           void this.relay.run(() => {
             if (!this.currentInvite()) this.clearInvite();
@@ -208,7 +245,7 @@ export class DeviceService {
         const expires_at = new Date(expires).toISOString();
         const payload = {
           v: 1, hub_id: identity.hubID, name: this.name, pk: identity.publicKey.toString("base64url"),
-          code: code.toString("base64url"), addrs: this.addresses, expires_at, ...(relay ? { relay } : {}),
+          code: code.toString("base64url"), addrs: this.addresses, expires_at, ...(relay ? { relay } : {}), ...(viewer ? { viewer } : {}),
         };
         return json(ok({ uri: `tacit://pair?d=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`, expires_at }));
       });
@@ -231,7 +268,10 @@ export class DeviceService {
         return removed;
       }).immediate();
       this.reconcile();
-      if (removed) await this.relay.flushRevocations(id);
+      if (removed) {
+        this.reconcileProjectionEvents();
+        await this.relay.flushRevocations(id);
+      }
       return removed;
     });
     return json(deleted ? ok({ deleted }) : fail(404, "设备不存在"));
@@ -241,6 +281,92 @@ export class DeviceService {
     this.relay.revokeInvite(this.invite?.relay);
     this.invite = null;
     clearTimeout(this.expiry);
+  }
+
+  /** The loopback listener checks its Host header before routing here. */
+  route(request: Request, server: Bun.Server<EventSocket>) {
+    const path = new URL(request.url).pathname;
+    if (request.method === "POST" && path === "/v1/device") return this.lanRequest(request);
+    if (request.method === "GET" && path === "/v1/device/events") {
+      return server.upgrade(request, { data: {} }) ? undefined : json(fail(400, "需要 WebSocket"));
+    }
+    return null;
+  }
+
+  readonly events: Bun.WebSocketHandler<EventSocket> = {
+    maxPayloadLength: 16 * 1024,
+    idleTimeout: 120,
+    sendPings: true,
+    open: socket => {
+      socket.data.timer = setTimeout(() => socket.close(1008, "鉴权超时"), 5_000);
+      socket.data.timer.unref();
+      this.subscribers.add(socket);
+    },
+    message: (socket, message) => {
+      if (socket.data.authenticating || socket.data.device || typeof message !== "string") {
+        socket.close(1008, "需要鉴权信封");
+        return;
+      }
+      socket.data.authenticating = true;
+      void this.subscribe(socket, message).catch(() => socket.close(1008, "设备无法订阅"));
+    },
+    close: socket => {
+      clearTimeout(socket.data.timer);
+      this.subscribers.delete(socket);
+    },
+  };
+
+  private viewer(device: string) {
+    return !!this.sql.prepare("SELECT 1 FROM devices WHERE id=? AND viewer=1").get(device);
+  }
+
+  private async subscribe(socket: Bun.ServerWebSocket<EventSocket>, message: string) {
+    const envelope = await readEnvelope(new Response(message, { headers: { "Content-Type": "application/json" } }));
+    const device = envelope.device;
+    if (!device || !this.viewer(device)) throw unpaired();
+    const identity = await this.activeIdentity();
+    const registered = this.sql.prepare<[string], { public_key: Buffer }>("SELECT public_key FROM devices WHERE id=?").get(device);
+    if (!identity || !registered) throw unpaired();
+    const sender = await suite.kem.deserializePublicKey(registered.public_key);
+    const input = await openRequest(envelope, identity.keys, sender);
+    const { op } = validateRequest(input, this.clock());
+    if (op !== "events.subscribe" || this.stopped || !this.subscribers.has(socket) || !this.viewer(device)) throw unpaired();
+    this.sql.transaction(() => {
+      if (!this.sql.prepare("INSERT OR IGNORE INTO device_nonces VALUES (?,?,?)").run(device, input!.nonce, this.clock()).changes) {
+        throw invalidEnvelope();
+      }
+      this.touch(device, registered.public_key);
+    }).immediate();
+    clearTimeout(socket.data.timer);
+    socket.data.device = device;
+    const { seq, epoch } = projectionHead(this.sql);
+    socket.send(JSON.stringify({ seq, epoch, urgent: false }));
+  }
+
+  private notifyProjection() {
+    const now = this.clock();
+    // The distillation worker has a separate database connection.
+    const today = localDateString(now);
+    const day = this.sql.prepare<[], { v: string }>("SELECT v FROM distill_state WHERE k='projection_today'").get()?.v;
+    if (day !== today) this.sql.transaction(() => {
+      if (day) touchProjectionDay(this.sql, day);
+      touchProjectionDay(this.sql, today);
+      this.sql.prepare("INSERT OR REPLACE INTO distill_state(k,v) VALUES ('projection_today',?)").run(today);
+    }).immediate();
+    flushProjectionDraft(this.sql, now, today);
+    const next = projectionHead(this.sql);
+    const seen = this.projectionSeen;
+    if (seen?.seq === next.seq && seen.epoch === next.epoch) return;
+    this.projectionSeen = next;
+    this.relay.kickProjection();
+    const message = JSON.stringify({ seq: next.seq, epoch: next.epoch,
+      urgent: next.epoch !== seen?.epoch || next.urgent > (seen?.seq ?? 0) });
+    for (const socket of this.subscribers) {
+      const device = socket.data.device;
+      if (!device) continue;
+      if (this.viewer(device)) socket.send(message);
+      else socket.close(1008, "设备已移除");
+    }
   }
 
   private async lanRequest(request: Request) {
@@ -293,8 +419,22 @@ export class DeviceService {
         context && createHash("sha256").update(envelope.enc).update(envelope.ct).digest("hex"));
     };
     // 邮件取信和设置已经在同一队列里，直连配对也在此队列里分配信箱。
+    const reading = device !== null && (input?.op === "projection.pull" || typeof input?.op === "string" && viewerReads.has(input.op));
+    const before = reading ? projectionHead(this.sql) : null;
     const result = device === null && !context ? await this.relay.run(execute) : await execute();
-    return result && await seal(result);
+    if (!result) return null;
+    const sealed = await seal(result);
+    if (before && result.status === 200) {
+      if (!this.viewer(device!)) throw unpaired();
+      const after = projectionHead(this.sql);
+      if (before.epoch !== after.epoch || before.urgent !== after.urgent) {
+        const retry = fail(409, "读取期间内容已撤下，请重试");
+        const reseal = await responseSealer(identity.keys, sender!, nonce);
+        return await reseal(retry);
+      }
+    }
+    if (context && before && result.status === 200) context.projectionRead = before;
+    return sealed;
   }
 
   private touch(device: string, publicKey: Buffer) {
@@ -335,9 +475,10 @@ export class DeviceService {
       return this.sql.transaction(() => {
         if (!claim()) return replay();
         try {
-          return remember(device === null ? fail(400, "配对信封只允许 pair") : this.dispatch(device, op, body));
+          return remember(device === null ? fail(400, "配对信封只允许 pair") : this.dispatch(device, op, body, !!context));
         } catch (error) {
           if (error instanceof InputError) return remember(fail(400, error.message));
+          if (error instanceof WireError) return remember(fail(error.status, error.message));
           throw error;
         }
       }).immediate();
@@ -356,13 +497,14 @@ export class DeviceService {
       (!context || invite.relay?.space === context.mailbox.space && invite.relay.up === context.mailbox.up);
     const commitError = (result: Result) => this.sql.transaction(() => { claim(); return remember(result); }).immediate();
     if (!valid) return commitError(fail(403, "配对邀请无效或已过期"));
-    if (body.platform !== "android" || typeof body.name !== "string" || !body.name.trim() || body.name.length > 200) {
+    const platform = invite.viewer ? "mac" : "android";
+    if (body.platform !== platform || typeof body.name !== "string" || !body.name.trim() || body.name.length > 200) {
       return commitError(fail(400, "设备名称或平台无效"));
     }
     const name = body.name.trim();
     const allocate = this.sql.prepare("INSERT OR IGNORE INTO issued_device_ids VALUES(?)");
     let device_id: string;
-    do { device_id = `android-${base32(randomBytes(5))}`; } while (!allocate.run(device_id).changes);
+    do { device_id = `${platform}-${base32(randomBytes(5))}`; } while (!allocate.run(device_id).changes);
     let provisioned: Awaited<ReturnType<RelayService["provisionDevice"]>>;
     try { provisioned = await this.relay.provisionDevice(device_id); }
     catch (error) {
@@ -377,7 +519,9 @@ export class DeviceService {
     try {
       const result = this.sql.transaction(() => {
         claim();
-        this.sql.prepare("INSERT INTO devices VALUES(?,?, 'android', ?,?,?)").run(device_id, name, publicKey, at, at);
+        this.sql.prepare("INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,viewer) VALUES(?,?,?,?,?,?,?)")
+          .run(device_id, name, platform, publicKey, at, at, Number(invite.viewer));
+        if (invite.viewer) touchProjectionDay(this.sql, localDateString(this.clock()));
         if (provisioned) this.relay.setState(provisioned.box, "active");
         if (context) {
           this.sql.prepare("UPDATE relay_mailboxes SET state='pair_reply', device=?, token=NULL WHERE space=? AND up=?")
@@ -387,6 +531,7 @@ export class DeviceService {
       }).immediate();
       this.invite = null;
       clearTimeout(this.expiry);
+      if (invite.viewer) this.reconcileProjectionEvents();
       return result;
     } catch (error) {
       if (provisioned) this.relay.revokeDevice(device_id);
@@ -436,7 +581,17 @@ export class DeviceService {
     }).immediate();
   }
 
-  private dispatch(device: string, op: string, body: Record<string, unknown>): Result {
+  private dispatch(device: string, op: string, body: Record<string, unknown>, fromRelay: boolean): Result {
+    const viewer = this.viewer(device);
+    if (op === "projection.pull" || op === "projection.ack" || viewerReads.has(op)) {
+      if (!viewer) return fail(403, "需要查看设备");
+      const projection = new Projection(this.hub, this.clock());
+      const max = fromRelay ? relayProjectionBytes : directProjectionBytes;
+      if (op === "projection.pull") return ok(projection.pull(device, body, max));
+      if (op === "projection.ack") return ok(projection.ack(device, body));
+      return ok(projection.read(op, body, max));
+    }
+    if (viewer && op !== "relay") return fail(403, "查看设备无此权限");
     switch (op) {
       case "ingest":
         if (!Array.isArray(body.records) || body.records.length > 200) throw new InputError("records 必须是最多 200 条的数组");

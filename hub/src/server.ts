@@ -93,7 +93,7 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
       if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, lanPort: options.devices?.open ? options.devices.lanPort : null, busy: busy.snapshot(), relay: options.devices?.relay.status() }));
       if (url.pathname.startsWith("/v1/settings/")) {
-        const deviceResponse = await options.devices?.settings(method, url.pathname);
+        const deviceResponse = await options.devices?.settings(method, url.pathname, request.body ? readJSON : undefined);
         if (deviceResponse) return deviceResponse;
         const relayResponse = await options.devices?.relay.settings(method, url.pathname, readJSON);
         if (relayResponse) return relayResponse;
@@ -251,9 +251,15 @@ export function startServer(options: {
   const dataDir = options.settings?.dataDir ?? (databaseFile === ":memory:" ? null : dirname(databaseFile));
   const devices = new DeviceService(options.db, dataDir === null ? DEFAULT_LAN_PORT : resolveLanPort(dataDir), options.deviceDeps);
   let handler: ReturnType<typeof createHandler>;
-  const server = Bun.serve({ hostname: "127.0.0.1", port: options.port ?? DEFAULT_PORT, fetch(request, server) {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: options.port ?? DEFAULT_PORT, websocket: devices.events, fetch(request, server) {
     handler ??= createHandler({ ...options, devices, port: server.port });
     const path = new URL(request.url).pathname;
+    if (path === "/v1/device" || path === "/v1/device/events") {
+      const host = request.headers.get("host");
+      if (host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return new Response("Host 不被允许", { status: 421 });
+      const routed = devices.route(request, server);
+      if (routed !== null) return routed;
+    }
     // 测试连接最长等 60 秒，超过 Bun 默认的 10 秒空闲超时。
     if (path === "/v1/settings/models/test") server.timeout(request, 75);
     if (path.startsWith("/v1/settings/relay") || path.startsWith("/v1/settings/devices/")) server.timeout(request, 0);

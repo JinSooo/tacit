@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../src/server.ts";
-import { setup, fixture, networkDenied } from "./helpers.ts";
+import { setup, fixture, networkDenied, removeProjectionSchema } from "./helpers.ts";
 
 const bindDenied = await networkDenied();
 
@@ -64,6 +64,7 @@ test("CLI 数据库迁移错误保留中文首行和错误码，屏蔽原始异�
   const ctx = setup();
   try {
     // 合成的不完整 v2 结构让打开阶段产生可识别的迁移错误。
+    removeProjectionSchema(ctx.db.db);
     ctx.db.db.exec("DROP TABLE agent_reads; PRAGMA user_version=2;");
     const result = spawnSync(process.execPath, [cli, "init"], { env: { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey }, encoding: "utf8" });
     expect(result.status).toBe(1);
@@ -82,6 +83,7 @@ test("serve 启动失败写固定错误和仅错误码的日志，区分开库�
   try {
     const env = { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey, RA_PORT: "0", TZ: "Asia/Tokyo" };
     const target = join(ctx.dir, "hub-startup-error.json");
+    removeProjectionSchema(ctx.db.db);
     ctx.db.db.exec("DROP TABLE agent_reads; PRAGMA user_version=2;");
     const cases = [
       [{ RA_DB_KEY: "synthetic-wrong-key" }, "db_open_failed"],

@@ -15,12 +15,17 @@ import { redactRecord } from "./redact.ts";
 import { SKELETON_SOURCES, sourceList } from "./record-sources.ts";
 import { registerAgentAudit, stopAgentAudit } from "./agent-audit.ts";
 import { relaySchema } from "./devices/relay-store.ts";
+import { projectionSchema, projectionWithdrawal, scheduleProjectionDraft } from "./devices/projection-store.ts";
 import { deviceSchema } from "./devices/store.ts";
 import { runtimeSchema, expireSnapshots, eraseSnapshots, sanitizeStoredModelErrors } from "./runtime-log.ts";
 
 export type StoredRecord = RecordV1 & { t_received: string };
 export interface IngestResult { accepted: number; duplicates: number; rejected: { index: number; errors: string[] }[] }
 export class InputError extends Error {}
+
+export function recordListCursor(time: number, id: string, tier?: number) {
+  return Buffer.from(JSON.stringify(tier === undefined ? [time, id] : [tier, time, id])).toString("base64url");
+}
 
 function setCipher(db: DatabaseTypes.Database, key: string): void {
   db.pragma("cipher='sqlcipher'");
@@ -100,15 +105,15 @@ export class HubDB {
       setCipher(this.db, key);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 14) throw new Error("数据库版本比当前 hub 新");
+      if (version > 15) throw new Error("数据库版本比当前 hub 新");
       this.db.pragma("secure_delete=ON");
       // 保留回滚日志模式；加密 WAL 也可能保留已删除内容的旧加密页。
       this.db.pragma("journal_mode=DELETE");
       // 必须先拿写锁再读取版本，等待另一进程迁移完成后才能决定迁移步骤。
       this.db.transaction(() => {
         const version = this.db.pragma("user_version", { simple: true }) as number;
-        if (version > 14) throw new Error("数据库版本比当前 hub 新");
-        migrating = version < 14;
+        if (version > 15) throw new Error("数据库版本比当前 hub 新");
+        migrating = version < 15;
         if (version > 0 && migrating && file !== ":memory:") ensureMigrationBackup(file, key, version);
         if (version === 0) {
           this.db.exec(`
@@ -169,10 +174,11 @@ export class HubDB {
         if (version < 12) this.db.exec(regenDaysRequestsSchema);
         if (version < 13) this.db.exec(deviceSchema);
         if (version < 14) this.db.exec(relaySchema);
+        if (version < 15) this.db.exec(projectionSchema);
       }).immediate();
       migrating = false;
       const backups = file === ":memory:" ? [] : readdirSync(dirname(file)).filter(name =>
-        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|1[0-3])\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
+        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|1[0-4])\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
       if (backups.length) {
         if (this.db.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("迁移后完整性检查失败，已保留备份");
         for (const backup of backups) {
@@ -255,16 +261,19 @@ export class HubDB {
         index.run(inserted.lastInsertRowid, bigram(record.title), bigram(record.body));
         if (record.source === "manual.correction" && record.corrects) {
           correction.run(record.id, record.t_received, record.corrects);
-          new DistillStore(this).correctRecord(record.corrects);
+          projectionWithdrawal(this.db, () => new DistillStore(this).correctRecord(record.corrects!));
         }
         result.accepted++;
       });
+      if (result.accepted && this.db.prepare("SELECT 1 FROM devices WHERE viewer=1 LIMIT 1").get()) {
+        scheduleProjectionDraft(this.db, Date.now() + 30_000);
+      }
       return result;
     })();
   }
 
-  list(params: URLSearchParams, { collapseScreenMatches = false, prioritizeContent = false } = {}): { records: Partial<StoredRecord>[]; next_cursor: string | null } {
-    const where: string[] = [];
+  list(params: URLSearchParams, { collapseScreenMatches = false, prioritizeContent = false, recordFilter = "" } = {}): { records: Partial<StoredRecord>[]; next_cursor: string | null } {
+    const where: string[] = recordFilter ? [recordFilter] : [];
     const args: unknown[] = [];
     for (const field of ["device", "source"]) if (params.has(field)) { where.push(`r.${field}=?`); args.push(params.get(field)); }
     for (const [field, op] of [["from", ">="], ["to", "<="]]) if (params.has(field!)) {
@@ -338,7 +347,7 @@ export class HubDB {
     const last = page.at(-1);
     return {
       records: page.map(row => decode(row, params.get("body") === "1")),
-      next_cursor: hasMore && last ? Buffer.from(JSON.stringify(prioritizeContent ? [tierOf(last), last.t_start_ms, last.id] : [last.t_start_ms, last.id])).toString("base64url") : null,
+      next_cursor: hasMore && last ? recordListCursor(last.t_start_ms, String(last.id), prioritizeContent ? tierOf(last) : undefined) : null,
     };
   }
 
@@ -387,7 +396,7 @@ export class HubDB {
 
   /** 有界批次共享一次引用清理和事务，包含原记录的所有修正。 */
   deleteMany(ids: string[], device?: string): number {
-    return this.db.transaction(() => {
+    return projectionWithdrawal(this.db, () => {
       const input = JSON.stringify([...new Set(ids)]);
       const rows = this.db.prepare<[string, string | null, string | null], Row>(`
         WITH targets AS (
@@ -405,10 +414,6 @@ export class HubDB {
       }
       if (!rows.length) return 0;
       eraseSnapshots(this);
-      // 还没投出去的信箱回执可能带着被删内容（对话总结、修正记录），同事务清掉；
-      // 设备收不到回复会在 24 小时后换新 nonce 重发。配对回执不含记录内容，保留。
-      this.db.prepare(`DELETE FROM relay_receipts WHERE NOT EXISTS (
-        SELECT 1 FROM relay_mailboxes b WHERE b.space=relay_receipts.space AND b.up=relay_receipts.up AND b.state='pair_reply')`).run();
       const store = new DistillStore(this);
       store.removeRecords(rows.map(r => ({ id: r.id as string, time: r.t_start as string })));
       const deleted = new Set(rows.map(r => r.id));
@@ -431,6 +436,6 @@ export class HubDB {
       }
       for (const id of corrected) store.correctRecord(id);
       return rows.length;
-    })();
+    });
   }
 }

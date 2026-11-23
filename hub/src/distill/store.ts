@@ -1,3 +1,4 @@
+import { projectionWithdrawal, touchProjectionDay, withdrawProjectionRecord } from "../devices/projection-store.ts";
 import { classifyModelError } from "../llm/error-category.ts";
 import { tryWriteWithoutWaiting } from "../db-busy.ts";
 import { chatKey } from "../chat.ts";
@@ -195,7 +196,7 @@ export class DistillStore {
    * 用户自己写的其他事实不动。线程、所属项目和涉及的日期标记重新整理。
    */
   detachFact(id: string, at = new Date().toISOString()): { frames: number; facts: number } {
-    return this.sql.transaction(() => {
+    return projectionWithdrawal(this.sql, () => {
       const fact = this.sql.prepare("SELECT * FROM facts WHERE id=? AND invalid_at IS NULL").get(id) as Row | undefined;
       if (!fact) throw new InputError("事实不存在或已失效");
       const threadId = fact.thread_id as string | null;
@@ -211,11 +212,9 @@ export class DistillStore {
       for (const other of this.facts("thread_id", threadId)) {
         if (other.origin === "llm" && other.evidence.length && other.evidence.every(e => moved.has(e))) { invalidate.run(at, other.id); count++; }
       }
-      this.sql.prepare("UPDATE threads SET needs_regen=1 WHERE id=?").run(threadId);
-      this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=(SELECT project_id FROM threads WHERE id=?)").run(threadId);
-      if (fact.project_id) this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=?").run(fact.project_id);
+      this.clearDerived(new Set([threadId]), new Set(fact.project_id ? [fact.project_id] : []), []);
       return { frames: frames.length, facts: count };
-    })();
+    });
   }
   /** 片段退回未分配，记下不能再分回这条线程，下一轮由模型重新归属。调用方负责事务和线程重新整理。 */
   private unassign(f: Frame, threadId: string, at: string) {
@@ -230,7 +229,7 @@ export class DistillStore {
    * 证据全在这个片段上的自动推断一并作废。
    */
   detachRecord(recordId: string, at = new Date().toISOString()): { frames: number; facts: number; thread: string | null } {
-    return this.sql.transaction(() => {
+    return projectionWithdrawal(this.sql, () => {
       const row = this.sql.prepare("SELECT f.*,a.thread_id FROM frame_records r JOIN frames f ON f.id=r.frame_id JOIN assignments a ON a.frame_id=f.id WHERE r.record_id=?").get(recordId) as Row | undefined;
       if (!row) return { frames: 0, facts: 0, thread: null };
       const threadId = row.thread_id as string, f = decode<Frame>(row);
@@ -240,10 +239,9 @@ export class DistillStore {
       for (const other of this.facts("thread_id", threadId)) {
         if (other.origin === "llm" && other.evidence.length && other.evidence.every(e => moved.has(e))) { this.sql.prepare("UPDATE facts SET invalid_at=? WHERE id=? AND invalid_at IS NULL").run(at, other.id); count++; }
       }
-      this.sql.prepare("UPDATE threads SET needs_regen=1 WHERE id=?").run(threadId);
-      this.sql.prepare("UPDATE projects SET needs_regen=1 WHERE id=(SELECT project_id FROM threads WHERE id=?)").run(threadId);
+      this.clearDerived(new Set([threadId]), new Set(), []);
       return { frames: 1, facts: count, thread: threadId };
-    })();
+    });
   }
   invalidateFact(id: string, replacement: string, origin: "llm" | "user", at = new Date().toISOString()) {
     const fact = this.sql.prepare("SELECT origin FROM facts WHERE id=? AND invalid_at IS NULL").get(id) as Row | undefined;
@@ -384,7 +382,7 @@ export class DistillStore {
     this.sql.prepare("DELETE FROM projects WHERE id=?").run(source);
   }
   removeProject(id: string): boolean {
-    return this.sql.transaction(() => {
+    return projectionWithdrawal(this.sql, () => {
       const project = this.project(id);
       if (!project) return false;
       const ignored = this.ignoredProjectKeys();
@@ -410,7 +408,7 @@ export class DistillStore {
       this.sql.prepare("UPDATE facts SET project_id=NULL WHERE project_id=?").run(id);
       this.sql.prepare("DELETE FROM projects WHERE id=?").run(id);
       return true;
-    }).immediate();
+    });
   }
   resolvePending(id: string, action: string, name?: string, target?: string) {
     this.sql.transaction(() => {
@@ -489,6 +487,8 @@ export class DistillStore {
       SELECT date,detail FROM days WHERE
         EXISTS (SELECT 1 FROM json_tree(days.detail) ref JOIN removed ON removed.id=ref.value WHERE ref.key='id')
         OR EXISTS (SELECT 1 FROM json_each(days.detail,'$.record_ids') ref JOIN removed ON removed.id=ref.value)
+        OR EXISTS (SELECT 1 FROM json_each(days.detail,'$.polished_segments') segment
+          JOIN json_each(segment.value,'$.model_dependencies') ref JOIN removed ON removed.id=ref.value)
         OR EXISTS (SELECT 1 FROM json_each(days.detail,'$.items') item
           JOIN json_each(item.value,'$.record_ids') ref JOIN removed ON removed.id=ref.value)`)
       .all(input) as { date: string; detail: string }[];
@@ -545,15 +545,24 @@ export class DistillStore {
     const original = this.hub.get(id);
     if (!original) return;
     const ids = [id, ...original.corrections.map(r => r.id)];
-    const placeholders = ids.map(() => "?").join(",");
-    const affected = this.sql.prepare(`SELECT DISTINCT a.thread_id FROM assignments a JOIN frame_records r ON r.frame_id=a.frame_id WHERE r.record_id IN (${placeholders})
-      UNION SELECT thread_id FROM facts WHERE thread_id IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (${placeholders}))`).all(...ids, ...ids) as { thread_id: string }[];
-    this.sql.prepare(`UPDATE facts SET invalid_at=? WHERE origin='llm' AND invalid_at IS NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (${placeholders}))`).run(new Date().toISOString(), ...ids);
+    const input = JSON.stringify(ids);
+    const affected = this.sql.prepare(`WITH changed(id) AS (SELECT value FROM json_each(?))
+      SELECT DISTINCT a.thread_id FROM assignments a JOIN frame_records r ON r.frame_id=a.frame_id WHERE r.record_id IN changed
+      UNION SELECT thread_id FROM facts WHERE thread_id IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN changed)
+      UNION SELECT id FROM threads WHERE EXISTS(SELECT 1 FROM json_each(threads.detail,'$.quotes') WHERE json_extract(value,'$.record_id') IN changed)`)
+      .all(input) as { thread_id: string }[];
+    const projects = this.sql.prepare<[string], { id: string }>(`WITH changed(id) AS (SELECT value FROM json_each(?))
+      SELECT project_id AS id FROM facts WHERE project_id IS NOT NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN changed)
+      UNION SELECT id FROM projects WHERE EXISTS(SELECT 1 FROM json_each(projects.detail,'$.quotes') WHERE json_extract(value,'$.record_id') IN changed)`)
+      .all(input);
+    this.sql.prepare(`UPDATE facts SET invalid_at=? WHERE origin='llm' AND invalid_at IS NULL AND EXISTS(SELECT 1 FROM json_each(facts.evidence) WHERE value IN (SELECT value FROM json_each(?)))`).run(new Date().toISOString(), input);
     this.clearReviewEvidence(ids);
     if (original.sensitivity === "private" || original.corrections.at(-1)?.sensitivity === "private") this.clearTimelineCorrections(ids);
-    this.clearDerived(new Set(affected.map(r => r.thread_id)), new Set(), [original.t_start], { preserveIncrementalDays: true });
+    this.clearDerived(new Set(affected.map(r => r.thread_id)), new Set(projects.map(r => r.id)), [original.t_start], { preserveIncrementalDays: true });
     removeSummariesOf(this.hub, id);
     this.sql.prepare("UPDATE days SET needs_regen=1 WHERE date=date(?, 'localtime')").run(original.t_start);
+    touchProjectionDay(this.sql, localDateString(Date.parse(original.t_start)));
+    for (const recordId of ids) withdrawProjectionRecord(this.sql, recordId);
   }
 
   removeRecord(id: string, time: string) { this.removeRecords([{id,time}]); }
@@ -600,6 +609,7 @@ export class DistillStore {
     this.clearReviewEvidence([...removed], true);
     this.clearTimelineCorrections([...removed]);
     this.clearDerived(affected, projects, records.map(r=>r.time), { preserveIncrementalDays: true });
+    for (const { time } of records) touchProjectionDay(this.sql, localDateString(Date.parse(time)));
     const candidates = this.getState<{ frame_ids: string[] }[]>("candidates");
     if (candidates) this.setState("candidates", candidates.filter(c => !c.frame_ids.some(id => changedFrames.has(id))));
   }

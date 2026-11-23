@@ -54,7 +54,7 @@ export interface ReviewDetail {
 
 type PolishedSegment = {
   id: string; anchor: string; start: number; end: number;
-  record_ids: string[]; dependencies: string[]; pending?: true;
+  record_ids: string[]; dependencies: string[]; model_dependencies?: string[]; pending?: true;
 };
 
 // 采集成功不等于有值得阅读的内容。旧回顾在读取时也使用同一个筛选规则。
@@ -576,7 +576,7 @@ const sameIds = (a: string[], b: string[]) => a.length === b.length && a.every(i
 /** Cut the full day locally. Only pending, quiet candidates get evidence numbered for the model. */
 export function incrementalReview(hub: HubDB, start: number, now: number, detail: ReviewDetail | null) {
   const rows = loadRecords(hub, start, now + 1, { covered: new Set(), includeRelated: true });
-  const previous = detail?.polished_segments ?? (detail?.items ?? []).filter(item => Array.isArray(item.record_ids))
+  const previous: PolishedSegment[] = detail?.polished_segments ?? (detail?.items ?? []).filter(item => Array.isArray(item.record_ids))
     .map(item => ({
       id: item.id, anchor: item.id, start: Date.parse(item.t_start), end: Date.parse(item.t_end),
       record_ids: item.record_ids, dependencies: item.record_ids,
@@ -621,6 +621,7 @@ export function incrementalReview(hub: HubDB, start: number, now: number, detail
     if ((old && !old.pending && old.start === snapshot.start && old.end === snapshot.end &&
       sameIds(old.record_ids, snapshot.record_ids) && sameIds(old.dependencies, snapshot.dependencies)) ||
       (!old && snapshot.record_ids.every(id => legacyOmitted.has(id)))) {
+      if (old?.model_dependencies) snapshot.model_dependencies = old.model_dependencies;
       preserved.push(snapshot);
       projects.set(snapshot.id, entry.candidate.activity.projectId);
     } else {

@@ -131,6 +131,19 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors || summary.releaseErrors) process.exitCode = 1;
     return;
   }
+  if (command === "projection" && name === "reset" && argv.length === 2) {
+    const [{ loadConfig }, { HubDB }, { resetProjection, projectionHead }] = await Promise.all([
+      import("./config.ts"), import("./db.ts"), import("./devices/projection-store.ts"),
+    ]);
+    const config = loadConfig();
+    const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
+    try {
+      // A restored file may be older than the epoch already cached by a device.
+      resetProjection(db.db, Date.now());
+      console.log(JSON.stringify({ epoch: projectionHead(db.db).epoch }));
+    } finally { db.close(); }
+    return;
+  }
   if (command === "audio") {
     // 一次性整理旧版采集端拆碎的说话人，见 AudioStore.consolidateAll。
     if (name !== "consolidate" || argv.length !== 2) throw new Error("用法：bun hub/src/cli.ts audio consolidate");

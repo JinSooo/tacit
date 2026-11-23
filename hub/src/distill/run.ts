@@ -839,8 +839,8 @@ async function todayStep(d: Deps, store: DistillStore, now: number, timing: "fas
   let calls = 0, error: ModelErrorCode | undefined;
   const mayPolish = polish === "after_segment" || (polish === "hourly" && timing !== "fast");
   const segments = mayPolish ? plan.segments() : [];
-  const recent = applyTimelineCorrections(plan.items.slice(-5), store.getState<TimelineCorrections>(timelineCorrectionKey(date)))
-    .map(({ title, description }) => ({ title, description }));
+  const recentItems = applyTimelineCorrections(plan.items.slice(-5), store.getState<TimelineCorrections>(timelineCorrectionKey(date)));
+  const recent = recentItems.map(({ title, description }) => ({ title, description }));
   const result = segments.length ? await complete<P.DayOutput>(d, {
     tier: "day", task: "day_polish", system: P.DAY_POLISH_SYSTEM, timeoutMs: 300_000,
     prompt: P.dayPolishPrompt(date, reviewMaterial(segments), recent),
@@ -853,10 +853,16 @@ async function todayStep(d: Deps, store: DistillStore, now: number, timing: "fas
     if (!result.ok) error = classifyModelError(result.error);
     else if (!polished) error = "schema_mismatch";
   }
-  const completed = polished ? plan.ready.map(entry => entry.snapshot) : [];
+  // All segments in this model call share its input, including any earlier polished context.
+  const older = new Map(plan.preserved.map(segment => [segment.id, segment]));
+  const modelDependencies = [...new Set([
+    ...segments.flatMap(segment => [...segment.dependencies, ...segment.evidence.map(e => e.reference.id)]),
+    ...recentItems.flatMap(item => older.get(item.id)?.model_dependencies ?? previous?.record_ids ?? item.record_ids ?? []),
+  ])];
+  const completed = polished ? plan.ready.map(({ snapshot }) => ({ ...snapshot, model_dependencies: modelDependencies })) : [];
   const processed = [...plan.preserved, ...completed];
   const snapshots = [...processed.map(({ pending: _pending, ...entry }) => entry),
-    ...plan.pending.map(entry => entry.snapshot).filter(entry => entry.pending && !completed.includes(entry))]
+    ...plan.pending.map(entry => entry.snapshot).filter(entry => entry.pending && !completed.some(segment => segment.id === entry.id))]
     .sort((a, b) => a.start - b.start);
   const items = [...plan.items, ...(polished ?? [])].sort((a, b) => Date.parse(a.t_start) - Date.parse(b.t_start));
   const detail: ReviewDetail = {

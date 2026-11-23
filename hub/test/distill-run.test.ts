@@ -6,7 +6,7 @@ import { DistillStore } from "../src/distill/store.ts";
 import * as P from "../src/distill/prompts.ts";
 import { assignStep, classifyStep, digestStep, touchThread, projectStep, dayStep, LIMITS, distillRound, type LLM } from "../src/distill/run.ts";
 import { createLLM, type LLMRequest } from "../src/llm/index.ts";
-import { emptyDayOutput, fixture, setup } from "./helpers.ts";
+import { emptyDayOutput, fixture, setup, removeProjectionSchema } from "./helpers.ts";
 import { AgentReads } from "../src/agent.ts";
 import { HubDB } from "../src/db.ts";
 import { toLocalIso, type RecordV1 } from "../../packages/record/index.ts";
@@ -301,10 +301,11 @@ test("存量已 digest 且没有新片段时走 classify；有新片段留给 di
 
 test("v3 加密库真实升级 v5：旧归属保留并复制成 hint，domain 留空，重开幂等", () => {
   store.upsertThread({ id: "legacy", title: "合成旧线程", status: "active", project_id: "p" });
+  removeProjectionSchema(ctx.db.db);
   ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; DROP TABLE runtime_calls; PRAGMA user_version=3;");
   const db = new HubDB(ctx.file, ctx.config.dbKey);
   try {
-    expect(db.db.pragma("user_version", { simple: true })).toBe(14);
+    expect(db.db.pragma("user_version", { simple: true })).toBe(15);
     const t = new DistillStore(db).thread("legacy")!;
     expect(t.project_id).toBe("p"); expect(t.project_hint).toBe("p"); expect(t.domain).toBeNull();
   } finally { db.close(); }

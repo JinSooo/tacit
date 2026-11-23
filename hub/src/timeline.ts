@@ -1,3 +1,4 @@
+import { projectionWithdrawal } from "./devices/projection-store.ts";
 import { toLocalIso } from "../../packages/record/index.ts";
 import { HubDB, InputError } from "./db.ts";
 import { localDayStart } from "./distill/requests.ts";
@@ -10,7 +11,7 @@ type TimelineDay = { date: string; items: ReviewItem[] };
 
 const normalized = (text: string) => text.normalize("NFKC").toLowerCase();
 
-export function timelineDays(hub: HubDB, params: URLSearchParams) {
+export function timelineDays(hub: HubDB, params: URLSearchParams, visible = (_date: string, _item: ReviewItem) => true) {
   const filters = ["project_id", "thread_id", "q"].filter(key => params.has(key));
   const project = params.get("project_id"), thread = params.get("thread_id"), q = params.get("q")?.trim();
   if (filters.length !== 1 || !(project || thread || q) ||
@@ -36,6 +37,7 @@ export function timelineDays(hub: HubDB, params: URLSearchParams) {
     if (!Array.isArray(detail.items)) continue;
     const corrections = row.corrections ? JSON.parse(row.corrections) as TimelineCorrections : null;
     const items = store.readingItems(applyTimelineCorrections(detail.items, corrections)).filter(isTimelineItem).filter(item => {
+      if (!visible(row.date, item)) return false;
       if (project) return item.project_id === project;
       if (thread) return "thread_id" in item && item.thread_id === thread;
       const target = normalized(`${item.title}\n${item.description}`);
@@ -48,7 +50,7 @@ export function timelineDays(hub: HubDB, params: URLSearchParams) {
   return { days, next_cursor: null };
 }
 
-export function timelineRecord(hub: HubDB, id: string) {
+export function timelineRecord(hub: HubDB, id: string, visible = (_date: string, _item: ReviewItem) => true) {
   const record = hub.db.prepare<[string], { id: string; t_start_ms: number; t_end: string | null }>(`
     SELECT COALESCE(original.id,r.id) id,COALESCE(original.t_start_ms,r.t_start_ms) t_start_ms,
       CASE WHEN original.id IS NULL THEN r.t_end ELSE original.t_end END t_end
@@ -67,7 +69,7 @@ export function timelineRecord(hub: HubDB, id: string) {
   for (const { date } of days) {
     const items = store.dayView(date)?.detail?.items as ReviewItem[] | undefined;
     const item = items?.filter(isTimelineItem).sort((a, b) => Date.parse(a.t_start) - Date.parse(b.t_start) || a.id.localeCompare(b.id))
-      .find(item => item.record_ids.includes(record.id));
+      .find(item => item.record_ids.includes(record.id) && visible(date, item));
     if (item) return { date, segment_id: item.id };
   }
   return { date: from, segment_id: null };
@@ -88,13 +90,13 @@ export function correctTimelineSegment(store: DistillStore, date: string, id: st
     throw new InputError("请写一句不超过 160 字的描述");
   }
   const text = redactString(description).text;
-  return store.hub.db.transaction(() => {
+  return projectionWithdrawal(store.hub.db, () => {
     const item = findSegment(store,date,id);
     if (!item) return null;
     const key = timelineCorrectionKey(date), corrections = store.getState<TimelineCorrections>(key);
     store.setState(key, { ...corrections, [id]: { record_ids: item.record_ids, description: text } });
     return { item: { ...item, description: text } };
-  }).immediate();
+  });
 }
 
 export function deleteTimelineSegment(store: DistillStore, date: string, id: string, input: unknown) {

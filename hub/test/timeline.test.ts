@@ -100,7 +100,7 @@ test("段描述修正跨重整保留，整段确认按成员原子删除并清�
     const records = Array.from({ length: 101 }, () => fixture({ source: "mac.audio", kind: "span", t_start: at(-2), t_end: at(2) }));
     const device = "android-abcd2345";
     records[0] = { ...records[0]!, device, source: "android.audio" };
-    ctx.db.db.prepare("INSERT INTO devices VALUES(?, '测试手机', 'android', ?, ?, ?)").run(device, Buffer.alloc(32), at(0), at(0));
+    ctx.db.db.prepare("INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen) VALUES(?, '测试手机', 'android', ?, ?, ?)").run(device, Buffer.alloc(32), at(0), at(0));
     const unaffected = fixture({ t_start: at(-30) });
     expect(ctx.db.ingest([...records,unaffected]).accepted).toBe(102);
     const ids = records.map(record => record.id), item = segment("segment:trail", ids);

@@ -20,7 +20,7 @@ export function deviceList(hub: HubDB) {
   return hub.db.prepare(`
     SELECT d.id, d.name, d.platform, d.paired_at, d.last_seen,
       (SELECT COUNT(*) FROM records r WHERE r.device=d.id) AS records,
-      (SELECT COUNT(*) FROM device_changes c WHERE c.device=d.id) AS pending_changes
+      (SELECT COUNT(*) FROM device_changes c WHERE c.device=d.id) AS pending_changes, d.viewer
     FROM devices d ORDER BY d.paired_at, d.id
   `).all();
 }

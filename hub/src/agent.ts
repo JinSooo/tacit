@@ -106,7 +106,7 @@ export class AgentReads {
       ORDER BY created_at DESC,id DESC LIMIT ?`).all(threadId, limit) as { text: string }[]).map(f => f.text);
   }
 
-  projectContext(project: Project) {
+  projectContext(project: Project, options?: { thread: (thread: Thread) => boolean; openFacts: (id: string) => string[]; now: number }) {
     const empty = { value: { text: "", project_id: project.id, tokens_est: 0 }, ids: [], threads: [] };
     // 带入已整理的公开事项；有其他来源且最新修正为私密时，也不能把它误作公开依据。
     const threads = this.hub.db.prepare(`SELECT t.* FROM threads t WHERE t.project_id=? AND (t.domain IS NULL OR t.domain='work')
@@ -115,9 +115,9 @@ export class AgentReads {
         OR EXISTS(SELECT 1 FROM assignments a JOIN frame_records fr ON fr.frame_id=a.frame_id JOIN records r ON r.id=fr.record_id
           WHERE a.thread_id=t.id AND r.sensitivity<>'private' AND COALESCE((SELECT c.sensitivity FROM records c
             WHERE c.corrects=r.id AND c.source='manual.correction' ORDER BY c.t_start_ms DESC,c.id DESC LIMIT 1),'normal')<>'private'))
-      ORDER BY COALESCE(t.last_ms,0) DESC,t.id DESC`).all(project.id, Date.now() - PAUSED_CONTEXT_MS) as Thread[];
-    const entries = threads.map(t => {
-      const open = this.openFacts(t.id, 2).map(text => {
+      ORDER BY COALESCE(t.last_ms,0) DESC,t.id DESC`).all(project.id, (options?.now ?? Date.now()) - PAUSED_CONTEXT_MS) as Thread[];
+    const entries = threads.filter(t => options?.thread(t) ?? true).map(t => {
+      const open = (options?.openFacts(t.id) ?? this.openFacts(t.id, 2)).map(text => {
         const points = Array.from(line(text).replace(/[。；;.]+$/u, ""));
         return points.slice(0, 60).join("") + (points.length > 60 ? "…" : "");
       });

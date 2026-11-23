@@ -5,7 +5,7 @@ import { requestsSchema, DistillRequests, defaultBackfillRange, localDayStart } 
 import { backfillRange, distillTick, sliceStep, tickSafely, type LLM, type LoopState } from "../src/distill/run.ts";
 import { HubDB } from "../src/db.ts";
 import { createHandler } from "../src/server.ts";
-import { fixture, setup } from "./helpers.ts";
+import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 
 // 合成数据 + 假模型（一律返回失败），不调用任何真实模型。
 let ctx: ReturnType<typeof setup>, store: DistillStore, requests: DistillRequests;
@@ -241,6 +241,7 @@ test("v11 请求队列迁移保留状态、日期和进度", () => {
   const before = requests.get(request.id);
   ctx.db.db.exec("ALTER TABLE distill_requests RENAME TO requests_saved; DROP INDEX distill_requests_status;");
   ctx.db.db.exec(requestsSchema);
+  removeProjectionSchema(ctx.db.db);
   ctx.db.db.exec("INSERT INTO distill_requests SELECT * FROM requests_saved; DROP TABLE requests_saved; PRAGMA user_version=11"); ctx.db.close();
   ctx.db = new HubDB(ctx.file, ctx.config.dbKey);
   expect(new DistillRequests(ctx.db).get(request.id)).toEqual(before);

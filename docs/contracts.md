@@ -693,17 +693,19 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 - 中枢下推整理结果（星形第二步）复用 `down`，协议草案见 6.9。
 - Mac 采集端和中枢拆开后，Mac 也作为一台设备走本节，协议草案见 6.10；权限分级与独立部署草案见 6.11。
 
-### 6.9 中枢下推整理结果（草案，待用户确认，未实施）
+### 6.9 中枢下推整理结果（中枢已实现，查看端待接入）
 
 中枢按星形同步将整理结果下推给有查看权限的设备，第一个使用方是 Mac 查看窗口；查看窗口不再直接调用中枢的本机管理读接口，离线时也能浏览已同步的整理结果与小组件，原始记录只在点开时按需向中枢取。本节复用 6.2 加密信封与 6.8 中转信箱。
 
 #### 6.9.1 下推范围与私密过滤
 
+本阶段由本机管理接口签发专用邀请。向 `POST /v1/settings/devices/pairing` 提交 `{ "viewer": true }`，邀请中带 `viewer: true`，只接受 `platform: "mac"`，分配 `mac-<8 位 base32>` 身份，存为 `devices.viewer=1`。普通邀请和已有 Android 配对的 `viewer` 均为 0。设备不能自行声明查看权。查看设备可用本节读接口和 `relay`，不能用采集端的写入口，管理分级留到 6.11。
+
 中枢只下推整理层产出，不下推原始记录正文；所有下推对象均由中枢单一写入，设备端只读缓存。
 
 | 实体 `kind` | 标识 `id` | 下推字段 | 用途 |
 |---|---|---|---|
-| `day` | `YYYY-MM-DD`（中枢本地自然日） | `date`、`brief`、`detail: { summary, cutoff, items, omitted_count }`、`needs_regen`、`failed`、`updated_at`；仅本地今天另带 `drafts` | 时间线简约档、当天概述、桌面小组件 |
+| `day` | `YYYY-MM-DD`（中枢本地自然日） | `date`、`brief`、`detail: { summary, cutoff, items, omitted_count }`、`needs_regen`、`failed`、`updated_at`；仅中枢本地今天另带 `drafts` | 时间线简约档、当天概述、桌面小组件 |
 | `project` | 项目 ID | `id`、`name`、`confirmed`、`keys: { repos, hosts, chats, remotes? }`、`brief`、`detail`、`salience`、`last_ms`、`thread_count`、`needs_regen`、`updated_at`、`facts`（有效非私密） | 侧栏项目列表、项目页一句话概况 |
 | `thread` | 事项 ID | `id`、`project_id`、`status`、`domain`、`title`、`brief`、`detail`、`first_ms`、`last_ms`、`active_minutes`、`sessions`、`needs_regen`、`updated_at`、`facts`（有效非私密） | 项目页与“这件事的经过”、事实纠错入口 |
 | `project_context` | 项目 ID | `project_id`、`name`、`keys`、`ignored_repos`、`text`、`tokens_est`、`thread_ids`、`threads`（含最新 2 条有效未决，同 4.5 `GET /v1/projects/:id/context`）、`computed_at`、`needs_regen` | 项目页“正在推进的事”、6.10 离线新会话带入 |
@@ -712,9 +714,10 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 **私密内容不推（硬边界）**：
 
 - 任何 `sensitivity = "private"`（或其最新 `manual.correction` 为 `private`）的原始记录及其派生物均不得进入下推载荷，即使中枢本机开启了“本地模型提炼 private”也不例外。
-- `day`：`items` 和 `drafts` 已排除私密记录；下推前额外过滤 `evidence`（剥离指向私密记录的引用，整段无非私密依据时整段不推）；不下推 `omitted_record_ids` 原始列表，只下推非私密未入段计数 `omitted_count`，避免泄露私密记录 ID。
-- `thread` 与 `project`：全私密事项（所有关联记录均为私密）不下推；混合事项中，全部 `evidence` 都指向私密记录的 `fact` 不下推。
-- `project_context`：沿用 4.6 规则，排除生活事项与全私密事项，预算按 `inject_tokens` 由中枢预计算。
+- `day`：下推前复核段成员、引用和润色使用过的记录。自由文本不能按引用拆开，存在私密或缺失依据时整段撤下。概述要求输入均可下推。旧回顾没有逐段模型输入时，以整次回顾的已知输入为准。只下推非私密未入段计数 `omitted_count`。
+- `thread` 与 `project`：全私密事项或没有可核验公开依据的事项只发撤下变更。混合事项保留中性标题与证据全部公开的有效事实，撤下摘要、详细版与覆盖私密记录的时长等字段。含此类事项的项目也撤下自由文本，已确认的项目可保留用户确认的项目元数据。
+- `project_context`：沿用 4.6 的预算和排序，排除生活事项和无法公开整段文字的事项。不下发被移除项目的路径。中枢首次需要时计算并缓存，依赖变动在同事务中清除缓存。
+- `now`：仅用通过上述检查的近期事项重建，沿用本机接口的状态反馈。
 - `day.drafts`：仅对中枢本地今天生成；为避免采集高频入库触发刷屏，入库引发的草稿下推合并节流（默认每 30 秒最多发出一次），润色完成、删除和修正立即发出。
 
 #### 6.9.2 增量游标与存储结构
@@ -722,14 +725,15 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 中枢使用全局单调递增的变更索引表（仅存元数据，**不复制正文**），参考 6.6 `device_changes` 的指针设计并按实体去重合并：
 
 ```sql
--- user_version 15（示例编号，实施时按实际版本顺延）
+-- user_version 15
 CREATE TABLE projection_changes (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL CHECK(kind IN ('day','project','thread','project_context','now','record_gone')),
   entity_id TEXT NOT NULL,
   op TEXT NOT NULL CHECK(op IN ('upsert','delete')),
-  rev INTEGER NOT NULL,                -- 与 runtime-log 的 content_rev 或实体版本联动
+  rev INTEGER GENERATED ALWAYS AS (seq) VIRTUAL,
   urgent INTEGER NOT NULL DEFAULT 0,   -- 1：删除或隐私撤回，需优先投递
+  urgent_seq INTEGER NOT NULL DEFAULT 0, -- 普通更新合并后保留上一次撤回的序号
   created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX projection_changes_entity ON projection_changes(kind, entity_id);
@@ -743,21 +747,21 @@ CREATE TABLE project_context_cache (
 ```
 
 - `devices` 表增加 `projection_cursor INTEGER NOT NULL DEFAULT 0` 与 `projection_epoch INTEGER NOT NULL DEFAULT 0`。
-- `distill_state` 维护 `projection_epoch`（整数，初值 1）。中枢重建全量整理、恢复旧备份或清理过旧变更窗口时递增 `projection_epoch`。
-- **合并写规则**：写入同一 `(kind, entity_id)` 的新变更时，在同一个 `BEGIN IMMEDIATE` 事务内删除旧行再插入新行（分配更大 `seq`）。离线多日的设备只拿到该实体的最新状态，不重放历史中间态；若是删除/撤回，旧的 `upsert` 行同事务被替换为 `op='delete'`，任何尚未拉取的设备都不会再读到删除前的内容。
+- `distill_state` 维护 `projection_epoch`（整数，初值 1）。清理过旧变更窗口时递增 `projection_epoch`。手工换回旧库或重建全量整理后，在恢复设备服务前用 `bun hub/src/cli.ts projection reset` 切换到新世代；中枢重连已登记的信箱时清空查看设备的旧下行消息。
+- **合并写规则**：写入同一 `(kind, entity_id)` 的新变更时，由数据库触发器在来源写入事务内合并为新行版本，分配更大 `seq`。离线多日的设备只拿到该实体的最新状态，不重放历史中间态；若是删除或撤回，替换为墓碑或按当前记录重新序列化成安全版本，尚未拉取的设备只能读取更新后的状态。
 - **拉取与确认操作（新增设备 `op`）**：
 
 | op | body | 返回 | 说明 |
 |---|---|---|---|
-| `projection.pull` | `{ cursor, epoch?, limit?, window_days? }` | `{ epoch, reset, changes, cursor, more, server_time }` | `cursor` 非负整数（首次 0）；`limit` 1–200（默认 50）；`window_days` 仅 `cursor=0` 生效，默认 90（1–365），限制冷启动拉取的 `day` 天数。单次响应明文体积上限：直连 4 MiB、经信箱 640 KiB（留出 HPKE 与 base64url 开销，低于 6.8.4 的 1 MiB 限额），超限时提前截断并置 `more: true` |
+| `projection.pull` | `{ cursor, epoch?, limit?, window_days? }` | `{ epoch, reset, changes, cursor, more, server_time }` | `cursor` 非负整数（首次 0）；`limit` 1–200（默认 50）；`cursor>0` 时必须附带上一次返回的 `epoch`。`window_days` 仅在 `cursor=0` 选定，默认 90（1–365），设备后续翻页沿用该次冷启动窗口。单次响应明文体积上限：直连 4 MiB、经信箱 640 KiB（留出 HPKE 与 base64url 开销，低于 6.8.4 的 1 MiB 限额），按实体分页，尚有后页时置 `more: true`。单实体超过上限时先缩减可选详情、草稿或事实，并标 `truncated: true`；仍无法传输则发带该标记的撤下项以保证游标能继续推进 |
 | `projection.ack` | `{ epoch, cursor }` | `{ ok: true }` | 设备将本批变更落盘并刷新小组件后再确认；中枢更新该设备的 `projection_cursor` 与 `projection_epoch` |
 
 - `changes` 每项格式：
-  - 更新：`{ "seq": 1042, "op": "upsert", "kind": "day", "id": "2026-11-23", "rev": 18, "data": { … } }`
-  - 删除/撤回：`{ "seq": 1043, "op": "delete", "kind": "day", "id": "2026-11-23", "rev": 19 }`
-  - 原文删除广播：`{ "seq": 1044, "op": "delete", "kind": "record_gone", "id": "01JC8K2M4N6P8Q0R2S4T6V8W0X", "rev": 19 }`
-- 当请求的 `epoch` 与中枢当前 `projection_epoch` 不一致，或 `cursor` 已被压缩清理时，返回 `{ epoch, reset: true, changes: [], cursor: 0, more: true, server_time }`；设备必须先清空本地缓存再以新 `epoch` 和 `cursor: 0` 重拉。
-- **变更表清理**：所有已配对查看/管理/Agent 设备的最小已确认 `projection_cursor` 之前的 `record_gone` 与 `op='delete'` 墓碑行，保留满 30 天后可清理，并在 `distill_state` 记录 `projection_floor_seq`；任何设备带着 `cursor < projection_floor_seq` 拉取时直接触发 `reset: true`，确保删除事件不会被跳过。
+  - 更新：`{ "seq": 1042, "op": "upsert", "kind": "day", "id": "2026-11-23", "rev": 1042, "data": { … } }`
+  - 删除/撤回：`{ "seq": 1043, "op": "delete", "kind": "day", "id": "2026-11-23", "rev": 1043 }`
+  - 原文删除广播：`{ "seq": 1044, "op": "delete", "kind": "record_gone", "id": "01JC8K2M4N6P8Q0R2S4T6V8W0X", "rev": 1044 }`
+- 当请求的 `epoch` 与中枢当前 `projection_epoch` 不一致，或非零 `cursor` 落在保留窗口之外时，返回 `{ epoch, reset: true, changes: [], cursor: 0, more: true, server_time }`；设备必须先清空本地缓存再以新 `epoch` 和 `cursor: 0` 重拉。
+- **变更表清理**：所有已配对查看/管理/Agent 设备的最小已确认 `projection_cursor` 之前的 `record_gone` 与 `op='delete'` 墓碑行，保留满 30 天后可清理，并在 `distill_state` 记录 `projection_floor_seq`；任何设备带着 `0 < cursor < projection_floor_seq` 拉取时直接触发 `reset: true`，确保删除事件不会被跳过。
 
 #### 6.9.3 原文按需读取
 
@@ -772,6 +776,8 @@ CREATE TABLE project_context_cache (
 | `timeline.query` | `{ project_id?, thread_id?, q?, before?, limit? }` | 同 `GET /v1/timeline` | 项目页“加载更早”或超出本地 90 天窗口的历史段 |
 | `timeline.locate` | `{ record_id }` | 同 `GET /v1/timeline/record/:id` | 搜索结果定位到时间线段 |
 
+- `records.get` 同一个 ID 可能跨页重复出现，`body_range: { start, end, total }` 按 Unicode 码点计算。要求带修正时，后续条目可只含原 ID 和 `corrections` 数组；同一修正也可分页。翻页过程中遇到撤下或修正，旧游标返回 409 并从头读。私密项只给请求中的 ID 和 `redacted_private: true`。当前查看身份即使指定 `include_private: true` 也不能获得私密内容。
+- `records.list` 在过滤与搜索阶段排除有效版本为私密的记录，按原接口游标、响应体积分页。单条正文超出该传输模式上限时标 `body_truncated`，可用 `records.get` 续读正文。混合私密的一整场录音详情返回 404。分段与查询接口如单组不可分页且超出响应体积，返回 413，可缩小日期范围或改用逐条读取。
 - 仅经信箱可达时，客户端照常发往 `up` 并在 `down` 等回复（超时 20 秒），界面显示加载态；断网时提示“当前离线，无法读取原文”，已缓存的整理结果照常可读。
 
 #### 6.9.4 删除和修正的失效链路
@@ -781,11 +787,11 @@ CREATE TABLE project_context_cache (
 1. **中枢写入同事务**：`db.deleteMany`、`db.ingest`（收到 `manual.correction`）、`store.removeProject`、`store.detachFact`、`correctTimelineSegment`、`deleteTimelineSegment` 在现有撤下逻辑的同一数据库事务内：
    - 立即清理受影响的 `project_context_cache` 行；
    - 在 `projection_changes` 中为每个受影响的 `day`、`thread`、`project`、`project_context`、`now` 写入 `op='delete'`（已撤下待重整或已删除）或无被删内容的最新 `op='upsert'`，并标记 `urgent = 1`；
-   - 为每条被删原始记录写入 `(kind='record_gone', entity_id=record_id, op='delete', urgent=1)`；
-   - 删除 `relay_receipts`（已有，排除 `pair_reply`）并标记各查看设备在信箱 `down` 中尚未取走的旧推送为待替换。
+   - 为每条被删原始记录和因修正需要清除缓存的原文版本写入 `(kind='record_gone', entity_id=record_id, op='delete', urgent=1)`；
+   - 删除 `relay_receipts`（排除 `pair_reply`），用紧急序号标记已投递但仍可能留在信箱 `down` 的旧投影推送和原文读取回执，重连时优先清除。
 2. **即时触达**：
    - 直连/本机快路：中枢立即通过推送事件通道（6.9.5）发出 `{ seq, urgent: true }`，在线查看端 1 秒内拉取并清除。
-   - 中转信箱：中枢优先 `DELETE` 该设备 `down` 中尚未被取走的旧 `projection.delta`（避免已删内容残留在信箱里），再投入一条不含正文的 `projection.invalidate`。
+   - 中转信箱：中枢优先 `DELETE` 该设备 `down` 中旧推送和可能含旧正文的读取回执，再投入一条不含正文的 `projection.invalidate`。客户端按列表清除缓存后，以原拉取游标续拉。若失效项无法装入一封信，改发 `projection.reset`。
 3. **设备端立即清除**：
    - 查看端本地加密缓存开启 `PRAGMA secure_delete = ON`，收到 `op='delete'` 或 `record_gone` 后在同一事务内删除对应缓存行、清掉内存中的原文 LRU、立即重算或删除桌面小组件快照；处理完成后发 `projection.ack`。
    - 若删除本身由当前查看端发起，收到中枢 `200` 回复后立即在本地乐观清除受影响段和缓存，不必等下一轮拉取。
@@ -795,7 +801,7 @@ CREATE TABLE project_context_cache (
 
 - **直连与本机快路**（同机走 6.10 的 `127.0.0.1:<port>/v1/device`，局域网/任意 URL 走 6.3）：
   - 拉取与按需读取走 `POST /v1/device`。
-  - 变更通知：新增可选轻量长连接 `GET /v1/device/events`（WebSocket，握手通过首帧 6.2 信封 `op: "events.subscribe"` 鉴权，仅在直连可用）。中枢在 `projection_changes` 推进时只推 `{ "seq": 1044, "epoch": 1, "urgent": true }`，不带任何业务内容；客户端据此立刻调 `projection.pull`。长连接不可用时退回轮询（窗口前台 30 秒、后台 5 分钟）。
+  - 变更通知：新增可选轻量长连接 `GET /v1/device/events`（WebSocket，握手通过首帧 6.2 信封 `op: "events.subscribe"` 鉴权，仅在直连可用，订阅成功返回一次当前序号）。中枢在 `projection_changes` 推进时只推 `{ "seq": 1044, "epoch": 1, "urgent": true }`，不带任何业务内容；客户端据此立刻调 `projection.pull`。长连接不可用时退回轮询（窗口前台 30 秒、后台 5 分钟）。
 - **经中转信箱（复用 6.8 `down`，不改 `relay/` 服务端协议）**：
   - 所有中枢主动下发的消息沿用 6.8.6 `relay.moved` 的加密方式：HPKE auth 模式（`info = "tacit-device-v1/response"`、`aad = 消息 id`），明文顶层含 `kind` 字段。新增 4 种 `kind`：
 
@@ -809,7 +815,7 @@ CREATE TABLE project_context_cache (
   - **配额与背压控制（防撑爆 6.8.4 的 100 MiB 空间限额）**：
     - `relay_mailboxes` 记录该设备当前尚未被取走的主动推送 `push_msg_id` 与 `push_seq`。
     - 每台查看设备的 `down` 里同一时刻最多保留 **1 条**中枢主动推送消息。新变更到来而旧消息还在 `down` 里时，中枢先 `DELETE` 旧 `push_msg_id` 再 `PUT` 新消息（非紧急推送合并间隔 5 分钟；`urgent=1` 立即替换）。
-    - 超过 24 小时未活跃的查看设备，中枢不再投递 `projection.delta` 正文，只保留 1 条 `projection.hint`。
+    - 超过 24 小时未活跃、还没确认过初始游标或增量放不进一条的查看设备，用一条 `projection.hint` 触发拉取，撤下和重置仍优先。
     - 查看端在窗口前台每 30 秒、后台每 5 分钟读一次 `down`（单台设备每天约 600–1200 次请求，远低于 20000 次/天限额）。未来若需把远程延迟降到秒级，可再为 `relay/` 扩展设备级 `GET /v1/spaces/:space/boxes/:box/watch`。
 
 #### 6.9.6 设备端缓存的保留与清理

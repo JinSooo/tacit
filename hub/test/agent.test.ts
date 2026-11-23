@@ -6,7 +6,7 @@ import { nowStep } from "../src/distill/run.ts";
 import { DistillStore, type Thread } from "../src/distill/store.ts";
 import { createHandler } from "../src/server.ts";
 import { toLocalIso, ulid } from "../../packages/record/index.ts";
-import { fixture, setup } from "./helpers.ts";
+import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 
 let ctx: ReturnType<typeof setup>, store: DistillStore, handler: ReturnType<typeof createHandler>;
 beforeEach(() => { ctx = setup(); store = new DistillStore(ctx.db); handler = createHandler({ db: ctx.db,token: ctx.config.token }); });
@@ -343,10 +343,11 @@ test("detail/evidence 超过 40000 字符时裁剪事实、记录及异常长正
 
 test("已有 v2 加密库迁移到 v5，保留记录和提炼数据，重开幂等", () => {
   project(); const r = fixture(); ctx.db.ingest([r]);
+  removeProjectionSchema(ctx.db.db);
   ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; DROP TABLE agent_reads; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; DROP TABLE runtime_calls; PRAGMA user_version=2;");
   const upgraded = new HubDB(ctx.file,ctx.config.dbKey);
   try {
-    expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(14);
+    expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(15);
     expect(upgraded.get(r.id)?.body).toBe(r.body); expect(new DistillStore(upgraded).project("p")?.name).toBe("合成项目p");
     expect(new AgentReads(upgraded).audit(new URLSearchParams()).reads).toEqual([]);
   } finally { upgraded.close(); }

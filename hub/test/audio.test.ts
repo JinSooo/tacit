@@ -5,7 +5,7 @@ import { DistillStore } from "../src/distill/store.ts";
 import { frameKey, sliceFrames } from "../src/distill/frames.ts";
 import { createHandler } from "../src/server.ts";
 import { ulid } from "../../packages/record/index.ts";
-import { fixture, setup } from "./helpers.ts";
+import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 
 let ctx: ReturnType<typeof setup>;
 let audio: AudioStore;
@@ -46,11 +46,12 @@ function call(path: string, method = "GET", data?: unknown) {
 
 test("v4 加密库事务升级 v5，保留旧数据并可重复打开", () => {
   const record = fixture(); ctx.db.ingest([record]);
+  removeProjectionSchema(ctx.db.db);
   ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; DROP TABLE runtime_calls; PRAGMA user_version=4;");
   for (let i=0;i<2;i++) {
     const upgraded = new HubDB(ctx.file,ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(14);
+      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(15);
       expect(upgraded.get(record.id)?.body).toBe(record.body);
       expect(new AudioStore(upgraded).settings()).toEqual({ retention_days: 7 });
     } finally { upgraded.close(); }
