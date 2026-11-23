@@ -7,8 +7,8 @@ import AudioStore
 final class AudioCoordinator {
   let config: Config
   private let queue = DispatchQueue(label: "record-anything.audio", qos: .utility)
-  // 每个 IOProc 缓冲约 10ms；留约 4 秒余量，偶尔的磁盘或设备操作不会让整路录音停掉，又能限制真跟不上时的内存。
-  private let slots = DispatchSemaphore(value: 400)
+  // 每批缓冲约 512ms；留约 10 秒余量，偶尔的磁盘或设备操作不会让整路录音停掉，又能限制真跟不上时的内存。
+  private let slots = DispatchSemaphore(value: 20)
   private let snapshotLock = NSLock()
   private var snapshot: [String] = []
   private var store: AudioStore?
@@ -98,10 +98,10 @@ final class AudioCoordinator {
         // 先用已采到的会议上下文结束当前对话，再清空探针历史；停用不能继续读取新的系统输入。
         self.enabled = false; stop()
       }
-      // 逐个读系统里所有音频进程的属性很贵（空闲时占采集端一半以上 CPU）。会议判定只看有人说话的那段时间里
-      // 会议软件是否在用麦克风：有人说话时每秒查，没人说话时每 10 秒查一次，够刷新 90 秒窗口。
+      // 逐个读系统里所有音频进程的属性很贵（约 15ms/次）。没人说话且没有进行中的对话时不轮询；
+      // 有人说话或对话进行中按原节奏查，新段落盘时若尚未采样再补查一次。
       let speaking = pipelines.values.contains { $0.speechActive }
-      meetingHistory.sample(enabled: enabled && !startGuard.blocked, speaking: speaking, at: now, read: microphoneInputBundles)
+      meetingHistory.sample(enabled: enabled && !startGuard.blocked, active: current != nil, speaking: speaking, at: now, read: microphoneInputBundles)
       if !initialized {
         // 从未开启过录音时不读钥匙串、不扫描音频目录；已初始化的历史维护仍按原节奏继续。
         guard enabled, !startGuard.blocked else { publish(); return }
@@ -307,6 +307,9 @@ final class AudioCoordinator {
     try store.writeSegment(AudioCodec.encode(samples), file: file, meta: meta)
     meta.segments.append(AudioSegment(file: file, track: track, start: start, end: end, dbfs: AudioPipeline.dbfs(samples)))
     let since = boundary.lastSpeechEnd ?? start
+    if enabled && !startGuard.blocked && !meetingHistory.hasSample(since: since, through: end) {
+      meetingHistory.observe(inputBundles: microphoneInputBundles(), at: end)
+    }
     let apps = meetingHistory.apps(since: since, through: end)
     meta.meeting_apps = Array(Set(meta.meeting_apps).union(apps)).sorted(); meta.updated_at = LocalTime.iso(Date())
     try store.writeMetadata(meta); current = meta

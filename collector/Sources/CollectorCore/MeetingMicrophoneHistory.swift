@@ -27,9 +27,27 @@ public struct MeetingMicrophoneHistory {
     }
   }
 
+  /// 没人说话且没有进行中的对话时跳过空闲轮询，避免空闲时段每 10 秒枚举全部系统音频进程；
+  /// 说话开始或新对话落盘时按需采样，会议判定窗口不缺样本。
+  public mutating func sample(enabled: Bool, active: Bool, speaking: Bool, at now: Date, read: () -> Set<String>) {
+    guard enabled else {
+      samples.removeAll(); lastProbe = nil
+      return
+    }
+    guard active || speaking else {
+      samples.removeAll { now.timeIntervalSince($0.0) > 90 }
+      return
+    }
+    sample(enabled: true, speaking: speaking, at: now, read: read)
+  }
+
   public mutating func observe(inputBundles: Set<String>, at now: Date) {
     samples.append((now, inputBundles.intersection(Self.meetingBundles)))
     samples.removeAll { now.timeIntervalSince($0.0) > 90 }
+  }
+
+  public func hasSample(since start: Date, through end: Date) -> Bool {
+    samples.contains { $0.0 >= start.addingTimeInterval(-1) && $0.0 <= end }
   }
 
   public func apps(since start: Date, through end: Date) -> Set<String> {

@@ -57,12 +57,37 @@ public struct PCMInputFormat {
       frames = count
     }
     var mono = [Float](repeating: 0, count: frames ?? 0)
+    guard !mono.isEmpty else { return mono }
+    let scale = 1.0 / Float(channels)
     for (buffer, format) in zip(buffers, layouts) {
+      if format.floating && format.bytesPerSample == 4 {
+        let raw = buffer.bytes.assumingMemoryBound(to: Float.self)
+        let ch = buffer.channels
+        if ch == 1 && channels == 1 {
+          for i in 0..<mono.count {
+            let sample = raw[i]
+            guard sample.isFinite else { throw PCMInputError.buffers }
+            mono[i] = sample
+          }
+        } else {
+          for i in 0..<mono.count {
+            var sum: Float = 0
+            let base = i * ch
+            for channel in 0..<ch {
+              let sample = raw[base + channel]
+              guard sample.isFinite else { throw PCMInputError.buffers }
+              sum += sample
+            }
+            mono[i] += sum * scale
+          }
+        }
+        continue
+      }
       for i in mono.indices {
         for channel in 0..<buffer.channels {
           let sample = format.sample(buffer.bytes, i * buffer.channels + channel)
           guard sample.isFinite else { throw PCMInputError.buffers }
-          mono[i] += sample / Float(channels)
+          mono[i] += sample * scale
         }
       }
     }
@@ -74,4 +99,95 @@ public struct PCMInputBuffer {
   public let channels: Int
   public let bytes: UnsafeRawBufferPointer
   public init(channels: Int, bytes: UnsafeRawBufferPointer) { self.channels = channels; self.bytes = bytes }
+}
+
+/// 将 10ms 级的小块 PCM 合并成约 512ms（16 个 32ms Silero VAD 窗口）再派发：
+/// 减少高频线程唤醒、重采样分配和冷缓存推理，不跳过任何人声。
+public struct PCMBatcher {
+  public let targetDuration: Double
+  public let maxDiscontinuity: Double
+  public let maxTrailingSilence: Double
+  private var buffer: [Float] = []
+  private var rate: Double = 0
+  private var startHost: UInt64?
+  private var expectedNextHost: UInt64?
+  private var hasSeenAudio = false
+  private var trailingSilenceFrames = 0
+
+  public init(targetDuration: Double = 0.512, maxDiscontinuity: Double = 0.15, maxTrailingSilence: Double = 1.0) {
+    self.targetDuration = targetDuration
+    self.maxDiscontinuity = maxDiscontinuity
+    self.maxTrailingSilence = maxTrailingSilence
+  }
+
+  public mutating func append(_ samples: [Float], rate: Double, host: UInt64, ticksPerSecond: Double,
+                              emit: ([Float], Double, UInt64) -> Void) {
+    guard !samples.isEmpty, rate > 0, ticksPerSecond > 0 else { return }
+    hasSeenAudio = true
+    trailingSilenceFrames = 0
+    appendRaw(samples, rate: rate, host: host, ticksPerSecond: ticksPerSecond, emit: emit)
+  }
+
+  /// 全零静音回调（如系统无播放）：在最后一次非零声音之后最多再送 maxTrailingSilence 秒静音让 VAD 正常收尾，
+  /// 之后直接跳过分配与派发；有新声音到来时由时间戳跳变自动重建流。
+  public mutating func appendZeroFrames(count: Int, rate: Double, host: UInt64, ticksPerSecond: Double,
+                                        emit: ([Float], Double, UInt64) -> Void) {
+    guard count > 0, rate > 0, ticksPerSecond > 0 else { return }
+    let limit = Int((rate * maxTrailingSilence).rounded(.up))
+    guard hasSeenAudio else { return }
+    if trailingSilenceFrames >= limit {
+      flush(emit: emit)
+      return
+    }
+    let keep = min(count, limit - trailingSilenceFrames)
+    trailingSilenceFrames += keep
+    appendRaw([Float](repeating: 0, count: keep), rate: rate, host: host, ticksPerSecond: ticksPerSecond, emit: emit)
+    if trailingSilenceFrames >= limit { flush(emit: emit) }
+  }
+
+  public mutating func flush(emit: ([Float], Double, UInt64) -> Void) {
+    guard !buffer.isEmpty, let host = startHost, rate > 0 else {
+      buffer.removeAll(keepingCapacity: true); startHost = nil; expectedNextHost = nil
+      return
+    }
+    let out = buffer
+    let outRate = rate
+    buffer = []
+    buffer.reserveCapacity(targetFrames(for: outRate))
+    startHost = nil
+    expectedNextHost = nil
+    emit(out, outRate, host)
+  }
+
+  private func targetFrames(for rate: Double) -> Int {
+    max(1, Int((rate * targetDuration).rounded()))
+  }
+
+  private mutating func appendRaw(_ samples: [Float], rate: Double, host: UInt64, ticksPerSecond: Double,
+                                  emit: ([Float], Double, UInt64) -> Void) {
+    if !buffer.isEmpty {
+      let discontinuity: Bool
+      if self.rate != rate {
+        discontinuity = true
+      } else if let expected = expectedNextHost {
+        let delta = host >= expected ? Double(host - expected) : Double(expected - host)
+        discontinuity = delta / ticksPerSecond > maxDiscontinuity
+      } else {
+        discontinuity = false
+      }
+      if discontinuity { flush(emit: emit) }
+    }
+    if buffer.isEmpty {
+      self.rate = rate
+      startHost = host
+      let target = targetFrames(for: rate)
+      if buffer.capacity < target { buffer.reserveCapacity(target) }
+    }
+    buffer.append(contentsOf: samples)
+    let durationTicks = UInt64((Double(samples.count) / rate * ticksPerSecond).rounded())
+    expectedNextHost = host &+ durationTicks
+    if buffer.count >= targetFrames(for: rate) {
+      flush(emit: emit)
+    }
+  }
 }
