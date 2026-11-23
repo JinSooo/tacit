@@ -276,7 +276,10 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
     if (desktopPlan) print("完全退出并重新打开 Claude Desktop 后生效；连接后可让它查询历史记录。");
     if (action === "install" && tools.includes("codex")) print("Codex 新 hook 需要在 Codex 里批准一次（trusted_hash）才会生效。");
   };
-  if (yes && action === "install" && cliTools.length && registerIdentity) return registerIdentity().then(apply);
+  if (yes && action === "install" && cliTools.length && registerIdentity) {
+    // 登记失败（中枢没在运行等）不挡接入：没有身份时 agent-cli 退回本机令牌（6.10.6 双栈），之后再接入一次即可补上。
+    return registerIdentity().catch(error => print(`暂未登记 AI 工具的设备身份（${error instanceof Error ? error.message : "原因未知"}），先用本机令牌接入。`)).then(apply);
+  }
   apply();
 }
 

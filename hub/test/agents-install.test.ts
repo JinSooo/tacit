@@ -137,6 +137,13 @@ test("两工具安装幂等，保留用户 hook、字段顺序、权限和最近
   const result = spawnSync("/bin/sh", ["-c", `set -- ${command}; printf '%s\\n' "$@"`], { encoding: "utf8" });
   expect(result.stdout.split("\n").slice(0, 4)).toEqual(["/tmp/bun bin", "/tmp/合成仓库 with 'quote'/hub/src/cli.ts", "hook", "session-start"]);
 });
+test("中枢没在运行时登记设备身份失败，命令行接入照常完成并提示退回本机令牌", async () => {
+  const ctx = setup(); const output: string[] = []; ctx.env.print = line => output.push(line);
+  await runAgents(["install", "--tool", "claude-code", "--yes"], ctx.env, async () => { throw new Error("当前无法连接 Tacit 中枢"); });
+  expect(ctx.calls.some(call => call[2] === "add")).toBe(true);
+  expect(JSON.parse(readFileSync(ctx.file, "utf8")).hooks.SessionStart.length).toBeGreaterThan(0);
+  expect(output.some(line => line.includes("先用本机令牌接入"))).toBe(true);
+});
 test("无配置时卸载不创建文件；新配置卸载清理空的 hooks", () => {
   const ctx = setup(); ctx.env.which = () => null;
   runAgents(["uninstall", "--yes"], ctx.env);
