@@ -59,19 +59,19 @@ class AudioController(context: Context) {
     /** Bumps whenever recordings, voices or status change; pages re-read on it instead of polling. */
     val changes: StateFlow<Long> get() = runtime.changes
     fun state() = AudioState(runtime.recording, runtime.models.current() != null, runtime.message)
-    fun listClips(): CompletableFuture<List<AudioClip>> = runtime.submit {
+    fun listClips(): CompletableFuture<List<AudioClip>> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.listClips() }
     }
-    fun listConversations(): CompletableFuture<List<AudioConversation>> = runtime.submit {
+    fun listConversations(): CompletableFuture<List<AudioConversation>> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.listConversations() }
     }
-    fun renderTranscript(recordId: String, fallbackBody: String): CompletableFuture<String> = runtime.submit {
+    fun renderTranscript(recordId: String, fallbackBody: String): CompletableFuture<String> = runtime.read {
         synchronized(runtime.lock) { runtime.ledger.render(recordId, fallbackBody, runtime.macVoiceprint()) }
     }
-    fun macVoiceKnown(): CompletableFuture<Boolean> = runtime.submit {
+    fun macVoiceKnown(): CompletableFuture<Boolean> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.macVoiceKnown() }
     }
-    fun listSpeakers(includeIgnored: Boolean = false): CompletableFuture<List<AudioSpeaker>> = runtime.submit {
+    fun listSpeakers(includeIgnored: Boolean = false): CompletableFuture<List<AudioSpeaker>> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.listSpeakers(includeIgnored) }
     }
     fun markMe(id: String): CompletableFuture<Unit> {
@@ -162,6 +162,8 @@ internal class AudioRuntime private constructor(val context: Context) {
     val qnnModels = QnnModels(context)
     @Volatile var accelerationStatus = "使用 CPU"; private set
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "tacit-local-audio") }
+    // Page reads only take [lock] briefly; they must not queue behind a long transcription drain on [worker].
+    private val reader = Executors.newSingleThreadExecutor { r -> Thread(r, "tacit-audio-read") }
     private val modelWorker = Executors.newSingleThreadExecutor { r -> Thread(r, "tacit-model-download") }
     private val modelLock = Any()
     private var modelCancellation: ModelDownloadCancellation? = null
@@ -280,6 +282,8 @@ internal class AudioRuntime private constructor(val context: Context) {
     fun <T> submit(block: () -> T): CompletableFuture<T> = CompletableFuture.supplyAsync({
         try { block() } catch (e: Throwable) { report("本地音频处理失败，请检查模型、空间和权限后重试"); throw e }
     }, worker)
+    /** Read-only queries that hold [lock] themselves; they run beside the processing [worker]. */
+    fun <T> read(block: () -> T): CompletableFuture<T> = CompletableFuture.supplyAsync(block, reader)
     /** For work that changes recordings or voices: signals pages even when the work fails halfway. */
     fun <T> change(block: () -> T): CompletableFuture<T> = submit { try { block() } finally { changed() } }
     fun closeEngine() { engine?.close(); engine = null; accelerationStatus = "使用 CPU" }
