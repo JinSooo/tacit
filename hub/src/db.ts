@@ -16,6 +16,7 @@ import { SKELETON_SOURCES, sourceList } from "./record-sources.ts";
 import { registerAgentAudit, stopAgentAudit } from "./agent-audit.ts";
 import { relaySchema } from "./devices/relay-store.ts";
 import { projectionSchema, projectionWithdrawal, scheduleProjectionDraft } from "./devices/projection-store.ts";
+import { deviceRoleSchema, pruneSecurityAudit } from "./security-audit.ts";
 import { deviceSchema } from "./devices/store.ts";
 import { runtimeSchema, expireSnapshots, eraseSnapshots, sanitizeStoredModelErrors } from "./runtime-log.ts";
 
@@ -105,15 +106,15 @@ export class HubDB {
       setCipher(this.db, key);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 15) throw new Error("数据库版本比当前 hub 新");
+      if (version > 16) throw new Error("数据库版本比当前 hub 新");
       this.db.pragma("secure_delete=ON");
       // 保留回滚日志模式；加密 WAL 也可能保留已删除内容的旧加密页。
       this.db.pragma("journal_mode=DELETE");
       // 必须先拿写锁再读取版本，等待另一进程迁移完成后才能决定迁移步骤。
       this.db.transaction(() => {
         const version = this.db.pragma("user_version", { simple: true }) as number;
-        if (version > 15) throw new Error("数据库版本比当前 hub 新");
-        migrating = version < 15;
+        if (version > 16) throw new Error("数据库版本比当前 hub 新");
+        migrating = version < 16;
         if (version > 0 && migrating && file !== ":memory:") ensureMigrationBackup(file, key, version);
         if (version === 0) {
           this.db.exec(`
@@ -175,10 +176,11 @@ export class HubDB {
         if (version < 13) this.db.exec(deviceSchema);
         if (version < 14) this.db.exec(relaySchema);
         if (version < 15) this.db.exec(projectionSchema);
+        if (version < 16) this.db.exec(deviceRoleSchema);
       }).immediate();
       migrating = false;
       const backups = file === ":memory:" ? [] : readdirSync(dirname(file)).filter(name =>
-        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|1[0-4])\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
+        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|1[0-5])\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
       if (backups.length) {
         if (this.db.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("迁移后完整性检查失败，已保留备份");
         for (const backup of backups) {
@@ -195,8 +197,9 @@ export class HubDB {
       registerAgentAudit(this, key);
       sanitizeStoredModelErrors(this);
       expireSnapshots(this);
+      pruneSecurityAudit(this.db);
       this.snapshotTimer = setInterval(() => {
-        try { expireSnapshots(this); } catch { console.error(JSON.stringify({ location: "runtime.expire", category: "storage" })); }
+        try { expireSnapshots(this); pruneSecurityAudit(this.db); } catch { console.error(JSON.stringify({ location: "runtime.expire", category: "storage" })); }
       }, 30 * 60_000);
       this.snapshotTimer.unref();
     } catch (e) {
@@ -265,7 +268,7 @@ export class HubDB {
         }
         result.accepted++;
       });
-      if (result.accepted && this.db.prepare("SELECT 1 FROM devices WHERE viewer=1 LIMIT 1").get()) {
+      if (result.accepted && this.db.prepare("SELECT 1 FROM devices WHERE role IN ('view','admin') LIMIT 1").get()) {
         scheduleProjectionDraft(this.db, Date.now() + 30_000);
       }
       return result;
@@ -395,15 +398,16 @@ export class HubDB {
   delete(id: string): boolean { return this.deleteMany([id]) > 0; }
 
   /** 有界批次共享一次引用清理和事务，包含原记录的所有修正。 */
-  deleteMany(ids: string[], device?: string): number {
+  deleteMany(ids: string[], device?: string, authorize?: (rows: { device: string; corrects: string | null; id: string }[]) => void): number {
     return projectionWithdrawal(this.db, () => {
       const input = JSON.stringify([...new Set(ids)]);
-      const rows = this.db.prepare<[string, string | null, string | null], Row>(`
+      const rows = this.db.prepare<[string, string | null, string | null], Row & { device: string; corrects: string | null; id: string }>(`
         WITH targets AS (
           SELECT id FROM records WHERE id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR device=?)
         )
         SELECT rowid,* FROM records WHERE id IN targets OR (source='manual.correction' AND corrects IN targets)
       `).all(input, device ?? null, device ?? null);
+      authorize?.(rows);
       if (device !== undefined) {
         // 设备删的记录可能还在信箱里没送到（经信箱投出后，手机回家直连发了删除）。
         // 先留一个不含内容的墓碑，那封旧信之后到达时按重复处理，删掉的不会复活。

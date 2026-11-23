@@ -147,12 +147,12 @@ export function resetProjection(sql: SQL, minimumEpoch = 1) {
   sql.transaction(() => {
     sql.prepare("UPDATE distill_state SET v=MAX(CAST(v AS INTEGER)+1,?) WHERE k='projection_epoch'").run(minimumEpoch);
     sql.prepare("DELETE FROM project_context_cache").run();
-    sql.prepare("UPDATE devices SET projection_window_from=NULL, projection_window_until=NULL WHERE viewer=1").run();
+    sql.prepare("UPDATE devices SET projection_window_from=NULL, projection_window_until=NULL WHERE role IN ('view','admin')").run();
     if (minimumEpoch > 1) {
       sql.prepare(`INSERT INTO distill_state(k,v) SELECT 'projection_relay_purge_epoch',v FROM distill_state WHERE k='projection_epoch'
         ON CONFLICT(k) DO UPDATE SET v=excluded.v`).run();
       sql.prepare(`DELETE FROM relay_receipts WHERE EXISTS (SELECT 1 FROM relay_mailboxes b JOIN devices d ON d.id=b.device
-        WHERE b.space=relay_receipts.space AND b.up=relay_receipts.up AND b.state='active' AND d.viewer=1)`).run();
+        WHERE b.space=relay_receipts.space AND b.up=relay_receipts.up AND b.state='active' AND d.role IN ('view','admin'))`).run();
     }
   }).immediate();
 }
@@ -162,8 +162,8 @@ export function pruneProjection(sql: SQL, clock: number) {
   sql.transaction(() => {
     const { epoch, seq } = projectionHead(sql);
     const min = sql.prepare<[number], { cursor: number | null }>(`SELECT MIN(projection_cursor) AS cursor
-      FROM devices WHERE viewer=1 AND projection_epoch=?`).get(epoch)!.cursor;
-    if (sql.prepare("SELECT 1 FROM devices WHERE viewer=1 AND projection_epoch<>? LIMIT 1").get(epoch)) return;
+      FROM devices WHERE role IN ('view','admin') AND projection_epoch=?`).get(epoch)!.cursor;
+    if (sql.prepare("SELECT 1 FROM devices WHERE role IN ('view','admin') AND projection_epoch<>? LIMIT 1").get(epoch)) return;
     const deleted = sql.prepare<[number, string], { seq: number }>(
       "DELETE FROM projection_changes WHERE op='delete' AND seq<=? AND created_at<=? RETURNING seq").all(min ?? seq, cutoff);
     if (!deleted.length) return;

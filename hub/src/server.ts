@@ -1,3 +1,4 @@
+import { WireError } from "./devices/envelope.ts";
 import { currentNow } from "./now-status.ts";
 import { logFailure } from "./diagnostics.ts";
 import { BusyResponses, isDatabaseBusy } from "./db-busy.ts";
@@ -230,6 +231,7 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       }
       return Response.json({ error: "接口不存在" }, { status: 404 });
     } catch (e) {
+      if (e instanceof WireError) return Response.json({ error: e.message }, { status: e.status });
       if (e instanceof InputError) return Response.json({ error: e.message }, { status: 400 });
       if (isDatabaseBusy(e)) return Response.json({ error: "数据库忙，稍后再试" }, { status: 503 });
       logFailure("server.request", e);

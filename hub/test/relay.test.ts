@@ -299,7 +299,7 @@ test("回执还没投出去时删掉记录，回执随删除清掉，原请求�
   } finally { await hub.dispose(); relay.stop(true); }
 });
 
-test("v13 加密数据库升级到 v15，保留配对记录并清理迁移备份", () => {
+test("v13 加密数据库升级到 v16，保留配对记录并清理迁移备份", () => {
   const ctx = setup();
   try {
     removeProjectionSchema(ctx.db.db);
@@ -311,7 +311,7 @@ test("v13 加密数据库升级到 v15，保留配对记录并清理迁移备份
     ctx.db.close();
     const db = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(db.db.pragma("user_version", { simple: true })).toBe(15);
+      expect(db.db.pragma("user_version", { simple: true })).toBe(16);
       expect(db.db.prepare("SELECT id FROM devices").all()).toEqual([{ id: "android-abcd2345" }]);
       expect(db.db.prepare("SELECT * FROM device_nonces").all()).toEqual([]);
       expect(existsSync(ctx.file + ".migration-v13.bak")).toBe(false);
@@ -383,12 +383,13 @@ test("查看邀请限定 Mac；Android 和伪装请求无权读取，WebSocket �
     const android = await hub.pair();
     const unauthorized = await hub.invite();
     const attempted = await unauthorized.phone.send("pair", { ...await unauthorized.phone.pairingBody(unauthorized.pairing), platform: "mac", viewer: true });
-    expect(attempted.status).toBe(400);
+    expect(attempted.status).toBe(200);
+    expect(attempted.body.role).toBe("collect");
     const viewer = await hub.pair(true, true);
     expect(viewer.device).toMatch(/^mac-/);
     expect((await android.send("projection.pull", { cursor: 0, device: viewer.device })).status).toBe(403);
     expect((await android.send("records.list", {})).status).toBe(403);
-    expect((await viewer.send("delete", { ids: [fixture().id] })).status).toBe(403);
+    expect((await viewer.send("delete", { ids: [fixture().id] })).status).toBe(200);
     const record = fixture({ title: "测试折叠温室" });
     hub.db.ingest([record]);
 
@@ -634,3 +635,44 @@ test("真实信箱分页和主动推送：先撤回旧下行正文，再放无�
     expect(await list(config)).toEqual([wake.message]);
   } finally { await hub.dispose(); relay.stop(true); }
 }, 12_000);
+
+test("降权时真实信箱撤回旧投影和原文回执，只向采集设备发 reset", async () => {
+  const relay = relayFixture(), hub = await hubFixture();
+  try {
+    expect((await hub.admin(path, "PUT", { mode: "custom", url: relay.url })).status).toBe(200);
+    const viewer = await hub.pair(true);
+    const { relay: box } = (await viewer.send<{ relay: RelayConfig }>("relay", {})).body;
+    const record = fixture({ source: "manual.note" });
+    const privateRecord = fixture({ source: "manual.note", sensitivity: "private" });
+    hub.db.ingest([record, privateRecord]);
+    const readId = await submit(box, viewer, "records.get", { ids: [record.id] }, hub.time());
+    expect((await reply<{ records: { body: string }[] }>(viewer, box, readId)).body.records[0]?.body).toBe(record.body);
+    const oldPush = await eventually(() => hub.db.db.prepare<[string], { push_msg_id: string }>(
+      "SELECT push_msg_id FROM relay_mailboxes WHERE device=? AND push_msg_id IS NOT NULL").get(viewer.device!)?.push_msg_id);
+    expect((await hub.admin("/v1/settings/devices/" + viewer.device + "/role", "PUT", { role: "admin" })).status).toBe(200);
+    const privateRead = await viewer.send<{ records: { body: string }[] }>("records.get", { ids: [privateRecord.id], include_private: true });
+    expect(privateRead.body.records[0]?.body).toBe(privateRecord.body);
+    const privateId = await submit(box, viewer, "records.get", { ids: [privateRecord.id], include_private: true }, hub.time());
+    expect((await reply(viewer, box, privateId)).status).toBe(403);
+    // Force is local CLI only. Pair a second administrator before demoting this one.
+    const invitation = await hub.admin("/v1/settings/devices/pairing", "POST", { role: "admin" });
+    const pairing = decodePairing((await invitation.json() as { uri: string }).uri);
+    const admin = await DeviceClient.fromInvite(pairing, hub.lan);
+    expect((await admin.pair(pairing, "mac")).status).toBe(200);
+    // Leave a fresh raw response in the same mailbox immediately before the demotion.
+    const lastRead = await submit(box, viewer, "records.get", { ids: [record.id] }, hub.time());
+    expect((await reply(viewer, box, lastRead)).status).toBe(200);
+    expect((await admin.send("devices.role.update", { id: viewer.device, role: "collect" })).status).toBe(200);
+    const reset = await eventually(async () => {
+      for (const message of await list(box)) {
+        const envelope = await remote(box, box.down, "GET", message.id);
+        if (!envelope.ok) continue;
+        const payload = await viewer.openPayload<{ kind?: string; epoch?: number }>(await envelope.json(), message.id);
+        if (payload.kind === "projection.reset") return payload;
+      }
+    });
+    expect(reset).toEqual({ kind: "projection.reset", epoch: expect.any(Number) });
+    for (const message of [oldPush, readId, lastRead]) expect((await remote(box, box.down, "GET", message)).status).toBe(404);
+    expect((await viewer.send("records.get", { ids: [record.id] })).status).toBe(403);
+  } finally { await hub.dispose(); await relay.stop(); }
+}, 15_000);

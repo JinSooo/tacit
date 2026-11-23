@@ -135,6 +135,30 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors || summary.releaseErrors) process.exitCode = 1;
     return;
   }
+  if (command === "devices") {
+    const [,, id, roleOrForce, forceFlag] = argv;
+    const list = name === "list" && argv.length === 2;
+    const setRole = name === "set-role" && (argv.length === 4 || argv.length === 5 && forceFlag === "--force");
+    const remove = name === "remove" && (argv.length === 3 || argv.length === 4 && roleOrForce === "--force");
+    if (!list && !setRole && !remove) {
+      throw new Error("用法：devices list | devices set-role <device_id> <role> [--force] | devices remove <device_id> [--force]");
+    }
+    const [{ loadConfig }, { HubDB }, { deviceList, updateDeviceRole, removeDevice }, { WireError }] = await Promise.all([
+      import("./config.ts"), import("./db.ts"), import("./devices/store.ts"), import("./devices/envelope.ts"),
+    ]);
+    const config = loadConfig();
+    const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
+    try {
+      const result = list ? deviceList(db) : setRole ? updateDeviceRole(db.db, id, roleOrForce, { force: forceFlag === "--force" })
+        : removeDevice(db.db, id, { force: roleOrForce === "--force" });
+      console.log(JSON.stringify(result));
+    } catch (error) {
+      if (!(error instanceof WireError)) throw error;
+      console.error(error.message);
+      process.exitCode = 1;
+    } finally { db.close(); }
+    return;
+  }
   if (command === "projection" && name === "reset" && argv.length === 2) {
     const [{ loadConfig }, { HubDB }, { resetProjection, projectionHead }] = await Promise.all([
       import("./config.ts"), import("./db.ts"), import("./devices/projection-store.ts"),

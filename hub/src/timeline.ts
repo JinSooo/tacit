@@ -99,7 +99,8 @@ export function correctTimelineSegment(store: DistillStore, date: string, id: st
   });
 }
 
-export function deleteTimelineSegment(store: DistillStore, date: string, id: string, input: unknown) {
+export function deleteTimelineSegment(store: DistillStore, date: string, id: string, input: unknown,
+                                      remove = (ids: string[]) => store.hub.deleteMany(ids)) {
   if (localDayStart(date) === null) throw new InputError("日期无效");
   const expected = input && typeof input === "object" && "record_ids" in input ? input.record_ids : null;
   if (!Array.isArray(expected) || !expected.length || expected.some(id => typeof id !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id))) {
@@ -111,6 +112,6 @@ export function deleteTimelineSegment(store: DistillStore, date: string, id: str
     const item = findSegment(store,date,id);
     if (!item) return null;
     if (item.record_ids.length !== members.size || item.record_ids.some(id => !members.has(id))) return { changed: true };
-    return { deleted: store.hub.deleteMany(item.record_ids) };
+    return { deleted: remove(item.record_ids) };
   }).immediate();
 }

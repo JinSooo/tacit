@@ -174,6 +174,14 @@ test("keys：PUT/DELETE 只接受两种 provider，key 从不出现在响应、�
   expect(await call(failing, "PUT", "/v1/settings/keys/anthropic", { key: SECRET })).toEqual({ status: 500, body: { error: "写入钥匙串失败" } });
   expect(await call(failing, "DELETE", "/v1/settings/keys/anthropic")).toEqual({ status: 500, body: { error: "删除钥匙串条目失败" } });
   expect((await call(failing, "GET", "/v1/settings/models")).body.keys).toEqual({ anthropic: null, "openai-compatible": null });
+  const audit = await call(h, "GET", "/v1/settings/security-audit");
+  expect(audit.body.events).toEqual(expect.arrayContaining([
+    expect.objectContaining({ action: "key.set", target: "anthropic", ok: 1 }),
+    expect.objectContaining({ action: "key.delete", target: "anthropic", ok: 1 }),
+    expect.objectContaining({ action: "key.set", target: "anthropic", ok: 0, detail_code: "secret_error" }),
+    expect.objectContaining({ action: "key.delete", target: "anthropic", ok: 0, detail_code: "secret_error" }),
+  ]));
+  expect(JSON.stringify(audit)).not.toContain(SECRET);
   for (const file of readdirSync(ctx.dir)) if (!file.startsWith("history.db")) expect(readFileSync(join(ctx.dir, file), "utf8")).not.toContain(SECRET);
 });
 
