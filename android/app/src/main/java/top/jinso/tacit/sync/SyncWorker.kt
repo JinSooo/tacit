@@ -20,8 +20,7 @@ import java.util.concurrent.TimeUnit.MINUTES
 internal class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val sync = (applicationContext as TacitApp).sync
-        if (inputData.getBoolean("timeline", false)) sync.refreshTimeline()
-        sync.run(inputData.getBoolean("retry", false))
+        sync.run(inputData.getBoolean("retry", false), periodic = inputData.getBoolean("timeline", false))
         Result.success()
     }
 

@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal typealias TimelineRequest = suspend (String, JSONObject) -> JSONObject
+internal enum class TimelinePage { COMPLETE, MORE, RESET, REVOKED }
 
 internal class TimelineSync(private val cache: TimelineCache) {
     private var confirmed: ProjectionCursor? = null
@@ -22,48 +23,65 @@ internal class TimelineSync(private val cache: TimelineCache) {
     /** Pull is gated by the authenticated current role, including when an old pairing is promoted. */
     suspend fun pull(role: String?, send: TimelineRequest) {
         if (!role(role)) return
-        try {
-            var resets = 0
-            while (true) {
+        var resets = 0
+        var conflicts = 0
+        while (true) {
+            try {
                 val previous = cache.cursor
                 val page = send("projection.pull", previous.pullBody())
-                val epoch = page.integer("epoch")
-                if (page.getBoolean("reset")) {
-                    confirmed = null
-                    if (page.optString("kind") == "projection.reset" || !page.getBoolean("more")) {
-                        clear()
+                when (applyPage(page, previous)) {
+                    TimelinePage.REVOKED -> return
+                    TimelinePage.RESET -> if (++resets >= 3) return
+                    TimelinePage.MORE -> Unit
+                    TimelinePage.COMPLETE -> {
+                        acknowledge(send)
                         return
                     }
-                    cache.reset(epoch)
-                    if (++resets >= 3) return
-                    continue
                 }
-                val next = page.integer("cursor")
-                cache.apply(epoch, next, page.getJSONArray("changes"))
-                if (!page.getBoolean("more")) break
-                check(cache.cursor != previous)
-            }
-            acknowledge(send)
-        } catch (error: DeviceStatus) {
-            when (error.status) {
-                401, 403 -> clear()
-                409 -> {
-                    confirmed = null
-                    cache.clear()
+            } catch (error: DeviceStatus) {
+                when (error.status) {
+                    401, 403 -> clear()
+                    409 -> {
+                        confirmed = null
+                        if (conflicts++ < 3) continue
+                    }
                 }
+                throw error
+            } catch (error: DeviceRemoved) {
+                clear()
+                throw error
             }
-            throw error
-        } catch (error: DeviceRemoved) {
-            clear()
-            throw error
         }
     }
 
-    suspend fun acknowledge(send: TimelineRequest) {
-        val cursor = cache.cursor
-        if (cursor.seq == 0L || cursor == confirmed) return
-        check(send("projection.ack", cursor.ackBody()).getBoolean("ok"))
+    fun applyPage(page: JSONObject, previous: ProjectionCursor): TimelinePage {
+        val epoch = page.integer("epoch")
+        val more = page.getBoolean("more")
+        if (page.getBoolean("reset")) {
+            if (page.optString("kind") == "projection.reset" || !more) {
+                clear()
+                return TimelinePage.REVOKED
+            }
+            confirmed = null
+            cache.reset(epoch)
+            return TimelinePage.RESET
+        }
+        cache.apply(epoch, page.integer("cursor"), page.getJSONArray("changes"))
+        if (!more) return TimelinePage.COMPLETE
+        check(cache.cursor != previous)
+        return TimelinePage.MORE
+    }
+
+    fun needsAck(cursor: ProjectionCursor) = cursor.seq > 0 && cursor != confirmed
+
+    fun confirmAck(cursor: ProjectionCursor, reply: JSONObject) {
+        check(reply.getBoolean("ok"))
         confirmed = cursor
+    }
+
+    private suspend fun acknowledge(send: TimelineRequest) {
+        val cursor = cache.cursor
+        if (needsAck(cursor)) confirmAck(cursor, send("projection.ack", cursor.ackBody()))
     }
 
     /** Returns whether the message may be deleted. Urgent notices can be applied before probing the role. */
@@ -112,7 +130,7 @@ internal suspend fun readTimelineOriginals(ids: Set<String>, send: TimelineReque
                         if (record.optBoolean("redacted_private")) continue
                         val id = record.getString("id")
                         val (_, text) = records.getOrPut(id) {
-                            TimelineOriginal(record.getString("source"), record.optString("title"), "") to StringBuilder()
+                            TimelineOriginal(record.getString("source"), record.optionalString("title").orEmpty(), "") to StringBuilder()
                         }
                         text.append(record.getString("body"))
                     }

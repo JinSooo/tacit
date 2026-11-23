@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -18,7 +19,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
+import top.jinso.tacit.audio.AudioController
+import top.jinso.tacit.core.HistoryRecord
 import top.jinso.tacit.sync.TimelineItem
 import top.jinso.tacit.sync.TimelineOriginal
 import top.jinso.tacit.ui.components.Caption
@@ -42,7 +47,7 @@ internal fun Modifier.timelineAxis(first: Boolean, last: Boolean): Modifier {
 internal fun ProjectedTimelineRow(item: TimelineItem, modifier: Modifier, onClick: () -> Unit) {
     Row(modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick)
         .padding(top = 12.dp, bottom = 12.dp, end = 12.dp)) {
-        Caption(item.timeLabel, Modifier.width(56.dp).padding(top = 5.dp))
+        Caption(item.timeLabel(), Modifier.width(56.dp).padding(top = 5.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             TimelineTitle(item.title)
             if (item.description.isNotBlank()) Text(item.description, color = tacitColors.muted)
@@ -62,15 +67,36 @@ private fun TimelineTitle(title: String) {
 }
 
 @Composable
-internal fun TimelineDetails(app: TacitApp, item: TimelineItem, invalidation: Long, onBack: () -> Unit) {
+internal fun TimelineDetails(
+    app: TacitApp, item: TimelineItem, invalidation: Long, onBack: () -> Unit,
+    onOpenLocal: (List<HistoryRecord>) -> Unit,
+) {
     val owner = LocalActivity.current as? LifecycleOwner
-    var originals by remember(item.recordIds, invalidation) { mutableStateOf<List<TimelineOriginal>?>(null) }
-    var offline by remember(item.recordIds, invalidation) { mutableStateOf(false) }
-    LaunchedEffect(owner, item.recordIds, invalidation) {
+    var local by remember(item.recordIds, invalidation) { mutableStateOf<List<AudioConversationRow>?>(null) }
+    LaunchedEffect(item.recordIds, invalidation) {
+        local = try {
+            withContext(Dispatchers.IO) {
+                val scenes = AudioController(app).listConversations().get()
+                    .filter { scene -> scene.recordIds.any { it in item.recordIds } }
+                val records = scenes.flatMap { it.recordIds }.distinct()
+                    .mapNotNull(app.vault::get).associateBy { it.id }
+                matchingLocalConversations(audioConversationRows(scenes, records), item.recordIds)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+    val remoteIds = local?.let { rows -> item.recordIds - rows.flatMap { row -> row.records.map { it.id } }.toSet() }
+    var originals by remember(remoteIds, invalidation) { mutableStateOf<List<TimelineOriginal>?>(null) }
+    var offline by remember(remoteIds, invalidation) { mutableStateOf(false) }
+    LaunchedEffect(owner, remoteIds, invalidation) {
+        if (remoteIds.isNullOrEmpty()) return@LaunchedEffect
         owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.STARTED) {
             offline = false
             try {
-                originals = app.sync.timelineOriginals(item.recordIds)
+                originals = app.sync.timelineOriginals(remoteIds)
                 // Keep the result only while this detail page is visible.
                 kotlinx.coroutines.awaitCancellation()
             } catch (error: CancellationException) {
@@ -90,7 +116,17 @@ internal fun TimelineDetails(app: TacitApp, item: TimelineItem, invalidation: Lo
                 TimelineTitle(item.title)
                 if (item.description.isNotBlank()) Text(item.description, color = tacitColors.muted)
             }
+            local.orEmpty().forEach { row ->
+                item(key = row.key) {
+                    TextButton(onClick = { onOpenLocal(row.records) }) {
+                        Text(if (local.orEmpty().size == 1) "这台手机录的对话"
+                            else "这台手机录的对话 · ${date(row.start, "HH:mm")}")
+                    }
+                }
+            }
             when {
+                remoteIds?.isEmpty() == true && local.orEmpty().isNotEmpty() -> Unit
+                remoteIds?.isEmpty() == true -> item { Caption("没有可读取的原文") }
                 offline -> item { Caption("当前离线，无法读取原文") }
                 originals == null -> item { ProgressLine(Modifier.fillMaxWidth()) }
                 originals.isNullOrEmpty() -> item { Caption("没有可读取的原文") }

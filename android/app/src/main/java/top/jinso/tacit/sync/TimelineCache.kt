@@ -13,15 +13,20 @@ import java.io.FileNotFoundException
 import java.security.KeyStore
 import java.time.Instant
 import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 internal data class TimelineItem(
-    val id: String, val start: Instant, val timeLabel: String, val title: String, val description: String,
+    val id: String, val start: Instant, val title: String, val description: String,
     val sources: List<String>, val recordIds: Set<String>,
-)
+) {
+    fun timeLabel(zone: ZoneId = ZoneId.systemDefault()): String = clockFormat.format(start.atZone(zone))
+}
 
 internal data class TimelineDay(
     val overview: String?, val items: List<TimelineItem>, val drafts: List<TimelineItem>,
@@ -41,13 +46,13 @@ internal data class ProjectionCursor(val epoch: Long = 0, val seq: Long = 0) {
 }
 
 private const val TIMELINE_DAYS = 30
+private val clockFormat = DateTimeFormatter.ofPattern("HH:mm")
 internal fun JSONArray.objects() = (0 until length()).map(::getJSONObject)
 
 private fun JSONObject.items(key: String): List<TimelineItem> = optJSONArray(key)?.objects().orEmpty().map { item ->
-    val start = item.getString("t_start")
     TimelineItem(
-        item.getString("id"), Instant.parse(start), start.substring(11, 16),
-        item.getString("title"), item.optionalString("description") ?: item.optString("excerpt"),
+        item.getString("id"), OffsetDateTime.parse(item.getString("t_start")).toInstant(),
+        item.getString("title"), (item.optionalString("description") ?: item.optionalString("excerpt")).orEmpty(),
         item.optJSONArray("sources")?.strings().orEmpty(), item.optJSONArray("record_ids")?.strings().orEmpty().toSet(),
     )
 }
@@ -58,6 +63,23 @@ private class CachedDay(val data: JSONObject) {
         detail?.items("items").orEmpty(), data.items("drafts"))
     val references = (day.items + day.drafts).flatMap { it.recordIds }.toSet() +
         detail?.optJSONArray("omitted_record_ids")?.strings().orEmpty()
+
+    fun withdraw(ids: Set<String>): CachedDay {
+        if (references.none { it in ids }) return this
+        fun keep(items: JSONArray?) = JSONArray(items?.objects().orEmpty().filter { item ->
+            item.optJSONArray("record_ids")?.strings().orEmpty().none { it in ids }
+        })
+        val updated = JSONObject(data.toString()).apply {
+            remove("brief")
+            put("drafts", keep(optJSONArray("drafts")))
+            optJSONObject("detail")?.apply {
+                remove("summary")
+                put("items", keep(optJSONArray("items")))
+                put("omitted_record_ids", JSONArray(optJSONArray("omitted_record_ids")?.strings().orEmpty() - ids))
+            }
+        }
+        return CachedDay(updated)
+    }
 }
 
 internal interface TimelineDisk {
@@ -109,8 +131,12 @@ internal class EncryptedTimelineDisk(context: Context) : TimelineDisk {
     }
 }
 
-/** Access is serialized by SyncCoordinator with pairing and sync. The UI only consumes immutable snapshots. */
-internal class TimelineCache(private val disk: TimelineDisk, private val today: () -> LocalDate = LocalDate::now) {
+/** Local deletes can withdraw cached text while the sync coordinator is waiting for the network. */
+internal class TimelineCache(
+    private val disk: TimelineDisk,
+    private val isDeleted: (String) -> Boolean = { false },
+    private val today: () -> LocalDate = LocalDate::now,
+) {
     private var owner: String? = null
     private var bound = false
     private var days = emptyMap<LocalDate, CachedDay>()
@@ -119,7 +145,7 @@ internal class TimelineCache(private val disk: TimelineDisk, private val today: 
     private val mutable = MutableStateFlow(TimelineSnapshot())
     val snapshots = mutable.asStateFlow()
 
-    fun bind(device: String?) {
+    @Synchronized fun bind(device: String?) {
         if (bound && owner == device) {
             prune()
             return
@@ -135,6 +161,7 @@ internal class TimelineCache(private val disk: TimelineDisk, private val today: 
             cursor = ProjectionCursor(state.integer("epoch"), state.integer("cursor"))
             val stored = state.getJSONObject("days")
             days = stored.keys().asSequence().associate { LocalDate.parse(it) to CachedDay(stored.getJSONObject(it)) }
+            withdrawRecords(days.values.flatMap { it.references }.filter(isDeleted).toSet())
             prune()
             publish(invalidate = true)
         } catch (_: Exception) {
@@ -142,7 +169,7 @@ internal class TimelineCache(private val disk: TimelineDisk, private val today: 
         }
     }
 
-    fun clear() {
+    @Synchronized fun clear() {
         val invalidated = days.isNotEmpty() || cursor != ProjectionCursor()
         days = emptyMap()
         cursor = ProjectionCursor()
@@ -150,12 +177,12 @@ internal class TimelineCache(private val disk: TimelineDisk, private val today: 
         disk.clear()
     }
 
-    fun reset(epoch: Long) {
+    @Synchronized fun reset(epoch: Long) {
         clear()
         cursor = ProjectionCursor(epoch)
     }
 
-    fun apply(epoch: Long, seq: Long, changes: JSONArray) {
+    @Synchronized fun apply(epoch: Long, seq: Long, changes: JSONArray) {
         val changedEpoch = cursor.epoch != 0L && epoch != cursor.epoch
         val previous = if (changedEpoch) ProjectionCursor() else cursor
         val next = if (changedEpoch) mutableMapOf() else days.toMutableMap()
@@ -171,7 +198,8 @@ internal class TimelineCache(private val disk: TimelineDisk, private val today: 
                         next.remove(day)
                         invalidate = true
                     } else if (day >= oldest()) {
-                        next[day] = CachedDay(change.getJSONObject("data"))
+                        val incoming = CachedDay(change.getJSONObject("data"))
+                        next[day] = incoming.withdraw(incoming.references.filter(isDeleted).toSet())
                     }
                 }
                 "record_gone" -> {
@@ -183,7 +211,7 @@ internal class TimelineCache(private val disk: TimelineDisk, private val today: 
         if (seq >= previous.seq) commit(next, ProjectionCursor(epoch, seq), invalidate)
     }
 
-    fun invalidate(epoch: Long, toSeq: Long, items: JSONArray) {
+    @Synchronized fun invalidate(epoch: Long, toSeq: Long, items: JSONArray) {
         if (cursor.epoch != 0L && cursor.epoch != epoch) {
             reset(epoch)
             return
@@ -198,6 +226,12 @@ internal class TimelineCache(private val disk: TimelineDisk, private val today: 
             }
         }
         commit(next, cursor, invalidate = true)
+    }
+
+    @Synchronized fun withdrawRecords(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        val next = days.mapValues { (_, value) -> value.withdraw(ids) }
+        commit(next, cursor, invalidate = next != days)
     }
 
     private fun oldest() = today().minusDays(TIMELINE_DAYS - 1L)

@@ -1,6 +1,8 @@
 package top.jinso.tacit.sync
 
+import android.net.ConnectivityManager
 import android.os.Build
+import android.os.SystemClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -8,6 +10,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.json.JSONArray
 import org.json.JSONObject
@@ -15,6 +18,7 @@ import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.AudioRuntime
 import top.jinso.tacit.data.Keys
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 
 internal data class MacStatus(
     val name: String?, val manual: String, val removed: Boolean, val lastSync: Long,
@@ -24,8 +28,11 @@ internal data class MacStatus(
 internal class SyncCoordinator(private val app: TacitApp) {
     private val mutex = Mutex()
     private val vault get() = app.vault
-    private val timelineCache = TimelineCache(EncryptedTimelineDisk(app))
+    private val timelineCache = TimelineCache(EncryptedTimelineDisk(app), isDeleted = { vault.isRecordDeleted(it) })
     private val timeline = TimelineSync(timelineCache)
+    private val directDiscovery = DirectDiscoveryBackoff(SystemClock::elapsedRealtime)
+    private val originalReads = Mutex()
+    private val originalRequests = ConcurrentHashMap.newKeySet<String>()
     private var timelineWorkerScheduled = false
     val timelineSnapshots = timelineCache.snapshots
 
@@ -84,14 +91,15 @@ internal class SyncCoordinator(private val app: TacitApp) {
         }
     }
 
-    suspend fun run(retry: Boolean) = mutex.withLock {
+    suspend fun run(retry: Boolean, periodic: Boolean = false) = mutex.withLock {
         val data = vault.syncConnection() ?: return@withLock
         if (data.optBoolean("removed")) return@withLock
         val wait = data.optLong("retryAt") - System.currentTimeMillis()
-        if (wait > 0) {
+        if (wait > 0 && !periodic) {
             if (retry) SyncWorker.retry(app, wait.coerceAtMost(MAX_RETRY))
             return@withLock
         }
+        timelineCache.bind(timelineOwner(data))
         val ctx = currentCoroutineContext()
         try {
             val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
@@ -107,22 +115,28 @@ internal class SyncCoordinator(private val app: TacitApp) {
             fun exchange(mailbox: RelayMailbox) = RelayExchange(protocol, journal, mailbox,
                 { delivery, reply -> applyRelayReceipt(data, delivery, reply) },
                 canResubmit = { it.op != "ingest" || it.ids.all { id -> vault.wire(id) != null } })
-            fun drain(config: RelayConfig, required: Boolean, allowMove: Boolean) {
-                try {
-                    ctx.ensureActive()
-                    journal.useMailbox(config) { exchange(RelayMailbox(config)).drain(allowMove) }
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    if (required) throw error
-                }
-            }
             val startingRelay = journal.active
+            for (retired in journal.retired().filter { it != startingRelay }) {
+                drainRetired(data, journal, retired, protocol)
+            }
             if (startingRelay != null && !journal.disabled &&
                 (origin == null || journal.deliveries().any { it.box == startingRelay.down && it.ids.isNotEmpty() })) {
-                drain(startingRelay, origin == null, allowMove = true)
+                ctx.ensureActive()
+                if (origin == null) {
+                    pollRelayTimeline(data, journal, startingRelay, protocol, postDue = true,
+                        budget = if (wait > 0) networkBudget() else null)
+                } else {
+                    try {
+                        pollRelayTimeline(data, journal, startingRelay, protocol, postDue = false, budget = networkBudget())
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: DeviceRemoved) {
+                        throw error
+                    } catch (_: Exception) {
+                        // A mailbox outage cannot block direct sync.
+                    }
+                }
             }
-            for (retired in journal.retired().filter { it != startingRelay }) drain(retired, required = false, allowMove = false)
             journal.prune()
 
             if (origin != null) {
@@ -131,17 +145,21 @@ internal class SyncCoordinator(private val app: TacitApp) {
                     deviceHttp(origin, request)
                 }, device)
                 journal.finishRound()
-                refreshRelay(client, journal)
+                val role = refreshRelay(data, client, journal)
+                if (periodic && role == "view") refreshDirectTimeline(deviceClient(data, origin, networkBudget()), role)
+                if (wait > 0) return@withLock
                 data.put("last", origin)
                 pullFromMac(data, client::send)
                 sendDirect(device, client, journal)
                 syncSummaries(System.currentTimeMillis(), client::send)
             } else {
+                if (journal.disabled) timeline.clear()
+                if (wait > 0) return@withLock
                 val config = journal.active?.takeUnless { journal.disabled } ?: throw requireNotNull(unavailable)
                 val mailbox = RelayMailbox(config)
                 val relay = exchange(mailbox)
                 journal.useMailbox(config) {
-                    if (config != startingRelay) relay.drain()
+                    if (config != startingRelay) pollRelayTimeline(data, journal, config, protocol, postDue = true)
                     if (journal.active != config) throw RelayWaiting()
                     // Deposit queued writes before making a pull that needs the Mac to be awake.
                     relay.resumeWrites()
@@ -171,94 +189,161 @@ internal class SyncCoordinator(private val app: TacitApp) {
     }
 
     suspend fun refreshTimeline(foreground: Boolean = false) = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        if (!mutex.tryLock()) return@withContext
+        try {
             val data = try {
                 vault.syncConnection()
             } catch (_: Exception) {
-                // The app already shows the locked-vault state. Do not restore a view without its pairing.
+                // The app already shows the locked-vault state.
                 timeline.clear()
-                return@withLock
+                return@withContext
             }
             timelineCache.bind(data?.takeUnless { it.optBoolean("removed") }?.let(::timelineOwner))
-            if (data == null || data.optBoolean("removed")) return@withLock
+            if (data == null || data.optBoolean("removed")) return@withContext
             if (foreground && !timelineWorkerScheduled) {
-                // Update the recurring work of phones paired before timeline support.
                 SyncWorker.schedulePeriodic(app)
                 timelineWorkerScheduled = true
             }
 
             try {
-                val origin = try { findOrigin(data) } catch (_: MacUnavailable) { null }
+                val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
+                val config = journal.active?.takeUnless { journal.disabled }
+                val origin = try { findOrigin(data, networkBudget()) } catch (_: MacUnavailable) { null }
+                val budget = networkBudget()
                 if (origin != null) {
-                    val client = DeviceClient(data.getString("hubKey"), restoreKeys(data),
-                        { deviceHttp(origin, it) }, data.getString("device"))
-                    val role = client.send("relay").optionalString("role")
-                    timeline.pull(role, client::send)
-                } else {
-                    val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
-                    if (journal.disabled) {
-                        timeline.clear()
-                        return@withLock
-                    }
-                    val config = journal.active ?: return@withLock
-                    val relay = timelineRelay(data, journal, config)
-                    journal.useMailbox(config) {
-                        // Withdrawals apply even when the upstream role request cannot reach the hub.
-                        relay.drain { timeline.push(it, view = false) }
-                        if (journal.active != config) return@useMailbox
-                        val role = relay.sendTransient("relay", JSONObject()).optionalString("role")
-                        if (timeline.role(role)) {
-                            relay.drain { timeline.push(it, view = true) }
-                            if (journal.active == config) timeline.pull(role, relay::sendTransient)
-                        }
-                    }
+                    val client = deviceClient(data, origin, budget)
+                    refreshDirectTimeline(client, refreshRelay(data, client, journal))
+                } else if (config != null) {
+                    val protocol = DeviceMessages(data.getString("hubKey"), restoreKeys(data), data.getString("device"))
+                    pollRelayTimeline(data, journal, config, protocol, postDue = true, budget = budget)
+                } else if (journal.disabled) {
+                    timeline.clear()
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: DeviceRemoved) {
                 markRemoved(data)
             } catch (error: RelayStatus) {
-                // A revoked mailbox can no longer deliver a downgrade or deletion notice.
                 if (error.unauthorized) timeline.clear()
-            } catch (error: Exception) {
+            } catch (_: Exception) {
                 // Keep the last confirmed view while the hub is unreachable.
             }
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    private suspend fun refreshDirectTimeline(client: DeviceClient, role: String?) {
+        try {
+            timeline.pull(role, client::send)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: DeviceRemoved) {
+            throw error
+        } catch (_: Exception) {
+            // A projection failure should not prevent audio sync.
         }
     }
 
     suspend fun timelineOriginals(ids: Set<String>): List<TimelineOriginal> = withContext(Dispatchers.IO) {
-        mutex.withLock {
+        originalReads.withLock {
             val data = vault.syncConnection()?.takeUnless { it.optBoolean("removed") } ?: throw DeviceRemoved()
+            val lastInvalidation = timelineSnapshots.value.invalidation
+            val config = RelayJournal(data, {}).let { it.active?.takeUnless { _ -> it.disabled } }
             try {
-                val origin = try { findOrigin(data) } catch (error: MacUnavailable) {
-                    val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
-                    val config = journal.active?.takeUnless { journal.disabled } ?: throw error
-                    val relay = timelineRelay(data, journal, config)
-                    return@withLock journal.useMailbox(config) { readTimelineOriginals(ids, relay::sendTransient) }
+                val origin = withTimeoutOrNull(NETWORK_BUDGET) {
+                    try { findOrigin(data, networkBudget()) }
+                    catch (error: MacUnavailable) { if (config == null) throw error else null }
                 }
-                val client = DeviceClient(data.getString("hubKey"), restoreKeys(data),
-                    { deviceHttp(origin, it) }, data.getString("device"))
-                readTimelineOriginals(ids, client::send)
+                val originals = if (origin != null) {
+                    readTimelineOriginals(ids, deviceClient(data, origin)::send)
+                } else {
+                    val journal = RelayJournal(data, {})
+                    val protocol = DeviceMessages(data.getString("hubKey"), restoreKeys(data), data.getString("device"))
+                    val relay = RelayExchange(protocol, journal, RelayMailbox(config ?: throw RelayWaiting()), { _, _ -> })
+                    readTimelineOriginals(ids) { op, body -> relay.sendTransient(op, body, originalRequests) }
+                }
+                val current = vault.syncConnection()
+                if (current == null || current.optBoolean("removed") || timelineOwner(current) != timelineOwner(data) ||
+                    timelineSnapshots.value.invalidation != lastInvalidation) throw RelayWaiting()
+                originals
             } catch (error: DeviceRemoved) {
-                markRemoved(data)
+                updateAfterOriginalFailure(data) { markRemoved(it) }
                 throw error
             } catch (error: DeviceStatus) {
-                if (error.status == 403) timeline.clear()
+                if (error.status == 403) updateAfterOriginalFailure(data) { timeline.clear() }
                 throw error
             } catch (error: RelayStatus) {
-                if (error.unauthorized) timeline.clear()
+                if (error.unauthorized) updateAfterOriginalFailure(data) {
+                    val journal = RelayJournal(it, { vault.saveSyncConnection(it) })
+                    if (config != null && journal.active == config) {
+                        journal.disable(config)
+                        timeline.clear()
+                    }
+                }
                 throw error
             }
+        }
+    }
+
+    private suspend fun updateAfterOriginalFailure(previous: JSONObject, update: (JSONObject) -> Unit) {
+        // A detail read only takes the sync lock if it needs to update the paired connection.
+        mutex.withLock {
+            val latest = vault.syncConnection() ?: return@withLock
+            if (timelineOwner(latest) == timelineOwner(previous)) update(latest)
         }
     }
 
     private fun timelineOwner(data: JSONObject) = data.getString("hub") + ":" + data.getString("device")
 
-    private fun timelineRelay(data: JSONObject, journal: RelayJournal, config: RelayConfig): RelayExchange {
-        val protocol = DeviceMessages(data.getString("hubKey"), restoreKeys(data), data.getString("device"))
-        return RelayExchange(protocol, journal, RelayMailbox(config),
-            { delivery, reply -> applyRelayReceipt(data, delivery, reply) })
+    fun withdrawTimelineRecords(ids: Set<String>) = timelineCache.withdrawRecords(ids)
+
+    private fun relayTimeline(data: JSONObject, config: RelayConfig) =
+        RelayTimeline(data, config.down, timelineCache, timeline, { vault.saveSyncConnection(data) })
+
+    private fun pollRelayTimeline(
+        data: JSONObject, journal: RelayJournal, config: RelayConfig, protocol: DeviceMessages,
+        postDue: Boolean, budget: (() -> Int)? = null,
+    ) {
+        val state = relayTimeline(data, config)
+        val mailbox = RelayMailbox(config, remainingMillis = budget)
+        val relay = RelayExchange(protocol, journal, mailbox, { delivery, reply -> applyRelayReceipt(data, delivery, reply) })
+        journal.useMailbox(config) {
+            relay.drain(timelineRequestIds = state.replyIds, originalRequests = originalRequests,
+                onTimelineReply = { nonce, message ->
+                    if (journal.active == config) state.reply(nonce, message, protocol)
+                }, projection = state::push)
+            if (postDue && journal.active == config) state.postDue(protocol, mailbox::put)
+        }
     }
+
+    private fun drainRetired(data: JSONObject, journal: RelayJournal, config: RelayConfig, protocol: DeviceMessages) {
+        try {
+            journal.useMailbox(config) {
+                val relay = RelayExchange(protocol, journal, RelayMailbox(config),
+                    { delivery, reply -> applyRelayReceipt(data, delivery, reply) })
+                relay.drain(allowMove = false, originalRequests = originalRequests) { message ->
+                    val active = journal.active
+                    if (active == null) timeline.push(message, view = false)
+                    else relayTimeline(data, active).push(message)
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Retired mail is best effort. Continue syncing over the active route.
+        }
+    }
+
+    private fun deviceClient(data: JSONObject, origin: String, budget: (() -> Int)? = null) =
+        DeviceClient(data.getString("hubKey"), restoreKeys(data), { request ->
+            if (budget == null) deviceHttp(origin, request)
+            else {
+                val timeout = budget()
+                if (timeout <= 0) throw RelayWaiting()
+                deviceHttp(origin, request, timeout)
+            }
+        }, data.getString("device"))
 
     private fun applyRelayReceipt(data: JSONObject, delivery: RelayJournal.Delivery, reply: JSONObject) {
         when (delivery.op) {
@@ -268,9 +353,24 @@ internal class SyncCoordinator(private val app: TacitApp) {
         data.put("lastSync", System.currentTimeMillis())
     }
 
-    private suspend fun findOrigin(data: JSONObject): String =
-        MacDiscovery(app).find(data.getString("hub"), data.optionalString("last"),
-            data.getJSONArray("addresses").strings(), data.optionalString("manual"))
+    private data class DirectRoute(val owner: String, val network: Long?, val addresses: String?, val manual: String?)
+
+    private suspend fun findOrigin(data: JSONObject, budget: (() -> Int)? = null): String {
+        val connectivity = app.getSystemService(ConnectivityManager::class.java)
+        val active = connectivity.activeNetwork
+        val route = DirectRoute(timelineOwner(data), active?.networkHandle,
+            connectivity.getLinkProperties(active)?.linkAddresses?.toString(), data.optionalString("manual"))
+        val canRelay = !data.isNull("relay") && !data.optBoolean("relayDisabled")
+        return directDiscovery.find(route, canRelay) {
+            MacDiscovery(app).find(data.getString("hub"), data.optionalString("last"),
+                data.getJSONArray("addresses").strings(), route.manual, budget ?: { Int.MAX_VALUE })
+        }
+    }
+
+    private fun networkBudget(): () -> Int {
+        val deadline = SystemClock.elapsedRealtime() + NETWORK_BUDGET
+        return { (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0).toInt() }
+    }
 
     private fun restoreKeys(data: JSONObject): AsymmetricCipherKeyPair {
         val public = data.getString("public")
@@ -281,20 +381,27 @@ internal class SyncCoordinator(private val app: TacitApp) {
     private fun markRemoved(data: JSONObject) {
         timeline.clear()
         data.put("removed", true)
-        for (key in listOf("private", "relay", "relayDisabled", "relayRetired", "relayJournal", "relayRoundAt", "audio", "error")) {
+        for (key in listOf("private", "relay", "relayDisabled", "relayRetired", "relayJournal", "relayRoundAt", "relayTimeline", "audio", "error")) {
             data.remove(key)
         }
         forgetAudioPolicy { vault.saveSyncConnection(data) }
         SyncWorker.cancel(app)
     }
 
-    private fun refreshRelay(client: DeviceClient, journal: RelayJournal) {
+    private fun refreshRelay(data: JSONObject, client: DeviceClient, journal: RelayJournal): String? {
         val reply = try { client.send("relay") } catch (error: DeviceStatus) {
-            if (error.status in setOf(400, 404)) return // Older Mac.
+            if (error.status in setOf(400, 404)) {
+                timeline.role(null)
+                return null // Older Mac.
+            }
             throw error
         }
-        timeline.role(reply.optionalString("role"))
+        val role = reply.optionalString("role")
         journal.config(if (reply.isNull("relay")) null else RelayConfig.parse(reply.getJSONObject("relay")))
+        val active = journal.active
+        if (active == null) timeline.role(role)
+        else relayTimeline(data, active).role(role)
+        return role
     }
 
     private suspend fun pullFromMac(data: JSONObject, send: suspend (String, JSONObject) -> JSONObject) {
@@ -348,10 +455,11 @@ internal class SyncCoordinator(private val app: TacitApp) {
             }
         }
         val oversized = mutableSetOf<String>()
-        var limit = mailbox.messageBytes
+        var messageLimit: Int? = null
         while (true) {
             val batch = vault.uploadBatch(device, journal.inFlight("ingest") + oversized)
             if (batch.isEmpty()) break
+            val limit = messageLimit ?: mailbox.messageBytes.also { messageLimit = it }
             val upload = relayUpload(protocol, batch, limit)
             if (upload == null) {
                 // A record too large for this mailbox can still go directly to the Mac.
@@ -362,7 +470,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 relay.sendWrite("ingest", upload.request, batch.take(upload.count).map { it.first })
             } catch (error: EnvelopeTooLarge) {
                 // A self-hosted limit can change between hello and PUT.
-                limit = minOf(limit, upload.request.json.size - 1)
+                messageLimit = minOf(limit, upload.request.json.size - 1)
             }
         }
     }
@@ -371,6 +479,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
 
     private fun confirmDeletes(ids: List<String>, reply: JSONObject) {
         require(reply.integer("deleted") in 0..ids.size.toLong())
+        withdrawTimelineRecords(ids.toSet())
         vault.confirmDeletes(ids)
     }
 
@@ -418,6 +527,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
 
     private companion object {
         const val MAX_RETRY = 3_600_000L
+        const val NETWORK_BUDGET = 7_000L
         /** The Mac accepts at most 32 days per request. */
         const val SUMMARY_WINDOW = 31 * 86_400_000L
     }

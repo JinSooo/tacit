@@ -52,9 +52,9 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     }
     fun back() {
         when {
-            timelineItem != null -> selectedItem = null
             detail != null -> reading.detail = null
-            else -> reading.conversation = emptyList()
+            conversation.isNotEmpty() -> reading.conversation = emptyList()
+            else -> selectedItem = null
         }
     }
     LaunchedEffect(Unit) {
@@ -81,7 +81,6 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                 store == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
-                timelineItem != null -> TimelineDetails(app, timelineItem, timeline.invalidation, ::back)
                 detail != null -> RecordDetail(
                     detail, store, app, onBack = ::back, notify = ::notify,
                     onSelect = { reading.detail = it },
@@ -90,7 +89,9 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                             try {
                                 withContext(Dispatchers.IO) {
                                     if (record.source == Sources.AUDIO) AudioController(app).deleteRecordAudio(record.id).get()
+                                    val deleted = setOf(record.id) + store.corrections(record.id).map { it.id }
                                     store.delete(record.id)
+                                    app.sync.withdrawTimelineRecords(deleted)
                                 }
                                 reading.conversation = reading.conversation.filterNot { it.id == record.id }
                                 reading.detail = null
@@ -100,6 +101,9 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                     },
                 )
                 conversation.isNotEmpty() -> ConversationDetail(conversation, app, store, ::back) { reading.detail = it }
+                timelineItem != null -> TimelineDetails(app, timelineItem, timeline.invalidation, ::back) {
+                    reading.conversation = it
+                }
                 !settingsOpen -> {
                     // A healthy connection is the default, and a failed sync away from home just waits for the Mac;
                     // the recording page only names a connection that needs the user.

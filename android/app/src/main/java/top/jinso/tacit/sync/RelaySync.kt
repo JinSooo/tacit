@@ -3,7 +3,7 @@ package top.jinso.tacit.sync
 import org.json.JSONArray
 import org.json.JSONObject
 
-private const val DELIVERY_TTL = 86_400_000L
+internal const val DELIVERY_TTL = 86_400_000L
 private const val REPLY_WAIT = 20_000L
 
 /** Stored in the Keystore-protected Vault alongside the paired connection. */
@@ -154,10 +154,19 @@ internal class RelayExchange(
     private val now: () -> Long = System::currentTimeMillis,
     private val canResubmit: (RelayJournal.Delivery) -> Boolean = { true },
 ) {
-    fun drain(allowMove: Boolean = true, projection: ((JSONObject) -> Boolean)? = null) {
+    fun drain(
+        allowMove: Boolean = true,
+        timelineRequestIds: Set<String> = emptySet(),
+        originalRequests: Set<String> = emptySet(),
+        onTimelineReply: (String, JSONObject) -> Unit = { _, _ -> },
+        projection: ((JSONObject) -> Boolean)? = null,
+    ) {
         var moved: JSONObject? = null
         val notifications = mutableListOf<String>()
+        val timelineReplies = mutableListOf<Pair<String, JSONObject>>()
+        val retiredReceipts = mutableListOf<Pair<String, JSONObject?>>()
         mailbox.scan { nonce ->
+            if (nonce in originalRequests) return@scan
             val wire = mailbox.get(nonce)
             if (wire != null) {
                 val message = open(wire, nonce)
@@ -169,7 +178,16 @@ internal class RelayExchange(
                         notifications += nonce
                     } else mailbox.delete(nonce)
                 } else if (message?.optString("kind")?.startsWith("projection.") == true) {
-                    if (projection?.invoke(message) == true || !allowMove) mailbox.delete(nonce)
+                    val kind = message.getString("kind")
+                    val withdrawal = kind == "projection.reset" || kind == "projection.invalidate"
+                    if (allowMove || withdrawal) {
+                        if (projection?.invoke(message) == true) mailbox.delete(nonce)
+                    } else mailbox.delete(nonce)
+                } else if (message != null && nonce in timelineRequestIds) {
+                    timelineReplies += nonce to message
+                } else if (!allowMove && journal.delivery(mailbox.config.down, nonce) != null) {
+                    // The final receipt can remove this retired box from the journal.
+                    retiredReceipts += nonce to message
                 } else {
                     process(nonce, message)
                     mailbox.delete(nonce)
@@ -180,6 +198,15 @@ internal class RelayExchange(
             // If interrupted after applying the move, the new configuration is already durable.
             journal.config(if (it.isNull("relay")) null else RelayConfig.parse(it.getJSONObject("relay")))
             notifications.forEach(mailbox::delete)
+        }
+        // Apply withdrawals before considering any pull replies from the same scan.
+        for ((nonce, message) in timelineReplies) {
+            onTimelineReply(nonce, message)
+            mailbox.delete(nonce)
+        }
+        for ((nonce, message) in retiredReceipts) {
+            process(nonce, message)
+            mailbox.delete(nonce)
         }
     }
 
@@ -215,13 +242,18 @@ internal class RelayExchange(
     }
 
     // Projection and original reads must never enter the persistent delivery journal.
-    suspend fun sendTransient(op: String, body: JSONObject): JSONObject {
+    suspend fun sendTransient(op: String, body: JSONObject, originals: MutableSet<String>): JSONObject {
         val request = protocol.request(op, body)
-        mailbox.put(request)
-        val wire = mailbox.await(request.nonce, now() + waitMillis, now) ?: throw RelayWaiting()
-        val message = protocol.open(wire, request.nonce)
-        mailbox.delete(request.nonce)
-        return protocol.response(op, message)
+        originals.add(request.nonce)
+        try {
+            mailbox.put(request)
+            val wire = mailbox.await(request.nonce, now() + waitMillis, now) ?: throw RelayWaiting()
+            val message = protocol.open(wire, request.nonce)
+            mailbox.delete(request.nonce)
+            return protocol.response(op, message)
+        } finally {
+            originals.remove(request.nonce)
+        }
     }
 
     suspend fun resumeWrites() {

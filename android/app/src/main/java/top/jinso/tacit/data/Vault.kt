@@ -256,6 +256,8 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
     private fun hasTombstone(key: String): Boolean =
         db.rawQuery("SELECT 1 FROM tombstones WHERE hash=?", arrayOf(hash(key))).use { it.moveToFirst() }
 
+    @Synchronized internal fun isRecordDeleted(id: String): Boolean = hasTombstone("id:$id")
+
     private fun tombstone(key: String) {
         db.execSQL("INSERT OR IGNORE INTO tombstones(hash) VALUES(?)", arrayOf(hash(key)))
     }

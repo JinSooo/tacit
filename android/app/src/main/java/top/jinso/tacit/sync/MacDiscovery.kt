@@ -17,11 +17,17 @@ internal class MacDiscovery(private val context: Context) {
     private val nsd = context.getSystemService(NsdManager::class.java)
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
 
-    suspend fun find(hubId: String, last: String?, invited: List<String>, manual: String?): String {
+    suspend fun find(
+        hubId: String, last: String?, invited: List<String>, manual: String?,
+        remainingMillis: () -> Int = { Int.MAX_VALUE },
+    ): String {
         val checked = mutableSetOf<String>()
-        fun valid(origin: String): Boolean = checked.add(origin) && matchesHub(origin, hubId)
+        fun valid(origin: String): Boolean {
+            val remaining = remainingMillis()
+            return remaining > 0 && checked.add(origin) && matchesHub(origin, hubId, minOf(2_500, remaining))
+        }
         (listOfNotNull(last) + invited).firstOrNull(::valid)?.let { return it }
-        discover(hubId, ::valid)?.let { return it }
+        discover(hubId, minOf(5_000, remainingMillis()).toLong(), ::valid)?.let { return it }
         if (manual != null && valid(manual)) return manual
         val active = connectivity.activeNetwork
         val capabilities = connectivity.getNetworkCapabilities(active)
@@ -49,7 +55,8 @@ internal class MacDiscovery(private val context: Context) {
         throw MacUnavailable(manual == null && (cellularOnly || differentSubnet))
     }
 
-    private suspend fun discover(hubId: String, valid: (String) -> Boolean): String? {
+    private suspend fun discover(hubId: String, timeout: Long, valid: (String) -> Boolean): String? {
+        if (timeout <= 0) return null
         val services = Channel<NsdServiceInfo>(Channel.UNLIMITED)
         val listener = object : NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(type: String) {}
@@ -61,7 +68,7 @@ internal class MacDiscovery(private val context: Context) {
         }
         if (runCatching { nsd.discoverServices("_tacit._tcp.", NsdManager.PROTOCOL_DNS_SD, listener) }.isFailure) return null
         try {
-            return withTimeoutOrNull(5_000) {
+            return withTimeoutOrNull(timeout) {
                 for (found in services) {
                     val resolved = withTimeoutOrNull(1_500) { resolve(found) } ?: continue
                     if (resolved.attributes["hub"]?.toString(Charsets.UTF_8) != hubId) continue

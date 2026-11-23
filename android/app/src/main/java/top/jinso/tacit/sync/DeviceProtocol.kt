@@ -75,14 +75,14 @@ internal fun macOrigin(input: String): String {
 }
 
 internal data class DeviceHttpReply(val status: Int, val body: ByteArray = byteArrayOf())
-internal fun deviceHttp(origin: String, payload: ByteArray?): DeviceHttpReply {
+internal fun deviceHttp(origin: String, payload: ByteArray?, timeout: Int = if (payload == null) 2_500 else 20_000): DeviceHttpReply {
     val path = if (payload == null) "/v1/device/hello" else "/v1/device"
     val connection = URI(macOrigin(origin) + path).toURL().openConnection(Proxy.NO_PROXY) as HttpURLConnection
     try {
         connection.instanceFollowRedirects = false
         connection.useCaches = false
-        connection.connectTimeout = 2_500
-        connection.readTimeout = if (payload == null) 2_500 else 20_000
+        connection.connectTimeout = minOf(2_500, timeout)
+        connection.readTimeout = timeout
         if (payload != null) {
             connection.requestMethod = "POST"
             connection.doOutput = true
@@ -108,8 +108,8 @@ internal fun deviceHttp(origin: String, payload: ByteArray?): DeviceHttpReply {
     } finally { connection.disconnect() }
 }
 
-internal fun matchesHub(origin: String, hubId: String): Boolean = runCatching {
-    val reply = deviceHttp(origin, null)
+internal fun matchesHub(origin: String, hubId: String, timeout: Int = 2_500): Boolean = runCatching {
+    val reply = deviceHttp(origin, null, timeout)
     if (reply.status != 200) return false
     val json = JSONObject(reply.body.toString(Charsets.UTF_8))
     json.integer("v") == 1L && json.getString("hub_id") == hubId

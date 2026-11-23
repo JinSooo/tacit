@@ -36,7 +36,9 @@ internal class RelayStatus(val status: Int) : IOException() {
 internal class RelayWaiting : IOException()
 internal typealias RelayHttp = (String, String, String?, ByteArray?, Int, Int) -> DeviceHttpReply
 
-internal class RelayMailbox(val config: RelayConfig, private val http: RelayHttp = ::relayHttp) {
+internal class RelayMailbox(
+    val config: RelayConfig, private val remainingMillis: (() -> Int)? = null, private val http: RelayHttp = ::relayHttp,
+) {
     private val prefix = "/v1/spaces/${config.space}/boxes"
     private val down = "$prefix/${config.down}/messages"
     val messageBytes: Int by lazy {
@@ -97,7 +99,9 @@ internal class RelayMailbox(val config: RelayConfig, private val http: RelayHttp
         limit: Int = 32 * 1024, statuses: Set<Int> = setOf(200), timeout: Int = 5_000,
     ): DeviceHttpReply {
         // The injected transport uses the same validation and HTTP status rules as production.
-        val reply = http(method, config.url + path, token, payload, limit, timeout)
+        val remaining = remainingMillis?.invoke() ?: timeout
+        if (remaining <= 0) throw RelayWaiting()
+        val reply = http(method, config.url + path, token, payload, limit, minOf(remaining, timeout))
         if (reply.status !in statuses) throw RelayStatus(reply.status)
         return reply
     }

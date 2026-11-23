@@ -205,10 +205,7 @@ import java.util.concurrent.CompletableFuture
                         RecordedConversation(entry.scene, summary, onConversation, axis)
                     }
                     is TimelineEntry.Projected -> ProjectedTimelineRow(entry.item, axis) {
-                        val own = rows.firstOrNull { row ->
-                            entry.item.recordIds.isNotEmpty() && row.records.map { it.id }.toSet() == entry.item.recordIds
-                        }
-                        if (own == null) onTimelineItem(entry.item) else onConversation(own.records)
+                        onTimelineItem(entry.item)
                     }
                 }
             }

@@ -8,6 +8,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.io.IOException
 import java.time.Instant
+import java.time.LocalDate
 
 class RelaySyncTest {
     private val hub = DeviceEnvelope.generate()
@@ -57,7 +58,8 @@ class RelaySyncTest {
             fake.down[nonce] = seal(nonce, JSONObject().put("status", 200).put("body", body))
         }
         try {
-            readTimelineOriginals(setOf("raw"), exchange::sendTransient)
+            val active = mutableSetOf<String>()
+            readTimelineOriginals(setOf("raw")) { op, body -> exchange.sendTransient(op, body, active) }
             fail("Expected offline read to fail")
         } catch (_: IOException) { }
         assertEquals(2, pages)
@@ -75,6 +77,120 @@ class RelaySyncTest {
         exchange.drain { assertEquals(3, it.getInt("epoch")); true }
         assertEquals(listOf(nonce), fake.deleted)
     }
+
+    // 回归（2026-11-24 审查第 3 条）
+    @Test fun emptyPollDoesNotWaitOrSendAgainAndPullsOnlyWhenDueForView() {
+        val cache = testCache()
+        val timeline = TimelineSync(cache)
+        val sent = mutableListOf<String>()
+        fake.onPut = { _, wire ->
+            val request = JSONObject(DeviceEnvelope.open(JSONObject(wire.toString(Charsets.UTF_8)),
+                DeviceEnvelope.REQUEST_INFO, "android-aebagbaf", hub, DeviceEnvelope.public(phone).base64url()))
+            sent += request.getString("op")
+        }
+        fun round() {
+            val data = JSONObject(saved)
+            val journal = journal(data)
+            val state = RelayTimeline(data, config.down, cache, timeline, { saved = data.toString() }, { now })
+            val mailbox = fake.client()
+            val exchange = RelayExchange(protocol, journal, mailbox, { _, _ -> fail() })
+            exchange.drain(timelineRequestIds = state.replyIds,
+                onTimelineReply = { nonce, message -> state.reply(nonce, message, protocol) }, projection = state::push)
+            state.postDue(protocol, mailbox::put)
+        }
+        fun reply(body: JSONObject) {
+            val nonce = fake.puts.last()
+            fake.down[nonce] = seal(nonce, JSONObject().put("status", 200).put("body", body))
+        }
+        round()
+        now += 30_000
+        val before = fake.calls.size
+        round()
+        assertEquals(listOf("list"), fake.calls.drop(before))
+        assertEquals(listOf("relay"), sent)
+        reply(JSONObject().put("role", "collect"))
+        round()
+        now += TIMELINE_RECHECK - 1
+        round()
+        assertEquals(listOf("relay"), sent)
+        now++
+        round()
+        reply(JSONObject().put("role", "view"))
+        round()
+        repeat(3) { now += 30_000; round() }
+        assertEquals(listOf("relay", "relay", "projection.pull"), sent)
+        reply(JSONObject("""{"epoch":1,"cursor":0,"more":false,"reset":false,"changes":[]}"""))
+        round()
+        val idle = fake.calls.size
+        now += TIMELINE_RECHECK - 1
+        round()
+        assertEquals(listOf("list"), fake.calls.drop(idle))
+        val hint = id(5)
+        fake.down[hint] = seal(hint, JSONObject().put("kind", "projection.hint").put("epoch", 1))
+        round()
+        assertEquals(listOf("relay", "relay", "projection.pull", "projection.pull"), sent)
+    }
+
+    // 回归（2026-11-24 审查第 3 条）
+    @Test fun directDiscoveryFailureIsSharedUntilTheNetworkChangesOrBackoffExpires() = runBlocking {
+        val backoff = DirectDiscoveryBackoff { now }
+        var probes = 0
+        suspend fun failed(route: String) {
+            try {
+                backoff.find(route, canRelay = true) { probes++; throw MacUnavailable(false) }
+                fail("Expected relay fallback")
+            } catch (_: MacUnavailable) { }
+        }
+        failed("wifi-a")
+        failed("wifi-a")
+        assertEquals(1, probes)
+        failed("wifi-b")
+        assertEquals(2, probes)
+        now += TIMELINE_RECHECK
+        failed("wifi-b")
+        assertEquals(3, probes)
+    }
+
+    // 回归（2026-11-24 审查第 6 条）
+    @Test fun retiredMailboxAppliesInvalidationAndResetBeforeDeletingEitherNotice() {
+        val date = LocalDate.parse("2026-11-24")
+        val cache = testCache(date)
+        val timeline = TimelineSync(cache)
+        val change = JSONObject().put("kind", "day").put("id", date.toString())
+            .put("op", "upsert").put("data", JSONObject().put("brief", "虚构日程"))
+        for ((kind, expected) in listOf("projection.invalidate" to ProjectionCursor(1, 1),
+            "projection.reset" to ProjectionCursor(2, 0))) {
+            val seq = expected.epoch
+            cache.apply(1, seq, JSONArray(listOf(change.put("seq", seq))))
+            assertTrue(date in cache.snapshots.value.days)
+            val journal = journal(JSONObject().put("relay", config.json()))
+            val write = protocol.request("delete", JSONObject())
+            journal.track(config.down, write, "delete", listOf("fixture-record"), null)
+            journal.config(null)
+            fake.down[write.nonce] = seal(write.nonce, JSONObject().put("status", 200).put("body", JSONObject()))
+            val nonce = id(expected.epoch.toInt() + 4)
+            fake.down[nonce] = seal(nonce, JSONObject().put("kind", kind).put("epoch", expected.epoch)
+                .put("to_seq", 2).put("items", JSONArray(listOf(JSONObject().put("kind", "day").put("id", date.toString())))))
+            val exchange = RelayExchange(protocol, journal, fake.client(), { _, _ ->
+                assertFalse(date in cache.snapshots.value.days)
+            })
+            exchange.drain(allowMove = false) {
+                assertTrue(nonce in fake.down)
+                assertEquals(listOf(config), journal.retired())
+                timeline.push(it, view = false)
+            }
+            assertEquals(expected, cache.cursor)
+            assertFalse(date in cache.snapshots.value.days)
+            assertEquals(listOf(nonce, write.nonce), fake.deleted.takeLast(2))
+            assertTrue(journal.retired().isEmpty())
+        }
+    }
+
+    private fun testCache(today: LocalDate = LocalDate.parse("2026-11-24")) = TimelineCache(object : TimelineDisk {
+        override fun read(owner: String): JSONObject? = null
+        override fun write(owner: String, state: JSONObject) = Unit
+        override fun clear() = Unit
+    }) { today }.apply { bind("test-hub:test-phone") }
 
     @Test fun pendingBatchesSurviveRestartWithoutRepackingAndExpireWithNewNonce() = runBlocking {
         val batch = listOf("record-1" to JSONObject().put("body", "虚构录音"))
@@ -241,12 +357,14 @@ class RelaySyncTest {
         val down = linkedMapOf<String, ByteArray>()
         val puts = mutableListOf<String>()
         val deleted = mutableListOf<String>()
+        val calls = mutableListOf<String>()
         var denied: Int? = null
         var onPut: (String, ByteArray) -> Unit = { _, _ -> }
 
         fun client() = RelayMailbox(config) { method, url, token, payload, _, _ ->
             assertTrue(url.startsWith(config.url))
             val path = url.removePrefix(config.url)
+            calls += if (method == "GET" && "?" in path) "list" else method
             if (path == "/v1/hello") {
                 assertNull(token)
                 DeviceHttpReply(200, """{"tacit_relay":1,"limits":{"message_bytes":1048576}}""".toByteArray())

@@ -25,3 +25,6 @@ internal fun audioConversationRows(
 /** A partially represented conversation stays visible so its remaining local records can still be opened. */
 internal fun undisplayedConversations(rows: List<AudioConversationRow>, projectedIds: Set<String>) =
     rows.filterNot { row -> row.records.isNotEmpty() && row.records.all { it.id in projectedIds } }
+
+internal fun matchingLocalConversations(rows: List<AudioConversationRow>, recordIds: Set<String>) =
+    rows.filter { row -> !row.private && row.records.any { it.id in recordIds } }

@@ -38,6 +38,20 @@ class AudioConversationRowsTest {
         assertEquals(listOf("pending"), undisplayedConversations(rows, setOf(first.id, second.id)).map { it.key })
     }
 
+    // 回归（2026-11-24 审查第 5 条）
+    @Test fun mergedAndSplitProjectionCanOpenTheEntireLocalConversation() {
+        val first = record("first", 1000)
+        val second = record("second", 1500)
+        val private = record("private", 2000, "private")
+        val rows = audioConversationRows(listOf(scene("phone", 1000, first.id, second.id, private.id)),
+            listOf(first, second, private).associateBy { it.id })
+        assertEquals(listOf("phone:private"), undisplayedConversations(rows, setOf(first.id, second.id)).map { it.key })
+        for (ids in listOf(setOf(first.id, second.id, "mac"), setOf(first.id), setOf(second.id))) {
+            assertEquals(listOf(first, second), matchingLocalConversations(rows, ids).single().records)
+        }
+        assertTrue(matchingLocalConversations(rows, setOf("mac", private.id)).isEmpty())
+    }
+
     @Test fun newestConversationsComeFirstAndDeletedRecordsAreOmitted() {
         val earlier = record("earlier", 1100)
         val later = record("later", 1200)
