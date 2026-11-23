@@ -51,7 +51,7 @@ internal class RelayTimeline(
                 "relay" -> role(body.optionalString("role"))
                 "projection.pull" -> if (view && cursor == cache.cursor) {
                     when (timeline.applyPage(body, cursor)) {
-                        TimelinePage.COMPLETE -> state.put("lastPull", now())
+                        TimelinePage.COMPLETE -> { state.put("lastPull", now()); state.remove("retries") }
                         TimelinePage.REVOKED -> role("collect")
                         TimelinePage.MORE -> state.put("needsPull", true)
                         TimelinePage.RESET -> retryPull()
@@ -66,7 +66,9 @@ internal class RelayTimeline(
             when (error.status) {
                 403 -> role("collect")
                 409 -> retryPull()
-                else -> throw error
+                // A busy or failing hub must not abort the whole mailbox drain and hold back recording uploads;
+                // drop this reply and pull again on the next round (2026-11-24 review).
+                else -> retryPull()
             }
         } finally {
             pending.remove(op)
@@ -87,7 +89,9 @@ internal class RelayTimeline(
             timeline.needsAck(cursor) -> "projection.ack"
             else -> return
         }
-        val previous = pending.optJSONObject(op)
+        // A request marked stale by an invalidate or reset is replaced at once: the hub deletes its old reply from
+        // the mailbox, so waiting out the 24 h delivery window left the timeline blank (2026-11-24 review).
+        val previous = pending.optJSONObject(op)?.takeUnless { it.optBoolean("stale") }
         if (previous != null && time - previous.getLong("at") < DELIVERY_TTL) {
             previous.optionalString("wire")?.let { wire ->
                 postRequest(op, previous, DeviceEnvelope.Request(wire.toByteArray(), previous.getString("nonce")), post)

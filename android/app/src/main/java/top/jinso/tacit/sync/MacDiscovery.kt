@@ -22,13 +22,20 @@ internal class MacDiscovery(private val context: Context) {
         remainingMillis: () -> Int = { Int.MAX_VALUE },
     ): String {
         val checked = mutableSetOf<String>()
+        var exhausted = false
         fun valid(origin: String): Boolean {
             val remaining = remainingMillis()
-            return remaining > 0 && checked.add(origin) && matchesHub(origin, hubId, minOf(2_500, remaining))
+            if (remaining <= 0) { exhausted = true; return false }
+            return checked.add(origin) && matchesHub(origin, hubId, minOf(2_500, remaining))
         }
-        (listOfNotNull(last) + invited).firstOrNull(::valid)?.let { return it }
+        // The last working address, then Bonjour and the hand-entered address, and only then the rest of the
+        // invitation's addresses: a few unreachable VPN or container addresses used to eat the whole budget
+        // before Bonjour ran (2026-11-24 review).
+        if (last != null && valid(last)) return last
+        if (remainingMillis() <= 0) exhausted = true
         discover(hubId, minOf(5_000, remainingMillis()).toLong(), ::valid)?.let { return it }
         if (manual != null && valid(manual)) return manual
+        invited.firstOrNull(::valid)?.let { return it }
         val active = connectivity.activeNetwork
         val capabilities = connectivity.getNetworkCapabilities(active)
         val links = connectivity.getLinkProperties(active)?.linkAddresses.orEmpty()
@@ -52,7 +59,7 @@ internal class MacDiscovery(private val context: Context) {
                 }
             }
         }
-        throw MacUnavailable(manual == null && (cellularOnly || differentSubnet))
+        throw MacUnavailable(manual == null && (cellularOnly || differentSubnet), incomplete = exhausted)
     }
 
     private suspend fun discover(hubId: String, timeout: Long, valid: (String) -> Boolean): String? {

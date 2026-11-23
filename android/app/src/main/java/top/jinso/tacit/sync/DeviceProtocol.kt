@@ -20,7 +20,8 @@ internal fun JSONObject.optionalString(key: String): String? = if (isNull(key)) 
 internal fun JSONArray.strings(): List<String> = (0 until length()).map { get(it) as String }
 
 internal class InviteExpired : Exception()
-internal class MacUnavailable(val networkMismatch: Boolean) : IOException()
+/** [incomplete]: the time budget ran out before every way to reach the Mac was tried, so it is not a real miss. */
+internal class MacUnavailable(val networkMismatch: Boolean, val incomplete: Boolean = false) : IOException()
 internal class DeviceRemoved : Exception()
 internal class DeviceStatus(val status: Int, val operation: String) : IOException()
 internal class EnvelopeTooLarge : Exception()

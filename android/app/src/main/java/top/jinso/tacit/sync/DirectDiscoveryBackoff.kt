@@ -14,7 +14,8 @@ internal class DirectDiscoveryBackoff(private val now: () -> Long) {
         try {
             discover().also { failed = null }
         } catch (error: MacUnavailable) {
-            failed = Failure(route, now() + TIMELINE_RECHECK, error)
+            // A search cut short by the time budget proves nothing; only a full miss starts the backoff.
+            if (!error.incomplete) failed = Failure(route, now() + TIMELINE_RECHECK, error)
             throw error
         }
     }

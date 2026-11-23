@@ -131,6 +131,61 @@ class RelaySyncTest {
         assertEquals(listOf("relay", "relay", "projection.pull", "projection.pull"), sent)
     }
 
+    // 回归（2026-11-24 第 2 轮审查第 1、3 条）：撤回后作废的拉取立即重发；中枢 503 不中断整轮。
+    @Test fun staleOrFailedPullIsReplacedWithoutWaitingForTheDeliveryWindow() {
+        val cache = testCache()
+        val timeline = TimelineSync(cache)
+        val sent = mutableListOf<String>()
+        fake.onPut = { _, wire ->
+            val request = JSONObject(DeviceEnvelope.open(JSONObject(wire.toString(Charsets.UTF_8)),
+                DeviceEnvelope.REQUEST_INFO, "android-aebagbaf", hub, DeviceEnvelope.public(phone).base64url()))
+            sent += request.getString("op")
+        }
+        fun round() {
+            val data = JSONObject(saved)
+            val journal = journal(data)
+            val state = RelayTimeline(data, config.down, cache, timeline, { saved = data.toString() }, { now })
+            val mailbox = fake.client()
+            val exchange = RelayExchange(protocol, journal, mailbox, { _, _ -> fail() })
+            exchange.drain(timelineRequestIds = state.replyIds,
+                onTimelineReply = { nonce, message -> state.reply(nonce, message, protocol) }, projection = state::push)
+            state.postDue(protocol, mailbox::put)
+        }
+        fun reply(status: Int, body: JSONObject) {
+            val nonce = fake.puts.last()
+            fake.down[nonce] = seal(nonce, JSONObject().put("status", status).put("body", body))
+        }
+        round()
+        reply(200, JSONObject().put("role", "view"))
+        round()
+        assertEquals(listOf("relay", "projection.pull"), sent)
+        // The hub deletes the old pull reply and sends an invalidation instead; the next round pulls again.
+        val notice = id(7)
+        fake.down[notice] = seal(notice, JSONObject().put("kind", "projection.invalidate").put("epoch", 1)
+            .put("to_seq", 3).put("items", org.json.JSONArray()))
+        round()
+        assertEquals(listOf("relay", "projection.pull", "projection.pull"), sent)
+        // A busy hub answers 503: the round finishes and the pull is retried later, not after 24 hours.
+        reply(503, JSONObject().put("error", "busy"))
+        round()
+        now += 30_000
+        round()
+        assertEquals(listOf("relay", "projection.pull", "projection.pull", "projection.pull"), sent)
+    }
+
+    // 回归（2026-11-24 第 2 轮审查第 2 条）：时间预算耗尽、没试完所有途径的发现不算失败，不进退避。
+    @Test fun discoveryCutShortByTheBudgetDoesNotStartTheBackoff() = runBlocking {
+        val backoff = DirectDiscoveryBackoff { now }
+        var probes = 0
+        repeat(2) {
+            try {
+                backoff.find("wifi-a", canRelay = true) { probes++; throw MacUnavailable(false, incomplete = true) }
+                fail("Expected relay fallback")
+            } catch (_: MacUnavailable) { }
+        }
+        assertEquals(2, probes)
+    }
+
     // 回归（2026-11-24 审查第 3 条）
     @Test fun directDiscoveryFailureIsSharedUntilTheNetworkChangesOrBackoffExpires() = runBlocking {
         val backoff = DirectDiscoveryBackoff { now }
