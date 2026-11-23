@@ -358,13 +358,14 @@ printf '%s\n' "$2"
 
 // 回归：事实的证据其实属于另一个项目，用户只能"修正"文案，证据仍挂在原线程上（2026-11-10 用户报告）。
 test("事实不属于这条线程：证据所在片段退回未分配并记下拒绝，作废该事实和全由这些片段支撑的推断", async () => {
-  project(); thread(); const a = rec(0), b = rec(1), keep = rec(30);
+  project(); const a = rec(0), b = rec(1), keep = rec(30);
+  store.upsertThread({ id: "t",project_id: "p",title: "合成线程",status: "active",first_ms: base,last_ms: base+30*60000,needs_regen: 0 });
   ctx.db.ingest([a,b,keep]);
   const wrong = frame([a.id,b.id]), right = frame([keep.id]);
   store.createFrame(wrong); store.createFrame(right); store.assign(wrong.id,"t","llm",0.8); store.assign(right.id,"t","llm",0.8);
   const target = fact([a.id],{ origin: "user",text: "用户修正过的文案" }), sameFrames = fact([b.id]), mixed = fact([b.id,keep.id]), own = fact([keep.id]);
   for (const f of [target,sameFrames,mixed,own]) store.writeFact(f);
-  store.upsertDay({ date: a.t_start.slice(0,10),needs_regen: 0 });
+  store.upsertDay({ date: a.t_start.slice(0,10),brief: "当天概述",needs_regen: 0 });
   const request = api();
   const res = await request(`facts/${target.id}/detach`,{});
   expect(res.status).toBe(200);
@@ -375,6 +376,8 @@ test("事实不属于这条线程：证据所在片段退回未分配并记下�
   expect(store.facts("thread_id","t").map(f => f.id).sort()).toEqual([mixed.id,own.id].sort());
   expect(store.thread("t")?.needs_regen).toBe(1); expect(store.project("p")?.needs_regen).toBe(1);
   expect(store.day(a.t_start.slice(0,10))?.needs_regen).toBe(1);
+  // 时间线由原始记录写成，不引用事项摘要：改归属只重写事项，已有的当天内容留到下次整理覆盖。
+  expect(store.day(a.t_start.slice(0,10))?.brief).toBe("当天概述");
   // 规则不会再把它直接归回原线程（项目里只有这一条活跃线程，原本会命中）。
   expect(new DistillRules(store).assign(store.frames().find(f => f.id === wrong.id)!)).toEqual({ status: "unassigned" });
   // 已失效的事实不能再操作。

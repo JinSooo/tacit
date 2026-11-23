@@ -212,7 +212,7 @@ export class DistillStore {
       for (const other of this.facts("thread_id", threadId)) {
         if (other.origin === "llm" && other.evidence.length && other.evidence.every(e => moved.has(e))) { invalidate.run(at, other.id); count++; }
       }
-      this.clearDerived(new Set([threadId]), new Set(fact.project_id ? [fact.project_id] : []), []);
+      this.clearDerived(new Set([threadId]), new Set(fact.project_id ? [fact.project_id] : []), [], { clearThreadDays: false });
       return { frames: frames.length, facts: count };
     });
   }
@@ -239,7 +239,7 @@ export class DistillStore {
       for (const other of this.facts("thread_id", threadId)) {
         if (other.origin === "llm" && other.evidence.length && other.evidence.every(e => moved.has(e))) { this.sql.prepare("UPDATE facts SET invalid_at=? WHERE id=? AND invalid_at IS NULL").run(at, other.id); count++; }
       }
-      this.clearDerived(new Set([threadId]), new Set(), []);
+      this.clearDerived(new Set([threadId]), new Set(), [], { clearThreadDays: false });
       return { frames: 1, facts: count, thread: threadId };
     });
   }
