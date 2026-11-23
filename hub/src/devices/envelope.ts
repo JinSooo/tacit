@@ -8,7 +8,7 @@ export const responseInfo = "tacit-device-v1/response";
 export const maxEnvelopeBytes = 8 * 1024 * 1024;
 export const deviceID = /^android-[a-z2-7]{8}$/;
 const clockWindowMs = 10 * 60_000;
-const nonceWindowMs = 2 * clockWindowMs;
+
 export const utf8 = (value: string) => new TextEncoder().encode(value);
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -61,7 +61,7 @@ export class WireError extends Error {
 export const invalidEnvelope = () => new WireError(400, "信封格式错误");
 export const unpaired = () => new WireError(401, "设备未配对或已移除");
 
-export async function readEnvelope(request: Request) {
+export async function readEnvelope(request: Pick<Request, "headers" | "body">, fromRelay = false) {
   if (Number(request.headers.get("content-length")) > maxEnvelopeBytes) throw new WireError(413, "信封超过 8 MiB");
   if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json" || !request.body) {
     throw invalidEnvelope();
@@ -69,7 +69,6 @@ export async function readEnvelope(request: Request) {
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let bytes = 0;
-  let raw: Record<string, unknown> | null;
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -81,13 +80,16 @@ export async function readEnvelope(request: Request) {
       }
       chunks.push(value);
     }
-    raw = object(JSON.parse(decoder.decode(Buffer.concat(chunks, bytes))));
   } catch (error) {
-    if (error instanceof WireError) throw error;
+    // 从远端读到一半断线，仍留在上行信箱等待重试。
+    if (fromRelay || error instanceof WireError) throw error;
     throw invalidEnvelope();
   } finally {
     reader.releaseLock();
   }
+  let raw: Record<string, unknown> | null;
+  try { raw = object(JSON.parse(decoder.decode(Buffer.concat(chunks, bytes)))); }
+  catch { throw invalidEnvelope(); }
   if (!raw || raw.v !== 1 || !(raw.device === null || (typeof raw.device === "string" && deviceID.test(raw.device)))) {
     throw invalidEnvelope();
   }
@@ -110,7 +112,7 @@ export async function openRequest(envelope: Awaited<ReturnType<typeof readEnvelo
 
 export async function responseSealer(senderKey: CryptoKeyPair, recipientPublicKey: CryptoKey, nonce: string, ekm?: ArrayBufferView) {
   const context = await suite.createSenderContext({ senderKey, recipientPublicKey, info: utf8(responseInfo), ekm });
-  return async (result: { status: number; body: object }) => {
+  return async (result: object) => {
     const ct = await context.seal(utf8(JSON.stringify(result)), utf8(nonce));
     return { v: 1, enc: Buffer.from(context.enc).toString("base64url"), ct: Buffer.from(ct).toString("base64url") };
   };
@@ -125,24 +127,14 @@ function timestamp(value: unknown): number {
   return Number.isFinite(+date) && date.toISOString().slice(0, 10) === match[1] ? Date.parse(value) : NaN;
 }
 
-export class RequestWindow {
-  private readonly nonces = new Map<string, number>();
-  private pruneAt = -Infinity;
-
-  validate(input: Record<string, unknown> | null, now: number) {
-    const body = object(input?.body);
-    if (!input || typeof input.op !== "string" || typeof input.nonce !== "string" || !base64url(input.nonce, 16) || !body) {
-      throw invalidEnvelope();
-    }
-    const ts = timestamp(input.ts);
-    if (!Number.isFinite(ts) || Math.abs(ts - now) > clockWindowMs) throw new WireError(400, "请求时间无效或已过期");
-    if (now >= this.pruneAt) {
-      for (const [nonce, at] of this.nonces) if (now - at >= nonceWindowMs) this.nonces.delete(nonce);
-      this.pruneAt = now + 60_000;
-    }
-    const previous = this.nonces.get(input.nonce);
-    if (previous !== undefined && now - previous < nonceWindowMs) throw new WireError(400, "请求 nonce 已使用");
-    this.nonces.set(input.nonce, now);
-    return { op: input.op, body };
+export function validateRequest(input: Record<string, unknown> | null, now: number, maxAge = clockWindowMs) {
+  const body = object(input?.body);
+  if (!input || typeof input.op !== "string" || typeof input.nonce !== "string" || !base64url(input.nonce, 16) || !body) {
+    throw invalidEnvelope();
   }
+  const ts = timestamp(input.ts);
+  if (!Number.isFinite(ts) || now - ts > maxAge || ts - now > clockWindowMs) {
+    throw new WireError(400, "请求时间无效或已过期");
+  }
+  return { op: input.op, body };
 }

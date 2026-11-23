@@ -56,3 +56,38 @@ export const deviceKeychain: DeviceKeyStorage = {
     if (result.status !== 0 || deviceKeychain.read() !== value) throw new Error("无法保存设备密钥");
   },
 };
+
+export interface RelayKeyStorage {
+  read(space: string): string | null;
+  write(space: string, value: string): void;
+  remove(space: string): void;
+}
+
+function relayAccount(space: string) {
+  if (!/^[A-Za-z0-9_-]{22}$/.test(space)) throw new Error("信箱空间编号无效");
+  return `relay-space-${space}`;
+}
+
+export const relayKeychain: RelayKeyStorage = {
+  read(space) {
+    const { status, value } = readKeychain(relayAccount(space));
+    if (status === 44) return null;
+    if (status !== 0) throw new Error("无法读取信箱密钥");
+    return value;
+  },
+  write(space, value) {
+    const account = relayAccount(space);
+    if (!/^[A-Za-z0-9_-]{43}$/.test(value)) throw new Error("信箱密钥格式无效");
+    const result = spawnSync("/usr/bin/security", ["-i"], {
+      input: `add-generic-password -U -s record-anything -a ${account} -w "${value}"\n`,
+      timeout: 10_000, stdio: ["pipe", "ignore", "ignore"],
+    });
+    if (result.status !== 0 || relayKeychain.read(space) !== value) throw new Error("无法保存信箱密钥");
+  },
+  remove(space) {
+    const result = spawnSync("/usr/bin/security", ["delete-generic-password", "-s", "record-anything", "-a", relayAccount(space)], {
+      timeout: 10_000, stdio: "ignore",
+    });
+    if (result.status !== 0 && result.status !== 44) throw new Error("无法删除信箱密钥");
+  },
+};

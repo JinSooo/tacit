@@ -1,21 +1,23 @@
 import { spawnSync } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import { AudioStore } from "../audio.ts";
 import { conversationsIn, saveSummary, setSelfSummarizing, storedSummary } from "../conversations.ts";
 import { InputError, type HubDB } from "../db.ts";
 import { isDatabaseBusy } from "../db-busy.ts";
 import { logFailure } from "../diagnostics.ts";
-import { deviceKeychain, type DeviceKeyStorage } from "../keys.ts";
+import { deviceKeychain, relayKeychain, type DeviceKeyStorage, type RelayKeyStorage } from "../keys.ts";
 import { base32, base64url, deviceID, identityFromRaw, invalidEnvelope, object,
-  openRequest, readEnvelope, RequestWindow, responseSealer, suite, unpaired, WireError } from "./envelope.ts";
+  openRequest, readEnvelope, responseSealer, suite, unpaired, validateRequest, WireError } from "./envelope.ts";
 import { deviceList } from "./store.ts";
+import { RelayService } from "./relay.ts";
+import { dayMs, type RelayConfig, type RelayRequest } from "./relay-store.ts";
 
 const invitationMs = 10 * 60_000;
 const idPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const identityKey = "device_hub_id";
 type Identity = Awaited<ReturnType<typeof identityFromRaw>>;
-type Invitation = { code: Buffer; expires: number };
+type Invitation = { code: Buffer; expires: number; relay: RelayConfig | null };
 type Result = { status: number; body: object };
 const ok = (body: object): Result => ({ status: 200, body });
 const fail = (status: number, error: string): Result => ({ status, body: { error } });
@@ -41,6 +43,7 @@ function cursorOf(value: unknown): number {
 
 export interface DeviceDeps {
   keys?: DeviceKeyStorage;
+  relayKeys?: RelayKeyStorage;
   now?: () => number;
   name?: string;
   addresses?: () => string[];
@@ -54,7 +57,7 @@ export class DeviceService {
   private identity?: Promise<Identity | null>;
   private creatingIdentity?: Promise<Identity>;
   private stopped = false;
-  private readonly replay = new RequestWindow();
+  readonly relay: RelayService;
   private readonly audio: AudioStore;
   private readonly clock: () => number;
   private readonly keys: DeviceKeyStorage;
@@ -63,6 +66,14 @@ export class DeviceService {
     this.audio = new AudioStore(hub);
     this.clock = deps.now ?? Date.now;
     this.keys = deps.keys ?? deviceKeychain;
+    this.relay = new RelayService(hub, deps.relayKeys ?? relayKeychain, this.clock,
+      (request, context) => this.receive(request, context),
+      async (publicKey, id, relay) => {
+        const identity = await this.activeIdentity();
+        if (!identity) throw unpaired();
+        const seal = await responseSealer(identity.keys, await suite.kem.deserializePublicKey(publicKey), id);
+        return await seal({ kind: "relay.moved", relay });
+      });
   }
 
   get open() { return this.listener !== undefined; }
@@ -74,15 +85,18 @@ export class DeviceService {
     return this.invite && this.invite.expires > now ? this.invite : null;
   }
 
-  start() { this.reconcile(); }
+  start() {
+    this.reconcile();
+    this.relay.start();
+  }
 
-  stop(force = false) {
+  async stop(force = false) {
     this.stopped = true;
     clearTimeout(this.expiry);
     clearTimeout(this.retry);
     const listener = this.listener;
     this.listener = undefined;
-    return listener?.stop(force);
+    await Promise.all([listener?.stop(force), this.relay.stop()]);
   }
 
   private reconcile() {
@@ -140,6 +154,7 @@ export class DeviceService {
     this.sql.transaction(() => {
       if (this.boundHubID() !== identity.hubID) {
         this.sql.prepare("DELETE FROM device_changes").run();
+        this.relay.revokeDevice();
         this.sql.prepare("DELETE FROM devices").run();
         this.sql.prepare("INSERT INTO distill_state(k,v) VALUES (?,json_quote(?)) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
           .run(identityKey, identity.hubID);
@@ -155,9 +170,10 @@ export class DeviceService {
     if (method === "GET" && path === root) {
       const invite = this.currentInvite();
       if (this.invite && !invite) {
-        this.invite = null;
-        clearTimeout(this.expiry);
-        this.reconcile();
+        await this.relay.run(() => {
+          if (!this.currentInvite()) this.clearInvite();
+          this.reconcile();
+        });
       }
       return json(ok({
         hub_id: this.boundHubID() ?? null,
@@ -167,37 +183,64 @@ export class DeviceService {
       }));
     }
     if (method === "POST" && path === root + "/pairing") {
-      const identity = await this.ensureIdentity();
-      if (this.stopped) return json(fail(503, "中枢正在关闭"));
-      try { this.listen(); }
-      catch { return json(fail(409, "局域网端口无法监听")); }
-      const code = randomBytes(16), expires = this.clock() + invitationMs;
-      this.invite = { code, expires };
-      clearTimeout(this.expiry);
-      this.expiry = setTimeout(() => { this.invite = null; this.reconcile(); }, invitationMs);
-      this.expiry.unref();
-      const expires_at = new Date(expires).toISOString();
-      const payload = {
-        v: 1, hub_id: identity.hubID, name: this.name, pk: identity.publicKey.toString("base64url"),
-        code: code.toString("base64url"), addrs: this.addresses, expires_at,
-      };
-      return json(ok({ uri: `tacit://pair?d=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`, expires_at }));
+      return await this.relay.run(async () => {
+        const identity = await this.ensureIdentity();
+        if (this.stopped) return json(fail(503, "中枢正在关闭"));
+        try { this.listen(); }
+        catch { return json(fail(409, "局域网端口无法监听")); }
+        const code = randomBytes(16), expires = this.clock() + invitationMs;
+        let relay: RelayConfig | null;
+        try { relay = await this.relay.provisionInvite(expires); }
+        catch (error) {
+          this.reconcile();
+          logFailure("relay.invite", error);
+          return json(fail(502, "无法创建配对信箱"));
+        }
+        this.clearInvite();
+        this.invite = { code, expires, relay };
+        this.expiry = setTimeout(() => {
+          void this.relay.run(() => {
+            if (!this.currentInvite()) this.clearInvite();
+            this.reconcile();
+          }).catch(error => { if (!this.stopped) logFailure("devices.invite", error); });
+        }, Math.max(0, expires - this.clock()));
+        this.expiry.unref();
+        const expires_at = new Date(expires).toISOString();
+        const payload = {
+          v: 1, hub_id: identity.hubID, name: this.name, pk: identity.publicKey.toString("base64url"),
+          code: code.toString("base64url"), addrs: this.addresses, expires_at, ...(relay ? { relay } : {}),
+        };
+        return json(ok({ uri: `tacit://pair?d=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`, expires_at }));
+      });
     }
     if (method !== "DELETE") return null;
     if (path === root + "/pairing") {
-      this.invite = null;
-      clearTimeout(this.expiry);
-      this.reconcile();
+      await this.relay.run(() => {
+        this.clearInvite();
+        this.reconcile();
+      });
       return json(ok({ ok: true }));
     }
     const id = path.slice(root.length + 1);
     if (!path.startsWith(root + "/") || !deviceID.test(id)) return null;
-    const deleted = this.sql.transaction(() => {
-      this.sql.prepare("DELETE FROM device_changes WHERE device=?").run(id);
-      return this.sql.prepare("DELETE FROM devices WHERE id=?").run(id).changes > 0;
-    }).immediate();
-    this.reconcile();
+    const deleted = await this.relay.run(async () => {
+      const removed = this.sql.transaction(() => {
+        this.sql.prepare("DELETE FROM device_changes WHERE device=?").run(id);
+        const removed = this.sql.prepare("DELETE FROM devices WHERE id=?").run(id).changes > 0;
+        if (removed) this.relay.revokeDevice(id);
+        return removed;
+      }).immediate();
+      this.reconcile();
+      if (removed) await this.relay.flushRevocations(id);
+      return removed;
+    });
     return json(deleted ? ok({ deleted }) : fail(404, "设备不存在"));
+  }
+
+  private clearInvite() {
+    this.relay.revokeInvite(this.invite?.relay);
+    this.invite = null;
+    clearTimeout(this.expiry);
   }
 
   private async lanRequest(request: Request) {
@@ -208,7 +251,7 @@ export class DeviceService {
         if (!identity) throw unpaired();
         return json(ok({ hub_id: identity.hubID, v: 1 }));
       }
-      if (request.method === "POST" && path === "/v1/device") return await this.receive(request);
+      if (request.method === "POST" && path === "/v1/device") return json(ok((await this.receive(request))!));
       return json(fail(404, "接口不存在"));
     } catch (error) {
       if (error instanceof WireError) return json(fail(error.status, error.message));
@@ -218,11 +261,12 @@ export class DeviceService {
     }
   }
 
-  private async receive(request: Request) {
-    const envelope = await readEnvelope(request);
+  private async receive(request: Request | Response, context?: RelayRequest) {
+    const envelope = await readEnvelope(request, context !== undefined);
+    const { device } = envelope;
+    if (context && device !== (context.mailbox.state === "active" ? context.mailbox.device : null)) throw unpaired();
     const identity = await this.activeIdentity();
     if (!identity || this.stopped) throw unpaired();
-    const { device } = envelope;
     const registered = device === null ? null : this.sql.prepare<[string], { public_key: Buffer }>("SELECT public_key FROM devices WHERE id=?").get(device);
     if (device !== null && !registered) throw unpaired();
     const sender = registered && await suite.kem.deserializePublicKey(registered.public_key);
@@ -234,57 +278,120 @@ export class DeviceService {
       throw invalidEnvelope();
     }
     const nonce = input!.nonce as string;
-    // 在消耗邀请前确认设备公钥能用于 HPKE，避免无效公钥导致邀请被锁死。
+    if (context && nonce !== context.id) throw invalidEnvelope();
+    // 先确认回复能加密，再消耗邀请或执行设备写入。
     let seal: Awaited<ReturnType<typeof responseSealer>>;
     try {
       seal = await responseSealer(identity.keys, sender ?? await suite.kem.deserializePublicKey(pairKey!), nonce);
     } catch {
       throw invalidEnvelope();
     }
-    if (this.stopped || this.boundHubID() !== identity.hubID) throw unpaired();
-    if (device !== null) this.touch(device, registered!.public_key);
-    let result: Result;
-    try {
-      const { op, body } = this.replay.validate(input, this.clock());
-      result = device === null
-        ? op === "pair" ? this.pair(body, pairKey!, identity.hubID) : fail(400, "配对信封只允许 pair")
-        : this.dispatch(device, op, body);
-    } catch (error) {
-      if (error instanceof InputError) result = fail(400, error.message);
-      else if (error instanceof WireError) result = fail(error.status, error.message);
-      else if (isDatabaseBusy(error)) throw error;
-      else {
-        logFailure("devices.operation", error);
-        result = fail(500, "存储操作失败");
-      }
-    }
-    return json(ok(await seal(result)));
+    const execute = async () => {
+      if (this.stopped || this.boundHubID() !== identity.hubID) throw unpaired();
+      if (device !== null) this.touch(device, registered!.public_key);
+      return await this.execute(input, nonce, device, pairKey, identity.hubID, context,
+        context && createHash("sha256").update(envelope.enc).update(envelope.ct).digest("hex"));
+    };
+    // 邮件取信和设置已经在同一队列里，直连配对也在此队列里分配信箱。
+    const result = device === null && !context ? await this.relay.run(execute) : await execute();
+    return result && await seal(result);
   }
 
   private touch(device: string, publicKey: Buffer) {
-    // HPKE 解封和封装上下文都会让出事件循环。再次核对设备仍在，才允许操作。
+    // HPKE 会让出事件循环，执行前要再次确认设备没有被移除。
     const updated = this.sql.prepare("UPDATE devices SET last_seen=? WHERE id=? AND public_key=?")
       .run(new Date(this.clock()).toISOString(), device, publicKey);
     if (!updated.changes) throw unpaired();
   }
 
-  private pair(body: Record<string, unknown>, publicKey: Buffer, hubID: string): Result {
-    const now = this.clock(), invite = this.currentInvite(now), code = base64url(body.code, 16);
-    if (!invite || !code || !timingSafeEqual(code, invite.code)) return fail(403, "配对邀请无效或已过期");
-    if (body.platform !== "android" || typeof body.name !== "string" || !body.name.trim() || body.name.length > 200) {
-      throw new InputError("设备名称或平台无效");
+  private async execute(input: Record<string, unknown> | null, nonce: string, device: string | null,
+                        pairKey: Buffer | null, hubID: string, context?: RelayRequest, hash?: string): Promise<Result | null> {
+    const space = context?.mailbox.space, up = context?.mailbox.up;
+    if (context) {
+      const receipt = this.sql.prepare<[string, string, string], { request_hash: string; result: string }>(
+        "SELECT request_hash, result FROM relay_receipts WHERE space=? AND up=? AND id=?",
+      ).get(space!, up!, nonce);
+      if (receipt) {
+        if (receipt.request_hash !== hash) throw invalidEnvelope();
+        return JSON.parse(receipt.result) as Result;
+      }
+      if (context.mailbox.state === "pair_reply") return null;
     }
-    const name = body.name.trim(), at = new Date(now).toISOString();
-    const device_id = this.sql.transaction(() => {
-      const claim = this.sql.prepare("INSERT OR IGNORE INTO issued_device_ids VALUES(?)");
-      let id: string;
-      do { id = `android-${base32(randomBytes(5))}`; } while (!claim.run(id).changes);
-      this.sql.prepare("INSERT INTO devices VALUES(?,?, 'android', ?,?,?)").run(id, name, publicKey, at, at);
-      return id;
-    }).immediate();
-    this.invite = null;
-    clearTimeout(this.expiry);
-    return ok({ device_id, hub_id: hubID, name });
+    const now = this.clock();
+    const remember = (result: Result) => {
+      if (context) this.sql.prepare("INSERT INTO relay_receipts VALUES (?,?,?,?,?,?)")
+        .run(space, up, nonce, hash, JSON.stringify(result), now);
+      return result;
+    };
+    try {
+      const { op, body } = validateRequest(input, now, context ? 30 * dayMs : undefined);
+      const claim = () => this.sql.prepare("INSERT OR IGNORE INTO device_nonces VALUES (?,?,?)")
+        .run(device ?? "", nonce, now).changes > 0;
+      const replay = () => context ? null : fail(400, "请求 nonce 已使用");
+      if (device === null && op === "pair") {
+        if (this.sql.prepare("SELECT 1 FROM device_nonces WHERE device='' AND nonce=?").get(nonce)) return replay();
+        return await this.pair(body, pairKey!, hubID, context, claim, remember);
+      }
+      return this.sql.transaction(() => {
+        if (!claim()) return replay();
+        try {
+          return remember(device === null ? fail(400, "配对信封只允许 pair") : this.dispatch(device, op, body));
+        } catch (error) {
+          if (error instanceof InputError) return remember(fail(400, error.message));
+          throw error;
+        }
+      }).immediate();
+    } catch (error) {
+      if (error instanceof InputError || error instanceof WireError) return remember(fail(400, error.message));
+      if (isDatabaseBusy(error)) throw error;
+      logFailure("devices.operation", error);
+      return fail(500, "存储操作失败");
+    }
+  }
+
+  private async pair(body: Record<string, unknown>, publicKey: Buffer, hubID: string, context: RelayRequest | undefined,
+                     claim: () => boolean, remember: (result: Result) => Result) {
+    const invite = this.currentInvite(), code = base64url(body.code, 16);
+    const valid = invite && code && timingSafeEqual(code, invite.code) &&
+      (!context || invite.relay?.space === context.mailbox.space && invite.relay.up === context.mailbox.up);
+    const commitError = (result: Result) => this.sql.transaction(() => { claim(); return remember(result); }).immediate();
+    if (!valid) return commitError(fail(403, "配对邀请无效或已过期"));
+    if (body.platform !== "android" || typeof body.name !== "string" || !body.name.trim() || body.name.length > 200) {
+      return commitError(fail(400, "设备名称或平台无效"));
+    }
+    const name = body.name.trim();
+    const allocate = this.sql.prepare("INSERT OR IGNORE INTO issued_device_ids VALUES(?)");
+    let device_id: string;
+    do { device_id = `android-${base32(randomBytes(5))}`; } while (!allocate.run(device_id).changes);
+    let provisioned: Awaited<ReturnType<RelayService["provisionDevice"]>>;
+    try { provisioned = await this.relay.provisionDevice(device_id); }
+    catch (error) {
+      logFailure("relay.pair", error);
+      return commitError(fail(503, "无法创建设备信箱，稍后再试"));
+    }
+    if (this.currentInvite() !== invite || this.stopped) {
+      if (provisioned) this.relay.revokeDevice(device_id);
+      return commitError(fail(403, "配对邀请无效或已过期"));
+    }
+    const at = new Date(this.clock()).toISOString();
+    try {
+      const result = this.sql.transaction(() => {
+        claim();
+        this.sql.prepare("INSERT INTO devices VALUES(?,?, 'android', ?,?,?)").run(device_id, name, publicKey, at, at);
+        if (provisioned) this.relay.setState(provisioned.box, "active");
+        if (context) {
+          this.sql.prepare("UPDATE relay_mailboxes SET state='pair_reply', device=?, token=NULL WHERE space=? AND up=?")
+            .run(device_id, context.mailbox.space, context.mailbox.up);
+        } else this.relay.revokeInvite(invite.relay);
+        return remember(ok({ device_id, hub_id: hubID, name, ...(provisioned ? { relay: provisioned.relay } : {}) }));
+      }).immediate();
+      this.invite = null;
+      clearTimeout(this.expiry);
+      return result;
+    } catch (error) {
+      if (provisioned) this.relay.revokeDevice(device_id);
+      throw error;
+    }
   }
 
   /** The summaries the Mac wrote for this device's own conversations; nothing from any other device. */
@@ -338,6 +445,7 @@ export class DeviceService {
         if (!Array.isArray(body.ids) || body.ids.length < 1 || body.ids.length > 100 ||
           !body.ids.every(id => typeof id === "string" && idPattern.test(id))) throw new InputError("每次删除需要 1–100 个有效记录 id");
         return ok({ deleted: this.hub.deleteMany(body.ids, device) });
+      case "relay": return ok({ relay: this.relay.config(device) });
       case "sync": return ok(this.hub.deviceChanges(device, cursorOf(body.cursor)));
       case "sync.ack":
         this.sql.prepare("DELETE FROM device_changes WHERE device=? AND seq<=?").run(device, cursorOf(body.cursor));

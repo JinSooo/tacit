@@ -298,7 +298,7 @@ test("音频转发只使用配对身份，拒绝跨设备修改对话和上传�
   } finally { await hub.dispose(); }
 });
 
-test("v12 加密数据库迁移到 v13，保留记录并清理验证通过的备份", () => {
+test("v12 加密数据库迁移到 v14，保留记录并清理验证通过的备份", () => {
   const hub = setup();
   try {
     const record = fixture();
@@ -307,7 +307,7 @@ test("v12 加密数据库迁移到 v13，保留记录并清理验证通过的备
     hub.db.close();
     const migrated = new HubDB(hub.file, hub.config.dbKey);
     try {
-      expect(migrated.db.pragma("user_version", { simple: true })).toBe(13);
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(14);
       expect(migrated.get(record.id)).toMatchObject({ id: record.id });
       expect(migrated.db.prepare("SELECT * FROM devices").all()).toEqual([]);
       expect(existsSync(hub.file + ".migration-v12.bak")).toBe(false);

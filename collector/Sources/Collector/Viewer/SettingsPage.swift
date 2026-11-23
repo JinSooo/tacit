@@ -245,6 +245,7 @@ struct HubSettingsView: View {
         Note("管理连接仅限这台 Mac。")
       }
       PhoneSettingsSection()
+      RelaySettingsSection()
       Section("连接设置") {
         SettingsRow("端口") {
           HStack(spacing: 8) {

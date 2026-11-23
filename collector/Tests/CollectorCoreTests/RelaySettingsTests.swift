@@ -1,0 +1,100 @@
+import Foundation
+import Testing
+@testable import CollectorCore
+
+@Test(arguments: [
+  "https://mailbox.example",
+  "https://mailbox.example:8443/relay/",
+  "HTTP://LOCALHOST:8000",
+  "http://127.0.0.1:8000/relay",
+])
+func acceptsRelayAddresses(_ address: String) {
+  #expect(RelaySettingsText.validatedAddress("  \(address)\n") == address)
+}
+
+@Test(arguments: [
+  "", "mailbox.example", "https:///relay", "ftp://mailbox.example",
+  "http://mailbox.example", "http://192.0.2.1", "http://localhost.example",
+  "https://user:pass@mailbox.example", "https://@mailbox.example", "https://mailbox.example?code=sample",
+  "https://mailbox.example#", "https://mailbox.example:70000", "https://mailbox.example/a b",
+  "https://mailbox.example\\relay",
+])
+func rejectsInvalidRelayAddresses(_ address: String) {
+  #expect(RelaySettingsText.validatedAddress(address) == nil)
+}
+
+@Test func presentsConnectedRelayWithPendingMessagesAndRetirement() throws {
+  let settings = try decodeRelay("""
+    {
+      "mode":"custom","url":"https://relay.example","connected":true,
+      "last_fetch_at":"2026-11-23T08:15:00.000Z","used_bytes":233,"unprocessable":0,
+      "devices":[{"device":"phone-a","pending":2},{"device":"phone-b","pending":3},
+                 {"device":"phone-c","pending":null},{"device":"phone-d","pending":0}],
+      "retiring":[{"url":"https://old.relay.example","retire_at":"2026-11-29T16:00:00.000Z"},
+                  {"url":"https://older.relay.example","retire_at":"2026-11-28T16:00:00.000Z"}]
+    }
+    """)
+  #expect(RelaySettingsText.connection(settings, calendar: testCalendar) == "已连接，上次取信 11月23日 17:15")
+  #expect(RelaySettingsText.pending(settings) == "还有 5 条等着取")
+  #expect(RelaySettingsText.retirement(settings, calendar: testCalendar) == "旧信箱保留到 11月30日")
+}
+
+@Test func presentsDisconnectedRelayWithoutEmptyDetails() throws {
+  let settings = try decodeRelay("""
+    {
+      "mode":"custom","url":"https://relay.example","connected":false,
+      "last_fetch_at":"2026-11-23T08:15:00.000Z","used_bytes":null,"unprocessable":0,
+      "devices":[{"device":"phone-a","pending":null},{"device":"phone-b","pending":0}],"retiring":[]
+    }
+    """)
+  #expect(RelaySettingsText.connection(settings) == "连不上信箱，请检查地址和网络。")
+  #expect(RelaySettingsText.pending(settings) == nil)
+  #expect(RelaySettingsText.retirement(settings) == nil)
+}
+
+@Test func presentsConnectedRelayBeforeFirstFetch() throws {
+  let settings = try decodeRelay("""
+    {
+      "mode":"custom","url":"https://relay.example","connected":true,"last_fetch_at":null,
+      "used_bytes":null,"unprocessable":0,"devices":[],"retiring":[]
+    }
+    """)
+  #expect(RelaySettingsText.connection(settings) == "已连接")
+}
+
+@Test func presentsOnlyRetirementAfterDisablingRelay() throws {
+  let settings = try decodeRelay("""
+    {
+      "mode":"off","url":null,"connected":false,"last_fetch_at":null,"used_bytes":null,
+      "unprocessable":0,"devices":[],
+      "retiring":[{"url":"https://old.relay.example","retire_at":"2026-11-29T16:00:00.000Z"}]
+    }
+    """)
+  #expect(RelaySettingsText.connection(settings) == nil)
+  #expect(RelaySettingsText.pending(settings) == nil)
+  #expect(RelaySettingsText.retirement(settings, calendar: testCalendar) == "旧信箱保留到 11月30日")
+}
+
+@Test(arguments: [
+  (0, "暂时无法与后台服务通信，请稍后再试。"),
+  (400, "地址无效，或该地址没有 Tacit 信箱。"),
+  (403, "开通码不正确，请检查后再试。"),
+  (429, "信箱请求次数已达今天的上限，请明天再试。"),
+  (502, "连不上信箱，请检查地址和网络。"),
+  (503, "后台服务正忙，请稍后再试。"),
+  (507, "信箱空间已满，请腾出空间后再试。"),
+  (500, "信箱操作失败，请稍后再试。"),
+])
+func presentsRelayFailures(_ status: Int, _ message: String) {
+  #expect(RelaySettingsText.failure(status: status) == message)
+}
+
+private func decodeRelay(_ json: String) throws -> RelaySettings {
+  try HubJSON.decoder().decode(RelaySettings.self, from: Data(json.utf8))
+}
+
+private var testCalendar: Calendar {
+  var calendar = Calendar(identifier: .gregorian)
+  calendar.timeZone = TimeZone(secondsFromGMT: 9 * 3600)!
+  return calendar
+}

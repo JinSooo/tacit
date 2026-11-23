@@ -1,0 +1,17 @@
+// Cloudflare 部署配置。在 relay/ 目录里运行 wrangler，不要在仓库根目录运行。
+{
+  "name": "tacit-relay",
+  "main": "src/cloudflare.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "durable_objects": {
+    "bindings": [
+      { "name": "SPACES", "class_name": "RelaySpace" },
+      { "name": "GATE", "class_name": "RelayGate" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RelaySpace", "RelayGate"] }
+  ],
+  "observability": { "enabled": false }
+}

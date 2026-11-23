@@ -373,6 +373,20 @@ extension HubAPI {
   func removeDevice(_ id: String) async throws {
     try await send("DELETE", "/v1/settings/devices/\(id)")
   }
+  func relaySettings() async throws -> RelaySettings {
+    try await call(RelaySettings.self, "GET", "/v1/settings/relay", nil, timeout: 5)
+  }
+  func saveRelay(address: String, code: String) async throws -> RelaySettings {
+    var body = ["mode": RelaySettings.Mode.custom.rawValue, "url": address]
+    if !code.isEmpty { body["code"] = code }
+    return try await call(RelaySettings.self, "PUT", "/v1/settings/relay", body, timeout: 75)
+  }
+  func disableRelay() async throws -> RelaySettings {
+    try await call(RelaySettings.self, "PUT", "/v1/settings/relay", ["mode": RelaySettings.Mode.off.rawValue], timeout: 75)
+  }
+  func testRelay(address: String) async throws -> RelayTestResult {
+    try await call(RelayTestResult.self, "POST", "/v1/settings/relay/test", ["url": address])
+  }
   func setHubPort(_ port: Int) async throws -> Bool {
     struct R: Decodable { let restarting: Bool }
     return try await call(R.self, "PUT", "/v1/settings/hub", ["port": port]).restarting
@@ -395,4 +409,14 @@ extension HubAPI {
     struct R: Decodable { let models: [String] }
     return try await call(R.self, "POST", "/v1/settings/models/local", ["base_url": baseURL], timeout: 8).models
   }
+}
+
+struct RelayTestResult: Decodable {
+  struct Limits: Decodable {
+    let spaceBytes: Int
+    let messageBytes: Int
+    let retentionDays: Int
+  }
+  let tacitRelay: Int
+  let limits: Limits
 }
