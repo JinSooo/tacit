@@ -154,7 +154,7 @@ internal class RelayExchange(
     private val now: () -> Long = System::currentTimeMillis,
     private val canResubmit: (RelayJournal.Delivery) -> Boolean = { true },
 ) {
-    fun drain(allowMove: Boolean = true) {
+    fun drain(allowMove: Boolean = true, projection: ((JSONObject) -> Boolean)? = null) {
         var moved: JSONObject? = null
         val notifications = mutableListOf<String>()
         mailbox.scan { nonce ->
@@ -168,6 +168,8 @@ internal class RelayExchange(
                         moved = message
                         notifications += nonce
                     } else mailbox.delete(nonce)
+                } else if (message?.optString("kind")?.startsWith("projection.") == true) {
+                    if (projection?.invoke(message) == true || !allowMove) mailbox.delete(nonce)
                 } else {
                     process(nonce, message)
                     mailbox.delete(nonce)
@@ -209,6 +211,16 @@ internal class RelayExchange(
         if (existing != null) return protocol.response(op, existing)
         journal.unconfirmedPut(id)?.let { post(it, fresh = false) }
         val message = receive(id)
+        return protocol.response(op, message)
+    }
+
+    // Projection and original reads must never enter the persistent delivery journal.
+    suspend fun sendTransient(op: String, body: JSONObject): JSONObject {
+        val request = protocol.request(op, body)
+        mailbox.put(request)
+        val wire = mailbox.await(request.nonce, now() + waitMillis, now) ?: throw RelayWaiting()
+        val message = protocol.open(wire, request.nonce)
+        mailbox.delete(request.nonce)
         return protocol.response(op, message)
     }
 

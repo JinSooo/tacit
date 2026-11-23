@@ -15,6 +15,13 @@ internal fun sourceName(source: String): String = when (source) {
     Sources.NOTE -> "补写"
     Sources.CORRECTION -> "修正"
     Sources.AUDIO -> "录音"
+    "mac.audio" -> "录音"
+    "claude_code.session" -> "Claude Code"
+    "codex.session" -> "Codex"
+    "mac.wechat" -> "微信"
+    "mac.browser" -> "浏览器"
+    "mac.screen" -> "屏幕"
+    "mac.app" -> "应用"
     // Historical labels for records still visible after an upgrade.
     Sources.NOTIFICATION -> "聊天通知"
     Sources.USAGE -> "应用使用"

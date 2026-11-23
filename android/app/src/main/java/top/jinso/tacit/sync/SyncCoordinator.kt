@@ -8,6 +8,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.json.JSONArray
 import org.json.JSONObject
 import top.jinso.tacit.TacitApp
@@ -23,6 +24,10 @@ internal data class MacStatus(
 internal class SyncCoordinator(private val app: TacitApp) {
     private val mutex = Mutex()
     private val vault get() = app.vault
+    private val timelineCache = TimelineCache(EncryptedTimelineDisk(app))
+    private val timeline = TimelineSync(timelineCache)
+    private var timelineWorkerScheduled = false
+    val timelineSnapshots = timelineCache.snapshots
 
     suspend fun status(includeReasons: Boolean): MacStatus = withContext(Dispatchers.IO) {
         val data = vault.syncConnection()
@@ -55,6 +60,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
                     .put("relay", paired.relay?.json()))
             }
             SyncWorker.schedulePeriodic(app)
+            timelineWorkerScheduled = true
             SyncWorker.enqueue(app)
         }
     }
@@ -71,8 +77,10 @@ internal class SyncCoordinator(private val app: TacitApp) {
 
     suspend fun disconnect() = withContext(Dispatchers.IO) {
         mutex.withLock {
+            timeline.clear()
             forgetAudioPolicy { vault.saveSyncConnection(null) }
             SyncWorker.cancel(app)
+            timelineWorkerScheduled = false
         }
     }
 
@@ -88,28 +96,16 @@ internal class SyncCoordinator(private val app: TacitApp) {
         try {
             val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
             var unavailable: MacUnavailable? = null
-            val origin = try {
-                MacDiscovery(app).find(data.getString("hub"), data.optionalString("last"),
-                    data.getJSONArray("addresses").strings(), data.optionalString("manual"))
-            } catch (error: MacUnavailable) {
+            val origin = try { findOrigin(data) } catch (error: MacUnavailable) {
                 unavailable = error
                 null
             }
             val device = data.getString("device")
-            val public = data.getString("public")
-            val secret = Keys(app).unwrapDeviceKey(data.getString("private").decode64(), public)
-            val keys = try { DeviceEnvelope.restore(secret, public.decode64(32)) } finally { secret.fill(0) }
+            val keys = restoreKeys(data)
             val hubKey = data.getString("hubKey")
             val protocol = DeviceMessages(hubKey, keys, device)
-            fun receipt(delivery: RelayJournal.Delivery, reply: JSONObject) {
-                when (delivery.op) {
-                    "ingest" -> vault.applyReceipt(delivery.ids, uploadReceipt(reply, delivery.ids.size))
-                    "delete" -> confirmDeletes(delivery.ids, reply)
-                }
-                data.put("lastSync", System.currentTimeMillis())
-            }
-
-            fun exchange(mailbox: RelayMailbox) = RelayExchange(protocol, journal, mailbox, ::receipt,
+            fun exchange(mailbox: RelayMailbox) = RelayExchange(protocol, journal, mailbox,
+                { delivery, reply -> applyRelayReceipt(data, delivery, reply) },
                 canResubmit = { it.op != "ingest" || it.ids.all { id -> vault.wire(id) != null } })
             fun drain(config: RelayConfig, required: Boolean, allowMove: Boolean) {
                 try {
@@ -163,18 +159,9 @@ internal class SyncCoordinator(private val app: TacitApp) {
         } catch (error: CancellationException) {
             throw error
         } catch (_: DeviceRemoved) {
-            data.put("removed", true)
-            data.remove("private")
-            data.remove("relay")
-            data.remove("relayDisabled")
-            data.remove("relayRetired")
-            data.remove("relayJournal")
-            data.remove("relayRoundAt")
-            data.remove("audio")
-            data.remove("error")
-            forgetAudioPolicy { vault.saveSyncConnection(data) }
-            SyncWorker.cancel(app)
+            markRemoved(data)
         } catch (error: Exception) {
+            if (error is RelayStatus && error.unauthorized && data.optBoolean("relayDisabled")) timeline.clear()
             val failures = (data.optInt("failures") + 1).coerceAtMost(8)
             val delay = (30_000L shl (failures - 1)).coerceAtMost(MAX_RETRY)
             data.put("error", if (data.optBoolean("relayDisabled")) null else syncError(error)).put("failures", failures).put("retryAt", System.currentTimeMillis() + delay)
@@ -183,11 +170,130 @@ internal class SyncCoordinator(private val app: TacitApp) {
         }
     }
 
+    suspend fun refreshTimeline(foreground: Boolean = false) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val data = try {
+                vault.syncConnection()
+            } catch (_: Exception) {
+                // The app already shows the locked-vault state. Do not restore a view without its pairing.
+                timeline.clear()
+                return@withLock
+            }
+            timelineCache.bind(data?.takeUnless { it.optBoolean("removed") }?.let(::timelineOwner))
+            if (data == null || data.optBoolean("removed")) return@withLock
+            if (foreground && !timelineWorkerScheduled) {
+                // Update the recurring work of phones paired before timeline support.
+                SyncWorker.schedulePeriodic(app)
+                timelineWorkerScheduled = true
+            }
+
+            try {
+                val origin = try { findOrigin(data) } catch (_: MacUnavailable) { null }
+                if (origin != null) {
+                    val client = DeviceClient(data.getString("hubKey"), restoreKeys(data),
+                        { deviceHttp(origin, it) }, data.getString("device"))
+                    val role = client.send("relay").optionalString("role")
+                    timeline.pull(role, client::send)
+                } else {
+                    val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
+                    if (journal.disabled) {
+                        timeline.clear()
+                        return@withLock
+                    }
+                    val config = journal.active ?: return@withLock
+                    val relay = timelineRelay(data, journal, config)
+                    journal.useMailbox(config) {
+                        // Withdrawals apply even when the upstream role request cannot reach the hub.
+                        relay.drain { timeline.push(it, view = false) }
+                        if (journal.active != config) return@useMailbox
+                        val role = relay.sendTransient("relay", JSONObject()).optionalString("role")
+                        if (timeline.role(role)) {
+                            relay.drain { timeline.push(it, view = true) }
+                            if (journal.active == config) timeline.pull(role, relay::sendTransient)
+                        }
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: DeviceRemoved) {
+                markRemoved(data)
+            } catch (error: RelayStatus) {
+                // A revoked mailbox can no longer deliver a downgrade or deletion notice.
+                if (error.unauthorized) timeline.clear()
+            } catch (error: Exception) {
+                // Keep the last confirmed view while the hub is unreachable.
+            }
+        }
+    }
+
+    suspend fun timelineOriginals(ids: Set<String>): List<TimelineOriginal> = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val data = vault.syncConnection()?.takeUnless { it.optBoolean("removed") } ?: throw DeviceRemoved()
+            try {
+                val origin = try { findOrigin(data) } catch (error: MacUnavailable) {
+                    val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
+                    val config = journal.active?.takeUnless { journal.disabled } ?: throw error
+                    val relay = timelineRelay(data, journal, config)
+                    return@withLock journal.useMailbox(config) { readTimelineOriginals(ids, relay::sendTransient) }
+                }
+                val client = DeviceClient(data.getString("hubKey"), restoreKeys(data),
+                    { deviceHttp(origin, it) }, data.getString("device"))
+                readTimelineOriginals(ids, client::send)
+            } catch (error: DeviceRemoved) {
+                markRemoved(data)
+                throw error
+            } catch (error: DeviceStatus) {
+                if (error.status == 403) timeline.clear()
+                throw error
+            } catch (error: RelayStatus) {
+                if (error.unauthorized) timeline.clear()
+                throw error
+            }
+        }
+    }
+
+    private fun timelineOwner(data: JSONObject) = data.getString("hub") + ":" + data.getString("device")
+
+    private fun timelineRelay(data: JSONObject, journal: RelayJournal, config: RelayConfig): RelayExchange {
+        val protocol = DeviceMessages(data.getString("hubKey"), restoreKeys(data), data.getString("device"))
+        return RelayExchange(protocol, journal, RelayMailbox(config),
+            { delivery, reply -> applyRelayReceipt(data, delivery, reply) })
+    }
+
+    private fun applyRelayReceipt(data: JSONObject, delivery: RelayJournal.Delivery, reply: JSONObject) {
+        when (delivery.op) {
+            "ingest" -> vault.applyReceipt(delivery.ids, uploadReceipt(reply, delivery.ids.size))
+            "delete" -> confirmDeletes(delivery.ids, reply)
+        }
+        data.put("lastSync", System.currentTimeMillis())
+    }
+
+    private suspend fun findOrigin(data: JSONObject): String =
+        MacDiscovery(app).find(data.getString("hub"), data.optionalString("last"),
+            data.getJSONArray("addresses").strings(), data.optionalString("manual"))
+
+    private fun restoreKeys(data: JSONObject): AsymmetricCipherKeyPair {
+        val public = data.getString("public")
+        val secret = Keys(app).unwrapDeviceKey(data.getString("private").decode64(), public)
+        return try { DeviceEnvelope.restore(secret, public.decode64(32)) } finally { secret.fill(0) }
+    }
+
+    private fun markRemoved(data: JSONObject) {
+        timeline.clear()
+        data.put("removed", true)
+        for (key in listOf("private", "relay", "relayDisabled", "relayRetired", "relayJournal", "relayRoundAt", "audio", "error")) {
+            data.remove(key)
+        }
+        forgetAudioPolicy { vault.saveSyncConnection(data) }
+        SyncWorker.cancel(app)
+    }
+
     private fun refreshRelay(client: DeviceClient, journal: RelayJournal) {
         val reply = try { client.send("relay") } catch (error: DeviceStatus) {
             if (error.status in setOf(400, 404)) return // Older Mac.
             throw error
         }
+        timeline.role(reply.optionalString("role"))
         journal.config(if (reply.isNull("relay")) null else RelayConfig.parse(reply.getJSONObject("relay")))
     }
 

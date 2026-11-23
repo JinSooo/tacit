@@ -9,6 +9,7 @@ struct DeviceSettingsSection: View {
     let invitation: DeviceInvitation
     let expires: Date
     let role: DeviceSettings.Role
+    let platform: String
     let previousDevices: Set<String>
     let qr: CGImage?
   }
@@ -83,8 +84,8 @@ struct DeviceSettingsSection: View {
           step = .role
         } confirmAdmin: {
           step = .confirmAdmin
-        } invite: { role in
-          Task { await createInvitation(role) }
+        } invite: { role, platform in
+          Task { await createInvitation(role, platform: platform) }
         } cancel: {
           closeSheet()
         }
@@ -109,7 +110,7 @@ struct DeviceSettingsSection: View {
                   .interpolation(.none)
                   .accessibilityHidden(true)
                   .frame(maxWidth: .infinity)
-                if session.role == .collect { Text("用手机扫描二维码") }
+                if session.platform == "android" { Text("用手机扫描二维码") }
               } else {
                 Text("二维码无法显示，请复制邀请链接。")
               }
@@ -125,7 +126,7 @@ struct DeviceSettingsSection: View {
                 .disabled(busy)
             } else {
               Text("邀请已过期")
-              Button("重新生成") { Task { await createInvitation(session.role) } }
+              Button("重新生成") { Task { await createInvitation(session.role, platform: session.platform) } }
                 .disabled(busy)
             }
           }
@@ -166,7 +167,7 @@ struct DeviceSettingsSection: View {
     }
   }
 
-  private func createInvitation(_ role: DeviceSettings.Role) async {
+  private func createInvitation(_ role: DeviceSettings.Role, platform: String) async {
     guard !busy else { return }
     busy = true
     defer { busy = false }
@@ -185,7 +186,7 @@ struct DeviceSettingsSection: View {
       guard let expires = ViewerTime.parse(invitation.expiresAt) else {
         throw HubError(message: "邀请有效期格式错误", status: 0)
       }
-      let active = Session(invitation: invitation, expires: expires, role: role,
+      let active = Session(invitation: invitation, expires: expires, role: role, platform: platform,
                            previousDevices: Set(before.devices.map(\.id)), qr: invitation.qrCode())
       copied = false
       session = active
@@ -224,7 +225,7 @@ struct DeviceSettingsSection: View {
             let issuedAt = Date(timeIntervalSince1970: floor(active.expires.timeIntervalSince1970) - duration)
             if result.pairing == nil, let device = result.displayedDevices.first(where: {
               !active.previousDevices.contains($0.id) && $0.role == active.role &&
-                $0.platform == (active.role == .collect ? "android" : "mac") &&
+                $0.platform == active.platform &&
                 (ViewerTime.parse($0.pairedAt) ?? .distantPast) >= issuedAt
             }) {
               store.onDeviceSettingsUpdate?(result, nil)
@@ -381,7 +382,7 @@ struct DeviceInvitationChoices: View {
   let error: String?
   let selectMac: () -> Void
   let confirmAdmin: () -> Void
-  let invite: (DeviceSettings.Role) -> Void
+  let invite: (DeviceSettings.Role, String) -> Void
   let cancel: () -> Void
 
   var body: some View {
@@ -397,13 +398,13 @@ struct DeviceInvitationChoices: View {
         Button("取消", action: cancel).keyboardShortcut(.cancelAction)
         switch step {
         case .type:
-          Button("手机") { invite(.collect) }
+          Button("手机") { invite(.view, "android") }
           Button("另一台 Mac", action: selectMac)
         case .role:
-          Button("查看") { invite(.view) }
+          Button("查看") { invite(.view, "mac") }
           Button("管理", action: confirmAdmin)
         case .confirmAdmin:
-          Button("生成邀请") { invite(.admin) }
+          Button("生成邀请") { invite(.admin, "mac") }
             .buttonStyle(.accent).keyboardShortcut(.defaultAction)
         }
       }

@@ -33,7 +33,9 @@ export function operationAccess(role: DeviceRole, op: string): "allow" | "deny" 
   if (collectOps.has(op)) return role === "agent" ? "deny" : "allow";
   if (projectionOps.has(op)) return role === "collect" ? "deny" : "allow";
   if (projectionReads.has(op) || op.startsWith("timeline.") || statusOps.has(op)) return projectionRoles(role) ? "allow" : "deny";
-  if (agentOps.has(op)) return role === "collect" ? "deny" : "allow";
+  // AI queries include private originals by design, so a view device must not reach them (2026-11-24 review:
+  // phones now default to view, and agent.* let them bypass include_private=false).
+  if (agentOps.has(op)) return role === "agent" || role === "admin" ? "allow" : "deny";
   if (adminOps.has(op) || /^(?:facts|pending|settings|devices|runtime|audio\.settings)\./.test(op)) {
     return role === "admin" ? "allow" : "deny";
   }

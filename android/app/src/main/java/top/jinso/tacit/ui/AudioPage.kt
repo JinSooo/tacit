@@ -34,10 +34,12 @@ import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.*
 import top.jinso.tacit.core.HistoryRecord
 import top.jinso.tacit.data.ConversationSummary
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import top.jinso.tacit.ui.components.*
+import top.jinso.tacit.sync.TimelineSnapshot
+import top.jinso.tacit.sync.TimelineItem
+import java.time.Instant
 import java.time.LocalDate
 import java.util.concurrent.CompletableFuture
 
@@ -45,12 +47,16 @@ import java.util.concurrent.CompletableFuture
  * The phone's one page: what was said, by day. Recording is always meant to be on, like a Mac source, so it has no
  * control here; the page only speaks up when recording is off or something needs the user.
  */
-@Composable fun AudioPage(
+@Composable internal fun AudioPage(
     app: TacitApp,
     resumed: Int,
     notify: (String) -> Unit,
     onOpenSettings: (String?) -> Unit,
     onConversation: (List<HistoryRecord>) -> Unit,
+    timeline: TimelineSnapshot,
+    day: LocalDate,
+    onDay: (LocalDate) -> Unit,
+    onTimelineItem: (TimelineItem) -> Unit,
     macProblem: String?,
     recovery: @Composable () -> Unit,
 ) {
@@ -63,7 +69,6 @@ import java.util.concurrent.CompletableFuture
     var macVoice by remember { mutableStateOf(false) }
     var loadFailed by remember { mutableStateOf(false) }
     var summaries by remember { mutableStateOf(emptyMap<String, ConversationSummary>()) }
-    var dayEpoch by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
     val includeIgnored = false
     fun work(task: () -> CompletableFuture<Unit>, success: String, after: () -> Unit = {}) {
         scope.launch {
@@ -116,25 +121,38 @@ import java.util.concurrent.CompletableFuture
     val candidate = if (macVoice || speakers.any { it.isMe }) null else speakers
         .filter { !it.ignored && it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
     val today = LocalDate.now()
-    val days = remember(rows) { rows.groupBy { LocalDate.parse(date(it.start, "yyyy-MM-dd")) } }
+    val local = remember(rows, timeline.days, today) {
+        val projectedIds = timeline.days.flatMap { (date, value) -> value.entries(date == today) }
+            .flatMap { it.recordIds }.toSet()
+        undisplayedConversations(rows, projectedIds).groupBy { LocalDate.parse(date(it.start, "yyyy-MM-dd")) }
+    }
+    val dayTimeline = timeline.days[day]
+    val availableDays = local.keys + timeline.days.filter { (date, value) ->
+        !value.overview.isNullOrBlank() || value.entries(date == today).isNotEmpty()
+    }.keys
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 8.dp, bottom = 32.dp)) {
-        // One day at a time, like the Mac timeline; the arrows step to the nearest day that has conversations.
-        val day = LocalDate.ofEpochDay(dayEpoch)
-        val earlier = days.keys.filter { it < day }.maxOrNull()
-        val later = (days.keys.filter { it > day } + listOfNotNull(today.takeIf { it > day })).minOrNull()
+        val earlier = availableDays.filter { it < day }.maxOrNull()
+        val later = availableDays.filter { it > day }.minOrNull()
         item(key = "day") {
             Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 4.dp), verticalAlignment = Alignment.Top) {
                 DayHeading(day, today, Modifier.weight(1f).padding(top = 8.dp), stacked = true)
-                IconButton(onClick = { earlier?.let { dayEpoch = it.toEpochDay() } }, enabled = earlier != null) {
+                IconButton(onClick = { earlier?.let(onDay) }, enabled = earlier != null) {
                     Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "前一天", tint = if (earlier != null) tacitColors.muted else tacitColors.faint)
                 }
-                IconButton(onClick = { later?.let { dayEpoch = it.toEpochDay() } }, enabled = later != null) {
+                IconButton(onClick = { later?.let(onDay) }, enabled = later != null) {
                     Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "后一天", tint = if (later != null) tacitColors.muted else tacitColors.faint)
                 }
                 IconButton(onClick = { onOpenSettings(null) }) {
                     Icon(Icons.Outlined.Settings, "设置", tint = tacitColors.muted)
                 }
+            }
+        }
+        dayTimeline?.overview?.takeIf { it.isNotBlank() }?.let { overview ->
+            item(key = "overview") {
+                Text(overview, Modifier.padding(top = 8.dp, end = 12.dp, bottom = 12.dp),
+                    style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
+                    fontWeight = FontWeight.Normal, color = tacitColors.readingBody)
             }
         }
         val notice = recordingNotice(state, app.prefs.audioCaptureWanted, macProblem)
@@ -170,15 +188,30 @@ import java.util.concurrent.CompletableFuture
         if (!loaded || busy) item { ProgressLine(Modifier.padding(end = 12.dp, top = 8.dp)) }
         if (loadFailed) item {
             Caption("暂时无法读取录音，正在重试。", Modifier.padding(top = 16.dp), color = tacitColors.attention)
-        } else if (loaded && days[day].isNullOrEmpty()) item(key = "empty") {
+        } else if (loaded && day !in availableDays) item(key = "empty") {
             Text("说过的话，会按天写在这里。", Modifier.padding(top = 48.dp, end = 12.dp),
                 style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
                 fontWeight = FontWeight.Normal, color = tacitColors.muted)
         }
-        val scenes = days[day].orEmpty()
-        scenes.filter { it.records.isNotEmpty() }.forEach { scene ->
-            val summary = scene.records.firstNotNullOfOrNull { summaries[it.id] }
-            item(key = "conversation-${scene.key}") { RecordedConversation(scene, summary, onConversation) }
+        val scenes = local[day].orEmpty()
+        val entries = (dayTimeline?.entries(day == today).orEmpty().map { TimelineEntry.Projected(it) } +
+            scenes.filter { it.records.isNotEmpty() }.map { TimelineEntry.Local(it) }).sortedByDescending { it.start }
+        entries.forEachIndexed { index, entry ->
+            item(key = entry.key) {
+                val axis = if (dayTimeline == null) Modifier else Modifier.timelineAxis(index == 0, index == entries.lastIndex)
+                when (entry) {
+                    is TimelineEntry.Local -> {
+                        val summary = entry.scene.records.firstNotNullOfOrNull { summaries[it.id] }
+                        RecordedConversation(entry.scene, summary, onConversation, axis)
+                    }
+                    is TimelineEntry.Projected -> ProjectedTimelineRow(entry.item, axis) {
+                        val own = rows.firstOrNull { row ->
+                            entry.item.recordIds.isNotEmpty() && row.records.map { it.id }.toSet() == entry.item.recordIds
+                        }
+                        if (own == null) onTimelineItem(entry.item) else onConversation(own.records)
+                    }
+                }
+            }
         }
         val untranscribed = scenes.count { it.records.isEmpty() }
         if (untranscribed > 0) item(key = "untranscribed-$day") {
@@ -320,11 +353,19 @@ private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () 
     }
 }
 
+private sealed class TimelineEntry(val key: String, val start: Instant) {
+    class Projected(val item: TimelineItem) : TimelineEntry("projected-${item.id}", item.start)
+    class Local(val scene: AudioConversationRow) : TimelineEntry("conversation-${scene.key}", Instant.ofEpochMilli(scene.start))
+}
+
 @Composable
-private fun RecordedConversation(scene: AudioConversationRow, summary: ConversationSummary?, onConversation: (List<HistoryRecord>) -> Unit) {
+private fun RecordedConversation(
+    scene: AudioConversationRow, summary: ConversationSummary?, onConversation: (List<HistoryRecord>) -> Unit,
+    modifier: Modifier,
+) {
     val records = scene.records
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp)
+        modifier.fillMaxWidth().heightIn(min = 56.dp)
             .clickable(enabled = records.isNotEmpty()) { onConversation(records) }.padding(top = 12.dp, bottom = 12.dp, end = 12.dp),
     ) {
         Caption(date(scene.start, "HH:mm"), Modifier.width(56.dp).padding(top = 5.dp))

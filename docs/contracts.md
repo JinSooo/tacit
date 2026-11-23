@@ -520,7 +520,7 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 
 ## 6. 设备配对与同步（v3，2026-11-19）
 
-Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录、它们的删除和修正，以及这些录音的对话总结（手机自己写的往上送，中枢写的往下发）；不在手机上展示其他设备的记录。
+Mac 中枢和 Android 之间唯一的通道。采集权限下只传手机自己采集的记录、它们的删除和修正，以及这些录音的对话总结（手机自己写的往上送，中枢写的往下发）；2026-11-24 起手机可升为查看，额外按 6.9 接收中枢整理的各来源时间线（见 6.9 末尾的 Android 查看端说明）。
 
 ### 6.1 加密与身份
 
@@ -565,7 +565,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 - `current_device_id` 在设备 op 中是已验证的调用设备 ID。本机 HTTP 返回本机登记的 Mac ID，尚未登记时为 `null`。
 - `hub_id` 是当前中枢身份，尚未生成密钥时为 `null`。局域网监听开启时必须返回该身份，采集端启动或邀请用完后仍可登记 Bonjour。
 - 邀请 `uri` = `tacit://pair?d=<base64url(JSON)>`，JSON 为 `{ "v": 1, "hub_id", "name": "<Mac 电脑名>", "pk": "<中枢公钥 base64url>", "code": "<16 字节随机数 base64url>", "addrs": [...], "expires_at", "role" }`。Mac 设置页把它画成二维码；手机扫码或粘贴。
-- 手机发 op `pair`，`body` = `{ code, device_pk, name, platform: "android" }`。`code` 不对、过期或已用 → `status` 403。成功 → `{ device_id, hub_id, name, role }`，邀请作废，设备入库。Mac 使用 `platform: "mac"`，可用任一角色邀请。Android 只能用 `collect` 邀请。
+- 手机发 op `pair`，`body` = `{ code, device_pk, name, platform: "android" }`。`code` 不对、过期或已用 → `status` 403。成功 → `{ device_id, hub_id, name, role }`，邀请作废，设备入库。Mac 使用 `platform: "mac"`，可用任一角色邀请。Android 可用 `collect` 或 `view` 邀请，不能用 `admin`（2026-11-24 起）。
 - 同一部手机重新配对算新设备（新 `device_id`），旧设备留在列表里由用户移除。
 
 ### 6.5 操作
@@ -831,6 +831,12 @@ CREATE TABLE project_context_cache (
   - 磁盘硬上限 **128 MiB**：超出时优先清理早于 30 天的 `day` 缓存，随后执行 `PRAGMA incremental_vacuum`。
 - **整库清空条件**：收到 `projection.reset`、中枢返回 401（设备被移除）、切换绑定中枢（`hub_id` 变化）或权限被降为 `collect` 时，立即删除 `viewer-cache.db` 及桌面小组件快照。
 
+#### Android 查看端（2026-11-24）
+
+- Android 设备可使用采集或查看邀请，也可在这两种权限之间切换。Mac 设置的“添加设备 → 手机”签发查看邀请。既有手机配对继续有效。设备协议 `relay` 的加密成功回复含当前设备的 `role`，Android 仅在 `view` 下拉取，旧中枢未返回权限时按采集处理。
+- 打开 App、前台每 30 秒及现有的 15 分钟定期同步检查时间线。直连优先，经信箱处理 `projection.delta`、`projection.invalidate`、`projection.hint` 和 `projection.reset`，遇到缺口从已保存游标拉取。同步只保存 `day` 实体，冷启动使用 `window_days=30`。游标和最近 30 天的实体原子写入同一个 Android Keystore AES-GCM 加密快照，落盘后确认。删除、原文失效与重置先应用到缓存，采集权限、设备请求 401、解除配对或信箱凭证被拒时清空。
+- 时间线按天显示概述、已整理段落和当天草稿，手机本地录音的原文 ID 都被时间线覆盖时折叠为中枢段。点开中枢段按需调用 `records.get`，不传 `include_private`，原文只存在当前详情页内存，离页或失效时清除。经信箱的投影和原文读取回复不进入手机持久同步日志。
+
 #### 6.9.7 模块变更、影响、迁移、风险与推荐做法
 
 - **要改的模块和公共接口**：
@@ -958,7 +964,7 @@ CREATE TABLE project_context_cache (
 
 #### 6.10.5 AI 工具接入（MCP 与新会话带入）与离线缓存
 
-- `agent.now`、`agent.get`、`agent.search`、`agent.timeline`、`agent.context`、`agent.append` 沿用 4.6 的字段和返回。原查询参数平铺在设备操作的 `body` 中，`limit` 可传整数或数字字符串。追加的正文参数同样平铺，加上 `tool`。沿用 6.11.1 矩阵，只允许 `agent`、`view`、`admin` 直连调用。中枢审计的 `args.agent_device` 来自已验证的设备身份。
+- `agent.now`、`agent.get`、`agent.search`、`agent.timeline`、`agent.context`、`agent.append` 沿用 4.6 的字段和返回。原查询参数平铺在设备操作的 `body` 中，`limit` 可传整数或数字字符串。追加的正文参数同样平铺，加上 `tool`。沿用 6.11.1 矩阵，只允许 `agent`、`admin` 直连调用（2026-11-24 起不再给 `view`：AI 查询按规则可读私密原文，查看设备不得借此绕过 `include_private` 限制）。中枢审计的 `args.agent_device` 来自已验证的设备身份。
 - `agent.context` 可加 `remote`（已归一化的仓库标识）和 `cache: true`。中枢优先按 4.7 匹配 `cwd`；未找到时，`remote` 只有唯一匹配才采用。找到项目且请求了缓存数据时，返回额外的 `cache: { keys: { repos, remotes? }, ignored_repos, result_ids, synced_at }`。其中 `result_ids` 为带入的事项 ID，`synced_at` 是中枢的 UTC ISO 时间。无匹配时仍返回空上下文，额外字段省略。
 - `agent.audit_sync` 接收 `{ entries: [{ id, at, tool, session?, cwd, project_id, result_ids, cached: true }] }`，最多 500 条。客户端为每条记录生成 ULID `id` 并在重试中复用，`at` 用 UTC ISO 时间，`project_id` 和 `result_ids` 为 ULID，`cwd` 为绝对路径。服务端按 ID 去重，成功返回 `{ accepted }`，重复项也计入确认条数。入库为 `kind=context`，`args` 含 `cached: true` 和调用设备，`bytes=0`，无响应正文。
 
@@ -1012,7 +1018,7 @@ CREATE TABLE project_context_cache (
 | 拉取整理结果（`projection.pull/ack`、`events.subscribe`） | 禁止 | 允许（全部非私密实体） | 允许（全部非私密实体） | 仅 `project_context` |
 | 按需读取非私密原文与搜索（`records.get/list`、`history.segments`、`conversations.detail`、`timeline.*`） | 禁止 | 允许（不含 `private` 正文） | 允许 | 禁止（走 `agent.*`） |
 | 按需读取 `private` 原文（`records.get/list`、`history.segments`、`conversations.detail` 的 `include_private: true`） | 禁止 | 禁止显式请求 | 直连与本机快路允许，经信箱禁止 | 禁止（MCP `agent.get/search` 沿用 4.6） |
-| AI 查询与追加（`agent.now/get/search/timeline/context/append/audit_sync`） | 禁止 | 允许 | 允许 | 允许 |
+| AI 查询与追加（`agent.now/get/search/timeline/context/append/audit_sync`） | 禁止 | 禁止（2026-11-24 起，AI 查询可读私密原文） | 允许 | 允许 |
 | 跨设备编辑与纠错（`records.create`、`segment.correct`、`facts.*`、`pending.*`、`distill.request/list`） | 禁止 | 禁止 | 允许 | 禁止 |
 | 跨设备删除与移除项目（`delete` 任意设备、`segment.delete`、`project.remove`） | 禁止 | 禁止 | 允许（真删按 6.11.4 限流） | 禁止 |
 | 状态查看（`status.get`、`diagnostics.get`） | 禁止 | 允许（只读概况） | 允许（完整） | 禁止 |
@@ -1022,7 +1028,7 @@ CREATE TABLE project_context_cache (
 
 #### 6.11.2 权限授予与变更流程
 
-- 本机管理接口 `POST /v1/settings/devices/pairing` 接收 `{ role: "collect" | "view" | "admin" }`，缺省为 `collect`。兼容一版旧入参，未传 `role` 时 `viewer: true` 等同于 `role: "view"`，显式 `role` 优先。邀请 JSON 与成功配对回复都带 `role`。采集与查看邀请 10 分钟有效，管理邀请 5 分钟有效。中枢只采用邀请锁定的角色，忽略配对请求自报权限。Android 使用查看或管理邀请返回 403。管理设备也可用 `devices.pairing.create` 签发邀请。Mac 设置里添加手机只申请采集权限，添加另一台 Mac 可选择查看或管理，生成管理邀请前需二次确认。
+- 本机管理接口 `POST /v1/settings/devices/pairing` 接收 `{ role: "collect" | "view" | "admin" }`，缺省为 `collect`。兼容一版旧入参，未传 `role` 时 `viewer: true` 等同于 `role: "view"`，显式 `role` 优先。邀请 JSON 与成功配对回复都带 `role`。采集与查看邀请 10 分钟有效，管理邀请 5 分钟有效。中枢只采用邀请锁定的角色，忽略配对请求自报权限。Android 使用管理邀请返回 403。管理设备也可用 `devices.pairing.create` 签发邀请。Mac 设置里添加手机申请查看权限（2026-11-24 起，此前为采集），添加另一台 Mac 可选择查看或管理，生成管理邀请前需二次确认。
 - `devices.role.update { id, role }` 和 `devices.remove { id }` 仅允许管理设备调用。管理设备可以降权，或把 Mac 从 `collect` 升为 `view`。直接授予 `admin` 仅能通过本机的 `PUT /v1/settings/devices/:id/role` 或 CLI 完成。首次管理配对可由本机管理接口签发，独立部署用的 `tacit-hub pair --role admin` 待实现。
 - 降为 `collect` 时，同事务清除该设备的投影视窗、游标和待投递回执，持久排入仅该设备可取的重置。已有订阅收到紧急提示后断开；随后直连 `projection.pull` 只返回 `{ kind: "projection.reset", reset: true, changes: [], cursor: 0, more: false, epoch, server_time }`，无须确认。经信箱先撤掉旧推送及原文回执，再投递加密 `projection.reset`。此角色不能读取原文或确认投影。新的 `collect` 设备没有待清缓存，拉取照常返回 403。
 - 设备 op 和本机 HTTP 都拒绝移除或降级最后一台 `admin`，返回 409「不能移除最后一台管理设备」。本机 CLI 直接操作数据库，提供 `devices list`、`devices set-role <device_id> <role> [--force]`、`devices remove <device_id> [--force]`。仅本机 CLI 的 `--force` 可绕过最后一台保护。6.1 的中枢密钥更换仍会撤销旧身份。

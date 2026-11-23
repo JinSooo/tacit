@@ -110,7 +110,7 @@ export function updateDeviceRole(sql: SQL, id: unknown, role: unknown, options: 
     if (target.role === "agent" || (options.actor && role === "admin")) {
       throw new WireError(403, devicePermissionDenied);
     }
-    if (target.platform === "android" && role !== "collect") throw new WireError(403, devicePermissionDenied);
+    if (target.platform === "android" && role === "admin") throw new WireError(403, devicePermissionDenied);
     protectLastAdmin(sql, target.role, options.force);
     const reset = role === "collect" && projectionRoles(target.role);
     sql.prepare(`UPDATE devices SET role=?,role_revision=role_revision+1,projection_reset=?,

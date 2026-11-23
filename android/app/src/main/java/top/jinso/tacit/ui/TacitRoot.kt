@@ -22,6 +22,7 @@ import top.jinso.tacit.sources.Sources
 import top.jinso.tacit.sync.MacStatus
 import top.jinso.tacit.ui.components.*
 import top.jinso.tacit.ui.onboarding.*
+import java.time.LocalDate
 
 @Composable
 fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
@@ -37,6 +38,12 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     val mac by rememberConnection(app, vault, resumed)
     val detail = reading.detail
     val conversation = reading.conversation
+    val timeline by app.sync.timelineSnapshots.collectAsState()
+    var dayEpoch by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
+    val day = LocalDate.ofEpochDay(dayEpoch)
+    var selectedItem by remember { mutableStateOf<String?>(null) }
+    val timelineItem = timeline.days[day]?.entries(day == LocalDate.now())?.firstOrNull { it.id == selectedItem }
+    LaunchedEffect(timelineItem) { if (timelineItem == null) selectedItem = null }
     val snackbar = remember { SnackbarHostState() }
     fun notify(text: String) { scope.launch { snackbar.showSnackbar(text) } }
     fun settings(route: String?) {
@@ -44,13 +51,17 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
         settingsOpen = true
     }
     fun back() {
-        if (detail != null) reading.detail = null else reading.conversation = emptyList()
+        when {
+            timelineItem != null -> selectedItem = null
+            detail != null -> reading.detail = null
+            else -> reading.conversation = emptyList()
+        }
     }
     LaunchedEffect(Unit) {
         try { vault = withContext(Dispatchers.IO) { app.vault } }
         catch (_: Exception) { locked = true }
     }
-    val open = detail != null || conversation.isNotEmpty()
+    val open = detail != null || conversation.isNotEmpty() || timelineItem != null
     BackHandler(open) { back() }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -70,6 +81,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                 store == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
+                timelineItem != null -> TimelineDetails(app, timelineItem, timeline.invalidation, ::back)
                 detail != null -> RecordDetail(
                     detail, store, app, onBack = ::back, notify = ::notify,
                     onSelect = { reading.detail = it },
@@ -98,7 +110,8 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                             else -> null
                         }
                     }
-                    AudioPage(app, resumed, ::notify, ::settings, { reading.conversation = it }, macProblem, recovery)
+                    AudioPage(app, resumed, ::notify, ::settings, { reading.conversation = it }, timeline,
+                        day, { dayEpoch = it.toEpochDay() }, { selectedItem = it.id }, macProblem, recovery)
                 }
                 else -> SettingsPage(
                     app, resumed, ::notify, hubRoute, { hubRoute = it }, { settingsOpen = false; hubRoute = null },

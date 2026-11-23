@@ -41,6 +41,41 @@ class RelaySyncTest {
         assertTrue(journal.deliveries().isEmpty())
     }
 
+    @Test fun originalPagesStayOutOfPersistentJournalEvenIfTheNextPageIsOffline() = runBlocking {
+        val journal = journal()
+        val exchange = RelayExchange(protocol, journal, fake.client(), { _, _ -> fail() })
+        val before = saved
+        var pages = 0
+        fake.onPut = { nonce, wire ->
+            val request = JSONObject(DeviceEnvelope.open(JSONObject(wire.toString(Charsets.UTF_8)),
+                DeviceEnvelope.REQUEST_INFO, "android-aebagbaf", hub, DeviceEnvelope.public(phone).base64url()))
+            assertEquals("records.get", request.getString("op"))
+            assertFalse(request.getJSONObject("body").has("include_private"))
+            if (++pages == 2) throw IOException("合成离线")
+            val record = JSONObject().put("id", "raw").put("source", "mac.wechat").put("body", "仅限内存的合成原文")
+            val body = JSONObject().put("records", JSONArray(listOf(record))).put("next_cursor", "page-two")
+            fake.down[nonce] = seal(nonce, JSONObject().put("status", 200).put("body", body))
+        }
+        try {
+            readTimelineOriginals(setOf("raw"), exchange::sendTransient)
+            fail("Expected offline read to fail")
+        } catch (_: IOException) { }
+        assertEquals(2, pages)
+        assertEquals(before, saved)
+        assertTrue(journal.deliveries().isEmpty())
+        assertTrue(fake.down.isEmpty())
+    }
+
+    @Test fun ordinarySyncLeavesAuthenticatedProjectionPushForTimelinePoll() {
+        val nonce = id(5)
+        fake.down[nonce] = seal(nonce, JSONObject().put("kind", "projection.reset").put("epoch", 3))
+        val exchange = RelayExchange(protocol, journal(), fake.client(), { _, _ -> fail() })
+        exchange.drain()
+        assertTrue(fake.down.containsKey(nonce))
+        exchange.drain { assertEquals(3, it.getInt("epoch")); true }
+        assertEquals(listOf(nonce), fake.deleted)
+    }
+
     @Test fun pendingBatchesSurviveRestartWithoutRepackingAndExpireWithNewNonce() = runBlocking {
         val batch = listOf("record-1" to JSONObject().put("body", "虚构录音"))
         suspend fun depositUnconfirmed(journal: RelayJournal) {

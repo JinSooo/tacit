@@ -197,7 +197,7 @@ test("信箱配对回复保留到手机读删，直连配对也发放设备信�
     expect(paired.body.relay.up).not.toBe(temporary.up);
     expect(await deviceConfig(phone)).toEqual(paired.body.relay);
     const relayOp = await submit(paired.body.relay, phone, "relay", {}, hub.time());
-    expect(await reply(phone, paired.body.relay, relayOp)).toEqual({ status: 200, body: { relay: paired.body.relay } });
+    expect(await reply(phone, paired.body.relay, relayOp)).toEqual({ status: 200, body: { relay: paired.body.relay, role: "collect" } });
     expect((await remote(temporary, temporary.down, "DELETE", nonce)).status).toBe(200);
     await hub.stop();
     hub.start();

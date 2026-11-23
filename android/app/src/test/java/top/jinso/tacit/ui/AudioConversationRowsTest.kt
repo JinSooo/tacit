@@ -29,6 +29,15 @@ class AudioConversationRowsTest {
         assertEquals(2, rows.map { it.key }.distinct().size)
     }
 
+    @Test fun onlyFullyProjectedConversationsAreHidden() {
+        val first = record("first", 1000)
+        val second = record("second", 1500)
+        val rows = audioConversationRows(listOf(scene("phone", 1000, first.id, second.id), scene("pending", 3000)),
+            listOf(first, second).associateBy { it.id })
+        assertEquals(rows, undisplayedConversations(rows, setOf(first.id)))
+        assertEquals(listOf("pending"), undisplayedConversations(rows, setOf(first.id, second.id)).map { it.key })
+    }
+
     @Test fun newestConversationsComeFirstAndDeletedRecordsAreOmitted() {
         val earlier = record("earlier", 1100)
         val later = record("later", 1200)

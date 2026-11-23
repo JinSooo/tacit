@@ -29,8 +29,8 @@ private func fixture() -> DeviceSettings {
     ("mac", .view, [.collect], true),
     ("mac", .collect, [.view], true),
     ("mac", .agent, [], false),
-    ("android", .collect, [], true),
-    ("android", .view, [], true),
+    ("android", .collect, [.view], true),
+    ("android", .view, [.collect], true),
     ("android", .admin, [], true),
     ("android", .agent, [], false),
     ("agent", .agent, [], false),
@@ -129,7 +129,7 @@ private func fixture() -> DeviceSettings {
 
     func invitation(_ step: DeviceInvitationChoices.Step) -> some View {
       DeviceInvitationChoices(step: step, busy: false, error: nil, selectMac: {}, confirmAdmin: {},
-                              invite: { _ in }, cancel: {})
+                              invite: { _, _ in }, cancel: {})
         .background(Palette.paperRaised)
     }
 

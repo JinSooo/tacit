@@ -21,3 +21,7 @@ internal fun audioConversationRows(
         AudioConversationRow("${scene.id}:$sensitivity", group.first().start, group, sensitivity == "private")
     }
 }
+
+/** A partially represented conversation stays visible so its remaining local records can still be opened. */
+internal fun undisplayedConversations(rows: List<AudioConversationRow>, projectedIds: Set<String>) =
+    rows.filterNot { row -> row.records.isNotEmpty() && row.records.all { it.id in projectedIds } }

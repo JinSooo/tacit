@@ -40,7 +40,16 @@ struct DeviceSettings: Decodable {
     var role: Role?
 
     func offeredRoles(isCurrent: Bool) -> [Role] {
-      guard !isCurrent, platform == "mac" else { return [] }
+      guard !isCurrent else { return [] }
+      // 手机只在采集和查看之间切换，不能成为管理设备（2026-11-24）。
+      if platform == "android" {
+        return switch role {
+        case .collect: [.view]
+        case .view: [.collect]
+        default: []
+        }
+      }
+      guard platform == "mac" else { return [] }
       return switch role {
       case .admin: [.view, .collect]
       case .view: [.collect]

@@ -152,6 +152,7 @@ internal class DeviceMessages(
     fun response(op: String, message: JSONObject): JSONObject {
         val status = message.integer("status")
         require(status in 100..599)
+        if (status == 401L && device != null) throw DeviceRemoved()
         if (status != 200L) throw DeviceStatus(status.toInt(), op)
         return message.getJSONObject("body")
     }

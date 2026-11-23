@@ -453,7 +453,8 @@ test("角色矩阵覆盖设备写入、投影、原文、AI、状态、编辑、
     [["ingest", "delete", "sync.ack", "audio.lines", "conversations.put", "collector.status", "relay"], ["collect", "view", "admin"]],
     [["projection.pull", "projection.ack", "events.subscribe"], ["view", "admin", "agent"]],
     [["records.get", "records.list", "history.segments", "conversations.detail", "timeline.query"], ["view", "admin"]],
-    [["agent.now", "agent.append", "agent.audit_sync"], ["view", "admin", "agent"]],
+    // 回归（2026-11-24）：查看设备经 agent.* 能读到私密原文。
+    [["agent.now", "agent.get", "agent.search", "agent.append", "agent.audit_sync"], ["admin", "agent"]],
     [["status.get", "diagnostics.get"], ["view", "admin"]],
     [["records.create", "segment.correct", "facts.update", "pending.resolve", "distill.request"], ["admin"]],
     [["segment.delete", "project.remove"], ["admin"]],
@@ -465,7 +466,7 @@ test("角色矩阵覆盖设备写入、投影、原文、AI、状态、编辑、
   expect(operationAccess("admin", "invalid")).toBe("unknown");
 });
 
-test("配对锁定角色、管理邀请正好 5 分钟过期，Android 不能用查看邀请", async () => {
+test("配对锁定角色、管理邀请正好 5 分钟过期，Android 查看邀请不能自行提权", async () => {
   const hub = await runningHub();
   try {
     await hub.pair();
@@ -478,11 +479,10 @@ test("配对锁定角色、管理邀请正好 5 分钟过期，Android 不能用
     const viewInvite = await hub.invite("view");
     expect(Date.parse(viewInvite.expires_at) - hub.time()).toBe(10 * minute);
     const viewer = await DeviceClient.fromInvite(viewInvite, hub.lan);
-    expect((await viewer.pair(viewInvite)).status).toBe(403);
-    const paired = await viewer.send("pair", { ...await viewer.pairingBody(viewInvite), platform: "mac", role: "admin" });
+    const paired = await viewer.send("pair", { ...await viewer.pairingBody(viewInvite), role: "admin" });
     expect(paired).toMatchObject({ status: 200, body: { role: "view" } });
     expect(await (await hub.settings()).json()).toMatchObject({ devices: expect.arrayContaining([
-      expect.objectContaining({ id: paired.body.device_id, role: "view" }),
+      expect.objectContaining({ id: paired.body.device_id, platform: "android", role: "view" }),
     ]) });
   } finally { await hub.dispose(); }
 });
@@ -496,7 +496,7 @@ test("限制远程提权及最后管理员，降回 collect 只下发重置，�
     const update = (client: DeviceClient, id: string | null, role: PairingRole) => client.send("devices.role.update", { id, role });
     expect(await phone.send("projection.pull", { cursor: 0 })).toEqual({ status: 403, body: { error: "当前设备权限不足" } });
     expect((await update(target, target.device, "view")).status).toBe(403);
-    expect((await update(admin, phone.device, "view")).status).toBe(403);
+    expect((await update(admin, phone.device, "admin")).status).toBe(403);
     expect((await update(admin, target.device, "admin")).status).toBe(403);
     expect(await update(admin, admin.device, "view")).toEqual({ status: 409, body: { error: "不能移除最后一台管理设备" } });
     expect((await admin.send("devices.remove", { id: admin.device })).status).toBe(409);
@@ -521,6 +521,29 @@ test("限制远程提权及最后管理员，降回 collect 只下发重置，�
       expect.objectContaining({ action: "device.role_change", actor_device: admin.device, target: target.device, detail_code: "view:collect" }),
       expect.objectContaining({ action: "device.remove", actor_device: target.device, target: admin.device }),
     ]));
+  } finally { await hub.dispose(); }
+});
+
+test("Android 可用查看邀请和远程升降级，不能成为管理设备", async () => {
+  const hub = await runningHub();
+  try {
+    const noAdmin = await hub.invite("admin");
+    const denied = await DeviceClient.fromInvite(noAdmin, hub.lan);
+    expect((await denied.pair(noAdmin, "android")).status).toBe(403);
+    const phone = await hub.pair("view", "android");
+    const admin = await hub.pair("admin");
+    const role = (role: PairingRole) => admin.send("devices.role.update", { id: phone.device, role });
+    expect(await phone.send("relay", {})).toMatchObject({ status: 200, body: { role: "view" } });
+    expect((await phone.send("projection.pull", { cursor: 0, window_days: 30 })).status).toBe(200);
+    expect((await phone.send("records.get", { ids: [ulid()], include_private: true })).status).toBe(403);
+    expect((await hub.settings("/" + phone.device + "/role", "PUT", { role: "admin" })).status).toBe(403);
+    expect((await role("collect")).status).toBe(200);
+    expect(await phone.send("relay", {})).toMatchObject({ status: 200, body: { role: "collect" } });
+    expect((await phone.send("records.get", { ids: [ulid()] })).status).toBe(403);
+    expect((await role("view")).status).toBe(200);
+    expect(await phone.send("relay", {})).toMatchObject({ status: 200, body: { role: "view" } });
+    expect(await phone.send("projection.pull", { cursor: 0, window_days: 30 }))
+      .toMatchObject({ status: 200, body: { reset: false } });
   } finally { await hub.dispose(); }
 });
 

@@ -19,7 +19,9 @@ import java.util.concurrent.TimeUnit.MINUTES
 
 internal class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        (applicationContext as TacitApp).sync.run(inputData.getBoolean("retry", false))
+        val sync = (applicationContext as TacitApp).sync
+        if (inputData.getBoolean("timeline", false)) sync.refreshTimeline()
+        sync.run(inputData.getBoolean("retry", false))
         Result.success()
     }
 
@@ -29,8 +31,9 @@ internal class SyncWorker(context: Context, params: WorkerParameters) : Coroutin
         private val network = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
         fun schedulePeriodic(context: Context) {
-            val request = PeriodicWorkRequestBuilder<SyncWorker>(15, MINUTES).setConstraints(network).addTag(TAG).build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP, request)
+            val request = PeriodicWorkRequestBuilder<SyncWorker>(15, MINUTES)
+                .setInputData(androidx.work.workDataOf("timeline" to true)).setConstraints(network).addTag(TAG).build()
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.UPDATE, request)
         }
 
         private var lastRecordTrigger: Long? = null

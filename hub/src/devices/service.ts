@@ -727,7 +727,7 @@ export class DeviceService {
     if ((platform !== "android" && platform !== "mac") || typeof body.name !== "string" || !body.name.trim() || body.name.length > 200) {
       return commitError(fail(400, "设备名称或平台无效"), "platform_or_name_invalid");
     }
-    if (platform === "android" && invite.role !== "collect") return commitError(fail(403, devicePermissionDenied), "platform_role");
+    if (platform === "android" && invite.role === "admin") return commitError(fail(403, devicePermissionDenied), "platform_role");
     const name = body.name.trim();
     if (this.sql.prepare("SELECT 1 FROM devices WHERE public_key=? AND local_only=1").get(publicKey)) {
       return commitError(fail(409, "公钥已用于本机登记"), "key_conflict");
@@ -931,7 +931,7 @@ export class DeviceService {
           throw error;
         }
       case "devices.remove": return ok(removeDevice(this.sql, body.id, { actor: device, now: this.clock() }));
-      case "relay": return ok({ relay: this.relay.config(device) });
+      case "relay": return ok({ relay: this.relay.config(device), role });
       case "sync": return ok(this.hub.deviceChanges(device, cursorOf(body.cursor)));
       case "sync.ack":
         this.sql.prepare("DELETE FROM device_changes WHERE device=? AND seq<=?").run(device, cursorOf(body.cursor));
