@@ -15,19 +15,49 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
-/** Both PCM and the metadata/voiceprint index are authenticated ciphertext before disk I/O. */
+/**
+ * Both PCM and the metadata/voiceprint index are authenticated ciphertext before disk I/O.
+ *
+ * Files are version 2: AES-256-GCM under a random data key, which is itself wrapped by the Keystore key
+ * in `data-key.wrap`. One Keystore operation per process instead of one per file: decrypting ~1900 item
+ * files through Keystore took ~24 s on a real phone and held [AudioRuntime.lock] the whole time
+ * (2026-11-23). Version 1 files (Keystore key directly) still read; small item files are rewritten as
+ * version 2 when the index loads, PCM keeps its version until retention deletes it.
+ */
 internal class EncryptedAudioStore(context: Context) {
     private val dir = File(context.noBackupFilesDir, "audio").apply { mkdirs() }
-    private val key: SecretKey by lazy {
+    private val keystoreKey: SecretKey by lazy {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        check(ks.containsAlias("tacit.audio.v1") || dir.listFiles().orEmpty().none { it.name.endsWith(".enc") || it.name.endsWith(".bak") }) { "录音密钥不可用，原文件已保留" }
+        check(ks.containsAlias("tacit.audio.v1") || dir.listFiles().orEmpty().none { it.name.endsWith(".enc") || it.name.endsWith(".bak") || it.name == WRAP }) { "录音密钥不可用，原文件已保留" }
         (ks.getKey("tacit.audio.v1", null) as? SecretKey) ?: KeyGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
             init(KeyGenParameterSpec.Builder("tacit.audio.v1", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256).build())
         }.generateKey()
+    }
+    private val dataKey: SecretKey by lazy {
+        val wrapped = File(dir, WRAP)
+        // Only the main process opens audio stores (the :qnn process runs inference on PCM it is handed), so
+        // an in-process lock is enough to mint exactly one key. Android forbids link() in app data.
+        synchronized(KEY_CREATION) {
+            if (!wrapped.isFile) {
+                // A store with version 2 files but no wrapped key cannot decrypt them; never mint a replacement.
+                check(dir.listFiles().orEmpty().none { (it.name.endsWith(".enc") || it.name.endsWith(".bak")) && version(it) == 2 }) {
+                    "录音密钥不可用，原文件已保留"
+                }
+                val raw = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+                val temp = File(dir, "$WRAP.${UUID.randomUUID()}.tmp")
+                try {
+                    temp.outputStream().use { it.write(sealWith(keystoreKey, 1, WRAP, raw)); it.fd.sync() }
+                    check(temp.renameTo(wrapped)) { "录音密钥保存失败" }
+                } finally { raw.fill(0); temp.delete() }
+            }
+        }
+        val raw = openWith(keystoreKey, wrapped.readBytes(), 1, WRAP)
+        try { SecretKeySpec(raw, "AES") } finally { raw.fill(0) }
     }
     private val indexFile = File(dir, "index.enc")
     private var loaded: JSONObject? = null
@@ -39,7 +69,7 @@ internal class EncryptedAudioStore(context: Context) {
     val index: JSONObject get() = loaded ?: load().also { loaded = it; dropUnusedSpeakers() }
     private fun load(): JSONObject {
         val head = if (indexFile.exists() || File(dir, "index.enc.bak").exists()) {
-            val plain = read(indexFile)
+            val plain = read(indexFile, migrate = true)
             try { JSONObject(String(plain, Charsets.UTF_8)) } finally { plain.fill(0) }
         } else JSONObject()
         // Older layouts kept clips and voices inside index.enc. Item files are written before the head,
@@ -59,7 +89,7 @@ internal class EncryptedAudioStore(context: Context) {
     }
     private fun items(suffix: String): List<JSONObject> = checkNotNull(dir.listFiles())
         .filter { it.name.endsWith(suffix) }.map { file ->
-            val plain = read(file)
+            val plain = read(file, migrate = true)
             try { JSONObject(String(plain, Charsets.UTF_8)) } finally { plain.fill(0) }
         }
     /** Persists the head plus the listed clips. Clips that did not change are never rewritten. */
@@ -216,24 +246,42 @@ internal class EncryptedAudioStore(context: Context) {
     /** Writes an encrypted file exactly as the store does; only for migration tests that need a layout-1 index. */
     @androidx.annotation.VisibleForTesting
     internal fun writeLegacyIndex(plain: ByteArray) { loaded = null; write(indexFile, plain) }
-    private fun write(file: File, plain: ByteArray) {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key)
-        cipher.updateAAD(file.name.toByteArray(Charsets.UTF_8))
-        val encrypted = cipher.doFinal(plain)
+    /** Writes the legacy Keystore-encrypted layout; only for tests that need version 1 files on disk. */
+    @androidx.annotation.VisibleForTesting
+    internal fun writeVersion1(name: String, plain: ByteArray) { loaded = null; atomicWrite(File(dir, name), sealWith(keystoreKey, 1, name, plain)) }
+    @androidx.annotation.VisibleForTesting
+    internal fun versionOf(name: String) = version(File(dir, name))
+    private fun write(file: File, plain: ByteArray) = atomicWrite(file, sealWith(dataKey, 2, file.name, plain))
+    private fun atomicWrite(file: File, sealed: ByteArray) {
         val atomic = AtomicFile(file)
         val stream = atomic.startWrite()
-        try {
-            stream.write(byteArrayOf(1)); stream.write(cipher.iv); stream.write(encrypted)
-            atomic.finishWrite(stream)
-        } catch (e: Exception) { atomic.failWrite(stream); throw e }
+        try { stream.write(sealed); atomic.finishWrite(stream) } catch (e: Exception) { atomic.failWrite(stream); throw e }
     }
-    private fun read(file: File): ByteArray {
+    private fun read(file: File, migrate: Boolean = false): ByteArray {
         val all = AtomicFile(file).readFully()
-        require(all.size >= 29 && all[0] == 1.toByte()) { "Invalid encrypted audio" }
+        return when (all.firstOrNull()) {
+            2.toByte() -> openWith(dataKey, all, 2, file.name)
+            1.toByte() -> openWith(keystoreKey, all, 1, file.name).also { plain ->
+                // Rewriting costs one in-process encryption; the Keystore decryption above was the slow part.
+                if (migrate) write(file, plain)
+            }
+            else -> throw IllegalArgumentException("Invalid encrypted audio")
+        }
+    }
+    /** Only the first byte: the check runs over every file, PCM included, before the key exists. */
+    private fun version(file: File): Int? = runCatching { file.inputStream().use { it.read() }.takeIf { it >= 0 } }.getOrNull()
+    private fun sealWith(key: SecretKey, version: Int, name: String, plain: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        cipher.updateAAD(name.toByteArray(Charsets.UTF_8))
+        val encrypted = cipher.doFinal(plain)
+        return byteArrayOf(version.toByte()) + cipher.iv + encrypted
+    }
+    private fun openWith(key: SecretKey, all: ByteArray, version: Int, name: String): ByteArray {
+        require(all.size >= 29 && all[0] == version.toByte()) { "Invalid encrypted audio" }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, all.copyOfRange(1, 13)))
-        cipher.updateAAD(file.name.toByteArray(Charsets.UTF_8))
+        cipher.updateAAD(name.toByteArray(Charsets.UTF_8))
         return cipher.doFinal(all, 13, all.size - 13)
     }
 }
@@ -241,6 +289,8 @@ internal fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { ge
 internal fun JSONArray.vector(): FloatArray = FloatArray(length()) { getDouble(it).toFloat() }
 private const val META = ".meta.enc"
 private const val SPEAKER = ".speaker.enc"
+private const val WRAP = "data-key.wrap"
+private val KEY_CREATION = Any()
 
 /** Vectors are stored as base64 little-endian float32: about a quarter of the decimal JSON size and no float formatting. */
 internal fun JSONObject.putVector(name: String, vector: FloatArray): JSONObject {
