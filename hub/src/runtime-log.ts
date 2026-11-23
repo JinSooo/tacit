@@ -183,6 +183,8 @@ export function backgroundLog(dataDir: string, source: string) {
       if (typeof value === "string" && /^[\w.:-]{1,80}$/.test(value) && redactString(value).count === 0) return value;
       if (!value || typeof value !== "object" || Array.isArray(value) || depth > 3) return undefined;
       return Object.fromEntries(Object.entries(value).filter(([key]) => fields.has(key)).flatMap(([key,v]) => {
+        // 时间带时区偏移（+09:00），通用字符串规则不放行 "+"；只对 at 按时间格式单独放行。
+        if (key === "at" && typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(v)) return [[key,v]];
         const safe = clean(v,depth+1); return safe === undefined ? [] : [[key,safe]];
       }));
     };

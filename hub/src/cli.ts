@@ -77,6 +77,7 @@ async function serve(args: string[] = []): Promise<void> {
   try {
     const localStatusPort = parseLocalStatusPort(args);
     applyTimezone(process.env, dataDir);
+    (await import("./log-stamp.ts")).stampConsole();
     const [{ loadConfig }, { HubDB }, { startServer }, { startLogRetention }] = await Promise.all([
       import("./config.ts"), import("./db.ts"), import("./server.ts"), import("./log-retention.ts"),
     ]);

@@ -161,9 +161,11 @@ test("排队期间删除使待发送调用失效；在途调用只保留无正�
 
 test("后台日志只读固定文件的结构化状态，不暴露错误原文或跟随符号链接", () => {
   const directory = join(ctx.config.dataDir,"logs"); mkdirSync(directory,{recursive:true});
-  writeFileSync(join(directory,"hub.log"),'private plaintext\n'+JSON.stringify({location:"collector.save",category:"storage",error:"个人秘密",records:12})+'\n');
+  writeFileSync(join(directory,"hub.log"),'private plaintext\n'+JSON.stringify({location:"collector.save",category:"storage",error:"个人秘密",records:12})+'\n'
+    // 回归：带时区的时间被通用字符串规则整条丢掉，页面看不到事件发生在何时；at 只放行时间格式。
+    +JSON.stringify({at:"2026-11-23T20:55:54+09:00",code:"started"})+'\n'+JSON.stringify({at:"昨天 个人秘密",code:"started"})+'\n');
   const result = backgroundLog(ctx.config.dataDir,"hub");
-  expect(result.events).toEqual([{ location:"collector.save",category:"storage",records:12 }]);
+  expect(result.events).toEqual([{ code:"started" },{ at:"2026-11-23T20:55:54+09:00",code:"started" },{ location:"collector.save",category:"storage",records:12 }]);
   expect(result.skipped).toBe(1);
   expect(() => backgroundLog(ctx.config.dataDir,"../../token")).toThrow();
   symlinkSync(join(directory,"hub.log"),join(directory,"collector.log"));
