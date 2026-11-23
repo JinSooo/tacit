@@ -15,7 +15,7 @@ import { HubDB, InputError } from "./db.ts";
 import { historySegments } from "./history.ts";
 import { conversationDetail } from "./conversations.ts";
 import { hubStatus } from "./status.ts";
-import { DEFAULT_LAN_PORT, DEFAULT_PORT, dataDirOf, resolveLanPort } from "./hub-json.ts";
+import { DEFAULT_LAN_PORT, DEFAULT_PORT, dataDirOf, hubModeOf, resolveLanPort, type HubMode } from "./hub-json.ts";
 import { createSettings, type SettingsDeps } from "./settings.ts";
 import { DeviceService, type DeviceDeps } from "./devices/service.ts";
 import { RuntimeLog, backgroundLog } from "./runtime-log.ts";
@@ -67,10 +67,13 @@ function authorized(request: Request, token: string): boolean {
 }
 
 /** settings 不传时用默认数据目录和系统钥匙串，不会重启进程。 */
-export function createHandler(options: { db: HubDB; token: string; agentToken?: string; port?: number; webDir?: string; settings?: SettingsDeps; devices?: DeviceService }) {
+export function createHandler(options: { db: HubDB; token: string; agentToken?: string; port?: number; webDir?: string; settings?: SettingsDeps; devices?: DeviceService; mode?: HubMode; env?: NodeJS.ProcessEnv }) {
   if (!options.token) throw new Error("本地 token 不能为空");
   const { db, token } = options;
-  const settings = createSettings(options.settings ?? { dataDir: dataDirOf() });
+  const env = options.env ?? options.settings?.env ?? process.env;
+  const mode = options.mode ?? options.settings?.mode ?? hubModeOf(env);
+  const settingsDataDir = options.settings?.dataDir ?? dataDirOf(env);
+  const settings = createSettings({ ...(options.settings ?? { dataDir: settingsDataDir }), mode, env });
   const busy = new BusyResponses();
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -92,7 +95,7 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
     try {
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
-      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, lanPort: options.devices?.open ? options.devices.lanPort : null, busy: busy.snapshot(), relay: options.devices?.relay.status() }));
+      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, lanPort: options.devices?.open ? options.devices.lanPort : null, busy: busy.snapshot(), relay: options.devices?.relay.status(), mode, env, dataDir: settingsDataDir }));
       if (url.pathname.startsWith("/v1/settings/")) {
         const deviceResponse = await options.devices?.settings(method, url.pathname, request.body ? readJSON : undefined,
           host === `127.0.0.1:${port}` ? `http://127.0.0.1:${port}/v1/device` : undefined);
@@ -247,15 +250,46 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
   };
 }
 
-export function startServer(options: {
+export interface StartServerOptions {
   db: HubDB; token: string; agentToken?: string; port?: number; settings?: SettingsDeps; deviceDeps?: DeviceDeps;
-}) {
+  mode?: HubMode; lanPort?: number; localStatusPort?: number; env?: NodeJS.ProcessEnv;
+}
+export interface RunningServer {
+  port: number | null; lanPort: number; hostname: string; url: URL | null; mode: HubMode;
+  stop(force?: boolean): Promise<void>;
+}
+export interface MacRunningServer extends RunningServer {
+  port: number; url: URL; mode: "mac";
+}
+
+export function startServer(options: StartServerOptions & { mode: "server" }): RunningServer;
+export function startServer(options: StartServerOptions & { mode: HubMode }): RunningServer;
+export function startServer(options: StartServerOptions & { mode?: "mac" }): MacRunningServer;
+export function startServer(options: StartServerOptions): RunningServer {
+  const env = options.env ?? options.settings?.env ?? process.env;
+  const mode = options.mode ?? options.settings?.mode ?? hubModeOf(env);
   const databaseFile = options.db.db.name;
   const dataDir = options.settings?.dataDir ?? (databaseFile === ":memory:" ? null : dirname(databaseFile));
-  const devices = new DeviceService(options.db, dataDir === null ? DEFAULT_LAN_PORT : resolveLanPort(dataDir), options.deviceDeps);
+  const lanPort = options.lanPort ?? (dataDir === null ? DEFAULT_LAN_PORT : resolveLanPort(dataDir, env));
+  let localServer: Bun.Server<unknown> | undefined;
+  const devices = new DeviceService(options.db, lanPort, {
+    ...options.deviceDeps,
+    alwaysListen: mode === "server",
+    getStatus: options.deviceDeps?.getStatus ?? (role => {
+      const snapshot = hubStatus(options.db, {
+        port: localServer?.port ?? null,
+        lanPort: devices.open ? devices.lanPort : null,
+        relay: devices.relay.status(),
+        mode,
+        env,
+        dataDir: dataDir ?? undefined,
+      });
+      return role === "admin" ? snapshot : { ...snapshot, database: { ...snapshot.database, file: null } };
+    }),
+  });
   let handler: ReturnType<typeof createHandler>;
-  const server = Bun.serve({ hostname: "127.0.0.1", port: options.port ?? DEFAULT_PORT, websocket: devices.events, fetch(request, server) {
-    handler ??= createHandler({ ...options, devices, port: server.port });
+  const startLocal = (port: number) => Bun.serve({ hostname: "127.0.0.1", port, websocket: devices.events, fetch(request, server) {
+    handler ??= createHandler({ ...options, mode, env, devices, port: server.port });
     const path = new URL(request.url).pathname;
     if (path === "/v1/device" || path === "/v1/device/events" || path === "/v1/device/hello") {
       const host = request.headers.get("host");
@@ -268,9 +302,31 @@ export function startServer(options: {
     if (path.startsWith("/v1/settings/relay") || path.startsWith("/v1/settings/devices/")) server.timeout(request, 0);
     return handler(request);
   } });
+
+  if (mode === "server") {
+    devices.start();
+    if (options.localStatusPort !== undefined) {
+      try { localServer = startLocal(options.localStatusPort); }
+      catch (error) { void devices.stop(true); throw error; }
+    }
+    return {
+      port: localServer?.port ?? null,
+      lanPort: devices.lanPort,
+      hostname: localServer?.hostname ?? "0.0.0.0",
+      url: localServer?.url ?? null,
+      mode,
+      async stop(force?: boolean) { await Promise.all([localServer?.stop(force), devices.stop(force)]); },
+    };
+  }
+
+  localServer = startLocal(options.port ?? DEFAULT_PORT);
   devices.start();
   return {
-    port: server.port, hostname: server.hostname, url: server.url,
-    async stop(force?: boolean) { await Promise.all([server.stop(force), devices.stop(force)]); },
+    port: localServer.port ?? (options.port ?? DEFAULT_PORT),
+    lanPort: devices.lanPort,
+    hostname: localServer.hostname ?? "127.0.0.1",
+    url: localServer.url,
+    mode,
+    async stop(force?: boolean) { await Promise.all([localServer?.stop(force), devices.stop(force)]); },
   };
 }

@@ -5,7 +5,8 @@ import Ajv from "ajv";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
-import { loadConfig, readKey as defaultReadKey } from "./config.ts";
+import { hubModeOf, type HubMode } from "../hub-json.ts";
+import { isCliProvider, loadConfig, ModelConfigError, readKey as defaultReadKey, SERVER_CLI_ERROR } from "./config.ts";
 import { claudeCLI } from "./claude-cli.ts";
 import { codexCLI } from "./codex-cli.ts";
 import { httpComplete } from "./http.ts";
@@ -42,7 +43,7 @@ export const MAX_TIMEOUT_MS = 300_000;
 // 跨实例共用队列，失败不会堵塞后续调用。
 let queue: Promise<unknown> = Promise.resolve();
 /** configs：不传时每次调用都重新读 models.json（改完下一次调用即生效）；设置页"测试连接"用它传入未保存的配置。 */
-export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRow) => void | Promise<void>; journal?: RuntimeLog; readKey?: ReadKey; spawn?: Spawn; configs?: () => Promise<Record<Tier, ModelConfig>> }) {
+export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRow) => void | Promise<void>; journal?: RuntimeLog; readKey?: ReadKey; spawn?: Spawn; configs?: () => Promise<Record<Tier, ModelConfig>>; mode?: HubMode }) {
   async function execute<T>(req: LLMRequest): Promise<LLMResult<T>> {
     const start = performance.now();
     const row: UsageRow = { id: ulid(), at: toLocalIso(Date.now()), tier: req.tier, task: req.task ?? null, provider: "", model: "", input_chars: Array.from(req.system).length + Array.from(req.prompt).length, output_chars: 0, input_tokens: null, output_tokens: null, ms: 0, ok: 0, error: null };
@@ -50,9 +51,11 @@ export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRo
     let data: unknown, validated = false, retryAfterMs: number | undefined;
     const identity = options.journal ? { call_id: row.id } : {};
     try {
-      const configs = await (options.configs ?? (() => loadConfig(options.dataDir)))();
+      const mode = options.mode ?? hubModeOf();
+      const configs = await (options.configs ?? (() => loadConfig(options.dataDir, { mode })))();
       const config = configs[req.tier];
       if (!config) throw new Error("不支持的模型档位");
+      if (mode === "server" && isCliProvider(config.provider)) throw new ModelConfigError(SERVER_CLI_ERROR);
       row.provider = config.provider; row.model = config.model;
       const timeoutMs = req.timeoutMs ?? 180_000;
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) throw new ModelError("bad_request");

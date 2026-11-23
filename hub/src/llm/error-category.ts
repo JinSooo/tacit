@@ -1,7 +1,8 @@
 export const MODEL_ERROR_LABELS = {
   timeout: "超时", network: "网络不可用", rate_limited: "请求太频繁", quota: "额度用完",
   auth: "密钥无效", bad_request: "请求被拒绝", server_error: "服务出错", invalid_json: "返回不是 JSON",
-  schema_mismatch: "返回格式不对", cli_failed: "命令行调用失败", usage_record_failed: "用量记录失败", unknown: "未知错误",
+  schema_mismatch: "返回格式不对", cli_failed: "命令行调用失败", usage_record_failed: "用量记录失败",
+  config_error: "模型配置无效", unknown: "未知错误",
 } as const;
 
 export type ModelErrorCategory = keyof typeof MODEL_ERROR_LABELS;
@@ -40,8 +41,10 @@ export function classifyModelError(error: unknown, fallback: ModelErrorCategory 
   const statusText = /\bHTTP\s+(?:请求失败[（(])?([1-5]\d{2})\b/i.exec(message)?.[1];
   const status = statusText ? Number(statusText) : undefined;
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+  if (code === "config_error") return "config_error";
   let category: ModelErrorCategory;
-  if (/\b(?:insufficient[ _-](?:quota|balance)(?:_error)?|quota(?:_exceeded)?|usage[ _-]+limit)\b|\b(?:hit|reached|exceeded)\s+(?:your\s+|the\s+)?(?:\d+[ -](?:hour|day|week|month)\s+)?limit\b|额度|余额不足|限额/i.test(message)) category = "quota";
+  if (/服务端中枢仅支持 API 模型|服务端中枢尚未配置 API 模型/.test(message)) category = "config_error";
+  else if (/\b(?:insufficient[ _-](?:quota|balance)(?:_error)?|quota(?:_exceeded)?|usage[ _-]+limit)\b|\b(?:hit|reached|exceeded)\s+(?:your\s+|the\s+)?(?:\d+[ -](?:hour|day|week|month)\s+)?limit\b|额度|余额不足|限额/i.test(message)) category = "quota";
   else if (/\brate[ _-]?limit(?:ed|ing|s|_exceeded|_error)?\b|频率限制|请求太频繁|too many requests/i.test(message)) category = "rate_limited";
   else if (status !== undefined && categoryForStatus(status) !== "unknown") category = categoryForStatus(status);
   else if (code === "ETIMEDOUT" || (error instanceof Error && error.name === "TimeoutError") || /超时|time[ -]?out|timed?\s*out|time limit exceeded/i.test(message)) category = "timeout";

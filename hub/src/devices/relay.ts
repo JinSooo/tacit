@@ -72,8 +72,9 @@ export class RelayService {
   }
 
   start() {
-    this.sql.prepare("UPDATE relay_mailboxes SET state='revoked', token=NULL WHERE state IN ('invite','staging')").run();
-    this.lastTick = this.clock();
+    const now = this.clock();
+    this.sql.prepare("UPDATE relay_mailboxes SET state='revoked', token=NULL WHERE state='staging' OR (state='invite' AND (expires_at IS NULL OR expires_at<=?))").run(now);
+    this.lastTick = now;
     this.kick(true);
     this.timer = setInterval(() => {
       const now = this.clock();
@@ -224,6 +225,11 @@ export class RelayService {
     const token = this.keys.read(space.space);
     if (!token) throw new Error("找不到信箱密钥");
     return token;
+  }
+
+  /** 在调用方已持有 relay.run 队列时按地址配置信箱（供 CLI pair --relay 复用）。 */
+  async configureDirect(url: string) {
+    await this.configure(relayURL(url));
   }
 
   private async configure(url: string | null, code?: string) {

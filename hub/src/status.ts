@@ -8,6 +8,8 @@ import type { HubDB } from "./db.ts";
 import { readGeneral } from "./general-settings.ts";
 import { budgetCooldown, providerCooldown } from "./distill/cooldown.ts";
 import type { RequestStatus } from "./distill/requests.ts";
+import { hubModeOf, timezoneStatus, type HubMode } from "./hub-json.ts";
+import { inspectModelConfig } from "./llm/config.ts";
 import { modelUsageDayStart, modelUsageRows, usageTokens } from "./model-usage.ts";
 
 /**
@@ -40,7 +42,7 @@ function addUsage(sum: UsageTotals, row: UsageTotals) {
   sum.output_tokens_incomplete ||= row.output_tokens_incomplete;
 }
 
-const errorCode = /^(timeout|network|rate_limited|quota|auth|bad_request|server_error|invalid_json|schema_mismatch|cli_failed|usage_record_failed|unknown)(?::[1-5][0-9]{2})?$/;
+const errorCode = /^(timeout|network|rate_limited|quota|auth|bad_request|server_error|invalid_json|schema_mismatch|cli_failed|usage_record_failed|config_error|unknown)(?::[1-5][0-9]{2})?$/;
 function statusError(value: string | null): string | null {
   if (value === null) return null;
   const code = errorCode.exec(value)?.[0];
@@ -122,9 +124,14 @@ function recordGroups(hub: HubDB) {
   return { bySource: merge("source") as { source: string; count: number; last_received: string | null }[], byDevice: merge("device") as { device: string; count: number; last_received: string | null }[], tombstones };
 }
 
-export function hubStatus(hub: HubDB, options: { port: number; lanPort?: number | null; now?: number; busy?: ReturnType<BusyResponses["snapshot"]>; relay?: ReturnType<RelayService["status"]> }) {
+export function hubStatus(hub: HubDB, options: {
+  port: number | null; lanPort?: number | null; now?: number;
+  busy?: ReturnType<BusyResponses["snapshot"]>; relay?: ReturnType<RelayService["status"]>;
+  mode?: HubMode; env?: NodeJS.ProcessEnv; dataDir?: string; processTimezone?: string;
+}) {
   const sql = hub.db;
   const now = options.now ?? Date.now();
+  const mode = options.mode ?? hubModeOf(options.env);
   const counts = (query: string, ...args: unknown[]): Counts =>
     Object.fromEntries((sql.prepare(query).all(...args) as { k: string; n: number }[]).map(r => [r.k, r.n]));
   const scalar = <T>(query: string, ...args: unknown[]): T => Object.values(sql.prepare(query).get(...args) as Record<string, T>)[0]!;
@@ -140,6 +147,10 @@ export function hubStatus(hub: HubDB, options: { port: number; lanPort?: number 
   const file = sql.name;
   let bytes: number | null = null;
   if (file && file !== ":memory:") { try { bytes = statSync(file).size; } catch { bytes = null; } }
+  const dataDir = options.dataDir ?? (file && file !== ":memory:" ? dirname(file) : undefined);
+  const modelCheck = dataDir ? inspectModelConfig(dataDir, { mode, env: options.env }) : { ok: true as const };
+  const modelConfigError = modelCheck.ok ? null : modelCheck.error;
+  const timezone = timezoneStatus({ env: options.env, dataDir, mode, processTimezone: options.processTimezone });
   const { transcription, transcription_disabled, collector } = collectorSnapshot(file, now);
 
   const { bySource, byDevice, tombstones } = recordGroups(hub);
@@ -203,9 +214,11 @@ export function hubStatus(hub: HubDB, options: { port: number; lanPort?: number 
       bun: typeof Bun === "undefined" ? null : Bun.version,
       busy: options.busy ?? new BusyResponses().snapshot(),
       schema_version: sql.pragma("user_version", { simple: true }) as number,
+      mode,
     },
-    // 本机接口只绑定 127.0.0.1；有配对邀请或已配对设备时，另开一个只收加密设备请求的局域网端口。
-    listen: { host: "127.0.0.1", port: options.port, localhost_only: !options.lanPort, lan_port: options.lanPort ?? null },
+    timezone,
+    // 本机接口只绑定 127.0.0.1；有配对邀请或已配对设备时（server 模式下常开），另开只收加密设备请求的端口。
+    listen: { host: options.port === null ? "0.0.0.0" : "127.0.0.1", port: options.port, localhost_only: !options.lanPort, lan_port: options.lanPort ?? null },
     database: { file, bytes },
     records: {
       total: bySource.reduce((n, r) => n + r.count, 0),
@@ -232,6 +245,8 @@ export function hubStatus(hub: HubDB, options: { port: number; lanPort?: number 
       last_error: lastError ? { at: lastError.at, tier: lastError.tier, error: statusError(lastError.error) ?? "unknown", recovered } : null,
       last_ok_at: lastOk?.at ?? null,
       cooldown: budgetCooldown(now, dailyLimit, todayTokens) ?? providerCooldown(state("llm_cooldown"), now),
+      config_error: modelConfigError,
+      paused_reason: modelConfigError,
     },
     collector,
     llm_today: { date: today, total, by_tier: byTier, by_task: byTask, used_tokens: todayTokens, token_limit: dailyLimit },

@@ -973,9 +973,9 @@ CREATE TABLE project_context_cache (
 - 降为 `collect` 时，同事务清除该设备的投影视窗、游标和待投递回执，持久排入仅该设备可取的重置。已有订阅收到紧急提示后断开；随后直连 `projection.pull` 只返回 `{ kind: "projection.reset", reset: true, changes: [], cursor: 0, more: false, epoch, server_time }`，无须确认。经信箱先撤掉旧推送及原文回执，再投递加密 `projection.reset`。此角色不能读取原文或确认投影。新的 `collect` 设备没有待清缓存，拉取照常返回 403。
 - 设备 op 和本机 HTTP 都拒绝移除或降级最后一台 `admin`，返回 409「不能移除最后一台管理设备」。本机 CLI 直接操作数据库，提供 `devices list`、`devices set-role <device_id> <role> [--force]`、`devices remove <device_id> [--force]`。仅本机 CLI 的 `--force` 可绕过最后一台保护。6.1 的中枢密钥更换仍会撤销旧身份。
 
-#### 6.11.3 中枢独立部署：密钥存放、远程认证与只走 API 模型
+#### 6.11.3 中枢独立部署：密钥存放、远程认证与只走 API 模型（已实施）
 
-- **统一密钥后端（`hub/src/secrets/`，`SecretStore` 接口，2026-11-23 已实现，其余 6.11 仍是草案）**：
+- **统一密钥后端（`hub/src/secrets/`，`SecretStore` 接口，2026-11-23 已实现）**：
   - 接口（同步）：`read(account)`（不存在返回 `null`，读不出来抛错）、`has`、`write`（覆盖）、`create`（只在不存在时写入，返回是否由本次创建）、`remove`。失败一律抛 `SecretError`，只带固定类别（`reason`）和启动诊断用的 `code`：根密钥与 `secrets.enc` 的问题为 `master_key_unreadable`，其余为 `secret_unreadable` / `secret_write_failed` / `secret_invalid`；消息不含密钥、账号名或路径。
   - 账号名白名单：`db-key`、`device-key`、`provider:<小写名称>`、`relay-space-<22 位空间编号>`，以及仅 `keychain` 后端可用的 `agent-device-key`、`agent-context-cache-key`、`audio-key-hex`（音频密钥只属于 Mac 采集端和本机钥匙串，`sealed-file` 一律拒绝）。其他名字、路径穿越写法一律拒绝；写入时再按账号检查值的格式（十六进制密钥、可见 ASCII 的 API key、信箱令牌）。
   - **后端选择**：环境变量 `RA_SECRET_BACKEND=keychain|sealed-file`；不设时 macOS 用 `keychain`，其他系统用 `sealed-file`，写错值直接报错。
@@ -985,22 +985,24 @@ CREATE TABLE project_context_cache (
     - 其余全部密钥合并成一份内容，经 HKDF-SHA256（信息串 `tacit-hub/secrets.enc/v1`）从根密钥派生出文件密钥，用 AES-256-GCM 整份加密，保存在 `<数据目录>/secrets.enc`（`0600`）。文件格式：4 字节头 `TSE1`（同时作 AEAD 附加认证数据）+ 12 字节随机数 + 密文 + 16 字节认证标签；明文是 `{"v":1,"entries":{账号:值}}`，账号名和条目数量也不外露。（与最初草案“按条目名分别派生子密钥”的出入：整份加密能在条目为空时也验出错的根密钥，且不暴露信箱空间编号等条目名；仍满足运行期远程更新模型 API Key、动态轮换信箱令牌。）
     - 写入：读-改-写期间持有 `secrets.enc.lock`（`serve` 与 `distill` 两个进程都可能写；超过 30 秒的锁视为崩溃遗留，等待超过 5 秒报错），同目录临时文件 + `fsync` + 原子替换，任何时刻磁盘上都是完整的旧文件或新文件；写入失败清掉临时文件。
     - 启动保护同 Mac：若 `secrets.enc` 已存在但根密钥缺失或解不开（错根密钥、被截断或篡改），立即以 `master_key_unreadable` 退出；数据库已存在而 `secrets.enc` 里没有 `db-key` 时以 `db_key_missing` 退出。任何一种都**绝不生成新密钥**，也不改动 `secrets.enc`。为沿用 Mac 端启动诊断的固定类别表，`serve` 把 `master_key_unreadable` 记为 `db_key_unreadable`，具体 `reason` 只出现在命令行输出的类别里。
-    - `tacit-hub keys export` 在这个后端下只输出备份指引，不打印任何密钥：根密钥文件与数据目录必须分开备份、存放在不同地方，“丢了根密钥无法恢复”，并列出 `db-key`、`device-key` 是否已在 `secrets.enc` 里。
-- **远程查询认证与网络暴露**：
+    - `bun hub/src/cli.ts keys export` 在这个后端下只输出备份指引，不打印任何密钥：根密钥文件与数据目录必须分开备份、存放在不同地方，“丢了根密钥无法恢复”，并列出 `db-key`、`device-key` 是否已在 `secrets.enc` 里。新增 `bun hub/src/cli.ts keys import-db-key`，从标准输入读入原 `db-key` 并在已有 `history.db` 时先做只读解密校验，再写入当前后端，不回显密钥、不覆盖已有不同密钥。
+- **远程查询认证与网络暴露（2026-11-23 已实现）**：
   - 独立部署模式（`RA_HUB_MODE=server`，非 macOS 默认启用）下：
-    - **关闭** `127.0.0.1` 本机明文管理/网页端口（或仅显式传 `--local-status-port` 时绑定 `127.0.0.1` 供 SSH 隧道排障），**绝不在 `0.0.0.0` 暴露任何 Bearer token 管理接口**。
-    - 设备端口（默认 `0.0.0.0:47824`，可经 `RA_LAN_PORT` 修改）常开，只提供 `GET /v1/device/hello`、`POST /v1/device` 与可选 `GET /v1/device/events`。
+    - **关闭** `127.0.0.1` 本机明文管理/网页端口；仅显式传 `--local-status-port <port>` 时绑定 `127.0.0.1:<port>` 供 SSH 隧道排障，**绝不在 `0.0.0.0` 暴露任何 Bearer token 管理接口**。
+    - 设备端口（默认 `0.0.0.0:47824`，可经 `RA_LAN_PORT` 或 `hub.json` 的 `lan_port` 修改）常开，只提供 `GET /v1/device/hello`、`POST /v1/device` 与 `GET /v1/device/events`。设备 op 补齐了 `status.get`（`admin` 返回完整状态，`view` 隐藏本机数据库路径）。
     - 支持放在 Caddy / Nginx / Cloudflare Tunnel / Tailscale 反向代理之后：应用层已有 HPKE 端到端加密与 X25519 双向认证，反向代理看不到明文也不能伪造请求；公网直连建议前置 HTTPS 保护元数据。
     - 远程 AI 工具（MCP / SessionStart）一律通过独立 `agent` 设备身份经 `POST /v1/device` 认证，复用 6.10.5。
-- **只走 API 的模型**：
+- **只走 API 的模型（2026-11-23 已实现）**：
   - `RA_HUB_MODE=server`（及全部非 macOS 平台）下禁用 `claude-cli` 与 `codex-cli`：
     - `GET /v1/settings/models` 仅返回 `anthropic` 与 `openai-compatible`；
-    - `PUT /v1/settings/models` 拒绝 CLI 提供方（返回 `400`「服务端中枢仅支持 API 模型」）；
-    - 无 `models.json` 时不再回退到 `claude-cli`，改为返回 `config_error`，等用户在 Mac 设置页填好 API 配置与密钥后开始整理。
-    - 本地/局域网模型（如服务器上同机跑 Ollama）仍可通过 `openai-compatible` 接入；`settings.models.local` 仍限制为中枢本机 loopback 地址以防 SSRF。
-- **部署与时区**：
-  - 仓库提供 `hub/Dockerfile` 与 `tacit-hub run` 单入口（统一管理 `serve` 与 `distill` 两个子进程与信号退出），用户单容器挂 `/data` 与 `/run/secrets/tacit_master_key` 即可运行。
-  - 独立部署须显式设置时区（`TZ` 环境变量或 `hub.json` 的 `timezone`）；未设置且检测到 UTC 时，状态页与 Mac 设置页给出提示，避免自然日与时间线跨天错位。
+    - `PUT /v1/settings/models` 与 `POST /v1/settings/models/test` 拒绝 CLI 提供方（返回 `400`「服务端中枢仅支持 API 模型」）；
+    - 无 `models.json` 时不再回退到 `claude-cli`：`GET /v1/settings/models` 返回 `tiers: null` 与非空 `config_error`；`createLLM` 与 `distill` 按同一规则返回 `config_error` 并暂停模型整理（切片草稿照常运行），状态接口在 `distill.config_error` 与 `distill.paused_reason` 中写明原因，配好 API 模型后自动恢复。
+    - 本地/局域网模型（如服务器上同机跑 Ollama）仍可通过 `openai-compatible` 接入；`POST /v1/settings/models/local` 仍限制为中枢本机 loopback 地址以防 SSRF。
+- **部署、CLI 引导与时区（2026-11-23 已实现）**：
+  - 仓库提供 `hub/Dockerfile`（基于 `oven/bun:1.4.4-alpine`，非 root `bun` 用户运行，含 `tzdata`）与 `.dockerignore`，部署说明见 `docs/server-deployment.md`。
+  - CLI `bun hub/src/cli.ts run [--local-status-port <port>]` 启动前先做密钥与数据库硬校验，再同时拉起并托管 `serve` 与 `distill` 两个子进程，转发 `SIGTERM`/`SIGINT` 并等待退出，任一子进程异常退出按退避重启（1s 起步、翻倍、上限 60s）。
+  - CLI `bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]` 复用 `DeviceService.createPairing` 在数据库中持久化一次性邀请（`admin` 5 分钟、`collect`/`view` 10 分钟），供运行中的 `serve` 直接核验；与原文差异：仓库未引入终端二维码依赖，当前仅向 stdout 输出 `tacit://pair?d=...` 链接，不新增额外依赖。
+  - 独立部署须显式设置时区（`TZ` 环境变量或 `hub.json` 的 `timezone` 字段，读取时校验为合法 IANA 时区名）；两者都未设置且检测到进程时区为 UTC 时，启动时向 stderr 输出一行告警，状态接口在 `timezone.warning` 给出提示（Mac 设置页展示待接入）。
 
 #### 6.11.4 远程删除和权限变更的风险控制
 
@@ -1018,15 +1020,15 @@ CREATE TABLE project_context_cache (
 #### 6.11.5 模块变更、影响、迁移、风险与推荐做法
 
 - **要改的模块和公共接口**：
-  - 中枢：新增 `hub/src/secrets/`（`SecretStore`、`keychain.ts`、`sealed-file.ts`），重构 `hub/src/config.ts`、`hub/src/keys.ts`、`hub/src/llm/keychain.ts` 接入 `SecretStore`；`hub/src/devices/store.ts` & `service.ts`（`role` 字段、权限矩阵、删除限流、`security_audit`、`devices.role.update`）；`hub/src/settings.ts` & `hub/src/llm/config.ts`（`server` 模式禁用 CLI 提供方）；`hub/src/cli.ts`（新增 `tacit-hub run`、`pair --role`、`devices list/set-role/remove`）；新增 `hub/Dockerfile` 与 `docs/server-deployment.md`。
-  - Mac 端：`collector/Sources/Collector/Viewer/PhoneSettings.swift`（升级为通用设备管理页，支持选角色配对、展示权限、降权与移除）、`SettingsPage.swift`（新增连接远端中枢入口、原生状态页、安全事件提示条）、`AppSetup.swift`（支持“仅连远端中枢”模式，不拉起本机中枢 launchd 服务）。
+  - 中枢（**已实施**）：`hub/src/secrets/`（`SecretStore`、`keychain.ts`、`sealed-file.ts`），`hub/src/config.ts`、`hub/src/hub-json.ts`（`RA_HUB_MODE`、`RA_LAN_PORT`、`timezone`）、`hub/src/keys.ts`（`exportKeysForBackend`、`importDbKey`）、`hub/src/llm/keychain.ts` 接入 `SecretStore`；`hub/src/devices/store.ts` & `service.ts`（`role` 字段、权限矩阵、删除限流、`security_audit`、`devices.role.update`、持久化邀请 `createPairing`、`status.get`、`alwaysListen`）；`hub/src/settings.ts`、`hub/src/llm/config.ts`、`hub/src/llm/index.ts`、`hub/src/distill/run.ts`、`hub/src/status.ts`（`server` 模式禁用 CLI 提供方、缺失 `models.json` 返回 `config_error` 并暂停整理、时区告警）；`hub/src/supervisor.ts` & `hub/src/cli.ts`（`run`、`serve --local-status-port`、`pair --role [--relay]`、`keys import-db-key`、`devices list/set-role/remove`）；`hub/Dockerfile`、`.dockerignore` 与 `docs/server-deployment.md`。
+  - Mac 端（**待实施**）：`collector/Sources/Collector/Viewer/PhoneSettings.swift`（升级为通用设备管理页，支持选角色配对、展示权限、降权与移除）、`SettingsPage.swift`（新增连接远端中枢入口、原生状态页、安全事件提示条）、`AppSetup.swift`（支持“仅连远端中枢”模式，不拉起本机中枢 launchd 服务）。
 - **对现有用户的影响**：
   - 留在单机 Mac 的用户完全不受影响：继续用钥匙串、`Tacit.app` 自动拉起本机中枢、零配置升级；原有已配对的 Android 手机自动迁移为 `role = "collect"`。
   - 想把中枢迁到独立服务器或另一台常开 Mac 的用户，可以导出迁移现有加密库，并把原 Mac 切为远端 `admin` 客户端。
 - **迁移步骤**：
-  1. 已落地 `devices.role`、权限检查和变更、远程删除限额、`security_audit` 和本机设备 CLI。旧 Android 迁为 `collect`，旧查看设备迁为 `view`，首台 `admin` 由本机显式授予。既有密钥后端选择不变。
-  2. 落地 `SecretStore` 抽象与 `sealed-file` 后端、只走 API 模型开关与 CLI 引导命令（`tacit-hub pair/devices/run`），构建 Docker 镜像并在 Linux 环境跑通端到端验收。
-  3. Mac 设置页开放“连接已有中枢 / 迁出中枢”向导（提供现库搬迁文档：停旧中枢 → 拷 `history.db` → 在新中枢导入原 `db-key` 到 `secrets.enc` → 新中枢 CLI 配对首台 `admin` Mac → 停用旧机中枢自启）。
+  1. （已完成）落地 `devices.role`、权限检查和变更、远程删除限额、`security_audit` 和本机设备 CLI。旧 Android 迁为 `collect`，旧查看设备迁为 `view`，首台 `admin` 由本机显式授予。既有密钥后端选择不变。
+  2. （已完成）落地 `SecretStore` 抽象与 `sealed-file` 后端、服务端模式与只走 API 模型开关、时区校验与告警、CLI 引导命令（`run`、`pair --role`、`keys import-db-key`）、`hub/Dockerfile` 与 `docs/server-deployment.md`，并在 Linux 容器环境跑通端到端验收。与原草案的差异：`pair` 仅输出 `tacit://pair?d=...` 链接，不新增终端二维码依赖；补齐 `keys import-db-key` 与 `status.get` 供无头迁移与状态查验。
+  3. （待实施）Mac 设置页开放“连接已有中枢 / 迁出中枢”向导（配合 `docs/server-deployment.md` 的搬迁步骤与远端状态页）。
 - **主要风险**：
   - 用户把 `RA_MASTER_KEY_FILE` 误放进数据目录一起同步/备份，导致加密库与密钥同处泄露（缓解：启动时校验路径不在 `RA_DATA_DIR` 下，否则拒绝启动）。
   - 独立部署后丢失最后一台 `admin` 设备或根密钥（缓解：文档与引导页强调备份根密钥；保留服务器 CLI `tacit-hub pair --role admin` 补救管理员设备）。

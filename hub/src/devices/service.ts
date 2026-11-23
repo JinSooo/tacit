@@ -20,11 +20,13 @@ import { RelayService } from "./relay.ts";
 import { Projection } from "./projection.ts";
 import { directProjectionBytes, flushProjectionDraft, projectionHead, relayProjectionBytes, touchProjectionDay } from "./projection-store.ts";
 import { localDateString } from "../distill/requests.ts";
+import { hubStatus } from "../status.ts";
 import { dayMs, type RelayConfig, type RelayRequest } from "./relay-store.ts";
 
 const invitationMs = 10 * 60_000;
 const idPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const identityKey = "device_hub_id";
+const inviteKey = "device_pairing_invite";
 type Identity = Awaited<ReturnType<typeof identityFromRaw>>;
 type Invitation = { code: Buffer; expires: number; relay: RelayConfig | null; role: PairingRole };
 type EventSocket = { local?: boolean; lastSeq?: number; device?: string; revision?: number; authenticating?: boolean; timer?: ReturnType<typeof setTimeout> };
@@ -61,10 +63,13 @@ export interface DeviceDeps {
   now?: () => number;
   name?: string;
   addresses?: () => string[];
+  /** server 模式下设备端口始终监听，不在无设备时关闭，绑定失败直接抛出。 */
+  alwaysListen?: boolean;
+  /** status.get 设备操作回调，提供与 GET /v1/status 一致的状态快照。 */
+  getStatus?: (role: DeviceRole) => object;
 }
 
 export class DeviceService {
-  private invite: Invitation | null = null;
   private expiry?: ReturnType<typeof setTimeout>;
   private retry?: ReturnType<typeof setTimeout>;
   private listener?: Bun.Server<EventSocket>;
@@ -95,16 +100,33 @@ export class DeviceService {
   }
 
   get open() { return this.listener !== undefined; }
-  get lanPort() { return this.port; }
+  get lanPort() { return this.listener?.port ?? this.port; }
   private get sql() { return this.hub.db; }
   private get name() { return this.deps.name ?? computerName(); }
-  private get addresses() { return [...new Set((this.deps.addresses ?? ipv4)())].map(ip => `${ip}:${this.port}`); }
-  private currentInvite(now = this.clock()) {
-    return this.invite && this.invite.expires > now ? this.invite : null;
+  private get addresses() { return [...new Set((this.deps.addresses ?? ipv4)())].map(ip => `${ip}:${this.lanPort}`); }
+
+  private loadStoredInvite(): Invitation | null {
+    const row = this.sql.prepare<[string], { v: string }>("SELECT v FROM distill_state WHERE k=?").get(inviteKey);
+    if (!row) return null;
+    try {
+      const parsed = object(JSON.parse(row.v));
+      const code = base64url(parsed?.code, 16);
+      const expires = parsed?.expires;
+      const role = parsed?.role;
+      if (!code || typeof expires !== "number" || !Number.isFinite(expires) || !isPairingRole(role)) return null;
+      const relay = parsed?.relay === null || parsed?.relay === undefined ? null : parsed.relay as RelayConfig;
+      return { code, expires, relay, role };
+    } catch { return null; }
+  }
+
+  private currentInvite(now = this.clock()): Invitation | null {
+    const stored = this.loadStoredInvite();
+    return stored && stored.expires > now ? stored : null;
   }
 
   start() {
-    this.reconcile();
+    if (this.deps.alwaysListen) this.listen();
+    else this.reconcile();
     this.relay.start();
     this.reconcileProjectionEvents();
     // The local device CLI writes through another connection.
@@ -123,6 +145,7 @@ export class DeviceService {
   private devicePermissionsChanged() {
     this.reconcile();
     this.reconcileProjectionEvents();
+    this.relay.kick(true);
     this.relay.kickProjection();
   }
 
@@ -166,7 +189,7 @@ export class DeviceService {
   private reconcile() {
     if (this.stopped) return;
     try {
-      if (this.currentInvite() || this.sql.prepare("SELECT 1 FROM devices WHERE local_only=0 LIMIT 1").get()) {
+      if (this.deps.alwaysListen || this.currentInvite() || this.sql.prepare("SELECT 1 FROM devices WHERE local_only=0 LIMIT 1").get()) {
         this.listen();
       } else {
         const listener = this.listener;
@@ -196,14 +219,27 @@ export class DeviceService {
     });
   }
 
-  private activeIdentity() {
-    this.identity ??= Promise.resolve().then(async () => {
+  private async activeIdentity(): Promise<Identity | null> {
+    if (this.identity) {
+      const cached = await this.identity;
+      if (cached && this.boundHubID() === cached.hubID) return cached;
+      this.identity = undefined;
+    }
+    const pending = Promise.resolve().then(async () => {
       const raw = this.keys.read();
       if (raw === null) return null;
       const identity = await identityFromRaw(raw);
       return this.boundHubID() === identity.hubID ? identity : null;
-    }).catch(error => { this.identity = undefined; throw error; });
-    return this.identity;
+    });
+    this.identity = pending;
+    try {
+      const resolved = await pending;
+      if (!resolved && this.identity === pending) this.identity = undefined;
+      return resolved;
+    } catch (error) {
+      if (this.identity === pending) this.identity = undefined;
+      throw error;
+    }
   }
 
   private boundHubID(): string | undefined {
@@ -237,11 +273,67 @@ export class DeviceService {
     return identity;
   }
 
+  /** 创建配对邀请并持久化到数据库，供本机 HTTP 接口与 CLI `pair` 共用。 */
+  async createPairing(options: { role?: unknown; viewer?: unknown; relayUrl?: string; openListener?: boolean } = {}): Promise<{ uri: string; expires_at: string; role: PairingRole }> {
+    if (options.viewer !== undefined && options.viewer !== true && options.viewer !== false) throw new InputError("viewer 必须是布尔值");
+    const role = options.role === undefined ? options.viewer === true ? "view" : "collect" : options.role;
+    if (!isPairingRole(role)) throw new InputError("设备角色无效");
+    const openListener = options.openListener ?? true;
+    const audit = (success: boolean, code: string = role) =>
+      auditSecurity(this.sql, "pair.create", { ok: success, code, now: this.clock() });
+    return await this.relay.run(async () => {
+      const identity = await this.ensureIdentity();
+      if (this.stopped) throw new WireError(503, "中枢正在关闭");
+      if (openListener) {
+        try { this.listen(); }
+        catch { audit(false, "listen_failed"); throw new WireError(409, "局域网端口无法监听"); }
+      }
+      if (options.relayUrl !== undefined) {
+        try { await this.relay.configureDirect(options.relayUrl); }
+        catch (error) {
+          if (openListener) this.reconcile();
+          logFailure("relay.invite", error);
+          audit(false, "relay_failed");
+          if (error instanceof WireError) throw error;
+          throw new WireError(502, "无法配置配对信箱");
+        }
+      }
+      const code = randomBytes(16), expires = this.clock() + (role === "admin" ? 5 * 60_000 : invitationMs);
+      let relay: RelayConfig | null;
+      try { relay = await this.relay.provisionInvite(expires); }
+      catch (error) {
+        if (openListener) this.reconcile();
+        logFailure("relay.invite", error);
+        audit(false, "relay_failed");
+        throw new WireError(502, "无法创建配对信箱");
+      }
+      this.clearInvite();
+      this.sql.prepare("INSERT INTO distill_state(k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
+        .run(inviteKey, JSON.stringify({ code: code.toString("base64url"), expires, relay, role }));
+      if (openListener) {
+        this.expiry = setTimeout(() => {
+          void this.relay.run(() => {
+            if (!this.currentInvite()) this.clearInvite();
+            this.reconcile();
+          }).catch(error => { if (!this.stopped) logFailure("devices.invite", error); });
+        }, Math.max(0, expires - this.clock()));
+        this.expiry.unref();
+      }
+      const expires_at = new Date(expires).toISOString();
+      const payload = {
+        v: 1, hub_id: identity.hubID, name: this.name, pk: identity.publicKey.toString("base64url"),
+        code: code.toString("base64url"), addrs: this.addresses, expires_at, role, ...(relay ? { relay } : {}),
+      };
+      audit(true);
+      return { uri: `tacit://pair?d=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`, expires_at, role };
+    });
+  }
+
   async settings(method: string, path: string, readJSON?: () => Promise<unknown>, loopbackEndpoint?: string): Promise<Response | null> {
     const root = "/v1/settings/devices";
     if (method === "GET" && path === root) {
       const invite = this.currentInvite();
-      if (this.invite && !invite) {
+      if (!invite && this.loadStoredInvite()) {
         await this.relay.run(() => {
           if (!this.currentInvite()) this.clearInvite();
           this.reconcile();
@@ -249,7 +341,7 @@ export class DeviceService {
       }
       return json(ok({
         hub_id: this.boundHubID() ?? null,
-        lan: { open: this.open, port: this.port, addrs: this.addresses },
+        lan: { open: this.open, port: this.lanPort, addrs: this.addresses },
         pairing: invite ? { expires_at: new Date(invite.expires).toISOString(), role: invite.role } : null,
         devices: deviceList(this.hub),
       }));
@@ -278,42 +370,13 @@ export class DeviceService {
     if (method === "POST" && path === root + "/pairing") {
       const input = readJSON ? object(await readJSON()) : {};
       if (!input) throw new InputError("配对邀请必须是 JSON 对象");
-      if (input.viewer !== undefined && input.viewer !== true && input.viewer !== false) throw new InputError("viewer 必须是布尔值");
-      const role = input.role === undefined ? input.viewer === true ? "view" : "collect" : input.role;
-      if (!isPairingRole(role)) throw new InputError("设备角色无效");
-      const audit = (success: boolean, code: string = role) =>
-        auditSecurity(this.sql, "pair.create", { ok: success, code, now: this.clock() });
-      return await this.relay.run(async () => {
-        const identity = await this.ensureIdentity();
-        if (this.stopped) return json(fail(503, "中枢正在关闭"));
-        try { this.listen(); }
-        catch { audit(false, "listen_failed"); return json(fail(409, "局域网端口无法监听")); }
-        const code = randomBytes(16), expires = this.clock() + (role === "admin" ? 5 * 60_000 : invitationMs);
-        let relay: RelayConfig | null;
-        try { relay = await this.relay.provisionInvite(expires); }
-        catch (error) {
-          this.reconcile();
-          logFailure("relay.invite", error);
-          audit(false, "relay_failed");
-          return json(fail(502, "无法创建配对信箱"));
-        }
-        this.clearInvite();
-        this.invite = { code, expires, relay, role };
-        this.expiry = setTimeout(() => {
-          void this.relay.run(() => {
-            if (!this.currentInvite()) this.clearInvite();
-            this.reconcile();
-          }).catch(error => { if (!this.stopped) logFailure("devices.invite", error); });
-        }, Math.max(0, expires - this.clock()));
-        this.expiry.unref();
-        const expires_at = new Date(expires).toISOString();
-        const payload = {
-          v: 1, hub_id: identity.hubID, name: this.name, pk: identity.publicKey.toString("base64url"),
-          code: code.toString("base64url"), addrs: this.addresses, expires_at, role, ...(relay ? { relay } : {}),
-        };
-        audit(true);
-        return json(ok({ uri: `tacit://pair?d=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`, expires_at }));
-      });
+      try {
+        const { uri, expires_at } = await this.createPairing({ role: input.role, viewer: input.viewer, openListener: true });
+        return json(ok({ uri, expires_at }));
+      } catch (error) {
+        if (error instanceof WireError) return json(fail(error.status, error.message));
+        throw error;
+      }
     }
     if (method === "DELETE" && path === root + "/pairing") {
       await this.relay.run(() => {
@@ -341,8 +404,9 @@ export class DeviceService {
   }
 
   private clearInvite() {
-    this.relay.revokeInvite(this.invite?.relay);
-    this.invite = null;
+    const existing = this.loadStoredInvite();
+    this.relay.revokeInvite(existing?.relay);
+    this.sql.prepare("DELETE FROM distill_state WHERE k=?").run(inviteKey);
     clearTimeout(this.expiry);
   }
 
@@ -616,7 +680,8 @@ export class DeviceService {
       logFailure("relay.pair", error);
       return commitError(fail(503, "无法创建设备信箱，稍后再试"), "relay_failed");
     }
-    if (this.currentInvite() !== invite || this.stopped) {
+    const latest = this.currentInvite();
+    if (!latest || !timingSafeEqual(latest.code, invite.code) || this.stopped) {
       if (provisioned) this.relay.revokeDevice(device_id);
       return commitError(fail(403, "配对邀请无效或已过期"), "invite_invalid");
     }
@@ -624,6 +689,12 @@ export class DeviceService {
     try {
       const result = this.sql.transaction(() => {
         if (!claim()) return context ? null : fail(400, "请求 nonce 已使用");
+        const active = this.currentInvite();
+        if (!active || !timingSafeEqual(active.code, invite.code)) {
+          auditSecurity(this.sql, "pair.complete", { ok: false, code: "invite_invalid", now: this.clock() });
+          return remember(fail(403, "配对邀请无效或已过期"));
+        }
+        this.sql.prepare("DELETE FROM distill_state WHERE k=?").run(inviteKey);
         this.sql.prepare("INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,role) VALUES(?,?,?,?,?,?,?)")
           .run(device_id, name, platform, publicKey, at, at, invite.role);
         auditSecurity(this.sql, "pair.complete", { target: device_id, code: invite.role, now: this.clock() });
@@ -639,7 +710,6 @@ export class DeviceService {
         if (provisioned) this.relay.revokeDevice(device_id);
         return result;
       }
-      this.invite = null;
       clearTimeout(this.expiry);
       if (projectionRoles(invite.role)) this.reconcileProjectionEvents();
       return result;
@@ -760,6 +830,11 @@ export class DeviceService {
       case "audio.lines": return ok(this.audio.lines({ ...body, device }, device));
       case "conversations": return ok({ conversations: this.conversations(device, body) });
       case "conversations.put": return ok(this.putConversations(device, body));
+      case "status.get": {
+        if (this.deps.getStatus) return ok(this.deps.getStatus(role));
+        const snapshot = hubStatus(this.hub, { port: null, lanPort: this.open ? this.lanPort : null, now: this.clock(), relay: this.relay.status() });
+        return ok(role === "admin" ? snapshot : { ...snapshot, database: { ...snapshot.database, file: null } });
+      }
       default: return fail(400, "设备操作无效");
     }
   }

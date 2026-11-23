@@ -34,6 +34,21 @@ function setCipher(db: DatabaseTypes.Database, key: string): void {
   db.pragma(`key='${key.replaceAll("'", "''")}'`);
 }
 
+/** 用只读方式验证密钥能否打开已有加密库，不改动文件、不触发迁移。 */
+export function verifyDbKey(file: string, key: string): boolean {
+  let db: DatabaseTypes.Database | undefined;
+  try {
+    db = new Database(file, { readonly: true, fileMustExist: true });
+    setCipher(db, key);
+    db.pragma("user_version", { simple: true });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    db?.close();
+  }
+}
+
 function validMigrationBackup(file: string, backup: string, key: string, version: number): boolean {
   let stat;
   try { stat = lstatSync(backup); }

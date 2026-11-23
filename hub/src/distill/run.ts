@@ -7,6 +7,8 @@ import type { HubDB, StoredRecord } from "../db.ts";
 import { chatApp, chatKey, recordChat } from "../chat.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { classifyModelError, type ModelErrorCode } from "../llm/error-category.ts";
+import { inspectModelConfig } from "../llm/config.ts";
+import type { HubMode } from "../hub-json.ts";
 import { activeCooldown, ModelCooldown, withModelCooldown } from "./cooldown.ts";
 import type { LLMRequest, LLMResult } from "../llm/index.ts";
 import { applyTimelineCorrections, DistillStore, timelineCorrectionKey, type Frame, type Thread, type TimelineCorrections } from "./store.ts";
@@ -29,7 +31,7 @@ import { redactString } from "../redact.ts";
 import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, selfSummarizingDevices, storedSummary, summaryState, speakerNamer, type ConversationGroup, type Summary } from "../conversations.ts";
 
 export interface LLM { complete<T>(req: LLMRequest): Promise<LLMResult<T>> }
-export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: string) => void }
+export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: string) => void; checkModelConfig?: () => string | null }
 
 /** 事务外等待模型时用户可能删除/修正内容：丢弃旧快照的响应，下一轮重试。 */
 async function complete<T>(d: Deps, req: LLMRequest): Promise<LLMResult<T>> {
@@ -968,27 +970,35 @@ export async function distillRound(deps: Deps, opts: RoundOptions = {}) {
 
 async function distillRoundInner(d: Deps, opts: RoundOptions, out: Record<string, unknown>, store: DistillStore, now: number) {
   out.slice = sliceStep(d.db, opts.backfill ?? false, now, opts.enabledDefault ?? now);
-  const active = activeCooldown(store, now);
-  if (active) out.stopped = active.kind;
-  else {
-    try {
-      // 先写对话总结，归线程时给模型看总结而不是转写开头。
-      out.conversations = await conversationStep(d, now);
-      out.assign = await assignStep(d, store, now);
-      out.classify = await classifyStep(d, store);
-      if (opts.slow) {
-        if (now - (store.getState<number>("dedup_ms") ?? 0) >= LIMITS.dedupEvery) {
-          out.dedup = await dedupStep(d, store, now);
-          if (!(out.dedup as { failed: number }).failed) store.setState("dedup_ms", now);
+  const configError = d.checkModelConfig?.() ?? null;
+  if (configError) {
+    store.setState("llm_config_error", { code: "config_error", reason: configError, at: toLocalIso(now) });
+    out.stopped = "config_error";
+    out.reason = configError;
+  } else {
+    if (store.getState("llm_config_error") !== null) store.setState("llm_config_error", null);
+    const active = activeCooldown(store, now);
+    if (active) out.stopped = active.kind;
+    else {
+      try {
+        // 先写对话总结，归线程时给模型看总结而不是转写开头。
+        out.conversations = await conversationStep(d, now);
+        out.assign = await assignStep(d, store, now);
+        out.classify = await classifyStep(d, store);
+        if (opts.slow) {
+          if (now - (store.getState<number>("dedup_ms") ?? 0) >= LIMITS.dedupEvery) {
+            out.dedup = await dedupStep(d, store, now);
+            if (!(out.dedup as { failed: number }).failed) store.setState("dedup_ms", now);
+          }
+          out.digest = await digestStep(d, store, now, "all");
+          out.projects = await projectStep(d, store, now);
+        } else if (opts.wantedDigestsOnFast && store.wantedDigests().size) {
+          out.digest = await digestStep(d, store, now, "wanted");
         }
-        out.digest = await digestStep(d, store, now, "all");
-        out.projects = await projectStep(d, store, now);
-      } else if (opts.wantedDigestsOnFast && store.wantedDigests().size) {
-        out.digest = await digestStep(d, store, now, "wanted");
+      } catch (error) {
+        if (!(error instanceof ModelCooldown)) throw error;
+        out.stopped = error.kind;
       }
-    } catch (error) {
-      if (!(error instanceof ModelCooldown)) throw error;
-      out.stopped = error.kind;
     }
   }
   out.lifecycle = lifecycleStep(store, now);
@@ -1049,7 +1059,10 @@ export async function distillTick(deps: Deps, state: LoopState, at?: number): Pr
   };
   store.setState("heartbeat_at", toLocalIso(now));
   settleRequest();
-  const req = activeCooldown(store, now) ? null : requests.claim(now);
+  const configError = d.checkModelConfig?.() ?? null;
+  if (configError) store.setState("llm_config_error", { code: "config_error", reason: configError, at: toLocalIso(now) });
+  else if (store.getState("llm_config_error") !== null) store.setState("llm_config_error", null);
+  const req = configError || activeCooldown(store, now) ? null : requests.claim(now);
   if (req) {
     let error: ModelErrorCode | undefined, requeue = false;
     try {
@@ -1139,10 +1152,14 @@ async function regularRound(d: Deps, state: LoopState) {
   return false;
 }
 
-export async function runDistill({ db, llm, once, backfill, range, log = console.log, pollMs = 5000 }: { db: HubDB; llm: LLM; once: boolean; backfill: boolean; range?: { from: string; to: string }; log?: (line: string) => void; pollMs?: number }) {
+export async function runDistill({ db, llm, once, backfill, range, log = console.log, pollMs = 5000, dataDir, mode }: { db: HubDB; llm: LLM; once: boolean; backfill: boolean; range?: { from: string; to: string }; log?: (line: string) => void; pollMs?: number; dataDir?: string; mode?: HubMode }) {
   const store = new DistillStore(db);
   refreshDerivedState(store);
-  const d: Deps = { db, llm, log };
+  const checkModelConfig = dataDir ? () => {
+    const inspected = inspectModelConfig(dataDir, { mode });
+    return inspected.ok ? null : inspected.error;
+  } : undefined;
+  const d: Deps = { db, llm, log, checkModelConfig };
   const enabledDefault = startOfDay(Date.now());
   if (range) log(JSON.stringify(backfillRange(db, range.from, range.to, { enabledDefault })));
   if (once || backfill) { log(JSON.stringify(await distillRound(d, { backfill: backfill && !range, slow: true, days: "all", enabledDefault }))); if (once) return; }
