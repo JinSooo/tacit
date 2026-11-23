@@ -113,7 +113,7 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
         if (deviceResponse) return deviceResponse;
         const relayResponse = await options.devices?.relay.settings(method, url.pathname, readJSON, actor);
         if (relayResponse) return relayResponse;
-        const response = await settings(method, url, { db, port, readJSON, lan: options.devices?.open ?? false, actor: actor?.device, deferRestart: actor?.fromRelay });
+        const response = await settings(method, url, { db, port, readJSON, lan: options.devices?.open ?? false, actor: actor?.device, remoteActor: actor?.remote, deferRestart: actor?.fromRelay });
         if (response) return response;
       }
       if (method === "GET" && url.pathname === "/v1/audit") return Response.json(new AgentReads(db).audit(url.searchParams));

@@ -174,11 +174,3 @@ private final class DeviceSettingsStub: URLProtocol, @unchecked Sendable {
 
   override func stopLoading() {}
 }
-
-@Test func phoneSettingsOnlyListsAndroidDevices() {
-  let devices = ["mac", "agent", "android"].map {
-    DeviceSettings.Device(id: "\($0)-abcd2345", name: $0, platform: $0, pairedAt: "", lastSeen: nil, records: 0, pendingChanges: 0)
-  }
-  let settings = DeviceSettings(hubId: nil, lan: .init(open: false, port: 47824, addrs: []), pairing: nil, devices: devices)
-  #expect(settings.phones.map(\.id) == ["android-abcd2345"])
-}

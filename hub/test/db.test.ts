@@ -32,7 +32,7 @@ test("SQLCipher 实际文件加密，错误密钥拒绝，正确密钥重开及�
   const reopened = new HubDB(ctx.file, ctx.config.dbKey);
   try {
     expect(reopened.get(record.id)?.body).toBe(record.body);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(17);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(18);
   } finally { reopened.close(); }
 });
 
@@ -159,8 +159,8 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
       }
       writeFileSync(gate, "go");
       const results = await Promise.all(children.map(async child => ({ code: await child.exited, error: await new Response(child.stderr).text(), output: await new Response(child.stdout).text() })));
-      expect(results).toEqual([{ code: 0, error: "", output: "17\n" }, { code: 0, error: "", output: "17\n" }]);
-      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(17);
+      expect(results).toEqual([{ code: 0, error: "", output: "18\n" }, { code: 0, error: "", output: "18\n" }]);
+      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(18);
       expect(ctx.db.db.pragma("table_info(threads)")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "domain" }), expect.objectContaining({ name: "project_hint" })]));
       expect(ctx.db.db.pragma("table_info(agent_reads)")).toHaveLength(8);
       expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'agent_reads_%'").all()).toHaveLength(2);
@@ -178,7 +178,7 @@ test("v8 用量升级到 v9：task 列可空，旧行不变，重开幂等", () 
   for (let i = 0; i < 2; i++) {
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(17);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(18);
       expect((upgraded.db.pragma("table_info(llm_usage)") as { name: string; type: string }[]).filter(c => c.name === "task")).toMatchObject([{ name: "task", type: "TEXT" }]);
       expect(upgraded.db.prepare("SELECT id,tier,input_tokens,ok,task FROM llm_usage WHERE id=?").get("legacy-usage")).toEqual({ id: "legacy-usage", tier: "hour", input_tokens: 123, ok: 1, task: null });
     } finally { upgraded.close(); }
@@ -204,7 +204,7 @@ test("v9 声纹升级 v10：mic 列按现有声纹回填，重开及已有列幂
   for (let i = 0; i < 3; i++) {
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(17);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(18);
       expect((upgraded.db.pragma("table_info(speakers)") as { name: string }[]).filter(c => c.name === "mic"))
         .toMatchObject([{ name: "mic", type: "INTEGER", notnull: 1, dflt_value: "0" }]);
       expect(upgraded.db.prepare("SELECT mic FROM speakers WHERE id=?").get(mic)).toEqual({ mic: 1 });
@@ -241,7 +241,7 @@ test("v14 迁移保留 Android 身份并索引已有整理，投影写入失败�
 
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(17);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(18);
       expect(existsSync(ctx.file + ".migration-v14.bak")).toBe(false);
       expect(upgraded.db.prepare("SELECT role,projection_cursor,projection_epoch FROM devices").get())
         .toEqual({ role: "collect", projection_cursor: 0, projection_epoch: 0 });
@@ -267,12 +267,14 @@ test("v16 → v17 保留已配对设备和历史 Mac 记录，默认仍是远程
       ALTER TABLE devices DROP COLUMN local_only;
       INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,role)
       VALUES ('mac-abcd2345','测试 Mac','mac',X'00','2026-11-23','2026-11-23','admin');
+      DROP TABLE security_event_acknowledgements;
+      ALTER TABLE security_audit DROP COLUMN remote_actor;
       PRAGMA user_version=16;
     `);
     ctx.db.close();
     const migrated = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(migrated.db.pragma("user_version", { simple: true })).toBe(17);
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(18);
       expect(migrated.db.prepare("SELECT id,role,local_only,bootstrap_agent_id FROM devices").get()).toEqual({
         id: "mac-abcd2345", role: "admin", local_only: 0, bootstrap_agent_id: null,
       });
@@ -288,4 +290,35 @@ test("历史设备筛选 mac 同时匹配新旧 Mac ID，完整 ID 仍精确匹�
   expect(ids("mac")).toEqual(records.slice(0, 3).map(row => row.id).sort());
   expect(ids("mac-abcd2345")).toEqual([records[1]!.id]);
   expect(ids("android-abcd2345")).toEqual([records[3]!.id]);
+});
+
+test("v17 安全审计迁移后只提示可识别的远程事件", () => {
+  const ctx = setup();
+  try {
+    const at = new Date().toISOString();
+    ctx.db.db.exec(`
+      DROP TABLE security_event_acknowledgements;
+      ALTER TABLE security_audit DROP COLUMN remote_actor;
+      PRAGMA user_version=17;
+    `);
+    const device = ctx.db.db.prepare(`INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,role,local_only)
+      VALUES (?, '测试设备', 'mac', X'00', ?, ?, 'admin', ?)`);
+    device.run("mac-local", at, at, 1);
+    device.run("mac-remote", at, at, 0);
+    const event = ctx.db.db.prepare("INSERT INTO security_audit(id,at,actor_device,action,target,ok,detail_code) VALUES (?,?,?,?,?,1,?)");
+    event.run("paired", at, null, "pair.complete", "mac-remote", "admin");
+    event.run("remote", at, "mac-remote", "key.set", null, null);
+    event.run("local", at, "mac-local", "key.set", null, null);
+    event.run("cli", at, null, "device.role_change", null, null);
+    ctx.db.close();
+
+    const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
+    try {
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(18);
+      expect(upgraded.db.prepare("SELECT id, actor_device FROM security_audit WHERE remote_actor=1 ORDER BY id").all()).toEqual([
+        { id: "paired", actor_device: "mac-remote" }, { id: "remote", actor_device: "mac-remote" },
+      ]);
+      expect(upgraded.db.prepare("SELECT * FROM security_event_acknowledgements").all()).toEqual([]);
+    } finally { upgraded.close(); }
+  } finally { ctx.cleanup(); }
 });

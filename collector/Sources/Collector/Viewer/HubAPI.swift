@@ -439,6 +439,17 @@ extension HubAPI {
     try await send("PUT", "/v1/settings/devices/\(id)/role", ["role": role],
                    device: .init("devices.role.update", ["id": .string(id)]))
   }
+  func pendingSecurityEvents() async throws -> [TimelineSecurityEvent] {
+    struct Reply: Decodable { let events: [TimelineSecurityEvent] }
+    return try await call(Reply.self, "GET", "/v1/settings/security-events", nil, timeout: 5,
+                          device: .init("settings.security-events.list")).events
+  }
+
+  func acknowledgeSecurityEvent(_ id: String) async throws {
+    try await send("POST", "/v1/settings/security-events/\(id)/ack",
+                   device: .init("settings.security-events.ack", ["id": .string(id)]))
+  }
+
   func relaySettings() async throws -> RelaySettings {
     try await call(RelaySettings.self, "GET", "/v1/settings/relay", nil, timeout: 5, device: .init("settings.relay.get"))
   }

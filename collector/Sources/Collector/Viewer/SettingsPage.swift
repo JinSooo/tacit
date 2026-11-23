@@ -244,7 +244,7 @@ struct HubSettingsView: View {
       } header: { Text("连接与保存") } footer: {
         Note("管理连接仅限这台 Mac。")
       }
-      PhoneSettingsSection()
+      DeviceSettingsSection()
       RelaySettingsSection()
       Section("连接设置") {
         SettingsRow("端口") {

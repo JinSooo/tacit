@@ -22,7 +22,7 @@ import { deviceAccount, ensureAgentIdentity, fileAgentSecrets } from "../src/age
 
 const minute = 60_000;
 
-async function runningHub() {
+async function runningHub(beforeModelKeySet?: () => Promise<void>) {
   const modelKeys = new Map<string, string>();
   const ctx = setup();
   const probe = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: () => new Response() });
@@ -33,7 +33,7 @@ async function runningHub() {
   const options = {
     db: ctx.db, token: ctx.config.token, agentToken: ctx.config.agentToken, port: 0, settings: { dataDir: ctx.dir, env: {}, keychain: {
       async has(provider: string) { return modelKeys.has(provider); },
-      async set(provider: string, key: string) { modelKeys.set(provider, key); },
+      async set(provider: string, key: string) { await beforeModelKeySet?.(); modelKeys.set(provider, key); },
       async remove(provider: string) { return modelKeys.delete(provider); },
     }, probePort: async () => {}, llm: { readKey: (provider: string) => modelKeys.get(provider) ?? "" } },
     deviceDeps: {
@@ -323,7 +323,7 @@ test("v12 加密数据库迁移到 v16，保留记录并清理验证通过的备
     hub.db.close();
     const migrated = new HubDB(hub.file, hub.config.dbKey);
     try {
-      expect(migrated.db.pragma("user_version", { simple: true })).toBe(17);
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(18);
       expect(migrated.get(record.id)).toMatchObject({ id: record.id });
       expect(migrated.db.prepare("SELECT * FROM devices").all()).toEqual([]);
       expect(existsSync(hub.file + ".migration-v12.bak")).toBe(false);
@@ -437,7 +437,7 @@ test("v15 升级 v16，旧查看设备迁为 view、Android 保持 collect，验
     hub.db.close();
     const migrated = new HubDB(hub.file, hub.config.dbKey);
     try {
-      expect(migrated.db.pragma("user_version", { simple: true })).toBe(17);
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(18);
       expect(migrated.db.prepare("SELECT id,role FROM devices ORDER BY id").all()).toEqual([
         { id: "android-testaaaa", role: "collect" }, { id: "mac-testaaaa", role: "view" },
       ]);
@@ -961,7 +961,7 @@ test("查看窗口的所有 op 沿用原 HTTP 状态和响应形状", async () =
       role: decodePairing(v.uri).role, expires_at: v.expires_at,
     }));
     await pair("devices.list", "GET", settings + "/devices", {}, undefined, v => ({
-      ...v, devices: v.devices.map((d: any) => ({ ...d, last_seen: "" })),
+      ...v, current_device_id: null, devices: v.devices.map((d: any) => ({ ...d, last_seen: "" })),
     }));
     await pair("devices.pairing.cancel", "DELETE", settings + "/devices/pairing");
     expect((await (await hub.settings()).json()).pairing).toBeNull();
@@ -1046,4 +1046,87 @@ test("私密原文仅对直连管理设备显式开放，整理投影依旧隔�
     const cached = hub.db.db.prepare("SELECT payload FROM project_context_cache UNION ALL SELECT result FROM relay_receipts").all();
     expect(JSON.stringify(cached)).not.toContain(marker);
   } finally { await hub.dispose(); }
+});
+
+test("管理设备只看到其他远程设备的安全事件，确认跨重启且只存事件 ID 与时间", async () => {
+  const hub = await runningHub();
+  const root = "/v1/settings/security-events";
+  const list = "settings.security-events.list", ack = "settings.security-events.ack";
+  try {
+    const { admin: local, agent } = await localClients(hub);
+    const remote = await hub.pair("admin");
+    const viewer = await hub.pair("view");
+    const phone = await hub.pair();
+    const provider = "openai-compatible", key = "synthetic-key-123";
+    const putKey = (client: DeviceClient) => client.send("settings.keys.put", { provider, key });
+    const role = (client: DeviceClient, next: PairingRole) => client.send("devices.role.update", { id: viewer.device, role: next });
+
+    expect(await (await hub.settings()).json()).toMatchObject({ current_device_id: local.device });
+    expect(await remote.send("devices.list", {})).toMatchObject({ body: { current_device_id: remote.device } });
+    expect((await (await hub.admin(root)).json()).events.map((event: { action: string }) => event.action)).toEqual(["pair.complete"]);
+    expect(await remote.send(list, {})).toEqual({ status: 200, body: { events: [] } });
+
+    expect((await putKey(local)).status).toBe(200);
+    expect((await role(local, "collect")).status).toBe(200);
+    expect((await hub.admin("/v1/settings/keys/" + provider, "PUT", { key })).status).toBe(200);
+    expect((await hub.settings("/" + viewer.device + "/role", "PUT", { role: "view" })).status).toBe(200);
+    expect((await role(remote, "collect")).status).toBe(200);
+    expect((await putKey(remote)).status).toBe(200);
+
+    const pending = await (await hub.admin(root)).json() as { events: { id: string; action: string; at: string }[] };
+    expect(pending.events.map(x => x.action).sort()).toEqual(["device.role_change", "key.set", "pair.complete"]);
+    const event = pending.events.find(x => x.action === "key.set")!;
+    expect(Object.keys(event).sort()).toEqual(["action", "at", "id"]);
+    expect(await local.send(list, {})).toEqual({ status: 200, body: pending });
+    expect(await remote.send(list, {})).toEqual({ status: 200, body: { events: [] } });
+    expect((await remote.send(ack, { id: event.id })).status).toBe(404);
+
+    const ackPath = root + "/" + event.id + "/ack";
+    for (const [path, method] of [[root, "GET"], [ackPath, "POST"]] as const) {
+      const url = new URL(path, hub.origin);
+      expect((await fetch(url, { method })).status).toBe(401);
+      expect((await fetch(url, { method, headers: { Authorization: "Bearer " + hub.config.agentToken } })).status).toBe(403);
+      expect((await fetch(hub.lan + path, { method })).status).toBe(404);
+    }
+    expect((await hub.settings("/" + viewer.device + "/role", "PUT", { role: "view" })).status).toBe(200);
+    for (const client of [viewer, phone, agent]) {
+      expect((await client.send(list, {})).status).toBe(403);
+      expect((await client.send(ack, { id: event.id })).status).toBe(403);
+    }
+
+    // Removing the authenticated actor does not turn its older events into local events.
+    expect((await hub.settings("/" + remote.device, "DELETE")).status).toBe(200);
+    expect((await (await hub.admin(root)).json()).events).toEqual(pending.events);
+    expect(await local.send(ack, { id: event.id })).toEqual({ status: 200, body: { ok: true } });
+    const stored = hub.db.db.prepare("SELECT * FROM security_event_acknowledgements").all();
+    expect(stored).toEqual([{ event_id: event.id, acknowledged_at: expect.any(String) }]);
+    expect((await hub.admin(ackPath, "POST")).status).toBe(200);
+    expect(hub.db.db.prepare("SELECT * FROM security_event_acknowledgements").all()).toEqual(stored);
+    await hub.restart();
+    expect(await (await hub.admin(root)).json()).toEqual({ events: pending.events.filter(x => x.id !== event.id) });
+    const pairingEvent = pending.events.find(x => x.action === "pair.complete")!;
+    expect((await hub.admin(root + "/" + pairingEvent.id + "/ack", "POST")).status).toBe(200);
+    expect((await (await hub.admin(root)).json()).events.map((x: { action: string }) => x.action)).toEqual(["device.role_change"]);
+    pruneSecurityAudit(hub.db.db, Date.now() + 91 * 24 * 60 * minute);
+    expect(hub.db.db.prepare("SELECT * FROM security_event_acknowledgements").all()).toEqual([]);
+  } finally { await hub.dispose(); }
+});
+
+test("写入模型密钥期间移除远程设备，仍会提示远程操作", async () => {
+  const writing = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>();
+  const hub = await runningHub(async () => { writing.resolve(); await resume.promise; });
+  try {
+    await localClients(hub);
+    const remote = await hub.pair("admin");
+    const operation = remote.send("settings.keys.put", { provider: "openai-compatible", key: "synthetic-key-123" });
+    await Promise.race([writing.promise, operation.then(() => { throw new Error("模型密钥写入未开始"); })]);
+    expect((await hub.settings("/" + remote.device, "DELETE")).status).toBe(200);
+    resume.resolve();
+    expect((await operation).status).toBe(200);
+    const pending = await (await hub.admin("/v1/settings/security-events")).json() as { events: { action: string }[] };
+    expect(pending.events.map(x => x.action).sort()).toEqual(["key.set", "pair.complete"]);
+  } finally {
+    resume.resolve();
+    await hub.dispose();
+  }
 });

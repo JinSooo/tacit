@@ -556,12 +556,13 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/v1/settings/devices` | `{ hub_id, lan: { open, port, addrs: ["192.168.1.5:47824"] }, pairing: { expires_at, role } \| null, devices: [{ id, name, platform, role, paired_at, last_seen, records, pending_changes }] }` |
+| GET | `/v1/settings/devices` | `{ hub_id, current_device_id, lan: { open, port, addrs: ["192.168.1.5:47824"] }, pairing: { expires_at, role } \| null, devices: [{ id, name, platform, role, paired_at, last_seen, records, pending_changes }] }` |
 | POST | `/v1/settings/devices/pairing` | 创建邀请（作废旧邀请），接收 `{ role? }`，普通邀请 10 分钟、管理邀请 5 分钟，均只可使用一次，重启后作废 → `{ uri, expires_at }`；打开局域网监听，端口绑定失败返回 409 |
 | DELETE | `/v1/settings/devices/pairing` | 作废邀请 |
 | PUT | `/v1/settings/devices/:id/role` | `{ role }` → `{ id, role }`，详见 6.11.2 |
 | DELETE | `/v1/settings/devices/:id` | 移除设备：删公钥和待下发变更；**已入库的记录保留**；最后一台管理设备返回 409；监听仍开着时，该设备的请求一律 401；关闭监听后连接失败 |
 
+- `current_device_id` 在设备 op 中是已验证的调用设备 ID。本机 HTTP 返回本机登记的 Mac ID，尚未登记时为 `null`。
 - `hub_id` 是当前中枢身份，尚未生成密钥时为 `null`。局域网监听开启时必须返回该身份，采集端启动或邀请用完后仍可登记 Bonjour。
 - 邀请 `uri` = `tacit://pair?d=<base64url(JSON)>`，JSON 为 `{ "v": 1, "hub_id", "name": "<Mac 电脑名>", "pk": "<中枢公钥 base64url>", "code": "<16 字节随机数 base64url>", "addrs": [...], "expires_at", "role" }`。Mac 设置页把它画成二维码；手机扫码或粘贴。
 - 手机发 op `pair`，`body` = `{ code, device_pk, name, platform: "android" }`。`code` 不对、过期或已用 → `status` 403。成功 → `{ device_id, hub_id, name, role }`，邀请作废，设备入库。Mac 使用 `platform: "mac"`，可用任一角色邀请。Android 只能用 `collect` 邀请。
@@ -943,7 +944,7 @@ CREATE TABLE project_context_cache (
 | `settings.relay.get` | GET `/v1/settings/relay` | — | 信箱状态 |
 | `settings.relay.put` | PUT `/v1/settings/relay` | `{ mode, url?, code? }`（6.8.7） | 信箱状态 |
 | `settings.relay.test` | POST `/v1/settings/relay/test` | `{ url }` | `{ tacit_relay, limits }` |
-| `devices.list` | GET `/v1/settings/devices` | — | `{ hub_id, lan, pairing, devices }` |
+| `devices.list` | GET `/v1/settings/devices` | — | `{ hub_id, current_device_id, lan, pairing, devices }` |
 | `devices.pairing.create` | POST `/v1/settings/devices/pairing` | `{ role?, viewer? }`（6.11.2） | `{ uri, expires_at }` |
 | `devices.pairing.cancel` | DELETE `/v1/settings/devices/pairing` | — | `{ ok: true }` |
 | `devices.remove` | DELETE `/v1/settings/devices/:id` | `{ id }` | `{ deleted: true }` |
@@ -953,7 +954,7 @@ CREATE TABLE project_context_cache (
 - `records.create` 和原 HTTP 写入一样在入库阶段校验：格式错误时返回 200 和含逐字段错误的 `rejected` 回执，不入库。
 - 管理身份允许表中所有操作。采集和查看身份的 `delete` 仍按 6.5 处理。查看身份另可调用 `status.get` 和 `diagnostics.get`。直接授予 `admin`、移除或降级最后一台管理设备沿用 6.11.2。目标不存在通常为 404，段成员变化或最后一台管理设备保护返回 409，删除限额为 429，设置和信箱的服务错误沿用原接口，如 502、503 或 507。
 - 经信箱的完整 UTF-8 JSON 回复（包括 `status`、`body` 以及音频 Base64 编码的开销）最多 **640 KiB**，超出返回 413。可缩小查询范围或改用直连。经信箱修改端口时，中枢先将成功回复写入下行信箱，再退出重启。音频样本和模型调用详情不进入回复缓存。Mac 将试听样本解码为内存中的音频数据，交给原有的波形显示和播放器。中枢的结构化日志通过 `diagnostics.get` 获取，运行记录页的整理、采集结构化日志通过 `runtime.background` 获取。
-- 原表中的全部 op 都保留。 `diagnostics.get` 复用中枢的脱敏后台日志接口。 `audit.list` 是 Agent 读取审计；安全审计仍由本机接口提供（6.11.4）。
+- `diagnostics.get` 复用中枢的脱敏后台日志接口。`audit.list` 是 Agent 读取审计。完整安全审计由本机接口提供，安全事件提示另有管理设备 op（6.11.4）。
 
 #### 6.10.5 AI 工具接入（MCP 与新会话带入）与离线缓存
 
@@ -1003,7 +1004,7 @@ CREATE TABLE project_context_cache (
 
 #### 6.11.1 三级设备权限（与独立 `agent` 身份）
 
-库升级到 `user_version = 16`。设备角色为 `collect`、`view`、`admin`、`agent`，默认 `collect`。v15 中 `viewer=1` 的设备迁为 `view`，其余迁为 `collect`，本机旧的管理令牌不对应设备身份。旧 `viewer` 列仅为迁移保留，新代码不再读写。面向用户的采集／查看／管理三级界面待接入。本机 `agent` 身份签发已由 6.10.6 提供。
+库升级到 `user_version = 16`。设备角色为 `collect`、`view`、`admin`、`agent`，默认 `collect`。v15 中 `viewer=1` 的设备迁为 `view`，其余迁为 `collect`，本机旧的管理令牌不对应设备身份。旧 `viewer` 列仅为迁移保留，新代码不再读写。Mac 设置的设备区显示采集／查看／管理三级权限。本机 `agent` 身份签发已由 6.10.6 提供。
 
 | 操作类别 | `collect`（采集） | `view`（查看） | `admin`（管理） | `agent`（AI 工具） |
 |---|---|---|---|---|
@@ -1015,13 +1016,13 @@ CREATE TABLE project_context_cache (
 | 跨设备编辑与纠错（`records.create`、`segment.correct`、`facts.*`、`pending.*`、`distill.request/list`） | 禁止 | 禁止 | 允许 | 禁止 |
 | 跨设备删除与移除项目（`delete` 任意设备、`segment.delete`、`project.remove`） | 禁止 | 禁止 | 允许（真删按 6.11.4 限流） | 禁止 |
 | 状态查看（`status.get`、`diagnostics.get`） | 禁止 | 允许（只读概况） | 允许（完整） | 禁止 |
-| 设置、密钥、审计、设备管理（`settings.*`、`devices.*`、`runtime.*`、`audit.list`、`audio.settings.*`、`audio.purge`、`speakers.list`、`audio.sample.get`） | 禁止 | 禁止 | 允许 | 禁止 |
+| 设置、密钥、审计、设备管理（`settings.*`、`devices.*`、`runtime.*`、`audit.list`、`settings.security-events.*`、`audio.settings.*`、`audio.purge`、`speakers.list`、`audio.sample.get`） | 禁止 | 禁止 | 允许 | 禁止 |
 
 - 权限校验统一在 `DeviceService.dispatch` 入口执行（基于信封解开后已验证的 `device` 对应数据库中的 `role`），越权一律返回加密的 `status: 403`（`{ "error": "当前设备权限不足" }`）并写入安全审计。已实现的设备 op 包括 6.5、6.9 的读写操作、6.10.5 的 Agent 直连操作，以及 6.10.4 的全部查看窗口 op。`agent` 的拉取只含 `project_context`，订阅只提示该类变更。私密原文只在中枢内存中生成回复，查看端的内存展示与清理待接入。
 
 #### 6.11.2 权限授予与变更流程
 
-- 本机管理接口 `POST /v1/settings/devices/pairing` 接收 `{ role: "collect" | "view" | "admin" }`，缺省为 `collect`。兼容一版旧入参，未传 `role` 时 `viewer: true` 等同于 `role: "view"`，显式 `role` 优先。邀请 JSON 与成功配对回复都带 `role`。采集与查看邀请 10 分钟有效，管理邀请 5 分钟有效。中枢只采用邀请锁定的角色，忽略配对请求自报权限。Android 使用查看或管理邀请返回 403。管理设备也可用 `devices.pairing.create` 签发邀请。客户端的权限说明和管理邀请二次确认待接入。
+- 本机管理接口 `POST /v1/settings/devices/pairing` 接收 `{ role: "collect" | "view" | "admin" }`，缺省为 `collect`。兼容一版旧入参，未传 `role` 时 `viewer: true` 等同于 `role: "view"`，显式 `role` 优先。邀请 JSON 与成功配对回复都带 `role`。采集与查看邀请 10 分钟有效，管理邀请 5 分钟有效。中枢只采用邀请锁定的角色，忽略配对请求自报权限。Android 使用查看或管理邀请返回 403。管理设备也可用 `devices.pairing.create` 签发邀请。Mac 设置里添加手机只申请采集权限，添加另一台 Mac 可选择查看或管理，生成管理邀请前需二次确认。
 - `devices.role.update { id, role }` 和 `devices.remove { id }` 仅允许管理设备调用。管理设备可以降权，或把 Mac 从 `collect` 升为 `view`。直接授予 `admin` 仅能通过本机的 `PUT /v1/settings/devices/:id/role` 或 CLI 完成。首次管理配对可由本机管理接口签发，独立部署用的 `tacit-hub pair --role admin` 待实现。
 - 降为 `collect` 时，同事务清除该设备的投影视窗、游标和待投递回执，持久排入仅该设备可取的重置。已有订阅收到紧急提示后断开；随后直连 `projection.pull` 只返回 `{ kind: "projection.reset", reset: true, changes: [], cursor: 0, more: false, epoch, server_time }`，无须确认。经信箱先撤掉旧推送及原文回执，再投递加密 `projection.reset`。此角色不能读取原文或确认投影。新的 `collect` 设备没有待清缓存，拉取照常返回 403。
 - 设备 op 和本机 HTTP 都拒绝移除或降级最后一台 `admin`，返回 409「不能移除最后一台管理设备」。本机 CLI 直接操作数据库，提供 `devices list`、`devices set-role <device_id> <role> [--force]`、`devices remove <device_id> [--force]`。仅本机 CLI 的 `--force` 可绕过最后一台保护。6.1 的中枢密钥更换仍会撤销旧身份。
@@ -1066,7 +1067,10 @@ CREATE TABLE project_context_cache (
 2. **安全审计表（`security_audit`）**：
    - 新增持久化审计表 `security_audit(id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_device TEXT, action TEXT NOT NULL, target TEXT, ok INTEGER NOT NULL, detail_code TEXT)`（不含任何记录正文），定期清理超过 **90 天** 的事件。本机管理令牌可读 `GET /v1/settings/security-audit`，返回 `{ events }`（最近 200 条）。
    - 记录事件：`pair.create`、`pair.complete`、`device.local_register`、`device.remove`、`device.role_change`、`key.set`、`key.delete`、`relay.change`、`remote.delete`（仅记条数，用成功事件计算限额）、`local.delete`（仅记本机设备实际删除条数）、`auth.denied`（403 越权，记录已知操作名，未登记的名称记为 `unknown_op`）。事件不含原文、凭据、信箱 URL 或邀请内容。
-   - 发生新的 `admin` 配对、权限变更或模型密钥更换时，计划在所有在线 `admin` Mac 的时间线顶部出现一行可确认消去的提示（沿用现有顶部一行提示机制，不弹系统通知）。
+   - v18 在审计行持久化操作者是否为远程设备（`local_only=0`），设备移除后仍可识别。升级时回填目前仍能识别的历史远程设备。成功配对的操作者是完成配对的新设备。
+   - 成功的远程管理设备配对、设备权限变更和模型密钥设置（`key.set`）会在管理 Mac 的时间线顶部逐条提示。排除该 Mac 自己发起的操作、本机登记设备的操作、以及本机 HTTP 和 CLI 操作。无系统通知。
+   - 本机管理 HTTP `GET /v1/settings/security-events` 或管理设备 op `settings.security-events.list {}`，返回最近 200 条符合条件的未确认事件 `{ events: [{ id, at, action }] }`，最新在前。
+   - 本机管理 HTTP `POST /v1/settings/security-events/:id/ack` 或管理设备 op `settings.security-events.ack { id }`，返回 `{ ok: true }`。ID 为审计事件的 UUID。事件不存在或对调用方不可见时返回 404。确认在所有管理设备上生效，可重复调用。确认表 `security_event_acknowledgements` 只存事件 ID 和确认时间，随原审计行过期清理。
 3. **测试与上线前验收门槛**（对应 `docs/design.md` 2.1）：
    - 涉及远程删除、权限分级与 `sealed-file` 密钥的代码上线前，必须在真实跨进程/跨主机（或容器）测试环境看到完整实测结果：验证 403 越权拦截、删除后已下推缓存与小组件清除、限流 429 触发、最后一台 `admin` 保护、以及拔掉根密钥后拒绝建新库。
 
@@ -1074,7 +1078,7 @@ CREATE TABLE project_context_cache (
 
 - **要改的模块和公共接口**：
   - 中枢（**已实施**）：`hub/src/secrets/`（`SecretStore`、`keychain.ts`、`sealed-file.ts`），`hub/src/config.ts`、`hub/src/hub-json.ts`（`RA_HUB_MODE`、`RA_LAN_PORT`、`timezone`）、`hub/src/keys.ts`（`exportKeysForBackend`、`importDbKey`）、`hub/src/llm/keychain.ts` 接入 `SecretStore`；`hub/src/devices/store.ts` & `service.ts`（`role` 字段、权限矩阵、删除限流、`security_audit`、`devices.role.update`、持久化邀请 `createPairing`、`status.get`、`alwaysListen`）；`hub/src/settings.ts`、`hub/src/llm/config.ts`、`hub/src/llm/index.ts`、`hub/src/distill/run.ts`、`hub/src/status.ts`（`server` 模式禁用 CLI 提供方、缺失 `models.json` 返回 `config_error` 并暂停整理、时区告警）；`hub/src/supervisor.ts` & `hub/src/cli.ts`（`run`、`serve --local-status-port`、`pair --role [--relay]`、`keys import-db-key`、`devices list/set-role/remove`）；`hub/Dockerfile`、`.dockerignore` 与 `docs/server-deployment.md`。
-  - Mac 端（**待实施**）：`collector/Sources/Collector/Viewer/PhoneSettings.swift`（升级为通用设备管理页，支持选角色配对、展示权限、降权与移除）、`SettingsPage.swift`（新增连接远端中枢入口、原生状态页、安全事件提示条）、`AppSetup.swift`（支持“仅连远端中枢”模式，不拉起本机中枢 launchd 服务）。
+  - Mac 端（**部分实施**）：`collector/Sources/Collector/Viewer/DeviceSettings.swift` 提供设备管理与分权限邀请，`ReviewPage.swift` 显示安全事件提示。连接远端中枢入口、原生远端状态页和 `AppSetup.swift` 的“仅连远端中枢”模式待实施。
 - **对现有用户的影响**：
   - 留在单机 Mac 的用户完全不受影响：继续用钥匙串、`Tacit.app` 自动拉起本机中枢、零配置升级；原有已配对的 Android 手机自动迁移为 `role = "collect"`。
   - 想把中枢迁到独立服务器或另一台常开 Mac 的用户，可以导出迁移现有加密库，并把原 Mac 切为远端 `admin` 客户端。
