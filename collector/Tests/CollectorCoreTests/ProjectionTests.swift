@@ -283,7 +283,7 @@ private func decodeClientRequest(
     var calls: [[String]] = []
   }
   let box = FakeSecurityBox()
-  let provider = KeychainProjectionCacheKeyProvider { args in
+  let provider = KeychainProjectionCacheKeyProvider { args, stdin in
     box.calls.append(args)
     if args.first == "find-generic-password" {
       #expect(args.contains("record-anything"))
@@ -291,12 +291,12 @@ private func decodeClientRequest(
       if let hex = box.storedHex { return (0, hex) }
       return (44, "")
     }
-    if args.first == "add-generic-password" {
-      #expect(args.contains("record-anything"))
-      #expect(args.contains("viewer-cache-key"))
-      if let wIdx = args.firstIndex(of: "-w"), wIdx + 1 < args.count {
-        box.storedHex = args[wIdx + 1]
-      }
+    if args == ["-i"] {
+      // 写入经标准输入：密钥不能出现在进程参数里。
+      let line = String(decoding: stdin ?? Data(), as: UTF8.self)
+      #expect(line.hasPrefix("add-generic-password -s record-anything -a viewer-cache-key -w "))
+      #expect(!line.contains("-U"))
+      box.storedHex = line.split(separator: " ").last.map { $0.trimmingCharacters(in: .newlines) }
       return (0, "")
     }
     return (1, "")
@@ -1135,7 +1135,8 @@ private func decodeClientRequest(
 
   // 1. 解析 viewer 邀请并核对中枢 hello。
   let invitation = try DevicePairingInvitation.parse(inviteURI)
-  #expect(invitation.viewer == true)
+  #expect(invitation.role == "view")
+  #expect(invitation.receivesProjection)
   let originURL = try #require(URL(string: originString))
   let transport = try DirectDeviceTransport(origin: originURL)
   #expect(await transport.matchesHub(hubID: invitation.hubID) == true)

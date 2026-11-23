@@ -126,7 +126,9 @@ public struct DevicePairingInvitation: Equatable, Sendable {
   public let expiresAt: Date
   public let relay: DeviceRelayConfig?
   public let role: String?
-  public let viewer: Bool
+
+  /// 邀请授予的角色能否接收下推整理结果（6.11.1：view / admin）。
+  public var receivesProjection: Bool { role == "view" || role == "admin" }
 
   public var hubPublicKey: Curve25519.KeyAgreement.PublicKey {
     // 构造时已校验为有效的 32 字节 X25519 公钥。
@@ -143,7 +145,6 @@ public struct DevicePairingInvitation: Equatable, Sendable {
     let expires_at: String
     let relay: DeviceRelayConfig?
     let role: String?
-    let viewer: Bool?
   }
 
   /// 解析并校验 `tacit://pair?d=...` 邀请链接。
@@ -225,8 +226,7 @@ public struct DevicePairingInvitation: Equatable, Sendable {
       addresses: normalizedAddresses,
       expiresAt: expiresAt,
       relay: wire.relay,
-      role: wire.role,
-      viewer: wire.viewer ?? false
+      role: wire.role
     )
   }
 

@@ -23,8 +23,9 @@ public final class AudioStore {
     let legacy = try readLegacy()
     let key = legacy.map { SymmetricKey(data: $0) } ?? SymmetricKey(size: .bits256)
     let hex = key.withUnsafeBytes { $0.map { String(format: "%02x", $0) }.joined() }
-    let added = try security(["add-generic-password", "-s", service, "-a", account, "-w", hex]).status
-    guard added == 0 || added == 45, let stored = try readKey() else { throw AudioError.keychain(added) }
+    // 经 `security -i` 从标准输入写入，密钥不进进程参数；退出码不可靠，以读回为准。
+    let added = try security(["-i"], stdin: SecurityCLI.addGenericPasswordCommand(service: service, account: account, hexValue: hex)).status
+    guard let stored = try readKey() else { throw AudioError.keychain(added == 0 ? -3 : added) }
     let same = stored.withUnsafeBytes { a in key.withUnsafeBytes { b in a.elementsEqual(b) } }
     if legacy != nil && same {
       SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: legacyAccount] as CFDictionary)
@@ -49,15 +50,11 @@ public final class AudioStore {
     return data
   }
   /// 10 秒没返回就放弃，交给调用方报错并稍后重试，不无限等待。
-  private static func security(_ arguments: [String]) throws -> (status: Int32, text: String) {
-    let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/security"); process.arguments = arguments
-    let output = Pipe(); process.standardOutput = output; process.standardError = FileHandle.nullDevice
-    let done = DispatchSemaphore(value: 0); process.terminationHandler = { _ in done.signal() }
-    try process.run()
-    if done.wait(timeout: .now() + 10) == .timedOut { process.terminate(); throw AudioError.keychain(-1) }
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    return (process.terminationStatus, String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+  private static func security(_ arguments: [String], stdin: Data? = nil) throws -> (status: Int32, text: String) {
+    do { return try SecurityCLI.run(arguments, stdin: stdin) }
+    catch let failure as SecurityCLI.Failure { throw AudioError.keychain(failure.status) }
   }
+
   public func directory(for meta: AudioMetadata) throws -> URL {
     try meta.validate()
     let day = String(meta.t_start.prefix(10))

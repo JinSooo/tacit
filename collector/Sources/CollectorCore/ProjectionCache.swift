@@ -270,7 +270,8 @@ public struct KeychainProjectionCacheKeyProvider: ProjectionCacheKeyProvider, Se
   public static let service = "record-anything"
   public static let account = "viewer-cache-key"
 
-  public typealias SecurityRunner = @Sendable ([String]) throws -> (status: Int32, text: String)
+  /// 参数和可选标准输入；写入经 `security -i` 走标准输入，密钥不进进程参数。
+  public typealias SecurityRunner = @Sendable ([String], Data?) throws -> (status: Int32, text: String)
 
   private let service: String
   private let account: String
@@ -279,7 +280,7 @@ public struct KeychainProjectionCacheKeyProvider: ProjectionCacheKeyProvider, Se
   public init(
     service: String = KeychainProjectionCacheKeyProvider.service,
     account: String = KeychainProjectionCacheKeyProvider.account,
-    runSecurity: @escaping SecurityRunner = { try KeychainProjectionCacheKeyProvider.systemSecurity($0) }
+    runSecurity: @escaping SecurityRunner = { try KeychainProjectionCacheKeyProvider.systemSecurity($0, stdin: $1) }
   ) {
     self.service = service
     self.account = account
@@ -292,15 +293,16 @@ public struct KeychainProjectionCacheKeyProvider: ProjectionCacheKeyProvider, Se
     let hex = created.withUnsafeBytes { bytes in
       bytes.map { String(format: "%02x", $0) }.joined()
     }
-    let added = try runSecurity(["add-generic-password", "-s", service, "-a", account, "-w", hex]).status
-    guard added == 0 || added == 45, let stored = try readKey() else {
-      throw ProjectionCacheError.keychainFailure(added)
+    let command = try SecurityCLI.addGenericPasswordCommand(service: service, account: account, hexValue: hex)
+    let added = try runSecurity(["-i"], command).status
+    guard let stored = try readKey() else {
+      throw ProjectionCacheError.keychainFailure(added == 0 ? -3 : added)
     }
     return stored
   }
 
   private func readKey() throws -> SymmetricKey? {
-    let (status, text) = try runSecurity(["find-generic-password", "-s", service, "-a", account, "-w"])
+    let (status, text) = try runSecurity(["find-generic-password", "-s", service, "-a", account, "-w"], nil)
     if status == 44 { return nil }
     guard status == 0,
           text.count == 64,
@@ -311,24 +313,10 @@ public struct KeychainProjectionCacheKeyProvider: ProjectionCacheKeyProvider, Se
     return SymmetricKey(data: raw)
   }
 
-  /// 参照 AudioStore.swift：仅调用 `/usr/bin/security`，10 秒超时防止无限挂起。
-  public static func systemSecurity(_ arguments: [String]) throws -> (status: Int32, text: String) {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-    process.arguments = arguments
-    let output = Pipe()
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    let done = DispatchSemaphore(value: 0)
-    process.terminationHandler = { _ in done.signal() }
-    try process.run()
-    if done.wait(timeout: .now() + 10) == .timedOut {
-      process.terminate()
-      throw ProjectionCacheError.keychainFailure(-1)
-    }
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-    return (process.terminationStatus, text)
+  /// 仅调用 `/usr/bin/security`，10 秒超时防止无限挂起。
+  public static func systemSecurity(_ arguments: [String], stdin: Data? = nil) throws -> (status: Int32, text: String) {
+    do { return try SecurityCLI.run(arguments, stdin: stdin) }
+    catch let failure as SecurityCLI.Failure { throw ProjectionCacheError.keychainFailure(failure.status) }
   }
 }
 

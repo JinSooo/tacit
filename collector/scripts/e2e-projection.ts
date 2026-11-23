@@ -233,17 +233,17 @@ try {
   await waitForHealth(adminOrigin);
   const adminToken = readFileSync(join(dataDir, "token"), "utf8").trim();
 
-  // 3. 经本机管理接口创建 viewer 邀请（viewer: true）。
+  // 3. 经本机管理接口创建查看邀请（role: "view"）。
   const pairRes = await fetch(`${adminOrigin}/v1/settings/devices/pairing`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${adminToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ viewer: true }),
+    body: JSON.stringify({ role: "view" }),
   });
   if (!pairRes.ok) {
-    throw new Error(`创建 viewer 邀请失败：HTTP ${pairRes.status} ${await pairRes.text()}`);
+    throw new Error(`创建查看邀请失败：HTTP ${pairRes.status} ${await pairRes.text()}`);
   }
   const { uri } = await pairRes.json() as { uri: string; expires_at: string };
 

@@ -413,7 +413,7 @@ Android 另有一个可选的音乐识别模型（ced-tiny，AudioSet 527 类）
   sys-0001.enc …
 ```
 
-- 密钥：钥匙串 service `record-anything`、account `audio-key-hex`，32 字节的十六进制，首次使用时生成。只通过 `/usr/bin/security` 读写（和 hub 的 `db-key` 一样），10 秒超时；旧版 account `audio-key`（SecItem 存的二进制）在第一次读取时迁移过来并删除。
+- 密钥：钥匙串 service `record-anything`、account `audio-key-hex`，32 字节的十六进制，首次使用时生成。只通过 `/usr/bin/security` 读写（和 hub 的 `db-key` 一样），10 秒超时；写入经 `security -i` 从标准输入传命令，密钥不出现在进程参数里，以读回为准（`CollectorCore/SecurityCLI.swift`，查看缓存的 `viewer-cache-key` 同样）；旧版 account `audio-key`（SecItem 存的二进制）在第一次读取时迁移过来并删除。
 - `meta.json`：`{ id, t_start, t_end（未结束为 null）, segments: [{ file, track: "mic"|"sys", t_start, t_end, dbfs }], meeting_apps: [bundle id], status, updated_at }`。
   - `status`：`open`（还在录）→ `closed`（等转写进程）→ `waiting_me`（还没有"我"的声纹，只留本机）/ `skipped`（判定没有"我"，不留记录）/ `done`（已写 History）/ `failed`（附 `error`，下次重试，最多 3 次）。
   - `meeting_apps`：对话期间**正在用麦克风**的会议软件（腾讯会议、飞书、Zoom、Teams、FaceTime、微信；用 Core Audio 进程对象的 `kAudioProcessPropertyIsRunningInput` 判断，只开着不算），用于"有会就保留"例外。（2026-11-09 真机验证：微信通话、腾讯会议都能识别）日历例外（2026-11-09 补上）已随日历来源在 2026-11-22 撤下，旧元数据里的 `com.apple.iCal` 仍按会议处理。转写进程的判断逻辑不变。
