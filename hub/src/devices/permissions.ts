@@ -21,6 +21,7 @@ const adminOps = new Set([
   "devices.role.update", "devices.remove", "devices.pairing.create", "devices.pairing.cancel", "devices.list",
   "records.create", "segment.correct", "segment.delete", "project.remove", "distill.request", "audit.list",
   "pending.list", "pending.resolve", "facts.create", "facts.detach",
+  "distill.list", "audio.purge", "speakers.list", "audio.sample.get",
   "settings.hub.get", "settings.hub.put", "settings.models.get", "settings.models.put", "settings.models.local", "settings.models.test",
   "settings.keys.put", "settings.keys.delete", "settings.general.get", "settings.general.put",
   "settings.relay.get", "settings.relay.put", "settings.relay.test", "audio.settings.get", "audio.settings.put",

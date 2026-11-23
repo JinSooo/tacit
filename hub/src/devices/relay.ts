@@ -1,3 +1,4 @@
+import type { ViewerActor } from "./viewer-operations.ts";
 import { randomBytes } from "node:crypto";
 import type { HubDB } from "../db.ts";
 import { logFailure } from "../diagnostics.ts";
@@ -128,7 +129,7 @@ export class RelayService {
     };
   }
 
-  async settings(method: string, path: string, readJSON: () => Promise<unknown>) {
+  async settings(method: string, path: string, readJSON: () => Promise<unknown>, actor?: ViewerActor) {
     const root = "/v1/settings/relay";
     const reply = (body: object, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
     if (method === "GET" && path === root) return reply(this.status());
@@ -140,13 +141,15 @@ export class RelayService {
       if (input?.mode !== "off" && input?.mode !== "custom") throw new WireError(400, "信箱模式无效");
       const url = input.mode === "off" ? null : relayURL(input.url);
       if (url !== null && input.code !== undefined && typeof input.code !== "string") throw new WireError(400, "开通码无效");
-      await this.run(async () => {
-        try { await this.configure(url, url === null ? undefined : input.code as string | undefined); }
+      const configure = async () => {
+        try { await this.configure(url, url === null ? undefined : input.code as string | undefined, actor?.device); }
         catch (error) {
-          auditSecurity(this.sql, "relay.change", { ok: false, code: "configure_failed", now: this.clock() });
+          auditSecurity(this.sql, "relay.change", { actor: actor?.device, ok: false, code: "configure_failed", now: this.clock() });
           throw error;
         }
-      });
+      };
+      if (actor?.relayLocked) await configure();
+      else await this.run(configure);
       return reply(this.status());
     } catch (error) {
       if (error instanceof WireError) return reply({ error: error.message }, error.status);
@@ -232,7 +235,7 @@ export class RelayService {
     await this.configure(relayURL(url));
   }
 
-  private async configure(url: string | null, code?: string) {
+  private async configure(url: string | null, code?: string, actor?: string) {
     const old = this.current();
     if (url !== null) await this.hello(url);
     if ((old?.url ?? null) === url) return;
@@ -274,7 +277,7 @@ export class RelayService {
           this.sql.prepare("UPDATE relay_spaces SET state='current' WHERE space=?").run(next.space);
           this.sql.prepare("UPDATE relay_mailboxes SET state='active' WHERE space=?").run(next.space);
         }
-        auditSecurity(this.sql, "relay.change", { code: next ? "custom" : "off", now: this.clock() });
+        auditSecurity(this.sql, "relay.change", { actor, code: next ? "custom" : "off", now: this.clock() });
         for (const { box, id, body } of moves) {
           this.sql.prepare("UPDATE relay_mailboxes SET move_id=?, move_body=? WHERE space=? AND up=?")
             .run(id, body, box.space, box.up);
@@ -714,5 +717,6 @@ export class RelayService {
       this.sql.prepare("DELETE FROM relay_receipts WHERE space=? AND up=? AND id=?").run(mailbox.space, mailbox.up, id);
       if (discarded) this.sql.prepare("UPDATE relay_spaces SET discarded=discarded+1 WHERE space=?").run(mailbox.space);
     }).immediate();
+    if (result && context.replyDelivered) setTimeout(context.replyDelivered, 0);
   }
 }

@@ -72,6 +72,7 @@ export interface Mailbox {
 export interface RelayRequest {
   mailbox: Mailbox;
   id: string;
+  replyDelivered?: () => void;
   projectionRead?: { seq: number; urgent: number; epoch: number; revision: number };
 }
 

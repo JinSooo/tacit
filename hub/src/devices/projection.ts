@@ -343,7 +343,8 @@ export class Projection {
       case "records.get": return this.recordsGet(body, max, includePrivate);
       case "records.list": return this.recordsList(body, max, includePrivate);
       case "history.segments": {
-        const history = historySegments(this.hub, parameters(body, ["from", "to", "device"]), id => this.public(id));
+        const history = historySegments(this.hub, parameters(body, ["from", "to", "device"]), includePrivate ? undefined : id => this.public(id));
+        if (includePrivate) { result = history; break; }
         for (const segment of history.segments) {
           const thread = segment.thread;
           if (thread && this.threadAccess(thread.id) !== "public") segment.thread = null;
@@ -355,9 +356,9 @@ export class Projection {
       }
       case "conversations.detail": {
         const id = recordID(body.record_id);
-        if (!this.public(id)) throw new WireError(404, "内容不存在");
+        if (!includePrivate && !this.public(id)) throw new WireError(404, "内容不存在");
         const detail = conversationDetail(this.hub, id, this.clock);
-        if (!this.publicEvidence(detail.record_ids)) throw new WireError(404, "内容不存在");
+        if (!includePrivate && !this.publicEvidence(detail.record_ids)) throw new WireError(404, "内容不存在");
         result = detail;
         break;
       }

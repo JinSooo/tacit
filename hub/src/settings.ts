@@ -84,8 +84,8 @@ export function createSettings(deps: SettingsDeps) {
     return { ...readGeneral(hub), defaults: GENERAL_DEFAULTS, ranges: GENERAL_RANGES, model_usage: readModelUsage(hub) };
   }
 
-  return async function handle(request: Request, url: URL, ctx: { db: HubDB; port: number; readJSON: () => Promise<unknown>; lan: boolean }): Promise<Response | null> {
-    const { pathname } = url, method = request.method;
+  return async function handle(method: string, url: URL, ctx: { db: HubDB; port: number; readJSON: () => Promise<unknown>; lan: boolean; actor?: string; deferRestart?: boolean }): Promise<Response | null> {
+    const { pathname } = url;
     if (!pathname.startsWith("/v1/settings/")) return null;
 
     if (pathname === "/v1/settings/hub") {
@@ -107,7 +107,7 @@ export function createSettings(deps: SettingsDeps) {
         }
         try { writeHubPort(deps.dataDir, port); } catch { return fail(500, "无法写入 hub.json"); }
         // 响应发出后再退出；不在这里直接退出，免得网页收不到结果。
-        if (deps.restart) setTimeout(deps.restart, 300);
+        if (deps.restart && !ctx.deferRestart) setTimeout(deps.restart, 300);
         return Response.json({ port, restarting: Boolean(deps.restart) });
       }
     }
@@ -171,10 +171,10 @@ export function createSettings(deps: SettingsDeps) {
         let deleted: boolean;
         try { deleted = await keychain.remove(provider); }
         catch {
-          auditSecurity(ctx.db.db, "key.delete", { target: provider, ok: false, code: "secret_error" });
+          auditSecurity(ctx.db.db, "key.delete", { actor: ctx.actor, target: provider, ok: false, code: "secret_error" });
           return fail(500, "删除钥匙串条目失败");
         }
-        auditSecurity(ctx.db.db, "key.delete", { target: provider, code: deleted ? "deleted" : "absent" });
+        auditSecurity(ctx.db.db, "key.delete", { actor: ctx.actor, target: provider, code: deleted ? "deleted" : "absent" });
         return Response.json({ provider, deleted });
       }
       const body = object(await ctx.readJSON());
@@ -183,10 +183,10 @@ export function createSettings(deps: SettingsDeps) {
       if (!KEY_PATTERN.test(value)) throw new InputError("API key 必须是 8–1024 个可见 ASCII 字符，不能含空格、双引号或反斜杠");
       try { await keychain.set(provider, value); }
       catch {
-        auditSecurity(ctx.db.db, "key.set", { target: provider, ok: false, code: "secret_error" });
+        auditSecurity(ctx.db.db, "key.set", { actor: ctx.actor, target: provider, ok: false, code: "secret_error" });
         return fail(500, "写入钥匙串失败");
       }
-      auditSecurity(ctx.db.db, "key.set", { target: provider });
+      auditSecurity(ctx.db.db, "key.set", { actor: ctx.actor, target: provider });
       return Response.json({ provider, set: true });
     }
 

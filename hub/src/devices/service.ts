@@ -20,6 +20,7 @@ import { RelayService } from "./relay.ts";
 import { Projection } from "./projection.ts";
 import { directProjectionBytes, flushProjectionDraft, projectionHead, relayProjectionBytes, touchProjectionDay } from "./projection-store.ts";
 import { localDateString } from "../distill/requests.ts";
+import { viewerOperation, viewerOperationNeedsRelayLock, type ViewerActor, type ViewerOperation } from "./viewer-operations.ts";
 import { hubStatus } from "../status.ts";
 import { dayMs, type RelayConfig, type RelayRequest } from "./relay-store.ts";
 
@@ -80,6 +81,9 @@ export class DeviceService {
   private identity?: Promise<Identity | null>;
   private creatingIdentity?: Promise<Identity>;
   private stopped = false;
+  private restartAfterRelayReply?: () => void;
+  private viewerStatus?: () => ReturnType<typeof hubStatus>;
+  private viewerHandler?: (route: ViewerOperation, actor: ViewerActor) => Promise<Response>;
   readonly relay: RelayService;
   private readonly audio: AudioStore;
   private readonly clock: () => number;
@@ -97,6 +101,12 @@ export class DeviceService {
         const seal = await responseSealer(identity.keys, await suite.kem.deserializePublicKey(publicKey), id);
         return await seal(payload);
       });
+  }
+
+  setViewerHandlers(handler: NonNullable<DeviceService["viewerHandler"]>, status: () => ReturnType<typeof hubStatus>, restart?: () => void) {
+    this.viewerHandler = handler;
+    this.viewerStatus = status;
+    this.restartAfterRelayReply = restart;
   }
 
   get open() { return this.listener !== undefined; }
@@ -274,14 +284,14 @@ export class DeviceService {
   }
 
   /** 创建配对邀请并持久化到数据库，供本机 HTTP 接口与 CLI `pair` 共用。 */
-  async createPairing(options: { role?: unknown; viewer?: unknown; relayUrl?: string; openListener?: boolean } = {}): Promise<{ uri: string; expires_at: string; role: PairingRole }> {
+  async createPairing(options: { role?: unknown; viewer?: unknown; relayUrl?: string; openListener?: boolean; actor?: ViewerActor } = {}): Promise<{ uri: string; expires_at: string; role: PairingRole }> {
     if (options.viewer !== undefined && options.viewer !== true && options.viewer !== false) throw new InputError("viewer 必须是布尔值");
     const role = options.role === undefined ? options.viewer === true ? "view" : "collect" : options.role;
     if (!isPairingRole(role)) throw new InputError("设备角色无效");
     const openListener = options.openListener ?? true;
     const audit = (success: boolean, code: string = role) =>
-      auditSecurity(this.sql, "pair.create", { ok: success, code, now: this.clock() });
-    return await this.relay.run(async () => {
+      auditSecurity(this.sql, "pair.create", { actor: options.actor?.device, ok: success, code, now: this.clock() });
+    return await this.withRelayLock(options.actor, async () => {
       const identity = await this.ensureIdentity();
       if (this.stopped) throw new WireError(503, "中枢正在关闭");
       if (openListener) {
@@ -329,12 +339,16 @@ export class DeviceService {
     });
   }
 
-  async settings(method: string, path: string, readJSON?: () => Promise<unknown>, loopbackEndpoint?: string): Promise<Response | null> {
+  private async withRelayLock<T>(actor: ViewerActor | undefined, run: () => T | Promise<T>) {
+    return actor?.relayLocked ? await run() : await this.relay.run(run);
+  }
+
+  async settings(method: string, path: string, readJSON?: () => Promise<unknown>, loopbackEndpoint?: string, actor?: ViewerActor): Promise<Response | null> {
     const root = "/v1/settings/devices";
     if (method === "GET" && path === root) {
       const invite = this.currentInvite();
       if (!invite && this.loadStoredInvite()) {
-        await this.relay.run(() => {
+        await this.withRelayLock(actor, () => {
           if (!this.currentInvite()) this.clearInvite();
           this.reconcile();
         });
@@ -371,7 +385,7 @@ export class DeviceService {
       const input = readJSON ? object(await readJSON()) : {};
       if (!input) throw new InputError("配对邀请必须是 JSON 对象");
       try {
-        const { uri, expires_at } = await this.createPairing({ role: input.role, viewer: input.viewer, openListener: true });
+        const { uri, expires_at } = await this.createPairing({ role: input.role, viewer: input.viewer, openListener: true, actor });
         return json(ok({ uri, expires_at }));
       } catch (error) {
         if (error instanceof WireError) return json(fail(error.status, error.message));
@@ -379,7 +393,7 @@ export class DeviceService {
       }
     }
     if (method === "DELETE" && path === root + "/pairing") {
-      await this.relay.run(() => {
+      await this.withRelayLock(actor, () => {
         this.clearInvite();
         this.reconcile();
       });
@@ -413,7 +427,11 @@ export class DeviceService {
   /** The loopback listener checks its Host header before routing here. */
   route(request: Request, server: Bun.Server<EventSocket>, local = false) {
     const path = new URL(request.url).pathname;
-    if (request.method === "POST" && path === "/v1/device") return this.lanRequest(request, local);
+    if (request.method === "POST" && path === "/v1/device") {
+      // Encrypted settings operations can take up to 60 seconds to test a model.
+      server.timeout(request, 75);
+      return this.lanRequest(request, local);
+    }
     if (request.method === "GET" && path === "/v1/device/hello") return this.lanRequest(request, local);
     if (request.method === "GET" && path === "/v1/device/events") {
       return server.upgrade(request, { data: { local } }) ? undefined : json(fail(400, "需要 WebSocket"));
@@ -570,10 +588,11 @@ export class DeviceService {
         context && createHash("sha256").update(envelope.enc).update(envelope.ct).digest("hex"));
     };
     // 邮件取信和设置已经在同一队列里，直连配对也在此队列里分配信箱。
-    const reading = device !== null && (input?.op === "projection.pull" || typeof input?.op === "string" && projectionReads.has(input.op));
+    const reading = device !== null && (input?.op === "projection.pull" || input?.op === "runtime.call" || input?.op === "audio.sample.get" ||
+      typeof input?.op === "string" && projectionReads.has(input.op));
     const before = reading ? projectionHead(this.sql) : null;
     const revision = reading ? deviceAccess(this.sql, device!)?.role_revision : undefined;
-    const serialized = !context && (device === null || input?.op === "devices.role.update" || input?.op === "devices.remove");
+    const serialized = !context && (device === null || typeof input?.op === "string" && viewerOperationNeedsRelayLock(input.op));
     const result = serialized ? await this.relay.run(execute) : await execute();
     if (!result) return null;
     const sealed = await seal(result);
@@ -592,6 +611,10 @@ export class DeviceService {
       }
     }
     if (context && before && result.status === 200) context.projectionRead = { ...before, revision: revision! };
+    if (context && input?.op === "settings.hub.put" && result.status === 200 &&
+        "restarting" in result.body && result.body.restarting === true) {
+      context.replyDelivered = this.restartAfterRelayReply;
+    }
     return sealed;
   }
 
@@ -605,21 +628,38 @@ export class DeviceService {
   private async execute(input: Record<string, unknown> | null, nonce: string, device: string | null,
                         pairKey: Buffer | null, hubID: string, context?: RelayRequest, hash?: string): Promise<Result | null> {
     const space = context?.mailbox.space, up = context?.mailbox.up;
+    let retryRead = false;
     if (context) {
       const receipt = this.sql.prepare<[string, string, string], { request_hash: string; result: string }>(
         "SELECT request_hash, result FROM relay_receipts WHERE space=? AND up=? AND id=?",
       ).get(space!, up!, nonce);
       if (receipt) {
         if (receipt.request_hash !== hash) throw invalidEnvelope();
-        return JSON.parse(receipt.result) as Result;
+        if (receipt.result !== "null") return JSON.parse(receipt.result) as Result;
+        retryRead = true;
       }
       if (context.mailbox.state === "pair_reply") return null;
     }
     const now = this.clock();
-    const remember = (result: Result) => {
+    const saveReceipt = (result: string) => {
       if (context) this.sql.prepare("INSERT INTO relay_receipts VALUES (?,?,?,?,?,?)")
-        .run(space, up, nonce, hash, JSON.stringify(result), now);
-      return result;
+        .run(space, up, nonce, hash, result, now);
+    };
+    const replaceReceipt = (result: Result) => {
+      if (!context) return result;
+      // A deletion or permission change can withdraw the pending reply.
+      // Never recreate it with the result of an operation already in flight.
+      const replaced = this.sql.prepare("UPDATE relay_receipts SET result=? WHERE space=? AND up=? AND id=?")
+        .run(JSON.stringify(result), space, up, nonce);
+      return replaced.changes ? result : fail(409, "回复已撤下，请刷新状态后再试");
+    };
+    const limitReply = (result: Result) => context && Buffer.byteLength(JSON.stringify(result)) > relayProjectionBytes
+      ? fail(413, "响应超过信箱大小上限，请缩小查询范围或改用直连") : result;
+    const remember = (result: Result) => {
+      const limited = limitReply(result);
+      if (retryRead) return replaceReceipt(limited);
+      if (context) saveReceipt(JSON.stringify(limited));
+      return limited;
     };
     try {
       const { op, body } = validateRequest(input, now, context ? 30 * dayMs : undefined);
@@ -630,10 +670,19 @@ export class DeviceService {
         if (this.sql.prepare("SELECT 1 FROM device_nonces WHERE device='' AND nonce=?").get(nonce)) return replay();
         return await this.pair(body, pairKey!, hubID, context, claim, remember);
       }
+      const memoryOnly = op === "audio.sample.get" || op === "runtime.call";
       const result = this.sql.transaction(() => {
-        if (!claim()) return replay();
+        if (!retryRead && !claim()) return replay();
         try {
-          return remember(device === null ? fail(400, "配对信封只允许 pair") : this.dispatch(device, op, body, !!context));
+          const dispatched = device === null ? fail(400, "配对信封只允许 pair") : this.dispatch(device, op, body, !!context);
+          if (typeof dispatched !== "function") return remember(dispatched);
+          // An interrupted async mutation must never be replayed. Keep a reply
+          // for the caller even if the process stops before the result is recorded.
+          if (!retryRead && context) {
+            if (memoryOnly) saveReceipt("null");
+            else remember(fail(409, "上次操作结果未确认，请刷新状态后再试"));
+          }
+          return dispatched;
         } catch (error) {
           if (error instanceof InputError) return remember(fail(400, error.message));
           if (error instanceof RemoteDeleteLimited) {
@@ -643,6 +692,12 @@ export class DeviceService {
           throw error;
         }
       }).immediate();
+      // Network and file settings may await. Keep SQLite transactions synchronous and
+      // claim the authenticated nonce before running an async operation.
+      if (typeof result === "function") {
+        const reply = limitReply(await result());
+        return memoryOnly ? reply : replaceReceipt(reply);
+      }
       if (result?.status === 200 && (op === "devices.role.update" || op === "devices.remove")) this.devicePermissionsChanged();
       return result;
     } catch (error) {
@@ -761,19 +816,27 @@ export class DeviceService {
     }).immediate();
   }
 
-  private deleteAsAdmin(device: string, ids: string[]) {
-    return this.hub.deleteMany(ids, undefined, rows => {
-      const requested = new Set(ids);
-      const cross = new Set(rows.filter(row => row.device !== device && requested.has(row.id)).map(row => row.id));
-      const count = rows.filter(row => cross.has(row.id) || (row.corrects !== null && cross.has(row.corrects))).length;
-      if (!reserveRemoteDelete(this.sql, device, count, this.clock())) throw new RemoteDeleteLimited(count);
+  private deleteRecords(device: string, ids: string[], ownOnly: boolean, local: boolean) {
+    return this.hub.deleteMany(ids, ownOnly ? device : undefined, rows => {
+      if (!rows.length) return;
+      if (local) auditSecurity(this.sql, "local.delete", { actor: device, code: String(rows.length), now: this.clock() });
+      else if (!reserveRemoteDelete(this.sql, device, rows.length, this.clock())) throw new RemoteDeleteLimited(rows.length);
     });
   }
 
-  private dispatch(device: string, op: string, body: Record<string, unknown>, fromRelay: boolean): Result {
+  private async runViewerOperation(route: ViewerOperation, actor: ViewerActor): Promise<Result> {
+    const response = await this.viewerHandler!(route, actor);
+    if (route.binary && response.ok) {
+      const data = Buffer.from(await response.arrayBuffer()).toString("base64");
+      return { status: response.status, body: { mime: response.headers.get("content-type"), data_base64: data } };
+    }
+    return { status: response.status, body: await response.json() as object };
+  }
+
+  private dispatch(device: string, op: string, body: Record<string, unknown>, fromRelay: boolean): Result | (() => Promise<Result>) {
     const access = deviceAccess(this.sql, device);
     if (!access) throw unpaired();
-    const { role, projection_reset } = access;
+    const { role, projection_reset, local_only } = access;
     // Former viewers can pull the withdrawal control message, with no data or usable cursor.
     if (op === "projection.pull" && role === "collect" && projection_reset) {
       return ok({ kind: "projection.reset", epoch: projectionHead(this.sql).epoch, reset: true,
@@ -787,14 +850,23 @@ export class DeviceService {
       const max = fromRelay ? relayProjectionBytes : directProjectionBytes;
       if (op === "projection.pull") return ok(projection.pull(device, body, max, role === "agent"));
       if (op === "projection.ack") return ok(projection.ack(device, body));
-      const includePrivate = (op === "records.get" || op === "records.list") && role === "admin" && body.include_private === true;
-      if (includePrivate && fromRelay) return this.denied(device, op);
+      const includePrivate = body.include_private === true;
+      if (includePrivate && (role !== "admin" || fromRelay)) return this.denied(device, op);
+      if (body.include_private !== undefined && (typeof body.include_private !== "boolean" ||
+          !["records.get", "records.list", "history.segments", "conversations.detail"].includes(op))) {
+        throw new InputError("include_private 无效");
+      }
       return ok(projection.read(op, body, max, includePrivate));
     }
     if (op.startsWith("agent.")) {
       if (fromRelay) return this.denied(device, op);
       return agentOperation(new AgentReads(this.hub), device, op.slice(6), body);
     }
+    const route = viewerOperation(op, body);
+    if (route && !route.native && this.viewerHandler) {
+      return () => this.runViewerOperation(route, { device, fromRelay, relayLocked: fromRelay || viewerOperationNeedsRelayLock(op) });
+    }
+    const remove = (ids: string[]) => this.deleteRecords(device, ids, role !== "admin", local_only === 1);
     switch (op) {
       case "ingest":
         if (!Array.isArray(body.records) || body.records.length > 200) throw new InputError("records 必须是最多 200 条的数组");
@@ -802,10 +874,10 @@ export class DeviceService {
       case "delete":
         if (!Array.isArray(body.ids) || body.ids.length < 1 || body.ids.length > 100 ||
           !body.ids.every(id => typeof id === "string" && idPattern.test(id))) throw new InputError("每次删除需要 1–100 个有效记录 id");
-        return ok({ deleted: role === "admin" ? this.deleteAsAdmin(device, body.ids) : this.hub.deleteMany(body.ids, device) });
+        return ok({ deleted: remove(body.ids) });
       case "segment.delete": {
         if (typeof body.date !== "string" || typeof body.id !== "string") throw new InputError("缺少日期或段编号");
-        const deleted = deleteTimelineSegment(new DistillStore(this.hub), body.date, body.id, body, ids => this.deleteAsAdmin(device, ids));
+        const deleted = deleteTimelineSegment(new DistillStore(this.hub), body.date, body.id, body, remove);
         if (!deleted) return fail(404, "内容不存在");
         if (deleted.changed) return fail(409, "这段记录已更新，请刷新后再确认删除");
         return ok(deleted);
@@ -832,7 +904,7 @@ export class DeviceService {
       case "conversations.put": return ok(this.putConversations(device, body));
       case "status.get": {
         if (this.deps.getStatus) return ok(this.deps.getStatus(role));
-        const snapshot = hubStatus(this.hub, { port: null, lanPort: this.open ? this.lanPort : null, now: this.clock(), relay: this.relay.status() });
+        const snapshot = this.viewerStatus?.() ?? hubStatus(this.hub, { port: null, lanPort: this.open ? this.lanPort : null, now: this.clock(), relay: this.relay.status() });
         return ok(role === "admin" ? snapshot : { ...snapshot, database: { ...snapshot.database, file: null } });
       }
       default: return fail(400, "设备操作无效");

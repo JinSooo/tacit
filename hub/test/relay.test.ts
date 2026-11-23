@@ -17,7 +17,7 @@ import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 const path = "/v1/settings/relay";
 const id = () => randomBytes(16).toString("base64url");
 
-async function hubFixture() {
+async function hubFixture(restart?: () => void) {
   const ctx = setup();
   const probe = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: () => new Response() });
   const lanPort = probe.port!;
@@ -27,7 +27,7 @@ async function hubFixture() {
   let key: string | null = null;
   const credentials = new Map<string, string>();
   const options = {
-    db: ctx.db, token: ctx.config.token, agentToken: "fixture-agent-token", port: 0, settings: { dataDir: ctx.dir },
+    db: ctx.db, token: ctx.config.token, agentToken: "fixture-agent-token", port: 0, settings: { dataDir: ctx.dir, restart, probePort: async () => {} },
     deviceDeps: {
       name: "测试中枢", addresses: () => ["192.0.2.2"], now: () => now,
       keys: { read: () => key, write: (value: string) => { key = value; } },
@@ -446,7 +446,8 @@ test("投影与按需读取撤掉私密内容，混合事项仅保留有公开�
     expect(next.changes).toContainEqual(expect.objectContaining({ kind: "thread", id: "public", op: "delete" }));
     expect(JSON.stringify(next)).not.toContain("公开苗床已贴标签");
     expect(JSON.stringify(next)).not.toContain("新私密");
-    const { body: reads } = await viewer.send("records.get", { ids: [pub.id, hidden.id, mixed.id], include_private: true, include_corrections: true });
+    expect((await viewer.send("records.get", { ids: [pub.id], include_private: true })).status).toBe(403);
+    const { body: reads } = await viewer.send("records.get", { ids: [pub.id, hidden.id, mixed.id], include_corrections: true });
     expect(reads.records).toMatchObject([{ id: pub.id, redacted_private: true }, { id: hidden.id, redacted_private: true }, { id: mixed.id, body: mixed.body }]);
     expect((await viewer.send("records.list", { q: "私密", body: true })).body.records).toEqual([]);
     expect((await viewer.send("records.list", { q: "公开苗床", body: true })).body.records).toEqual([]);
@@ -675,4 +676,58 @@ test("降权时真实信箱撤回旧投影和原文回执，只向采集设备�
     for (const message of [oldPush, readId, lastRead]) expect((await remote(box, box.down, "GET", message)).status).toBe(404);
     expect((await viewer.send("records.get", { ids: [record.id] })).status).toBe(403);
   } finally { await hub.dispose(); await relay.stop(); }
+}, 15_000);
+
+test("信箱查看窗口 op 走共享设置逻辑，禁私密读取，按完整明文大小限制返回", async () => {
+  const limits = { ...defaultLimits }, relay = relayFixture({ limits });
+  let restarted = 0;
+  const hub = await hubFixture(() => { restarted++; });
+  try {
+    expect((await hub.admin(path, "PUT", { mode: "custom", url: relay.url })).status).toBe(200);
+    const admin = await hub.pair(true);
+    expect((await hub.admin("/v1/settings/devices/" + admin.device + "/role", "PUT", { role: "admin" })).status).toBe(200);
+    const { relay: box } = (await admin.send<{ relay: RelayConfig }>("relay", {})).body;
+    const send = async (op: string, args: object) => reply(admin, box, await submit(box, admin, op, args, hub.time()));
+    expect(await send("audio.settings.put", { retention_days: 12 })).toEqual({ status: 200, body: { retention_days: 12 } });
+    expect((await send("devices.list", {})).status).toBe(200);
+    expect((await send("devices.pairing.create", { role: "view" })).status).toBe(200);
+    expect((await send("devices.pairing.cancel", {})).status).toBe(200);
+    const record = fixture({ source: "manual.note", sensitivity: "private", body: "合成私密记录只留本机" });
+    expect(hub.db.ingest([record]).accepted).toBe(1);
+    for (const [op, args] of [
+      ["records.get", { ids: [record.id] }],
+      ["records.list", {}],
+      ["history.segments", { from: record.t_start, to: record.t_start }],
+      ["conversations.detail", { record_id: record.id }],
+    ] as const) expect((await send(op, { ...args, include_private: true })).status).toBe(403);
+
+    const sampleID = fixture().id;
+    hub.db.db.prepare("INSERT INTO voice_samples VALUES (?,?,?,?,?,?)")
+      .run(sampleID, "fixture-speaker", "fixture-request", "audio/ogg", Buffer.alloc(500 * 1024, 42), hub.time());
+    const direct = await admin.send<{ data_base64: string }>("audio.sample.get", { id: sampleID });
+    expect(direct.status).toBe(200);
+    expect(Buffer.from(direct.body.data_base64, "base64").byteLength).toBe(500 * 1024);
+    expect((await send("audio.sample.get", { id: sampleID })).status).toBe(413);
+    expect(JSON.stringify(hub.db.db.prepare("SELECT result FROM relay_receipts").all())).not.toContain(record.body);
+
+    // An envelope rejected by the relay's storage limit can be retried after
+    // reconnecting without running the setting twice or restarting early.
+    await hub.stop();
+    const nonce = await submit(box, admin, "settings.hub.put", { port: 49002 }, hub.time());
+    limits.space_bytes = 1;
+    hub.start();
+    await eventually(() => {
+      const row = hub.db.db.prepare<[string], { result: string }>("SELECT result FROM relay_receipts WHERE id=?").get(nonce);
+      return row && JSON.parse(row.result).status === 200 ? true : undefined;
+    });
+    expect(restarted).toBe(0);
+    await hub.stop();
+    limits.space_bytes = defaultLimits.space_bytes;
+    hub.start();
+    expect(await reply(admin, box, nonce)).toEqual({ status: 200, body: { port: 49002, restarting: true } });
+    await eventually(() => restarted === 1 || undefined);
+  } finally {
+    await hub.dispose();
+    await relay.server.stop(true);
+  }
 }, 15_000);
