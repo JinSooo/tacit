@@ -54,20 +54,26 @@ export function registerLocalDevices(sql: SQL, agentKey: Buffer, macKey: Buffer 
       "SELECT id, platform, role, local_only, bootstrap_agent_id FROM devices WHERE public_key=? ORDER BY id LIMIT 2");
     const agents = find.all(agentKey), macs = macKey ? find.all(macKey) : [];
     const [agent] = agents, [mac] = macs;
-    if (agents.length || macs.length) {
-      if (agents.length !== 1 || agent?.platform !== "agent" || agent.role !== "agent" || !agent.local_only ||
-          macKey && (macs.length !== 1 || mac?.platform !== "mac" || !mac.local_only || mac.bootstrap_agent_id !== agent.id)) {
-        auditSecurity(sql, "device.local_register", { ok: false, code: "key_conflict", now });
-        return null;
-      }
-      return { agent_device_id: agent.id, ...(mac ? { mac_device_id: mac.id } : {}) };
+    const usableAgent = agents.length === 1 && agent?.platform === "agent" && agent.role === "agent" && agent.local_only === 1;
+    const existingPair = usableAgent && macs.length === 1 && mac?.platform === "mac" &&
+      mac.local_only === 1 && mac.bootstrap_agent_id === agent.id;
+    const agentAlreadyPaired = usableAgent && macKey && !macs.length &&
+      sql.prepare("SELECT 1 FROM devices WHERE platform='mac' AND bootstrap_agent_id=?").get(agent.id);
+    if ((agents.length && !usableAgent) || (macs.length && !existingPair) || agentAlreadyPaired) {
+      auditSecurity(sql, "device.local_register", { ok: false, code: "key_conflict", now });
+      return null;
     }
+    if (existingPair) return { mac_device_id: mac.id, agent_device_id: agent.id };
+    if (usableAgent && !macKey) return { agent_device_id: agent.id };
+
     const at = new Date(now).toISOString();
     const insert = sql.prepare(`INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,role,local_only,bootstrap_agent_id)
       VALUES(?,?,?,?,?,?,?,1,?)`);
-    const agentId = allocateDeviceID(sql, "agent");
-    insert.run(agentId, "Tacit AI", "agent", agentKey, at, at, "agent", null);
-    auditSecurity(sql, "device.local_register", { target: agentId, code: "agent", now });
+    const agentId = agent?.id ?? allocateDeviceID(sql, "agent");
+    if (!agent) {
+      insert.run(agentId, "Tacit AI", "agent", agentKey, at, at, "agent", null);
+      auditSecurity(sql, "device.local_register", { target: agentId, code: "agent", now });
+    }
     if (!macKey) return { agent_device_id: agentId };
     const macId = allocateDeviceID(sql, "mac");
     insert.run(macId, "Tacit Mac", "mac", macKey, at, at, "admin", agentId);

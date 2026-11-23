@@ -24,7 +24,7 @@ test("活动段：同一线程接得上的片段合成一段，未提炼的按�
   // 未提炼：聊天 10:02–10:04、10:08–10:10 合成一段；私密记录照常列出，只计数。
   const chat1 = fixture({ kind: "span", t_start: at("10:02"), t_end: at("10:04"), context: { app: "com.synthetic.chat" } });
   const chat2 = fixture({ kind: "span", t_start: at("10:08"), t_end: at("10:10"), context: { app: "com.synthetic.chat" }, sensitivity: "private" });
-  const shell = fixture({ source: "mac.shell", source_ref: "synthetic-shell-1", t_start: at("10:09") });
+  const shell = fixture({ device: "mac-abcd2345", source: "mac.shell", source_ref: "synthetic-shell-1", t_start: at("10:09") });
   const other = fixture({ device: "phone", t_start: at("10:03"), context: { app: "com.synthetic.chat" } });
   const yesterday = fixture({ t_start: "2026-11-07T23:00:00+08:00" });
   expect(ctx.db.ingest([editor, browser, later, chat1, chat2, shell, other, yesterday]).accepted).toBe(8);

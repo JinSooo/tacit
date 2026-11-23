@@ -3,7 +3,7 @@ import { SegmentList } from "./segment-list.tsx";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { RecordV1 } from "../../packages/record/index.ts";
-import { buildCorrection, buildNote, captureNames, dateTitle, dayKey, duration, groupRecords, latestCorrection, recordTitle, safeUrl, sourceNames, timeRange, type Detail, type HistoryRow } from "./history.ts";
+import { buildCorrection, buildNote, captureNames, dateTitle, dayKey, duration, groupRecords, historyDeviceGroup, latestCorrection, recordTitle, safeUrl, sourceNames, timeRange, type Detail, type HistoryRow } from "./history.ts";
 import { DayOverview } from "./day-overview.tsx";
 import { toLocalIso } from "./record-helpers.ts";
 import { createDistillationApi } from "./distillation.ts";
@@ -215,7 +215,7 @@ export function App() {
       const page = await api<{ records: HistoryRow[]; next_cursor: string | null }>(`/v1/records?${params}`, { signal });
       if (version !== generation.current) return;
       setRecords(previous => next ? [...new Map([...previous, ...page.records].map(record => [record.id, record])).values()] : page.records);
-      setDevices(previous => [...new Set([...previous, ...page.records.map(record => record.device)])].sort());
+      setDevices(previous => [...new Set([...previous, ...page.records.map(record => historyDeviceGroup(record.device))])].sort());
       setCursor(page.next_cursor);
     } catch (error) { if (version === generation.current && !signal?.aborted) setError(message(error)); }
     finally { if (version === generation.current) { loading.current = false; setBusy(false); } }

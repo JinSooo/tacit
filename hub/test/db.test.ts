@@ -280,3 +280,12 @@ test("v16 → v17 保留已配对设备和历史 Mac 记录，默认仍是远程
     } finally { migrated.close(); }
   } finally { ctx.cleanup(); }
 });
+
+test("历史设备筛选 mac 同时匹配新旧 Mac ID，完整 ID 仍精确匹配", () => {
+  const records = ["mac", "mac-abcd2345", "mac-bcde3456", "android-abcd2345", "mac-abcd0123"].map(device => fixture({ device }));
+  expect(ctx.db.ingest(records).accepted).toBe(records.length);
+  const ids = (device: string) => ctx.db.list(new URLSearchParams({ device })).records.map(row => row.id).sort();
+  expect(ids("mac")).toEqual(records.slice(0, 3).map(row => row.id).sort());
+  expect(ids("mac-abcd2345")).toEqual([records[1]!.id]);
+  expect(ids("android-abcd2345")).toEqual([records[3]!.id]);
+});

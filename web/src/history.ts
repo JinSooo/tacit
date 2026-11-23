@@ -2,6 +2,9 @@ import type { RecordV1 } from "../../packages/record/index.ts";
 import { toLocalIso, ulid } from "./record-helpers.ts";
 export type HistoryRow = Omit<RecordV1, "body">;
 export type Detail = RecordV1 & { corrections: RecordV1[] };
+export function historyDeviceGroup(device: string): string {
+  return /^mac-[a-z2-7]{8}$/.test(device) ? "mac" : device;
+}
 const pad = (n: number) => String(n).padStart(2, "0");
 export function dayKey(value: string | Date): string {
   const date = new Date(value);

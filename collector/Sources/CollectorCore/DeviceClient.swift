@@ -307,7 +307,7 @@ public protocol DeviceTransport: Sendable {
   func send(_ request: SealedDeviceRequest) async throws -> DeviceTransportResponse
 }
 
-private final class NoRedirectSessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+final class NoRedirectSessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
   static let shared = NoRedirectSessionDelegate()
 
   func urlSession(

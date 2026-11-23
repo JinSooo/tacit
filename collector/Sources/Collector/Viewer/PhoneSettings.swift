@@ -31,7 +31,7 @@ struct PhoneSettingsSection: View {
         SettingsMessage(text: "需要更新后台服务才能配对手机。", warning: false)
       } else {
         if let settings {
-          ForEach(settings.devices) { phone in
+          ForEach(settings.phones) { phone in
             SettingsRow {
               Button("移除") { phoneToRemove = phone }
                 .foregroundStyle(Palette.attention)
@@ -209,7 +209,7 @@ struct PhoneSettingsSection: View {
             }
             // 邀请时长为 10 分钟。兼容精度只到整秒的配对时间。
             let issuedAt = Date(timeIntervalSince1970: floor(active.expires.timeIntervalSince1970) - 600)
-            if result.pairing == nil, let phone = result.devices.first(where: {
+            if result.pairing == nil, let phone = result.phones.first(where: {
               !active.previousDevices.contains($0.id) &&
                 (ViewerTime.parse($0.pairedAt) ?? .distantPast) >= issuedAt
             }) {

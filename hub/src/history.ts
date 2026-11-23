@@ -1,5 +1,6 @@
 import { HubDB, InputError } from "./db.ts";
 import { conversationList } from "./conversations.ts";
+import { recordDeviceFilter } from "./record-sources.ts";
 import { unionSeconds } from "./durations.ts";
 export { unionSeconds } from "./durations.ts";
 
@@ -54,7 +55,7 @@ export function historySegments(hub: HubDB, params: URLSearchParams, include = (
   const device = params.get("device");
   const rows = (hub.db.prepare(`SELECT r.id,r.source,r.title,r.t_start_ms,r.t_end,r.context,r.sensitivity,a.thread_id
     FROM records r LEFT JOIN frame_records fr ON fr.record_id=r.id LEFT JOIN assignments a ON a.frame_id=fr.frame_id
-    WHERE r.t_start_ms>=? AND r.t_start_ms<=? ${device ? "AND r.device=?" : ""} ORDER BY r.t_start_ms,r.id`).all(...[from,to,...device ? [device] : []]) as Row[]).filter(row => include(row.id));
+    WHERE r.t_start_ms>=? AND r.t_start_ms<=? ${device ? "AND " + recordDeviceFilter(device) : ""} ORDER BY r.t_start_ms,r.id`).all(...[from,to,...device ? [device] : []]) as Row[]).filter(row => include(row.id));
 
   const threadIds = [...new Set(rows.flatMap(r => r.thread_id ? [r.thread_id] : []))];
   const threads = new Map<string, SegmentThread>();

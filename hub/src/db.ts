@@ -12,7 +12,7 @@ import { DistillStore } from "./distill/store.ts";
 import { createHash } from "node:crypto";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { redactRecord } from "./redact.ts";
-import { SKELETON_SOURCES, sourceList } from "./record-sources.ts";
+import { recordDeviceFilter, SKELETON_SOURCES, sourceList } from "./record-sources.ts";
 import { registerAgentAudit, stopAgentAudit } from "./agent-audit.ts";
 import { relaySchema } from "./devices/relay-store.ts";
 import { projectionSchema, projectionWithdrawal, scheduleProjectionDraft } from "./devices/projection-store.ts";
@@ -300,7 +300,9 @@ export class HubDB {
   list(params: URLSearchParams, { collapseScreenMatches = false, prioritizeContent = false, recordFilter = "" } = {}): { records: Partial<StoredRecord>[]; next_cursor: string | null } {
     const where: string[] = recordFilter ? [recordFilter] : [];
     const args: unknown[] = [];
-    for (const field of ["device", "source"]) if (params.has(field)) { where.push(`r.${field}=?`); args.push(params.get(field)); }
+    const device = params.get("device");
+    if (device !== null) { where.push(recordDeviceFilter(device)); args.push(device); }
+    if (params.has("source")) { where.push("r.source=?"); args.push(params.get("source")); }
     for (const [field, op] of [["from", ">="], ["to", "<="]]) if (params.has(field!)) {
       const time = Date.parse(params.get(field!)!);
       if (!Number.isFinite(time)) throw new InputError(`${field} 必须是有效时间`);
