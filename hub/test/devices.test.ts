@@ -849,6 +849,12 @@ test("查看窗口的所有 op 沿用原 HTTP 状态和响应形状", async () =
     const peer = fixture({ source: "manual.note" });
     expect(await admin.send("records.create", peer)).toEqual({ status: 200, body: created });
     expect(hub.db.get(peer.id)?.body).toBe(peer.body);
+    // 格式错误的补写：两条通道都返回逐字段的 rejected，不入库（C3 联调发现设备协议曾只回一句 400）。
+    const malformed = (id: string) => ({ ...fixture({ source: "manual.note" }), id, capture: { method: "manual", extra: true } });
+    const badHTTP = await (await hub.admin(createPath, "POST", malformed(ulid()))).json();
+    const badDevice = await admin.send("records.create", malformed(ulid()));
+    expect(badDevice).toEqual({ status: 200, body: badHTTP });
+    expect(badHTTP.rejected[0].errors.length).toBeGreaterThan(0);
 
     const date = "2026-11-08", id = "segment:fixture";
     const dayPath = `/v1/days/${date}/segments/${id}`;
@@ -986,7 +992,6 @@ test("查看窗口 op 拒绝无效路径、额外字段以及查看与 Agent 越
       ["settings.models.put", { tiers: {}, path: "/v1/records" }],
       ["settings.general.get", { method: "DELETE" }],
       ["audio.settings.put", { retention_days: 5, extra: true }],
-      ["records.create", { ...fixture({ source: "manual.note" }), capture: { method: "manual", extra: true } }],
       ["settings.unregistered", {}],
       ["constructor", {}],
     ] as const) expect((await admin.send(op, args)).status).toBe(400);

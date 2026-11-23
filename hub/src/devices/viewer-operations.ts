@@ -1,4 +1,3 @@
-import { validateRecord } from "../../../packages/record/index.ts";
 import { InputError } from "../db.ts";
 import { localDayStart } from "../distill/requests.ts";
 import { GENERAL_DEFAULTS } from "../general-settings.ts";
@@ -81,8 +80,7 @@ export function viewerOperation(op: string, body: Record<string, unknown>): View
   if (!route) return;
   const keys = [...Object.keys(route.params ?? {}), ...Object.keys(route.query ?? {}), ...(route.body ?? [])];
   if (route.record) {
-    // Use the record schema also used by ingest, including its nested field constraints.
-    if (!validateRecord(body).ok) throw new InputError("手动记录格式无效");
+    // 字段校验交给原接口的 ingest：格式不对时和 HTTP 一样返回逐字段的 rejected，而不是一句笼统的 400。
   } else if (Object.keys(body).some(key => !keys.includes(key))) {
     throw new InputError("设备操作包含未登记的参数");
   }

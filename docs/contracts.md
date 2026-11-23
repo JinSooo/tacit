@@ -942,7 +942,7 @@ CREATE TABLE project_context_cache (
 | `devices.role.update` | PUT `/v1/settings/devices/:id/role` | `{ id, role }`（6.11.2） | `{ id, role }` |
 
 - 日期为有效的 `YYYY-MM-DD`。设备 ID 采用 6.2 格式，provider 只接受 `anthropic` 或 `openai-compatible`。段 ID 支持字母、数字、下划线、冒号、点和连字符，最长 200，单独的 `.` 和 `..` 非法。其余路径 ID 支持字母、数字、下划线和连字符，最长 128。多余参数、非法字段、无效路径参数和未登记的 op 返回 400（角色越权优先返回 403）。
-- `records.create` 在路由处对记录结构做预检，格式错误时直接返回 400「手动记录格式无效」。原 HTTP 写入在入库阶段校验，可能返回含逐字段错误的 `rejected` 回执。
+- `records.create` 和原 HTTP 写入一样在入库阶段校验：格式错误时返回 200 和含逐字段错误的 `rejected` 回执，不入库。
 - 管理身份允许表中所有操作。采集和查看身份的 `delete` 仍按 6.5 处理。查看身份另可调用 `status.get` 和 `diagnostics.get`。直接授予 `admin`、移除或降级最后一台管理设备沿用 6.11.2。目标不存在通常为 404，段成员变化或最后一台管理设备保护返回 409，删除限额为 429，设置和信箱的服务错误沿用原接口，如 502、503 或 507。
 - 经信箱的完整 UTF-8 JSON 回复（包括 `status`、`body` 以及音频 Base64 编码的开销）最多 **640 KiB**，超出返回 413。可缩小查询范围或改用直连。经信箱修改端口时，中枢先将成功回复写入下行信箱，再退出重启。音频样本和模型调用详情不进入回复缓存。Mac 将试听样本解码为内存中的音频数据，交给原有的波形显示和播放器。中枢的结构化日志通过 `diagnostics.get` 获取，运行记录页的整理、采集结构化日志通过 `runtime.background` 获取。
 - 原表中的全部 op 都保留。 `diagnostics.get` 复用中枢的脱敏后台日志接口。 `audit.list` 是 Agent 读取审计；安全审计仍由本机接口提供（6.11.4）。
