@@ -395,6 +395,10 @@ export class HubDB {
       `).all(input, device ?? null, device ?? null);
       if (!rows.length) return 0;
       eraseSnapshots(this);
+      // 还没投出去的信箱回执可能带着被删内容（对话总结、修正记录），同事务清掉；
+      // 设备收不到回复会在 24 小时后换新 nonce 重发。配对回执不含记录内容，保留。
+      this.db.prepare(`DELETE FROM relay_receipts WHERE NOT EXISTS (
+        SELECT 1 FROM relay_mailboxes b WHERE b.space=relay_receipts.space AND b.up=relay_receipts.up AND b.state='pair_reply')`).run();
       const store = new DistillStore(this);
       store.removeRecords(rows.map(r => ({ id: r.id as string, time: r.t_start as string })));
       const deleted = new Set(rows.map(r => r.id));

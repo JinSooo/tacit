@@ -6,6 +6,8 @@ import { base64url, object, WireError } from "./envelope.ts";
 import { dayMs, relayConfig, type Mailbox, type RelayRequest, type Space } from "./relay-store.ts";
 
 const tickMs = 5_000;
+// 单条消息最大 1 MiB，经代理或慢网络时一次存取可能要十几秒（2026-11-23 线上实测 14–17 秒）。
+const messageTimeoutMs = 60_000;
 const pollMs = 60_000;
 const inventoryMs = 5 * pollMs;
 const RelayWebSocket = WebSocket as typeof WebSocket & {
@@ -144,9 +146,9 @@ export class RelayService {
     }
   }
 
-  private async request(url: string, method: string, token?: string, body?: unknown) {
+  private async request(url: string, method: string, token?: string, body?: unknown, timeout = tickMs) {
     const response = await fetch(url, {
-      method, redirect: "error", signal: AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(tickMs)]),
+      method, redirect: "error", signal: AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(timeout)]),
       headers: {
         ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -175,7 +177,8 @@ export class RelayService {
 
   private async spaceRequest(space: Space, token: string, method: string, path: string, body?: unknown) {
     try {
-      const response = await this.request(`${space.url}/v1/spaces/${space.space}${path}`, method, token, body);
+      const timeout = /\/messages\/[^/?]+$/.test(path) ? messageTimeoutMs : tickMs;
+      const response = await this.request(`${space.url}/v1/spaces/${space.space}${path}`, method, token, body, timeout);
       this.connected.set(space.space, true);
       return response;
     } catch (error) {

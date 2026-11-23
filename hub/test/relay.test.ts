@@ -252,6 +252,31 @@ test("回执写入失败后重启可补发原结果，已执行的请求不再�
   } finally { await hub.dispose(); relay.stop(true); }
 });
 
+test("回执还没投出去时删掉记录，回执随删除清掉，原请求不再执行", async () => {
+  const hub = await hubFixture(), limits = { ...defaultLimits }, relay = relayFixture({ limits });
+  try {
+    const phone = await hub.pair();
+    await configure(hub, relay.url);
+    const box = await deviceConfig(phone);
+    await hub.stop();
+    const record = fixture({ device: phone.device!, source: "android.audio", source_ref: "audio:fixture-erase" });
+    const nonce = await submit(box, phone, "ingest", { records: [record] }, hub.time());
+    limits.space_bytes = 1;
+    hub.start();
+    await eventually(() => hub.db.get(record.id) ?? undefined);
+    await hub.stop();
+    expect(hub.db.db.prepare("SELECT COUNT(*) AS n FROM relay_receipts").get()).toEqual({ n: 1 });
+    expect(hub.db.deleteMany([record.id])).toBe(1);
+    expect(hub.db.db.prepare("SELECT COUNT(*) AS n FROM relay_receipts").get()).toEqual({ n: 0 });
+    limits.space_bytes = defaultLimits.space_bytes;
+    hub.start();
+    await eventually(async () => (await list(box, box.up, hub.credentials.get(box.space))).length === 0 || undefined);
+    expect(await list(box)).toEqual([]);
+    expect(hub.db.get(record.id)).toBeFalsy();
+    expect(nonce).toBeTruthy();
+  } finally { await hub.dispose(); relay.stop(true); }
+});
+
 test("v13 加密数据库升级到 v14，保留配对记录并清理迁移备份", () => {
   const ctx = setup();
   try {

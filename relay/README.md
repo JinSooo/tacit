@@ -34,3 +34,7 @@ docker run -d --name tacit-relay -p 8787:8787 -v tacit-relay:/data \
 bun test relay/
 bun relay/src/bun.ts   # 本机起一个，默认 :8787，库在 /data/relay.db，可用 TACIT_RELAY_DB 改
 ```
+
+## 项目自己的实例
+
+`https://tacit-relay.jinso.top`：Cloudflare Worker `tacit-relay`，部署在项目维护者的账号下（2026-11-23）。仓库公开前设了开通码，只给维护者自己用；公开时去掉开通码，作为公共信箱。部署时把本目录复制到仓库外，在副本的 `wrangler.jsonc` 里加 `"routes": [{ "pattern": "tacit-relay.jinso.top", "custom_domain": true }]` 再 `bun x wrangler@4 deploy`；开通码用 `wrangler secret put TACIT_RELAY_CREATE_CODE` 经标准输入写入，不进命令参数和文件。
