@@ -531,6 +531,14 @@ const firstSentence = (text: string) => redactString(text).text.split(/(?<=[。�
 const comparable = (text: string) => terse(text, 60).replace(/[\s。！？!?，,.…]+$/u, "");
 // 记录标题有长度上限，长输入在标题里只剩开头，也算重复。
 const repeats = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 8 && (a.startsWith(b) || b.startsWith(a)));
+/**
+ * 草稿那一行取信息最多的一句：聊天第一句常是“卧槽”“好的”这类，看不出在聊什么（2026-11-23 用户反馈）。
+ * 不足 5 个字的当语气词跳过，剩下取最长的，同样长取先说的。只用于聊天、录音这类对话，AI 会话仍按输入顺序。
+ */
+function informative(quotes: string[]) {
+  const size = (q: string) => Array.from(comparable(q).replace(/\s+/gu, "")).length;
+  return quotes.filter(q => size(q) >= 5).reduce<string | undefined>((best, q) => best && size(best) >= size(q) ? best : q, undefined);
+}
 /** AI 会话记录标题是“工具 · 项目 · 首条输入”；工具已由图标表示、项目按当天项目数另标，草稿只用首条输入。 */
 function sessionTopic(title: string) {
   const parts = title.split(" · ");
@@ -551,9 +559,12 @@ function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
   const title = AUDIO_SOURCES.has(primary.source) ? "一场对话"
     : primary.chat || (SESSION_SOURCES.has(primary.source) ? sessionTopic(primary.title) : primary.app || primary.title);
   // 标题已经是某句原话（AI 会话标题就是首条输入）时换一句，没有别的就不重复。
-  const quotes = [...entries.filter(e => e.role === "user"), ...entries.filter(e => e.role !== "user")]
-    .map(e => terse(firstSentence(e.text), 60));
-  const excerpt = quotes.find(q => comparable(q) && !repeats(comparable(q), comparable(title))) ?? "";
+  const usable = (list: UnnumberedEvidence[]) => list.map(e => terse(firstSentence(e.text), 60))
+    .filter(q => comparable(q) && !repeats(comparable(q), comparable(title)));
+  const mine = usable(entries.filter(e => e.role === "user")), others = usable(entries.filter(e => e.role !== "user"));
+  // AI 会话按输入顺序取：最长的常是贴进去的日志或工具自动插入的提示，不是用户的意思。
+  const excerpt = (SESSION_SOURCES.has(primary.source) ? undefined : informative(mine) ?? informative(others))
+    ?? mine[0] ?? others[0] ?? "";
   return {
     id, t_start: toLocalIso(a.start), t_end: toLocalIso(a.end), active_seconds: a.seconds,
     title, excerpt, sources: [...new Set(apps.map(app => app.source))], apps,

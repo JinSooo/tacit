@@ -179,3 +179,32 @@ test("合成重日 3200 条记录，生成草稿的 dayView 低于 300 ms", () =
     expect(elapsed).toBeLessThan(300);
   } finally { ctx.cleanup(); }
 });
+
+test("聊天草稿那一行跳过语气词，取本人信息最多的一句（2026-11-23 用户反馈只看到“卧槽”）", () => {
+  const ctx = setup();
+  try {
+    const store = new DistillStore(ctx.db);
+    const records = [
+      chat(480, "卧槽"), chat(481, "东边那排豆苗被风吹倒了。", 0), chat(482, "好的！"),
+      chat(483, "明天把东边的豆苗重新扶起来"), chat(484, "顺便浇水"),
+      chat(600, "嗯嗯", 1, "种植台"), chat(601, "花苗已经搬到温室里了。", 0, "种植台"),
+    ];
+    expect(ctx.db.ingest(records).accepted).toBe(records.length);
+    expect(drafts(store).map(d => [d.title, d.excerpt])).toEqual([
+      ["苗圃群", "明天把东边的豆苗重新扶起来"],
+      // 本人只有语气词时用对方信息最多的一句。
+      ["种植台", "花苗已经搬到温室里了。"],
+    ]);
+  } finally { ctx.cleanup(); }
+});
+
+test("AI 会话草稿仍按输入顺序取，不挑最长的一句（贴进去的日志、工具插入的提示更长）", () => {
+  const ctx = setup();
+  try {
+    const store = new DistillStore(ctx.db);
+    const pasted = "错误日志：" + "苗床传感器读数超时，".repeat(8);
+    const s = session(480, "nursery#1", `[我] 把花苗移到东边。\n\n[AI] 已移好。\n\n[我] ${pasted}\n\n[AI] 已查看。`);
+    expect(ctx.db.ingest([s]).accepted).toBe(1);
+    expect(drafts(store)[0]?.excerpt).toBe("把花苗移到东边。");
+  } finally { ctx.cleanup(); }
+});
