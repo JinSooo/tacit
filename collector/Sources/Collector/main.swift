@@ -566,7 +566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       guard !statusReporting, statusThrottle.shouldSend(report, hasError: hasError, force: forceReport, now: uptime) else { return }
       statusReporting = true
       let deviceSession = self.deviceSession
-      nonisolated(unsafe) weak var weakSelf = self
+      nonisolated(unsafe) weak let weakSelf = self
       Task {
         let sent = (try? await deviceSession.send(op: "collector.status", body: report)) != nil
         weakSelf?.captureQueue.async {
