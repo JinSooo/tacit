@@ -6,6 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PairingRole } from "../src/devices/permissions.ts";
 import { decodePairing, DeviceClient } from "../src/devices/client.ts";
+import { HubDB } from "../src/db.ts";
+import { loadConfig } from "../src/config.ts";
+import { DistillStore } from "../src/distill/store.ts";
+import { localDateString } from "../src/distill/requests.ts";
+import { identityFromRaw, suite } from "../src/devices/envelope.ts";
+import type { ProjectionPage } from "../src/devices/projection.ts";
 import { fixture } from "./helpers.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "tacit-device-roles-"));
@@ -114,6 +120,73 @@ try {
   assert.equal(run("remove", admin.device!).exitCode, 1);
   assert.equal(run("remove", admin.device!, "--force").exitCode, 0);
   console.log("本机 CLI：list、set-role 成功，移除最后一台 admin 仅 --force 成功");
+
+  const remoteAdmin = await pair("admin", "mac");
+  const [macKey, agentKey] = await Promise.all(
+    [1, 2].map(() => identityFromRaw(randomBytes(32).toString("hex"))),
+  );
+  const registration = await adminHTTP("/v1/settings/devices/local-bootstrap", "POST", {
+    mac_pk: macKey!.publicKey.toString("base64url"), agent_pk: agentKey!.publicKey.toString("base64url"),
+  });
+  assert.equal(registration.status, 200);
+  const link = await registration.json() as { hub_pk: string; mac_device_id: string };
+  const hubKey = await suite.kem.deserializePublicKey(Buffer.from(link.hub_pk, "base64url"));
+  const local = new DeviceClient(hubKey, macKey!.keys, origin);
+  local.device = link.mac_device_id;
+
+  const recorded = Date.now() - 86_400_000;
+  const date = localDateString(recorded), at = new Date(recorded).toISOString();
+  const members = Array.from({ length: 300 }, () => fixture({ device: local.device!, source: "manual.note", t_start: at }));
+  const args = { date, id: members[0]!.id };
+  const record_ids = members.map(r => r.id);
+  // Seed only the encrypted fixture database with the kind of day saved by distillation.
+  const db = new HubDB(join(dataDir, "history.db"), loadConfig(env).dbKey);
+  try {
+    assert.equal(db.ingest(members).accepted, 300);
+    new DistillStore(db).upsertDay({ date, detail: { items: [{
+      id: args.id, title: "虚构苗圃", description: "先检查苗床。", t_start: at, t_end: at,
+      active_seconds: 0, sources: ["manual.note"], apps: [], project_id: null, record_ids,
+      evidence: [{ id: args.id, at, source: "manual.note", title: "检查苗床" }],
+    }] } });
+  } finally { db.close(); }
+
+  const description = "更正为先检查河边苗床。";
+  assert.equal((await local.send("segment.correct", { ...args, description })).status, 200);
+  async function pullDay(from?: ProjectionPage) {
+    let next = from;
+    let day: ProjectionPage["changes"][number] | undefined;
+    for (let page = 0; page < 20; page++) {
+      const result = await local.send<ProjectionPage>("projection.pull",
+        next ? { epoch: next.epoch, cursor: next.cursor, limit: 200 } : { cursor: 0, limit: 200 });
+      assert.equal(result.status, 200);
+      assert.equal(result.body.reset, false);
+      day = result.body.changes.find(change => change.kind === "day" && change.id === date) ?? day;
+      next = result.body;
+      if (!next.more) {
+        assert.ok(day, "投影没有返回合成日期");
+        return { next, day };
+      }
+    }
+    throw new Error("合成日期的投影没有读完");
+  }
+  const pull = await pullDay();
+  assert.ok(JSON.stringify(pull.day).includes(description));
+  console.log(`本机 admin segment.correct：200，projection.pull 200，描述=「${description}」`);
+
+  const deniedDelete = await remoteAdmin.send("segment.delete", { ...args, record_ids });
+  assert.deepEqual(deniedDelete, { status: 429, body: { error: limitError } });
+  console.log(`远程 admin segment.delete（300 条）：${deniedDelete.status} ${limitError}`);
+  const localDelete = await local.send("segment.delete", { ...args, record_ids });
+  assert.deepEqual(localDelete, { status: 200, body: { deleted: 300 } });
+  const deleted = await local.send<{ missing: string[] }>("records.get", { ids: [record_ids[0], record_ids.at(-1)] });
+  assert.deepEqual(deleted.body.missing, [record_ids[0], record_ids.at(-1)]);
+  const withdrawn = await pullDay(pull.next);
+  assert.ok(!JSON.stringify(withdrawn.day).includes(description));
+  console.log(`本机 admin segment.delete（同一段）：${localDelete.status} deleted=300，原文已删、旧投影已撤下`);
+
+  const settingsDenied = await viewer.send("settings.models.put", { tiers: {} });
+  assert.deepEqual(settingsDenied, { status: 403, body: { error: "当前设备权限不足" } });
+  console.log("view settings.models.put：403 当前设备权限不足");
 } finally {
   if (child && child.exitCode === null) {
     child.kill("SIGTERM");

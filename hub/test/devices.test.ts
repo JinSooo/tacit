@@ -23,6 +23,7 @@ import { deviceAccount, ensureAgentIdentity, fileAgentSecrets } from "../src/age
 const minute = 60_000;
 
 async function runningHub() {
+  const modelKeys = new Map<string, string>();
   const ctx = setup();
   const probe = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: () => new Response() });
   const lanPort = probe.port!;
@@ -30,7 +31,11 @@ async function runningHub() {
   writeFileSync(join(ctx.dir, "hub.json"), JSON.stringify({ lan_port: lanPort }));
   let now = Date.now(), key: string | null = null, writes = 0;
   const options = {
-    db: ctx.db, token: ctx.config.token, agentToken: ctx.config.agentToken, port: 0, settings: { dataDir: ctx.dir },
+    db: ctx.db, token: ctx.config.token, agentToken: ctx.config.agentToken, port: 0, settings: { dataDir: ctx.dir, env: {}, keychain: {
+      async has(provider: string) { return modelKeys.has(provider); },
+      async set(provider: string, key: string) { modelKeys.set(provider, key); },
+      async remove(provider: string) { return modelKeys.delete(provider); },
+    }, probePort: async () => {}, llm: { readKey: (provider: string) => modelKeys.get(provider) ?? "" } },
     deviceDeps: {
       now: () => now, addresses: () => ["192.0.2.2"], name: "测试中枢",
       keys: { read: () => key, write: (value: string) => { key = value; writes++; } },
@@ -519,7 +524,7 @@ test("限制远程提权及最后管理员，降回 collect 只下发重置，�
   } finally { await hub.dispose(); }
 });
 
-test("远程删除限额按库累计，包含修正、跨重启保留，本设备删除不占限额", async () => {
+test("远程删除限额按库累计，包含修正、跨重启保留，远程设备自身删除也受限", async () => {
   const hub = await runningHub();
   try {
     const phone = await hub.pair();
@@ -538,8 +543,8 @@ test("远程删除限额按库累计，包含修正、跨重启保留，本设�
     await hub.restart();
     expect((await remove(199, 200, otherAdmin)).status).toBe(429);
     expect(hub.db.get(rows[199]!.id)).not.toBeNull();
-    expect((await admin.send("delete", { ids: [own.id] })).body.deleted).toBe(1);
-    expect((await phone.send("delete", { ids: [ownPhone.id] })).body.deleted).toBe(1);
+    expect((await admin.send("delete", { ids: [own.id] })).status).toBe(429);
+    expect((await phone.send("delete", { ids: [ownPhone.id] })).status).toBe(429);
     for (let cursor = 199; cursor < 999; cursor += 200) {
       hub.advance(minute);
       expect((await remove(cursor, cursor + 100)).body.deleted).toBe(100);
@@ -608,10 +613,11 @@ test("设备段删除校验成员并和普通删除共用限额", async () => {
   try {
     const phone = await hub.pair();
     const admin = await hub.pair("admin");
-    const rows = Array.from({ length: 201 }, () => fixture({ device: phone.device! }));
-    expect(hub.db.ingest(rows).accepted).toBe(201);
+    const rows = Array.from({ length: 501 }, () => fixture({ device: phone.device! }));
+    const correction = fixture({ source: "manual.correction", corrects: rows[0]!.id });
+    expect(hub.db.ingest([...rows, correction]).accepted).toBe(502);
     const date = "2026-11-08";
-    const body = { date, id: "segment:trail", record_ids: rows.slice(0, 200).map(row => row.id) };
+    const body = { date, id: "segment:trail", record_ids: rows.slice(0, 199).map(row => row.id) };
     new DistillStore(hub.db).upsertDay({ date, detail: { items: [{
       ...body, title: "步道校对", description: "校对步道入口。", t_start: rows[0]!.t_start, t_end: rows[0]!.t_start,
       active_seconds: 0, sources: ["mac.screen"], apps: [], project_id: null, evidence: [],
@@ -619,7 +625,17 @@ test("设备段删除校验成员并和普通删除共用限额", async () => {
     expect((await phone.send("segment.delete", body)).status).toBe(403);
     expect((await admin.send("segment.delete", { ...body, record_ids: body.record_ids.slice(1) })).status).toBe(409);
     expect(await admin.send("segment.delete", body)).toEqual({ status: 200, body: { deleted: 200 } });
-    expect((await admin.send("delete", { ids: [rows[200]!.id] })).status).toBe(429);
+    expect(hub.db.get(correction.id)).toBeNull();
+    expect((await admin.send("delete", { ids: [rows[199]!.id] })).status).toBe(429);
+    const { admin: local } = await localClients(hub);
+    const localBody = { date, id: "segment:local", record_ids: rows.slice(201).map(row => row.id) };
+    new DistillStore(hub.db).upsertDay({ date, detail: { items: [{
+      ...localBody, title: "本机样例", description: "复核步道地图。", t_start: rows[201]!.t_start, t_end: rows[201]!.t_start,
+      active_seconds: 0, sources: ["mac.screen"], apps: [], project_id: null, evidence: [],
+    }] } });
+    expect(await local.send("segment.delete", localBody)).toEqual({ status: 200, body: { deleted: 300 } });
+    expect(hub.db.db.prepare("SELECT detail_code FROM security_audit WHERE action='local.delete' AND actor_device=?").all(local.device))
+      .toEqual([{ detail_code: "300" }]);
   } finally { await hub.dispose(); }
 });
 
@@ -788,4 +804,240 @@ test("SessionStart 800 ms 回退到按 remote 匹配的加密缓存，7 天过�
     expect(rows[0]!.bytes).toBe(0);
     expect(await run(checkout)).toBe(online);
   } finally { await slow.stop(true); await hub.dispose(); }
+});
+
+async function localClients(hub: Awaited<ReturnType<typeof runningHub>>) {
+  const keys = await bootstrapKeys();
+  const response = await hub.settings("/local-bootstrap", "POST", keys.body);
+  expect(response.status).toBe(200);
+  const link = await response.json() as Bootstrap;
+  const publicKey = await suite.kem.deserializePublicKey(Buffer.from(link.hub_pk, "base64url"));
+  const admin = new DeviceClient(publicKey, keys.mac.keys, hub.origin);
+  const agent = new DeviceClient(publicKey, keys.agent.keys, hub.origin);
+  admin.device = link.mac_device_id;
+  agent.device = link.agent_device_id;
+  return { admin, agent };
+}
+
+test("查看窗口的所有 op 沿用原 HTTP 状态和响应形状", async () => {
+  const hub = await runningHub();
+  const model = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (new URL(request.url).pathname === "/models") return Response.json({ data: [{ id: "fixture-model" }] });
+    if (new URL(request.url).pathname === "/v1/hello") return Response.json({
+      tacit_relay: 1, limits: { space_bytes: 1000000, message_bytes: 100000, retention_days: 30 },
+    });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: '{"ok":true}' } }] });
+  } });
+  try {
+    const { admin } = await localClients(hub);
+    const store = new DistillStore(hub.db);
+    const pair = async (op: string, method: string, path: string, args: object = {}, payload?: object,
+                        normalize: (v: any) => unknown = v => v, status = 200) => {
+      const response = await hub.admin(path, method, payload);
+      const expected = { status: response.status, body: normalize(await response.json()) };
+      expect(expected.status).toBe(status);
+      const actual = await admin.send(op, args);
+      expect({ status: actual.status, body: normalize(actual.body) }).toEqual(expected);
+      return actual.body;
+    };
+    const record = fixture({ source: "manual.note" });
+    const createPath = "/v1/records";
+    const originalCreate = await hub.admin(createPath, "POST", record);
+    expect(originalCreate.status).toBe(200);
+    const created = await originalCreate.json();
+    const peer = fixture({ source: "manual.note" });
+    expect(await admin.send("records.create", peer)).toEqual({ status: 200, body: created });
+    expect(hub.db.get(peer.id)?.body).toBe(peer.body);
+
+    const date = "2026-11-08", id = "segment:fixture";
+    const dayPath = `/v1/days/${date}/segments/${id}`;
+    const seedSegment = (recordID: string) => store.upsertDay({ date, detail: { items: [{
+      id, title: "核对苗圃", description: "检查标签。", t_start: record.t_start, t_end: record.t_start,
+      active_seconds: 0, sources: ["manual.note"], apps: [], project_id: null, evidence: [], record_ids: [recordID],
+    }] } });
+    seedSegment(record.id);
+    await pair("segment.correct", "PATCH", dayPath, { date, id, description: "校对苗圃标签。" }, { description: "校对苗圃标签。" });
+    const httpSegment = await hub.admin(dayPath, "DELETE", { record_ids: [record.id] });
+    seedSegment(peer.id);
+    expect(await admin.send("segment.delete", { date, id, record_ids: [peer.id] }))
+      .toEqual({ status: httpSegment.status, body: await httpSegment.json() });
+    expect(httpSegment.status).toBe(200);
+    expect(hub.db.get(peer.id)).toBeNull();
+
+    const [first, second] = [fixture(), fixture()];
+    expect(hub.db.ingest([first, second]).accepted).toBe(2);
+    await pair("delete", "DELETE", createPath, { ids: [second.id] }, { ids: [first.id] });
+    expect(hub.db.get(second.id)).toBeNull();
+
+    const projects = [ulid(), ulid()];
+    for (const project of projects) store.upsertProject({ id: project, name: "样例苗圃", keys: { repos: [], hosts: [], chats: [] } });
+    const now = new Date().toISOString();
+    const pending = projects.map(project_id => ({ id: ulid(), kind: "project" as const, payload: { project_id }, created_at: now }));
+    for (const item of pending) store.createPending(item);
+    await pair("pending.list", "GET", "/v1/pending");
+    await pair("pending.resolve", "POST", "/v1/pending/" + pending[0]!.id, { id: pending[1]!.id, action: "confirm" }, { action: "confirm" });
+    expect(store.project(projects[1]!)?.confirmed).toBe(1);
+    await pair("project.remove", "DELETE", "/v1/projects/" + projects[0], { id: projects[1]! });
+    expect(store.project(projects[1]!)).toBeNull();
+
+    const thread = ulid();
+    store.upsertThread({ id: thread, title: "苗圃", status: "active", domain: "work" });
+    const evidence = fixture({ source: "manual.note" });
+    expect(hub.db.ingest([evidence]).accepted).toBe(1);
+    const factBody = { kind: "decision", text: "保留蓝色标签", evidence: [evidence.id], thread_id: thread, valid_at: now };
+    const httpFact = await hub.admin("/v1/facts", "POST", factBody);
+    expect(httpFact.status).toBe(200);
+    const fact = await httpFact.json() as { id: string; created_at: string };
+    const deviceFact = await admin.send("facts.create", factBody);
+    expect(deviceFact.status).toBe(200);
+    expect(deviceFact.body).toEqual({ ...fact, id: expect.any(String), created_at: expect.any(String) });
+    await pair("facts.detach", "POST", `/v1/facts/${fact.id}/detach`, { id: deviceFact.body.id });
+    expect(store.facts("thread_id", thread)).toEqual([]);
+
+    const distillPath = "/v1/distill/requests";
+    const request = { kind: "round" };
+    const queued = await admin.send("distill.request", request);
+    expect(queued.status).toBe(202);
+    expect(queued.body).toMatchObject({ kind: "round", status: "queued" });
+    await pair("distill.request", "POST", distillPath, request, request);
+    await pair("distill.list", "GET", distillPath);
+
+    const audioPath = "/v1/audio/settings";
+    await pair("audio.settings.put", "PUT", audioPath, { retention_days: 9 }, { retention_days: 9 });
+    await pair("audio.settings.get", "GET", audioPath);
+    await pair("audio.purge", "POST", "/v1/audio/purge", {}, undefined, v => ({ purge_before: typeof v.purge_before }));
+    await pair("speakers.list", "GET", "/v1/speakers");
+    const sample = Buffer.from("synthetic-audio-sample"), sampleId = ulid();
+    hub.db.db.prepare("INSERT INTO voice_samples VALUES (?,?,?,?,?,?)").run(sampleId, ulid(), ulid(), "audio/ogg", sample, now);
+    const clip = await hub.admin("/v1/audio/samples/" + sampleId);
+    expect(clip.status).toBe(200);
+    expect(await admin.send("audio.sample.get", { id: sampleId })).toEqual({
+      status: 200, body: { mime: clip.headers.get("content-type"), data_base64: Buffer.from(await clip.arrayBuffer()).toString("base64") },
+    });
+
+    await pair("status.get", "GET", "/v1/status", {}, undefined, v => {
+      const { generated_at, ...rest } = v;
+      return { ...rest, hub: { ...rest.hub, uptime_s: 0, started_at: "" }, devices: rest.devices.map((d: any) => ({ ...d, last_seen: "" })) };
+    });
+    await pair("diagnostics.get", "GET", "/v1/runtime/background?source=hub");
+    await pair("runtime.background", "GET", "/v1/runtime/background?source=distill", { source: "distill" });
+    await pair("audit.list", "GET", "/v1/audit?limit=1&tool=codex", { limit: 1, tool: "codex" });
+
+    const settings = "/v1/settings";
+    await pair("settings.hub.put", "PUT", settings + "/hub", { port: 49001 }, { port: 49001 });
+    await pair("settings.hub.get", "GET", settings + "/hub");
+    const provider = "openai-compatible", url = model.url.origin;
+    const config = { provider, base_url: url, model: "fixture-model" };
+    const tiers = { tiers: { minute: config, hour: config, day: config } };
+    const key = { key: "synthetic-model-key-0123456789" };
+    await pair("settings.keys.put", "PUT", settings + "/keys/" + provider, { provider, ...key }, key);
+    await pair("settings.models.put", "PUT", settings + "/models", tiers, tiers);
+    await pair("settings.models.get", "GET", settings + "/models");
+    await pair("settings.models.local", "POST", settings + "/models/local", { base_url: url }, { base_url: url });
+    const modelTest = { tier: "minute", config };
+    await pair("settings.models.test", "POST", settings + "/models/test", modelTest, modelTest, v => {
+      expect(v).toMatchObject({ ok: true, error: null });
+      return { ...v, ms: 0 };
+    });
+    const logs = await pair("runtime.models", "GET", "/v1/runtime/models?limit=1", { limit: 1 }) as { calls: { id: string }[] };
+    await pair("runtime.call", "GET", "/v1/runtime/calls/" + logs.calls[0]!.id, { id: logs.calls[0]!.id });
+    const httpKeyDelete = await hub.admin(settings + "/keys/" + provider, "DELETE");
+    await admin.send("settings.keys.put", { provider, ...key });
+    expect(await admin.send("settings.keys.delete", { provider })).toEqual({ status: httpKeyDelete.status, body: await httpKeyDelete.json() });
+
+    await pair("settings.general.put", "PUT", settings + "/general", { archive_days: 15 }, { archive_days: 15 });
+    await pair("settings.general.get", "GET", settings + "/general");
+    await pair("settings.relay.put", "PUT", settings + "/relay", { mode: "off" }, { mode: "off" });
+    await pair("settings.relay.get", "GET", settings + "/relay");
+    await pair("settings.relay.test", "POST", settings + "/relay/test", { url }, { url });
+    await pair("devices.pairing.create", "POST", settings + "/devices/pairing", { role: "view" }, { role: "view" }, v => ({
+      role: decodePairing(v.uri).role, expires_at: v.expires_at,
+    }));
+    await pair("devices.list", "GET", settings + "/devices", {}, undefined, v => ({
+      ...v, devices: v.devices.map((d: any) => ({ ...d, last_seen: "" })),
+    }));
+    await pair("devices.pairing.cancel", "DELETE", settings + "/devices/pairing");
+    expect((await (await hub.settings()).json()).pairing).toBeNull();
+
+    const target = await hub.pair("view");
+    await pair("devices.role.update", "PUT", settings + `/devices/${target.device}/role`, { id: target.device, role: "collect" }, { role: "collect" });
+    const otherTarget = await hub.pair("view");
+    await pair("devices.remove", "DELETE", settings + "/devices/" + target.device, { id: otherTarget.device });
+    expect(hub.db.db.prepare("SELECT id FROM devices WHERE id=?").get(otherTarget.device)).toBeUndefined();
+  } finally {
+    await model.stop(true);
+    await hub.dispose();
+  }
+}, 15_000);
+
+test("查看窗口 op 拒绝无效路径、额外字段以及查看与 Agent 越权", async () => {
+  const hub = await runningHub();
+  try {
+    const { admin, agent } = await localClients(hub);
+    const viewer = await hub.pair("view");
+    for (const [op, args] of [
+      ["segment.correct", { date: "2026-11-08", id: "../123", description: "样例" }],
+      ["segment.delete", { date: "2026-11-08", id: "%2F", record_ids: [ulid()] }],
+      ["segment.correct", { date: "2026-02-31", id: "segment", description: "样例" }],
+      ["project.remove", { id: ".." }],
+      ["settings.keys.put", { provider: "unknown", key: "synthetic-key" }],
+      ["devices.remove", { id: viewer.device, force: true }],
+      ["settings.models.put", { tiers: {}, path: "/v1/records" }],
+      ["settings.general.get", { method: "DELETE" }],
+      ["audio.settings.put", { retention_days: 5, extra: true }],
+      ["records.create", { ...fixture({ source: "manual.note" }), capture: { method: "manual", extra: true } }],
+      ["settings.unregistered", {}],
+      ["constructor", {}],
+    ] as const) expect((await admin.send(op, args)).status).toBe(400);
+    for (const client of [viewer, agent]) {
+      for (const op of ["records.create", "segment.correct", "segment.delete", "project.remove", "facts.create",
+        "settings.hub.put", "settings.models.put", "settings.keys.put", "settings.relay.put", "audio.settings.put",
+        "audio.purge", "audio.sample.get", "devices.pairing.create", "devices.remove"]) {
+        expect((await client.send(op, {})).status).toBe(403);
+      }
+    }
+  } finally { await hub.dispose(); }
+});
+
+test("私密原文仅对直连管理设备显式开放，整理投影依旧隔离", async () => {
+  const hub = await runningHub();
+  try {
+    const { admin: local } = await localClients(hub);
+    const remote = await hub.pair("admin");
+    const viewer = await hub.pair("view");
+    const marker = "合成私密河道名录";
+    const start = new Date(hub.time() - 60_000).toISOString();
+    const end = new Date(hub.time() - 30_000).toISOString();
+    const normal = fixture({ source: "mac.audio", kind: "span", t_start: start, t_end: end });
+    const privateAudio = fixture({ source: "mac.audio", kind: "span", t_start: start, t_end: end,
+      title: marker, body: "[10:00:00] 我：" + marker, sensitivity: "private" });
+    const correction = fixture({ source: "manual.correction", corrects: normal.id, body: marker + "修正", sensitivity: "private" });
+    expect(hub.db.ingest([normal, privateAudio, correction]).accepted).toBe(3);
+    const range = { from: start, to: end };
+    const requests = [
+      ["records.get", { ids: [normal.id, privateAudio.id], include_corrections: true }],
+      ["records.list", { q: marker, body: true }],
+      ["history.segments", range],
+      ["conversations.detail", { record_id: privateAudio.id }],
+    ] as const;
+    for (const [op, args] of requests) {
+      expect((await viewer.send(op, { ...args, include_private: true })).status).toBe(403);
+      expect(JSON.stringify(await remote.send(op, args))).not.toContain(marker);
+      for (const client of [local, remote]) {
+        const reply = await client.send(op, { ...args, include_private: true });
+        expect(reply.status).toBe(200);
+        if (op === "history.segments") expect(JSON.stringify(reply.body)).toContain(privateAudio.id);
+        else expect(JSON.stringify(reply.body)).toContain(marker);
+      }
+    }
+    const privateHistory = await remote.send("history.segments", { ...range, include_private: true });
+    expect(privateHistory.body).toEqual(await (await hub.admin("/v1/history/segments?" + new URLSearchParams(range))).json());
+    expect((await remote.send("conversations.detail", { record_id: privateAudio.id, include_private: true })).body)
+      .toEqual(await (await hub.admin("/v1/conversations/" + privateAudio.id)).json());
+    const pull = await local.send("projection.pull", { cursor: 0 });
+    expect(pull.status).toBe(200);
+    expect(JSON.stringify(pull.body)).not.toContain(marker);
+    const cached = hub.db.db.prepare("SELECT payload FROM project_context_cache UNION ALL SELECT result FROM relay_receipts").all();
+    expect(JSON.stringify(cached)).not.toContain(marker);
+  } finally { await hub.dispose(); }
 });

@@ -3,7 +3,7 @@ import type { HubDB } from "./db.ts";
 
 type SQL = HubDB["db"];
 type Action = "pair.create" | "pair.complete" | "device.local_register" | "device.remove" | "device.role_change" |
-  "key.set" | "key.delete" | "relay.change" | "remote.delete" | "auth.denied";
+  "key.set" | "key.delete" | "relay.change" | "remote.delete" | "local.delete" | "auth.denied";
 
 export const deviceRoleSchema = `
 ALTER TABLE devices ADD COLUMN role TEXT NOT NULL DEFAULT 'collect' CHECK(role IN ('collect','view','admin','agent'));
@@ -39,7 +39,7 @@ export function pruneSecurityAudit(sql: SQL, now = Date.now()) {
   sql.prepare("DELETE FROM security_audit WHERE at<?").run(new Date(now - 90 * dayMs).toISOString());
 }
 
-/** Called under the same write lock as the deletion. The quota is shared by all remote admins. */
+/** Called under the same write lock as the deletion. The quota is shared by all remote devices. */
 export function reserveRemoteDelete(sql: SQL, actor: string, count: number, now: number) {
   if (count === 0) return true;
   const minute = new Date(now - 60_000).toISOString(), day = new Date(now - dayMs).toISOString();

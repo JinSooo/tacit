@@ -18,6 +18,7 @@ import { hubStatus } from "./status.ts";
 import { DEFAULT_LAN_PORT, DEFAULT_PORT, dataDirOf, hubModeOf, resolveLanPort, type HubMode } from "./hub-json.ts";
 import { createSettings, type SettingsDeps } from "./settings.ts";
 import { DeviceService, type DeviceDeps } from "./devices/service.ts";
+import type { ViewerActor } from "./devices/viewer-operations.ts";
 import { RuntimeLog, backgroundLog } from "./runtime-log.ts";
 import { correctTimelineSegment, deleteTimelineSegment, timelineDays, timelineRecord } from "./timeline.ts";
 
@@ -67,7 +68,7 @@ function authorized(request: Request, token: string): boolean {
 }
 
 /** settings 不传时用默认数据目录和系统钥匙串，不会重启进程。 */
-export function createHandler(options: { db: HubDB; token: string; agentToken?: string; port?: number; webDir?: string; settings?: SettingsDeps; devices?: DeviceService; mode?: HubMode; env?: NodeJS.ProcessEnv }) {
+export function createHandler(options: { db: HubDB; token: string; agentToken?: string; port?: number; webDir?: string; settings?: SettingsDeps; devices?: DeviceService; mode?: HubMode; env?: NodeJS.ProcessEnv; deviceOnly?: boolean }) {
   if (!options.token) throw new Error("本地 token 不能为空");
   const { db, token } = options;
   const env = options.env ?? options.settings?.env ?? process.env;
@@ -75,11 +76,15 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
   const settingsDataDir = options.settings?.dataDir ?? dataDirOf(env);
   const settings = createSettings({ ...(options.settings ?? { dataDir: settingsDataDir }), mode, env });
   const busy = new BusyResponses();
-  const handle = async (request: Request): Promise<Response> => {
+  const port = options.port ?? DEFAULT_PORT;
+  const statusSnapshot = () => hubStatus(db, {
+    port: options.deviceOnly ? null : port, lanPort: options.devices?.open ? options.devices.lanPort : null,
+    busy: busy.snapshot(), relay: options.devices?.relay.status(), mode, env, dataDir: settingsDataDir,
+  });
+  const handleHTTP = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const method = request.method;
     const host = request.headers.get("host");
-    const port = options.port ?? DEFAULT_PORT;
     // 被拒的请求不写审计：未鉴权的来源（例如 DNS 重绑定的网页）不能往库里写东西。
     if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return new Response("Host 不被允许", { status: 421 });
     if (method === "GET" && url.pathname === "/v1/health") return Response.json({ ok: true });
@@ -92,22 +97,28 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
     const readJSON = async (): Promise<unknown> => {
       try { return await request.json(); } catch { throw new InputError("请求体必须是 JSON"); }
     };
+    return await handleRoute(method, url, readJSON, request.body !== null,
+      host === `127.0.0.1:${port}` ? `http://127.0.0.1:${port}/v1/device` : undefined);
+  };
+  // The HTTP entry authenticates its token. DeviceService authorizes its own
+  // identity and can enter here only with a route compiled from the op registry.
+  const handleRoute = async (method: string, url: URL, readJSON: () => Promise<unknown>,
+                             hasBody: boolean, loopbackEndpoint?: string, actor?: ViewerActor): Promise<Response> => {
     try {
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
-      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, lanPort: options.devices?.open ? options.devices.lanPort : null, busy: busy.snapshot(), relay: options.devices?.relay.status(), mode, env, dataDir: settingsDataDir }));
+      if (method === "GET" && url.pathname === "/v1/status") return Response.json(statusSnapshot());
       if (url.pathname.startsWith("/v1/settings/")) {
-        const deviceResponse = await options.devices?.settings(method, url.pathname, request.body ? readJSON : undefined,
-          host === `127.0.0.1:${port}` ? `http://127.0.0.1:${port}/v1/device` : undefined);
+        const deviceResponse = await options.devices?.settings(method, url.pathname, hasBody ? readJSON : undefined, loopbackEndpoint, actor);
         if (deviceResponse) return deviceResponse;
-        const relayResponse = await options.devices?.relay.settings(method, url.pathname, readJSON);
+        const relayResponse = await options.devices?.relay.settings(method, url.pathname, readJSON, actor);
         if (relayResponse) return relayResponse;
-        const response = await settings(request, url, { db, port, readJSON, lan: options.devices?.open ?? false });
+        const response = await settings(method, url, { db, port, readJSON, lan: options.devices?.open ?? false, actor: actor?.device, deferRestart: actor?.fromRelay });
         if (response) return response;
       }
       if (method === "GET" && url.pathname === "/v1/audit") return Response.json(new AgentReads(db).audit(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/runtime/models") return Response.json(new RuntimeLog(db).models(url.searchParams));
-      if (method === "GET" && url.pathname === "/v1/runtime/background") return Response.json(backgroundLog(options.settings?.dataDir ?? dataDirOf(),url.searchParams.get("source") ?? "hub"));
+      if (method === "GET" && url.pathname === "/v1/runtime/background") return Response.json(backgroundLog(settingsDataDir,url.searchParams.get("source") ?? "hub"));
       const runtime = /^\/v1\/runtime\/calls\/([\w-]{1,128})$/.exec(url.pathname);
       if (method === "GET" && runtime) {
         const detail = new RuntimeLog(db).detail(runtime[1]!);
@@ -242,8 +253,13 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       return Response.json({ error: "存储操作失败" }, { status: 500 });
     }
   };
+  options.devices?.setViewerHandlers(
+    (route, actor) => handleRoute(route.method, route.url, async () => route.input, route.input !== undefined, undefined, actor),
+    statusSnapshot,
+    options.settings?.restart,
+  );
   return async (request: Request): Promise<Response> => {
-    const response = await handle(request);
+    const response = await handleHTTP(request);
     // Agent 内部也会捕获库忙并返回响应，统一在出口计数，避免漏计或重复计数。
     if (response.status === 503) busy.record(new URL(request.url).pathname);
     return response;
@@ -275,40 +291,30 @@ export function startServer(options: StartServerOptions): RunningServer {
   const devices = new DeviceService(options.db, lanPort, {
     ...options.deviceDeps,
     alwaysListen: mode === "server",
-    getStatus: options.deviceDeps?.getStatus ?? (role => {
-      const snapshot = hubStatus(options.db, {
-        port: localServer?.port ?? null,
-        lanPort: devices.open ? devices.lanPort : null,
-        relay: devices.relay.status(),
-        mode,
-        env,
-        dataDir: dataDir ?? undefined,
-      });
-      return role === "admin" ? snapshot : { ...snapshot, database: { ...snapshot.database, file: null } };
-    }),
   });
-  let handler: ReturnType<typeof createHandler>;
-  const startLocal = (port: number) => Bun.serve({ hostname: "127.0.0.1", port, websocket: devices.events, fetch(request, server) {
-    handler ??= createHandler({ ...options, mode, env, devices, port: server.port });
-    const path = new URL(request.url).pathname;
-    if (path === "/v1/device" || path === "/v1/device/events" || path === "/v1/device/hello") {
-      const host = request.headers.get("host");
-      if (host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return new Response("Host 不被允许", { status: 421 });
-      const routed = devices.route(request, server, true);
-      if (routed !== null) return routed;
-    }
-    // 测试连接最长等 60 秒，超过 Bun 默认的 10 秒空闲超时。
-    if (path === "/v1/settings/models/test") server.timeout(request, 75);
-    if (path.startsWith("/v1/settings/relay") || path.startsWith("/v1/settings/devices/")) server.timeout(request, 0);
-    return handler(request);
-  } });
+  const startLocal = (port: number) => {
+    const local = Bun.serve({ hostname: "127.0.0.1", port, websocket: devices.events, fetch(request, server) {
+      const path = new URL(request.url).pathname;
+      if (path === "/v1/device" || path === "/v1/device/events" || path === "/v1/device/hello") {
+        const host = request.headers.get("host");
+        if (host !== `127.0.0.1:${server.port}` && host !== `localhost:${server.port}`) return new Response("Host 不被允许", { status: 421 });
+        const routed = devices.route(request, server, true);
+        if (routed !== null) return routed;
+      }
+      // 测试连接最长等 60 秒，超过 Bun 默认的 10 秒空闲超时。
+      if (path === "/v1/settings/models/test") server.timeout(request, 75);
+      if (path.startsWith("/v1/settings/relay") || path.startsWith("/v1/settings/devices/")) server.timeout(request, 0);
+      return handler(request);
+    } });
+    const handler = createHandler({ ...options, mode, env, devices, port: local.port });
+    return local;
+  };
 
   if (mode === "server") {
-    devices.start();
-    if (options.localStatusPort !== undefined) {
-      try { localServer = startLocal(options.localStatusPort); }
-      catch (error) { void devices.stop(true); throw error; }
-    }
+    if (options.localStatusPort !== undefined) localServer = startLocal(options.localStatusPort);
+    else createHandler({ ...options, mode, env, devices, deviceOnly: true });
+    try { devices.start(); }
+    catch (error) { void localServer?.stop(true); void devices.stop(true); throw error; }
     return {
       port: localServer?.port ?? null,
       lanPort: devices.lanPort,

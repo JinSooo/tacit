@@ -574,7 +574,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 | op | body | 返回 | 说明 |
 |---|---|---|---|
 | `ingest` | `{ records }` | 同 `/v1/ingest` | 额外规则：`record.device` 必须等于调用方；`source` 与修正范围按 6.10.1 检查，不符合的那一条进 `rejected` |
-| `delete` | `{ ids }`（1–100） | `{ deleted }` | `collect` 和 `view` 只删除本设备的记录，忽略已知属于其他设备的 id。中枢还没有的 id 留一个不含内容的墓碑，之后同 id 的记录到达时按重复处理。`admin` 可以删除任意已入库记录，跨设备删除受 6.11.4 限额。所有路径走真删流程，连带删除目标的修正。 |
+| `delete` | `{ ids }`（1–100） | `{ deleted }` | `collect` 和 `view` 只删除本设备的记录，忽略已知属于其他设备的 id。中枢还没有的 id 留一个不含内容的墓碑，之后同 id 的记录到达时按重复处理。`admin` 可以删除任意已入库记录，所有远程设备的实际删除都受 6.11.4 限额。所有路径走真删流程，连带删除目标的修正。 |
 | `sync` | `{ cursor }`（首次 0） | `{ changes, cursor, more }` | 中枢下发给这台设备的变更，按 `seq` 升序，每页最多 200 条；见 6.6 |
 | `sync.ack` | `{ cursor }` | `{ ok: true }` | 删除 `seq ≤ cursor` 的待下发变更 |
 | `conversations` | `{ from, to }`（毫秒，范围不超过 32 天） | `{ conversations: [{ id, record_ids, start_ms, end_ms, title, summary, points }] }` | 只读：中枢为这台设备自己的录音按场写好的总结（同 `GET /v1/conversations` 的分场和总结）。只返回已有总结且记录全属于调用方的场次；没写总结的场（太短、私密、还在等）不返回，手机照旧显示自己的原文。 |
@@ -659,7 +659,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 - 中枢逐条取出，先核对信封里的 `device` 与信箱所属设备一致（配对信箱要求 `null`），解开后核对消息 `id` 等于明文 `nonce`。不一致的直接删除、不处理。处理完把加密回复 PUT 到这台设备的 `down`（`id` 同请求，AAD 同 6.2，为请求的 `nonce`），回复写成功后再删请求。
 - 直连时以明文返回的错误（400、401、413）在信箱路径下不回复，删除请求并计入状态页的“无法处理”。
 - 防重放：经信箱的请求 `ts` 可以早于中枢时钟最多 30 天、晚于最多 10 分钟。中枢按设备持久保存 `nonce`（`device_nonces(device, nonce, seen_at)`，保留 31 天，配对用独立命名空间）。见过的请求只删除。直连也用这张表，时间窗仍是 10 分钟。
-- 经信箱执行时，中枢在同一数据库事务里写入编号、操作结果和待发送回执。回执留在加密数据库中，确认上行已删后清除。回执投递失败或中枢重启时，同一信箱内同一密文可补发回执，操作只执行一次。
+- 经信箱同步执行的操作在同一数据库事务里写入编号、操作结果和待发送回执。6.10.4 经共享路由执行的异步操作先在事务里登记编号和占位回执，完成后更新回执。若中枢在结果落盘前退出，重取返回 409「上次操作结果未确认，请刷新状态后再试」。操作不会自动重做。音频样本和模型调用详情只记录请求指纹，投递失败时在权限检查后重新读取。回执留在加密数据库中，确认上行已删后清除。
 - 中枢取信：`watch` 连着时收到通知就取；连不上时醒着每 60 秒轮询一轮；启动和从睡眠醒来时立即取一轮。
 - 中枢状态和信箱设置返回地址、最近确认的连接状态、最近取信时间、各设备上行待取条数及无法处理的条数。信箱服务没有总用量查询，中枢定期按已知信箱中可列出的消息大小汇总已用字节数。用量和待取条数反映最近一次扫描，首次扫描前为空。
 
@@ -770,15 +770,15 @@ CREATE TABLE project_context_cache (
 
 | op | body | 返回 | 说明 |
 |---|---|---|---|
-| `records.get` | `{ ids, include_corrections?, include_private?, cursor? }` | `{ records, missing, next_cursor? }` | `ids` 为 1–50 个 ULID；单条长正文复用 2026-11-13 码点分页（单页 ≤ 38000 字符），经信箱时总响应 ≤ 640 KiB。`include_private` 默认 `false`，为 `true` 时需具备 6.11 允许的权限，否则省略私密正文并在该项标 `redacted_private: true` |
+| `records.get` | `{ ids, include_corrections?, include_private?, cursor? }` | `{ records, missing, next_cursor? }` | `ids` 为 1–50 个 ULID；单条长正文复用 2026-11-13 码点分页（单页 ≤ 38000 字符），经信箱时总响应 ≤ 640 KiB。`include_private` 默认 `false`，为 `false` 时私密项只返回 ID 和 `redacted_private: true` |
 | `records.list` | `{ from?, to?, device?, source?, q?, limit?, cursor?, body?, include_private? }` | 同 `GET /v1/records` | 详细档与原文搜索用；不含无权限查看的私密记录正文 |
-| `history.segments` | `{ from, to, device? }` | 同 `GET /v1/history/segments` | 详细档时间轴泳道与按小时列表 |
-| `conversations.detail` | `{ record_id }` | 同 `GET /v1/conversations/:id` | 展开一场录音的总结与整理后原文 |
+| `history.segments` | `{ from, to, device?, include_private? }` | 同 `GET /v1/history/segments` | 详细档时间轴泳道与按小时列表 |
+| `conversations.detail` | `{ record_id, include_private? }` | 同 `GET /v1/conversations/:id` | 展开一场录音的总结与整理后原文 |
 | `timeline.query` | `{ project_id?, thread_id?, q?, before?, limit? }` | 同 `GET /v1/timeline` | 项目页“加载更早”或超出本地 90 天窗口的历史段 |
 | `timeline.locate` | `{ record_id }` | 同 `GET /v1/timeline/record/:id` | 搜索结果定位到时间线段 |
 
-- `records.get` 同一个 ID 可能跨页重复出现，`body_range: { start, end, total }` 按 Unicode 码点计算。要求带修正时，后续条目可只含原 ID 和 `corrections` 数组；同一修正也可分页。翻页过程中遇到撤下或修正，旧游标返回 409 并从头读。私密项只给请求中的 ID 和 `redacted_private: true`。查看设备即使指定 `include_private: true` 也只能得到占位。管理设备在直连、本机快路上可显式请求私密正文，经信箱请求私密正文返回 403。
-- `records.list` 默认在过滤与搜索阶段排除有效版本为私密的记录，按原接口游标、响应体积分页。单条正文超出该传输模式上限时标 `body_truncated`，可用 `records.get` 续读正文。混合私密的一整场录音详情返回 404。分段与查询接口如单组不可分页且超出响应体积，返回 413，可缩小日期范围或改用逐条读取。
+- `records.get` 同一个 ID 可能跨页重复出现，`body_range: { start, end, total }` 按 Unicode 码点计算。要求带修正时，后续条目可只含原 ID 和 `corrections` 数组；同一修正也可分页。翻页过程中遇到撤下或修正，旧游标返回 409 并从头读。私密项只给请求中的 ID 和 `redacted_private: true`。`records.get`、`records.list`、`history.segments` 和 `conversations.detail` 只有管理设备能在直连或本机快路指定 `include_private: true`。查看设备显式请求或经信箱显式请求都返回 403。允许的请求在内存中读取原文，私密内容不进入投影、回执或缓存表。
+- `records.list` 默认在过滤与搜索阶段排除有效版本为私密的记录，按原接口游标、响应体积分页。单条正文超出该传输模式上限时标 `body_truncated`，可用 `records.get` 续读正文。默认情况下，混合私密的一整场录音详情返回 404，经授权指定 `include_private: true` 后可读取整场。分段与查询接口如单组不可分页且超出响应体积，返回 413，可缩小日期范围或改用逐条读取。
 - 仅经信箱可达时，客户端照常发往 `up` 并在 `down` 等回复（超时 20 秒），界面显示加载态；断网时提示“当前离线，无法读取原文”，已缓存的整理结果照常可读。
 
 #### 6.9.4 删除和修正的失效链路
@@ -853,7 +853,7 @@ CREATE TABLE project_context_cache (
 
 ---
 
-### 6.10 Mac 采集端和 AI 工具接入改走设备协议（中枢、agent-cli 与同机 Mac 采集上传已实施）
+### 6.10 Mac 采集端和 AI 工具接入改走设备协议（中枢查看窗口 op、agent-cli 与同机 Mac 采集上传已实施，Swift 查看窗口待接入）
 
 中枢已提供本机登记和设备接入，Claude Code / Codex 可经设备协议查询、追加与带入项目上下文。Mac 同机登记后，内建采集上传走设备协议。插件与音频代理、查看窗口和设置页的迁移见 6.10.3–6.10.4。Claude Desktop 沿用旧接入。
 
@@ -888,19 +888,55 @@ CREATE TABLE project_context_cache (
 
 #### 6.10.4 查看窗口读写迁到设备协议
 
-- 读路径（时间线、项目、事项、“此刻”、小组件）：全部改读 6.9 的本地 `viewer-cache.db` 与按需原文 op。
-- 写路径与管理操作（均经 `DeviceClient` 发送，受 6.11 权限控制）：
+读路径由查看窗口读取 6.9 的本地 `viewer-cache.db` 和按需原文 op。下表操作已由中枢实现，Swift 查看窗口接入见 6.10.7。设备请求以 `body` 为参数对象，没有参数时传 `{}`。`?` 表示可选。回复为加密的 `{ status, body }`，除注明的设备专用权限、限额和音频编码外，状态码与响应字段沿用对应 HTTP 接口。
 
-| 类别 | 设备 `op` | 对应原 HTTP 接口 |
-|---|---|---|
-| 记录与段编辑 | `records.create`、`delete`、`segment.correct`、`segment.delete` | `POST /v1/records`、`DELETE /v1/records`、`PATCH/DELETE /v1/days/:date/segments/:id` |
-| 事项与项目纠错 | `project.remove`、`pending.list`、`pending.resolve`、`facts.create`、`facts.detach` | `DELETE /v1/projects/:id`、`/v1/pending*`、`/v1/facts*` |
-| 整理与音频管理 | `distill.request`、`distill.list`、`audio.settings.get/put`、`audio.purge`、`speakers.list`、`audio.sample.get` | `/v1/distill/requests`、`/v1/audio/*`、`/v1/speakers` |
-| 状态与排障 | `status.get`、`diagnostics.get`、`runtime.models`、`runtime.call`、`runtime.background`、`audit.list` | `/v1/status`、`/v1/runtime/*`、`/v1/audit` |
-| 设置与设备管理 | `settings.hub.get/put`、`settings.models.get/put/local/test`、`settings.keys.put/delete`、`settings.general.get/put`、`settings.relay.get/put/test`、`devices.list`、`devices.pairing.create/cancel`、`devices.remove`、`devices.role.update` | `/v1/settings/*` |
+| 设备 `op` | 对应 HTTP | 参数 | 成功的 `body` |
+|---|---|---|---|
+| `records.create` | POST `/v1/records` | 1 节记录对象，顶层直传，`source` 为 `manual.*` | 写入回执 `{ accepted, duplicates, rejected }` |
+| `delete` | DELETE `/v1/records` | `{ ids }`（1–100 个 ULID），兼容 6.5 的 `device?`，忽略其值 | `{ deleted }`，非管理设备只删自身记录 |
+| `segment.correct` | PATCH `/v1/days/:date/segments/:id` | `{ date, id, description }` | `{ item }` |
+| `segment.delete` | DELETE `/v1/days/:date/segments/:id` | `{ date, id, record_ids }`，完整段成员 | `{ deleted }` |
+| `project.remove` | DELETE `/v1/projects/:id` | `{ id }` | `{ removed: true }` |
+| `pending.list` | GET `/v1/pending` | — | `{ pending }` |
+| `pending.resolve` | POST `/v1/pending/:id` | `{ id, action, name?, target? }` | `{ resolved: true }` |
+| `facts.create` | POST `/v1/facts` | `{ kind, text, evidence, thread_id?, project_id?, reason?, supersedes?, valid_at?, confidence? }` | 新 fact |
+| `facts.detach` | POST `/v1/facts/:id/detach` | `{ id }` | `{ frames, facts }` |
+| `distill.request` | POST `/v1/distill/requests` | `{ kind, from?, to? }`（4.8） | 请求对象，新建 202，已有同类未结束请求 200 |
+| `distill.list` | GET `/v1/distill/requests` | — | `{ requests }` |
+| `audio.settings.get` | GET `/v1/audio/settings` | — | `{ retention_days }` |
+| `audio.settings.put` | PUT `/v1/audio/settings` | `{ retention_days }` | `{ retention_days }` |
+| `audio.purge` | POST `/v1/audio/purge` | — | `{ purge_before }`，清理原始音频的时间标记 |
+| `speakers.list` | GET `/v1/speakers` | — | `{ speakers }` |
+| `audio.sample.get` | GET `/v1/audio/samples/:id` | `{ id }` | `{ mime, data_base64 }`，标准 Base64，保留原 MIME 类型 |
+| `status.get` | GET `/v1/status` | — | 中枢状态，查看角色的 `database.file` 为 `null` |
+| `diagnostics.get` | GET `/v1/runtime/background?source=hub` | — | `{ source, events, skipped, modified_at? }`，中枢的结构化日志摘要 |
+| `runtime.models` | GET `/v1/runtime/models` | `{ limit?, cursor? }` | `{ calls, next_cursor }` |
+| `runtime.call` | GET `/v1/runtime/calls/:id` | `{ id }` | 一条模型调用及当前仍保留的输入和输出 |
+| `runtime.background` | GET `/v1/runtime/background` | `{ source? }`（`hub` 默认、`distill`、`collector`） | `{ source, events, skipped, modified_at? }` |
+| `audit.list` | GET `/v1/audit` | `{ limit?, cursor?, tool? }` | `{ reads, next_cursor }`，沿用 Agent 读取审计 |
+| `settings.hub.get` | GET `/v1/settings/hub` | — | `{ port, listen, lan, locked }` |
+| `settings.hub.put` | PUT `/v1/settings/hub` | `{ port }` | `{ port, restarting }` |
+| `settings.models.get` | GET `/v1/settings/models` | — | `{ tiers, config_error, keys, providers, tier_info }` |
+| `settings.models.put` | PUT `/v1/settings/models` | `{ tiers }`（3.1） | 同 `settings.models.get` |
+| `settings.models.local` | POST `/v1/settings/models/local` | `{ base_url }` | `{ models }` |
+| `settings.models.test` | POST `/v1/settings/models/test` | `{ tier, config? }` | `{ ok, ms, provider, model, error }` |
+| `settings.keys.put` | PUT `/v1/settings/keys/:provider` | `{ provider, key }` | `{ provider, set: true }` |
+| `settings.keys.delete` | DELETE `/v1/settings/keys/:provider` | `{ provider }` | `{ provider, deleted }` |
+| `settings.general.get` | GET `/v1/settings/general` | — | 当前值、`defaults`、`ranges` 和 `model_usage` |
+| `settings.general.put` | PUT `/v1/settings/general` | 至少一项 `inject_tokens`、`ask_done_days`、`archive_days`、`timeline_polish`、`timeline_overview`、`daily_token_limit` | 同 `settings.general.get` |
+| `settings.relay.get` | GET `/v1/settings/relay` | — | 信箱状态 |
+| `settings.relay.put` | PUT `/v1/settings/relay` | `{ mode, url?, code? }`（6.8.7） | 信箱状态 |
+| `settings.relay.test` | POST `/v1/settings/relay/test` | `{ url }` | `{ tacit_relay, limits }` |
+| `devices.list` | GET `/v1/settings/devices` | — | `{ hub_id, lan, pairing, devices }` |
+| `devices.pairing.create` | POST `/v1/settings/devices/pairing` | `{ role?, viewer? }`（6.11.2） | `{ uri, expires_at }` |
+| `devices.pairing.cancel` | DELETE `/v1/settings/devices/pairing` | — | `{ ok: true }` |
+| `devices.remove` | DELETE `/v1/settings/devices/:id` | `{ id }` | `{ deleted: true }` |
+| `devices.role.update` | PUT `/v1/settings/devices/:id/role` | `{ id, role }`（6.11.2） | `{ id, role }` |
 
-- `DiagnosticSettings.swift`：本机采集日志仍读本地目录，中枢状态与日志摘要改为通过 `status.get` / `diagnostics.get` 拉取，不再假设与中枢共享 `logs/hub.log`。
-- `audio.sample.get` 返回 base64 音频片段（单段约 10 秒 Opus/M4A，远小于 640 KiB），Mac 设置/待确认页播放后即丢弃，不落盘。
+- 日期为有效的 `YYYY-MM-DD`。设备 ID 采用 6.2 格式，provider 只接受 `anthropic` 或 `openai-compatible`。段 ID 支持字母、数字、下划线、冒号、点和连字符，最长 200，单独的 `.` 和 `..` 非法。其余路径 ID 支持字母、数字、下划线和连字符，最长 128。多余参数、非法字段、无效路径参数和未登记的 op 返回 400（角色越权优先返回 403）。
+- 管理身份允许表中所有操作。采集和查看身份的 `delete` 仍按 6.5 处理。查看身份另可调用 `status.get` 和 `diagnostics.get`。直接授予 `admin`、移除或降级最后一台管理设备沿用 6.11.2。目标不存在通常为 404，段成员变化或最后一台管理设备保护返回 409，删除限额为 429，设置和信箱的服务错误沿用原接口，如 502、503 或 507。
+- 经信箱的完整 UTF-8 JSON 回复（包括 `status`、`body` 以及音频 Base64 编码的开销）最多 **640 KiB**，超出返回 413。可缩小查询范围或改用直连。经信箱修改端口时，中枢先将成功回复写入下行信箱，再退出重启。音频样本和模型调用详情不进入回复缓存。Swift 接入时试听样本播放后即丢弃，采集日志继续读本地，中枢结构化日志通过 `diagnostics.get` 获取。
+- 原表中的全部 op 都保留。 `diagnostics.get` 复用中枢的脱敏后台日志接口。 `audit.list` 是 Agent 读取审计；安全审计仍由本机接口提供（6.11.4）。
 
 #### 6.10.5 AI 工具接入（MCP 与新会话带入）与离线缓存
 
@@ -940,7 +976,7 @@ CREATE TABLE project_context_cache (
 #### 6.10.7 后续迁移
 
 1. Mac 查看窗口切到 Swift `DeviceClient`，继续验收实际录音、插件、纠错及设置。
-2. 实现采集状态上报、插件宿主代理、6.10.4 剩余写操作和设置操作。插件仅在完整送达回执后提交状态和清除缓冲。
+2. 实现采集状态上报、插件宿主代理。插件仅在完整送达回执后提交状态和清除缓冲。
 3. 验证已安装的 Claude Code / Codex 在线、超时和离线场景。远端 Agent 签发、通过信箱查询、独立部署及兼容接口下线安排留待后续。
 
 ---
@@ -958,18 +994,18 @@ CREATE TABLE project_context_cache (
 | 上传/删除/修正**本设备**记录（`ingest`、`delete` 限本设备、`sync*`、`audio.*`、`conversations*`、`collector.status`、`relay`） | 允许 | 允许 | 允许 | 禁止 |
 | 拉取整理结果（`projection.pull/ack`、`events.subscribe`） | 禁止 | 允许（全部非私密实体） | 允许（全部非私密实体） | 仅 `project_context` |
 | 按需读取非私密原文与搜索（`records.get/list`、`history.segments`、`conversations.detail`、`timeline.*`） | 禁止 | 允许（不含 `private` 正文） | 允许 | 禁止（走 `agent.*`） |
-| 按需读取 `private` 原文（`records.get/list` 的 `include_private: true`） | 禁止 | 过滤私密正文 | 直连允许，经信箱禁止 | 禁止（MCP `agent.get/search` 沿用 4.6） |
+| 按需读取 `private` 原文（`records.get/list`、`history.segments`、`conversations.detail` 的 `include_private: true`） | 禁止 | 禁止显式请求 | 直连与本机快路允许，经信箱禁止 | 禁止（MCP `agent.get/search` 沿用 4.6） |
 | AI 查询与追加（`agent.now/get/search/timeline/context/append/audit_sync`） | 禁止 | 允许 | 允许 | 允许 |
-| 跨设备编辑与纠错（`records.create`、`segment.correct`、`facts.*`、`pending.*`、`distill.request`） | 禁止 | 禁止 | 允许 | 禁止 |
-| 跨设备删除与移除项目（`delete` 任意设备、`segment.delete`、`project.remove`） | 禁止 | 禁止 | 允许（受 6.11.4 限流） | 禁止 |
+| 跨设备编辑与纠错（`records.create`、`segment.correct`、`facts.*`、`pending.*`、`distill.request/list`） | 禁止 | 禁止 | 允许 | 禁止 |
+| 跨设备删除与移除项目（`delete` 任意设备、`segment.delete`、`project.remove`） | 禁止 | 禁止 | 允许（真删按 6.11.4 限流） | 禁止 |
 | 状态查看（`status.get`、`diagnostics.get`） | 禁止 | 允许（只读概况） | 允许（完整） | 禁止 |
-| 设置、密钥、审计、设备管理（`settings.*`、`devices.*`、`runtime.*`、`audit.list`、`audio.settings.*`） | 禁止 | 禁止 | 允许 | 禁止 |
+| 设置、密钥、审计、设备管理（`settings.*`、`devices.*`、`runtime.*`、`audit.list`、`audio.settings.*`、`audio.purge`、`speakers.list`、`audio.sample.get`） | 禁止 | 禁止 | 允许 | 禁止 |
 
-- 权限校验统一在 `DeviceService.dispatch` 入口执行（基于信封解开后已验证的 `device` 对应数据库中的 `role`），越权一律返回加密的 `status: 403`（`{ "error": "当前设备权限不足" }`）并写入安全审计。已实现的设备 op 包括 6.5、6.9 的读写操作、6.10.5 的 Agent 直连操作，以及 `segment.delete`、`devices.role.update`、`devices.remove`。`agent` 的拉取只含 `project_context`，订阅只提示该类变更。表中其余 op 预留权限，获准调用后因尚无处理器返回 400。私密原文只在中枢内存中生成回复，查看端的内存展示与清理待接入。
+- 权限校验统一在 `DeviceService.dispatch` 入口执行（基于信封解开后已验证的 `device` 对应数据库中的 `role`），越权一律返回加密的 `status: 403`（`{ "error": "当前设备权限不足" }`）并写入安全审计。已实现的设备 op 包括 6.5、6.9 的读写操作、6.10.5 的 Agent 直连操作，以及 6.10.4 的全部查看窗口 op。`agent` 的拉取只含 `project_context`，订阅只提示该类变更。私密原文只在中枢内存中生成回复，查看端的内存展示与清理待接入。
 
 #### 6.11.2 权限授予与变更流程
 
-- 本机管理接口 `POST /v1/settings/devices/pairing` 接收 `{ role: "collect" | "view" | "admin" }`，缺省为 `collect`。兼容一版旧入参，未传 `role` 时 `viewer: true` 等同于 `role: "view"`，显式 `role` 优先。邀请 JSON 与成功配对回复都带 `role`。采集与查看邀请 10 分钟有效，管理邀请 5 分钟有效。中枢只采用邀请锁定的角色，忽略配对请求自报权限。Android 使用查看或管理邀请返回 403。设备 op 创建邀请、客户端的权限说明和管理邀请二次确认待实现。
+- 本机管理接口 `POST /v1/settings/devices/pairing` 接收 `{ role: "collect" | "view" | "admin" }`，缺省为 `collect`。兼容一版旧入参，未传 `role` 时 `viewer: true` 等同于 `role: "view"`，显式 `role` 优先。邀请 JSON 与成功配对回复都带 `role`。采集与查看邀请 10 分钟有效，管理邀请 5 分钟有效。中枢只采用邀请锁定的角色，忽略配对请求自报权限。Android 使用查看或管理邀请返回 403。管理设备也可用 `devices.pairing.create` 签发邀请。客户端的权限说明和管理邀请二次确认待接入。
 - `devices.role.update { id, role }` 和 `devices.remove { id }` 仅允许管理设备调用。管理设备可以降权，或把 Mac 从 `collect` 升为 `view`。直接授予 `admin` 仅能通过本机的 `PUT /v1/settings/devices/:id/role` 或 CLI 完成。首次管理配对可由本机管理接口签发，独立部署用的 `tacit-hub pair --role admin` 待实现。
 - 降为 `collect` 时，同事务清除该设备的投影视窗、游标和待投递回执，持久排入仅该设备可取的重置。已有订阅收到紧急提示后断开；随后直连 `projection.pull` 只返回 `{ kind: "projection.reset", reset: true, changes: [], cursor: 0, more: false, epoch, server_time }`，无须确认。经信箱先撤掉旧推送及原文回执，再投递加密 `projection.reset`。此角色不能读取原文或确认投影。新的 `collect` 设备没有待清缓存，拉取照常返回 403。
 - 设备 op 和本机 HTTP 都拒绝移除或降级最后一台 `admin`，返回 409「不能移除最后一台管理设备」。本机 CLI 直接操作数据库，提供 `devices list`、`devices set-role <device_id> <role> [--force]`、`devices remove <device_id> [--force]`。仅本机 CLI 的 `--force` 可绕过最后一台保护。6.1 的中枢密钥更换仍会撤销旧身份。
@@ -1008,12 +1044,12 @@ CREATE TABLE project_context_cache (
 #### 6.11.4 远程删除和权限变更的风险控制
 
 1. **远程删除限流与熔断**：
-   - 设备 op `delete` 和 `segment.delete` 的跨设备部分共用全库滑动窗口。中枢在删除事务里统计实际要删除的跨设备目标和连带修正，同一条只计一次。每分钟最多 **200 条**、每 24 小时最多 **1,000 条**，重启或更换管理设备不清零。超出时整批不删，返回加密 `429`（`{ "error": "远程删除达到安全上限，请在中枢本机执行或稍后再试" }`）。删除本设备的记录及其连带修正、本机管理接口均不占限额。
-   - `segment.delete { date, id, record_ids }` 沿用 4.5 的段删除，成员发生变化返回 `409`。
-   - 预留的 `project.remove` 沿用 `AGENTS.md` 规则：只解除归属、绝不删除原始记录。
+   - 所有远程设备（`local_only=0`）通过设备 op 真删原始记录共用全库滑动窗口，包括 `delete` 删除自身或其他设备的记录，以及 `segment.delete`。删除事务按实际删除的原始记录与连带修正计数，同一条只计一次。每分钟最多 **200 条**、每 24 小时最多 **1,000 条**，重启或更换设备不清零。超出时整批不删，返回加密 `429`（`{ "error": "远程删除达到安全上限，请在中枢本机执行或稍后再试" }`）。
+   - 本机登记设备（`local_only=1`）和旧本机管理接口不占远程限额。本机登记设备与中枢同机，原本即可使用本机管理令牌操作。远程限额防的是远程设备密钥泄露。
+   - `segment.delete { date, id, record_ids }` 沿用 4.5 的段删除，成员发生变化返回 `409`。 `project.remove` 只解除归属，保留原始记录，无删除计数。
 2. **安全审计表（`security_audit`）**：
    - 新增持久化审计表 `security_audit(id TEXT PRIMARY KEY, at TEXT NOT NULL, actor_device TEXT, action TEXT NOT NULL, target TEXT, ok INTEGER NOT NULL, detail_code TEXT)`（不含任何记录正文），定期清理超过 **90 天** 的事件。本机管理令牌可读 `GET /v1/settings/security-audit`，返回 `{ events }`（最近 200 条）。
-   - 记录事件：`pair.create`、`pair.complete`、`device.local_register`、`device.remove`、`device.role_change`、`key.set`、`key.delete`、`relay.change`、`remote.delete`（仅记条数，用成功事件计算限额）、`auth.denied`（403 越权，记录已知操作名，未登记的名称记为 `unknown_op`）。事件不含原文、凭据、信箱 URL 或邀请内容。
+   - 记录事件：`pair.create`、`pair.complete`、`device.local_register`、`device.remove`、`device.role_change`、`key.set`、`key.delete`、`relay.change`、`remote.delete`（仅记条数，用成功事件计算限额）、`local.delete`（仅记本机设备实际删除条数）、`auth.denied`（403 越权，记录已知操作名，未登记的名称记为 `unknown_op`）。事件不含原文、凭据、信箱 URL 或邀请内容。
    - 发生新的 `admin` 配对、权限变更或模型密钥更换时，计划在所有在线 `admin` Mac 的时间线顶部出现一行可确认消去的提示（沿用现有顶部一行提示机制，不弹系统通知）。
 3. **测试与上线前验收门槛**（对应 `docs/design.md` 2.1）：
    - 涉及远程删除、权限分级与 `sealed-file` 密钥的代码上线前，必须在真实跨进程/跨主机（或容器）测试环境看到完整实测结果：验证 403 越权拦截、删除后已下推缓存与小组件清除、限流 429 触发、最后一台 `admin` 保护、以及拔掉根密钥后拒绝建新库。
