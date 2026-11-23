@@ -573,7 +573,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 | op | body | 返回 | 说明 |
 |---|---|---|---|
 | `ingest` | `{ records }` | 同 `/v1/ingest` | 额外规则：`record.device` 必须等于调用方；`source` 必须以 `android.` 开头，或是 `manual.note`，或是 `manual.correction` 且 `corrects` 指向本设备的记录；不符合的那一条进 `rejected` |
-| `delete` | `{ ids }`（1–100） | `{ deleted }` | 只接受 `device` 等于调用方的目标 id（其余 id 忽略），走现有真删流程并连带删除目标的修正 |
+| `delete` | `{ ids }`（1–100） | `{ deleted }` | 只接受 `device` 等于调用方的目标 id（其余 id 忽略），走现有真删流程并连带删除目标的修正；中枢还没有的 id（可能还在信箱里没送到）留一个不含内容的墓碑，之后同 id 的记录到达时按重复处理（2026-11-23） |
 | `sync` | `{ cursor }`（首次 0） | `{ changes, cursor, more }` | 中枢下发给这台设备的变更，按 `seq` 升序，每页最多 200 条；见 6.6 |
 | `sync.ack` | `{ cursor }` | `{ ok: true }` | 删除 `seq ≤ cursor` 的待下发变更 |
 | `conversations` | `{ from, to }`（毫秒，范围不超过 32 天） | `{ conversations: [{ id, record_ids, start_ms, end_ms, title, summary, points }] }` | 只读：中枢为这台设备自己的录音按场写好的总结（同 `GET /v1/conversations` 的分场和总结）。只返回已有总结且记录全属于调用方的场次；没写总结的场（太短、私密、还在等）不返回，手机照旧显示自己的原文。 |

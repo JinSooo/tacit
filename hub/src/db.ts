@@ -393,6 +393,14 @@ export class HubDB {
         )
         SELECT rowid,* FROM records WHERE id IN targets OR (source='manual.correction' AND corrects IN targets)
       `).all(input, device ?? null, device ?? null);
+      if (device !== undefined) {
+        // 设备删的记录可能还在信箱里没送到（经信箱投出后，手机回家直连发了删除）。
+        // 先留一个不含内容的墓碑，那封旧信之后到达时按重复处理，删掉的不会复活。
+        this.db.prepare(`INSERT INTO tombstones(id,source,source_ref,content_hash,deleted_at)
+          SELECT value,'device.deleted',NULL,'',? FROM json_each(?)
+          WHERE value NOT IN (SELECT id FROM records) AND value NOT IN (SELECT id FROM tombstones)`)
+          .run(new Date().toISOString(), input);
+      }
       if (!rows.length) return 0;
       eraseSnapshots(this);
       // 还没投出去的信箱回执可能带着被删内容（对话总结、修正记录），同事务清掉；

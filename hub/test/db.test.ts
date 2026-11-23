@@ -211,3 +211,14 @@ test("v9 声纹升级 v10：mic 列按现有声纹回填，重开及已有列幂
     } finally { upgraded.close(); }
   }
 });
+
+test("设备先删了还没送到的记录，之后那条记录再到达也不会入库", () => {
+  const record = fixture({ device: "android-abcd2345", source: "android.audio", source_ref: "audio:fixture-late" });
+  expect(ctx.db.deleteMany([record.id], "android-abcd2345")).toBe(0);
+  expect(ctx.db.ingest([record], "android-abcd2345")).toMatchObject({ accepted: 0, duplicates: 1 });
+  expect(ctx.db.get(record.id)).toBeFalsy();
+  // 本机删除（不带设备）不留这种墓碑，只删已有记录。
+  const other = fixture({ source: "manual.note" });
+  expect(ctx.db.deleteMany([other.id])).toBe(0);
+  expect(ctx.db.ingest([other])).toMatchObject({ accepted: 1 });
+});
