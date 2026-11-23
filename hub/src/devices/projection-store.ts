@@ -130,6 +130,8 @@ export function flushProjectionDraft(sql: SQL, time: number, date: string) {
   sql.transaction(() => {
     if (sql.prepare("DELETE FROM distill_state WHERE k='projection_draft_due' AND CAST(v AS INTEGER)<=?").run(time).changes) {
       touchProjectionDay(sql, date);
+      // 新记录可能让“此刻”变成“有新活动待整理”，一起重算。
+      sql.prepare(now).run();
     }
   }).immediate();
 }

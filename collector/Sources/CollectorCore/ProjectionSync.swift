@@ -1317,17 +1317,21 @@ public actor ProjectionSync {
   }
 
   /// 按需调用 `history.segments`，结果缓存在内存 LRU。
-  public func historySegments(from: String, to: String, device: String? = nil) async throws -> DeviceResponsePayload {
+  public func historySegments(from: String, to: String, device: String? = nil, includePrivate: Bool = false) async throws -> DeviceResponsePayload {
     var body: [String: DeviceJSON] = ["from": .string(from), "to": .string(to)]
     if let device { body["device"] = .string(device) }
+    // 本机 admin 带私密内容按需读（只在内存，不落盘）；参数进请求体，内存缓存键随之区分。
+    if includePrivate { body["include_private"] = .bool(true) }
     return try await cachedRead(op: "history.segments", body: body, invalidateOnAnyRecordGone: true)
   }
 
   /// 按需调用 `conversations.detail`，结果缓存在内存 LRU 并绑定涉及的 `record_ids`。
-  public func conversationDetail(recordID: String) async throws -> DeviceResponsePayload {
-    try await cachedRead(
+  public func conversationDetail(recordID: String, includePrivate: Bool = false) async throws -> DeviceResponsePayload {
+    var body: [String: DeviceJSON] = ["record_id": .string(recordID)]
+    if includePrivate { body["include_private"] = .bool(true) }
+    return try await cachedRead(
       op: "conversations.detail",
-      body: ["record_id": .string(recordID)],
+      body: body,
       extraRecordIDs: [recordID],
       invalidateOnAnyRecordGone: false
     )
@@ -1339,10 +1343,12 @@ public actor ProjectionSync {
   }
 
   /// 按需调用 `timeline.locate`，结果缓存在内存 LRU 并绑定目标 `record_id`。
-  public func timelineLocate(recordID: String) async throws -> DeviceResponsePayload {
-    try await cachedRead(
+  public func timelineLocate(recordID: String, includePrivate: Bool = false) async throws -> DeviceResponsePayload {
+    var body: [String: DeviceJSON] = ["record_id": .string(recordID)]
+    if includePrivate { body["include_private"] = .bool(true) }
+    return try await cachedRead(
       op: "timeline.locate",
-      body: ["record_id": .string(recordID)],
+      body: body,
       extraRecordIDs: [recordID],
       invalidateOnAnyRecordGone: false
     )

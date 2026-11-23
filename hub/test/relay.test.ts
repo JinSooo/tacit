@@ -462,6 +462,35 @@ test("投影与按需读取撤掉私密内容，混合事项仅保留有公开�
   } finally { await hub.dispose(); }
 });
 
+// 回归（C2 联调发现）：没有公开活跃事项时“此刻”整条被撤下，查看端看不到“有新活动待整理 / 整理失败”；
+// 当天下推缺未入时间线的记录 ID；本机 admin 定位私密记录不能按需读取。
+test("此刻在无活跃事项时仍下推待整理状态，当天带公开的未入时间线 ID，admin 可按需定位私密记录", async () => {
+  const hub = await hubFixture();
+  try {
+    const viewer = await hub.pair(true);
+    const now = Date.parse(hub.time()), date = localDateString(now);
+    const pub = fixture({ t_start: new Date(now - 5 * 60_000).toISOString(), source: "manual.note", title: "苗圃浇水", body: "苗圃浇水完成" });
+    const hidden = fixture({ t_start: new Date(now - 4 * 60_000).toISOString(), title: "私密水池", body: "私密水池正文", sensitivity: "private" });
+    hub.db.ingest([pub, hidden]);
+    const store = new DistillStore(hub.db);
+    store.upsertDay({ date, brief: null, needs_regen: 1, updated_at: null, detail: {
+      summary: null, cutoff: pub.t_start, items: [], record_ids: [pub.id, hidden.id], omitted_record_ids: [pub.id, hidden.id] } });
+    store.setState("now", null);
+    const page = (await viewer.send<ProjectionPage>("projection.pull", { cursor: 0 })).body;
+    const nowChange = page.changes.find(change => change.kind === "now");
+    expect(nowChange).toMatchObject({ op: "upsert", data: { brief: "有新活动待整理。", detail: { threads: [] } } });
+    const day = page.changes.find(change => change.kind === "day" && change.id === date) as { data: { detail: { omitted_record_ids: string[]; omitted_count: number } } };
+    expect(day.data.detail.omitted_record_ids).toEqual([pub.id]);
+    expect(day.data.detail.omitted_count).toBe(1);
+    expect(JSON.stringify(page)).not.toContain(hidden.id);
+    // 查看级不能按需读私密；admin 可以（参数被接受，不再 400）。
+    expect((await viewer.send("timeline.locate", { record_id: hidden.id, include_private: true })).status).toBe(403);
+    hub.db.db.prepare("UPDATE devices SET role='admin' WHERE id=?").run(viewer.device);
+    expect((await viewer.send("timeline.locate", { record_id: hidden.id })).status).toBe(404);
+    expect((await viewer.send("timeline.locate", { record_id: hidden.id, include_private: true })).status).toBe(200);
+  } finally { await hub.dispose(); }
+});
+
 test("游标分页跨越冷启动窗口，确认单调且 epoch 重置后全量重拉", async () => {
   const hub = await hubFixture();
   try {

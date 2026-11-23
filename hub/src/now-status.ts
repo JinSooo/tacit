@@ -3,7 +3,9 @@ import type { HubDB } from "./db.ts";
 import { DistillStore, type Thread } from "./distill/store.ts";
 
 const day = 24 * 3600_000;
-const emptyBrief = "最近 24 小时没有活跃的线程。";
+export const emptyNowBrief = "最近 24 小时没有活跃的线程。";
+export const pendingBrief = "有新活动待整理。";
+const emptyBrief = emptyNowBrief;
 
 export function nowSummary(store: DistillStore, clock: number, include?: (id: string) => boolean) {
   // 暂停的事项只要近 24 小时有活动，也仍属于此刻。
@@ -50,7 +52,7 @@ export function currentNow(hub: HubDB, clock = Date.now()) {
   const call = hub.db.prepare("SELECT at,ok FROM llm_usage WHERE task IN ('assign','thread_digest','thread_brief') ORDER BY julianday(at) DESC,id DESC LIMIT 1").get() as { at: string; ok: number } | undefined;
   const failed = call && !call.ok && Date.parse(call.at) >= updated;
   if (!hasSummary && pendingActivity(store, clock)) {
-    return { brief: "有新活动待整理。", detail: { threads: [] }, updated_at: null,
+    return { brief: pendingBrief, detail: { threads: [] }, updated_at: null,
       feedback: failed ? "最近一次整理失败。请到设置检查 AI 模型连接。" : null };
   }
   let feedback: string | null = null;

@@ -236,16 +236,8 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
   }
 
   func timelineLocation(record id: String) async throws -> HubAPI.TimelineLocation {
-    do {
-      let payload = try await sync.timelineLocate(recordID: id)
-      return try HubJSON.decoder().decode(HubAPI.TimelineLocation.self, from: payload.bodyData)
-    } catch let error as DeviceClientError {
-      // 中枢 timeline.locate 目前不支持 include_private，私密记录返回 404 时退回 HTTP。
-      if case .operationError(_, 404, _) = error, includePrivate, let httpFallback {
-        return try await httpFallback.timelineLocation(record: id)
-      }
-      throw error
-    }
+    let payload = try await sync.timelineLocate(recordID: id, includePrivate: includePrivate)
+    return try HubJSON.decoder().decode(HubAPI.TimelineLocation.self, from: payload.bodyData)
   }
 
   func records(_ query: HubAPI.RecordQuery, cursor: String?) async throws -> RecordPage {
@@ -330,29 +322,16 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
   }
 
   func segments(_ day: Date, device: String?) async throws -> (segments: [HistorySegment], conversations: [ConversationRef]) {
-    // 中枢 history.segments 设备操作目前硬编码过滤私密记录与私密对话，尚未支持 admin 的 include_private；
-    // 为保证详细档不丢失私密内容，有本机 HTTP 回退时暂走 HTTP。
-    if includePrivate, let httpFallback {
-      return try await httpFallback.segments(day, device: device)
-    }
     struct Wire: Decodable { let segments: [HistorySegment]; let conversations: [ConversationRef]? }
     let bounds = ViewerTime.dayQuery(day)
-    let payload = try await sync.historySegments(from: bounds.from, to: bounds.to, device: device)
+    let payload = try await sync.historySegments(from: bounds.from, to: bounds.to, device: device, includePrivate: includePrivate)
     let decoded = try HubJSON.decoder().decode(Wire.self, from: payload.bodyData)
     return (decoded.segments, decoded.conversations ?? [])
   }
 
   func conversation(_ recordID: String) async throws -> ConversationDetail {
-    do {
-      let payload = try await sync.conversationDetail(recordID: recordID)
-      return try HubJSON.decoder().decode(ConversationDetail.self, from: payload.bodyData)
-    } catch let error as DeviceClientError {
-      // 中枢 conversations.detail 目前不支持 include_private，私密对话返回 404 时退回 HTTP。
-      if case .operationError(_, 404, _) = error, includePrivate, let httpFallback {
-        return try await httpFallback.conversation(recordID)
-      }
-      throw error
-    }
+    let payload = try await sync.conversationDetail(recordID: recordID, includePrivate: includePrivate)
+    return try HubJSON.decoder().decode(ConversationDetail.self, from: payload.bodyData)
   }
 
   // MARK: - 内部辅助

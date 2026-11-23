@@ -706,7 +706,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 
 | 实体 `kind` | 标识 `id` | 下推字段 | 用途 |
 |---|---|---|---|
-| `day` | `YYYY-MM-DD`（中枢本地自然日） | `date`、`brief`、`detail: { summary, cutoff, items, omitted_count }`、`needs_regen`、`failed`、`updated_at`；仅中枢本地今天另带 `drafts` | 时间线简约档、当天概述、桌面小组件 |
+| `day` | `YYYY-MM-DD`（中枢本地自然日） | `date`、`brief`、`detail: { summary, cutoff, items, omitted_count, omitted_record_ids }`、`needs_regen`、`failed`、`updated_at`；仅中枢本地今天另带 `drafts` | 时间线简约档、当天概述、桌面小组件 |
 | `project` | 项目 ID | `id`、`name`、`confirmed`、`keys: { repos, hosts, chats, remotes? }`、`brief`、`detail`、`salience`、`last_ms`、`thread_count`、`needs_regen`、`updated_at`、`facts`（有效非私密） | 侧栏项目列表、项目页一句话概况 |
 | `thread` | 事项 ID | `id`、`project_id`、`status`、`domain`、`title`、`brief`、`detail`、`first_ms`、`last_ms`、`active_minutes`、`sessions`、`needs_regen`、`updated_at`、`facts`（有效非私密） | 项目页与“这件事的经过”、事实纠错入口 |
 | `project_context` | 项目 ID | `project_id`、`name`、`keys`、`ignored_repos`、`text`、`tokens_est`、`thread_ids`、`threads`（含最新 2 条有效未决，同 4.5 `GET /v1/projects/:id/context`）、`computed_at`、`needs_regen` | 项目页“正在推进的事”、6.10 离线新会话带入 |
@@ -715,7 +715,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 **私密内容不推（硬边界）**：
 
 - 任何 `sensitivity = "private"`（或其最新 `manual.correction` 为 `private`）的原始记录及其派生物均不得进入下推载荷，即使中枢本机开启了“本地模型提炼 private”也不例外。
-- `day`：下推前复核段成员、引用和润色使用过的记录。自由文本不能按引用拆开，存在私密或缺失依据时整段撤下。概述要求输入均可下推。旧回顾没有逐段模型输入时，以整次回顾的已知输入为准。只下推非私密未入段计数 `omitted_count`。
+- `day`：下推前复核段成员、引用和润色使用过的记录。自由文本不能按引用拆开，存在私密或缺失依据时整段撤下。概述要求输入均可下推。旧回顾没有逐段模型输入时，以整次回顾的已知输入为准。只下推非私密的未入时间线记录：计数 `omitted_count` 和 ID 列表 `omitted_record_ids`（只有 ID，不含正文）。
 - `thread` 与 `project`：全私密事项或没有可核验公开依据的事项只发撤下变更。混合事项保留中性标题与证据全部公开的有效事实，撤下摘要、详细版与覆盖私密记录的时长等字段。含此类事项的项目也撤下自由文本，已确认的项目可保留用户确认的项目元数据。
 - `project_context`：沿用 4.6 的预算和排序，排除生活事项和无法公开整段文字的事项。不下发被移除项目的路径。中枢首次需要时计算并缓存，依赖变动在同事务中清除缓存。
 - `now`：仅用通过上述检查的近期事项重建，沿用本机接口的状态反馈。
@@ -837,7 +837,7 @@ CREATE TABLE project_context_cache (
   - **实现与草案偏差说明**：
     1. 6.9.6 缓存加密从 SQLCipher 改为系统 `SQLite3` + 每行 `AES.GCM`（AAD 绑定 `kind` + `entity_id`），`kind` 与 `entity_id` 明文存储以支持按天清理和索引，密钥仍存钥匙串 `record-anything` / `viewer-cache-key`。
     2. 中枢按需读接口中仅 `records.get` 与 `records.list` 已支持管理设备的 `include_private: true`，`history.segments`、`conversations.detail`、`timeline.locate` 目前仍硬编码过滤私密记录。为保证本机 `admin` 在详细档、私密录音详情与搜索定位中不丢失私密内容，Mac 查看端在缓存模式下：`history.segments` 暂退回 HTTP，`conversations.detail` 与 `timeline.locate` 在设备 op 返回 404 时退回 HTTP；待中枢补齐 `include_private` 后再切回设备协议。
-    3. 下推 `day` 实体不含 `detail.timeline`（章节）与 `detail.omitted_record_ids`（仅下推 `omitted_count`）。Mac 端在解码本地 `day` 缓存时按 `detail.items` 自动合成章节供详细档时间轴使用；详细档“未入时间线”角标在缓存模式下暂不显示逐条标记。
+    3. 下推 `day` 实体不含 `detail.timeline`（章节）。Mac 端在解码本地 `day` 缓存时按 `detail.items` 自动合成章节供详细档时间轴使用；“未入时间线”逐条标记按下推的 `omitted_record_ids` 显示。
     4. 开放区间或覆盖当前时刻的 `records.list` 查询（如菜单栏面板最近记录与当天详细档）绕过 10 分钟内存 LRU 缓存，避免新采集记录滞后展示；单条原文（`records.get`）与历史日期列表照常使用内存 LRU，锁屏与关窗时调用 `clearMemory()` 清空。
     5. 事项 `level=evidence` 层与超过 30 天已从本地缓存清理的归档事项详情按需退回 HTTP。
 - **对现有用户的影响**：单机用户界面和交互无变化；打开时间线、项目页和菜单栏面板的响应更快（本地缓存直出），中枢忙于写库（503）时查看窗口不再白屏报错；原有 `history.db` 在首次升级时自动无损迁移并自动备份。
@@ -896,7 +896,7 @@ CREATE TABLE project_context_cache (
   - **已切到设备协议按需读（仅留内存 LRU，锁屏/关窗调 `clearMemory()`）**：展开段落查看原文与单条记录详情（`records.get`，本机 `admin` 带 `include_private: true`）、详细档全天记录、菜单栏近 1 小时活动条/最近记录与原文搜索（`records.list`，本机 `admin` 带 `include_private: true`）、时间线搜索与超 90 天历史（`timeline.query`）、非私密录音整场详情（`conversations.detail`）、非私密记录定位（`timeline.locate`）。
   - **失效与回退**：收到 401（设备被移除）或 403（角色降级）时立即调用 `wipe()` 删除 `viewer-cache.db` 与小组件快照（401 同时移除 `collector-link.json`）并静默退回 HTTP；无连接文件时默认走 HTTP，界面不新增状态提示。
   - **与原文的出入（暂留 HTTP 的读接口）**：
-    - `history.segments`：中枢该 op 目前未支持 `include_private: true` 且过滤私密记录与私密对话，缓存模式下暂退回 HTTP 以防详细档丢私密内容；`conversations.detail` 与 `timeline.locate` 遇 404 时退回 HTTP（同因）。
+    - `history.segments`、`conversations.detail`、`timeline.locate` 已和 `records.*` 一样由本机 `admin` 带 `include_private: true` 经设备协议按需读（仅直连，结果只在内存）。
     - 事项详细页“依据”标签（`level=evidence`，下推 `thread` 不含完整 `frame_records` 列表）及超过 30 天已清理的归档事项详情退回 HTTP。
     - 待确认（`/v1/pending`、音频样本）、说话人（`/v1/speakers`）、首次准备清单（`/v1/status`、`/v1/settings/agents`）、运行记录（`/v1/runtime/*`）、审计日志（`/v1/audit`）与设置页读接口随写操作一并留待下阶段迁移。
 - **写路径与管理操作**：下表操作中枢已实现（受 6.11 权限控制），Swift 查看窗口的写路径和设置页仍走本机 HTTP，待迁移。设备请求以 `body` 为参数对象，没有参数时传 `{}`。`?` 表示可选。回复为加密的 `{ status, body }`，除注明的设备专用权限、限额和音频编码外，状态码与响应字段沿用对应 HTTP 接口。

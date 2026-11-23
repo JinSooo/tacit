@@ -6,7 +6,7 @@ import type { DraftItem, ReviewDetail, ReviewItem } from "../distill/day-review.
 import { localDateString } from "../distill/requests.ts";
 import { DistillStore, type Project, type Thread } from "../distill/store.ts";
 import { historySegments } from "../history.ts";
-import { currentNow, nowSummary } from "../now-status.ts";
+import { currentNow, emptyNowBrief, nowSummary, pendingBrief } from "../now-status.ts";
 import { timelineDays, timelineRecord } from "../timeline.ts";
 import { base64url, object, WireError } from "./envelope.ts";
 import { directProjectionBytes, projectionHead, type ChangeRow, type ProjectionKind } from "./projection-store.ts";
@@ -233,6 +233,8 @@ export class Projection {
     return { date, brief: safe ? row.brief ?? null : null, detail: row.detail ? {
       summary, cutoff: row.detail.cutoff, items,
       omitted_count: ((row.detail.omitted_record_ids ?? []) as string[]).filter(id => this.public(id)).length,
+      // 只下推公开记录的 ID（不含正文），查看端据此给详细档标“未入时间线”。
+      omitted_record_ids: ((row.detail.omitted_record_ids ?? []) as string[]).filter(id => this.public(id)),
     } : null, needs_regen: row.needs_regen ?? 0, failed: !!row.failed, updated_at: row.updated_at ?? null,
     ...(date === localDateString(this.clock) ? { drafts } : {}) };
   }
@@ -245,7 +247,12 @@ export class Projection {
       return { ...row, project: project?.name ?? null };
     });
     const first = threads[0], local = currentNow(this.hub, this.clock);
-    if (!first) return null;
+    if (!first) {
+      // 没有公开的活跃事项时，照样下推“待整理 / 整理失败”这类状态（AGENTS：此刻要显示整理失败或有新活动待整理）。
+      // 只用固定文案，不带 currentNow 可能来自私密事项的缓存摘要。
+      if (!local?.feedback && local?.brief !== pendingBrief) return null;
+      return { brief: local.brief === pendingBrief ? pendingBrief : emptyNowBrief, detail: { threads: [] }, updated_at: null, feedback: local.feedback ?? null };
+    }
     const brief = first.project && !first.brief.includes(first.project) ? `${first.project}：${first.brief}` : first.brief;
     return { brief, detail: { threads }, updated_at: this.store.thread(first.thread_id)?.updated_at ?? null, feedback: local?.feedback ?? null };
   }
@@ -379,7 +386,7 @@ export class Projection {
       }
       case "timeline.locate": {
         const id = recordID(body.record_id);
-        const located = this.public(id) && timelineRecord(this.hub, id, allowedItem);
+        const located = (includePrivate || this.public(id)) && timelineRecord(this.hub, id, allowedItem);
         if (!located) throw new WireError(404, "内容不存在");
         result = located;
         break;

@@ -1033,12 +1033,14 @@ private func locateBun() -> String? {
     #expect(cachePrivRec == httpPrivRec)
     #expect(cachePrivRec.record.body == "合成私密记录正文：PRIVATE_SYNTHETIC_MARKER_9981")
 
-    // 详细档活动段（因中枢 history.segments 暂不支持 include_private，缓存模式退回 HTTP 保证私密记录不丢失）
+    // 详细档活动段：本机 admin 经设备协议带 include_private 按需读，私密记录不丢、与 HTTP 相同。
     let httpSegments = try await httpSource.segments(today)
     let cacheSegments = try await adaptiveSource.segments(today)
     #expect(cacheSegments.segments == httpSegments.segments)
     #expect(cacheSegments.conversations == httpSegments.conversations)
     #expect(cacheSegments.segments.contains { $0.recordIds.contains(seeded.ids.recPriv) && $0.privateCount == 1 })
+    // 定位私密记录同样走设备协议，与 HTTP 一致。
+    #expect(try await adaptiveSource.timelineLocation(record: seeded.ids.recPriv) == (try await httpSource.timelineLocation(record: seeded.ids.recPriv)))
 
     // 7. 演示删除：先发布今日小组件快照，再在中枢删除 recT2（属于 seg-t2），验证缓存段消失且小组件更新。
     let publisher = await MainActor.run {

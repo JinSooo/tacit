@@ -857,7 +857,7 @@ export class DeviceService {
       const includePrivate = body.include_private === true;
       if (includePrivate && (role !== "admin" || fromRelay)) return this.denied(device, op);
       if (body.include_private !== undefined && (typeof body.include_private !== "boolean" ||
-          !["records.get", "records.list", "history.segments", "conversations.detail"].includes(op))) {
+          !["records.get", "records.list", "history.segments", "conversations.detail", "timeline.locate"].includes(op))) {
         throw new InputError("include_private 无效");
       }
       return ok(projection.read(op, body, max, includePrivate));
