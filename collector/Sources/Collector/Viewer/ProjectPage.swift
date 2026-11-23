@@ -36,7 +36,17 @@ struct ProjectPage: View {
     .background(Palette.paper)
     .navigationTitle("")
     .modifier(QuietPageTitle())
-    .toolbar { BackButton() }
+    .toolbar {
+      BackButton()
+      if let project = store.project(id) {
+        ToolbarItem(placement: .primaryAction) {
+          Menu {
+            Button("移除项目…", role: .destructive) { store.projectToRemove = project }.disabled(store.removingProject)
+          } label: { PhIcon("dots-three", size: PhIcon.toolbar) }
+            .menuIndicator(.hidden).help("更多").accessibilityLabel("更多")
+        }
+      }
+    }
     .task(id: store.revision) { await loadOverview() }
     .task(id: store.revision) { await load() }
   }

@@ -32,6 +32,7 @@ public enum PhosphorGlyphs {
     ("cpu", 0xE610),
     ("database", 0xE1DE),
     ("device-mobile", 0xE1E0),
+    ("dots-three", 0xE1FE),
     ("eye", 0xE220),
     ("eye-slash", 0xE224),
     ("file", 0xE230),

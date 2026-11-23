@@ -83,6 +83,10 @@ enum Route: Hashable {
   var section: Page = .review { didSet { if oldValue != section { path = [] } } }
   var path: [Route] = []
   var projects: [Project] = []
+  /// 侧栏右键和项目页“…”菜单共用一个确认框，放在根视图上，侧栏收起时也能弹出。
+  var projectToRemove: Project?
+  var removingProject = false
+  var projectRemovalError: String?
   var pending: [PendingItem] = []
   var speakers: [Speaker] = []
   var sharedError: String?
@@ -176,6 +180,14 @@ enum Route: Hashable {
   func perform(_ action: CaptureAction) { controls?.perform(action); refreshCapture() }
 
   func project(_ id: String?) -> Project? { id.flatMap { id in projects.first { $0.id == id } } }
+
+  func confirmProjectRemoval(_ project: Project) async {
+    guard !removingProject else { return }
+    projectRemovalError = nil
+    removingProject = true
+    defer { removingProject = false }
+    do { try await removeProject(project.id) } catch { projectRemovalError = error.localizedDescription }
+  }
 
   func removeProject(_ id: String) async throws {
     try await api.removeProject(id)

@@ -29,6 +29,14 @@ struct RootView: View {
       }
     }
     .toolbar(removing: .sidebarToggle)
+    .alert("移除“\(store.projectToRemove?.name ?? "")”？",
+           isPresented: Binding(get: { store.projectToRemove != nil }, set: { if !$0 { store.projectToRemove = nil } }),
+           presenting: store.projectToRemove) { project in
+      Button("移除", role: .destructive) { Task { await store.confirmProjectRemoval(project) } }
+      Button("取消", role: .cancel) {}
+    } message: { _ in
+      Text("原始记录不会删除。这个目录以后不再自动识别为项目，新会话也不再带入它的内容。")
+    }
     .background(BehindWindowMaterial().ignoresSafeArea())
     .tint(Palette.accent)
     .accentColor(Palette.accent)
@@ -86,11 +94,10 @@ struct RootView: View {
 struct Sidebar: View {
   @Environment(ViewerStore.self) private var store
   @AppStorage("viewer.projectsExpanded") private var projectsExpanded = true
-  @State private var projectToRemove: Project?
-  @State private var removingProject = false
-  @State private var removalError: String?
+  @State private var olderExpanded = false
 
   var body: some View {
+    let (recent, older) = Project.byRecency(store.projects, now: .now)
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
       Section {
         SidebarLabel(title: "时间线", icon: "clock-counter-clockwise").tag(Page.review)
@@ -98,15 +105,15 @@ struct Sidebar: View {
       }
       if !store.projects.isEmpty {
         Section("项目", isExpanded: $projectsExpanded) {
-          // 还没确认的项目用虚线文件夹，和待确认里"新项目"同一个图标。
-          ForEach(store.projects) { p in
-            SidebarLabel(title: p.name, icon: p.confirmed.value ? "folder" : "folder-dashed")
-              .help(p.confirmed.value ? p.name : "\(p.name)，还没确认")
-              .contextMenu {
-                Button("移除项目…", role: .destructive) { projectToRemove = p }
-                  .disabled(removingProject)
-              }
-              .tag(Page.project(p.id))
+          ForEach(recent) { projectRow($0) }
+          if !older.isEmpty {
+            // 一周没有活动的收进“更早”，有新活动自动回到上面；选中的项目在里面时保持展开。
+            DisclosureGroup(isExpanded: Binding(get: { olderExpanded || older.contains { store.section == .project($0.id) } },
+                                                set: { olderExpanded = $0 })) {
+              ForEach(older) { projectRow($0) }
+            } label: {
+              Text("更早").foregroundStyle(Palette.muted)
+            }
           }
         }
       }
@@ -114,33 +121,24 @@ struct Sidebar: View {
     .listStyle(.sidebar)
     .safeAreaInset(edge: .bottom, spacing: 0) {
       VStack(alignment: .leading, spacing: 8) {
-        if let removalError {
-          Text(removalError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
+        if let error = store.projectRemovalError {
+          Text(error).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
             .padding(.horizontal, 12)
         }
         CaptureFooter()
       }
     }
-    .alert("移除“\(projectToRemove?.name ?? "")”？",
-           isPresented: Binding(get: { projectToRemove != nil }, set: { if !$0 { projectToRemove = nil } }),
-           presenting: projectToRemove) { project in
-      Button("移除", role: .destructive) { Task { await removeProject(project) } }
-      Button("取消", role: .cancel) {}
-    } message: { _ in
-      Text("原始记录不会删除。这个目录以后不再自动识别为项目，新会话也不再带入它的内容。")
-    }
   }
 
-  private func removeProject(_ project: Project) async {
-    guard !removingProject else { return }
-    removalError = nil
-    removingProject = true
-    defer { removingProject = false }
-    do {
-      try await store.removeProject(project.id)
-    } catch {
-      removalError = error.localizedDescription
-    }
+  // 还没确认的项目用虚线文件夹，和待确认里"新项目"同一个图标。
+  private func projectRow(_ p: Project) -> some View {
+    SidebarLabel(title: p.name, icon: p.confirmed.value ? "folder" : "folder-dashed")
+      .help(p.confirmed.value ? p.name : "\(p.name)，还没确认")
+      .contextMenu {
+        Button("移除项目…", role: .destructive) { store.projectToRemove = p }
+          .disabled(store.removingProject)
+      }
+      .tag(Page.project(p.id))
   }
 }
 

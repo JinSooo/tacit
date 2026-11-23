@@ -163,6 +163,14 @@ public struct Project: Decodable, Identifiable, Hashable, Sendable {
   public let lastMs: Double?
   public let threadCount: Int?
   public var last: Date? { lastMs.map { Date(timeIntervalSince1970: $0 / 1000) } }
+
+  /// 侧栏把一周没有活动的项目收进“更早”（2026-11-23 用户确认）。没有活动时间的新项目算近期。
+  public static let recentWindow: TimeInterval = 7 * 24 * 3600
+  public static func byRecency(_ projects: [Project], now: Date) -> (recent: [Project], older: [Project]) {
+    let cutoff = now.addingTimeInterval(-recentWindow)
+    let older = projects.filter { ($0.last ?? now) < cutoff }
+    return (projects.filter { ($0.last ?? now) >= cutoff }, older)
+  }
 }
 
 /// 线程和项目的详细版共用：线程有 progress，项目有 status 和 people。
