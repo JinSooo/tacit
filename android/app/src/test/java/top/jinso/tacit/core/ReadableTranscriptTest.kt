@@ -23,5 +23,7 @@ class ReadableTranscriptTest {
         // Reported case: a conversation previewed as a lone "。" from recognized noise.
         assertEquals("周五定稿。", firstSentence("[20:20:01] 对方 1：。\n[20:20:05] 我：周五定稿。"))
         assertEquals("", firstSentence("对方 1：。"))
+        // Reported case (2026-11-23): the detail page showed a speaker whose whole line was "。".
+        assertEquals("我：周五定稿。", readableTranscript("[20:20:01] 对方 5：。\n[20:20:05] 我：周五定稿。"))
     }
 }

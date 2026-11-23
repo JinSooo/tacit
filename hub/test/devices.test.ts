@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HubDB } from "../src/db.ts";
+import { conversationsIn, saveSummary } from "../src/conversations.ts";
 import { openRequest, readEnvelope, suite } from "../src/devices/envelope.ts";
 import { startServer } from "../src/server.ts";
 import { validateRecord } from "../../packages/record/index.ts";
@@ -346,4 +347,25 @@ test("互通向量可逐字节重建，base 和 auth 请求、回复均能解封
     expect(await client.open(response.envelope as ResponseEnvelope, response.aad_utf8)).toEqual(JSON.parse(response.plaintext_json_utf8));
   }
   expect(Buffer.from(await suite.kem.serializePublicKey(hub.publicKey)).toString("base64url")).toBe(vectors.hub.public_key_base64url);
+});
+
+test("手机只能取回自己那几场对话的总结", async () => {
+  const hub = await runningHub();
+  try {
+    const phone = await hub.pair(), other = await hub.pair();
+    const audio = (device: string, ref: string, at: string) => fixture({ device, source: "android.audio", kind: "span",
+      source_ref: `audio:${ref}`, t_start: at, t_end: at.replace(":00+", ":30+"), title: "对话记录",
+      body: "[10:00:05] 我：周五下午三点在会议室见", capture: { method: "asr" } });
+    const mine = audio(phone.device!, "a", "2026-11-08T10:00:00+08:00"), theirs = audio(other.device!, "b", "2026-11-08T10:00:00+08:00");
+    expect((await phone.send("ingest", { records: [mine] })).body).toMatchObject({ accepted: 1 });
+    expect((await other.send("ingest", { records: [theirs] })).body).toMatchObject({ accepted: 1 });
+    const from = Date.parse("2026-11-08T00:00:00+08:00"), to = from + 86_400_000;
+    for (const g of conversationsIn(hub.db, from, to)) saveSummary(hub.db, g, { title: "约会议时间", summary: "定在周五下午三点。", points: ["会议室"] });
+
+    const got = await phone.send<{ conversations: { record_ids: string[]; title: string }[] }>("conversations", { from, to });
+    expect(got).toMatchObject({ status: 200, body: { conversations: [
+      { record_ids: [mine.id], title: "约会议时间", summary: "定在周五下午三点。", points: ["会议室"] },
+    ] } });
+    expect((await phone.send("conversations", { from, to: from + 40 * 86_400_000 })).status).toBe(400);
+  } finally { await hub.dispose(); }
 });

@@ -248,7 +248,8 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
     fun render(record: String, fallback: String, mac: MacVoiceprint? = null): String {
         val row = store.transcripts().firstOrNull { it.getString("recordId") == record } ?: return fallback
         val lines = row.getJSONArray("utterances").objects().mapNotNull { u ->
-            val text = u.optString("text"); if (text.isBlank()) return@mapNotNull null
+            // Same rule as publishing: a line of only punctuation ("。") is recognition noise.
+            val text = u.optString("text"); if (text.none(Char::isLetterOrDigit)) return@mapNotNull null
             val name = participantName(conversation(row.getString("conversationId")), u.getInt("label"), u.getString("speaker"), mac)
             "$name：$text"
         }

@@ -8,6 +8,7 @@ import top.jinso.tacit.sources.Sources
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 import java.security.MessageDigest
+import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneOffset
@@ -48,7 +49,32 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
         // 0.3 的手机端整理已撤下，派生文本不再展示，也不再维护：升级时直接删掉。
         db.execSQL("DROP TABLE IF EXISTS summary_sources")
         db.execSQL("DROP TABLE IF EXISTS conversation_summaries")
+        // What the Mac wrote about this phone's own conversations; a cache the next sync replaces.
+        db.execSQL("CREATE TABLE IF NOT EXISTS mac_summaries(id TEXT PRIMARY KEY, record_ids TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, points TEXT NOT NULL)")
     }
+
+    /** Replaces every cached summary in [from]..[to] with what the Mac returned for that window. */
+    @Synchronized internal fun saveMacSummaries(from: Long, to: Long, list: JSONArray) {
+        val rows = (0 until list.length()).map(list::getJSONObject)
+        transaction {
+            db.execSQL("DELETE FROM mac_summaries WHERE end>=? AND start<=?", arrayOf(from, to))
+            for (r in rows) db.execSQL("INSERT OR REPLACE INTO mac_summaries VALUES(?,?,?,?,?,?,?)", arrayOf(
+                r.getString("id"), r.getJSONArray("record_ids").toString(), r.getLong("start_ms"), r.getLong("end_ms"),
+                r.getString("title"), r.getString("summary"), r.getJSONArray("points").toString()))
+        }
+        changes.value++
+    }
+
+    @Synchronized internal fun macSummaries(): List<MacSummary> =
+        db.rawQuery("SELECT id,record_ids,start,end,title,summary,points FROM mac_summaries ORDER BY start", emptyArray<String>()).use { c ->
+            buildList {
+                while (c.moveToNext()) {
+                    val ids = JSONArray(c.getString(1)); val points = JSONArray(c.getString(6))
+                    add(MacSummary(c.getString(0), (0 until ids.length()).map(ids::getString), c.getLong(2), c.getLong(3),
+                        c.getString(4), c.getString(5), (0 until points.length()).map(points::getString)))
+                }
+            }
+        }
     /** Same source/ref returns its original ID, so an interrupted audio publish can finish its metadata.
      * Permission and tombstone rejection still return null; duplicates never rewrite the original. */
     fun ingest(draft: Draft): String? = ingest(draft, ZoneOffset.UTC)
@@ -205,7 +231,7 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
             if (data == null || data.optString("device") != syncConnection()?.optString("device")) {
                 db.delete("sync_deletes", null, null)
             }
-            if (data == null) db.delete("sync_connection", null, null)
+            if (data == null) { db.delete("sync_connection", null, null); db.delete("mac_summaries", null, null) }
             else db.execSQL("INSERT OR REPLACE INTO sync_connection VALUES(1,?)", arrayOf(data.toString()))
         }
         changes.value++
@@ -329,3 +355,7 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
 
     private fun hash(text: String): String = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 }
+
+/** A conversation summary the Mac wrote from this phone's records. */
+internal data class MacSummary(val id: String, val recordIds: List<String>, val start: Long, val end: Long,
+    val title: String, val summary: String, val points: List<String>)

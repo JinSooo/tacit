@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import { AudioStore } from "../audio.ts";
+import { conversationsIn, storedSummary } from "../conversations.ts";
 import { InputError, type HubDB } from "../db.ts";
 import { isDatabaseBusy } from "../db-busy.ts";
 import { logFailure } from "../diagnostics.ts";
@@ -286,6 +287,17 @@ export class DeviceService {
     return ok({ device_id, hub_id: hubID, name });
   }
 
+  /** The summaries the Mac wrote for this device's own conversations; nothing from any other device. */
+  private conversations(device: string, body: Record<string, unknown>) {
+    const from = body.from, to = body.to;
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || (from as number) > (to as number) ||
+      (to as number) - (from as number) > 32 * 86_400_000) throw new InputError("from/to 必须是不超过 32 天的毫秒时间范围");
+    return conversationsIn(this.hub, from as number, to as number, device).flatMap(g => {
+      const summary = storedSummary(this.hub, g);
+      return summary ? [{ id: g.id, record_ids: g.record_ids, start_ms: g.start_ms, end_ms: g.end_ms, ...summary }] : [];
+    });
+  }
+
   private dispatch(device: string, op: string, body: Record<string, unknown>): Result {
     switch (op) {
       case "ingest":
@@ -305,6 +317,7 @@ export class DeviceService {
       case "audio.skipped": return ok(this.audio.skipped(body.conversation_ref, device));
       case "audio.samples": return ok(this.audio.uploadSamples(body, device));
       case "audio.lines": return ok(this.audio.lines({ ...body, device }, device));
+      case "conversations": return ok({ conversations: this.conversations(device, body) });
       default: return fail(400, "设备操作无效");
     }
   }

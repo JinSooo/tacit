@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -51,7 +52,17 @@ internal fun ConversationDetail(
             val end = current.maxOf { (record, _) -> record.end ?: record.start }
             val private = current.any { (record, _) -> record.sensitivity == "private" }
             DetailInfo(Sources.AUDIO, start, end, private)
-            DetailTitle(conversationTitle(private))
+            // Like the Mac: what the conversation was about first, then the cleaned-up transcript.
+            val summary = remember(current, changes) {
+                val ids = current.map { it.first.id }.toSet()
+                vault.macSummaries().firstOrNull { m -> m.recordIds.any(ids::contains) }
+            }
+            DetailTitle(summary?.title ?: conversationTitle(private))
+            if (summary != null) {
+                ReadingBody(summary.summary)
+                summary.points.forEach { Text("· $it", Modifier.padding(top = 6.dp), color = tacitColors.muted) }
+                Spacer(Modifier.height(20.dp))
+            }
             val body = current.joinToString("\n\n") { it.second }.trim()
             if (body.isBlank()) Caption("这场对话没有可显示的完整转写。")
             else ReadingBody(body, transcript = true)

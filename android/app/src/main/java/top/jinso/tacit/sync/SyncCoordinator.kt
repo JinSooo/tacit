@@ -122,6 +122,12 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 val receipt = uploadReceipt(client.send("ingest", JSONObject().put("records", records)), batch.size)
                 vault.applyReceipt(batch.map { it.first }, receipt)
             }
+            // Summaries are a read-only extra: an older Mac without the op must not fail the whole sync.
+            try {
+                val now = System.currentTimeMillis(); val from = now - SUMMARY_WINDOW
+                val got = client.send("conversations", JSONObject().put("from", from).put("to", now))
+                vault.saveMacSummaries(from, now, got.getJSONArray("conversations"))
+            } catch (error: CancellationException) { throw error } catch (error: DeviceRemoved) { throw error } catch (_: Exception) { }
             data.put("lastSync", System.currentTimeMillis()).put("last", origin)
             data.remove("error")
             data.remove("retryAt")
@@ -158,7 +164,11 @@ internal class SyncCoordinator(private val app: TacitApp) {
         try { macOrigin(it) } catch (_: Exception) { throw InvalidMacAddress() }
     }
 
-    private companion object { const val MAX_RETRY = 3_600_000L }
+    private companion object {
+        const val MAX_RETRY = 3_600_000L
+        /** The Mac accepts at most 32 days per request. */
+        const val SUMMARY_WINDOW = 31 * 86_400_000L
+    }
 }
 
 internal class InvalidMacAddress : Exception()

@@ -12,7 +12,8 @@ fun readableTranscript(body: String): String {
         val speaker = line.substring(0, split).trim().replaceFirst(transcriptClockPrefix, "")
         val text=line.substring(split+1).trim()
         val compact=text.replace(Regex("[\\s\\p{P}\\p{S}]"),"")
-        if(text.isBlank()||filler.matches(compact))continue
+        // A line of only punctuation ("。") is recognition noise, like filler words.
+        if(compact.isEmpty()||filler.matches(compact))continue
         val previous=turns.lastOrNull()
         if(previous?.first==speaker) {
             val separator=if(previous.second.lastOrNull()?.let{it in "。！？!?…,，、；;：:"}==true) "" else "，"

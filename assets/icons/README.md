@@ -29,8 +29,8 @@ Mac 应用图标 16 / 32pt（含 2×）、网页 favicon 和 Android 通知仍�
 | `generated/preview.png` | 应用图标、实际尺寸 favicon、浅深色菜单栏和 Android 遮罩预览 |
 
 网页已接入 favicon 和 Apple touch 图标。PWA 图标先作为资源交付，尚未添加 manifest 或离线能力。
-Android 工程尚未建立；将 `generated/android/res/` 合入未来应用的 `src/main/res/`，
-设置 `android:icon="@mipmap/ic_launcher"` 和 `android:roundIcon="@mipmap/ic_launcher_round"`。
+`android/app/src/main/res/` 里的图标是 `generated/android/res/` 的原样拷贝，`android/scripts/verify.sh` 逐个比对，
+重新导出后要一起复制过去。HyperOS 桌面只显示前景层中间约 66dp，旧拷贝（圆环 62dp）因此贴边（2026-11-23）。
 通知使用 `R.drawable.ic_stat_tacit`，系统负责着色，不使用彩色应用图标。
 
 自适应前景采用 108dp 图层，圆环的完整外径约 49dp，位于中央 66dp 安全圆内。

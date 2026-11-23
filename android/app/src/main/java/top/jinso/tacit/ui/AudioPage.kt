@@ -27,11 +27,16 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withResumed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.*
 import top.jinso.tacit.core.HistoryRecord
+import top.jinso.tacit.data.MacSummary
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import top.jinso.tacit.ui.components.*
 import java.time.LocalDate
 import java.util.concurrent.CompletableFuture
@@ -57,6 +62,8 @@ import java.util.concurrent.CompletableFuture
     var loaded by remember { mutableStateOf(false) }
     var macVoice by remember { mutableStateOf(false) }
     var loadFailed by remember { mutableStateOf(false) }
+    var summaries by remember { mutableStateOf(emptyMap<String, MacSummary>()) }
+    var dayEpoch by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
     val includeIgnored = false
     fun work(task: () -> CompletableFuture<Unit>, success: String, after: () -> Unit = {}) {
         scope.launch {
@@ -85,7 +92,8 @@ import java.util.concurrent.CompletableFuture
     }
     LaunchedEffect(owner, resumed, includeIgnored) {
         // Re-read only when recordings, voices or status change; nothing runs while the page is hidden.
-        owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { audio.changes.collectLatest {
+        // A sync that brings new Mac summaries only touches the vault, so listen to both.
+        owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { merge(audio.changes, app.vault.changes).collectLatest {
             state = audio.state()
             val snapshot = withContext(Dispatchers.IO) {
                     runCatching {
@@ -93,11 +101,12 @@ import java.util.concurrent.CompletableFuture
                         val mac = audio.macVoiceKnown().get()
                         val scenes = audio.listConversations().get().sortedByDescending { it.start }
                         val text = scenes.flatMap { it.recordIds }.distinct().mapNotNull { app.vault.get(it) }.associateBy { it.id }
-                        (voices to mac) to audioConversationRows(scenes, text)
+                        val written = app.vault.macSummaries().flatMap { m -> m.recordIds.map { it to m } }.toMap()
+                        Triple(voices to mac, audioConversationRows(scenes, text), written)
                     }
                 }
-            snapshot.onSuccess { (voices, conversations) ->
-                speakers = voices.first; macVoice = voices.second; rows = conversations
+            snapshot.onSuccess { (voices, conversations, written) ->
+                speakers = voices.first; macVoice = voices.second; rows = conversations; summaries = written
             }
             loadFailed = snapshot.isFailure
             loaded = true
@@ -110,9 +119,19 @@ import java.util.concurrent.CompletableFuture
     val days = remember(rows) { rows.groupBy { LocalDate.parse(date(it.start, "yyyy-MM-dd")) } }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 8.dp, bottom = 32.dp)) {
-        item(key = "today") {
+        // One day at a time, like the Mac timeline; the arrows step to the nearest day that has conversations.
+        val day = LocalDate.ofEpochDay(dayEpoch)
+        val earlier = days.keys.filter { it < day }.maxOrNull()
+        val later = (days.keys.filter { it > day } + listOfNotNull(today.takeIf { it > day })).minOrNull()
+        item(key = "day") {
             Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 4.dp), verticalAlignment = Alignment.Top) {
-                DayHeading(today, today, Modifier.weight(1f).padding(top = 8.dp), stacked = true)
+                DayHeading(day, today, Modifier.weight(1f).padding(top = 8.dp), stacked = true)
+                IconButton(onClick = { earlier?.let { dayEpoch = it.toEpochDay() } }, enabled = earlier != null) {
+                    Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "前一天", tint = if (earlier != null) tacitColors.muted else tacitColors.faint)
+                }
+                IconButton(onClick = { later?.let { dayEpoch = it.toEpochDay() } }, enabled = later != null) {
+                    Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "后一天", tint = if (later != null) tacitColors.muted else tacitColors.faint)
+                }
                 IconButton(onClick = { onOpenSettings(null) }) {
                     Icon(Icons.Outlined.Settings, "设置", tint = tacitColors.muted)
                 }
@@ -151,27 +170,24 @@ import java.util.concurrent.CompletableFuture
         if (!loaded || busy) item { ProgressLine(Modifier.padding(end = 12.dp, top = 8.dp)) }
         if (loadFailed) item {
             Caption("暂时无法读取录音，正在重试。", Modifier.padding(top = 16.dp), color = tacitColors.attention)
-        } else if (loaded && rows.isEmpty()) item(key = "empty") {
+        } else if (loaded && days[day].isNullOrEmpty()) item(key = "empty") {
             Text("说过的话，会按天写在这里。", Modifier.padding(top = 48.dp, end = 12.dp),
                 style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
                 fontWeight = FontWeight.Normal, color = tacitColors.muted)
         }
-        days.forEach { (day, scenes) ->
-            if (day != today) item(key = "day-$day") {
-                DayHeading(day, today, Modifier.padding(top = 32.dp, bottom = 4.dp))
-            }
-            scenes.filter { it.records.isNotEmpty() }.forEach { scene ->
-                item(key = "conversation-${scene.key}") { RecordedConversation(scene, onConversation) }
-            }
-            val untranscribed = scenes.count { it.records.isEmpty() }
-            if (untranscribed > 0) item(key = "untranscribed-$day") {
-                val other = if (scenes.any { it.records.isNotEmpty() }) "另有 " else ""
-                Row(Modifier.padding(vertical = 12.dp)) {
-                    Box(Modifier.width(56.dp).padding(top = 9.dp)) {
-                        Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
-                    }
-                    Caption("$other$untranscribed 段没认出你的声音，未转写")
+        val scenes = days[day].orEmpty()
+        scenes.filter { it.records.isNotEmpty() }.forEach { scene ->
+            val summary = scene.records.firstNotNullOfOrNull { summaries[it.id] }
+            item(key = "conversation-${scene.key}") { RecordedConversation(scene, summary, onConversation) }
+        }
+        val untranscribed = scenes.count { it.records.isEmpty() }
+        if (untranscribed > 0) item(key = "untranscribed-$day") {
+            val other = if (scenes.any { it.records.isNotEmpty() }) "另有 " else ""
+            Row(Modifier.padding(vertical = 12.dp)) {
+                Box(Modifier.width(56.dp).padding(top = 9.dp)) {
+                    Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
                 }
+                Caption("$other$untranscribed 段没认出你的声音，未转写")
             }
         }
     }
@@ -305,7 +321,7 @@ private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () 
 }
 
 @Composable
-private fun RecordedConversation(scene: AudioConversationRow, onConversation: (List<HistoryRecord>) -> Unit) {
+private fun RecordedConversation(scene: AudioConversationRow, summary: MacSummary?, onConversation: (List<HistoryRecord>) -> Unit) {
     val records = scene.records
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp)
@@ -313,9 +329,11 @@ private fun RecordedConversation(scene: AudioConversationRow, onConversation: (L
     ) {
         Caption(date(scene.start, "HH:mm"), Modifier.width(56.dp).padding(top = 5.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(firstSentence(records).ifBlank { conversationTitle(scene.private) },
+            // The Mac's title and summary when it has written them; until then the user's own first sentence.
+            Text(summary?.title ?: firstSentence(records).ifBlank { conversationTitle(scene.private) },
                 style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (summary != null) Text(summary.summary, color = tacitColors.muted, maxLines = 3, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Caption(durationLabel(conversationDuration(records)))
                 if (scene.private) PrivacyLock()
