@@ -1,6 +1,6 @@
-import type { PairingRole } from "../src/devices/permissions.ts";
+import type { PairingRole } from "./permissions.ts";
 import { randomBytes } from "node:crypto";
-import { requestInfo, responseInfo, suite, utf8 } from "../src/devices/envelope.ts";
+import { requestInfo, responseInfo, suite, utf8 } from "./envelope.ts";
 
 export interface Pairing {
   v: 1; role: PairingRole; name: string; hub_id: string; pk: string; code: string; addrs: string[]; expires_at: string;
@@ -12,6 +12,10 @@ export interface ResponseEnvelope { v: number; enc: string; ct: string }
 
 export function decodePairing(uri: string): Pairing {
   return JSON.parse(Buffer.from(new URL(uri).searchParams.get("d")!, "base64url").toString("utf8"));
+}
+
+export class DeviceTransportError extends Error {
+  constructor(readonly status: number) { super(`设备传输失败 ${status}`); }
 }
 
 export class DeviceClient {
@@ -49,16 +53,21 @@ export class DeviceClient {
     return JSON.parse(new TextDecoder().decode(await context.open(Buffer.from(envelope.ct, "base64url"), utf8(nonce))));
   }
 
-  post(envelope: object) {
+  post(envelope: object, signal?: AbortSignal) {
     return fetch(this.origin + "/v1/device", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(envelope),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(envelope), signal, redirect: "error",
     });
   }
 
-  async send<T = Record<string, unknown>>(op: string, body: object, options: Partial<Pick<DevicePlaintext, "ts" | "nonce">> = {}) {
-    const input = { op, body, ts: new Date().toISOString(), nonce: randomBytes(16).toString("base64url"), ...options };
-    const response = await this.post(await this.envelope(input));
-    if (response.status !== 200) throw new Error(`设备传输失败 ${response.status}`);
+  async send<T = Record<string, unknown>>(op: string, body: object, options: Partial<Pick<DevicePlaintext, "ts" | "nonce">> & { signal?: AbortSignal } = {}) {
+    const { signal, ...overrides } = options;
+    signal?.throwIfAborted();
+    const input = { op, body, ts: new Date().toISOString(), nonce: randomBytes(16).toString("base64url"), ...overrides };
+    const response = await this.post(await this.envelope(input), signal);
+    if (response.status !== 200) {
+      await response.body?.cancel();
+      throw new DeviceTransportError(response.status);
+    }
     return this.open<T>(await response.json() as ResponseEnvelope, input.nonce);
   }
 

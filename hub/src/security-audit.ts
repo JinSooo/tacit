@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { HubDB } from "./db.ts";
 
 type SQL = HubDB["db"];
-type Action = "pair.create" | "pair.complete" | "device.remove" | "device.role_change" |
+type Action = "pair.create" | "pair.complete" | "device.local_register" | "device.remove" | "device.role_change" |
   "key.set" | "key.delete" | "relay.change" | "remote.delete" | "auth.denied";
 
 export const deviceRoleSchema = `

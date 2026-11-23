@@ -12,7 +12,7 @@ import { dayDrafts, incrementalReview, isReadableReviewItem, type ReviewDetail, 
 import { localDateString, localDayStart } from "./requests.ts";
 
 export interface Frame { id: string; t_start_ms: number; t_end_ms: number; key: string; record_ids: string[]; chars: number; private: number; status: "new" | "assigned" | "ignored" | "candidate" | "candidate_expired" }
-export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[] }
+export interface ProjectKeys { repos: string[]; hosts: string[]; chats: string[]; remotes?: string[] }
 export interface Project { id: string; name: string; confirmed?: number; keys: ProjectKeys; brief?: string | null; detail?: unknown; salience?: number; last_ms?: number; needs_regen?: number; updated_at?: string }
 export interface Thread { id: string; domain?: "work" | "life" | null; project_hint?: string | null; project_id?: string | null; status: "active" | "paused" | "done" | "abandoned" | "archived"; title: string; brief?: string | null; detail?: unknown; first_ms?: number; last_ms?: number; active_minutes?: number; sessions?: number; needs_regen?: number; updated_at?: string }
 export interface Fact { id: string; thread_id?: string | null; project_id?: string | null; kind: "decision" | "rejected" | "open" | "next" | "inference"; text: string; reason?: string; evidence: string[]; confidence?: number; origin: "llm" | "user"; valid_at: string; invalid_at?: string | null; superseded_by?: string | null; created_at: string }
@@ -375,6 +375,7 @@ export class DistillStore {
       const values = [...keys[k], ...project.keys[k]];
       keys[k] = k === "chats" ? [...new Map(values.map(value => [chatKey(value), value])).values()] : [...new Set(values)];
     }
+    if (project.keys.remotes) keys.remotes = [...new Set([...(dest.keys.remotes ?? []), ...project.keys.remotes])];
     this.upsertProject({ ...dest, keys, needs_regen: 1 });
     this.sql.prepare("UPDATE threads SET project_id=?,needs_regen=1 WHERE project_id=?").run(dest.id,source);
     this.sql.prepare("UPDATE threads SET project_hint=? WHERE project_hint=?").run(dest.id,source);
@@ -389,6 +390,7 @@ export class DistillStore {
       for (const key of ["repos", "hosts", "chats"] as const) {
         ignored[key] = [...new Set([...ignored[key], ...project.keys[key]])];
       }
+      if (project.keys.remotes) ignored.remotes = [...new Set([...(ignored.remotes ?? []), ...project.keys.remotes])];
       this.setState("ignored_project_keys", ignored);
       const threads = this.sql.prepare<[string, string], { id: string }>(`
         SELECT id FROM threads WHERE project_id=? OR project_hint=?`).all(id, id);

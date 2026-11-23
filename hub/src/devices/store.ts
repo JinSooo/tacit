@@ -1,6 +1,7 @@
+import { randomBytes } from "node:crypto";
 import type { HubDB } from "../db.ts";
 import { auditSecurity } from "../security-audit.ts";
-import { deviceID, WireError } from "./envelope.ts";
+import { base32, deviceID, WireError } from "./envelope.ts";
 import { devicePermissionDenied, isPairingRole, projectionRoles, type DeviceRole } from "./permissions.ts";
 import { touchProjectionDay } from "./projection-store.ts";
 import { localDateString } from "../distill/requests.ts";
@@ -35,9 +36,45 @@ export function deviceList(hub: HubDB) {
 }
 
 export function deviceAccess(sql: SQL, id: string) {
-  return sql.prepare<[string], { role: DeviceRole; role_revision: number; projection_reset: number; platform: string }>(
-    "SELECT role,role_revision,projection_reset,platform FROM devices WHERE id=?",
+  return sql.prepare<[string], { role: DeviceRole; role_revision: number; projection_reset: number; platform: string; local_only: number }>(
+    "SELECT role,role_revision,projection_reset,platform,local_only FROM devices WHERE id=?",
   ).get(id);
+}
+
+export function allocateDeviceID(sql: SQL, platform: "mac" | "android" | "agent") {
+  const allocate = sql.prepare("INSERT OR IGNORE INTO issued_device_ids VALUES(?)");
+  let id: string;
+  do { id = `${platform}-${base32(randomBytes(5))}`; } while (!allocate.run(id).changes);
+  return id;
+}
+
+export function registerLocalDevices(sql: SQL, agentKey: Buffer, macKey: Buffer | null, now: number) {
+  return sql.transaction(() => {
+    const find = sql.prepare<[Buffer], { id: string; platform: string; role: DeviceRole; local_only: number; bootstrap_agent_id: string | null }>(
+      "SELECT id, platform, role, local_only, bootstrap_agent_id FROM devices WHERE public_key=? ORDER BY id LIMIT 2");
+    const agents = find.all(agentKey), macs = macKey ? find.all(macKey) : [];
+    const [agent] = agents, [mac] = macs;
+    if (agents.length || macs.length) {
+      if (agents.length !== 1 || agent?.platform !== "agent" || agent.role !== "agent" || !agent.local_only ||
+          macKey && (macs.length !== 1 || mac?.platform !== "mac" || !mac.local_only || mac.bootstrap_agent_id !== agent.id)) {
+        auditSecurity(sql, "device.local_register", { ok: false, code: "key_conflict", now });
+        return null;
+      }
+      return { agent_device_id: agent.id, ...(mac ? { mac_device_id: mac.id } : {}) };
+    }
+    const at = new Date(now).toISOString();
+    const insert = sql.prepare(`INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,role,local_only,bootstrap_agent_id)
+      VALUES(?,?,?,?,?,?,?,1,?)`);
+    const agentId = allocateDeviceID(sql, "agent");
+    insert.run(agentId, "Tacit AI", "agent", agentKey, at, at, "agent", null);
+    auditSecurity(sql, "device.local_register", { target: agentId, code: "agent", now });
+    if (!macKey) return { agent_device_id: agentId };
+    const macId = allocateDeviceID(sql, "mac");
+    insert.run(macId, "Tacit Mac", "mac", macKey, at, at, "admin", agentId);
+    auditSecurity(sql, "device.local_register", { target: macId, code: "admin", now });
+    touchProjectionDay(sql, localDateString(now));
+    return { mac_device_id: macId, agent_device_id: agentId };
+  }).immediate();
 }
 
 function targetDevice(sql: SQL, id: unknown) {

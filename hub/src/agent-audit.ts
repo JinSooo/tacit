@@ -5,8 +5,8 @@ import { tryWriteWithoutWaiting } from "./db-busy.ts";
 import { diagnostic } from "./diagnostics.ts";
 import type { HubDB } from "./db.ts";
 
-type AuditRow = [string, string, string, string, string, string, number, number];
-type Queue = { key: Buffer; directory: string | null; rows: Map<string, AuditRow>; corruptNotRemoved: Set<string>; errorLogged: boolean; timer?: ReturnType<typeof setInterval> };
+export type AgentAuditRow = [string, string, string, string, string, string, number, number];
+type Queue = { key: Buffer; directory: string | null; rows: Map<string, AgentAuditRow>; corruptNotRemoved: Set<string>; errorLogged: boolean; timer?: ReturnType<typeof setInterval> };
 const queues = new WeakMap<HubDB, Queue>();
 const missing = (e: unknown) => (e as NodeJS.ErrnoException)?.code === "ENOENT";
 const QUERY_RETENTION_MS = 7 * 86_400_000;
@@ -15,11 +15,11 @@ export function auditQueryExpiry(now = Date.now()): string {
   return new Date(now - QUERY_RETENTION_MS).toISOString();
 }
 
-function withoutQuery(row: AuditRow): AuditRow {
+function withoutQuery(row: AgentAuditRow): AgentAuditRow {
   const args = JSON.parse(row[4]);
   if (!Object.hasOwn(args, "q")) return row;
   delete args.q;
-  const clean: AuditRow = [...row];
+  const clean: AgentAuditRow = [...row];
   clean[4] = JSON.stringify(args);
   return clean;
 }
@@ -37,7 +37,7 @@ function directory(queue: Queue, create = false): boolean {
 function syncDirectory(path: string) {
   const fd = openSync(path, constants.O_RDONLY); try { fsyncSync(fd); } finally { closeSync(fd); }
 }
-function persist(queue: Queue, row: AuditRow) {
+function persist(queue: Queue, row: AgentAuditRow) {
   if (!queue.directory) return; // :memory: 数据库本身也不跨进程保存。
   directory(queue, true);
   const iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", queue.key, iv);
@@ -55,7 +55,7 @@ function persist(queue: Queue, row: AuditRow) {
     try { unlinkSync(temp); } catch (e) { if (!missing(e)) throw e; }
   }
 }
-function decodePending(key: Buffer, id: string, bytes: Buffer): AuditRow | undefined {
+function decodePending(key: Buffer, id: string, bytes: Buffer): AgentAuditRow | undefined {
   if (bytes.length < 29 || bytes.length > 256_000) return;
   try {
     const cipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12));
@@ -65,7 +65,7 @@ function decodePending(key: Buffer, id: string, bytes: Buffer): AuditRow | undef
       || !Number.isSafeInteger(row[6]) || ![0, 1].includes(row[7])) return;
     const args = JSON.parse(row[4]), ids = JSON.parse(row[5]);
     if (!args || typeof args !== "object" || Array.isArray(args) || !Array.isArray(ids) || !ids.every(v => typeof v === "string")) return;
-    return row as AuditRow;
+    return row as AgentAuditRow;
   } catch { return; }
 }
 function restore(queue: Queue) {
@@ -77,7 +77,7 @@ function restore(queue: Queue) {
     const id = name.slice(0, -4);
     if (queue.rows.has(id)) continue;
     const path = join(queue.directory!, name);
-    let row: AuditRow | undefined;
+    let row: AgentAuditRow | undefined;
     if (entry.isFile() && /^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)) {
       let fd: number;
       try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
@@ -122,7 +122,7 @@ export function flushAgentAudit(hub: HubDB): void {
     restore(queue);
     if (!queue.rows.size) return;
     if (tryWriteWithoutWaiting(hub, () => {
-      const insert = hub.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING");
+      const insert = insertAgentAudit(hub);
       let cutoff: string | undefined;
       for (const row of queue.rows.values()) {
         let safe = row;
@@ -148,7 +148,7 @@ export function flushAgentAudit(hub: HubDB): void {
   }
 }
 /** 日志必须落盘成功才允许返回读取结果；无法保存时由 HTTP 入口返回错误，不泄露未审计内容。 */
-export function enqueueAgentAudit(hub: HubDB, row: AuditRow): void {
+export function enqueueAgentAudit(hub: HubDB, row: AgentAuditRow): void {
   const queue = queues.get(hub); if (!queue) throw new Error("审计未初始化");
   persist(queue, row); queue.rows.set(row[0], row); flushAgentAudit(hub); retry(hub, queue);
 }
@@ -175,4 +175,8 @@ export function eraseAuditQueries(hub: HubDB): void {
 export function stopAgentAudit(hub: HubDB): void {
   flushAgentAudit(hub);
   const queue = queues.get(hub); if (queue) { clearInterval(queue.timer); queue.timer = undefined; }
+}
+
+export function insertAgentAudit(hub: HubDB) {
+  return hub.db.prepare("INSERT INTO agent_reads(id,at,tool,kind,args,result_ids,bytes,ok) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING");
 }

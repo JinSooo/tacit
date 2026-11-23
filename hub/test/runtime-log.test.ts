@@ -24,7 +24,7 @@ test("v10 加密文件真实迁移到 v11，旧记录保留，完整性通过后
   ctx.db.db.exec("DROP TABLE runtime_calls; PRAGMA user_version=10;"); ctx.db.close();
   ctx.db = new HubDB(ctx.file,ctx.config.dbKey); log = new RuntimeLog(ctx.db);
   expect(ctx.db.get(record.id)?.body).toBe(record.body);
-  expect(ctx.db.db.pragma("user_version",{simple:true})).toBe(16);
+  expect(ctx.db.db.pragma("user_version",{simple:true})).toBe(17);
   expect(ctx.db.db.pragma("integrity_check",{simple:true})).toBe("ok");
   expect(readdirSync(ctx.config.dataDir).filter(p=>p.includes("migration-v"))).toEqual([]);
   const id=ulid(); log.begin(id,req,config);

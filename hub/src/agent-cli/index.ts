@@ -1,5 +1,7 @@
 import { isAbsolute } from "node:path";
-import { AgentError, readHub, reason } from "./client.ts";
+import { AgentError, reason, sessionContext } from "./client.ts";
+
+import type { AgentClientOptions } from "./identity.ts";
 
 function readInput(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -19,7 +21,7 @@ function toolArg(args: string[], hook: boolean): string {
   return args[1];
 }
 
-async function sessionStart(args: string[]): Promise<void> {
+async function sessionStart(args: string[], options?: AgentClientOptions): Promise<void> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -42,10 +44,10 @@ async function sessionStart(args: string[]): Promise<void> {
       const event = typeof source === "string" && ["startup", "resume", "clear", "compact"].includes(source) ? source : "startup";
       const query = new URLSearchParams({ cwd: input.cwd, event, tool });
       const session = "session_id" in input ? input.session_id : undefined;
-      if (typeof session === "string" && session && session.length <= 128) query.set("session", session);
-      const result = await readHub("context", query, controller.signal);
-      if (!result || typeof result !== "object" || !("text" in result) || typeof result.text !== "string") throw new AgentError("hub 上下文格式无效");
-      if (!controller.signal.aborted && result.text.trim()) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: result.text } }) + "\n");
+      if (typeof session === "string" && session && session.length <= 128 && !/[\x00-\x1f\x7f]/.test(session)) query.set("session", session);
+      await sessionContext(query, controller.signal, text => {
+        if (text.trim()) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } }) + "\n");
+      }, options);
     })()]);
   } catch (error) {
     console.error(reason(error));
@@ -55,10 +57,10 @@ async function sessionStart(args: string[]): Promise<void> {
   }
 }
 
-export async function runAgentCommand(argv: string[]): Promise<void> {
+export async function runAgentCommand(argv: string[], options?: AgentClientOptions): Promise<void> {
   if (argv[0] === "hook") {
     if (argv[1] !== "session-start") { console.error("hook 仅支持 session-start"); return; }
-    await sessionStart(argv.slice(2));
+    await sessionStart(argv.slice(2), options);
   } else {
     const tool = toolArg(argv.slice(1), false);
     const { runMcp } = await import("./mcp.ts");

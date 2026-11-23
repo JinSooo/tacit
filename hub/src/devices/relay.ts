@@ -230,7 +230,7 @@ export class RelayService {
     const old = this.current();
     if (url !== null) await this.hello(url);
     if ((old?.url ?? null) === url) return;
-    const devices = this.sql.prepare<[], { id: string; public_key: Buffer }>("SELECT id, public_key FROM devices").all();
+    const devices = this.sql.prepare<[], { id: string; public_key: Buffer }>("SELECT id, public_key FROM devices WHERE local_only=0").all();
     let next: Space | null = null;
     const configs = new Map<string, ReturnType<typeof relayConfig>>();
     try {

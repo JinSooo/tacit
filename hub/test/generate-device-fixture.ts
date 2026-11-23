@@ -1,6 +1,6 @@
 // From the repository root: bun hub/test/generate-device-fixture.ts
 import { identityFromRaw, requestInfo, responseInfo, responseSealer, suite } from "../src/devices/envelope.ts";
-import { DeviceClient } from "./device-client.ts";
+import { DeviceClient } from "../src/devices/client.ts";
 
 export async function deviceFixture() {
   const hubPrivate = "01".repeat(32), devicePrivate = "02".repeat(32);

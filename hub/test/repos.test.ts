@@ -261,3 +261,21 @@ test("项目整理期间移除项目，旧模型结果不能写回", async () =>
   expect(store.project("main")).toBeNull();
   expect(store.getState("project_brief:main")).toBeNull();
 });
+
+test("项目识别记录无凭据的 origin 并合并不同路径的克隆", () => {
+  git("-C", repo, "remote", "add", "origin", "https://synthetic:fictional@example.test/maple/ledger.git?hint=ignored");
+  const second = join(realpathSync(ctx.dir), "second-clone");
+  git("init", second);
+  git("-C", second, "remote", "add", "origin", "git@example.test:maple/ledger.git");
+  const rules = new DistillRules(new DistillStore(ctx.db));
+  expect(rules.projectForRepo(repo)?.keys.remotes).toEqual(["example.test/maple/ledger"]);
+  expect(rules.projectForRepo(second)?.id).toBe("main");
+  expect(store.project("main")?.keys.repos).toEqual([repo, second]);
+  expect(store.projects()).toHaveLength(1);
+  expect(store.removeProject("main")).toBe(true);
+  expect(store.ignoredProjectKeys().remotes).toEqual(["example.test/maple/ledger"]);
+  const third = join(realpathSync(ctx.dir), "third-clone");
+  git("init", third);
+  git("-C", third, "remote", "add", "origin", "ssh://git@example.test:22/maple/ledger");
+  expect(rules.projectForRepo(third)).toBeNull();
+});

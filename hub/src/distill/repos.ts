@@ -1,26 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
-import { basename, dirname, resolve, sep } from "node:path";
-import type { Project } from "./store.ts";
+import { resolve } from "node:path";
+import { normalizeGitRemote, originArgs, projectForPath, repositoryRoot } from "../repo-identity.ts";
+
+export { projectForPath, projectForRemote, repoContainsPath } from "../repo-identity.ts";
 
 type Repository = { root: string; worktree: string };
 const cache = new Map<string, { value: Repository | null; at: number }>();
 
-export function repoContainsPath(repo: string, path: string): boolean {
-  const root = resolve(repo), absolute = resolve(path);
-  return root !== homedir() && (absolute === root || absolute.startsWith(root.endsWith(sep) ? root : root + sep));
-}
-
-/** 按路径边界取最长别名，不能把 foo 和 foobar 当成同一仓库。 */
-export function projectForPath(path: string, projects: Project[]): Project | null {
-  const absolute = resolve(path);
-  return projects.flatMap(project => project.keys.repos.flatMap(repo => {
-    return repoContainsPath(repo, absolute) ? [{ project, length: resolve(repo).length }] : [];
-  })).sort((a,b) => b.length - a.length)[0]?.project ?? null;
-}
-
 /** 缓存只存 git 探测，项目别名每次从当前库读取，合并后不会命中过时项目。 */
-export function resolveRepository(path: string, projects: Project[]): Repository | null {
+export function resolveRepository(path: string, projects: { keys: { repos: string[] } }[]): Repository | null {
   const absolute = resolve(path), now = Date.now();
   let cached = cache.get(absolute);
   if (!cached || now - cached.at >= 60_000) {
@@ -31,8 +20,8 @@ export function resolveRepository(path: string, projects: Project[]): Repository
     if (common.status === 0) {
       const top = git("--show-toplevel");
       if (top.status === 0) {
-        const shared = resolve(common.stdout.trim()), worktree = resolve(top.stdout.trim());
-        value = { root: basename(shared) === ".git" ? dirname(shared) : worktree, worktree };
+        const worktree = resolve(top.stdout.trim());
+        value = { root: repositoryRoot(common.stdout.trim(), worktree), worktree };
       }
     }
     if (cache.size >= 2048) cache.delete(cache.keys().next().value!);
@@ -45,6 +34,19 @@ export function resolveRepository(path: string, projects: Project[]): Repository
 }
 
 /** 任意目录归一到主仓库；目录已删除时使用项目中保留的别名。 */
-export function resolveRepoRoot(path: string, projects: Project[]): string | null {
+export function resolveRepoRoot(path: string, projects: { keys: { repos: string[] } }[]): string | null {
   return resolveRepository(path, projects)?.root ?? null;
+}
+
+const remoteCache = new Map<string, { value: string | null; at: number }>();
+
+export function repositoryRemote(cwd: string): string | null {
+  const now = Date.now();
+  const cached = remoteCache.get(cwd);
+  if (cached && now - cached.at < 60_000) return cached.value;
+  const git = spawnSync("git", originArgs(cwd), { encoding: "utf8", timeout: 250, maxBuffer: 8192 });
+  const value = git.status === 0 ? normalizeGitRemote(git.stdout.trim()) : null;
+  if (remoteCache.size >= 2048) remoteCache.delete(remoteCache.keys().next().value!);
+  remoteCache.set(cwd, { value, at: now });
+  return value;
 }

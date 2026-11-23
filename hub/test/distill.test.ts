@@ -34,7 +34,7 @@ test("真实 v1 加密结构升级，备份仍为 v1 且不覆盖，未来版本
   PRAGMA user_version=1;`);
   db.close();
   const upgraded = new HubDB(file,ctx.config.dbKey);
-  expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(16);
+  expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(17);
   expect(upgraded.db.pragma("busy_timeout",{ simple: true })).toBe(5000);
   const r = rec(0); expect(upgraded.ingest([r]).accepted).toBe(1);
   upgraded.close();
@@ -50,7 +50,7 @@ test("真实 v1 加密结构升级，备份仍为 v1 且不覆盖，未来版本
   expect(old.pragma("user_version",{ simple: true })).toBe(1); old.close();
   expect(() => new HubDB(file,ctx.config.dbKey)).toThrow();
   expect(readFileSync(backupFile)).toEqual(backup);
-  const future = new Database(file); future.pragma("cipher='sqlcipher'"); future.pragma("legacy=4"); future.pragma(`key='${ctx.config.dbKey}'`); future.pragma("user_version=17"); future.close();
+  const future = new Database(file); future.pragma("cipher='sqlcipher'"); future.pragma("legacy=4"); future.pragma(`key='${ctx.config.dbKey}'`); future.pragma("user_version=18"); future.close();
   expect(() => new HubDB(file,ctx.config.dbKey)).toThrow("版本");
 });
 
@@ -267,7 +267,7 @@ test("旧开发版 v2 打开时补建归属索引，删除与 JSON 归属保持�
   ctx.db.db.exec("DROP TABLE frame_records");
   const reopened = new HubDB(ctx.file,ctx.config.dbKey);
   try {
-    expect(reopened.db.pragma("user_version",{ simple: true })).toBe(16);
+    expect(reopened.db.pragma("user_version",{ simple: true })).toBe(17);
     expect(reopened.db.prepare("SELECT record_id,frame_id FROM frame_records ORDER BY record_id").all()).toEqual([a.id,b.id].sort().map(record_id => ({ record_id,frame_id: f.id })));
     expect(() => new DistillStore(reopened).createFrame(frame([a.id]))).toThrow();
     reopened.delete(a.id);
@@ -349,8 +349,8 @@ printf '%s\n' "$2"
     expect(new DistillRules(store).projectForRepo(repo)?.id).toBe(first?.id);
     expect(new DistillRules(store).projectForRepo(missing)).toBeNull();
     expect(new DistillRules(store).projectForRepo(missing)).toBeNull();
-    // 成功路径探测 common-dir 和 toplevel 各一次，失败路径只探测一次。
-    expect(readFileSync(count,"utf8").trim().split("\n")).toHaveLength(3);
+    // 成功路径探测 common-dir、toplevel 和 origin 各一次，失败路径只探测一次。
+    expect(readFileSync(count,"utf8").trim().split("\n")).toHaveLength(4);
   } finally {
     envNames.forEach((name,i) => { if (previous[i] === undefined) delete process.env[name]; else process.env[name] = previous[i]; });
   }

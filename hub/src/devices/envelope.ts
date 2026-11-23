@@ -6,7 +6,7 @@ export const suite = new CipherSuite({ kem: new DhkemX25519HkdfSha256(), kdf: ne
 export const requestInfo = "tacit-device-v1";
 export const responseInfo = "tacit-device-v1/response";
 export const maxEnvelopeBytes = 8 * 1024 * 1024;
-export const deviceID = /^(?:android|mac)-[a-z2-7]{8}$/;
+export const deviceID = /^(?:android|mac|agent)-[a-z2-7]{8}$/;
 const clockWindowMs = 10 * 60_000;
 
 export const utf8 = (value: string) => new TextEncoder().encode(value);

@@ -1,20 +1,24 @@
 import { expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HubDB } from "../src/db.ts";
 import { conversationsIn, saveSummary, selfSummarizingDevices, storedSummary } from "../src/conversations.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { conversationStep } from "../src/distill/run.ts";
-import { openRequest, readEnvelope, suite } from "../src/devices/envelope.ts";
+import { identityFromRaw, openRequest, readEnvelope, suite } from "../src/devices/envelope.ts";
 import { startServer } from "../src/server.ts";
-import { validateRecord } from "../../packages/record/index.ts";
+import { ulid, validateRecord } from "../../packages/record/index.ts";
 import vectors from "../../schema/fixtures/device-envelope.json";
 import { operationAccess, type DeviceRole, type PairingRole } from "../src/devices/permissions.ts";
 import { auditSecurity, pruneSecurityAudit } from "../src/security-audit.ts";
-import { decodePairing, DeviceClient, type ResponseEnvelope } from "./device-client.ts";
+import { decodePairing, DeviceClient, type ResponseEnvelope } from "../src/devices/client.ts";
 import { deviceFixture } from "./generate-device-fixture.ts";
 import { fixture, setup, removeDeviceRoleSchema, removeProjectionSchema } from "./helpers.ts";
+
+import { readHub, sessionContext } from "../src/agent-cli/client.ts";
+import { ContextCache } from "../src/agent-cli/context-cache.ts";
+import { deviceAccount, ensureAgentIdentity, fileAgentSecrets } from "../src/agent-cli/identity.ts";
 
 const minute = 60_000;
 
@@ -26,7 +30,7 @@ async function runningHub() {
   writeFileSync(join(ctx.dir, "hub.json"), JSON.stringify({ lan_port: lanPort }));
   let now = Date.now(), key: string | null = null, writes = 0;
   const options = {
-    db: ctx.db, token: ctx.config.token, port: 0, settings: { dataDir: ctx.dir },
+    db: ctx.db, token: ctx.config.token, agentToken: ctx.config.agentToken, port: 0, settings: { dataDir: ctx.dir },
     deviceDeps: {
       now: () => now, addresses: () => ["192.0.2.2"], name: "测试中枢",
       keys: { read: () => key, write: (value: string) => { key = value; writes++; } },
@@ -53,6 +57,7 @@ async function runningHub() {
   }
   return {
     ...ctx, lan, lanPort, admin, settings, invite, pair,
+    get origin() { return server.url.origin; },
     time: () => now,
     advance(ms: number) { now += ms; },
     get writes() { return writes; },
@@ -79,7 +84,7 @@ test("LAN 仅在邀请或设备存在时监听，hello 返回身份，本机管�
     for (const path of ["/", "/v1/settings/devices", "/v1/health", "/v1/agent/search", "/v1/device"]) {
       expect((await fetch(hub.lan + path)).status).toBe(404);
     }
-    expect((await hub.admin("/v1/device/hello")).status).toBe(404);
+    expect(await (await hub.admin("/v1/device/hello")).json()).toEqual({ hub_id: invite.hub_id, v: 1 });
     // 采集端靠这个 hub_id 登记 Bonjour，邀请用完或采集端重启后也要能拿到。
     expect(await (await hub.settings()).json()).toMatchObject({ hub_id: invite.hub_id, pairing: { expires_at: invite.expires_at } });
     expect((await hub.settings("/pairing", "DELETE")).status).toBe(200);
@@ -313,7 +318,7 @@ test("v12 加密数据库迁移到 v16，保留记录并清理验证通过的备
     hub.db.close();
     const migrated = new HubDB(hub.file, hub.config.dbKey);
     try {
-      expect(migrated.db.pragma("user_version", { simple: true })).toBe(16);
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(17);
       expect(migrated.get(record.id)).toMatchObject({ id: record.id });
       expect(migrated.db.prepare("SELECT * FROM devices").all()).toEqual([]);
       expect(existsSync(hub.file + ".migration-v12.bak")).toBe(false);
@@ -427,7 +432,7 @@ test("v15 升级 v16，旧查看设备迁为 view、Android 保持 collect，验
     hub.db.close();
     const migrated = new HubDB(hub.file, hub.config.dbKey);
     try {
-      expect(migrated.db.pragma("user_version", { simple: true })).toBe(16);
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(17);
       expect(migrated.db.prepare("SELECT id,role FROM devices ORDER BY id").all()).toEqual([
         { id: "android-testaaaa", role: "collect" }, { id: "mac-testaaaa", role: "view" },
       ]);
@@ -616,4 +621,162 @@ test("设备段删除校验成员并和普通删除共用限额", async () => {
     expect(await admin.send("segment.delete", body)).toEqual({ status: 200, body: { deleted: 200 } });
     expect((await admin.send("delete", { ids: [rows[200]!.id] })).status).toBe(429);
   } finally { await hub.dispose(); }
+});
+
+type Bootstrap = { mac_device_id: string; agent_device_id: string; hub_id: string; hub_pk: string; endpoint: string };
+async function bootstrapKeys() {
+  const [mac, agent] = await Promise.all([identityFromRaw(randomBytes(32).toString("hex")), identityFromRaw(randomBytes(32).toString("hex"))]);
+  return { mac, agent, body: { mac_pk: mac.publicKey.toString("base64url"), agent_pk: agent.publicKey.toString("base64url") } };
+}
+
+test("本机登记同一对公钥幂等，部分匹配冲突，只接受 127.0.0.1 的管理令牌", async () => {
+  const hub = await runningHub();
+  try {
+    const { body } = await bootstrapKeys();
+    const path = "/v1/settings/devices/local-bootstrap";
+    const bootstrap = (input = body) => hub.settings("/local-bootstrap", "POST", input);
+    const unauth = await fetch(hub.origin + path, { method: "POST", body: JSON.stringify(body) });
+    expect(unauth.status).toBe(401);
+    const alias = await fetch(hub.origin.replace("127.0.0.1", "localhost") + path, {
+      method: "POST", headers: { Authorization: "Bearer " + hub.config.token }, body: JSON.stringify(body),
+    });
+    expect(alias.status).toBe(403);
+    const agentToken = await fetch(hub.origin + path, {
+      method: "POST", headers: { Authorization: "Bearer " + hub.config.agentToken }, body: JSON.stringify(body),
+    });
+    expect(agentToken.status).toBe(403);
+    const first = await bootstrap();
+    expect(first.status).toBe(200);
+    const previous = await first.json() as Bootstrap;
+    expect(previous).toEqual({
+      hub_id: expect.stringMatching(/^[a-z2-7]{26}$/), hub_pk: expect.stringMatching(/^[\w-]{43}$/),
+      mac_device_id: expect.stringMatching(/^mac-[a-z2-7]{8}$/), agent_device_id: expect.stringMatching(/^agent-[a-z2-7]{8}$/),
+      endpoint: hub.origin + "/v1/device",
+    });
+    expect(await (await bootstrap()).json()).toEqual(previous);
+    const second = (await bootstrapKeys()).body;
+    expect((await bootstrap({ ...body, agent_pk: second.agent_pk })).status).toBe(409);
+    expect((await bootstrap({ ...body, mac_pk: second.mac_pk })).status).toBe(409);
+    expect((await bootstrap({ mac_pk: body.agent_pk, agent_pk: body.mac_pk })).status).toBe(409);
+    const localAgent = (agent_pk: string) => hub.settings("/local-agent", "POST", { agent_pk });
+    const installed = await localAgent(second.agent_pk);
+    expect(installed.status).toBe(200);
+    expect(await (await localAgent(second.agent_pk)).json()).toEqual(await installed.json());
+    expect((await localAgent(body.mac_pk)).status).toBe(409);
+    expect((await bootstrap(second)).status).toBe(409);
+    expect(hub.db.db.prepare("SELECT COUNT(*) AS count FROM devices").get()).toEqual({ count: 3 });
+    expect(hub.db.db.prepare("SELECT COUNT(*) AS count FROM security_audit WHERE action='device.local_register' AND ok=1").get()).toEqual({ count: 3 });
+    expect((await (await hub.settings()).json() as { lan: { open: boolean } }).lan.open).toBe(false);
+    expect((await fetch(hub.origin + "/v1/device/hello")).status).toBe(200);
+    await expect(fetch(hub.lan + "/v1/device/hello")).rejects.toThrow();
+    await hub.invite();
+    expect((await fetch(hub.lan + "/v1/device/hello")).status).toBe(200);
+    expect((await fetch(hub.lan + path, {
+      method: "POST", headers: { Authorization: "Bearer " + hub.config.token }, body: JSON.stringify(body),
+    })).status).toBe(404);
+  } finally { await hub.dispose(); }
+});
+
+test("设备 Agent 查询沿用旧接口语义，写入和审计记录调用设备", async () => {
+  const hub = await runningHub();
+  try {
+    const keys = await bootstrapKeys();
+    const link = await (await hub.settings("/local-bootstrap", "POST", keys.body)).json() as Bootstrap;
+    const publicKey = await suite.kem.deserializePublicKey(Buffer.from(link.hub_pk, "base64url"));
+    const mac = new DeviceClient(publicKey, keys.mac.keys, hub.origin), agent = new DeviceClient(publicKey, keys.agent.keys, hub.origin);
+    mac.device = link.mac_device_id;
+    agent.device = link.agent_device_id;
+    const row = fixture({ device: mac.device, title: "枫叶账本样例", source: "mac.screen" });
+    const ingest = await mac.send("ingest", { records: [row, fixture({ device: mac.device, source: "android.app" })] });
+    expect(ingest).toMatchObject({ status: 200, body: { accepted: 1, rejected: [{ index: 1, errors: ["/source 不支持此设备来源"] }] } });
+    expect((await agent.send("ingest", { records: [fixture({ device: agent.device, source: "manual.note" })] })).status).toBe(403);
+
+    const store = new DistillStore(hub.db);
+    const project = ulid(), cwd = "/tmp/tacit-maple-ledger", now = Date.now();
+    store.upsertProject({ id: project, name: "枫叶账本", keys: { repos: [cwd], hosts: [], chats: [] } });
+    store.upsertThread({ id: ulid(), title: "对账", brief: "完成第一轮虚构对账", status: "active", domain: "work", project_id: project, last_ms: now });
+    for (const [kind, args] of [
+      ["context", { cwd, event: "startup" }], ["now", {}], ["get", { id: row.id, level: "detail" }],
+      ["search", { q: "枫叶账本" }], ["timeline", { device: mac.device }],
+    ] as const) {
+      const params = { tool: "codex", ...args } as Record<string, string>;
+      const legacy = await fetch(hub.origin + `/v1/agent/${kind}?${new URLSearchParams(params)}`, {
+        headers: { Authorization: "Bearer " + hub.config.agentToken },
+      });
+      const device = await agent.send(`agent.${kind}`, params);
+      expect(legacy.status).toBe(200);
+      expect(device).toEqual({ status: legacy.status, body: await legacy.json() });
+    }
+    const append = await agent.send<{ id: string }>("agent.append", { tool: "codex", title: "写入虚构条目", body: "拿来做协议回归" });
+    expect(append.status).toBe(200);
+    expect(hub.db.get(append.body.id)?.device).toBe(agent.device);
+    const audit = hub.db.db.prepare("SELECT kind FROM agent_reads WHERE json_extract(args,'$.agent_device')=? ORDER BY kind").all(agent.device);
+    expect(audit).toEqual(["append", "context", "get", "now", "search", "timeline"].map(kind => ({ kind })));
+    await hub.invite();
+    const offMachine = new DeviceClient(publicKey, keys.agent.keys, hub.lan);
+    offMachine.device = agent.device;
+    await expect(offMachine.send("agent.now", { tool: "codex" })).rejects.toThrow("401");
+  } finally { await hub.dispose(); }
+});
+
+test("SessionStart 800 ms 回退到按 remote 匹配的加密缓存，7 天过期，恢复连接补报一次", async () => {
+  const hub = await runningHub();
+  let requested = false;
+  const slow = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch() { requested = true; await Bun.sleep(1800); return new Response(null, { status: 503 }); },
+  });
+  try {
+    const secrets = fileAgentSecrets(hub.dir);
+    const env = { RA_DATA_DIR: hub.dir, RA_PORT: new URL(hub.origin).port };
+    const link = await ensureAgentIdentity({ env, secrets });
+    expect(await ensureAgentIdentity({ env, secrets })).toEqual(link);
+    expect(await secrets.read(deviceAccount, AbortSignal.timeout(1000))).toMatch(/^[a-f0-9]{64}$/);
+    const repoPath = join(hub.dir, "hub-side-repo"), checkout = join(hub.dir, "other-mac-repo");
+    mkdirSync(checkout);
+    for (const args of [["init", "-q"], ["remote", "add", "origin", "git@example.test:maple/ledger.git"]]) {
+      expect(Bun.spawnSync(["git", "-C", checkout, ...args]).exitCode).toBe(0);
+    }
+    const store = new DistillStore(hub.db), projectId = ulid(), threadId = ulid();
+    store.upsertProject({ id: projectId, name: "枫叶账本", keys: {
+      repos: [repoPath], remotes: ["example.test/maple/ledger"], hosts: [], chats: [],
+    } });
+    store.upsertThread({ id: threadId, project_id: projectId, status: "active", domain: "work", title: "对账", brief: "合成对账完成" });
+    const params = (cwd: string) => new URLSearchParams({ cwd, tool: "codex", event: "startup", session: "fictional-session" });
+    const run = async (cwd: string, port = env.RA_PORT) => {
+      let text = "";
+      await sessionContext(params(cwd), AbortSignal.timeout(2000), value => { text = value; },
+        { env: { ...env, RA_PORT: port }, secrets });
+      return text;
+    };
+    const online = await run(repoPath);
+    expect(online).toContain("合成对账完成");
+    expect(online).not.toContain("离线缓存");
+    const cachePath = join(hub.dir, "agent-context-cache", `${link.hub_id}-${link.device_id}`, `${projectId}.enc`);
+    expect(readFileSync(cachePath).includes(Buffer.from("合成对账完成"))).toBe(false);
+
+    const start = performance.now();
+    const offline = await run(checkout, String(slow.port));
+    const elapsed = performance.now() - start;
+    expect(requested).toBe(true);
+    expect(elapsed).toBeGreaterThanOrEqual(730);
+    expect(elapsed).toBeLessThan(1600);
+    expect(offline).toMatch(/^（离线缓存，同步于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}）/);
+    expect(offline).toContain(online);
+
+    const cache = new ContextCache(hub.dir, link, secrets);
+    expect(await cache.offline(params(checkout), "example.test/maple/ledger", AbortSignal.timeout(1000),
+      Date.now() + 7 * 86_400_000 + 1000)).toBe("");
+
+    const now = () => readHub("now", new URLSearchParams({ tool: "codex" }), AbortSignal.timeout(1000), undefined, { env, secrets });
+    await now();
+    await now();
+    const rows = hub.db.db.prepare("SELECT args, result_ids, bytes FROM agent_reads WHERE json_extract(args,'$.cached')=1").all() as
+      { args: string; result_ids: string; bytes: number }[];
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0]!.args)).toEqual({ session: "fictional-session", cwd: checkout, project: projectId, agent_device: link.device_id, cached: true });
+    expect(JSON.parse(rows[0]!.result_ids)).toEqual([threadId]);
+    expect(rows[0]!.bytes).toBe(0);
+    expect(await run(checkout)).toBe(online);
+  } finally { await slow.stop(true); await hub.dispose(); }
 });

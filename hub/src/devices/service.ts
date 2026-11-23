@@ -1,15 +1,17 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
+import { AgentReads } from "../agent.ts";
+import { agentOperation } from "../agent-device.ts";
 import { AudioStore } from "../audio.ts";
 import { conversationsIn, saveSummary, setSelfSummarizing, storedSummary } from "../conversations.ts";
 import { InputError, type HubDB } from "../db.ts";
 import { isDatabaseBusy } from "../db-busy.ts";
 import { logFailure } from "../diagnostics.ts";
 import { deviceKeychain, relayKeychain, type DeviceKeyStorage, type RelayKeyStorage } from "../keys.ts";
-import { base32, base64url, deviceID, identityFromRaw, invalidEnvelope, object,
+import { base64url, deviceID, identityFromRaw, invalidEnvelope, object,
   openRequest, readEnvelope, responseSealer, suite, unpaired, validateRequest, WireError } from "./envelope.ts";
-import { deviceAccess, deviceList, removeDevice, updateDeviceRole } from "./store.ts";
+import { allocateDeviceID, deviceAccess, deviceList, registerLocalDevices, removeDevice, updateDeviceRole } from "./store.ts";
 import { auditOp, devicePermissionDenied, isPairingRole, operationAccess, projectionReads, projectionRoles, type DeviceRole, type PairingRole } from "./permissions.ts";
 import { auditSecurity, remoteDeleteLimit, reserveRemoteDelete } from "../security-audit.ts";
 import { deleteTimelineSegment } from "../timeline.ts";
@@ -25,7 +27,7 @@ const idPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const identityKey = "device_hub_id";
 type Identity = Awaited<ReturnType<typeof identityFromRaw>>;
 type Invitation = { code: Buffer; expires: number; relay: RelayConfig | null; role: PairingRole };
-type EventSocket = { lastSeq?: number; device?: string; revision?: number; authenticating?: boolean; timer?: ReturnType<typeof setTimeout> };
+type EventSocket = { local?: boolean; lastSeq?: number; device?: string; revision?: number; authenticating?: boolean; timer?: ReturnType<typeof setTimeout> };
 type Result = { status: number; body: object };
 const ok = (body: object): Result => ({ status: 200, body });
 const fail = (status: number, error: string): Result => ({ status, body: { error } });
@@ -164,7 +166,7 @@ export class DeviceService {
   private reconcile() {
     if (this.stopped) return;
     try {
-      if (this.currentInvite() || this.sql.prepare("SELECT 1 FROM devices LIMIT 1").get()) {
+      if (this.currentInvite() || this.sql.prepare("SELECT 1 FROM devices WHERE local_only=0 LIMIT 1").get()) {
         this.listen();
       } else {
         const listener = this.listener;
@@ -235,7 +237,7 @@ export class DeviceService {
     return identity;
   }
 
-  async settings(method: string, path: string, readJSON?: () => Promise<unknown>): Promise<Response | null> {
+  async settings(method: string, path: string, readJSON?: () => Promise<unknown>, loopbackEndpoint?: string): Promise<Response | null> {
     const root = "/v1/settings/devices";
     if (method === "GET" && path === root) {
       const invite = this.currentInvite();
@@ -251,6 +253,27 @@ export class DeviceService {
         pairing: invite ? { expires_at: new Date(invite.expires).toISOString(), role: invite.role } : null,
         devices: deviceList(this.hub),
       }));
+    }
+    if (method === "POST" && (path === root + "/local-bootstrap" || path === root + "/local-agent")) {
+      if (!loopbackEndpoint) return json(fail(403, "设备登记仅允许从 127.0.0.1 调用"));
+      const bootstrap = path.endsWith("/local-bootstrap");
+      const input = readJSON && object(await readJSON());
+      const agentKey = base64url(input?.agent_pk, 32), macKey = bootstrap ? base64url(input?.mac_pk, 32) : null;
+      if (!agentKey || (bootstrap && !macKey) || agentKey.equals(macKey ?? Buffer.alloc(0)) ||
+          !input || Object.keys(input).length !== (bootstrap ? 2 : 1)) throw new InputError("需要不同的 X25519 公钥");
+      return await this.relay.run(async () => {
+        if (this.stopped) return json(fail(503, "中枢正在关闭"));
+        const identity = await this.ensureIdentity();
+        try {
+          for (const key of macKey ? [agentKey, macKey] : [agentKey]) {
+            await responseSealer(identity.keys, await suite.kem.deserializePublicKey(key), "");
+          }
+        } catch { throw new InputError("X25519 公钥无效"); }
+        const ids = registerLocalDevices(this.sql, agentKey, macKey, this.clock());
+        if (!ids) return json(fail(409, "公钥已属于其他设备或登记不完整"));
+        this.devicePermissionsChanged();
+        return json(ok({ ...ids, hub_id: identity.hubID, hub_pk: identity.publicKey.toString("base64url"), endpoint: loopbackEndpoint }));
+      });
     }
     if (method === "POST" && path === root + "/pairing") {
       const input = readJSON ? object(await readJSON()) : {};
@@ -324,11 +347,12 @@ export class DeviceService {
   }
 
   /** The loopback listener checks its Host header before routing here. */
-  route(request: Request, server: Bun.Server<EventSocket>) {
+  route(request: Request, server: Bun.Server<EventSocket>, local = false) {
     const path = new URL(request.url).pathname;
-    if (request.method === "POST" && path === "/v1/device") return this.lanRequest(request);
+    if (request.method === "POST" && path === "/v1/device") return this.lanRequest(request, local);
+    if (request.method === "GET" && path === "/v1/device/hello") return this.lanRequest(request, local);
     if (request.method === "GET" && path === "/v1/device/events") {
-      return server.upgrade(request, { data: {} }) ? undefined : json(fail(400, "需要 WebSocket"));
+      return server.upgrade(request, { data: { local } }) ? undefined : json(fail(400, "需要 WebSocket"));
     }
     return null;
   }
@@ -373,8 +397,8 @@ export class DeviceService {
     const device = envelope.device;
     if (!device) throw unpaired();
     const identity = await this.activeIdentity();
-    const registered = this.sql.prepare<[string], { public_key: Buffer }>("SELECT public_key FROM devices WHERE id=?").get(device);
-    if (!identity || !registered) throw unpaired();
+    const registered = this.sql.prepare<[string], { public_key: Buffer; local_only: number }>("SELECT public_key, local_only FROM devices WHERE id=?").get(device);
+    if (!identity || !registered || (registered.local_only && !socket.data.local)) throw unpaired();
     const sender = await suite.kem.deserializePublicKey(registered.public_key);
     const input = await openRequest(envelope, identity.keys, sender);
     const { op } = validateRequest(input, this.clock());
@@ -432,7 +456,7 @@ export class DeviceService {
     }
   }
 
-  private async lanRequest(request: Request) {
+  private async lanRequest(request: Request, local = false) {
     const path = new URL(request.url).pathname;
     try {
       if (request.method === "GET" && path === "/v1/device/hello") {
@@ -440,7 +464,7 @@ export class DeviceService {
         if (!identity) throw unpaired();
         return json(ok({ hub_id: identity.hubID, v: 1 }));
       }
-      if (request.method === "POST" && path === "/v1/device") return json(ok((await this.receive(request))!));
+      if (request.method === "POST" && path === "/v1/device") return json(ok((await this.receive(request, undefined, local))!));
       return json(fail(404, "接口不存在"));
     } catch (error) {
       if (error instanceof WireError) return json(fail(error.status, error.message));
@@ -450,14 +474,14 @@ export class DeviceService {
     }
   }
 
-  private async receive(request: Request | Response, context?: RelayRequest) {
+  private async receive(request: Request | Response, context?: RelayRequest, local = false) {
     const envelope = await readEnvelope(request, context !== undefined);
     const { device } = envelope;
     if (context && device !== (context.mailbox.state === "active" ? context.mailbox.device : null)) throw unpaired();
     const identity = await this.activeIdentity();
     if (!identity || this.stopped) throw unpaired();
-    const registered = device === null ? null : this.sql.prepare<[string], { public_key: Buffer }>("SELECT public_key FROM devices WHERE id=?").get(device);
-    if (device !== null && !registered) throw unpaired();
+    const registered = device === null ? null : this.sql.prepare<[string], { public_key: Buffer; local_only: number }>("SELECT public_key, local_only FROM devices WHERE id=?").get(device);
+    if (device !== null && (!registered || (registered.local_only && !local))) throw unpaired();
     const sender = registered && await suite.kem.deserializePublicKey(registered.public_key);
     const input = await openRequest(envelope, identity.keys, sender ?? undefined);
     const pairKey = device === null ? base64url(object(input?.body)?.device_pk, 32) : null;
@@ -582,9 +606,10 @@ export class DeviceService {
     }
     if (platform === "android" && invite.role !== "collect") return commitError(fail(403, devicePermissionDenied), "platform_role");
     const name = body.name.trim();
-    const allocate = this.sql.prepare("INSERT OR IGNORE INTO issued_device_ids VALUES(?)");
-    let device_id: string;
-    do { device_id = `${platform}-${base32(randomBytes(5))}`; } while (!allocate.run(device_id).changes);
+    if (this.sql.prepare("SELECT 1 FROM devices WHERE public_key=? AND local_only=1").get(publicKey)) {
+      return commitError(fail(409, "公钥已用于本机登记"), "key_conflict");
+    }
+    const device_id = allocateDeviceID(this.sql, platform);
     let provisioned: Awaited<ReturnType<RelayService["provisionDevice"]>>;
     try { provisioned = await this.relay.provisionDevice(device_id); }
     catch (error) {
@@ -696,10 +721,14 @@ export class DeviceService {
       if (includePrivate && fromRelay) return this.denied(device, op);
       return ok(projection.read(op, body, max, includePrivate));
     }
+    if (op.startsWith("agent.")) {
+      if (fromRelay) return this.denied(device, op);
+      return agentOperation(new AgentReads(this.hub), device, op.slice(6), body);
+    }
     switch (op) {
       case "ingest":
         if (!Array.isArray(body.records) || body.records.length > 200) throw new InputError("records 必须是最多 200 条的数组");
-        return ok(this.hub.ingest(body.records, device));
+        return ok(this.hub.ingest(body.records, device, access.platform, access.platform === "mac" && role === "admin"));
       case "delete":
         if (!Array.isArray(body.ids) || body.ids.length < 1 || body.ids.length > 100 ||
           !body.ids.every(id => typeof id === "string" && idPattern.test(id))) throw new InputError("每次删除需要 1–100 个有效记录 id");

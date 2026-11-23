@@ -11,7 +11,7 @@ import { projectionHead, pruneProjection, resetProjection, relayProjectionBytes 
 import type { ProjectionPage } from "../src/devices/projection.ts";
 import { dayMs, type RelayConfig } from "../src/devices/relay-store.ts";
 import { startServer } from "../src/server.ts";
-import { decodePairing, DeviceClient, type ResponseEnvelope } from "./device-client.ts";
+import { decodePairing, DeviceClient, type ResponseEnvelope } from "../src/devices/client.ts";
 import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 
 const path = "/v1/settings/relay";
@@ -311,7 +311,7 @@ test("v13 加密数据库升级到 v16，保留配对记录并清理迁移备份
     ctx.db.close();
     const db = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(db.db.pragma("user_version", { simple: true })).toBe(16);
+      expect(db.db.pragma("user_version", { simple: true })).toBe(17);
       expect(db.db.prepare("SELECT id FROM devices").all()).toEqual([{ id: "android-abcd2345" }]);
       expect(db.db.prepare("SELECT * FROM device_nonces").all()).toEqual([]);
       expect(existsSync(ctx.file + ".migration-v13.bak")).toBe(false);
