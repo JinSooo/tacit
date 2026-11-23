@@ -524,7 +524,7 @@ test("限制远程提权及最后管理员，降回 collect 只下发重置，�
   } finally { await hub.dispose(); }
 });
 
-test("远程删除限额按库累计，包含修正、跨重启保留，远程设备自身删除也受限", async () => {
+test("远程删除限额按库累计，包含修正、跨重启保留；远程设备删自己的记录不计入、额度用完也能删", async () => {
   const hub = await runningHub();
   try {
     const phone = await hub.pair();
@@ -543,8 +543,9 @@ test("远程删除限额按库累计，包含修正、跨重启保留，远程�
     await hub.restart();
     expect((await remove(199, 200, otherAdmin)).status).toBe(429);
     expect(hub.db.get(rows[199]!.id)).not.toBeNull();
-    expect((await admin.send("delete", { ids: [own.id] })).status).toBe(429);
-    expect((await phone.send("delete", { ids: [ownPhone.id] })).status).toBe(429);
+    // 额度用完时，删自己采集的记录照样成功，且不占额度（手机删除不能被共享额度拦下）。
+    expect(await admin.send("delete", { ids: [own.id] })).toMatchObject({ status: 200, body: { deleted: 1 } });
+    expect(await phone.send("delete", { ids: [ownPhone.id] })).toMatchObject({ status: 200, body: { deleted: 1 } });
     for (let cursor = 199; cursor < 999; cursor += 200) {
       hub.advance(minute);
       expect((await remove(cursor, cursor + 100)).body.deleted).toBe(100);

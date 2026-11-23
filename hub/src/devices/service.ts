@@ -819,8 +819,12 @@ export class DeviceService {
   private deleteRecords(device: string, ids: string[], ownOnly: boolean, local: boolean) {
     return this.hub.deleteMany(ids, ownOnly ? device : undefined, rows => {
       if (!rows.length) return;
-      if (local) auditSecurity(this.sql, "local.delete", { actor: device, code: String(rows.length), now: this.clock() });
-      else if (!reserveRemoteDelete(this.sql, device, rows.length, this.clock())) throw new RemoteDeleteLimited(rows.length);
+      if (local) { auditSecurity(this.sql, "local.delete", { actor: device, code: String(rows.length), now: this.clock() }); return; }
+      // 远程设备删自己采集的记录不计入：密钥泄露时也只波及这台设备自己的数据，且手机等采集端的删除不能占用共享额度被拦下（6.11.4）。
+      const requested = new Set(ids);
+      const cross = new Set(rows.filter(row => row.device !== device && requested.has(row.id)).map(row => row.id));
+      const count = rows.filter(row => cross.has(row.id) || (row.corrects !== null && cross.has(row.corrects))).length;
+      if (count && !reserveRemoteDelete(this.sql, device, count, this.clock())) throw new RemoteDeleteLimited(count);
     });
   }
 
