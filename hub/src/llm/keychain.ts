@@ -2,6 +2,7 @@
 // 只经 /usr/bin/security（AGENTS.md）；key 不进命令行参数、日志、错误信息或文件。
 import { spawn } from "node:child_process";
 import type { KeyProvider } from "./config.ts";
+import { PROVIDER_KEY_PATTERN, defaultSecretStore, providerAccount, secretBackendOf, type SecretStore } from "../secrets/index.ts";
 
 export interface Keychain {
   has(provider: KeyProvider): Promise<boolean>;
@@ -13,7 +14,7 @@ export interface Keychain {
 const SECURITY = "/usr/bin/security";
 const SERVICE = "record-anything";
 /** security -i 按双引号解析一行命令，引号和反斜杠无法原样写入（2026-11-10 实测）；API key 本来也只用可见 ASCII。 */
-export const KEY_PATTERN = /^[\x21\x23-\x5b\x5d-\x7e]{8,1024}$/;
+export const KEY_PATTERN = PROVIDER_KEY_PATTERN;
 
 function run(command: string, args: string[], input?: string): Promise<number | null> {
   return new Promise(resolve => {
@@ -33,7 +34,7 @@ export function securityKeychain(command = SECURITY): Keychain {
   return {
   async has(provider) {
     // 不带 -w：只查条目属性，不读出密码，也不会触发钥匙串授权框。
-    const code = await run_(["find-generic-password", "-s", SERVICE, "-a", `provider:${provider}`]);
+    const code = await run_(["find-generic-password", "-s", SERVICE, "-a", providerAccount(provider)]);
     if (code === 0) return true;
     if (code === 44) return false;
     throw new Error("无法查询钥匙串");
@@ -41,15 +42,39 @@ export function securityKeychain(command = SECURITY): Keychain {
   async set(provider, key) {
     if (!KEY_PATTERN.test(key)) throw new Error("API key 格式无效");
     // 交互模式从 stdin 读命令，key 不出现在进程参数里（ps 看不到）；-U 覆盖已有条目。
-    const code = await run_(["-i"], `add-generic-password -U -s ${SERVICE} -a provider:${provider} -w "${key}"\n`);
+    const code = await run_(["-i"], `add-generic-password -U -s ${SERVICE} -a ${providerAccount(provider)} -w "${key}"\n`);
     if (code !== 0) throw new Error("写入钥匙串失败");
   },
   async remove(provider) {
-    const code = await run_(["delete-generic-password", "-s", SERVICE, "-a", `provider:${provider}`]);
+    const code = await run_(["delete-generic-password", "-s", SERVICE, "-a", providerAccount(provider)]);
     if (code === 0) return true;
     if (code === 44) return false;
     throw new Error("删除钥匙串条目失败");
   },
   };
 }
-export const systemKeychain = securityKeychain();
+
+/** sealed-file 后端：同一个 Keychain 接口，落到 secrets.enc。 */
+export function storeKeychain(store: SecretStore): Keychain {
+  return {
+    async has(provider) {
+      try { return store.has(providerAccount(provider)); } catch { throw new Error("无法查询密钥存储"); }
+    },
+    async set(provider, key) {
+      if (!KEY_PATTERN.test(key)) throw new Error("API key 格式无效");
+      try { store.write(providerAccount(provider), key); } catch { throw new Error("写入密钥存储失败"); }
+    },
+    async remove(provider) {
+      try { return store.remove(providerAccount(provider)); } catch { throw new Error("删除密钥存储条目失败"); }
+    },
+  };
+}
+
+/** Mac 默认后端沿用异步调用 /usr/bin/security 的实现（行为不变）；服务端 sealed-file 走 SecretStore。 */
+const macKeychain = securityKeychain();
+const select = (): Keychain => secretBackendOf() === "keychain" ? macKeychain : storeKeychain(defaultSecretStore());
+export const systemKeychain: Keychain = {
+  has: provider => Promise.resolve().then(() => select().has(provider)),
+  set: (provider, key) => Promise.resolve().then(() => select().set(provider, key)),
+  remove: provider => Promise.resolve().then(() => select().remove(provider)),
+};

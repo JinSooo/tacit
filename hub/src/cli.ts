@@ -11,7 +11,9 @@ export function cliErrorDetail(error: unknown): string {
   const value = error as { name?: unknown; code?: unknown } | null;
   const label = (input: unknown, fallback: string) => typeof input === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(input) ? input : fallback;
   const name = label(value?.name, "Error");
-  return `${name} (${label(value?.code, "UNKNOWN")})`;
+  // 密钥存放层的错误带固定的 reason 类别（secrets/errors.ts），帮运维区分根密钥缺失、权限、位置等。
+  const reason = (error as { reason?: unknown } | null)?.reason;
+  return `${name} (${label(value?.code, "UNKNOWN")}${typeof reason === "string" && /^[a-z_]{1,48}$/.test(reason) ? `: ${reason}` : ""})`;
 }
 
 const startupMessages = {
@@ -91,6 +93,8 @@ async function serve(): Promise<void> {
   } catch (error) {
     const code = errorCode(error);
     if (code === "db_key_missing" || code === "db_key_unreadable" || code === "db_migration_failed") failure = code;
+    // 服务端 sealed-file：根密钥或 secrets.enc 不可用，沿用“密钥读不出来”这一类启动诊断（Mac 端诊断的类别表是固定的）。
+    else if (code === "master_key_unreadable") failure = "db_key_unreadable";
     else if (code === "EADDRINUSE") failure = "port_in_use";
     reportStartupFailure(dataDir, failure);
     stopLogs?.();
@@ -162,8 +166,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === "keys") {
     if (name !== "export" || argv.length !== 2) throw new Error("用法：bun hub/src/cli.ts keys export");
-    const { exportKeys } = await import("./keys.ts");
-    const { text, missing } = exportKeys();
+    const { exportKeysForBackend } = await import("./keys.ts");
+    const { text, missing } = exportKeysForBackend();
     console.log(text);
     if (missing.length) { console.error(`没有导出：${missing.join("、")}密钥`); process.exitCode = 1; }
     return;

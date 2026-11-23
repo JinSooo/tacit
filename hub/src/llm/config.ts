@@ -2,6 +2,7 @@ import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
+import { defaultSecretStore, providerAccount, secretBackendOf } from "../secrets/index.ts";
 import type { ModelConfig, Provider, ReasoningEffort, Tier } from "./types.ts";
 
 export const TIERS: Tier[] = ["minute", "hour", "day"];
@@ -71,9 +72,16 @@ export async function saveConfig(dataDir: string, tiers: unknown): Promise<Recor
 }
 
 export function readKey(provider: Provider): Promise<string> {
+  const account = providerAccount(provider);
+  // sealed-file（服务端）直接读 secrets.enc；Mac 默认后端仍异步调用 /usr/bin/security，不阻塞中枢事件循环。
+  if (secretBackendOf() !== "keychain") {
+    return Promise.resolve().then(() => defaultSecretStore().read(account)).then(
+      value => { if (!value) throw new Error(`无法读取 ${account} 的密钥`); return value; },
+      () => { throw new Error(`无法读取 ${account} 的密钥`); });
+  }
   return new Promise((resolve, reject) => {
-    execFile("security", ["find-generic-password", "-s", "record-anything", "-a", `provider:${provider}`, "-w"], { timeout: 10_000 }, (error, stdout) => {
-      if (error || !stdout.trim()) reject(new Error(`无法从钥匙串读取 provider:${provider}`));
+    execFile("/usr/bin/security", ["find-generic-password", "-s", "record-anything", "-a", account, "-w"], { timeout: 10_000 }, (error, stdout) => {
+      if (error || !stdout.trim()) reject(new Error(`无法从钥匙串读取 ${account}`));
       else resolve(stdout.trim());
     });
   });
