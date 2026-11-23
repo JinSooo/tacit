@@ -16,6 +16,25 @@
 - 在对话页点“开启”开始录音，试听标记“我”。分别测试只有他人的对话和有“我”的对话，核对前者无历史记录、后者可在本机转写。按硬件分别核对 QNN 与 CPU 路径。
 - 在 HyperOS 上重启或停止服务后打开 Tacit，确认录音自动接上；在设置里关掉后再打开，确认不会自动开始、页首出现“录音没有开启”。测试转写脱敏、复制及删除。
 
+## 真机仪器测试
+
+只用 `ANDROID_HOME=$HOME/Library/Android/sdk python3 scripts/verify-device.py`（覆盖安装，不卸载、不清数据）；它不编译，先跑 `./scripts/verify.sh` 产出两份 APK。不要用 Gradle 的 `connectedDebugAndroidTest`，它会卸载应用、清空手机数据。
+
+语音和 NPU 用例需要两样测试素材，缺了会以“前提不满足”跳过，脚本把这类跳过算作错误：
+
+- 合成语音：在 Mac 上用装好的中文语音生成含“本地”“记录”的句子，转成 16 kHz 单声道小端 16 位原始 PCM，放进应用私有目录 `files/speech-fixture.pcm`：
+
+  ```sh
+  say -v Tingting -o fx.aiff "这是一段本地记录的测试语音。今天的本地记录已经整理好了，记录会保存在手机上。"
+  afconvert -f WAVE -d LEI16@16000 -c 1 fx.aiff fx.wav   # 再去掉 WAV 头得到 fx.pcm
+  adb shell "run-as top.jinso.tacit tee files/speech-fixture.pcm > /dev/null" < fx.pcm
+  ```
+
+  部分中文语音（Eddy、Flo、Ting-Ting）在 Mac 上没下载时只输出 0.01 秒，先确认时长。
+- SM8650 的 QNN 模型：从 `QnnCatalog.archive` 的地址下载，核对 `QnnCatalog` 里的大小和 SHA-256，只解出 `model.bin`、`tokens.txt`，放进 `no_backup/qnn-models/incoming/`，测试会自行校验并启用。启用后应用平时转写会自动走 NPU；用户没开过加速时，测完删掉 `no_backup/qnn-models/` 下的模型目录和 `current`，恢复只用 CPU。
+
+覆盖安装会停掉录音服务，测完打开一次 Tacit 让录音自动接上。
+
 ## 配对与同步
 
 JVM 单测从仓库读取中枢生成的向量，逐字节验证配对、同步请求及两种回复。测试覆盖邀请过期、回执校验、发送副本的设备编号、分页保存与确认顺序，以及收到明文 401 后停止请求。
