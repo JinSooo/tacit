@@ -11,7 +11,7 @@ import { validateRecord } from "../../packages/record/index.ts";
 import vectors from "../../schema/fixtures/device-envelope.json";
 import { decodePairing, DeviceClient, type ResponseEnvelope } from "./device-client.ts";
 import { deviceFixture } from "./generate-device-fixture.ts";
-import { fixture, setup } from "./helpers.ts";
+import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 
 const minute = 60_000;
 
@@ -298,16 +298,17 @@ test("音频转发只使用配对身份，拒绝跨设备修改对话和上传�
   } finally { await hub.dispose(); }
 });
 
-test("v12 加密数据库迁移到 v14，保留记录并清理验证通过的备份", () => {
+test("v12 加密数据库迁移到 v15，保留记录并清理验证通过的备份", () => {
   const hub = setup();
   try {
     const record = fixture();
     hub.db.ingest([record]);
+    removeProjectionSchema(hub.db.db);
     hub.db.db.exec("DROP TABLE devices; DROP TABLE issued_device_ids; DROP TABLE device_changes; DROP INDEX records_device; PRAGMA user_version=12");
     hub.db.close();
     const migrated = new HubDB(hub.file, hub.config.dbKey);
     try {
-      expect(migrated.db.pragma("user_version", { simple: true })).toBe(14);
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(15);
       expect(migrated.get(record.id)).toMatchObject({ id: record.id });
       expect(migrated.db.prepare("SELECT * FROM devices").all()).toEqual([]);
       expect(existsSync(hub.file + ".migration-v12.bak")).toBe(false);
@@ -319,6 +320,7 @@ test("v12 结构冲突时保留加密备份并回滚迁移", () => {
   const hub = setup();
   try {
     hub.db.ingest([fixture()]);
+    removeProjectionSchema(hub.db.db);
     hub.db.db.exec(`
       DROP TABLE devices; DROP TABLE issued_device_ids; DROP TABLE device_changes; DROP INDEX records_device;
       CREATE VIEW device_changes AS SELECT 1;

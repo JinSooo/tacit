@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { AudioStore } from "../src/audio.ts";
 import { HubDB } from "../src/db.ts";
-import { fixture, setup } from "./helpers.ts";
+import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 import { ulid } from "../../packages/record/index.ts";
 
 let ctx: ReturnType<typeof setup>;
@@ -11,6 +11,7 @@ afterEach(() => ctx.cleanup());
 
 test("迁移失败重试时，截断或等长但损坏的备份会被完整副本替换", () => {
   // 模拟一份有结构冲突的旧库，迁移失败后可以立即检验留下的副本。
+  removeProjectionSchema(ctx.db.db);
   ctx.db.db.exec("CREATE TABLE distill_requests_v11 (id TEXT); PRAGMA user_version=11;");
   ctx.db.close();
   const source = readFileSync(ctx.file), backup = `${ctx.file}.migration-v11.bak`;
@@ -31,7 +32,7 @@ test("SQLCipher 实际文件加密，错误密钥拒绝，正确密钥重开及�
   const reopened = new HubDB(ctx.file, ctx.config.dbKey);
   try {
     expect(reopened.get(record.id)?.body).toBe(record.body);
-    expect(reopened.db.pragma("user_version", { simple: true })).toBe(14);
+    expect(reopened.db.pragma("user_version", { simple: true })).toBe(15);
   } finally { reopened.close(); }
 });
 
@@ -146,6 +147,7 @@ test("来源稳定键、修正目标和不可排序的日期逐条拒绝", () =>
 test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成迁移（10 次）", async () => {
   const script = new URL("./fixtures/migrate-worker.ts", import.meta.url).pathname;
   for (let round = 0; round < 10; round++) {
+    removeProjectionSchema(ctx.db.db);
     ctx.db.db.exec("DROP TABLE speakers; DROP TABLE voice_embeddings; DROP TABLE voice_samples; DROP TABLE sample_requests; DROP TABLE audio_settings; DROP TABLE agent_reads; DROP TABLE distill_requests; ALTER TABLE threads DROP COLUMN domain; ALTER TABLE threads DROP COLUMN project_hint; DROP TABLE runtime_calls; PRAGMA user_version=2;");
     const gate = `${ctx.dir}/gate-${round}`;
     const children = [0, 1].map(index => Bun.spawn([process.execPath, script, ctx.file, ctx.config.dbKey, gate, String(index)], { stdout: "pipe", stderr: "pipe" }));
@@ -157,8 +159,8 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
       }
       writeFileSync(gate, "go");
       const results = await Promise.all(children.map(async child => ({ code: await child.exited, error: await new Response(child.stderr).text(), output: await new Response(child.stdout).text() })));
-      expect(results).toEqual([{ code: 0, error: "", output: "14\n" }, { code: 0, error: "", output: "14\n" }]);
-      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(14);
+      expect(results).toEqual([{ code: 0, error: "", output: "15\n" }, { code: 0, error: "", output: "15\n" }]);
+      expect(ctx.db.db.pragma("user_version", { simple: true })).toBe(15);
       expect(ctx.db.db.pragma("table_info(threads)")).toEqual(expect.arrayContaining([expect.objectContaining({ name: "domain" }), expect.objectContaining({ name: "project_hint" })]));
       expect(ctx.db.db.pragma("table_info(agent_reads)")).toHaveLength(8);
       expect(ctx.db.db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'agent_reads_%'").all()).toHaveLength(2);
@@ -170,12 +172,13 @@ test("两个子进程并发迁移 v2，等锁后复读版本并跳过已完成�
 }, 30000);
 
 test("v8 用量升级到 v9：task 列可空，旧行不变，重开幂等", () => {
+  removeProjectionSchema(ctx.db.db);
   ctx.db.db.exec("ALTER TABLE llm_usage DROP COLUMN task; DROP TABLE runtime_calls; PRAGMA user_version=8;");
   ctx.db.db.prepare("INSERT INTO llm_usage(id, tier, input_tokens, ok) VALUES(?,?,?,?)").run("legacy-usage", "hour", 123, 1);
   for (let i = 0; i < 2; i++) {
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(14);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(15);
       expect((upgraded.db.pragma("table_info(llm_usage)") as { name: string; type: string }[]).filter(c => c.name === "task")).toMatchObject([{ name: "task", type: "TEXT" }]);
       expect(upgraded.db.prepare("SELECT id,tier,input_tokens,ok,task FROM llm_usage WHERE id=?").get("legacy-usage")).toEqual({ id: "legacy-usage", tier: "hour", input_tokens: 123, ok: 1, task: null });
     } finally { upgraded.close(); }
@@ -196,18 +199,19 @@ test("v9 声纹升级 v10：mic 列按现有声纹回填，重开及已有列幂
   if ((ctx.db.db.pragma("table_info(speakers)") as { name: string }[]).some(c => c.name === "mic")) {
     ctx.db.db.exec("ALTER TABLE speakers DROP COLUMN mic;");
   }
+  removeProjectionSchema(ctx.db.db);
   ctx.db.db.exec("DROP TABLE runtime_calls; PRAGMA user_version=9;");
   for (let i = 0; i < 3; i++) {
     const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(14);
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(15);
       expect((upgraded.db.pragma("table_info(speakers)") as { name: string }[]).filter(c => c.name === "mic"))
         .toMatchObject([{ name: "mic", type: "INTEGER", notnull: 1, dflt_value: "0" }]);
       expect(upgraded.db.prepare("SELECT mic FROM speakers WHERE id=?").get(mic)).toEqual({ mic: 1 });
       expect(upgraded.db.prepare("SELECT mic FROM speakers WHERE id=?").get(sys)).toEqual({ mic: 0 });
       // 已有列但版本号尚旧时也能迁移；声纹清理后重开不能丢掉 mic。
       upgraded.db.prepare("DELETE FROM voice_embeddings WHERE track='mic'").run();
-      if (i === 0) upgraded.db.exec("DROP TABLE runtime_calls; PRAGMA user_version=9;");
+      if (i === 0) { removeProjectionSchema(upgraded.db); upgraded.db.exec("DROP TABLE runtime_calls; PRAGMA user_version=9;"); }
     } finally { upgraded.close(); }
   }
 });
@@ -221,4 +225,34 @@ test("设备先删了还没送到的记录，之后那条记录再到达也不�
   const other = fixture({ source: "manual.note" });
   expect(ctx.db.deleteMany([other.id])).toBe(0);
   expect(ctx.db.ingest([other])).toMatchObject({ accepted: 1 });
+});
+
+test("v14 迁移保留 Android 身份并索引已有整理，投影写入失败时原文删除一并回滚", () => {
+  const ctx = setup();
+  try {
+    const record = fixture();
+    const date = record.t_start.slice(0, 10);
+    ctx.db.ingest([record]);
+    ctx.db.db.prepare("INSERT INTO days(date,brief) VALUES(?,?)").run(date, "合成日历");
+    ctx.db.db.exec("INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen) VALUES ('android-abcd2345','测试手机','android',X'00','2026-11-23','2026-11-23');");
+    removeProjectionSchema(ctx.db.db);
+    ctx.db.db.pragma("user_version=14");
+    ctx.db.close();
+
+    const upgraded = new HubDB(ctx.file, ctx.config.dbKey);
+    try {
+      expect(upgraded.db.pragma("user_version", { simple: true })).toBe(15);
+      expect(existsSync(ctx.file + ".migration-v14.bak")).toBe(false);
+      expect(upgraded.db.prepare("SELECT viewer,projection_cursor,projection_epoch FROM devices").get())
+        .toEqual({ viewer: 0, projection_cursor: 0, projection_epoch: 0 });
+      const index = upgraded.db.prepare("SELECT seq,kind,entity_id,rev FROM projection_changes ORDER BY seq");
+      const before = index.all();
+      expect(before).toContainEqual(expect.objectContaining({ kind: "day", entity_id: date }));
+      upgraded.db.exec(`CREATE TRIGGER fail_projection_withdrawal BEFORE INSERT ON projection_changes
+        WHEN NEW.kind='record_gone' BEGIN SELECT RAISE(ABORT,'test rollback'); END;`);
+      expect(() => upgraded.delete(record.id)).toThrow("test rollback");
+      expect(upgraded.get(record.id)?.body).toBe(record.body);
+      expect(index.all()).toEqual(before);
+    } finally { upgraded.close(); }
+  } finally { ctx.cleanup(); }
 });

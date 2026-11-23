@@ -5,14 +5,18 @@ import { DistillStore, type Thread } from "./distill/store.ts";
 const day = 24 * 3600_000;
 const emptyBrief = "最近 24 小时没有活跃的线程。";
 
-export function nowSummary(store: DistillStore, clock: number) {
+export function nowSummary(store: DistillStore, clock: number, include?: (id: string) => boolean) {
   // 暂停的事项只要近 24 小时有活动，也仍属于此刻。
-  const rows = store.hub.db.prepare(`SELECT t.id,t.title,t.brief,t.last_ms,t.updated_at,p.name project
+  type Recent = Pick<Thread, "id" | "title" | "updated_at"> & { brief: string; last_ms: number; project: string | null };
+  const candidates = store.hub.db.prepare<[number, number], Recent>(`SELECT t.id,t.title,t.brief,t.last_ms,t.updated_at,p.name project
     FROM threads t LEFT JOIN projects p ON p.id=t.project_id
     WHERE t.status IN ('active','paused') AND t.last_ms>? AND t.last_ms<=? AND trim(t.brief)!=''
-    ORDER BY t.last_ms DESC LIMIT 5`).all(clock - day, clock) as (Pick<Thread, "id" | "title" | "updated_at"> & {
-      brief: string; last_ms: number; project: string | null;
-    })[];
+    ORDER BY t.last_ms DESC`).iterate(clock - day, clock);
+  const rows: Recent[] = [];
+  for (const row of candidates) {
+    if (!include || include(row.id)) rows.push(row);
+    if (rows.length === 5) break;
+  }
   const threads = rows.map(t => ({ thread_id: t.id, title: t.title, brief: t.brief, project: t.project, last: toLocalIso(t.last_ms) }));
   const top = threads[0];
   const brief = top ? (top.project && !top.brief.includes(top.project) ? `${top.project}：${top.brief}` : top.brief) : emptyBrief;

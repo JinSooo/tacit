@@ -43,3 +43,26 @@ export function networkDenied(): Promise<boolean> {
     probe.listen(0, "127.0.0.1", () => probe.close(() => resolve(false)));
   });
 }
+
+/** Migration fixtures start from setup() and then remove the schema newer than the version under test. */
+export function removeProjectionSchema(db: HubDB["db"]) {
+  db.transaction(() => {
+    const triggers = db.prepare<[], { name: string }>("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB 'projection_*'").all();
+    for (const { name } of triggers) db.exec(`DROP TRIGGER "${name}"`);
+    db.exec(`
+      DROP TABLE projection_changes; DROP TABLE project_context_cache; DROP TABLE relay_projection_replies;
+      DELETE FROM distill_state WHERE k GLOB 'projection_*';
+      ALTER TABLE devices DROP COLUMN viewer;
+      ALTER TABLE devices DROP COLUMN projection_cursor;
+      ALTER TABLE devices DROP COLUMN projection_epoch;
+      ALTER TABLE devices DROP COLUMN projection_window_from;
+      ALTER TABLE devices DROP COLUMN projection_window_until;
+      ALTER TABLE relay_mailboxes DROP COLUMN push_msg_id;
+      ALTER TABLE relay_mailboxes DROP COLUMN push_seq;
+      ALTER TABLE relay_mailboxes DROP COLUMN push_epoch;
+      ALTER TABLE relay_mailboxes DROP COLUMN push_at;
+      ALTER TABLE relay_mailboxes DROP COLUMN push_kind;
+      ALTER TABLE relay_mailboxes DROP COLUMN projection_purged_epoch;
+    `);
+  })();
+}

@@ -47,14 +47,14 @@ function appOf(context: string | null): string | null {
   catch { return null; }
 }
 
-export function historySegments(hub: HubDB, params: URLSearchParams): { segments: Segment[]; conversations: ReturnType<typeof conversationList> } {
+export function historySegments(hub: HubDB, params: URLSearchParams, include = (_id: string) => true): { segments: Segment[]; conversations: ReturnType<typeof conversationList> } {
   const from = Date.parse(params.get("from") ?? ""), to = Date.parse(params.get("to") ?? "");
   if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) throw new InputError("需要有效的 from 和 to");
   if (to - from > MAX_RANGE_MS) throw new InputError("时间范围不能超过 31 天");
   const device = params.get("device");
-  const rows = hub.db.prepare(`SELECT r.id,r.source,r.title,r.t_start_ms,r.t_end,r.context,r.sensitivity,a.thread_id
+  const rows = (hub.db.prepare(`SELECT r.id,r.source,r.title,r.t_start_ms,r.t_end,r.context,r.sensitivity,a.thread_id
     FROM records r LEFT JOIN frame_records fr ON fr.record_id=r.id LEFT JOIN assignments a ON a.frame_id=fr.frame_id
-    WHERE r.t_start_ms>=? AND r.t_start_ms<=? ${device ? "AND r.device=?" : ""} ORDER BY r.t_start_ms,r.id`).all(...[from,to,...device ? [device] : []]) as Row[];
+    WHERE r.t_start_ms>=? AND r.t_start_ms<=? ${device ? "AND r.device=?" : ""} ORDER BY r.t_start_ms,r.id`).all(...[from,to,...device ? [device] : []]) as Row[]).filter(row => include(row.id));
 
   const threadIds = [...new Set(rows.flatMap(r => r.thread_id ? [r.thread_id] : []))];
   const threads = new Map<string, SegmentThread>();

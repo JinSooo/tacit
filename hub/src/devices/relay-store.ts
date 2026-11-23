@@ -60,11 +60,18 @@ export interface Mailbox {
   move_id: string | null;
   move_body: string | null;
   pending: number | null;
+  push_msg_id: string | null;
+  push_seq: number | null;
+  push_epoch: number | null;
+  push_at: number | null;
+  push_kind: string | null;
+  projection_purged_epoch: number | null;
 }
 
 export interface RelayRequest {
   mailbox: Mailbox;
   id: string;
+  projectionRead?: { seq: number; urgent: number; epoch: number };
 }
 
 export function relayConfig(space: Space, box: Mailbox): RelayConfig {
