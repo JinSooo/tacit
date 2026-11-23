@@ -37,7 +37,11 @@ export class DeviceClient {
     return { v: 1, device: this.device, enc: Buffer.from(context.enc).toString("base64url"), ct: Buffer.from(ct).toString("base64url") };
   }
 
-  async open<T>(envelope: ResponseEnvelope, nonce: string): Promise<{ status: number; body: T }> {
+  open<T>(envelope: ResponseEnvelope, nonce: string) {
+    return this.openPayload<{ status: number; body: T }>(envelope, nonce);
+  }
+
+  async openPayload<T>(envelope: ResponseEnvelope, nonce: string): Promise<T> {
     const context = await suite.createRecipientContext({
       recipientKey: this.keys, senderPublicKey: this.hub, enc: Buffer.from(envelope.enc, "base64url"), info: utf8(responseInfo),
     });

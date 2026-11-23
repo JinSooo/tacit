@@ -91,10 +91,12 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
     try {
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
-      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, lanPort: options.devices?.open ? options.devices.lanPort : null, busy: busy.snapshot() }));
+      if (method === "GET" && url.pathname === "/v1/status") return Response.json(hubStatus(db, { port, lanPort: options.devices?.open ? options.devices.lanPort : null, busy: busy.snapshot(), relay: options.devices?.relay.status() }));
       if (url.pathname.startsWith("/v1/settings/")) {
         const deviceResponse = await options.devices?.settings(method, url.pathname);
         if (deviceResponse) return deviceResponse;
+        const relayResponse = await options.devices?.relay.settings(method, url.pathname, readJSON);
+        if (relayResponse) return relayResponse;
         const response = await settings(request, url, { db, port, readJSON, lan: options.devices?.open ?? false });
         if (response) return response;
       }
@@ -251,8 +253,10 @@ export function startServer(options: {
   let handler: ReturnType<typeof createHandler>;
   const server = Bun.serve({ hostname: "127.0.0.1", port: options.port ?? DEFAULT_PORT, fetch(request, server) {
     handler ??= createHandler({ ...options, devices, port: server.port });
+    const path = new URL(request.url).pathname;
     // 测试连接最长等 60 秒，超过 Bun 默认的 10 秒空闲超时。
-    if (new URL(request.url).pathname === "/v1/settings/models/test") server.timeout(request, 75);
+    if (path === "/v1/settings/models/test") server.timeout(request, 75);
+    if (path.startsWith("/v1/settings/relay") || path.startsWith("/v1/settings/devices/")) server.timeout(request, 0);
     return handler(request);
   } });
   devices.start();

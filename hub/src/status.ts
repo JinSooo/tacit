@@ -1,3 +1,4 @@
+import type { RelayService } from "./devices/relay.ts";
 import { deviceList } from "./devices/store.ts";
 import { BusyResponses } from "./db-busy.ts";
 import { readFileSync, statSync } from "node:fs";
@@ -121,7 +122,7 @@ function recordGroups(hub: HubDB) {
   return { bySource: merge("source") as { source: string; count: number; last_received: string | null }[], byDevice: merge("device") as { device: string; count: number; last_received: string | null }[], tombstones };
 }
 
-export function hubStatus(hub: HubDB, options: { port: number; lanPort?: number | null; now?: number; busy?: ReturnType<BusyResponses["snapshot"]> }) {
+export function hubStatus(hub: HubDB, options: { port: number; lanPort?: number | null; now?: number; busy?: ReturnType<BusyResponses["snapshot"]>; relay?: ReturnType<RelayService["status"]> }) {
   const sql = hub.db;
   const now = options.now ?? Date.now();
   const counts = (query: string, ...args: unknown[]): Counts =>
@@ -193,6 +194,7 @@ export function hubStatus(hub: HubDB, options: { port: number; lanPort?: number 
 
   return {
     devices: deviceList(hub),
+    relay: options.relay ?? null,
     generated_at: toLocalIso(now),
     hub: {
       started_at: toLocalIso(now - Math.round(process.uptime() * 1000)),
