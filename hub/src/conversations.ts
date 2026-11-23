@@ -1,6 +1,6 @@
 import type { HubDB } from "./db.ts";
 import { InputError } from "./db.ts";
-import { AUDIO_SOURCES, sourceList } from "./record-sources.ts";
+import { AUDIO_SOURCES, recordDeviceFilter, sourceList } from "./record-sources.ts";
 
 /**
  * 一场对话常被静音切成几条记录，按规则合成一组；
@@ -174,20 +174,20 @@ function appOf(context: string | null): string | null {
   if (!context) return null;
   try { const app = (JSON.parse(context) as { app?: unknown }).app; return typeof app === "string" && app ? app : null; } catch { return null; }
 }
-function audioRows(db: HubDB, from: number, to: number, device?: string): AudioMetaRow[] {
+function audioRows(db: HubDB, from: number, to: number, device?: string, matchDeviceGroup = false): AudioMetaRow[] {
   return db.db.prepare<[number, number, ...string[]], AudioMetaRow>(`SELECT r.id,r.source,r.device,r.t_start,r.t_start_ms,r.t_end,r.context,
     CASE WHEN r.sensitivity='private' OR COALESCE(c.sensitivity,'normal')='private' THEN 'private' ELSE COALESCE(c.sensitivity,r.sensitivity) END AS sensitivity
     FROM records r
     LEFT JOIN records c ON c.id=(SELECT cc.id FROM records cc WHERE cc.corrects=r.id AND cc.source='manual.correction' ORDER BY cc.t_start_ms DESC,cc.id DESC LIMIT 1)
-    WHERE r.source IN (${sourceList(AUDIO_SOURCES)}) AND r.t_start_ms>=? AND r.t_start_ms<=?${device ? " AND r.device=?" : ""}
+    WHERE r.source IN (${sourceList(AUDIO_SOURCES)}) AND r.t_start_ms>=? AND r.t_start_ms<=?${device ? " AND " + (matchDeviceGroup ? recordDeviceFilter(device) : "r.device=?") : ""}
     ORDER BY r.t_start_ms,r.id`).all(from, to, ...(device ? [device] : []));
 }
 const toAudio = (r: AudioMetaRow): AudioRow => ({ id: r.id, source: r.source, device: r.device, start_ms: r.t_start_ms, end_ms: Math.max(r.t_start_ms, r.t_end ? Date.parse(r.t_end) || r.t_start_ms : r.t_start_ms), app: appOf(r.context), private: r.sensitivity === "private" });
 
 /** 范围内的对话分组。范围两头各多读一段，免得把跨边界的一场切开。 */
-export function conversationsIn(db: HubDB, from: number, to: number, device?: string): ConversationGroup[] {
+export function conversationsIn(db: HubDB, from: number, to: number, device?: string, matchDeviceGroup = false): ConversationGroup[] {
   const pad = 4 * 3600_000;
-  return groupConversations(audioRows(db, from - pad, to + pad, device).map(toAudio)).filter(g => g.end_ms >= from && g.start_ms <= to);
+  return groupConversations(audioRows(db, from - pad, to + pad, device, matchDeviceGroup).map(toAudio)).filter(g => g.end_ms >= from && g.start_ms <= to);
 }
 
 /** 用户写的修正优先于转写原文。 */
@@ -273,5 +273,5 @@ export function conversationDetail(db: HubDB, recordId: string, now = Date.now()
 
 /** 列表用：每场对话的组成和标题（有总结时）。 */
 export function conversationList(db: HubDB, from: number, to: number, device?: string) {
-  return conversationsIn(db, from, to, device).map(g => ({ id: g.id, record_ids: g.record_ids, start_ms: g.start_ms, end_ms: g.end_ms, app: g.app, title: storedSummary(db, g)?.title ?? null }));
+  return conversationsIn(db, from, to, device, true).map(g => ({ id: g.id, record_ids: g.record_ids, start_ms: g.start_ms, end_ms: g.end_ms, app: g.app, title: storedSummary(db, g)?.title ?? null }));
 }

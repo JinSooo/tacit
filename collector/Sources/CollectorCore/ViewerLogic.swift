@@ -1,5 +1,16 @@
 import Foundation
 
+public enum HistoryDeviceFilter {
+  public static func group(_ device: String) -> String {
+    device.hasPrefix("mac-") && DeviceProtocol.isValidDeviceID(device) ? "mac" : device
+  }
+
+  public static func matches(_ device: String, selection: String?) -> Bool {
+    guard let selection else { return true }
+    return selection == "mac" ? group(device) == selection : device == selection
+  }
+}
+
 /// 客户端展示用的纯逻辑：时间解析与格式、连续片段合并、泳道归类、日记章节排布。
 
 /// 录音对话来源（Mac 与手机录音采用同一套对话展示规则）。

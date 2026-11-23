@@ -555,3 +555,12 @@ private func placeRecord(_ id: String, _ source: String, _ title: String, second
   #expect(collapsed.map { $0.records.map(\.id) } == [["pa2", "pa"], ["pu"]])
   #expect(collapsed[0].conversation == conv)
 }
+
+@Test func historyDeviceFilterIncludesBothMacIdentities() {
+  #expect(HistoryDeviceFilter.group("mac") == "mac")
+  #expect(HistoryDeviceFilter.group("mac-abcd2345") == "mac")
+  #expect(HistoryDeviceFilter.matches("mac-abcd2345", selection: "mac"))
+  #expect(!HistoryDeviceFilter.matches("mac-abcd0123", selection: "mac"))
+  #expect(!HistoryDeviceFilter.matches("android-abcd2345", selection: "mac"))
+  #expect(!HistoryDeviceFilter.matches("mac-bcde3456", selection: "mac-abcd2345"))
+}

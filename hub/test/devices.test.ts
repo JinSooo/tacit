@@ -629,7 +629,7 @@ async function bootstrapKeys() {
   return { mac, agent, body: { mac_pk: mac.publicKey.toString("base64url"), agent_pk: agent.publicKey.toString("base64url") } };
 }
 
-test("本机登记同一对公钥幂等，部分匹配冲突，只接受 127.0.0.1 的管理令牌", async () => {
+test("本机登记可接续单独 Agent，同一对公钥幂等，其余冲突拒绝", async () => {
   const hub = await runningHub();
   try {
     const { body } = await bootstrapKeys();
@@ -661,11 +661,20 @@ test("本机登记同一对公钥幂等，部分匹配冲突，只接受 127.0.0
     const localAgent = (agent_pk: string) => hub.settings("/local-agent", "POST", { agent_pk });
     const installed = await localAgent(second.agent_pk);
     expect(installed.status).toBe(200);
-    expect(await (await localAgent(second.agent_pk)).json()).toEqual(await installed.json());
+    const standalone = await installed.json() as Omit<Bootstrap, "mac_device_id">;
+    expect(await (await localAgent(second.agent_pk)).json()).toEqual(standalone);
     expect((await localAgent(body.mac_pk)).status).toBe(409);
-    expect((await bootstrap(second)).status).toBe(409);
-    expect(hub.db.db.prepare("SELECT COUNT(*) AS count FROM devices").get()).toEqual({ count: 3 });
-    expect(hub.db.db.prepare("SELECT COUNT(*) AS count FROM security_audit WHERE action='device.local_register' AND ok=1").get()).toEqual({ count: 3 });
+    const upgraded = await bootstrap(second);
+    expect(upgraded.status).toBe(200);
+    const upgradedPair = await upgraded.json() as Bootstrap;
+    expect(upgradedPair).toEqual({ ...standalone, mac_device_id: expect.stringMatching(/^mac-[a-z2-7]{8}$/) });
+    expect(await (await bootstrap(second)).json()).toEqual(upgradedPair);
+    expect(await (await localAgent(second.agent_pk)).json()).toEqual(standalone);
+    expect((await bootstrap({ ...second, mac_pk: (await bootstrapKeys()).body.mac_pk })).status).toBe(409);
+    expect(hub.db.db.prepare("SELECT COUNT(*) AS count FROM devices").get()).toEqual({ count: 4 });
+    expect(hub.db.db.prepare("SELECT bootstrap_agent_id FROM devices WHERE id=?").get(upgradedPair.mac_device_id))
+      .toEqual({ bootstrap_agent_id: standalone.agent_device_id });
+    expect(hub.db.db.prepare("SELECT COUNT(*) AS count FROM security_audit WHERE action='device.local_register' AND ok=1").get()).toEqual({ count: 4 });
     expect((await (await hub.settings()).json() as { lan: { open: boolean } }).lan.open).toBe(false);
     expect((await fetch(hub.origin + "/v1/device/hello")).status).toBe(200);
     await expect(fetch(hub.lan + "/v1/device/hello")).rejects.toThrow();

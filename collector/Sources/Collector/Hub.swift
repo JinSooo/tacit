@@ -53,6 +53,7 @@ final class HubClient {
   let config: Config
   let queue: OutboundQueue
   private let buffer: OutboxBuffer
+  private let upload: CollectorUpload
   private var inFlight = false
   private let lock = NSLock()
   private var networkError: String?
@@ -73,6 +74,7 @@ final class HubClient {
 
   init(config: Config) {
     self.config = config
+    upload = CollectorUpload(config: config)
     queue = OutboundQueue()
     buffer = OutboxBuffer(memory: queue, open: { try OutboxStore(dataDirectory: config.dataDir) })
     io.async { [self] in retryOutbox() }
@@ -109,6 +111,7 @@ final class HubClient {
   }
 
   func flush() {
+    Task { await upload.prepare() }
     io.async { [self] in
       retryOutbox()
       sendNext()
@@ -117,38 +120,36 @@ final class HubClient {
 
   private func sendNext() {
     guard !inFlight else { return }
-    let batch = buffer.batch(limit: 200)
+    let batch = buffer.batch(limit: CollectorUpload.batchLimit)
     publishOutbox()
     guard !batch.isEmpty else { return }
     inFlight = true
 
-    guard let token = config.token else { finish(error: "找不到 hub 的 token，hub 是否启动过？", done: nil); return }
-    var req = URLRequest(url: config.hubURL.appendingPathComponent("v1/ingest"))
-    req.httpMethod = "POST"
-    req.timeoutInterval = 15
-    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-    struct Body: Encodable { let device: String; let records: [Record] }
-    let enc = JSONEncoder(); enc.outputFormatting = [.withoutEscapingSlashes]
-    req.httpBody = try? enc.encode(Body(device: config.device, records: batch))
-
-    URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
+    Task { [weak self] in
       guard let self else { return }
-      let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-      if err != nil { self.finish(error: "hub 连不上。", done: nil); return }
-      // 503 是中枢撞上别的进程的写锁、不等锁直接返回：中枢是通的，记录留在队列里下一轮再发，不提示连不上。
-      if status == 503 { self.finish(error: nil, done: nil, status: status); return }
-      guard status == 200, let data else {
-        self.finish(error: "hub 返回 \(status)", done: nil); return
+      do {
+        let delivery = try await upload.send(batch)
+        let records = delivery.records
+        guard let receipt = DeliveryReceipt.decode(delivery.body, batchCount: records.count) else {
+          finish(error: "后台未确认完整接收，待发送记录已保留。", done: nil)
+          return
+        }
+        // 明确拒收只记数量，不把中枢返回的正文写入日志。
+        let bad = receipt.rejected.count
+        if bad > 0 { NSLog("record-anything: hub 拒收 %d 条", bad) }
+        finish(error: nil, done: (Set(records.map(\.id)), records.count - bad, bad))
+      } catch DeviceClientError.hubBusy, DeviceClientError.operationError(_, 503, _), DeviceClientError.plaintextError(503, _) {
+        finish(error: nil, done: nil, status: 503)
+      } catch DeviceClientError.operationError(_, let status, _), DeviceClientError.plaintextError(let status, _) {
+        finish(error: "hub 返回 \(status)", done: nil)
+      } catch CollectorUpload.Failure.noToken {
+        finish(error: "找不到 hub 的 token，hub 是否启动过？", done: nil)
+      } catch CollectorUpload.Failure.batchTooLarge, DeviceClientError.envelopeTooLarge {
+        finish(error: "待发送记录超过上传大小限制。", done: nil)
+      } catch {
+        finish(error: "无法向 hub 发送记录，待发送记录已保留。", done: nil)
       }
-      guard let receipt = DeliveryReceipt.decode(data, batchCount: batch.count) else {
-        self.finish(error: "后台未确认完整接收，待发送记录已保留。", done: nil); return
-      }
-      // 明确拒收的项不会因重试而成功；只记数量，不把服务器返回的正文写入日志。
-      let bad = receipt.rejected.count
-      if bad > 0 { NSLog("record-anything: hub 拒收 %d 条", bad) }
-      self.finish(error: nil, done: (Set(batch.map(\.id)), batch.count - bad, bad))
-    }.resume()
+    }
   }
 
   private func finish(error: String?, done: (Set<String>, Int, Int)?, status: Int? = nil) {

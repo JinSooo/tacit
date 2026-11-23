@@ -42,7 +42,7 @@ struct HistoryPage<Header: View>: View {
   }
   private var visible: [HistoryRecord] {
     records.filter { r in
-      (lane == nil || Lane.of(r.source) == lane) && (device == nil || r.device == device) &&
+      (lane == nil || Lane.of(r.source) == lane) && HistoryDeviceFilter.matches(r.device, selection: device) &&
         (brush.map { r.start <= $0.upperBound && (r.end ?? r.start) >= $0.lowerBound } ?? true)
     }
   }
@@ -161,7 +161,7 @@ struct HistoryPage<Header: View>: View {
     }
     guard !Task.isCancelled else { return }
     loadedKey = key
-    if !records.contains(where: { $0.device == device }) { device = nil }
+    if !records.contains(where: { HistoryDeviceFilter.matches($0.device, selection: device) }) { device = nil }
     consumeFocus()
   }
 
@@ -198,7 +198,7 @@ struct HistoryPage<Header: View>: View {
 
   private var strataHeader: some View {
     VStack(alignment: .leading, spacing: 8) {
-      DayStrata(records: records.filter { device == nil || $0.device == device }, chapters: DayStrata.chapters(from: diary, on: day), day: day, selected: selectedRecord,
+      DayStrata(records: records.filter { HistoryDeviceFilter.matches($0.device, selection: device) }, chapters: DayStrata.chapters(from: diary, on: day), day: day, selected: selectedRecord,
                 brush: $brush, lane: $lane,
                 conversationTitles: Dictionary(conversations.flatMap { c in c.title.map { t in c.recordIds.map { ($0, t) } } ?? [] }, uniquingKeysWith: { a, _ in a })) { r in reveal(r.id) }
       if brush != nil || lane != nil {
@@ -305,7 +305,7 @@ struct HistoryPage<Header: View>: View {
           ForEach(Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } }, id: \.self) { Text($0.name).tag(Lane?.some($0)) }
         }
         .pickerStyle(.inline)
-        let devices = Set(records.map(\.device)).sorted()
+        let devices = Set(records.map { HistoryDeviceFilter.group($0.device) }).sorted()
         if devices.count > 1 {
           Picker("设备", selection: $device) {
             Text("全部设备").tag(String?.none)

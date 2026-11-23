@@ -853,9 +853,9 @@ CREATE TABLE project_context_cache (
 
 ---
 
-### 6.10 Mac 采集端和 AI 工具接入改走设备协议（中枢与 agent-cli 已实施，Swift 端待接入）
+### 6.10 Mac 采集端和 AI 工具接入改走设备协议（中枢、agent-cli 与同机 Mac 采集上传已实施）
 
-中枢已提供本机登记和设备接入，Claude Code / Codex 可经设备协议查询、追加与带入项目上下文。Mac 采集、插件与音频代理、查看窗口和设置页的迁移见 6.10.3–6.10.4。Claude Desktop 沿用旧接入。
+中枢已提供本机登记和设备接入，Claude Code / Codex 可经设备协议查询、追加与带入项目上下文。Mac 同机登记后，内建采集上传走设备协议。插件与音频代理、查看窗口和设置页的迁移见 6.10.3–6.10.4。Claude Desktop 沿用旧接入。
 
 #### 6.10.1 身份扩展与历史兼容
 
@@ -865,25 +865,26 @@ CREATE TABLE project_context_cache (
   - `android` 允许 `android.*`、`manual.note`、`manual.correction`（仅指向本设备记录）。
   - `mac` 允许 `mac.*`、`claude_code.session`、`codex.session`、`plugin.ext_*`、`manual.note`、`manual.correction`。采集和查看角色的修正只可指向自己的记录，管理设备也可以修正其他记录。
   - `agent` 的写入走 `agent.append`，调用 `ingest` 返回加密 403。创建的 `manual.agent` 及其后续修正都用调用方 `device_id`。旧 HTTP 接口仍写历史身份 `"mac"`。
-- 历史 `device = "mac"` 的记录照常展示、搜索与整理。今后走设备协议采集的 Mac 记录使用 `mac-<8 位 base32>`。Mac 管理设备可删除和修正历史 `device = "mac"` 的记录。
+- 历史 `device = "mac"` 的记录照常展示、搜索与整理。今后走设备协议采集的 Mac 记录使用 `mac-<8 位 base32>`。Mac 管理设备可删除和修正历史 `device = "mac"` 的记录。历史记录和活动段的读取筛选 `device=mac` 包含旧 `mac` 和新 `mac-<id>`；指定完整设备 ID 时仍精确匹配。归属、鉴权和同步继续校验完整设备 ID。
 
 #### 6.10.2 同机时的本机快路
 
 - 本机监听 `127.0.0.1:<port>` 提供 `POST /v1/device`、`GET /v1/device/hello` 和 `GET /v1/device/events`。设备请求仍用 6.2 的 HPKE 信封与相同权限分发。已生成中枢身份时，`hello` 返回 `{ hub_id, v: 1 }`，否则返回 401。
 - 只有未过期邀请或至少一台 `local_only=0` 的设备才打开 `0.0.0.0:<lan_port>`。本机登记的设备仅能通过本机监听认证，局域网监听拒绝它们的身份，信箱也不给它们分配地址。
-- agent-cli 使用 `agent-link.json` 中的直连地址。本机登记的地址是 `http://127.0.0.1:<port>`，当前有效的 `RA_PORT` 或 `hub.json.port` 可让客户端跟随端口变更。通过 HPKE 校验回复的中枢身份。Mac 采集端将按本机快路、已知直连地址、Bonjour 或手填地址、中转信箱的顺序接入。远程 Agent 身份签发及信箱查询留待后续。
+- agent-cli 使用 `agent-link.json` 中的直连地址。本机登记的地址是 `http://127.0.0.1:<port>`，当前有效的 `RA_PORT` 或 `hub.json.port` 可让客户端跟随端口变更。通过 HPKE 校验回复的中枢身份。Mac 采集端使用本机快路并跟随当前配置端口；已知直连地址、Bonjour 或手填地址、中转信箱用于后续远程接入。远程 Agent 身份签发及信箱查询留待后续。
 
 #### 6.10.3 Mac 采集端、插件与音频迁到设备协议
 
 - **统一设备传输层（`CollectorCore/DeviceClient.swift`）**：
   - 基于 macOS 14+ 原生 `CryptoKit.HPKE` 实现 6.1/6.2（DHKEM X25519 / HKDF-SHA256 / AES-128-GCM），单测必须通过 `schema/fixtures/device-envelope.json` 互通向量。
-  - Mac 设备私钥存钥匙串（service `record-anything`、account `mac-device-key`，经 `/usr/bin/security`）；设备私钥丢失只需重新配对，不影响已入库数据。连接元数据存 `<数据目录>/collector-link.json`（含 `hub_id`、`hub_pk`、`device_id`、`mode`、`addrs`、`relay`（不含令牌））。设备自己的信箱令牌存钥匙串 service `record-anything`、account `relay-device-<device_id>`（AI 工具身份用 `relay-device-agent-<id>`；无头编码机放在同目录 `0600` 文件），换信箱收到 `relay.moved` 时原位覆盖。
-- **采集上传（`HubClient`）**：`OutboxStore` 加密落盘机制不变；发送端改为调 `DeviceClient` 的 `ingest` op（直连每批 ≤ 200 条且 ≤ 4 MiB；经信箱每批 ≤ 640 KiB），回执校验规则不变。
-- **外部插件（`PluginScheduler` + `hub/src/run-plugin.ts`）**：
+  - Mac 设备私钥存钥匙串（service `record-anything`、account `mac-device-key`，经 `/usr/bin/security -i` 从标准输入写入），以读回结果确认。连接元数据存 `<数据目录>/collector-link.json`，本机格式为 `{ hub_id, hub_pk, device_id, mode: "local", addrs: [endpoint 的 origin], relay: null }`。连接文件不含密钥或令牌，详见 6.10.6。
+- **采集上传（`HubClient`）**：本机连接文件可用时，经 `DeviceClient` 向当前端口的 `POST /v1/device` 发送 `ingest`。只在发送副本上填中枢分配的 `mac-<id>`，保留记录 ID、加密待发送副本和既有入库记录。没有可用连接文件时沿用持管理令牌的 `POST /v1/ingest`。每批最多 200 条、编码后的请求体最多 4 MiB（设备请求按加密前的 `body` 计算）。只有完整有效的回执才确认并删除待发送副本。设备端点返回 HTTP 401 时，撤下 `collector-link.json`，同批改用旧接口重试，下一次应用启动才重新登记。
+- **后续传输**：信箱上传尚未接入，计划每批不超过 640 KiB。设备的信箱令牌计划使用钥匙串 `record-anything` 服务下的 `relay-device-<device_id>` 账户，无头编码机用同名的 `0600` 文件。换信箱时收到 `relay.moved` 原位覆盖。
+- **外部插件（`PluginScheduler` + `hub/src/run-plugin.ts`），待迁移**：
   - `run-plugin` 新增 `--transport stdio`（或本机 IPC 代理模式）：插件子进程只输出记录批次给宿主 `Tacit.app`，由 `Tacit.app` 的 `DeviceClient` 签名发送并把 `IngestResult` 回执交回 `run-plugin`，`run-plugin` 核对回执后再落盘 `state.json` 并按规则清理 `release` 缓冲文件。
   - 插件子进程不接触设备私钥与信箱令牌，且中枢在远端时自动获得信箱回退能力。
-- **音频转写（`AudioCoordinator` + `ra-audio-worker`）**：改走 6.5 已有的 `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`、`audio.samples`、`audio.lines`；`ra-audio-worker` 通过宿主代理发出请求，不再自己读 `token` 调 `127.0.0.1`。
-- **采集健康上报（解耦 `collector-status.json`）**：新增 `op: "collector.status"`，采集端每 60 秒或出错时上报 `{ time, transcription, outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak }`，中枢按 `device_id` 保存在内存/状态表，不再读共享目录的 `collector-status.json`。
+- **音频转写（`AudioCoordinator` + `ra-audio-worker`），待迁移**：改走 6.5 已有的 `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`、`audio.samples`、`audio.lines`；`ra-audio-worker` 通过宿主代理发出请求，不再自己读 `token` 调 `127.0.0.1`。
+- **采集健康上报（解耦 `collector-status.json`），待迁移**：新增 `op: "collector.status"`，采集端每 60 秒或出错时上报 `{ time, transcription, outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak }`，中枢按 `device_id` 保存在内存/状态表，不再读共享目录的 `collector-status.json`。
 
 #### 6.10.4 查看窗口读写迁到设备协议
 
@@ -929,16 +930,16 @@ CREATE TABLE project_context_cache (
 | POST | `/v1/settings/devices/local-agent` | `{ agent_pk }` | `{ agent_device_id, hub_id, hub_pk, endpoint }` |
 
 - `hub_pk` 同为 X25519 公钥的无填充 base64url，`endpoint` 为完整的 `http://127.0.0.1:<port>/v1/device`。
-- `local-bootstrap` 同一事务创建 `mac-<id>`（`admin`）和 `agent-<id>`（`agent`）。两行均为 `local_only=1`。同一对公钥重试时返回已登记的两台设备 ID。只有一把公钥匹配、两把来自不同登记、或公钥属于其他设备时返回 409。
-- `local-agent` 单独创建本机 Agent，供 `agents install --yes` 在 Tacit.app 尚未登记时使用。已登记的本机 Agent 公钥（包括双登记里的 Agent）返回原 ID，其他设备的公钥返回 409。先单独登记的公钥不能与新的 Mac 公钥配成一对来重试双登记。写入 `security_audit` 的事件为 `device.local_register`，包含创建和冲突结果。
+- `local-bootstrap` 同一事务创建 `mac-<id>`（`admin`）和 `agent-<id>`（`agent`）。两行均为 `local_only=1`。若 `agent_pk` 已属于一台本机 Agent（`platform=agent`、`role=agent`、`local_only=1`），且没有 Mac 的 `bootstrap_agent_id` 指向它，新的 `mac_pk` 可创建 Mac 并与该 Agent 关联。同一对公钥重试时返回已登记的两台设备 ID。其余单边匹配、不同登记或公钥已由其他设备占用返回 409。
+- `local-agent` 单独创建本机 Agent，供 `agents install --yes` 在 Tacit.app 尚未登记时使用。已登记的本机 Agent 公钥（包括双登记里的 Agent）返回原 ID，其他设备的公钥返回 409。写入 `security_audit` 的事件为 `device.local_register`，包含创建和冲突结果。
 - 无效 JSON、公钥编码错误或不可用的 X25519 公钥返回 400，缺失或无效令牌返回 401，受限令牌或本机监听上用 `localhost` Host 返回 403，其他 Host 返回 421。局域网监听上的登记路径返回 404。中枢忙时返回 503。
 - agent-cli 在数据目录中读取 `agent-link.json`，JSON 为 `{ hub_id, hub_pk, device_id, address }`，`address` 是 `endpoint` 的 origin，不含路径。Agent 私钥是 32 字节十六进制值。macOS 经系统 `/usr/bin/security -i` 从标准输入写入服务 `record-anything`、账户 `agent-device-key`，其他系统写数据目录下同名 `0600` 文件。文件中没有管理令牌。正式安装 Claude Code 或 Codex 接入时，如果没有连接文件，先登记再写工具配置。预览和卸载只处理工具配置。
 - 已登记的 Claude Code / Codex 新进程走设备协议。没有连接文件的进程、仍运行的旧版 MCP 以及 Claude Desktop 沿用 4.6 的 `agent-token` 路径。旧版采集端和本机网页继续使用原 HTTP 接口。
-- Swift 升级引导、Mac 设置页联动及 `collector-link.json` 的建立留待后续。Swift 需要读取本节的返回字段，并协调已单独登记的 Agent，避免把同一把公钥与新 Mac 公钥一起提交。
+- Tacit.app 启动后，有本地管理令牌且尚无 `collector-link.json` 时，先检查本机中枢健康，再读取已存的两把私钥；缺哪一把就生成、写入并读回确认。已单独登记的 Agent 和中途退出留下的私钥都可复用。登记成功时先原子写入 `agent-link.json`，再原子建立 `collector-link.json`（格式见 6.10.3）。两份文件权限均为 `0600`，拒绝符号链接。中枢未就绪或返回 503 时稍后重试，期间沿用旧上传接口。409 时只记固定类别 `key_conflict`，保留钥匙串和既有文件，本次运行继续走旧接口。
 
 #### 6.10.7 后续迁移
 
-1. Mac 采集端与查看窗口切到 Swift `DeviceClient`，用 `schema/fixtures/device-envelope.json` 检查 HPKE 互通，再验收屏幕、微信、录音、插件、纠错及设置。
+1. Mac 查看窗口切到 Swift `DeviceClient`，继续验收实际录音、插件、纠错及设置。
 2. 实现采集状态上报、插件宿主代理、6.10.4 剩余写操作和设置操作。插件仅在完整送达回执后提交状态和清除缓冲。
 3. 验证已安装的 Claude Code / Codex 在线、超时和离线场景。远端 Agent 签发、通过信箱查询、独立部署及兼容接口下线安排留待后续。
 

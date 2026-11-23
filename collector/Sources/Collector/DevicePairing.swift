@@ -11,6 +11,8 @@ struct DeviceSettings: Decodable {
 
   struct Pairing: Decodable { let expiresAt: String }
 
+  var phones: [Device] { devices.filter { $0.platform == "android" } }
+
   struct Device: Decodable, Identifiable {
     let id: String
     let name: String

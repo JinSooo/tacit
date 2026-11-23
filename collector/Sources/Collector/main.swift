@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     terminationSignal = TerminationSignal { NSApp.terminate(nil) }
     let startup = LoginStartup(home: FileManager.default.homeDirectoryForCurrentUser, dataDir: config.dataDir)
     guard AppSetup.start(config: config, startup: startup) else { return }
+    hub.flush()
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     // 左键弹面板，右键（或按住 control 点）弹菜单。菜单不常驻在 statusItem 上，否则左键也会弹菜单。
     statusMenu.delegate = self
