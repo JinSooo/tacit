@@ -5,7 +5,7 @@ import type { HubDB } from "../db.ts";
 import { unionSeconds } from "../durations.ts";
 import { redactString } from "../redact.ts";
 import { dayDisplayName, readDayEvidence, sampleDayEvidence, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
-import { AUDIO_SOURCES, SKELETON_SOURCES, sourceList } from "../record-sources.ts";
+import { AUDIO_SOURCES, SKELETON_SOURCES, audioDeviceGroup, sourceList } from "../record-sources.ts";
 import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
 import { MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
@@ -187,9 +187,9 @@ function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: numb
   return result.sort((a,b) => a.start-b.start);
 }
 
-function groupRecords(rows: ReviewRecord[], gap: number): Activity[] {
+function groupRecords(rows: ReviewRecord[], gap: number, normalizeDevice?: (device: string | undefined) => string | undefined): Activity[] {
   const audio = groupConversations(rows.filter(r => AUDIO_SOURCES.has(r.source))
-    .map(r => ({ id: r.id, source: r.source, device: r.device, start_ms: r.start, end_ms: r.end, app: r.app, private: false })));
+    .map(r => ({ id: r.id, source: r.source, device: r.device, start_ms: r.start, end_ms: r.end, app: r.app, private: false })), normalizeDevice);
   const lookup = new Map(rows.map(record => [record.id, record]));
   const voices = new Map<string, { id: string; thread: string | null }>();
   for (const conversation of audio) {
@@ -442,10 +442,10 @@ function longerConversationBudget(segments: Candidate[]) {
   return extras;
 }
 
-function cutCandidates(rows: ReviewRecord[], gap: number, accepts = eligible) {
+function cutCandidates(rows: ReviewRecord[], gap: number, accepts = eligible, normalizeDevice?: (device: string | undefined) => string | undefined) {
   const sessionThreads = new Set(rows.filter(r => SESSION_SOURCES.has(r.source)).flatMap(r => r.thread ?? []));
   return splitOverlaps(groupRecords(rows.filter(r =>
-    !SKELETON_SOURCES.has(r.source) || !r.thread || !sessionThreads.has(r.thread)), gap), accepts);
+    !SKELETON_SOURCES.has(r.source) || !r.thread || !sessionThreads.has(r.thread)), gap, normalizeDevice), accepts);
 }
 
 function segmentId(a: Candidate) {
@@ -488,7 +488,7 @@ function reviewSegments(rows: ReviewRecord[], selected: Candidate[], evidenceLim
 export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 30) {
   const rows = loadRecords(hub, start, end);
   const gap = gapMinutes * MINUTE;
-  const allCandidates = cutCandidates(rows, gap);
+  const allCandidates = cutCandidates(rows, gap, eligible, audioDeviceGroup(hub));
   const candidates = allCandidates.filter(a => a.primary.some(r =>
     r.evidence.some(entry => evidenceInPiece(entry, r, a))));
   const candidateCount = allCandidates.length, evidenceCount = candidates.length;
@@ -519,10 +519,10 @@ const draftSpeech = (entry: UnnumberedEvidence) => entry.role !== "assistant" &&
 const SEGMENT_QUIET_MS = 30 * MINUTE;
 const POLISH_EVIDENCE_PER_SEGMENT = 6;
 
-function draftCandidates(rows: ReviewRecord[]) {
+function draftCandidates(rows: ReviewRecord[], normalizeDevice?: (device: string | undefined) => string | undefined) {
   // 单条实质聊天或手记也可实时显示，无需等到模型整理的候选门槛。
   const candidates = cutCandidates(rows, SEGMENT_QUIET_MS, (_kind, records) =>
-    records.some(r => r.evidence.some(draftSpeech))).filter(a => a.primary.some(r =>
+    records.some(r => r.evidence.some(draftSpeech)), normalizeDevice).filter(a => a.primary.some(r =>
       r.evidence.some(e => draftSpeech(e) && evidenceInPiece(e, r, a))));
   return mergeAdjacent(candidates, SEGMENT_QUIET_MS);
 }
@@ -565,7 +565,7 @@ function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
 export function dayDrafts(hub: HubDB, start: number, end: number, window: DraftWindow): DraftItem[] {
   if (window.cutoff !== undefined && window.cutoff >= end - 1) return [];
   const rows = loadRecords(hub, start, end, { ...window, includeRelated: window.cutoff === undefined });
-  return draftCandidates(rows).map(a => {
+  return draftCandidates(rows, audioDeviceGroup(hub)).map(a => {
     const overlapping = rows.filter(r => inPiece(r, a)).flatMap(r => [r, ...(r.related ?? [])]);
     return draftItem(a, segmentId(a), [...new Set(recordMembership(a, overlapping).map(r => r.id))]);
   });
@@ -581,7 +581,7 @@ export function incrementalReview(hub: HubDB, start: number, now: number, detail
       id: item.id, anchor: item.id, start: Date.parse(item.t_start), end: Date.parse(item.t_end),
       record_ids: item.record_ids, dependencies: item.record_ids,
     } satisfies PolishedSegment));
-  const candidates = draftCandidates(rows).map(candidate => {
+  const candidates = draftCandidates(rows, audioDeviceGroup(hub)).map(candidate => {
     const overlapping = overlappingRecords(rows, candidate);
     const anchor = segmentId(candidate);
     const snapshot: PolishedSegment = {

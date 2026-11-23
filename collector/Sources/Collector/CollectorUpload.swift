@@ -22,21 +22,25 @@ actor CollectorUpload {
   private let files: LocalDeviceLink.Files
   private let keys: LocalDeviceLink.Keys
   private let session: URLSession
+  private let deviceSession: HostDeviceSession
   private let log: (String) -> Void
   private let onLinked: (@Sendable (LocalDeviceLink) -> Void)?
   private var preparing = false
   private var prepareAfter = 0.0
   private var prepareStopped = false
-  private var useLegacy = false
-  private var active: (link: LocalDeviceLink, origin: URL, client: DeviceClient)?
 
   init(config: Config, files: LocalDeviceLink.Files? = nil, keys: LocalDeviceLink.Keys = .keychain,
-       session: URLSession = .shared, log: @escaping (String) -> Void = { NSLog("record-anything: %@", $0) },
+       session: URLSession = .shared, deviceSession: HostDeviceSession? = nil,
+       log: @escaping @Sendable (String) -> Void = { NSLog("record-anything: %@", $0) },
        onLinked: (@Sendable (LocalDeviceLink) -> Void)? = nil) {
     self.config = config
-    self.files = files ?? .init(directory: config.dataDir)
+    let resolvedFiles = files ?? .init(directory: config.dataDir)
+    self.files = resolvedFiles
     self.keys = keys
     self.session = session
+    self.deviceSession = deviceSession ?? HostDeviceSession(
+      origin: { config.hubURL }, files: resolvedFiles, keys: keys, session: session, log: log
+    )
     self.log = log
     self.onLinked = onLinked
   }
@@ -58,7 +62,7 @@ actor CollectorUpload {
     } catch LocalDeviceLink.Failure.conflict {
       log("local-bootstrap: key_conflict")
       prepareStopped = true
-      useLegacy = true
+      await deviceSession.disableForSession()
     } catch LocalDeviceLink.Failure.unsafeFile, LocalDeviceLink.Failure.invalidLink {
       log("local-bootstrap: invalid_link")
       prepareStopped = true
@@ -70,28 +74,14 @@ actor CollectorUpload {
   }
 
   func send(_ pending: [Record]) async throws -> Delivery {
-    if !useLegacy, let link = try? files.collector() {
-      let origin = config.hubURL
-      let client: DeviceClient
-      if let active, active.link == link, active.origin == origin {
-        client = active.client
-      } else {
-        guard let raw = try keys.read(.mac) else { throw LocalDeviceLink.Failure.keyUnavailable }
-        client = try DeviceClient(hubPublicKeyBase64URL: link.hub_pk, deviceID: link.device_id,
-                                  keyStore: InMemoryDeviceKeyStore(rawRepresentation: raw),
-                                  transport: DirectDeviceTransport(origin: origin, session: session))
-        active = (link, origin, client)
-      }
-      let records = try Self.batch(pending, legacyDevice: nil, assignedDevice: link.device_id)
+    if let conn = try await deviceSession.connection() {
+      let records = try Self.batch(pending, legacyDevice: nil, assignedDevice: conn.link.device_id)
       do {
-        let reply = try await client.send(op: "ingest", body: Body(device: nil, records: records))
+        let reply = try await conn.client.send(op: "ingest", body: Body(device: nil, records: records))
         return Delivery(records: records, body: reply.bodyData)
       } catch DeviceClientError.deviceRemoved {
         prepareStopped = true
-        useLegacy = true
-        active = nil
-        do { try files.removeCollector() }
-        catch { log("device-ingest: link_removal_failed") }
+        await deviceSession.handleDeviceRemoved()
         // 只重传被拒绝的那一批。保留原来的记录 ID 与本机队列内容。
         return try await sendLegacy(Array(pending.prefix(records.count)))
       }

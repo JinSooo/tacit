@@ -36,6 +36,32 @@ final class NoRedirect: NSObject, URLSessionTaskDelegate {
   func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                   newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
+/// 通过标准输入输出向宿主（Tacit.app）代理设备协议请求，子进程不读取管理令牌或设备私钥。
+final class StdioHubTransport: HubTransport {
+  private let channel: StdioLineChannel
+  private let lock = NSLock()
+  private var nextID = 0
+  private let encoder = AudioProxy.jsonEncoder()
+  private let decoder = JSONDecoder()
+
+  init(channel: StdioLineChannel) { self.channel = channel }
+
+  func request(_ path: String, body: Data? = nil) async throws -> Data {
+    let (op, payload) = try AudioProxy.translateHTTPPath(path, body: body)
+    return try lock.withLock {
+      nextID += 1
+      let id = nextID
+      let req = AudioProxyRequest(id: id, op: op, body: payload)
+      try channel.writeLine(encoder.encode(req))
+      guard let line = try channel.readLine() else { throw WorkerError.http }
+      let reply = try decoder.decode(AudioProxyResponse.self, from: line)
+      guard reply.id == id, reply.ok, reply.status == 200, let replyBody = reply.body else {
+        throw WorkerError.http
+      }
+      return try encoder.encode(replyBody)
+    }
+  }
+}
 // 只含窗口位置、声纹和 hub id；不保存文字或明文音频。首次上传前原子落盘，重跑及样本请求复用完全相同的 S 编号。
 struct SpeakerCache: Codable {
   let segments: [AudioSegment]

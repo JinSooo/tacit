@@ -208,12 +208,26 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === "plugin-run") {
     const [{ PluginManager, pluginSource }, { runPlugin }, { dataDirOf }] = await Promise.all([import("./plugin-manager.ts"), import("./run-plugin.ts"), import("./hub-json.ts")]);
-    if (!name || argv[2] !== "--hub" || !argv[3]) throw new Error("插件运行参数无效");
+    if (!name) throw new Error("插件运行参数无效");
+    let hub: string | undefined, transport: "stdio" | undefined, device: string | undefined;
+    let idx = 2;
+    while (idx < argv.length) {
+      const flag = argv[idx];
+      if (flag === "--hub" || flag === "--transport" || flag === "--device") {
+        const value = argv[idx + 1];
+        if (!value) throw new Error("插件运行参数无效");
+        if (flag === "--hub") { if (hub !== undefined) throw new Error("插件运行参数无效"); hub = value; }
+        else if (flag === "--transport") { if (transport !== undefined || value !== "stdio") throw new Error("插件运行参数无效"); transport = "stdio"; }
+        else { if (device !== undefined) throw new Error("插件运行参数无效"); device = value; }
+        idx += 2;
+      } else break;
+    }
+    if (Boolean(hub) === Boolean(transport)) throw new Error("插件运行参数无效");
     const dataDir = dataDirOf(), manager = new PluginManager(dataDir), plugin = manager.installed(name);
     const code = join(manager.path(name), "code");
-    const summary = await runPlugin({ name, dataDir, hub: argv[3], allowedSource: pluginSource(name),
+    const summary = await runPlugin({ name, dataDir, hub, transport, device, allowedSource: pluginSource(name),
       sandbox: { code, manifest: plugin.manifest, values: plugin.values },
-      command: [process.execPath, "--no-install", "--no-env-file", join(code, plugin.manifest.entry), ...argv.slice(4)], cwd: code,
+      command: [process.execPath, "--no-install", "--no-env-file", join(code, plugin.manifest.entry), ...argv.slice(idx)], cwd: code,
       env: { PATH: process.env.PATH, HOME: homedir(), TMPDIR: process.env.TMPDIR, RA_PLUGIN_CONFIG: JSON.stringify(plugin.values) } });
     console.log(JSON.stringify(summary));
     if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors || summary.releaseErrors) process.exitCode = 1;
@@ -380,20 +394,26 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     finally { db.close(); }
     return;
   }
-  if (command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts run | serve [--local-status-port <port>] | pair --role <collect|view|admin> [--relay <url>] | devices list|set-role|remove | init | open [--print] | keys export|import-db-key | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url>] -- <插件命令...>");
+  if (command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts run | serve [--local-status-port <port>] | pair --role <collect|view|admin> [--relay <url>] | devices list|set-role|remove | init | open [--print] | keys export|import-db-key | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url> | --transport stdio] [--device <id>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
+  let runPluginDevice: string | undefined;
   if (command === "run-plugin") {
-    let hub: string | undefined, tokenFile: string | undefined;
+    let hub: string | undefined, tokenFile: string | undefined, transport: "stdio" | undefined;
     for (let i = 2; i < separator; i += 2) {
       const flag = argv[i], value = argv[i + 1];
       if (!value || i + 1 >= separator) throw new Error("参数缺少值");
       if (flag === "--hub") hub = value;
       else if (flag === "--token-file") tokenFile = value;
+      else if (flag === "--transport") {
+        if (value !== "stdio") throw new Error("--transport 仅支持 stdio");
+        transport = "stdio";
+      } else if (flag === "--device") runPluginDevice = value;
       else throw new Error("未知参数");
     }
-    if (hub) {
+    if (transport && (hub || tokenFile)) throw new Error("--transport stdio 不能与 --hub 或 --token-file 同用");
+    if (hub || transport) {
       const dataDir = process.env.RA_DATA_DIR ?? join(homedir(), "Library/Application Support/record-anything");
-      const summary = await runPlugin({ hub, tokenFile, dataDir, name: name!, command: argv.slice(separator + 1) });
+      const summary = await runPlugin({ hub, tokenFile, transport, device: runPluginDevice, dataDir, name: name!, command: argv.slice(separator + 1) });
       console.log(JSON.stringify(summary));
       if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors || summary.releaseErrors) process.exitCode = 1;
       return;
@@ -403,7 +423,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const config = loadConfig();
   const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
   try {
-    const summary = await runPlugin({ db, dataDir: config.dataDir, name: name!, command: argv.slice(separator + 1), report: result => console.log(JSON.stringify(result)) });
+    const summary = await runPlugin({ db, device: runPluginDevice, dataDir: config.dataDir, name: name!, command: argv.slice(separator + 1), report: result => console.log(JSON.stringify(result)) });
     if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors || summary.releaseErrors) process.exitCode = 1;
   } finally { db.close(); }
 }

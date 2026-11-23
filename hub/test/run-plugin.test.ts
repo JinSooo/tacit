@@ -230,3 +230,110 @@ test("插件 stderr 持续排空，诊断只保留固定类别，不回显路径
   expect(JSON.stringify(result)).not.toContain("synthetic-secret");
   expect(result.stateWritten).toBe(false);
 });
+
+test("stdio 模式：不读 token、按 200 条切批、503 退避重试，完整回执后才提交 state 并清理 release", async () => {
+  const file = bufferFile();
+  const stateFile = join(ctx.dir, "plugins/fake/state.json");
+  const records = Array.from({ length: 201 }, (_, i) => ({
+    type: "record",
+    record: fixture({ device: "mac-abcd2345", source: "plugin.ext_demo", source_ref: `stdio-${i}` }),
+  }));
+  const script = join(ctx.dir, "stdio-plugin.ts");
+  writeFileSync(script, `
+const lines = ${JSON.stringify([...records, { type: "checkpoint", state: { offset: 201 }, release: [file] }])};
+const args = process.argv.slice(2);
+if (args[args.indexOf("--device") + 1] !== "mac-abcd2345") process.exit(9);
+for (const line of lines) console.log(JSON.stringify(line));
+`);
+
+  const batchSizes: number[] = [];
+  let attempts = 0;
+  const responses: string[] = [];
+  let notify: (() => void) | undefined;
+  const input: AsyncIterable<string> = {
+    async *[Symbol.asyncIterator]() {
+      while (true) {
+        while (responses.length) yield responses.shift()!;
+        await new Promise<void>(resolve => { notify = resolve; });
+      }
+    },
+  };
+  const push = (msg: object) => { responses.push(JSON.stringify(msg) + "\n"); notify?.(); notify = undefined; };
+
+  const result = await runPlugin({
+    transport: "stdio",
+    device: "mac-abcd2345",
+    dataDir: ctx.dir,
+    name: "fake",
+    command: [process.execPath, script],
+    stdio: {
+      input,
+      write(line) {
+        const req = JSON.parse(line) as { type: string; id: number; records: unknown[] };
+        expect(req.type).toBe("ingest");
+        expect(existsSync(stateFile)).toBe(false);
+        attempts++;
+        if (attempts === 1) {
+          push({ type: "ingest_result", id: req.id, ok: false, status: 503, error: "hub_busy" });
+          return;
+        }
+        batchSizes.push(req.records.length);
+        push({
+          type: "ingest_result",
+          id: req.id,
+          ok: true,
+          result: { accepted: req.records.length, duplicates: 0, rejected: [] },
+        });
+      },
+    },
+  });
+
+  expect(attempts).toBe(3);
+  expect(batchSizes).toEqual([200, 1]);
+  expect(result).toMatchObject({ accepted: 201, duplicates: 0, rejected: 0, stateWritten: true, released: 1, releaseErrors: 0 });
+  expect(JSON.parse(readFileSync(stateFile, "utf8"))).toEqual({ offset: 201 });
+  expect(existsSync(file)).toBe(false);
+});
+
+test("stdio 模式：宿主断连或非法回执不写 state、不删 release", async () => {
+  const file = bufferFile();
+  const stateFile = join(ctx.dir, "plugins/fake/state.json");
+  const script = join(ctx.dir, "stdio-fail.ts");
+  writeFileSync(script, `
+console.log(JSON.stringify({ type: "record", record: ${JSON.stringify(fixture({ device: "mac-abcd2345" }))} }));
+console.log(JSON.stringify({ type: "checkpoint", state: { offset: 1 }, release: [${JSON.stringify(file)}] }));
+`);
+
+  // 1. EOF 断连
+  const eofResult = await runPlugin({
+    transport: "stdio",
+    device: "mac-abcd2345",
+    dataDir: ctx.dir,
+    name: "fake",
+    command: [process.execPath, script],
+    stdio: { input: (async function* () {})(), write: () => {} },
+  });
+  expect(eofResult).toMatchObject({ rejected: 1, stateWritten: false, released: 0, failure: "storage" });
+  expect(existsSync(stateFile)).toBe(false);
+  expect(existsSync(file)).toBe(true);
+
+  // 2. 计数不匹配的畸形回执
+  let badReply: string | null = null;
+  const badResult = await runPlugin({
+    transport: "stdio",
+    device: "mac-abcd2345",
+    dataDir: ctx.dir,
+    name: "fake",
+    command: [process.execPath, script],
+    stdio: {
+      input: (async function* () { if (badReply) yield badReply; })(),
+      write(line) {
+        const req = JSON.parse(line) as { id: number };
+        badReply = JSON.stringify({ type: "ingest_result", id: req.id, ok: true, result: { accepted: 0, duplicates: 0, rejected: [] } }) + "\n";
+      },
+    },
+  });
+  expect(badResult).toMatchObject({ rejected: 1, stateWritten: false, released: 0, failure: "storage" });
+  expect(existsSync(stateFile)).toBe(false);
+  expect(existsSync(file)).toBe(true);
+});

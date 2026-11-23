@@ -10,6 +10,14 @@ import { jsonLines } from "./jsonl.ts";
 
 /** 中枢返回 503（库忙）时每次重试前等待的毫秒数，合计约 7.75 秒。 */
 const BUSY_RETRY_MS = [250, 500, 1000, 2000, 4000];
+/** 设备协议单批上限：与 CollectorUpload 及中枢 device ingest 一致。 */
+const STDIO_BATCH_LIMIT = 200;
+const STDIO_BYTE_LIMIT = 4 * 1024 * 1024;
+
+export interface PluginStdioTransport {
+  input: AsyncIterable<Uint8Array | string>;
+  write: (line: string) => void | Promise<void>;
+}
 
 export interface PluginSummary {
   failure?: string;
@@ -18,8 +26,21 @@ export interface PluginSummary {
   filtered: number; stateWritten: boolean; protocolErrors: number; released: number; releaseErrors: number;
 }
 
+function validateIngestResult(value: unknown, count: number): IngestResult {
+  const result = value as IngestResult | null;
+  if (!result || typeof result !== "object"
+    || !Number.isSafeInteger(result.accepted) || result.accepted < 0
+    || !Number.isSafeInteger(result.duplicates) || result.duplicates < 0
+    || !Array.isArray(result.rejected)
+    || result.accepted + result.duplicates + result.rejected.length !== count) {
+    throw new Error("Hub 响应无效");
+  }
+  return result;
+}
+
 export async function runPlugin(options: {
-  db?: HubDB; hub?: string; tokenFile?: string; dataDir: string; name: string; command: string[]; device?: string;
+  db?: HubDB; hub?: string; tokenFile?: string; transport?: "stdio"; stdio?: PluginStdioTransport;
+  dataDir: string; name: string; command: string[]; device?: string;
   allowedSource?: string; sandbox?: PluginSandbox; env?: NodeJS.ProcessEnv; cwd?: string;
   report?: (summary: PluginSummary) => void;
 }): Promise<PluginSummary> {
@@ -27,10 +48,39 @@ export async function runPlugin(options: {
   if (!options.command.length) throw new Error("缺少插件命令");
   const device = options.device ?? "mac";
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(device)) throw new Error("设备名无效");
-  if (!options.hub && !options.db) throw new Error("缺少数据库或 hub 地址");
+  const isStdio = options.transport === "stdio";
+  if (options.transport !== undefined && !isStdio) throw new Error("不支持的传输方式");
+  const modeCount = Number(Boolean(options.hub)) + Number(Boolean(options.db)) + Number(isStdio);
+  if (modeCount === 0) throw new Error("缺少数据库或 hub 地址");
+  if (modeCount > 1) throw new Error("不能同时指定多种传输方式");
   const token = options.hub ? readFileSync(options.tokenFile ?? join(options.dataDir, "token"), "utf8").trim() : "";
   if (options.hub && !token) throw new Error("本地 token 文件为空");
+  const stdioLines = isStdio ? jsonLines(options.stdio?.input ?? process.stdin) : undefined;
+  const writeStdio = options.stdio?.write ?? ((line: string) => new Promise<void>((resolve, reject) => {
+    process.stdout.write(line, err => err ? reject(err) : resolve());
+  }));
+  let stdioSeq = 0;
   const ingest = async (records: unknown[]): Promise<IngestResult> => {
+    if (isStdio) {
+      for (let attempt = 0; ; attempt++) {
+        const id = ++stdioSeq;
+        await writeStdio(JSON.stringify({ type: "ingest", id, records }) + "\n");
+        const next = await stdioLines!.next();
+        if (next.done) throw new Error("宿主连接已断开");
+        let reply: Record<string, unknown>;
+        try { reply = JSON.parse(next.value) as Record<string, unknown>; }
+        catch { throw new Error("宿主响应无效"); }
+        if (!reply || typeof reply !== "object" || reply.type !== "ingest_result" || reply.id !== id) {
+          throw new Error("宿主响应无效");
+        }
+        if (reply.ok === true) return validateIngestResult(reply.result, records.length);
+        if (reply.status === 503 && attempt < BUSY_RETRY_MS.length) {
+          await Bun.sleep(BUSY_RETRY_MS[attempt]!);
+          continue;
+        }
+        throw new Error(reply.status === 503 ? "Hub 数据库忙，稍后重试" : "Hub 接收失败");
+      }
+    }
     if (!options.hub) return options.db!.ingest(records);
     const body = JSON.stringify({ device, records });
     let response: Response;
@@ -45,11 +95,7 @@ export async function runPlugin(options: {
       await Bun.sleep(BUSY_RETRY_MS[attempt]!);
     }
     if (!response.ok) throw new Error(response.status === 503 ? "Hub 数据库忙，稍后重试" : "Hub 接收失败");
-    const result = await response.json() as IngestResult;
-    if (!result || !Number.isSafeInteger(result.accepted) || result.accepted < 0
-      || !Number.isSafeInteger(result.duplicates) || result.duplicates < 0 || !Array.isArray(result.rejected)
-      || result.accepted + result.duplicates + result.rejected.length !== records.length) throw new Error("Hub 响应无效");
-    return result;
+    return validateIngestResult(await response.json(), records.length);
   };
   const dir = join(options.dataDir, "plugins", options.name);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -81,14 +127,16 @@ export async function runPlugin(options: {
   // 在异步读取 stdout 时，启动失败也不会产生未处理的 rejection。
   void exited.catch(() => {});
   const summary: PluginSummary = { accepted: 0, duplicates: 0, rejected: 0, exitCode: 1, filtered: 0, stateWritten: false, protocolErrors: 0, released: 0, releaseErrors: 0 };
+  const batchLimit = isStdio ? STDIO_BATCH_LIMIT : 500;
   let batch: unknown[] = [];
+  let batchBytes = 0;
   let checkpoint: unknown;
   let release: string[] = [];
   let hasCheckpoint = false;
   let storageFailed = false;
   const flush = async () => {
     if (!batch.length) return;
-    if (interrupted) { batch = []; return; }
+    if (interrupted) { batch = []; batchBytes = 0; return; }
     try {
       const result: IngestResult = await ingest(batch);
       summary.accepted += result.accepted;
@@ -96,6 +144,7 @@ export async function runPlugin(options: {
       summary.rejected += result.rejected.length;
     } catch (error) { logFailure("plugin.ingest", error); storageFailed = true; summary.rejected += batch.length; }
     batch = [];
+    batchBytes = 0;
   };
   try {
     // Bun 在 ENOENT 时不会结束 stdout；必须先确认启动成功，再等待输出流。
@@ -111,8 +160,16 @@ export async function runPlugin(options: {
             if (policy === "invalid") { summary.rejected++; continue; }
             if (policy === "blocked") { summary.filtered++; continue; }
           }
-          batch.push(message.record);
-          if (batch.length === 500) await flush();
+          if (isStdio) {
+            const size = Buffer.byteLength(JSON.stringify(message.record)) + (batch.length ? 1 : 0);
+            // 留出外层 JSON 键和记录数组开销，确保加密前的 body 不超过 4 MiB。
+            if (batch.length > 0 && batchBytes + size + 128 > STDIO_BYTE_LIMIT) await flush();
+            batch.push(message.record);
+            batchBytes += Buffer.byteLength(JSON.stringify(message.record)) + (batch.length > 1 ? 1 : 0);
+          } else {
+            batch.push(message.record);
+          }
+          if (batch.length === batchLimit) await flush();
         } else if (message.type === "checkpoint" && Object.hasOwn(message, "state")) {
           if (message.release !== undefined && (!Array.isArray(message.release) || !message.release.every((p: unknown) => typeof p === "string"))) throw new Error();
           // Sandboxed plugins cannot write buffers, so they must not use the trusted runner as a deletion proxy.
@@ -165,6 +222,10 @@ export async function runPlugin(options: {
   } finally {
     process.removeListener("SIGTERM", stop); process.removeListener("SIGINT", stop);
     if (forceStop) clearTimeout(forceStop);
+    if (isStdio && !options.stdio) {
+      process.stdin.pause();
+      (process.stdin as { unref?: () => void }).unref?.();
+    }
   }
   if (summary.exitCode !== 0) summary.failure = options.sandbox && /sandbox-exec:|sandbox_init/i.test(diagnostic) ? "sandbox" : /EACCES|EPERM|permission denied/i.test(diagnostic) ? "permission"
     : /ENOENT|no such file/i.test(diagnostic) ? "missing_file"

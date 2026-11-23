@@ -579,9 +579,10 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 | `sync.ack` | `{ cursor }` | `{ ok: true }` | 删除 `seq ≤ cursor` 的待下发变更 |
 | `conversations` | `{ from, to }`（毫秒，范围不超过 32 天） | `{ conversations: [{ id, record_ids, start_ms, end_ms, title, summary, points }] }` | 只读：中枢为这台设备自己的录音按场写好的总结（同 `GET /v1/conversations` 的分场和总结）。只返回已有总结且记录全属于调用方的场次；没写总结的场（太短、私密、还在等）不返回，手机照旧显示自己的原文。 |
 | `conversations.put` | `{ summarizing, summaries: [{ id, record_ids, title, summary, points }] }`（`summaries` 最多 50 项；title ≤ 40、summary ≤ 400、points ≤ 5 条且每条 ≤ 120 字符） | `{ saved: [id], stale: [id] }` | 手机每次同步都发：`summarizing` 说明它开没开“AI 总结”，开着时中枢不再给这台设备的对话写总结（已移除的设备不算）。每项是手机按 `conversations` 同一规则分出的一场；`record_ids` 和中枢分出的那一场完全一致、都属于调用方、不私密时才写进 `conversation_summaries`（`saved`），否则 `stale`，手机不再重发。手机只在这一场的记录都已被中枢确认接收后才发。 |
-| `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`（body 带 `conversation_ref`）、`audio.samples`、`audio.lines` | 同 5.4 对应接口 | 同 5.4 | `audio.lines` 对应本机 `POST /v1/audio/lines`（`{ conversation_ref, lines: [{ at, speaker_id, hidden }] }` → `{ stored }`）。设备只可上传分给自己的样本；对话键不能属于其他设备；上传 `audio.lines` 前须已上传该对话的记录或声纹。 |
+| `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`（body 带 `conversation_ref`）、`audio.samples`、`audio.lines` | 同 5.4 对应接口 | 同 5.4 | `audio.lines` 对应本机 `POST /v1/audio/lines`（`{ conversation_ref, lines: [{ at, speaker_id, hidden }] }` → `{ stored }`）。设备只可上传分给自己的样本；对话键不能属于其他设备；上传 `audio.lines` 前须已上传该对话的记录或声纹。本机登记的 Mac（`platform=mac`、`local_only=1`）与历史 `device="mac"` 共享音频归属、清理与分场身份，远端设备按各自 `device_id` 隔离。 |
+| `collector.status` | `{ time, transcription: { pending, failed } \| null, outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak }` | `{ ok: true }` | 采集端每 60 秒或出错时上报本机健康状态；`time` 为带时区的 RFC 3339，`transcription` 为 `null` 表示录音关闭。中枢按 `device_id` 存进 `distill_state`（`collector_status:<device_id>`），状态接口优先读取已登记设备的上报（优先本机 Mac），无上报时回落到 `collector-status.json`。移除设备时清除其上报。 |
 
-`android.audio` 记录的 `source_ref` 不能指向其他设备的对话。每次成功解开的请求都更新设备的 `last_seen`。
+`android.audio` 与 `mac.audio` 记录的 `source_ref` 不能指向其他设备的对话（本机 Mac 与历史 `"mac"` 视为同一音频身份）。每次成功解开的请求都更新设备的 `last_seen`。
 
 ### 6.6 下发变更
 
@@ -868,7 +869,7 @@ CREATE TABLE project_context_cache (
   - `android` 允许 `android.*`、`manual.note`、`manual.correction`（仅指向本设备记录）。
   - `mac` 允许 `mac.*`、`claude_code.session`、`codex.session`、`plugin.ext_*`、`manual.note`、`manual.correction`。采集和查看角色的修正只可指向自己的记录，管理设备也可以修正其他记录。
   - `agent` 的写入走 `agent.append`，调用 `ingest` 返回加密 403。创建的 `manual.agent` 及其后续修正都用调用方 `device_id`。旧 HTTP 接口仍写历史身份 `"mac"`。
-- 历史 `device = "mac"` 的记录照常展示、搜索与整理。今后走设备协议采集的 Mac 记录使用 `mac-<8 位 base32>`。Mac 管理设备可删除和修正历史 `device = "mac"` 的记录。历史记录和活动段的读取筛选 `device=mac` 包含旧 `mac` 和新 `mac-<id>`；指定完整设备 ID 时仍精确匹配。归属、鉴权和同步继续校验完整设备 ID。
+- 历史 `device = "mac"` 的记录照常展示、搜索与整理。今后走设备协议采集的 Mac 记录使用 `mac-<8 位 base32>`。Mac 管理设备可删除和修正历史 `device = "mac"` 的记录。历史记录和活动段的读取筛选 `device=mac` 包含旧 `mac` 和新 `mac-<id>`；指定完整设备 ID 时仍精确匹配。归属、鉴权和同步继续校验完整设备 ID；唯一例外是本机登记的 Mac（`platform=mac`、`local_only=1`）在音频模块与历史 `device = "mac"` 视为同一音频身份，以保证已确认声纹、命名说话人、相邻 10 分钟内的对话分场、试听样本请求、补转写/重认及保留期清理连续不断，不改写已有记录。
 
 #### 6.10.2 同机时的本机快路
 
@@ -883,11 +884,18 @@ CREATE TABLE project_context_cache (
   - Mac 设备私钥存钥匙串（service `record-anything`、account `mac-device-key`，经 `/usr/bin/security -i` 从标准输入写入），以读回结果确认。连接元数据存 `<数据目录>/collector-link.json`，本机格式为 `{ hub_id, hub_pk, device_id, mode: "local", addrs: [endpoint 的 origin], relay: null }`。连接文件不含密钥或令牌，详见 6.10.6。
 - **采集上传（`HubClient`）**：本机连接文件可用时，经 `DeviceClient` 向当前端口的 `POST /v1/device` 发送 `ingest`。只在发送副本上填中枢分配的 `mac-<id>`，保留记录 ID、加密待发送副本和既有入库记录。没有可用连接文件时沿用持管理令牌的 `POST /v1/ingest`。每批最多 200 条、编码后的请求体最多 4 MiB（设备请求按加密前的 `body` 计算）。只有完整有效的回执才确认并删除待发送副本。设备端点返回 HTTP 401 时，撤下 `collector-link.json`，同批改用旧接口重试，下一次应用启动才重新登记。
 - **后续传输**：信箱上传尚未接入，计划每批不超过 640 KiB。设备的信箱令牌计划使用钥匙串 `record-anything` 服务下的 `relay-device-<device_id>` 账户，无头编码机用同名的 `0600` 文件。换信箱时收到 `relay.moved` 原位覆盖。
-- **外部插件（`PluginScheduler` + `hub/src/run-plugin.ts`），待迁移**：
-  - `run-plugin` 新增 `--transport stdio`（或本机 IPC 代理模式）：插件子进程只输出记录批次给宿主 `Tacit.app`，由 `Tacit.app` 的 `DeviceClient` 签名发送并把 `IngestResult` 回执交回 `run-plugin`，`run-plugin` 核对回执后再落盘 `state.json` 并按规则清理 `release` 缓冲文件。
-  - 插件子进程不接触设备私钥与信箱令牌，且中枢在远端时自动获得信箱回退能力。
-- **音频转写（`AudioCoordinator` + `ra-audio-worker`），待迁移**：改走 6.5 已有的 `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`、`audio.samples`、`audio.lines`；`ra-audio-worker` 通过宿主代理发出请求，不再自己读 `token` 调 `127.0.0.1`。
-- **采集健康上报（解耦 `collector-status.json`），待迁移**：新增 `op: "collector.status"`，采集端每 60 秒或出错时上报 `{ time, transcription, outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak }`，中枢按 `device_id` 保存在内存/状态表，不再读共享目录的 `collector-status.json`。
+- **外部插件（`PluginScheduler` + `hub/src/run-plugin.ts`，已实施）**：
+  - `run-plugin` 与 `plugin-run` 新增 `--transport stdio` 与 `--device <id>` 参数，不能与 `--hub` / `--token-file` 同用，也不读取本机 `token` 文件。有 `collector-link.json` 时，宿主 `Tacit.app` 以 `--transport stdio --device <mac-id>` 启动插件 runner，无连接文件时沿用 `--hub` 旧路径。
+  - 传输格式为逐行 UTF-8 JSONL（单批最多 200 条且编码体积不超过 4 MiB）：runner 向 stdout 输出 `{"type":"ingest","id":<序号>,"records":[...]}`，宿主核对来源白名单（禁止 `manual.*`，内置/扩展插件限定自身来源）并将每条记录的 `device` 设为已登记的 `mac-<id>`，经 `DeviceClient` 发 `ingest`、用 `DeliveryReceipt` 校验回执后，向 runner 的 stdin 回写 `{"type":"ingest_result","id":<序号>,"ok":true,"result":<IngestResult>}` 或失败时的 `{"type":"ingest_result","id":<序号>,"ok":false,"status":<码>,"error":"<固定类别>"}`。
+  - `run-plugin` 收到 `status: 503` 按与 HTTP 模式相同的退避序列重试；仅在进程正常退出且全部批次收到完整有效回执后才原子落盘 `state.json` 并清理 `release` 缓冲文件。最后仍向 stdout 输出一行运行摘要供 `PluginScheduler` 展示。
+  - 插件子进程不接触设备私钥与管理令牌，且中枢在远端时自动随宿主获得信箱回退能力。
+- **音频转写（`AudioCoordinator` + `ra-audio-worker`，已实施）**：
+  - 有 `collector-link.json` 时，`AudioCoordinator` 直接经宿主共享 `HostDeviceSession` / `DeviceClient` 调用 `audio.sync` 与 `audio.sync.ack`，并以 `--device <mac-id> --transport stdio` 启动 `ra-audio-worker`（不传 `--hub`，子进程不读取 `token` 或设备私钥）。
+  - `ra-audio-worker` 在加载模型前先 `dup` 标准输入输出为私有描述符并将 fd 0/1 重定向到 `/dev/null`（避免原生 C 库日志破坏协议），再以逐行 JSONL 向宿主发出 `{"id":<序号>,"op":"<op>","body":{...}}`，宿主校验 `op` 仅限白名单（`audio.sync`、`audio.embeddings`、`audio.skipped`、`audio.samples`、`audio.lines`、`ingest`；其中 `ingest` 只允许 `source="mac.audio"` 并覆盖 `device` 为 `mac-<id>`），经 `DeviceClient` 发送后回写 `{"id":<序号>,"ok":true,"status":200,"body":{...}}` 或失败时的固定错误类别。
+  - 没有 `collector-link.json` 或收到 401 移除回退时，仍沿用原 `--hub` + `token` 路径。
+- **采集健康上报（`collector.status`，已实施）**：
+  - 有 `collector-link.json` 时，采集端通过 `HostDeviceSession` 每 60 秒或在出错（待发送队列降级/丢弃、转写失败增加、hub 忙或发送报错，受 5 秒最短冷却约束）时发送 `op: "collector.status"`，载荷为 `{ time, transcription, outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak }`（录音关闭时 `transcription` 显式编码为 `null`）；同时保留本地 `collector-status.json` 供离线诊断与未登记回退使用。
+  - 中枢在 `DeviceService` 严格校验字段后按 `device_id` 存入 `distill_state`（`collector_status:<device_id>`，移除设备时删除）；`hubStatus` 优先读取设备上报（优先本机 Mac，其次其他 Mac，按最新时间排序），无上报时回落到 `collector-status.json`，状态页展示保持不变。
 
 #### 6.10.4 查看窗口和设置页走设备协议
 
@@ -984,9 +992,8 @@ CREATE TABLE project_context_cache (
 
 #### 6.10.7 后续迁移
 
-1. 在日常使用中验收 Mac 的录音、纠错及设置。查看窗口的接入与合成数据验收见 6.10.4。
-2. 实现采集状态上报、插件宿主代理。插件仅在完整送达回执后提交状态和清除缓冲。
-3. 验证已安装的 Claude Code / Codex 在线、超时和离线场景。远端 Agent 签发、通过信箱查询、独立部署及兼容接口下线安排留待后续。
+1. 在日常使用中验收 Mac 的录音、插件、纠错及设置。查看窗口读写、音频与插件宿主代理、采集状态上报均已接入，合成数据验收见 6.10.3–6.10.4。
+2. 验证已安装的 Claude Code / Codex 在线、超时和离线场景。远端 Agent 签发、通过信箱查询、独立部署及兼容接口下线安排留待后续。
 
 ---
 

@@ -56,9 +56,11 @@ final class AudioCoordinator {
   private var sessionStarted = Date.distantPast
 
   private let startGuard: RecordingStartGuard
+  private let deviceSession: HostDeviceSession?
   let initiallyBlocked: Bool
-  init(config: Config) {
+  init(config: Config, deviceSession: HostDeviceSession? = nil) {
     self.config = config
+    self.deviceSession = deviceSession
     startGuard = RecordingStartGuard(dataDirectory: config.dataDir)
     initiallyBlocked = startGuard.blocked
     if initiallyBlocked {
@@ -364,57 +366,103 @@ final class AudioCoordinator {
   private func sync() {
     guard !shuttingDown, !syncing else { return }
     syncing = true; lastSync = Date()
-    request(path: "/v1/audio/sync") { [weak self] data in
-      guard let self else { return }
-      self.queue.async {
-        defer { self.syncing = false; self.publish() }
-        guard let data, let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let days = reply["retention_days"] as? Int, (0...365).contains(days),
-              let deleting = reply["delete_conversations"] as? [String] else { return }
+    if let deviceSession {
+      Task { [weak self] in
+        guard let self else { return }
         do {
-          self.retentionDays = days; self.retentionKnown = true
-          if let voice = reply["voiceprint"] as? [String: Any] {
-            let canonical = try JSONSerialization.data(withJSONObject: voice, options: .sortedKeys)
-            let hash = SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
-            if hash != self.voiceHash { self.voiceChanged = true; self.voiceHash = hash }
-          } else { self.voiceHash = nil }
-          self.samplesRequested = !((reply["sample_requests"] as? [Any]) ?? []).isEmpty
-          // worker 持有 closed 对话期间不删除，待它退出后再执行并 ack。
-          guard self.worker == nil else { return }
-          let purgeText = reply["purge_before"] as? String
-          let purge = AudioPolicy.date(purgeText)
-          if purgeText != nil && purge == nil { throw AudioError.invalidMetadata }
-          // 没有要删的对话时不扫描：保留期清理和盘点由定时维护负责，每 5 分钟同步一次不必再扫两遍目录。
-          if purgeText == nil && deleting.isEmpty {
-            if self.shouldRunWorker(Date()) { self.launchWorker() }
-            self.persistState(); return
+          if let link = await deviceSession.currentLink(),
+             let reply = try await deviceSession.send(op: "audio.sync", body: [:]) {
+            self.handleSyncReply(reply.bodyData, link: link)
+            return
           }
-          guard !self.maintenance.isRunning, let store = self.store else { self.lastSync = .distantPast; return }
-          let revision = self.inventoryRevision
-          self.maintenance.perform(returningTo: self.queue, operation: {
-            let deleted = try store.cleanup(now: Date(), retentionDays: days, purgeBefore: purge, deleting: deleting)
-            return (deleted, try store.conversations(readOnly: true))
-          }, completion: { result in
-            do {
-              let (deleted, all) = try result.get()
-              self.maintenanceFailure = nil; self.acceptInventory(all, revision: revision)
-              var ack: [String: Any] = ["device": self.config.device, "deleted": deleting.filter { deleted.contains($0) }]
-              if let purgeText { ack["purged_at"] = purgeText }
-              if !self.shuttingDown && (purgeText != nil || !deleting.isEmpty) { self.request(path: "/v1/audio/sync/ack", body: ack) { _ in } }
-              if self.shouldRunWorker(Date()) { self.launchWorker() }
-              self.persistState(); self.publish()
-            } catch { self.maintenanceFailure = "音频同步清理失败"; self.lastSync = .distantPast }
-          })
-        } catch { self.failure = "音频同步清理失败：\(error)" }
+        } catch DeviceClientError.deviceRemoved {
+          // 401 已由 HostDeviceSession 撤下 collector-link.json，下面回落到旧 HTTP 接口。
+        } catch {
+          self.handleSyncReply(nil, link: nil)
+          return
+        }
+        self.request(path: "/v1/audio/sync") { [weak self] data in
+          self?.handleSyncReply(data, link: nil)
+        }
       }
+      return
+    }
+    request(path: "/v1/audio/sync") { [weak self] data in
+      self?.handleSyncReply(data, link: nil)
     }
   }
-  private func launchWorker() {
+  private func sendSyncAck(deleted: [String], purgedAt: String?, link: LocalDeviceLink?) {
+    guard !shuttingDown else { return }
+    if link != nil, let deviceSession {
+      var body: [String: DeviceJSON] = ["deleted": .array(deleted.map(DeviceJSON.string))]
+      if let purgedAt { body["purged_at"] = .string(purgedAt) }
+      Task { _ = try? await deviceSession.send(op: "audio.sync.ack", body: body) }
+      return
+    }
+    var ack: [String: Any] = ["device": config.device, "deleted": deleted]
+    if let purgedAt { ack["purged_at"] = purgedAt }
+    request(path: "/v1/audio/sync/ack", body: ack) { _ in }
+  }
+  private func handleSyncReply(_ data: Data?, link: LocalDeviceLink?) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      defer { self.syncing = false; self.publish() }
+      guard let data, let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let days = reply["retention_days"] as? Int, (0...365).contains(days),
+            let deleting = reply["delete_conversations"] as? [String] else { return }
+      do {
+        self.retentionDays = days; self.retentionKnown = true
+        if let voice = reply["voiceprint"] as? [String: Any] {
+          let canonical = try JSONSerialization.data(withJSONObject: voice, options: .sortedKeys)
+          let hash = SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
+          if hash != self.voiceHash { self.voiceChanged = true; self.voiceHash = hash }
+        } else { self.voiceHash = nil }
+        self.samplesRequested = !((reply["sample_requests"] as? [Any]) ?? []).isEmpty
+        // worker 持有 closed 对话期间不删除，待它退出后再执行并 ack。
+        guard self.worker == nil else { return }
+        let purgeText = reply["purge_before"] as? String
+        let purge = AudioPolicy.date(purgeText)
+        if purgeText != nil && purge == nil { throw AudioError.invalidMetadata }
+        // 没有要删的对话时不扫描：保留期清理和盘点由定时维护负责，每 5 分钟同步一次不必再扫两遍目录。
+        if purgeText == nil && deleting.isEmpty {
+          if self.shouldRunWorker(Date()) { self.launchWorker(link: link) }
+          self.persistState(); return
+        }
+        guard !self.maintenance.isRunning, let store = self.store else { self.lastSync = .distantPast; return }
+        let revision = self.inventoryRevision
+        self.maintenance.perform(returningTo: self.queue, operation: {
+          let deleted = try store.cleanup(now: Date(), retentionDays: days, purgeBefore: purge, deleting: deleting)
+          return (deleted, try store.conversations(readOnly: true))
+        }, completion: { result in
+          do {
+            let (deleted, all) = try result.get()
+            self.maintenanceFailure = nil; self.acceptInventory(all, revision: revision)
+            if !self.shuttingDown && (purgeText != nil || !deleting.isEmpty) {
+              self.sendSyncAck(deleted: deleting.filter { deleted.contains($0) }, purgedAt: purgeText, link: link)
+            }
+            if self.shouldRunWorker(Date()) { self.launchWorker(link: link) }
+            self.persistState(); self.publish()
+          } catch { self.maintenanceFailure = "音频同步清理失败"; self.lastSync = .distantPast }
+        })
+      } catch { self.failure = "音频同步清理失败：\(error)" }
+    }
+  }
+  private func launchWorker(link: LocalDeviceLink? = nil) {
     let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/taskpolicy")
-    process.arguments = ["-b", workerURL.path, "--data-dir", config.dataDir.path, "--device", config.device, "--hub", config.hubURL.absoluteString]
     var env = ProcessInfo.processInfo.environment; env["RA_DATA_DIR"] = config.dataDir.path; process.environment = env
-    // 系统库也能往这个流输出，转写退出原因和积压量通过诊断日志及状态文件记录。
-    process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.standardError  // worker 只写固定标签和计数，跟随主进程进 collector.log
+    var proxyPipes: (input: Pipe, output: Pipe, deviceID: String, session: HostDeviceSession)?
+    if let link, let deviceSession {
+      let inPipe = Pipe(), outPipe = Pipe()
+      process.arguments = ["-b", workerURL.path, "--data-dir", config.dataDir.path, "--device", link.device_id, "--transport", "stdio"]
+      process.standardInput = inPipe
+      process.standardOutput = outPipe
+      process.standardError = FileHandle.standardError
+      proxyPipes = (inPipe, outPipe, link.device_id, deviceSession)
+    } else {
+      process.arguments = ["-b", workerURL.path, "--data-dir", config.dataDir.path, "--device", config.device, "--hub", config.hubURL.absoluteString]
+      // 系统库也能往这个流输出，转写退出原因和积压量通过诊断日志及状态文件记录。
+      process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.standardError  // worker 只写固定标签和计数，跟随主进程进 collector.log
+    }
     process.terminationHandler = { [weak self] p in
       let crashed = p.terminationReason == .uncaughtSignal
       if p.terminationStatus != 0 {
@@ -428,6 +476,25 @@ final class AudioCoordinator {
     }
     do {
       try process.run(); worker = process; lastWorker = Date(); voiceChanged = false
+      if let proxy = proxyPipes {
+        try? proxy.input.fileHandleForReading.close()
+        try? proxy.output.fileHandleForWriting.close()
+        let readHandle = proxy.output.fileHandleForReading
+        let writeHandle = proxy.input.fileHandleForWriting
+        let channel = StdioLineChannel(readFD: readHandle.fileDescriptor, writeFD: writeHandle.fileDescriptor)
+        Task.detached(priority: .utility) {
+          defer {
+            try? readHandle.close()
+            try? writeHandle.close()
+          }
+          await AudioProxy.serve(channel: channel, deviceID: proxy.deviceID) { op, body in
+            guard let reply = try await proxy.session.send(op: op, body: body) else {
+              throw DeviceClientError.deviceRemoved(message: nil)
+            }
+            return reply
+          }
+        }
+      }
       if failure?.hasPrefix(Self.workerLaunchFailure) == true { failure = nil }
     } catch {
       DiagnosticLog.shared.record(.audioWorkerLaunchFailed)

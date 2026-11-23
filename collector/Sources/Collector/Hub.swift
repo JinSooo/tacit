@@ -71,10 +71,14 @@ final class HubClient {
   private(set) var rejected = 0
   private var deliveryMetrics = HubDeliveryMetrics()
   var hubBusy: Int { lock.lock(); defer { lock.unlock() }; return deliveryMetrics.hubBusy }
+  private let onHealthEvent: (@Sendable () -> Void)?
 
-  init(config: Config, onLinked: (@Sendable (LocalDeviceLink) -> Void)? = nil) {
+  init(config: Config, deviceSession: HostDeviceSession? = nil,
+       onHealthEvent: (@Sendable () -> Void)? = nil,
+       onLinked: (@Sendable (LocalDeviceLink) -> Void)? = nil) {
     self.config = config
-    upload = CollectorUpload(config: config, onLinked: onLinked)
+    self.onHealthEvent = onHealthEvent
+    upload = CollectorUpload(config: config, deviceSession: deviceSession, onLinked: onLinked)
     queue = OutboundQueue()
     buffer = OutboxBuffer(memory: queue, open: { try OutboxStore(dataDirectory: config.dataDir) })
     io.async { [self] in retryOutbox() }
@@ -89,6 +93,7 @@ final class HubClient {
     let status = buffer.status
     lock.lock()
     let newDrops = status.dropped > diskStatus.dropped
+    let becameDegraded = status.degraded && !diskStatus.degraded
     diskStatus = status
     storedCount = buffer.count
     peak = buffer.queuePeak
@@ -99,6 +104,7 @@ final class HubClient {
     lock.unlock()
     if newDrops { DiagnosticLog.shared.record(.outboxDropped(total: status.dropped)) }
     if status.degraded { DiagnosticLog.shared.record(.outboxDegraded) }
+    if newDrops || becameDegraded { onHealthEvent?() }
   }
 
   func enqueue(_ records: [Record]) {
@@ -160,12 +166,14 @@ final class HubClient {
         catch { acknowledged = nil }
       }
       lock.lock()
+      let previousError = networkError
       if let status { deliveryMetrics.received(status: status) }
       inFlight = false
       networkError = error
       if let done = acknowledged { sent += done.1; rejected += done.2 }
       lock.unlock()
       publishOutbox()
+      if (error != nil && previousError == nil) || status == 503 { onHealthEvent?() }
       if acknowledged != nil { sendNext() }
     }
   }
@@ -222,8 +230,12 @@ final class PluginScheduler {
   private var regularQueued = false
   private let lock = NSLock()
   private let jobs = DispatchQueue(label: "record-anything.plugins", qos: .utility)
+  private let deviceSession: HostDeviceSession?
 
-  init(config: Config) { self.config = config }
+  init(config: Config, deviceSession: HostDeviceSession? = nil) {
+    self.config = config
+    self.deviceSession = deviceSession
+  }
 
   var available: Bool { config.repo != nil && FileManager.default.isExecutableFile(atPath: config.bun) }
 
@@ -247,13 +259,33 @@ final class PluginScheduler {
     }
   }
 
+  private func resolveLink() -> LocalDeviceLink? {
+    guard let deviceSession else { return nil }
+    let done = DispatchSemaphore(value: 0)
+    var resolved: LocalDeviceLink?
+    Task {
+      resolved = await deviceSession.currentLink()
+      done.signal()
+    }
+    done.wait()
+    return resolved
+  }
+
   private func run(_ name: String, since: Date?) -> Outcome {
     guard let repo = config.repo else { return Outcome(ok: false, accepted: 0, text: "未配置仓库", at: Date()) }
     lock.lock(); current = name; lock.unlock()
     defer { lock.lock(); current = nil; process = nil; lock.unlock() }
+    let link = resolveLink()
     let p = Process()
     p.executableURL = URL(fileURLWithPath: config.bun)
-    if name.hasPrefix("ext-") {
+    if let link, deviceSession != nil {
+      if name.hasPrefix("ext-") {
+        p.arguments = ["\(repo)/hub/src/cli.ts", "plugin-run", name, "--transport", "stdio", "--device", link.device_id] + PluginImport.arguments(plugin: name, since: since)
+      } else {
+        p.arguments = ["\(repo)/hub/src/cli.ts", "run-plugin", name, "--transport", "stdio", "--device", link.device_id,
+                       "--", config.bun, "\(repo)/plugins/\(name)/main.ts"] + PluginImport.arguments(plugin: name, since: since)
+      }
+    } else if name.hasPrefix("ext-") {
       p.arguments = ["\(repo)/hub/src/cli.ts", "plugin-run", name, "--hub", config.hubURL.absoluteString] + PluginImport.arguments(plugin: name, since: since)
     } else {
       p.arguments = ["\(repo)/hub/src/cli.ts", "run-plugin", name, "--hub", config.hubURL.absoluteString,
@@ -262,16 +294,50 @@ final class PluginScheduler {
     var env = ProcessInfo.processInfo.environment
     env["RA_DATA_DIR"] = config.dataDir.path
     p.environment = env
-    let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
+    let out = Pipe()
+    let input = link != nil && deviceSession != nil ? Pipe() : nil
+    if let input { p.standardInput = input }
+    p.standardOutput = out; p.standardError = FileHandle.nullDevice
     let started = Date()
     lock.lock()
     guard active.contains(name) && isEnabled(name) else { lock.unlock(); return Outcome(ok: true, accepted: 0, text: "已停用或暂停", at: Date()) }
     do { try p.run(); process = p; lock.unlock() } catch { lock.unlock(); return set(name, Outcome(ok: false, accepted: 0, text: "启动失败", at: Date())) }
     let timer = DispatchWorkItem { if p.isRunning { p.terminate() } }
     DispatchQueue.global().asyncAfter(deadline: .now() + PluginImport.timeout(since: since), execute: timer)
-    let data = out.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit(); timer.cancel()
-    let summary = String(data: data, encoding: .utf8)?.split(separator: "\n").last.map(String.init) ?? ""
+    let summary: String
+    if let link, let deviceSession, let input {
+      try? input.fileHandleForReading.close()
+      try? out.fileHandleForWriting.close()
+      let readHandle = out.fileHandleForReading
+      let writeHandle = input.fileHandleForWriting
+      let channel = StdioLineChannel(readFD: readHandle.fileDescriptor, writeFD: writeHandle.fileDescriptor)
+      let proxyDone = DispatchSemaphore(value: 0)
+      var lastLine = ""
+      Task.detached(priority: .utility) {
+        defer {
+          try? readHandle.close()
+          try? writeHandle.close()
+          proxyDone.signal()
+        }
+        lastLine = await PluginProxy.serve(
+          channel: channel,
+          deviceID: link.device_id,
+          allowedSources: PluginProxy.allowedSources(for: name)
+        ) { op, body in
+          guard let reply = try await deviceSession.send(op: op, body: body) else {
+            throw DeviceClientError.deviceRemoved(message: nil)
+          }
+          return reply
+        }
+      }
+      proxyDone.wait()
+      p.waitUntilExit(); timer.cancel()
+      summary = lastLine
+    } else {
+      let data = out.fileHandleForReading.readDataToEndOfFile()
+      p.waitUntilExit(); timer.cancel()
+      summary = String(data: data, encoding: .utf8)?.split(separator: "\n").last.map(String.init) ?? ""
+    }
     let ok = p.terminationStatus == 0
     var accepted: Int?, failure: String?, warnings: [String] = []
     if let d = summary.data(using: .utf8), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {

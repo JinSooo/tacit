@@ -28,7 +28,7 @@ export interface HubStatus {
     last_ok_at: string | null;
     cooldown: { until: string; kind: "rate_limited" | "quota" | "network" | "budget" } | null;
   };
-  collector: (CollectorUpdate & { outbox_bytes: number; outbox_dropped: number; outbox_degraded: boolean }) | null;
+  collector: (CollectorUpdate & { outbox_bytes: number; outbox_dropped: number; outbox_degraded: boolean; hub_busy?: number; queue_peak?: number }) | null;
   llm_today: { date: string; total: Omit<TierUsage, "tier" | "models">; by_tier: TierUsage[]; used_tokens: number; token_limit: number | null };
   agent_reads_today: number;
   audio: {

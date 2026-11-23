@@ -2,6 +2,7 @@ import { tryWriteWithoutWaiting } from "./db-busy.ts";
 import { ulid } from "../../packages/record/index.ts";
 import { HubDB, InputError } from "./db.ts";
 import { saveLines } from "./conversations.ts";
+import { audioEquivalentDevices, audioIdentity } from "./record-sources.ts";
 
 export const MATCH_THRESHOLD = 0.5;
 export const DEFAULT_ME_THRESHOLD = 0.49;
@@ -109,13 +110,19 @@ export class AudioStore {
     });
     return this.sql.transaction(() => {
       const me = this.activeSpeakers().filter(s => s.is_me);
+      const devices = audioEquivalentDevices(this.hub, device);
+      const placeholders = devices.map(() => "?").join(",");
       const purge = this.setting<string | null>("purge_before", null);
-      const ack = this.setting<string | null>(`purged:${device}`, null);
+      const ackMs = devices
+        .map(d => this.setting<string | null>(`purged:${d}`, null))
+        .filter((v): v is string => typeof v === "string" && Number.isFinite(Date.parse(v)))
+        .reduce((max, v) => Math.max(max, Date.parse(v)), -Infinity);
+      const deletes = [...new Set(devices.flatMap(d => this.setting<string[]>(`delete:${d}`, [])))];
       return {
-        ...this.settings(), purge_before: purge && (!ack || Date.parse(ack) < Date.parse(purge)) ? purge : null,
+        ...this.settings(), purge_before: purge && (!Number.isFinite(ackMs) || ackMs < Date.parse(purge)) ? purge : null,
         voiceprint: me.length ? { vector: weighted(me), threshold: this.setting("me_threshold", DEFAULT_ME_THRESHOLD) } : null,
-        sample_requests: this.sql.prepare("SELECT id,speaker_id,conversation_ref,local FROM sample_requests WHERE device=? AND fulfilled_at IS NULL ORDER BY created_at,id").all(device),
-        delete_conversations: this.setting<string[]>(`delete:${device}`, []),
+        sample_requests: this.sql.prepare(`SELECT id,speaker_id,conversation_ref,local FROM sample_requests WHERE device IN (${placeholders}) AND fulfilled_at IS NULL ORDER BY created_at,id`).all(...devices),
+        delete_conversations: deletes,
       };
     })();
   }
@@ -124,13 +131,26 @@ export class AudioStore {
     const purged = b.purged_at === undefined ? undefined : date(b.purged_at);
     if (b.deleted !== undefined && (!Array.isArray(b.deleted) || !b.deleted.every(v => typeof v === "string" && v.length > 0 && v.length <= 512))) throw new InputError("deleted 必须是对话键数组");
     return this.sql.transaction(() => {
+      const devices = audioEquivalentDevices(this.hub, device);
       if (purged) {
         const purge = this.setting<string | null>("purge_before", null);
         // 只确认 hub 已发出的清理时刻，未来时间不能吞掉下一次清理。
-        const previous = this.setting<string | null>(`purged:${device}`, null);
-        if (purge && Date.parse(purged) >= Date.parse(purge) && (!previous || Date.parse(previous) < Date.parse(purge))) this.set(`purged:${device}`, purge);
+        if (purge && Date.parse(purged) >= Date.parse(purge)) {
+          for (const d of devices) {
+            const previous = this.setting<string | null>(`purged:${d}`, null);
+            if (!previous || Date.parse(previous) < Date.parse(purge)) this.set(`purged:${d}`, purge);
+          }
+        }
       }
-      if (b.deleted) this.set(`delete:${device}`, this.setting<string[]>(`delete:${device}`, []).filter(ref => !(b.deleted as string[]).includes(ref)));
+      if (b.deleted) {
+        const removed = b.deleted as string[];
+        for (const d of devices) {
+          const existing = this.setting<string[] | null>(`delete:${d}`, null);
+          if (existing !== null || d === device) {
+            this.set(`delete:${d}`, (existing ?? []).filter(ref => !removed.includes(ref)));
+          }
+        }
+      }
       return { acknowledged: true };
     }).immediate();
   }
@@ -148,7 +168,8 @@ export class AudioStore {
       if (caller) this.assertDeviceConversation(ref, caller);
       if (this.sql.prepare("SELECT 1 FROM tombstones WHERE source IN ('mac.audio','android.audio') AND source_ref=?").get(ref)) throw new InputError("对话已删除");
       const old = this.sql.prepare("SELECT * FROM voice_embeddings WHERE conversation_ref=?").all(ref) as Embedding[];
-      if (old.some(s => s.device !== device)) throw new InputError("对话属于其他设备");
+      const deviceGroup = audioIdentity(this.hub, device);
+      if (old.some(s => audioIdentity(this.hub, s.device) !== deviceGroup)) throw new InputError("对话属于其他设备");
       // 原样重传不更改中心和累计次数。
       const same = old.length === input.length && input.every(s => old.some(o => o.local === s.local && o.track === s.track && o.seconds === s.seconds && o.centroid.equals(s.centroid))) &&
         (this.sql.prepare("SELECT 1 FROM voice_embeddings WHERE conversation_ref=? AND (t_start!=? OR t_end!=?)").get(ref,start,end) === undefined);
@@ -261,7 +282,10 @@ export class AudioStore {
   /** 试听片段来自哪段对话、这个人当时说了什么。用户报告：光听一段模糊的录音认不出是谁。 */
   private sampleContext(s: Speaker, requestId: string): { at?: string; said?: string } {
     const request = this.sql.prepare("SELECT conversation_ref,device FROM sample_requests WHERE id=?").get(requestId) as { conversation_ref: string; device: string } | undefined;
-    const record = request && this.sql.prepare("SELECT t_start,body FROM records WHERE source IN ('mac.audio','android.audio') AND source_ref=? AND device=?").get(request.conversation_ref,request.device) as { t_start: string; body: string } | undefined;
+    const devices = request ? audioEquivalentDevices(this.hub, request.device) : [];
+    const record = request && this.sql.prepare(
+      `SELECT t_start,body FROM records WHERE source IN ('mac.audio','android.audio') AND source_ref=? AND device IN (${devices.map(() => "?").join(",")})`,
+    ).get(request.conversation_ref, ...devices) as { t_start: string; body: string } | undefined;
     if (!record) return {};
     // 记录里的说话人写法是转写当时的名字，未确认时是本地标签；两个都试。
     const names = new Set([s.name, s.label].map(n => (n ?? "").trim()).filter(Boolean));
@@ -395,7 +419,7 @@ export class AudioStore {
     });
     return this.sql.transaction(() => {
       const request = this.sql.prepare("SELECT * FROM sample_requests WHERE id=?").get(requestId) as SampleRequest | undefined;
-      if (!request || (caller && request.device !== caller) || this.speaker(request.speaker_id)?.status !== "asked") throw new InputError("样本请求不存在或已处理");
+      if (!request || (caller && audioIdentity(this.hub, request.device) !== audioIdentity(this.hub, caller)) || this.speaker(request.speaker_id)?.status !== "asked") throw new InputError("样本请求不存在或已处理");
       const existing = (this.sql.prepare("SELECT COUNT(*) AS n FROM voice_samples WHERE speaker_id=? AND request_id!=?").get(request.speaker_id,requestId) as { n: number }).n;
       if (existing+clips.length > MAX_CLIPS) throw new InputError("每个说话人最多 3 段样本");
       this.sql.prepare("DELETE FROM voice_samples WHERE request_id=?").run(requestId);
@@ -421,7 +445,7 @@ export class AudioStore {
     return this.sql.transaction(() => {
       if (caller) this.assertDeviceConversation(ref, caller, true);
       const owner = this.sql.prepare("SELECT device FROM voice_embeddings WHERE conversation_ref=? LIMIT 1").get(ref) as { device: string } | undefined;
-      if (owner && owner.device !== device) throw new InputError("对话属于其他设备");
+      if (owner && audioIdentity(this.hub, owner.device) !== audioIdentity(this.hub, device)) throw new InputError("对话属于其他设备");
       if (this.sql.prepare("SELECT 1 FROM tombstones WHERE source IN ('mac.audio','android.audio') AND source_ref=?").get(ref)) throw new InputError("对话已删除");
       return { stored: saveLines(this.hub, ref, lines) };
     }).immediate();
@@ -433,7 +457,8 @@ export class AudioStore {
       UNION SELECT device FROM records WHERE source IN ('mac.audio','android.audio') AND source_ref=?
       UNION SELECT device FROM sample_requests WHERE conversation_ref=?
     `).all(ref, ref, ref);
-    if (owners.some(owner => owner.device !== device)
+    const identity = audioIdentity(this.hub, device);
+    if (owners.some(owner => audioIdentity(this.hub, owner.device) !== identity)
       || (!owners.length && (requireOwner || this.sql.prepare("SELECT 1 FROM conversation_lines WHERE conversation_ref=?").get(ref)))) {
       throw new InputError("对话不属于本设备");
     }
@@ -441,7 +466,14 @@ export class AudioStore {
 
   removeConversation(ref: string, device: string) {
     this.sql.prepare("DELETE FROM conversation_lines WHERE conversation_ref=?").run(ref);
-    const devices = new Set([device, ...(this.sql.prepare("SELECT DISTINCT device FROM voice_embeddings WHERE conversation_ref=?").all(ref) as { device: string }[]).map(r => r.device)]);
+    const seen = new Set<string>();
+    const devices: string[] = [];
+    for (const d of [device, ...(this.sql.prepare("SELECT DISTINCT device FROM voice_embeddings WHERE conversation_ref=?").all(ref) as { device: string }[]).map(r => r.device)]) {
+      const identity = audioIdentity(this.hub, d);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      devices.push(d);
+    }
     for (const d of devices) this.set(`delete:${d}`, [...new Set([...this.setting<string[]>(`delete:${d}`,[]),ref])]);
     this.sql.prepare("DELETE FROM voice_embeddings WHERE conversation_ref=?").run(ref);
     const requests = this.sql.prepare("SELECT id FROM sample_requests WHERE conversation_ref=?").all(ref) as { id: string }[];
