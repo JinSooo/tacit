@@ -857,7 +857,7 @@ CREATE TABLE project_context_cache (
   - `mac`：`mac.*`、`claude_code.session`、`codex.session`、`plugin.ext_*`、`manual.note`、`manual.correction`。
   - `agent`：禁止调用 `ingest`；仅允许 `agent.append`（写入 `source = "manual.agent"`，`device` 填调用方 `device_id`，取代 `hub/src/agent.ts` 中写死的 `"mac"`）。
 - **历史 `device = "mac"` 记录**：
-  - 遵循 `AGENTS.md` “记录写入后不再修改”：升级后**不改写**已有记录的 `device = "mac"`，历史记录继续正常展示、搜索与整理；新采集的 Mac 记录使用新分配的 `mac-<8位base32>`（例如 `mac-k7m2p9q4`）；原 Mac 升级后作为 `admin` 设备可直接删除或修正历史 `device = "mac"` 记录。
+  - 遵循 `AGENTS.md` “记录写入后不再修改”：升级后**不改写**已有记录的 `device = "mac"`，历史记录继续正常展示、搜索与整理；新采集的 Mac 记录使用新分配的 `mac-<8位base32>`（例如 `mac-k7m2p3q4`；字符集同 `hub_id`，`a–z` 加 `2–7`）；原 Mac 升级后作为 `admin` 设备可直接删除或修正历史 `device = "mac"` 记录。
 
 #### 6.10.2 同机时的本机快路
 
@@ -872,7 +872,7 @@ CREATE TABLE project_context_cache (
 
 - **统一设备传输层（`CollectorCore/DeviceClient.swift`）**：
   - 基于 macOS 14+ 原生 `CryptoKit.HPKE` 实现 6.1/6.2（DHKEM X25519 / HKDF-SHA256 / AES-128-GCM），单测必须通过 `schema/fixtures/device-envelope.json` 互通向量。
-  - Mac 设备私钥存钥匙串（service `record-anything`、account `mac-device-key`，经 `/usr/bin/security`）；设备私钥丢失只需重新配对，不影响已入库数据。连接元数据存 `<数据目录>/collector-link.json`（含 `hub_id`、`hub_pk`、`device_id`、`mode`、`addrs`、`relay`（不含令牌，信箱令牌存钥匙串））。
+  - Mac 设备私钥存钥匙串（service `record-anything`、account `mac-device-key`，经 `/usr/bin/security`）；设备私钥丢失只需重新配对，不影响已入库数据。连接元数据存 `<数据目录>/collector-link.json`（含 `hub_id`、`hub_pk`、`device_id`、`mode`、`addrs`、`relay`（不含令牌））。设备自己的信箱令牌存钥匙串 service `record-anything`、account `relay-device-<device_id>`（AI 工具身份用 `relay-device-agent-<id>`；无头编码机放在同目录 `0600` 文件），换信箱收到 `relay.moved` 时原位覆盖。
 - **采集上传（`HubClient`）**：`OutboxStore` 加密落盘机制不变；发送端改为调 `DeviceClient` 的 `ingest` op（直连每批 ≤ 200 条且 ≤ 4 MiB；经信箱每批 ≤ 640 KiB），回执校验规则不变。
 - **外部插件（`PluginScheduler` + `hub/src/run-plugin.ts`）**：
   - `run-plugin` 新增 `--transport stdio`（或本机 IPC 代理模式）：插件子进程只输出记录批次给宿主 `Tacit.app`，由 `Tacit.app` 的 `DeviceClient` 签名发送并把 `IngestResult` 回执交回 `run-plugin`，`run-plugin` 核对回执后再落盘 `state.json` 并按规则清理 `release` 缓冲文件。
@@ -914,14 +914,14 @@ CREATE TABLE project_context_cache (
 #### 6.10.6 迁移期间老版本共存
 
 - **双栈期**：中枢同时保留旧的本机 `127.0.0.1:<port>/v1/*`（Bearer `token` / `agent-token`）与新的 `127.0.0.1:<port>/v1/device`。
-- **同机自动引导**：新版 `Tacit.app` 升级启动时，若发现存在本地 `token` 且尚未有 `collector-link.json`，自动调用一次本机引导接口 `POST /v1/settings/devices/local-bootstrap`（仅 `127.0.0.1` + 管理令牌可用），在同一事务生成本机 `mac-<id>`（`role = "admin"`, `local_only = 1`）与 `agent-<id>`（`role = "agent"`, `local_only = 1`），无需扫码，升级无感。
+- **同机自动引导**：新版 `Tacit.app` 升级启动时，若发现存在本地 `token` 且尚未有 `collector-link.json`，自动调用一次本机引导接口 `POST /v1/settings/devices/local-bootstrap`（仅 `127.0.0.1` + 管理令牌可用），在同一事务生成本机 `mac-<id>`（`role = "admin"`, `local_only = 1`）与 `agent-<id>`（`role = "agent"`, `local_only = 1`），无需扫码，升级无感。请求体是 `{ mac_pk, agent_pk }`：两把公钥由 `Tacit.app` 先在本机生成、私钥先写进钥匙串再发请求，私钥从不离开本机。按公钥幂等：同一对公钥已登记过就原样返回已有的两个 `device_id`，所以崩溃后重试不会多出设备；只有一把对得上或公钥属于别的设备时返回 409，客户端丢弃本地密钥重新生成后再试。
 - **运行中的旧 MCP 进程**：升级时不重启用户已打开的 Claude Code / Codex 会话；旧 MCP 进程继续经 `agent-token` 访问 `/v1/agent/*`，直到会话重启后切入新版设备协议。
 - **旧版采集端/网页状态页**：老版 `Tacit.app` 若回滚仍可走原 `/v1/*`；本机网页状态页在同机模式下继续工作，不强制中断。
 
 #### 6.10.7 模块变更、影响、迁移、风险与推荐做法
 
 - **要改的模块和公共接口**：
-  - 中枢：`hub/src/devices/envelope.ts`（放宽 `deviceID` 格式）、`hub/src/devices/service.ts`（扩展 `dispatch` 覆盖查看/管理/Agent/采集状态 op，新增 `/v1/device/events` 和 `local-bootstrap`）、`hub/src/server.ts`（在 `127.0.0.1:<port>` 挂载 `/v1/device*`）、`hub/src/db.ts`（按平台放行 `mac.*`/会话来源）、`hub/src/agent.ts`（`AGENT_DEVICE` 改为调用方 `device_id`，新增 `agent.audit_sync`）、`hub/src/status.ts`（改为读设备上报的采集状态，兼容回落 `collector-status.json`）、`hub/src/distill/repos.ts`（项目 `keys` 可选记录 `remotes`）、`hub/src/run-plugin.ts`（增加宿主代理发送模式）、`hub/src/agent-cli/`（`client.ts`、`index.ts`、`mcp.ts` 接入设备协议与离线 `project_context` 缓存）。
+  - 中枢：`hub/src/devices/envelope.ts`（`deviceID` 放宽为 `^(android|mac|agent)-[a-z2-7]{8}$`；`pair()` 按邀请里的平台分配前缀，不再写死 `android-`）、`hub/src/devices/service.ts`（扩展 `dispatch` 覆盖查看/管理/Agent/采集状态 op，新增 `/v1/device/events` 和 `local-bootstrap`）、`hub/src/server.ts`（在 `127.0.0.1:<port>` 挂载 `/v1/device*`）、`hub/src/db.ts`（按平台放行 `mac.*`/会话来源）、`hub/src/agent.ts`（`AGENT_DEVICE` 改为调用方 `device_id`，新增 `agent.audit_sync`）、`hub/src/status.ts`（改为读设备上报的采集状态，兼容回落 `collector-status.json`）、`hub/src/distill/repos.ts`（项目 `keys` 可选记录 `remotes`）、`hub/src/run-plugin.ts`（增加宿主代理发送模式）、`hub/src/agent-cli/`（`client.ts`、`index.ts`、`mcp.ts` 接入设备协议与离线 `project_context` 缓存）。
   - Mac 端：新增 `collector/Sources/CollectorCore/DeviceClient.swift`，改造 `Hub.swift`、`AudioCoordinator.swift`、`AudioWorker`、`Viewer/HubAPI.swift`、`Viewer/DiagnosticSettings.swift`、`WidgetSnapshotPublisher.swift`。
 - **对现有用户的影响**：单机用户升级全自动无感，不需要重新配对、不需要重装 AI 工具钩子、不会打开局域网监听；中枢短暂重启或远端断网时，新开编程会话仍能拿到近 7 天内的项目上下文。
 - **迁移步骤**：
