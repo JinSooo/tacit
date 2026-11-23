@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { HubDB } from "../src/db.ts";
 import { DistillStore } from "../src/distill/store.ts";
-import { projectStep, distillRound, frameView, assignStep, LIMITS, type LLM } from "../src/distill/run.ts";
+import { projectStep, distillRound, frameView, assignStep, digestStep, LIMITS, type LLM } from "../src/distill/run.ts";
+import { persistFrames } from "../src/distill/frames.ts";
+import { ulid, toLocalIso } from "../../packages/record/index.ts";
 import * as P from "../src/distill/prompts.ts";
 import { conversationsIn, saveSummary } from "../src/conversations.ts";
 import { hubStatus } from "../src/status.ts";
@@ -111,4 +113,63 @@ test("生成项目简略版期间的新失效标记不被成功回写覆盖", as
   } };
   await projectStep({ db: ctx.db, llm }, store, now);
   expect(store.project("p")!.needs_regen).toBe(1);
+});
+
+test("conversationsIn 经单条 SQL 继承修正记录的私密标记，不逐条回查", () => {
+  const normal = fixture({ source: "android.audio", device: "phone-synth", source_ref: "a-1", kind: "span",
+    t_start: toLocalIso(base), t_end: toLocalIso(base + MIN), body: "我：普通内容", capture: { method: "asr" } });
+  const initiallyPrivate = fixture({ source: "android.audio", device: "phone-synth", source_ref: "a-2", kind: "span",
+    t_start: toLocalIso(base + 30 * MIN), t_end: toLocalIso(base + 31 * MIN), body: "我：原私密内容", sensitivity: "private", capture: { method: "asr" } });
+  const markPrivate = fixture({ source: "manual.correction", device: "phone-synth", corrects: normal.id,
+    t_start: toLocalIso(base + 2 * MIN), body: "我：改标为私密", sensitivity: "private" });
+  const tryRelax = fixture({ source: "manual.correction", device: "phone-synth", corrects: initiallyPrivate.id,
+    t_start: toLocalIso(base + 32 * MIN), body: "我：修正文案", sensitivity: "normal" });
+  expect(ctx.db.ingest([normal, initiallyPrivate, markPrivate, tryRelax]).accepted).toBe(4);
+  const groups = conversationsIn(ctx.db, base, base + 40 * MIN, "phone-synth");
+  expect(groups).toHaveLength(2);
+  expect(groups[0]!.private).toBe(true);
+  expect(groups[1]!.private).toBe(true);
+});
+
+test("批量展开大量手机录音片段不触发 O(N²) 窗口重查与内存暴涨", async () => {
+  store.setState("enabled_ms", 0);
+  const records = Array.from({ length: 300 }, (_, i) => {
+    const start = base + i * 2 * MIN;
+    return fixture({
+      id: ulid(start), device: "phone-synth", source: "android.audio", source_ref: `batch-${i}`, kind: "span",
+      t_start: toLocalIso(start), t_end: toLocalIso(start + 30_000), title: `合成录音 ${i}`,
+      body: "我：核对苗圃浇水节奏。\n对方：明天上午完成。", capture: { method: "asr" },
+    });
+  });
+  expect(ctx.db.ingest(records).accepted).toBe(300);
+  const firstGroup = conversationsIn(ctx.db, base, base + 650 * MIN, "phone-synth")[0]!;
+  saveSummary(ctx.db, firstGroup, { title: "苗圃浇水讨论", summary: "确认明天上午完成浇水。", points: ["明天上午完成"] });
+  const persisted = persistFrames(ctx.db, 0, base + 700 * MIN);
+  expect(persisted.frames).toHaveLength(300);
+
+  const rssBefore = process.memoryUsage().rss;
+  const assignPrompts: string[] = [];
+  const llm: LLM = {
+    async complete<T>(req: LLMRequest) {
+      if (req.task === "assign") {
+        assignPrompts.push(req.prompt);
+        return { ok: true, data: { items: [] } as T, ms: 1 };
+      }
+      return { ok: true, data: {
+        domain: "life", in_project: false, title: "苗圃浇水",
+        detail: { goal: "", progress: "已核对浇水节奏", artifacts: { files: [], urls: [], commands: [], people: [] }, quotes: [] },
+        new_facts: [], invalidate: [], brief: "核对苗圃浇水节奏。",
+      } as T, ms: 1 };
+    },
+  };
+  await assignStep({ db: ctx.db, llm }, store, base + 700 * MIN);
+  expect(assignPrompts.length).toBeGreaterThan(0);
+  expect(assignPrompts[0]).toContain("苗圃浇水讨论");
+
+  store.upsertThread({ id: "t-audio", title: "苗圃浇水", status: "active", needs_regen: 1, last_ms: base + 600 * MIN });
+  for (const frame of persisted.frames) store.assign(frame.id, "t-audio", "rule", 1);
+  const digest = await digestStep({ db: ctx.db, llm }, store, base + 700 * MIN, "all");
+  expect(digest.updated).toBe(1);
+  const rssDeltaMB = (process.memoryUsage().rss - rssBefore) / 1048576;
+  expect(rssDeltaMB).toBeLessThan(150);
 });

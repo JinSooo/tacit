@@ -168,23 +168,26 @@ export function speakerNamer(db: HubDB): () => (label: string, speakerId?: strin
 }
 
 interface RecordRow { id: string; t_start: string; t_start_ms: number; t_end: string | null; context: string | null; sensitivity: string; body: string }
-type AudioRecordRow = RecordRow & { source: string; device: string };
+type AudioMetaRow = Omit<RecordRow, "body"> & { source: string; device: string };
 
 function appOf(context: string | null): string | null {
   if (!context) return null;
   try { const app = (JSON.parse(context) as { app?: unknown }).app; return typeof app === "string" && app ? app : null; } catch { return null; }
 }
-function audioRows(db: HubDB, from: number, to: number, device?: string): AudioRecordRow[] {
-  return db.db.prepare<[number, number, ...string[]], AudioRecordRow>(`SELECT id,source,device,t_start,t_start_ms,t_end,context,sensitivity,body
-    FROM records WHERE source IN (${sourceList(AUDIO_SOURCES)}) AND t_start_ms>=? AND t_start_ms<=?${device ? " AND device=?" : ""}
-    ORDER BY t_start_ms,id`).all(from, to, ...(device ? [device] : []));
+function audioRows(db: HubDB, from: number, to: number, device?: string): AudioMetaRow[] {
+  return db.db.prepare<[number, number, ...string[]], AudioMetaRow>(`SELECT r.id,r.source,r.device,r.t_start,r.t_start_ms,r.t_end,r.context,
+    CASE WHEN r.sensitivity='private' OR COALESCE(c.sensitivity,'normal')='private' THEN 'private' ELSE COALESCE(c.sensitivity,r.sensitivity) END AS sensitivity
+    FROM records r
+    LEFT JOIN records c ON c.id=(SELECT cc.id FROM records cc WHERE cc.corrects=r.id AND cc.source='manual.correction' ORDER BY cc.t_start_ms DESC,cc.id DESC LIMIT 1)
+    WHERE r.source IN (${sourceList(AUDIO_SOURCES)}) AND r.t_start_ms>=? AND r.t_start_ms<=?${device ? " AND r.device=?" : ""}
+    ORDER BY r.t_start_ms,r.id`).all(from, to, ...(device ? [device] : []));
 }
-const toAudio = (r: AudioRecordRow): AudioRow => ({ id: r.id, source: r.source, device: r.device, start_ms: r.t_start_ms, end_ms: Math.max(r.t_start_ms, r.t_end ? Date.parse(r.t_end) || r.t_start_ms : r.t_start_ms), app: appOf(r.context), private: r.sensitivity === "private" });
+const toAudio = (r: AudioMetaRow): AudioRow => ({ id: r.id, source: r.source, device: r.device, start_ms: r.t_start_ms, end_ms: Math.max(r.t_start_ms, r.t_end ? Date.parse(r.t_end) || r.t_start_ms : r.t_start_ms), app: appOf(r.context), private: r.sensitivity === "private" });
 
 /** 范围内的对话分组。范围两头各多读一段，免得把跨边界的一场切开。 */
 export function conversationsIn(db: HubDB, from: number, to: number, device?: string): ConversationGroup[] {
   const pad = 4 * 3600_000;
-  return groupConversations(audioRows(db, from - pad, to + pad, device).map(r => toAudio({ ...r, sensitivity: db.effective(r.id)?.sensitivity ?? r.sensitivity }))).filter(g => g.end_ms >= from && g.start_ms <= to);
+  return groupConversations(audioRows(db, from - pad, to + pad, device).map(toAudio)).filter(g => g.end_ms >= from && g.start_ms <= to);
 }
 
 /** 用户写的修正优先于转写原文。 */

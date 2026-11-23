@@ -3,7 +3,7 @@ import { contentRevision, appliedCall, discardedCall } from "../runtime-log.ts";
 // 提炼流程：切片 → 归线程 → 线程详细版 → 简略版 → 项目 → 当前状态 → 日记。契约：docs/contracts.md 第 4 节。
 // 模型调用都在事务之外；每一步落库用小事务，失败只影响这一步，下一轮再试。
 // 日志只写计数，不写任何记录内容或标题。
-import type { HubDB } from "../db.ts";
+import type { HubDB, StoredRecord } from "../db.ts";
 import { chatApp, chatKey, recordChat } from "../chat.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { classifyModelError, type ModelErrorCode } from "../llm/error-category.ts";
@@ -26,7 +26,7 @@ import { readGeneral, readTimelineSettings } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
 import { composePolish, composeReview, incrementalReview, reviewPlan, reviewMaterial, type ReviewDetail } from "./day-review.ts";
 import { redactString } from "../redact.ts";
-import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, selfSummarizingDevices, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
+import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, selfSummarizingDevices, storedSummary, summaryState, speakerNamer, type ConversationGroup, type Summary } from "../conversations.ts";
 
 export interface LLM { complete<T>(req: LLMRequest): Promise<LLMResult<T>> }
 export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: string) => void }
@@ -165,18 +165,73 @@ function displayFrameKey(store: DistillStore, f: Frame): string {
   return latest ?? f.key;
 }
 
-export function frameView(store: DistillStore, frame: Frame, opts: { maxRecords: number; excerpt: (source: string) => number }): P.FrameView {
+type AudioSummaryLookup = (record: { id: string; device: string; t_start: string }) => { group: ConversationGroup; summary: Summary } | null;
+
+/** 批量展开多个片段时按设备一次查出涉及的对话分组和总结，避免逐条音频记录反复扫描 8 小时窗口。 */
+function audioSummaryLookup(hub: HubDB, frames: Frame[]): AudioSummaryLookup {
+  const groups = new Map<string, ConversationGroup>();
+  const summaries = new Map<string, Summary | null>();
+  if (frames.length) {
+    const spans = hub.db.prepare<[string], { device: string; min_ms: number; max_ms: number }>(`
+      SELECT r.device, MIN(r.t_start_ms) AS min_ms, MAX(r.t_start_ms) AS max_ms
+      FROM frame_records fr JOIN records r ON r.id=fr.record_id
+      WHERE fr.frame_id IN (SELECT value FROM json_each(?)) AND r.source IN (${sourceList(AUDIO_SOURCES)})
+      GROUP BY r.device
+    `).all(JSON.stringify(frames.map(f => f.id)));
+    for (const { device, min_ms, max_ms } of spans) {
+      for (const g of conversationsIn(hub, min_ms, max_ms, device)) {
+        for (const rid of g.record_ids) groups.set(rid, g);
+      }
+    }
+  }
+  return record => {
+    const g = groups.get(record.id) ?? (() => {
+      const at = Date.parse(record.t_start);
+      const found = conversationsIn(hub, at, at, record.device).find(c => c.record_ids.includes(record.id));
+      if (found) for (const rid of found.record_ids) groups.set(rid, found);
+      return found;
+    })();
+    if (!g) return null;
+    if (!summaries.has(g.id)) summaries.set(g.id, storedSummary(hub, g));
+    const summary = summaries.get(g.id);
+    return summary ? { group: g, summary } : null;
+  };
+}
+
+function effectiveOf(original: StoredRecord & { corrections: StoredRecord[] }): StoredRecord {
+  const latest = original.corrections.at(-1);
+  if (!latest) return original;
+  return { ...original, ...latest, context: original.context,
+    sensitivity: original.sensitivity === "private" || latest.sensitivity === "private" ? "private" : latest.sensitivity };
+}
+
+export function frameView(store: DistillStore, frame: Frame, opts: { maxRecords: number; excerpt: (source: string) => number; audioSummary?: AudioSummaryLookup }): P.FrameView {
   const f = frame;
+  const loaded = new Map<string, StoredRecord & { corrections: StoredRecord[] }>();
+  const load = (id: string) => {
+    let r = loaded.get(id);
+    if (!r) {
+      const found = store.hub.get(id);
+      if (found) { loaded.set(id, found); r = found; }
+    }
+    return r ?? null;
+  };
   // 保留原活动 ID 供后续查 effective；修正记录本身不能误当成独立活动再被过滤掉。
-  const materialIDs = f.record_ids.filter(id => store.hub.effective(id));
+  const materialIDs = f.record_ids.filter(id => load(id) !== null);
   const ids = materialIDs.length <= opts.maxRecords ? materialIDs
     : Array.from({ length: opts.maxRecords }, (_, i) => materialIDs[Math.round(i * (materialIDs.length - 1) / (opts.maxRecords - 1))]!);
   let hidden = 0;
   const conversations = new Set<string>();
+  const lookupAudio: AudioSummaryLookup = opts.audioSummary ?? (record => {
+    const at = Date.parse(record.t_start);
+    const g = conversationsIn(store.hub, at, at, record.device).find(c => c.record_ids.includes(record.id));
+    const s = g && storedSummary(store.hub, g);
+    return g && s ? { group: g, summary: s } : null;
+  });
   const records: P.FrameView["records"] = ids.flatMap(id => {
-    const original = store.hub.get(id);
+    const original = load(id);
     if (!original || original.source === "manual.correction") return [];
-    const originalEffective = store.hub.effective(id)!;
+    const originalEffective = effectiveOf(original);
     // private 记录的标题和正文都不发给模型；同一片段里的其他记录照常发送。
     if (originalEffective.sensitivity === "private") { hidden++; return []; }
     if (SKELETON_SOURCES.has(original.source) && (originalEffective.source !== "manual.correction" || original.source === "android.usage")) {
@@ -187,10 +242,9 @@ export function frameView(store: DistillStore, frame: Frame, opts: { maxRecords:
     const r = { ...originalEffective, body: materialBody(originalEffective) };
     // 对话开头常是寒暄和噪声，总结另附一次，不挤占每条原文的截断预算。
     if (AUDIO_SOURCES.has(original.source)) {
-      const at = Date.parse(original.t_start);
-      const g = conversationsIn(store.hub, at, at, original.device).find(g => g.record_ids.includes(original.id));
-      const s = g && storedSummary(store.hub, g);
-      if (s && g) {
+      const found = lookupAudio(original);
+      if (found) {
+        const { group: g, summary: s } = found;
         const first = !conversations.has(g.id); conversations.add(g.id);
         return [{ id: r.id, source: r.source, title: `对话：${s.title}`, ...evidenceTime(r), conversation_id: g.id,
           ...(first ? { conversation_summary: { summary: s.summary, points: s.points } } : {}),
@@ -203,7 +257,7 @@ export function frameView(store: DistillStore, frame: Frame, opts: { maxRecords:
   if (ids.length < materialIDs.length) records.push({ id: "", source: "note", title: `（共 ${materialIDs.length} 条独立材料，只列出 ${ids.length} 条）`, excerpt: "" });
   // 整个片段都是私密记录时才整段隐藏（只给应用和时长）。
   const allPrivate = hidden > 0 && records.every(r => r.source === "note");
-  const repos = [...new Set(ids.flatMap(id => { const r = store.hub.get(id); return r?.sensitivity !== "private" && r?.context?.repo ? [r.context.repo] : []; }))];
+  const repos = [...new Set(ids.flatMap(id => { const r = load(id); return r?.sensitivity !== "private" && r?.context?.repo ? [r.context.repo] : []; }))];
   return { id: f.id, start: clock(f.t_start_ms), end: clock(f.t_end_ms), key: displayFrameKey(store, f), ...(repos.length ? { repos } : {}), private: allPrivate, records };
 }
 
@@ -243,8 +297,9 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
   // 用户说过"不属于"某些线程的片段按拒绝的线程分组单独成批：候选里直接去掉这些线程（只在提示里写不能选，
   // 模型仍会被片段里的字样带回原线程，2026-11-10 实测），片段带上被拒线程的标题，避免另起同名线程。
   const groups = new Map<string, { rejected: string[]; views: { f: Frame; v: P.FrameView }[] }>();
+  const audioSummary = audioSummaryLookup(store.hub, pending);
   for (const f of pending) {
-    const v = frameView(store, f, { maxRecords: LIMITS.assignRecords, excerpt: () => LIMITS.assignExcerpt });
+    const v = frameView(store, f, { maxRecords: LIMITS.assignRecords, excerpt: () => LIMITS.assignExcerpt, audioSummary });
     const rejected = store.rejectedThreads(f.id).sort();
     const titles = rejected.map(id => store.thread(id)?.title).filter((t): t is string => !!t);
     const key = rejected.join(",");
@@ -498,7 +553,10 @@ export async function digestStep(d: Deps, store: DistillStore, now: number, sele
     let rebuild = !mark || mark.frames.some(f => !present.has(f)) || countOf(new Set(mark.frames)) < mark.records;
     const done = new Set(rebuild ? [] : mark!.frames);
     let fresh = frames.filter(f => !done.has(f.id));
-    const toPieces = () => digestPieces(fresh.map(f => frameView(store, f, { maxRecords: Infinity, excerpt: () => Infinity })), LIMITS.digestChars);
+    const toPieces = () => {
+      const audioSummary = audioSummaryLookup(store.hub, fresh);
+      return digestPieces(fresh.map(f => frameView(store, f, { maxRecords: Infinity, excerpt: () => Infinity, audioSummary })), LIMITS.digestChars);
+    };
     let pieces = toPieces();
     // 部分成功后原记录被删除/移走时，旧分段摘要也必须从头重建。
     if (!rebuild && mark?.parts?.some(key => !pieces.some(p => p.key === key))) {

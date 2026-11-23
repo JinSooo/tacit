@@ -89,6 +89,8 @@ function decode(row: Row, body = true, received = true): RecordV1 {
 export class HubDB {
   readonly db: DatabaseTypes.Database;
   private snapshotTimer?: ReturnType<typeof setInterval>;
+  private recordByIdStmt?: DatabaseTypes.Statement<[string], Row>;
+  private correctionsByTargetStmt?: DatabaseTypes.Statement<[string], Row>;
   constructor(file: string, key: string) {
     if (!key) throw new Error("数据库密钥不能为空");
     this.db = new Database(file);
@@ -341,9 +343,9 @@ export class HubDB {
   }
 
   get(id: string): (StoredRecord & { corrections: StoredRecord[] }) | null {
-    const row = this.db.prepare<[string], Row>("SELECT rowid,* FROM records WHERE id=?").get(id);
+    const row = (this.recordByIdStmt ??= this.db.prepare<[string], Row>("SELECT rowid,* FROM records WHERE id=?")).get(id);
     if (!row) return null;
-    const corrections = this.db.prepare<[string], Row>("SELECT rowid,* FROM records WHERE corrects=? AND source='manual.correction' ORDER BY t_start_ms,id").all(id).map(r => decode(r));
+    const corrections = (this.correctionsByTargetStmt ??= this.db.prepare<[string], Row>("SELECT rowid,* FROM records WHERE corrects=? AND source='manual.correction' ORDER BY t_start_ms,id")).all(id).map(r => decode(r));
     return { ...decode(row), corrections };
   }
 
