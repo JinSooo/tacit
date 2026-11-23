@@ -134,7 +134,7 @@ struct RelaySettingsSection: View {
     } catch is CancellationError {
     } catch {
       guard !Task.isCancelled, revision == configurationRevision else { return }
-      refreshError = "暂时无法读取信箱设置。"
+      refreshError = (error as? HubError)?.actionMessage ?? "暂时无法读取信箱设置。"
     }
   }
 
@@ -169,7 +169,8 @@ struct RelaySettingsSection: View {
       refreshError = nil
     } catch is CancellationError {
     } catch {
-      actionError = RelaySettingsText.failure(status: (error as? HubError)?.status)
+      let hubError = error as? HubError
+      actionError = hubError?.actionMessage ?? RelaySettingsText.failure(status: hubError?.status)
     }
   }
 }

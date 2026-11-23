@@ -24,7 +24,7 @@ extension HubAPI {
   }
   func distillHealth() async throws -> DistillHealth {
     struct R: Decodable { let distill: DistillHealth }
-    return try await get(R.self, "/v1/status").distill
+    return try await get(R.self, "/v1/status", device: .init("status.get")).distill
   }
 }
 

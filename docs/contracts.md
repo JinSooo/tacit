@@ -844,7 +844,7 @@ CREATE TABLE project_context_cache (
 - **迁移步骤**：
   1. 中枢已合入表结构、变更写入钩子与 `projection.*` 设备接口（保留现有 `/v1/*` 管理读接口不变）。
   2. 中枢与 Mac 端均已补齐私密过滤、删除即刻失效、信箱 640 KiB 拆包及真实中枢等价性测试。
-  3. Mac 查看窗口与桌面小组件读路径已接入 `ProjectionCache` + 设备按需读接口：存在有效 `collector-link.json` 时自动启用，无连接文件、冷启动设备通道不可用或收到 401/403（执行 `wipe()` 后）静默退回 HTTP；写接口、待确认与设置页暂留原路，待 6.10.4 剩余设备 op 补齐后迁移。
+  3. Mac 查看窗口与桌面小组件读路径已接入 `ProjectionCache` + 设备按需读接口。查看窗口的写接口、待确认和设置页的通道及各自的回退规则见 6.10.4。
 - **主要风险**：
   - 私密记录漏过过滤链进入下推（缓解：在 `projection.ts` 出口做统一白名单过滤 + 针对混合私密事项/修正转私密的专项单测）。
   - 中枢高频写草稿导致信箱请求暴涨或撑爆空间（缓解：30 秒合并节流 + `down` 单条替换 + 离线 24h 转轻量 `hint`）。
@@ -856,7 +856,7 @@ CREATE TABLE project_context_cache (
 
 ---
 
-### 6.10 Mac 采集端和 AI 工具接入改走设备协议（中枢查看窗口 op、agent-cli 与同机 Mac 采集上传已实施，Swift 查看窗口待接入）
+### 6.10 Mac 采集端和 AI 工具接入改走设备协议
 
 中枢已提供本机登记和设备接入，Claude Code / Codex 可经设备协议查询、追加与带入项目上下文。Mac 同机登记后，内建采集上传走设备协议。插件与音频代理、查看窗口和设置页的迁移见 6.10.3–6.10.4。Claude Desktop 沿用旧接入。
 
@@ -889,17 +889,14 @@ CREATE TABLE project_context_cache (
 - **音频转写（`AudioCoordinator` + `ra-audio-worker`），待迁移**：改走 6.5 已有的 `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`、`audio.samples`、`audio.lines`；`ra-audio-worker` 通过宿主代理发出请求，不再自己读 `token` 调 `127.0.0.1`。
 - **采集健康上报（解耦 `collector-status.json`），待迁移**：新增 `op: "collector.status"`，采集端每 60 秒或出错时上报 `{ time, transcription, outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak }`，中枢按 `device_id` 保存在内存/状态表，不再读共享目录的 `collector-status.json`。
 
-#### 6.10.4 查看窗口读写迁到设备协议（读路径已切换，写路径与设置页待迁移）
+#### 6.10.4 查看窗口和设置页走设备协议
 
 - **读路径（已实施）**：通过 `ViewerDataSource`（`HTTPViewerDataSource` / `CachedViewerDataSource` / `AdaptiveViewerDataSource`）统一封装；应用启动或 `local-bootstrap` 写出 `collector-link.json` 后即启动 `ProjectionSync`（窗口或菜单栏面板前台 30 秒、后台 5 分钟轮询，同时订阅 `/v1/device/events`）：
   - **已切到本地 `viewer-cache.db`**：时间线简约档与当天概述（`day`）、侧栏项目列表与项目页一句话概况（`project`）、项目页“正在推进”（`project_context`）、项目页“最近的进展”与事项经过（`day` 本地筛选，跨出 90 天窗口按需走 `timeline.query`）、事项标题与详细版（`thread`）、菜单栏“此刻”（`now`）、桌面小组件快照（`day`，只含当天、不含私密、跨天即删）。
-  - **已切到设备协议按需读（仅留内存 LRU，锁屏/关窗调 `clearMemory()`）**：展开段落查看原文与单条记录详情（`records.get`，本机 `admin` 带 `include_private: true`）、详细档全天记录、菜单栏近 1 小时活动条/最近记录与原文搜索（`records.list`，本机 `admin` 带 `include_private: true`）、时间线搜索与超 90 天历史（`timeline.query`）、非私密录音整场详情（`conversations.detail`）、非私密记录定位（`timeline.locate`）。
-  - **失效与回退**：收到 401（设备被移除）或 403（角色降级）时立即调用 `wipe()` 删除 `viewer-cache.db` 与小组件快照（401 同时移除 `collector-link.json`）并静默退回 HTTP；无连接文件时默认走 HTTP，界面不新增状态提示。
-  - **与原文的出入（暂留 HTTP 的读接口）**：
-    - `history.segments`、`conversations.detail`、`timeline.locate` 已和 `records.*` 一样由本机 `admin` 带 `include_private: true` 经设备协议按需读（仅直连，结果只在内存）。
-    - 事项详细页“依据”标签（`level=evidence`，下推 `thread` 不含完整 `frame_records` 列表）及超过 30 天已清理的归档事项详情退回 HTTP。
-    - 待确认（`/v1/pending`、音频样本）、说话人（`/v1/speakers`）、首次准备清单（`/v1/status`、`/v1/settings/agents`）、运行记录（`/v1/runtime/*`）、审计日志（`/v1/audit`）与设置页读接口随写操作一并留待下阶段迁移。
-- **写路径与管理操作**：下表操作中枢已实现（受 6.11 权限控制），Swift 查看窗口的写路径和设置页仍走本机 HTTP，待迁移。设备请求以 `body` 为参数对象，没有参数时传 `{}`。`?` 表示可选。回复为加密的 `{ status, body }`，除注明的设备专用权限、限额和音频编码外，状态码与响应字段沿用对应 HTTP 接口。
+  - **已切到设备协议按需读（仅留内存 LRU，锁屏/关窗调 `clearMemory()`）**：段落原文与单条记录详情（`records.get`）、详细档全天记录、菜单栏近 1 小时活动条/最近记录与原文搜索（`records.list`）、详细档活动段（`history.segments`）、时间线搜索与超 90 天历史（`timeline.query`）、录音整场详情（`conversations.detail`）、记录定位（`timeline.locate`）。本机 `admin` 按需读取私密记录时带 `include_private: true`。
+  - **投影失效与回退**：无连接文件或冷启动设备通道不可用时退回 HTTP。收到 401（设备被移除）或 403（角色降级）时清除 `viewer-cache.db` 与小组件快照，401 同时移除 `collector-link.json`，再退回 HTTP。事项详细页“依据”标签（`level=evidence`，下推 `thread` 不含完整 `frame_records` 列表）及超过 30 天已清理的归档事项详情仍按需走 HTTP。
+- **写路径与管理操作**：下表除端口修改外均已接入 Mac 的 `HubAPI`，有 `collector-link.json` 时复用设备直连会话，缺少文件时退回原 HTTP。明确收到 401 时执行与投影相同的清理，再用 HTTP 重试。403 显示“当前设备权限不足”，409 和 429 显示中枢的原文。超时或未确认结果的请求不会改用 HTTP 重发。设备请求以 `body` 为参数对象，没有参数时传 `{}`。`?` 表示可选。回复为加密的 `{ status, body }`，除注明的设备专用权限、限额和音频编码外，状态码与响应字段沿用对应 HTTP 接口。单条记录删除使用 `delete`，设备回复 `deleted: 0` 时在 Mac 端保留旧单条接口的 404「记录不存在」。
+- **继续使用本机途径**：修改端口（`settings.hub.put`）仍走 HTTP。重启后 Mac 按 `hub.json` 连接新端口，但 `collector-link.json` 的 `addrs` 尚不会更新。AI 工具接入（`/v1/settings/agents`）及不在表内的 HTTP 路径（如健康探针、网页状态页）继续用原接口。数据源和采集端设置、本机日志目录、诊断预览中的本地文件项继续用原来的本机途径。
 
 | 设备 `op` | 对应 HTTP | 参数 | 成功的 `body` |
 |---|---|---|---|
@@ -926,7 +923,7 @@ CREATE TABLE project_context_cache (
 | `runtime.background` | GET `/v1/runtime/background` | `{ source? }`（`hub` 默认、`distill`、`collector`） | `{ source, events, skipped, modified_at? }` |
 | `audit.list` | GET `/v1/audit` | `{ limit?, cursor?, tool? }` | `{ reads, next_cursor }`，沿用 Agent 读取审计 |
 | `settings.hub.get` | GET `/v1/settings/hub` | — | `{ port, listen, lan, locked }` |
-| `settings.hub.put` | PUT `/v1/settings/hub` | `{ port }` | `{ port, restarting }` |
+| `settings.hub.put`（Mac 暂用 HTTP） | PUT `/v1/settings/hub` | `{ port }` | `{ port, restarting }` |
 | `settings.models.get` | GET `/v1/settings/models` | — | `{ tiers, config_error, keys, providers, tier_info }` |
 | `settings.models.put` | PUT `/v1/settings/models` | `{ tiers }`（3.1） | 同 `settings.models.get` |
 | `settings.models.local` | POST `/v1/settings/models/local` | `{ base_url }` | `{ models }` |
@@ -945,8 +942,9 @@ CREATE TABLE project_context_cache (
 | `devices.role.update` | PUT `/v1/settings/devices/:id/role` | `{ id, role }`（6.11.2） | `{ id, role }` |
 
 - 日期为有效的 `YYYY-MM-DD`。设备 ID 采用 6.2 格式，provider 只接受 `anthropic` 或 `openai-compatible`。段 ID 支持字母、数字、下划线、冒号、点和连字符，最长 200，单独的 `.` 和 `..` 非法。其余路径 ID 支持字母、数字、下划线和连字符，最长 128。多余参数、非法字段、无效路径参数和未登记的 op 返回 400（角色越权优先返回 403）。
+- `records.create` 在路由处对记录结构做预检，格式错误时直接返回 400「手动记录格式无效」。原 HTTP 写入在入库阶段校验，可能返回含逐字段错误的 `rejected` 回执。
 - 管理身份允许表中所有操作。采集和查看身份的 `delete` 仍按 6.5 处理。查看身份另可调用 `status.get` 和 `diagnostics.get`。直接授予 `admin`、移除或降级最后一台管理设备沿用 6.11.2。目标不存在通常为 404，段成员变化或最后一台管理设备保护返回 409，删除限额为 429，设置和信箱的服务错误沿用原接口，如 502、503 或 507。
-- 经信箱的完整 UTF-8 JSON 回复（包括 `status`、`body` 以及音频 Base64 编码的开销）最多 **640 KiB**，超出返回 413。可缩小查询范围或改用直连。经信箱修改端口时，中枢先将成功回复写入下行信箱，再退出重启。音频样本和模型调用详情不进入回复缓存。Swift 接入时试听样本播放后即丢弃，采集日志继续读本地，中枢结构化日志通过 `diagnostics.get` 获取。
+- 经信箱的完整 UTF-8 JSON 回复（包括 `status`、`body` 以及音频 Base64 编码的开销）最多 **640 KiB**，超出返回 413。可缩小查询范围或改用直连。经信箱修改端口时，中枢先将成功回复写入下行信箱，再退出重启。音频样本和模型调用详情不进入回复缓存。Mac 将试听样本解码为内存中的音频数据，交给原有的波形显示和播放器。中枢的结构化日志通过 `diagnostics.get` 获取，运行记录页的整理、采集结构化日志通过 `runtime.background` 获取。
 - 原表中的全部 op 都保留。 `diagnostics.get` 复用中枢的脱敏后台日志接口。 `audit.list` 是 Agent 读取审计；安全审计仍由本机接口提供（6.11.4）。
 
 #### 6.10.5 AI 工具接入（MCP 与新会话带入）与离线缓存
@@ -986,7 +984,7 @@ CREATE TABLE project_context_cache (
 
 #### 6.10.7 后续迁移
 
-1. Mac 查看窗口切到 Swift `DeviceClient`，继续验收实际录音、插件、纠错及设置。
+1. 在日常使用中验收 Mac 的录音、纠错及设置。查看窗口的接入与合成数据验收见 6.10.4。
 2. 实现采集状态上报、插件宿主代理。插件仅在完整送达回执后提交状态和清除缓冲。
 3. 验证已安装的 Claude Code / Codex 在线、超时和离线场景。远端 Agent 签发、通过信箱查询、独立部署及兼容接口下线安排留待后续。
 

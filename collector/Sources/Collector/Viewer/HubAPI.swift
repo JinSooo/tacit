@@ -1,31 +1,66 @@
 import Foundation
 import CollectorCore
 
-/// 客户端只通过 hub 的本机 HTTP 接口读写，和网页用同一套接口与同一个 token。
 struct HubError: LocalizedError {
   let message: String
   let status: Int
   var errorDescription: String? { message }
+  var actionMessage: String? { [403, 409, 429].contains(status) ? message : nil }
 }
 
 final class HubAPI: @unchecked Sendable {
+  typealias DeviceAction = (String, [String: DeviceJSON], TimeInterval?) async throws -> DeviceResponsePayload?
+
+  struct DeviceOperation {
+    let name: String
+    let parameters: [String: DeviceJSON]
+    let responseData: (DeviceResponsePayload) throws -> Data
+
+    init(_ name: String, _ parameters: [String: DeviceJSON] = [:],
+         responseData: @escaping (DeviceResponsePayload) throws -> Data = { $0.bodyData }) {
+      self.name = name
+      self.parameters = parameters
+      self.responseData = responseData
+    }
+  }
+
   private let baseURL: () -> URL
   var base: URL { baseURL() }
   private let tokenProvider: () -> String?
   private let session: URLSession
   private let busyRetryDelays: [TimeInterval]
+  private let deviceAction: DeviceAction?
 
   init(base: @escaping () -> URL, token: @escaping () -> String?, configuration: URLSessionConfiguration = .ephemeral,
-       busyRetryDelays: [TimeInterval] = [1, 2]) {
+       busyRetryDelays: [TimeInterval] = [1, 2], deviceAction: DeviceAction? = nil) {
     self.baseURL = base
     self.tokenProvider = token
     self.busyRetryDelays = busyRetryDelays
+    self.deviceAction = deviceAction
     configuration.timeoutIntervalForRequest = 20
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
     session = URLSession(configuration: configuration)
   }
 
-  private func request(_ path: String, query: [String: String?] = [:], method: String = "GET", body: Data? = nil, timeout: TimeInterval? = nil, authenticated: Bool = true) async throws -> Data {
+  private func request(
+    _ path: String, query: [String: String?] = [:], method: String = "GET", body: Data? = nil,
+    timeout: TimeInterval? = nil, authenticated: Bool = true, device: DeviceOperation? = nil
+  ) async throws -> Data {
+    if let device, let deviceAction {
+      let fields = try body.map { try JSONDecoder().decode([String: DeviceJSON].self, from: $0) } ?? [:]
+      let parameters = fields.merging(device.parameters) { _, parameter in parameter }
+      for wait in busyRetryDelays.map(Optional.some) + [nil] {
+        do {
+          if let reply = try await deviceAction(device.name, parameters, timeout) {
+            return try device.responseData(reply)
+          }
+          break
+        } catch let error as HubError where error.status == 503 {
+          guard let wait else { throw error }
+          try await Task.sleep(for: .seconds(wait))
+        }
+      }
+    }
     var c = URLComponents(url: base, resolvingAgainstBaseURL: false)!
     c.path = path
     let items = query.compactMap { k, v in v.map { URLQueryItem(name: k, value: $0) } }
@@ -69,7 +104,7 @@ final class HubAPI: @unchecked Sendable {
 
   func diagnosticStatus() async -> (reachable: Bool, status: Data?) {
     guard await isReachable(), !Task.isCancelled else { return (false, nil) }
-    return (true, try? await request("/v1/status", timeout: 3))
+    return (true, try? await request("/v1/status", timeout: 3, device: .init("status.get")))
   }
 
   /// 中枢网页的状态页地址，和 `bun hub/src/cli.ts open` 一样把 token 放在 hash 里（不会发给服务器）。
@@ -79,15 +114,18 @@ final class HubAPI: @unchecked Sendable {
     return URL(string: "\(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/#token=\(encoded)&status")
   }
 
-  func get<T: Decodable>(_ type: T.Type, _ path: String, _ query: [String: String?] = [:]) async throws -> T {
-    let data = try await request(path, query: query)
+  private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
     do { return try HubJSON.decoder().decode(T.self, from: data) }
     catch { throw HubError(message: "后台服务返回的数据读不出来：\(error)", status: 0) }
   }
 
-  private func send(_ method: String, _ path: String, _ json: Any? = nil) async throws {
+  func get<T: Decodable>(_ type: T.Type, _ path: String, _ query: [String: String?] = [:], device: DeviceOperation? = nil) async throws -> T {
+    try decode(type, from: await request(path, query: query, device: device))
+  }
+
+  private func send(_ method: String, _ path: String, _ json: Any? = nil, device: DeviceOperation? = nil) async throws {
     let body = try json.map { try JSONSerialization.data(withJSONObject: $0) }
-    _ = try await request(path, method: method, body: body)
+    _ = try await request(path, method: method, body: body, device: device)
   }
 
   // MARK: History
@@ -146,11 +184,20 @@ final class HubAPI: @unchecked Sendable {
     return (r.segments, r.conversations ?? [])
   }
   func conversation(_ recordID: String) async throws -> ConversationDetail { try await get(ConversationDetail.self, "/v1/conversations/\(recordID)") }
-  func deleteRecord(_ id: String) async throws { try await send("DELETE", "/v1/records/\(id)") }
+  func deleteRecord(_ id: String) async throws {
+    let device = DeviceOperation("delete", ["ids": .array([.string(id)])]) { reply in
+      struct Result: Decodable { let deleted: Int }
+      if try self.decode(Result.self, from: reply.bodyData).deleted == 0 {
+        throw HubError(message: "记录不存在", status: 404)
+      }
+      return reply.bodyData
+    }
+    try await send("DELETE", "/v1/records/\(id)", device: device)
+  }
 
   func saveManual(_ record: [String: Any]) async throws {
     let body = try JSONSerialization.data(withJSONObject: record)
-    let data = try await request("/v1/records", method: "POST", body: body)
+    let data = try await request("/v1/records", method: "POST", body: body, device: .init("records.create"))
     let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     if (j?["accepted"] as? Int) != 1 {
       let errors = ((j?["rejected"] as? [[String: Any]]) ?? []).flatMap { ($0["errors"] as? [String]) ?? [] }
@@ -164,11 +211,15 @@ final class HubAPI: @unchecked Sendable {
   }
 
   func correctSegment(day: Date, id: String, description: String) async throws {
-    try await send("PATCH", "/v1/days/\(TimelineDay.key(day))/segments/\(id)", ["description": description])
+    let date = TimelineDay.key(day)
+    try await send("PATCH", "/v1/days/\(date)/segments/\(id)", ["description": description],
+                   device: .init("segment.correct", ["date": .string(date), "id": .string(id)]))
   }
 
   func deleteSegment(day: Date, id: String, recordIds: [String]) async throws {
-    try await send("DELETE", "/v1/days/\(TimelineDay.key(day))/segments/\(id)", ["record_ids": recordIds])
+    let date = TimelineDay.key(day)
+    try await send("DELETE", "/v1/days/\(date)/segments/\(id)", ["record_ids": recordIds],
+                   device: .init("segment.delete", ["date": .string(date), "id": .string(id)]))
   }
 
   struct TimelineResult: Decodable, Equatable, Sendable {
@@ -206,7 +257,7 @@ final class HubAPI: @unchecked Sendable {
     return try await get(R.self, "/v1/projects").projects
   }
 
-  func removeProject(_ id: String) async throws { try await send("DELETE", "/v1/projects/\(id)") }
+  func removeProject(_ id: String) async throws { try await send("DELETE", "/v1/projects/\(id)", device: .init("project.remove", ["id": .string(id)])) }
 
   func threads(project: String? = nil, status: String? = nil) async throws -> [HubThread] {
     struct R: Decodable { let threads: [HubThread]; let nextCursor: String? }
@@ -231,24 +282,24 @@ final class HubAPI: @unchecked Sendable {
 
   func pending() async throws -> [PendingItem] {
     struct R: Decodable { let pending: [PendingItem] }
-    return try await get(R.self, "/v1/pending").pending
+    return try await get(R.self, "/v1/pending", device: .init("pending.list")).pending
   }
 
   func resolve(_ id: String, action: String, name: String? = nil, target: String? = nil) async throws {
     var body: [String: Any] = ["action": action]
     if let name { body["name"] = name }
     if let target { body["target"] = target }
-    try await send("POST", "/v1/pending/\(id)", body)
+    try await send("POST", "/v1/pending/\(id)", body, device: .init("pending.resolve", ["id": .string(id)]))
   }
 
   /// 这条事实不属于它的线程：证据所在片段退回未分配，下一轮由模型重新归属（见 contracts.md）。
-  func detachFact(_ id: String) async throws { try await send("POST", "/v1/facts/\(id)/detach") }
+  func detachFact(_ id: String) async throws { try await send("POST", "/v1/facts/\(id)/detach", device: .init("facts.detach", ["id": .string(id)])) }
 
   func correct(_ fact: Fact, text: String) async throws {
     var body: [String: Any] = ["kind": fact.kind, "text": text, "evidence": fact.evidence, "supersedes": fact.id]
     if let t = fact.threadId { body["thread_id"] = t }
     if let p = fact.projectId { body["project_id"] = p }
-    try await send("POST", "/v1/facts", body)
+    try await send("POST", "/v1/facts", body, device: .init("facts.create"))
   }
 
   // MARK: 提炼请求（由常驻提炼进程领取执行，见 docs/contracts.md 4.8）
@@ -257,45 +308,57 @@ final class HubAPI: @unchecked Sendable {
   func requestDistill(kind: String, range: DistillDateRange? = nil) async throws -> DistillRequestInfo {
     var body: [String: Any] = ["kind": kind]
     if let range { body["from"] = range.from; body["to"] = range.to }
-    let data = try await request("/v1/distill/requests", method: "POST", body: try JSONSerialization.data(withJSONObject: body))
-    do { return try HubJSON.decoder().decode(DistillRequestInfo.self, from: data) }
-    catch { throw HubError(message: "后台服务返回的数据读不出来：\(error)", status: 0) }
+    return try await call(DistillRequestInfo.self, "POST", "/v1/distill/requests", body, device: .init("distill.request"))
   }
 
   func distillRequests() async throws -> [DistillRequestInfo] {
     struct R: Decodable { let requests: [DistillRequestInfo] }
-    return try await get(R.self, "/v1/distill/requests").requests
+    return try await get(R.self, "/v1/distill/requests", device: .init("distill.list")).requests
   }
 
   // MARK: 音频
 
   func speakers() async throws -> [Speaker] {
     struct R: Decodable { let speakers: [Speaker] }
-    return try await get(R.self, "/v1/speakers").speakers
+    return try await get(R.self, "/v1/speakers", device: .init("speakers.list")).speakers
   }
-  func sample(_ id: String) async throws -> Data { try await request("/v1/audio/samples/\(id)") }
+  func sample(_ id: String) async throws -> Data {
+    struct Sample: Decodable { let dataBase64: Data }
+    let device = DeviceOperation("audio.sample.get", ["id": .string(id)]) {
+      try self.decode(Sample.self, from: $0.bodyData).dataBase64
+    }
+    return try await request("/v1/audio/samples/\(id)", device: device)
+  }
   func retentionDays() async throws -> Int {
     struct R: Decodable { let retentionDays: Int }
-    return try await get(R.self, "/v1/audio/settings").retentionDays
+    return try await get(R.self, "/v1/audio/settings", device: .init("audio.settings.get")).retentionDays
   }
-  func setRetentionDays(_ days: Int) async throws { try await send("PUT", "/v1/audio/settings", ["retention_days": days]) }
-  func purgeAudio() async throws { try await send("POST", "/v1/audio/purge") }
+  func setRetentionDays(_ days: Int) async throws { try await send("PUT", "/v1/audio/settings", ["retention_days": days], device: .init("audio.settings.put")) }
+  func purgeAudio() async throws { try await send("POST", "/v1/audio/purge", device: .init("audio.purge")) }
 
   func modelCalls(cursor: String?) async throws -> ModelCallPage {
-    try await get(ModelCallPage.self, "/v1/runtime/models", ["limit":"30", "cursor":cursor])
+    var parameters: [String: DeviceJSON] = ["limit": .int(30)]
+    if let cursor { parameters["cursor"] = .string(cursor) }
+    return try await get(ModelCallPage.self, "/v1/runtime/models", ["limit": "30", "cursor": cursor],
+                         device: .init("runtime.models", parameters))
   }
   func callSnapshot(_ id: String) async throws -> CallSnapshot {
-    try await get(CallSnapshot.self, "/v1/runtime/calls/" + id)
+    try await get(CallSnapshot.self, "/v1/runtime/calls/" + id, device: .init("runtime.call", ["id": .string(id)]))
   }
   func backgroundLog(_ source: String) async throws -> BackgroundLogPage {
-    try await get(BackgroundLogPage.self, "/v1/runtime/background", ["source":source])
+    let device = source == "hub" ? DeviceOperation("diagnostics.get") : .init("runtime.background", ["source": .string(source)])
+    return try await get(BackgroundLogPage.self, "/v1/runtime/background", ["source": source], device: device)
   }
 
   // MARK: 读取记录
 
   func audit(tool: String?, cursor: String?) async throws -> (reads: [AuditRead], next: String?) {
     struct R: Decodable { let reads: [AuditRead]; let nextCursor: String? }
-    let r = try await get(R.self, "/v1/audit", ["limit": "100", "tool": tool, "cursor": cursor])
+    var parameters: [String: DeviceJSON] = ["limit": .int(100)]
+    if let tool { parameters["tool"] = .string(tool) }
+    if let cursor { parameters["cursor"] = .string(cursor) }
+    let r = try await get(R.self, "/v1/audit", ["limit": "100", "tool": tool, "cursor": cursor],
+                          device: .init("audit.list", parameters))
     return (r.reads, r.nextCursor)
   }
 
@@ -345,11 +408,9 @@ struct GeneralSettingsInfo: Decodable, Equatable {
 struct ModelTestResult: Decodable { let ok: Bool; let ms: Double?; let error: String? }
 
 extension HubAPI {
-  func call<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, _ json: Any?, timeout: TimeInterval? = nil) async throws -> T {
+  func call<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, _ json: Any?, timeout: TimeInterval? = nil, device: DeviceOperation? = nil) async throws -> T {
     let body = try json.map { try JSONSerialization.data(withJSONObject: $0) }
-    let data = try await request(path, method: method, body: body, timeout: timeout)
-    do { return try HubJSON.decoder().decode(T.self, from: data) }
-    catch { throw HubError(message: "后台服务返回的数据读不出来：\(error)", status: 0) }
+    return try decode(type, from: await request(path, method: method, body: body, timeout: timeout, device: device))
   }
   static func tierJSON(_ t: ModelTierConfig) -> [String: Any] {
     var d: [String: Any] = ["provider": t.provider, "model": t.model]
@@ -358,56 +419,67 @@ extension HubAPI {
     return d
   }
 
-  func hubSettings() async throws -> HubPortSettings { try await get(HubPortSettings.self, "/v1/settings/hub") }
+  func hubSettings() async throws -> HubPortSettings { try await get(HubPortSettings.self, "/v1/settings/hub", device: .init("settings.hub.get")) }
   /// nil 表示后台服务版本还没有设备管理接口。
   func deviceSettings() async throws -> DeviceSettings? {
-    do { return try await call(DeviceSettings.self, "GET", "/v1/settings/devices", nil, timeout: 5) }
+    do { return try await call(DeviceSettings.self, "GET", "/v1/settings/devices", nil, timeout: 5, device: .init("devices.list")) }
     catch let error as HubError where error.status == 404 { return nil }
   }
-  func createDeviceInvitation() async throws -> DeviceInvitation {
-    try await call(DeviceInvitation.self, "POST", "/v1/settings/devices/pairing", nil)
+  func createDeviceInvitation(role: String? = nil) async throws -> DeviceInvitation {
+    try await call(DeviceInvitation.self, "POST", "/v1/settings/devices/pairing", role.map { ["role": $0] },
+                   device: .init("devices.pairing.create"))
   }
   func cancelDeviceInvitation() async throws {
-    try await send("DELETE", "/v1/settings/devices/pairing")
+    try await send("DELETE", "/v1/settings/devices/pairing", device: .init("devices.pairing.cancel"))
   }
   func removeDevice(_ id: String) async throws {
-    try await send("DELETE", "/v1/settings/devices/\(id)")
+    try await send("DELETE", "/v1/settings/devices/\(id)", device: .init("devices.remove", ["id": .string(id)]))
+  }
+  func updateDeviceRole(_ id: String, role: String) async throws {
+    try await send("PUT", "/v1/settings/devices/\(id)/role", ["role": role],
+                   device: .init("devices.role.update", ["id": .string(id)]))
   }
   func relaySettings() async throws -> RelaySettings {
-    try await call(RelaySettings.self, "GET", "/v1/settings/relay", nil, timeout: 5)
+    try await call(RelaySettings.self, "GET", "/v1/settings/relay", nil, timeout: 5, device: .init("settings.relay.get"))
   }
   func saveRelay(address: String, code: String) async throws -> RelaySettings {
     var body = ["mode": RelaySettings.Mode.custom.rawValue, "url": address]
     if !code.isEmpty { body["code"] = code }
-    return try await call(RelaySettings.self, "PUT", "/v1/settings/relay", body, timeout: 75)
+    return try await call(RelaySettings.self, "PUT", "/v1/settings/relay", body, timeout: 75, device: .init("settings.relay.put"))
   }
   func disableRelay() async throws -> RelaySettings {
-    try await call(RelaySettings.self, "PUT", "/v1/settings/relay", ["mode": RelaySettings.Mode.off.rawValue], timeout: 75)
+    try await call(RelaySettings.self, "PUT", "/v1/settings/relay", ["mode": RelaySettings.Mode.off.rawValue], timeout: 75, device: .init("settings.relay.put"))
   }
   func testRelay(address: String) async throws -> RelayTestResult {
-    try await call(RelayTestResult.self, "POST", "/v1/settings/relay/test", ["url": address])
+    try await call(RelayTestResult.self, "POST", "/v1/settings/relay/test", ["url": address], device: .init("settings.relay.test"))
   }
+  // hub.json 会随重启切换端口，collector-link.json 的 addrs 尚不会改写。
   func setHubPort(_ port: Int) async throws -> Bool {
     struct R: Decodable { let restarting: Bool }
     return try await call(R.self, "PUT", "/v1/settings/hub", ["port": port]).restarting
   }
-  func modelSettings() async throws -> ModelSettingsInfo { try await get(ModelSettingsInfo.self, "/v1/settings/models") }
+  func modelSettings() async throws -> ModelSettingsInfo { try await get(ModelSettingsInfo.self, "/v1/settings/models", device: .init("settings.models.get")) }
   func saveModels(_ tiers: [String: ModelTierConfig]) async throws -> ModelSettingsInfo {
-    try await call(ModelSettingsInfo.self, "PUT", "/v1/settings/models", ["tiers": tiers.mapValues(Self.tierJSON)])
+    try await call(ModelSettingsInfo.self, "PUT", "/v1/settings/models", ["tiers": tiers.mapValues(Self.tierJSON)],
+                   device: .init("settings.models.put"))
   }
   func testModel(tier: String, config: ModelTierConfig) async throws -> ModelTestResult {
-    try await call(ModelTestResult.self, "POST", "/v1/settings/models/test", ["tier": tier, "config": Self.tierJSON(config)], timeout: 75)
+    try await call(ModelTestResult.self, "POST", "/v1/settings/models/test", ["tier": tier, "config": Self.tierJSON(config)], timeout: 75,
+                   device: .init("settings.models.test"))
   }
-  func setKey(provider: String, key: String) async throws { try await send("PUT", "/v1/settings/keys/\(provider)", ["key": key]) }
-  func deleteKey(provider: String) async throws { try await send("DELETE", "/v1/settings/keys/\(provider)") }
-  func generalSettings() async throws -> GeneralSettingsInfo { try await get(GeneralSettingsInfo.self, "/v1/settings/general") }
+  func setKey(provider: String, key: String) async throws { try await send("PUT", "/v1/settings/keys/\(provider)", ["key": key],
+                   device: .init("settings.keys.put", ["provider": .string(provider)])) }
+  func deleteKey(provider: String) async throws { try await send("DELETE", "/v1/settings/keys/\(provider)",
+                   device: .init("settings.keys.delete", ["provider": .string(provider)])) }
+  func generalSettings() async throws -> GeneralSettingsInfo { try await get(GeneralSettingsInfo.self, "/v1/settings/general", device: .init("settings.general.get")) }
   func saveGeneral(_ values: [String: Any]) async throws -> GeneralSettingsInfo {
-    try await call(GeneralSettingsInfo.self, "PUT", "/v1/settings/general", values)
+    try await call(GeneralSettingsInfo.self, "PUT", "/v1/settings/general", values, device: .init("settings.general.put"))
   }
 
   func localModels(baseURL: String) async throws -> [String] {
     struct R: Decodable { let models: [String] }
-    return try await call(R.self, "POST", "/v1/settings/models/local", ["base_url": baseURL], timeout: 8).models
+    return try await call(R.self, "POST", "/v1/settings/models/local", ["base_url": baseURL], timeout: 8,
+                          device: .init("settings.models.local")).models
   }
 }
 

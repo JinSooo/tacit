@@ -337,7 +337,7 @@ struct SamplePlayer: View {
       data = d
       peaks = Waveform.peaks(wav: d, buckets: 64)
     } catch is CancellationError {
-    } catch { self.error = "取不到片段" }
+    } catch { self.error = (error as? HubError)?.actionMessage ?? "取不到片段" }
   }
 
   func toggle() async {

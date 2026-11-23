@@ -25,7 +25,7 @@ public enum DeviceClientError: Error, Equatable, Sendable {
   case hubBusy(message: String?)
   /// 6.2：其他无法加密回复的明文 HTTP 错误（400、500 等）。
   case plaintextError(status: Int, message: String?)
-  /// 6.2：HTTP 200 加密回复内业务状态非 200（400、403、409、429、503 等）。
+  /// 6.2：HTTP 200 加密回复内业务状态非 2xx（400、403、409、429、503 等）。
   case operationError(op: String, status: Int, message: String?)
   /// 底层网络或传输层失败。
   case transportError(String)
@@ -305,6 +305,13 @@ public protocol DeviceTransport: Sendable {
   var maxEnvelopeBytes: Int { get }
   /// 发送已封装的请求信封，返回响应状态码与原始响应体。
   func send(_ request: SealedDeviceRequest) async throws -> DeviceTransportResponse
+  func send(_ request: SealedDeviceRequest, timeout: TimeInterval) async throws -> DeviceTransportResponse
+}
+
+public extension DeviceTransport {
+  func send(_ request: SealedDeviceRequest, timeout: TimeInterval) async throws -> DeviceTransportResponse {
+    try await send(request)
+  }
 }
 
 final class NoRedirectSessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
@@ -379,11 +386,15 @@ public struct DirectDeviceTransport: DeviceTransport, Sendable {
   }
 
   public func send(_ request: SealedDeviceRequest) async throws -> DeviceTransportResponse {
+    try await send(request, timeout: requestTimeout)
+  }
+
+  public func send(_ request: SealedDeviceRequest, timeout: TimeInterval) async throws -> DeviceTransportResponse {
     if request.wireData.count > maxEnvelopeBytes {
       throw DeviceClientError.envelopeTooLarge(message: nil)
     }
     let endpoint = origin.appendingPathComponent("v1/device")
-    var urlRequest = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: requestTimeout)
+    var urlRequest = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
     urlRequest.httpMethod = "POST"
     urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
     urlRequest.setValue("no-store", forHTTPHeaderField: "Cache-Control")
@@ -425,6 +436,8 @@ public struct DirectDeviceTransport: DeviceTransport, Sendable {
     let response: URLResponse
     do {
       (data, response) = try await session.data(for: urlRequest, delegate: NoRedirectSessionDelegate.shared)
+    } catch let error as URLError where error.code == .cancelled {
+      throw CancellationError()
     } catch {
       throw DeviceClientError.transportError(error.localizedDescription)
     }
@@ -574,7 +587,7 @@ public actor DeviceClient {
   }
 
   /// 发送设备操作并返回已解密的响应载荷。
-  public func send(op: String, body: [String: DeviceJSON] = [:]) async throws -> DeviceResponsePayload {
+  public func send(op: String, body: [String: DeviceJSON] = [:], timeout: TimeInterval? = nil) async throws -> DeviceResponsePayload {
     if isRemoved {
       throw DeviceClientError.deviceRemoved(message: nil)
     }
@@ -588,7 +601,7 @@ public actor DeviceClient {
       senderPrivateKey: currentDeviceID == nil ? nil : privateKey,
       timestamp: clock()
     )
-    return try await dispatch(op: op, sealed: sealed, currentDeviceID: currentDeviceID, privateKey: privateKey)
+    return try await dispatch(op: op, sealed: sealed, currentDeviceID: currentDeviceID, privateKey: privateKey, timeout: timeout)
   }
 
   /// 发送带强类型 Encodable 请求体的设备操作。
@@ -713,12 +726,18 @@ public actor DeviceClient {
     op: String,
     sealed: SealedDeviceRequest,
     currentDeviceID: String?,
-    privateKey: Curve25519.KeyAgreement.PrivateKey
+    privateKey: Curve25519.KeyAgreement.PrivateKey,
+    timeout: TimeInterval? = nil
   ) async throws -> DeviceResponsePayload {
     if sealed.wireData.count > transport.maxEnvelopeBytes {
       throw DeviceClientError.envelopeTooLarge(message: nil)
     }
-    let reply = try await transport.send(sealed)
+    let reply: DeviceTransportResponse
+    if let timeout {
+      reply = try await transport.send(sealed, timeout: timeout)
+    } else {
+      reply = try await transport.send(sealed)
+    }
     if reply.statusCode != 200 {
       let message = parsePlaintextErrorMessage(reply.body)
       switch reply.statusCode {
@@ -739,7 +758,11 @@ public actor DeviceClient {
       recipientPrivateKey: privateKey,
       hubPublicKey: hubPublicKey
     )
-    if payload.status != 200 {
+    if payload.status == 401, currentDeviceID != nil {
+      isRemoved = true
+      throw DeviceClientError.deviceRemoved(message: payload.errorMessage)
+    }
+    if !(200..<300).contains(payload.status) {
       throw DeviceClientError.operationError(op: op, status: payload.status, message: payload.errorMessage)
     }
     return payload
