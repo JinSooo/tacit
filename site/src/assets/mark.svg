@@ -1,13 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="834 30 300 300" role="img" aria-label="Tacit">
-  <defs><clipPath id="d"><circle cx="984" cy="180" r="79.5"/></clipPath></defs>
-  <rect x="834" y="30" width="300" height="300" rx="67.5" fill="#211f1d"/>
-  <circle cx="984" cy="180" r="100.5" fill="none" stroke="#e7e3dc" stroke-width="7.2"/>
-  <g clip-path="url(#d)">
-    <path fill="#93cbbd" d="M904.5 100.5h159v23.803H904.5z"/>
-    <path fill="#81bfb0" d="M904.5 134.299h159v23.803H904.5z"/>
-    <path fill="#6bae9f" d="M904.5 168.098h159v23.803H904.5z"/>
-    <path fill="#599d8e" d="M904.5 201.897h159v23.803H904.5z"/>
-    <rect x="904.5" y="235.696" width="89.04" height="23.804" rx="11.902" fill="#4b8d7e"/>
-    <path fill="#4b8d7e" d="M904.5 235.696H984V259.5h-79.5z"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Tacit">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2c2926"/>
+      <stop offset="100%" stop-color="#191816"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fffaf2" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#fffaf2" stop-opacity="0.03"/>
+    </linearGradient>
+    <linearGradient id="rail" x1="30.5" y1="22.5" x2="30.5" y2="97.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#8fd0bf"/>
+      <stop offset="55%" stop-color="#a8a197"/>
+      <stop offset="100%" stop-color="#4a4540"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="47.3" y1="38.6" x2="97.4" y2="38.6" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9ad4c5"/>
+      <stop offset="100%" stop-color="#5ca494"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="120" height="120" rx="27" fill="url(#bg)"/>
+  <rect x="0.85" y="0.85" width="118.3" height="118.3" rx="26.15" fill="none" stroke="url(#rim)" stroke-width="1.7"/>
+  <path d="M28.3 20.9 V29.6 M28.3 47.6 V99.1" fill="none" stroke="url(#rail)" stroke-width="3.36" stroke-linecap="round"/>
+  <circle cx="28.3" cy="36.6" r="7.44" fill="none" stroke="#8fd0bf" stroke-width="3.36"/>
+  <circle cx="28.3" cy="36.6" r="2.64" fill="#e7f5f1"/>
+  <rect x="46.2" y="29.9" width="54.6" height="13.44" rx="6.72" fill="url(#bar)"/>
+  <circle cx="28.3" cy="61.8" r="5.76" fill="#eeeae3"/>
+  <rect x="46.2" y="55.56" width="42.6" height="12.48" rx="6.24" fill="#e7e3dc" opacity="0.92"/>
+  <circle cx="28.3" cy="85.8" r="4.8" fill="#8b847b"/>
+  <rect x="46.2" y="80.04" width="28.4" height="11.52" rx="5.76" fill="#6d6760"/>
 </svg>

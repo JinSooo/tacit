@@ -1,9 +1,12 @@
 <p align="center">
-  <img src="assets/readme/cover.svg" alt="Tacit：让 AI 接上你的上下文" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.png">
+    <img src="assets/readme/hero-light.png" alt="Tacit：把每天做的事理成时间线，也让 AI 接着做" width="100%">
+  </picture>
 </p>
 
 <p align="center">
-  <b>把每天在 Mac 上做的事整理成一条时间线，给你回看，也让 AI 接着用。</b>
+  <b>把每天在 Mac 上做的事整理成一条时间线，给你回看，也让 AI 不用重讲背景直接接着用。</b>
 </p>
 
 <p align="center">

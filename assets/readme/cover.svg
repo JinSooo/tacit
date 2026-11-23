@@ -1,8 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title description">
   <title id="title">Tacit</title>
-  <desc id="description">让 AI 接上你的上下文。暖炭灰底色、铜绿文字行与暖白圆环。</desc>
+  <desc id="description">让 AI 接上你的上下文。暖炭灰底色与铜绿墨轴纪事图标。</desc>
   <defs>
-    <clipPath id="disc"><circle cx="984" cy="180" r="79.5"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2c2926"/>
+      <stop offset="100%" stop-color="#191816"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fffaf2" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#fffaf2" stop-opacity="0.03"/>
+    </linearGradient>
+    <linearGradient id="rail" x1="935" y1="108" x2="935" y2="252" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#8fd0bf"/>
+      <stop offset="55%" stop-color="#a8a197"/>
+      <stop offset="100%" stop-color="#4a4540"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="969" y1="138" x2="1074" y2="138" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9ad4c5"/>
+      <stop offset="100%" stop-color="#5ca494"/>
+    </linearGradient>
   </defs>
   <rect width="1200" height="360" rx="24" fill="#211f1d"/>
   <text x="72" y="139" font-family="Georgia, 'Times New Roman', serif" font-size="86" fill="#eeeae3" letter-spacing="-3">Tacit</text>
@@ -11,14 +27,15 @@
   <text x="76" y="291" font-family="'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#b7afa5">记录日常</text>
   <text x="284" y="291" font-family="'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#b7afa5">整理进展</text>
   <text x="492" y="291" font-family="'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#b7afa5">接续工作</text>
-  <!-- Same ring/disc proportions and five-row palette as AppIconArt. -->
-  <circle cx="984" cy="180" r="100.5" fill="none" stroke="#e7e3dc" stroke-width="7.2"/>
-  <g clip-path="url(#disc)">
-    <path fill="#93cbbd" d="M904.5 100.5h159v23.803H904.5z"/>
-    <path fill="#81bfb0" d="M904.5 134.299h159v23.803H904.5z"/>
-    <path fill="#6bae9f" d="M904.5 168.098h159v23.803H904.5z"/>
-    <path fill="#599d8e" d="M904.5 201.897h159v23.803H904.5z"/>
-    <rect x="904.5" y="235.696" width="89.04" height="23.804" rx="11.902" fill="#4b8d7e"/>
-    <path fill="#4b8d7e" d="M904.5 235.696H984V259.5h-79.5z"/>
-  </g>
+  <!-- Timeline Spine icon mark (matches AppIconArt). -->
+  <rect x="880" y="65" width="230" height="230" rx="52" fill="url(#bg)"/>
+  <rect x="881.6" y="66.6" width="226.8" height="226.8" rx="50.4" fill="none" stroke="url(#rim)" stroke-width="3.2"/>
+  <path d="M934.3 105 V121.8 M934.3 156.2 V255" fill="none" stroke="url(#rail)" stroke-width="6.4" stroke-linecap="round"/>
+  <circle cx="934.3" cy="135.2" r="14.3" fill="none" stroke="#8fd0bf" stroke-width="6.4"/>
+  <circle cx="934.3" cy="135.2" r="5.1" fill="#e7f5f1"/>
+  <rect x="968.6" y="122.3" width="104.6" height="25.8" rx="12.9" fill="url(#bar)"/>
+  <circle cx="934.3" cy="183.5" r="11" fill="#eeeae3"/>
+  <rect x="968.6" y="171.5" width="81.6" height="23.9" rx="11.95" fill="#e7e3dc" opacity="0.92"/>
+  <circle cx="934.3" cy="229.5" r="9.2" fill="#8b847b"/>
+  <rect x="968.6" y="218.5" width="54.4" height="22.1" rx="11.05" fill="#6d6760"/>
 </svg>
