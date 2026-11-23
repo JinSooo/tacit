@@ -126,6 +126,7 @@ public struct DevicePairingInvitation: Equatable, Sendable {
   public let expiresAt: Date
   public let relay: DeviceRelayConfig?
   public let role: String?
+  public let viewer: Bool
 
   public var hubPublicKey: Curve25519.KeyAgreement.PublicKey {
     // 构造时已校验为有效的 32 字节 X25519 公钥。
@@ -142,6 +143,7 @@ public struct DevicePairingInvitation: Equatable, Sendable {
     let expires_at: String
     let relay: DeviceRelayConfig?
     let role: String?
+    let viewer: Bool?
   }
 
   /// 解析并校验 `tacit://pair?d=...` 邀请链接。
@@ -223,7 +225,8 @@ public struct DevicePairingInvitation: Equatable, Sendable {
       addresses: normalizedAddresses,
       expiresAt: expiresAt,
       relay: wire.relay,
-      role: wire.role
+      role: wire.role,
+      viewer: wire.viewer ?? false
     )
   }
 
@@ -518,6 +521,56 @@ public actor DeviceClient {
   public func publicKeyBase64URL() throws -> String {
     let key = try resolvePrivateKey(createIfMissing: true)
     return DeviceEnvelope.publicKeyBase64URL(key.publicKey)
+  }
+
+  /// 构造并加密一条设备请求信封（供 WebSocket 首帧 `events.subscribe` 或信箱上行复用）。
+  public func makeSealedRequest(
+    op: String,
+    body: [String: DeviceJSON] = [:],
+    nonce: String? = nil
+  ) throws -> SealedDeviceRequest {
+    if isRemoved {
+      throw DeviceClientError.deviceRemoved(message: nil)
+    }
+    let currentDeviceID = deviceID
+    let privateKey = try resolvePrivateKey(createIfMissing: currentDeviceID == nil)
+    return try DeviceEnvelope.makeRequest(
+      op: op,
+      body: body,
+      deviceID: currentDeviceID,
+      hubPublicKey: hubPublicKey,
+      senderPrivateKey: currentDeviceID == nil ? nil : privateKey,
+      timestamp: clock(),
+      nonce: nonce
+    )
+  }
+
+  /// 解开中枢通过信箱 `down` 主动下发的加密消息（6.8.7 / 6.9.5：HPKE auth、`tacit-device-v1/response`、AAD 为消息 id）。
+  public func openPushEnvelope(wireData: Data, messageID: String) throws -> Data {
+    let privateKey = try resolvePrivateKey(createIfMissing: false)
+    let envelope: DeviceResponseEnvelope
+    do {
+      envelope = try JSONDecoder().decode(DeviceResponseEnvelope.self, from: wireData)
+    } catch {
+      throw DeviceClientError.invalidEnvelope("推送信封 JSON 格式无效")
+    }
+    return try DeviceEnvelope.openResponseEnvelope(
+      envelope,
+      requestNonce: messageID,
+      recipientPrivateKey: privateKey,
+      hubPublicKey: hubPublicKey
+    )
+  }
+
+  /// 解开中枢经信箱 `down` 返回的普通请求响应（携带 `{ status, body }`）。
+  public func openResponseEnvelope(wireData: Data, requestNonce: String) throws -> DeviceResponsePayload {
+    let privateKey = try resolvePrivateKey(createIfMissing: false)
+    return try DeviceEnvelope.openResponse(
+      wireData: wireData,
+      requestNonce: requestNonce,
+      recipientPrivateKey: privateKey,
+      hubPublicKey: hubPublicKey
+    )
   }
 
   /// 发送设备操作并返回已解密的响应载荷。

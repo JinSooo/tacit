@@ -821,7 +821,7 @@ CREATE TABLE project_context_cache (
 
 #### 6.9.6 设备端缓存的保留与清理
 
-- **存储位置与加密**：Mac 查看端在 `<数据目录>/viewer-cache.db` 存放 SQLCipher 加密缓存（目录 `0700`、文件 `0600`、拒绝符号链接、`PRAGMA secure_delete = ON`），密钥经 `/usr/bin/security` 存钥匙串（service `record-anything`、account `viewer-cache-key`）。
+- **存储位置与加密**：Mac 查看端在 `<数据目录>/viewer-cache.db` 存放本地缓存（目录 `0700`、文件 `0600`、拒绝符号链接、`PRAGMA secure_delete = ON`、`PRAGMA auto_vacuum = INCREMENTAL`）。底层使用系统 SQLite（`SQLite3`）加逐行 `CryptoKit` AES-256-GCM 加密实体正文（`kind` 和 `entity_id` 明文用于索引与保留清理，AAD 绑定 `kind` 与 `entity_id` 防止整行调换），密钥（32 字节）经 `/usr/bin/security` 存钥匙串（service `record-anything`、account `viewer-cache-key`）。不引入 SQLCipher（原因：Mac 端没有 SQLCipher 依赖，为一份可重建的投影缓存不值得引入第三方 C 库）。
 - **保留规则**：
   - `day`：默认保留最近 **90 天**；超过 90 天的日期按需通过 `timeline.query` 读取，只留内存。
   - `project`、`project_context`、`now`：保留全部未删除项；`thread` 保留全部 `active` / `paused` 及近 30 天更新的 `archived` 项。
@@ -833,7 +833,10 @@ CREATE TABLE project_context_cache (
 
 - **要改的模块和公共接口**：
   - 中枢：`hub/src/db.ts`（`user_version` 迁移新增 `projection_changes`、`project_context_cache` 及 `devices` 游标列；`deleteMany`/`ingest` 写变更钩子）、`hub/src/distill/store.ts` & `hub/src/distill/run.ts`（写入 `days`/`threads`/`projects`/`now` 与纠错时调用投影变更写入器）、`hub/src/agent.ts`（复用 `projectContext` 写 `project_context_cache`）、新增 `hub/src/devices/projection.ts`（下推序列化、私密过滤、体积切分）、`hub/src/devices/service.ts`（新增 `projection.*`、`records.*`、`history.segments`、`conversations.detail`、`timeline.*` 及 `/v1/device/events`）、`hub/src/devices/relay.ts`（`down` 主动推送与单条覆盖背压）。
-  - Mac 端：新增 `collector/Sources/CollectorCore/ProjectionCache.swift`（SQLCipher 缓存与清理）、`collector/Sources/Collector/Viewer/HubAPI.swift` & `ViewerStore.swift`（读路径切到缓存 + 按需 op）、`collector/Sources/Collector/WidgetSnapshotPublisher.swift`（改读本地缓存）。
+  - Mac 端：新增 `collector/Sources/CollectorCore/ProjectionCache.swift`（系统 SQLite + 逐行 AES-GCM 缓存与清理）、`collector/Sources/CollectorCore/ProjectionSync.swift`（拉取/确认循环、`/v1/device/events` 订阅与轮询退避、信箱 `down` 处理及按需原文内存 LRU）；后续再接入 `collector/Sources/Collector/Viewer/HubAPI.swift`、`ViewerStore.swift` 与 `WidgetSnapshotPublisher.swift`。
+  - **实现与草案偏差说明**：
+    1. 6.9.6 缓存加密从 SQLCipher 改为系统 `SQLite3` + 每行 `AES.GCM`（AAD 绑定 `kind` + `entity_id`），`kind` 与 `entity_id` 明文存储以支持按天清理和索引，密钥仍存钥匙串 `record-anything` / `viewer-cache-key`。
+    2. 6.9.1 中枢本机监听（`127.0.0.1:<port>`）目前尚未挂载 `GET /v1/device/hello`（仅挂载了 `POST /v1/device` 与 `GET /v1/device/events`，`hello` 仅在局域网端口可用）；同机自动引导（`local-bootstrap`）及查看窗口接入留待 6.10 阶段完成。
 - **对现有用户的影响**：单机用户界面和交互无变化；打开时间线、项目页和菜单栏面板的响应更快（本地缓存直出），中枢忙于写库（503）时查看窗口不再白屏报错；原有 `history.db` 在首次升级时自动无损迁移并自动备份。
 - **迁移步骤**：
   1. 中枢先合入表结构、变更写入钩子与 `projection.*` 设备接口（保留现有 `/v1/*` 管理读接口不变）。
