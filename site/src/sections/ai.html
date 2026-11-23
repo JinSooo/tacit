@@ -8,7 +8,8 @@
     <div class="ai-layout">
       <div class="ai-terminal band-night">
         <header class="ai-terminal-bar">
-          <svg aria-hidden="true" width="20" height="20"><use href="assets/sources.svg#terminal"/></svg>
+          <span class="ai-terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <svg aria-hidden="true" width="18" height="18"><use href="assets/sources.svg#terminal"/></svg>
           <span>Claude Code 终端示例</span>
         </header>
 
@@ -35,8 +36,8 @@
           <details class="ai-source">
             <summary><span>出自 <span class="num">11 月 19 日 15:10</span> 与 Claude 的对话</span></summary>
             <blockquote>
-              <p><b>你</b>　账单用 CSV，另外给一份 JSON 元数据。金额统一存分。</p>
-              <p><b lang="en">Claude</b>　记下了。导出时，CSV 里的金额用整数分表示。</p>
+              <p><b lang="en">Claude</b>　账单可以用 CSV，另放一份 JSON 写格式版本和币种。金额列用整数分，回读时就不用四舍五入。</p>
+              <p><b>我</b>　就用 CSV 加 JSON，金额统一存分。要不要按账本分开、重新导入怎么去重，下次再定。</p>
             </blockquote>
           </details>
         </section>

@@ -12,7 +12,7 @@ bun hub/src/cli.ts open
 
 默认连接真实用户数据目录，开发实验请为后台设置独立的 `RA_DATA_DIR` 和 `RA_DB_KEY`。
 
-开发服务器使用 `bun x vite --config web/vite.config.ts`；`/v1` 代理到本机 47823 端口，设置 `RA_PORT` 时跟随该端口。页面包括历史记录、此刻、待确认、AI 读取记录、状态和设置，跟随系统明暗模式。
+开发服务器使用 `bun x vite --config web/vite.config.ts`；`/v1` 代理到本机 47823 端口，设置 `RA_PORT` 时跟随该端口。网页端自 2026-11-16 起冻结，日常入口只保留状态页（其余页面代码仍保留在仓库中），跟随系统明暗模式。
 
 ```sh
 bun test web/test

@@ -14,7 +14,7 @@ open site/dist/index.html   # 不起服务也能直接打开看
 
 ## 部署
 
-线上地址 https://tacit.jinso.top ，是 Cloudflare Pages 项目 `tacit`（`tacit-c51.pages.dev`），直接上传，没有 Git 连接。`jinso.top` 的 DNS 在 Cloudflare，API 令牌在本机钥匙串，入口和资源清单见 `/Users/jinso/Self/基础设施/`。
+线上地址 https://tacit.jinso.top ，是 Cloudflare Pages 项目 `tacit`（`tacit-c51.pages.dev`），直接上传，没有 Git 连接。`jinso.top` 的 DNS 在 Cloudflare，API 令牌存放在本机钥匙串。
 
 更新时先 `bun site/build.ts`，把 `site/dist` 复制到仓库外的临时目录，再在那个目录里运行：
 
@@ -63,18 +63,17 @@ CLOUDFLARE_ACCOUNT_ID=<账号 ID> CLOUDFLARE_API_TOKEN=<从钥匙串读取> \
 
 ## 虚构的一天（全站示例数据共用）
 
-示例一律虚构。主角是一位独立开发者，在做记账 App「晴天记账」，和设计师小林、产品搭档阿杰合作。日期：11 月 19 日 星期四。
+示例一律虚构。主角是一位独立开发者，在做记账 App「晴天记账」，和设计师小林、产品搭档阿杰合作。日期：11 月 19 日 星期四。所有入时间线的活动段都以主体来源（AI 会话、微信、录音）驱动，浏览器和屏幕只作附带时间骨架与可搜索原文。
 
-当天概述：上午在「晴天记账」修好月度报表的汇总错误，和设计师小林定下首页卡片样式；下午和 Claude 定了导出格式，周会定下 12 月第一周提审；傍晚读完 SwiftData 迁移文档。
+当天概述：上午在「晴天记账」修好月度报表的汇总错误，和小林定下首页卡片样式；下午和 Claude 定了导出格式，周会定下 12 月第一周提审；傍晚理清了 SwiftData 迁移方案。
 
 | 开始 | 来源 | 标题 | 描述 |
 | --- | --- | --- | --- |
 | 09:30 | `terminal` Claude Code | 修好月度报表的汇总错误 | 跨月账单按创建时间归月，改成按记账日期，补了回归用例 |
-| 11:20 | `design` Figma | 调整首页卡片设计稿 | 对比三版间距，选了留白更大的一版 |
-| 14:00 | `chat` 微信 | 和小林确认首页卡片样式 | 保留圆角卡片，去掉渐变，周五前出终稿 |
+| 14:00 | `chat` 微信 + `design` Figma（骨架） | 和小林确认首页卡片样式 | 对比三版间距后保留圆角卡片、去掉渐变，周五前出终稿 |
 | 15:10 | `ai` Claude | 设计导出功能的数据格式 | 定为 CSV 加一份 JSON 元数据，金额统一存分 |
 | 16:30 | `voice` 录音 | 和阿杰的周会 | 定下 12 月第一周提审，导出功能放进 1.2 |
-| 17:40 | `browser` Safari | 读 SwiftData 迁移文档 | 弄清轻量迁移和自定义迁移的分界 |
+| 17:40 | `terminal` Codex + `browser` Safari（骨架） | 梳理 SwiftData 迁移方案 | 和 Codex 核对轻量迁移和自定义迁移的分界，记下拆分旧分类表的步骤 |
 
 项目「晴天记账」：一句话概况“iOS 记账 App，1.1 准备 12 月第一周提审，导出功能排进 1.2。”正在推进的事：
 

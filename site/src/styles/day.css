@@ -74,15 +74,19 @@
 }
 
 .day-overview {
-  margin-block: 12px 24px;
+  margin-block: 10px 24px;
+  font-family: var(--serif);
+  font-size: var(--fs-body);
+  font-weight: 400;
   color: var(--reading);
-  line-height: 1.6;
-  text-wrap: wrap;
+  line-height: 1.7;
+  text-wrap: pretty;
 }
 
 .day-segments {
-  --day-time-width: 44px;
-  --day-axis-gap: 24px;
+  --day-time-width: 42px;
+  --day-axis-gap: 28px;
+  --day-axis-x: calc(var(--day-time-width) + var(--day-axis-gap) / 2);
   position: relative;
 }
 
@@ -93,7 +97,7 @@
 .day-segments > li:not(:last-child)::before {
   position: absolute;
   inset-block: 19px -19px;
-  left: var(--day-time-width);
+  left: var(--day-axis-x);
   width: 1px;
   background: var(--line);
   content: "";
@@ -126,7 +130,7 @@
 .day-segment summary::before {
   position: absolute;
   top: 16px;
-  left: calc(var(--day-time-width) - 3px);
+  left: calc(var(--day-axis-x) - 3px);
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -167,17 +171,22 @@
   line-height: 1.4;
 }
 
-.day-source {
-  display: block;
-  width: fit-content;
-  margin-top: 2px;
+.day-sources {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
   color: var(--muted);
+}
+
+.day-source {
+  display: inline-flex;
 }
 
 .day-source svg,
 .day-hour-list svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
 .day-record {
@@ -202,8 +211,8 @@
 
 .day-record dl > div {
   display: grid;
-  grid-template-columns: minmax(0, 7em) minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: minmax(3.2em, max-content) minmax(0, 1fr);
+  column-gap: 12px;
 }
 
 .day-record dt {
@@ -213,6 +222,12 @@
 
 .day-record dd {
   margin: 0;
+}
+
+.day-record-skeleton {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
 }
 
 .day-stats {
@@ -340,9 +355,13 @@
   border-top: 1px solid var(--line);
 }
 
-.day-project-items h5 {
+.day-item-title {
   margin: 0;
-  text-wrap: wrap;
+  font-family: var(--serif);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.4;
 }
 
 .day-project-items p {
@@ -375,7 +394,7 @@
 
 @media (max-width: 480px) {
   .day-segments {
-    --day-axis-gap: 12px;
+    --day-axis-gap: 20px;
   }
 
   .day-record dl > div {

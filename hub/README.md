@@ -11,7 +11,7 @@ bun hub/src/cli.ts run-plugin browser -- bun plugins/browser/main.ts
 
 这些命令默认使用真实用户数据目录；开发或测试请通过 `RA_DATA_DIR` 指定独立目录，并设置独立的 `RA_DB_KEY`。不要对正式数据运行实验性导入或删除。
 
-- 仅监听 `127.0.0.1`。端口优先级为 `RA_PORT`、数据目录 `hub.json`、默认 `47823`。
+- 管理、网页和 MCP 接口仅监听 `127.0.0.1`。端口优先级为 `RA_PORT`、数据目录 `hub.json`、默认 `47823`。存在未过期的配对邀请或已配对设备时，另行开放加密的局域网设备端口（默认 `47824`，见 `docs/contracts.md` 6.3）。
 - 数据目录默认是 `~/Library/Application Support/record-anything/`。未设置 `RA_DB_KEY` 时，通过 macOS 钥匙串读取数据库密钥；读取错误时不会覆盖已有密钥。
 - 除健康检查外，接口需要鉴权。网页与采集端使用管理令牌，MCP / hook 使用独立的受限 Agent 令牌；Agent 可以读取和明确授权的追加，不能管理设置或删除记录。
 - 入库统一进行 Schema 校验、去重和密钥规则拦截。HTTP 200 回执仍须核对 `accepted`、`duplicates`、`rejected`，不能仅凭状态码推进插件游标。

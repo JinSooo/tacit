@@ -14,7 +14,7 @@
   border: 1px solid var(--line);
   border-radius: var(--r-stage);
   font-family: var(--mono), var(--sans);
-  font-size: var(--fs-caption);
+  font-size: 14px;
   line-height: 1.75;
   overflow-wrap: anywhere;
 }
@@ -31,6 +31,21 @@
   padding-block: 12px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
+  font-size: var(--fs-caption);
+}
+
+.ai-terminal-dots {
+  display: flex;
+  gap: 6px;
+  margin-right: 6px;
+}
+
+.ai-terminal-dots i {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--night-line);
+  border-radius: 50%;
+  background: var(--fill);
 }
 
 .ai-terminal-bar svg {

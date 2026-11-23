@@ -66,7 +66,7 @@
   <circle class="cdot" cx="486" cy="203" r="4"/>
   <text class="ci" x="502" y="208">一天切成连续的活动段</text>
   <circle class="cdot" cx="486" cy="247" r="4"/>
-  <text class="ci" x="502" y="252">当天概述，约每 3 小时更新</text>
+  <text class="ci" x="502" y="252">当天概述，每小时更新一次</text>
   <circle class="cdot" cx="486" cy="291" r="4"/>
   <text class="ci" x="502" y="296">事项跨天接续，记下决定</text>
   <circle class="cdot" cx="486" cy="335" r="4"/>

@@ -34,8 +34,9 @@
 }
 
 .hero-window {
-  --hero-time-width: 44px;
-  --hero-axis-gap: 24px;
+  --hero-time-width: 42px;
+  --hero-axis-gap: 28px;
+  --hero-axis-x: calc(var(--hero-time-width) + var(--hero-axis-gap) / 2);
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--r-stage);
@@ -71,7 +72,7 @@
 }
 
 .hero-window-page {
-  padding: 24px clamp(16px, 3vw, 40px);
+  padding: 24px clamp(16px, 3vw, 36px) 28px;
 }
 
 .hero-date {
@@ -82,16 +83,19 @@
 }
 
 .hero-overview {
-  margin-block: 8px 24px;
+  margin-block: 10px 24px;
+  font-family: var(--serif);
+  font-size: var(--fs-body);
+  font-weight: 400;
   color: var(--reading);
-  line-height: 1.6;
-  text-wrap: wrap;
+  line-height: 1.7;
+  text-wrap: pretty;
 }
 
 .hero-timeline li:not(:last-child)::after {
   position: absolute;
   inset-block: 11px -11px;
-  left: var(--hero-time-width);
+  left: var(--hero-axis-x);
   width: 1px;
   background: var(--line);
   z-index: -1;
@@ -103,7 +107,7 @@
   display: grid;
   grid-template-columns: var(--hero-time-width) minmax(0, 1fr);
   gap: var(--hero-axis-gap);
-  padding-bottom: 8px;
+  padding-bottom: 14px;
   isolation: isolate;
 }
 
@@ -114,7 +118,7 @@
 .hero-timeline li::before {
   position: absolute;
   top: 8px;
-  left: calc(var(--hero-time-width) - 3px);
+  left: calc(var(--hero-axis-x) - 3px);
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -133,22 +137,27 @@
 }
 
 .hero-timeline p {
-  margin-top: 2px;
+  margin-top: 3px;
   color: var(--muted);
   font-size: var(--fs-caption);
   line-height: 1.5;
 }
 
-.hero-source {
-  display: block;
-  width: fit-content;
-  margin-top: 4px;
+.hero-sources {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
   color: var(--muted);
 }
 
+.hero-source {
+  display: inline-flex;
+}
+
 .hero-source svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
 .hero-writing-line {
@@ -169,7 +178,7 @@
 
 @media (max-width: 480px) {
   .hero-window {
-    --hero-axis-gap: 12px;
+    --hero-axis-gap: 20px;
   }
 
   .hero-actions .btn {
@@ -178,27 +187,18 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .hero-glyph {
-    animation: hero-show 1ms var(--hero-letter-delay) both;
-  }
-
-  .hero-window[data-writing] .hero-timeline li {
-    animation: hero-write-row 220ms var(--ease) var(--hero-row-delay) both;
+  .hero-window[data-writing] .hero-newest {
+    animation: hero-write-row 380ms var(--ease) both;
   }
 
   .hero-window[data-writing] .hero-writing-line {
-    animation: hero-write-line 280ms var(--ease) var(--hero-line-delay) both;
+    animation: hero-write-line 360ms var(--ease) 220ms both;
     transform-origin: left;
   }
 }
 
-@keyframes hero-show {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
 @keyframes hero-write-row {
-  from { opacity: 0; transform: translateY(4px); }
+  from { opacity: 0; transform: translateY(-6px); }
   to { opacity: 1; transform: translateY(0); }
 }
 

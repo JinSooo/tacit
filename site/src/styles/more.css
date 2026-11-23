@@ -85,6 +85,32 @@
   font-size: var(--fs-caption);
 }
 
+.more-search-chips:where(:not([hidden])) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.more-search-chips button {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: var(--r-control);
+  background: var(--fill);
+  color: var(--muted);
+  font-size: var(--fs-caption);
+  transition: background-color 0.2s var(--ease), color 0.2s var(--ease);
+}
+
+.more-search-chips button:hover {
+  color: var(--ink);
+}
+
+.more-search-chips button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .more-search-results {
   padding: 16px;
 }

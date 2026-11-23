@@ -46,13 +46,13 @@
 
 从“应用程序”打开 Tacit 后，在桌面空白处右键选择“编辑小组件”，搜索 Tacit 并添加“Tacit 时间线”。点击小组件应打开当日时间线。主程序在启动、唤醒、记录变更和每 10 分钟检查一次当天整理结果，变化时刷新小组件。
 
-主程序把当天概述和最近三段的开始时刻、标题写到 `~/Library/Application Support/record-anything/widget/today.json`。该目录只给小组件沙盒授予只读访问。跨天后小组件切到新的一天，主程序在零点或重新运行时移除旧文件。卸载时即使保留历史记录也会清理该目录。
+主程序把中号和大号小组件所需的当天概述、活动时段和最近几段（大号展示四至五段）写到 `~/Library/Application Support/record-anything/widget/today.json`。该目录只给小组件沙盒授予只读访问。跨天后小组件切到新的一天，主程序在零点或重新运行时移除旧文件。卸载时即使保留历史记录也会清理该目录。
 
 自签名扩展已在关闭 SIP 的 macOS 27.2.1 上通过桌面渲染验证。在开启 SIP 的机器上，首次打开后用虚构记录生成当天整理，再从图库添加小组件。确认首次添加和随后的刷新都不弹出“访问其他 App 的数据”授权，显示的内容与当天时间线一致，并核对点击跳转和跨天清理。
 
 ## 发布安装包
 
-1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）、`android/app/build.gradle.kts` 的 `versionName`（`versionCode` 加 1）；`scripts/release-version.test.ts` 检查这几处一致。提交并打 `v<版本号>` tag。
+1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）、`android/app/build.gradle.kts` 的 `versionName`（`versionCode` 加 1）；`scripts/release-version.test.ts` 检查这几处一致。若改动了官网源码 `site/src/`，顺手运行 `bun site/build.ts` 同步 `site/dist/`。提交并打 `v<版本号>` tag。
 2. 在这台有签名证书的 Mac 上运行 `scripts/release-dmg.sh`。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
 3. 推送 tag，用 `gh release create` 建 Release 并上传这两个文件。
 

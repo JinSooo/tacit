@@ -21,8 +21,6 @@
 | `mac.app` | 保留，v1 不用：应用使用记录并入 `mac.screen` 时段（读不到正文时也照样记应用、窗口标题和时长） |
 | `mac.clipboard`、`mac.file`、`mac.calendar`、`mac.shell`、`mac.git` | 已撤下（2026-11-22），只剩旧记录 |
 | `mac.wechat` | Mac 采集端"微信对话"数据源（默认关闭）：读微信窗口聊天区，一条消息一条记录，格式见下 |
-| `mac.shell` | plugins/shell |
-| `mac.git` | plugins/git |
 | `mac.browser` | plugins/browser |
 | `claude_code.session`、`codex.session` | plugins/agent-sessions |
 | `manual.note`、`manual.correction` | 网页手动补写 / 修正 |
@@ -65,7 +63,7 @@
 
 ## 3. Hub 接口
 
-只监听 `127.0.0.1`，默认端口 `47823`（可改，见 3.1），所有请求带 `Authorization: Bearer <token>`。
+管理、网页和 MCP 接口只监听 `127.0.0.1`，默认端口 `47823`（可改，见 3.1），所有请求带 `Authorization: Bearer <token>`。设备配对和同步走单独的加密局域网端口（默认 `47824`，见 6.3）。
 
 ### 写入
 
@@ -113,7 +111,7 @@
 
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
-| GET | `/v1/settings/hub` | — | `{ port, listen: "127.0.0.1", lan: false, locked }`；`port` 是正在监听的端口，`locked` 为 true 表示设了 `RA_PORT` |
+| GET | `/v1/settings/hub` | — | `{ port, listen: "127.0.0.1", lan, locked }`；`port` 是本机管理端口，`lan` 为局域网设备端口实际监听状态（见 6.3），`locked` 为 true 表示设了 `RA_PORT` |
 | PUT | `/v1/settings/hub` | `{ port }`，1024–65535 的整数 | `{ port, restarting }`。先在 127.0.0.1 试绑定新端口，再原子写 `hub.json`（保留其他字段），响应发出约 300ms 后中枢退出，launchd KeepAlive 用新端口拉起。和当前端口相同时只写文件，`restarting: false`。被占用 409「端口 N 已被占用，请换一个」；设了 `RA_PORT` 时 409「端口由环境变量 RA_PORT 固定…」 |
 | GET | `/v1/settings/models` | — | `{ tiers, config_error, keys, providers, tier_info }`，见下 |
 | PUT | `/v1/settings/models` | `{ tiers: { minute, hour, day } }`，每档 `{ provider, model, base_url?, reasoning_effort? }` | 同 GET。三档都要给，规则和读取 `models.json` 相同（`validateTiers`）；原子写回，下一次模型调用生效 |
@@ -132,7 +130,7 @@
 - 本机地址只是连接位置，不保证推理不转发到云端；本次接入不改变 private 内容排除规则。Mac 和网页通过同一个列表接口读取，区分未连接、读取失败和空模型列表。本机连接不提示填写 API key。
 - 账号登录类后端（`claude-cli`、`codex-cli`）只调用本机已登录的命令，不需要 key，不接受 `base_url` 或 `reasoning_effort`。
 - general 存在 `distill_state` 表的 `general_settings` 键里。使用时现读，缺省或无效取默认值，改完不需要重启。
-- 只监听 127.0.0.1；没有开放局域网的接口，配对和应用层 HPKE 加密之后才开放（v3），`lan` 目前恒为 false。
+- 管理与网页接口只监听 `127.0.0.1`，没有对外开放管理端口的开关；存在未过期配对邀请或已配对设备时才开放加密的局域网设备端口（见 6.3），`lan` 反映该端口的实际监听状态。
 
 通用设置字段与默认值：
 
@@ -602,3 +600,4 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 - `android.notification` 和 `android.usage` 只有 0.4.1 及以前的手机会产出，0.4.2 起手机只录音。旧的 `android.notification` 只可搜索，不进时间线和整理，不再和 Mac 微信比对去重；下面两条是旧版的约定。
 - `android.notification` 的 `title` 是会话名，`body` 是「发送人：正文」或仅正文。中枢把它当作收到的聊天。整理时在前后各两分钟内按会话、发送人和正文比对 Mac 微信，手机预览可为足够长的正文前缀；命中时使用 Mac 记录，手机原文仍可搜索。通知有应用包名时仅微信参与比对，否则用其余条件判断。
 - `android.usage` 只提供应用名和使用时段。
+
