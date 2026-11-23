@@ -108,12 +108,14 @@ struct Sidebar: View {
           ForEach(recent) { projectRow($0) }
           if !older.isEmpty {
             // 一周没有活动的收进“更早”，有新活动自动回到上面；选中的项目在里面时保持展开。
-            DisclosureGroup(isExpanded: Binding(get: { olderExpanded || older.contains { store.section == .project($0.id) } },
-                                                set: { olderExpanded = $0 })) {
-              ForEach(older) { projectRow($0) }
-            } label: {
-              Text("更早").foregroundStyle(Palette.muted)
+            // 和项目行同一列对齐（系统折叠组的箭头会顶到最左、内容再缩一层，看着像另一种控件）。
+            let open = olderExpanded || older.contains { store.section == .project($0.id) }
+            Button { olderExpanded = !open } label: {
+              SidebarLabel(title: "更早", icon: open ? "caret-down" : "caret-right")
+                .foregroundStyle(Palette.muted).contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            if open { ForEach(older) { projectRow($0) } }
           }
         }
       }
