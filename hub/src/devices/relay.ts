@@ -163,7 +163,15 @@ export class RelayService {
   }
 
   private async hello(url: string) {
-    const response = await this.request(url + "/v1/hello", "GET");
+    let response: Response;
+    try { response = await this.request(url + "/v1/hello", "GET"); }
+    catch (error) {
+      // 能连上但没有 hello 接口（普通网站多是 404）说明地址不是信箱，不算连不上。
+      if (error instanceof RelayHTTPError && error.status >= 400 && error.status < 500 && error.status !== 429) {
+        throw new WireError(400, "地址不是 Tacit 信箱");
+      }
+      throw error;
+    }
     const hello = object(await response.json().catch(() => null));
     const limits = object(hello?.limits);
     if (hello?.tacit_relay !== 1 || !limits || !["space_bytes", "message_bytes", "retention_days"].every(key =>

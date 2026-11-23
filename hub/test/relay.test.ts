@@ -125,7 +125,7 @@ test("管理令牌隔离，真实信箱上传、跨重启防重放并丢弃错�
   const hub = await hubFixture(), relay = relayFixture({ createCode: "fixture-code" });
   try {
     expect((await hub.admin(path, "PUT", { mode: "custom", url: "http://example.test" })).status).toBe(400);
-    expect((await hub.admin(path + "/test", "POST", { url: hub.url().origin })).status).toBe(502);
+    expect((await hub.admin(path + "/test", "POST", { url: hub.url().origin })).status).toBe(400);
     const probe = await hub.admin(path + "/test", "POST", { url: relay.url });
     expect(await probe.json()).toMatchObject({ tacit_relay: 1 });
     expect((await hub.admin(path, "PUT", { mode: "custom", url: relay.url, code: "wrong" })).status).toBe(403);
@@ -250,6 +250,19 @@ test("回执写入失败后重启可补发原结果，已执行的请求不再�
     expect(await reply(phone, box, nonce)).toMatchObject({ status: 200, body: { accepted: 1, duplicates: 0 } });
     await eventually(async () => (await list(box, box.up, hub.credentials.get(box.space))).length === 0 || undefined);
   } finally { await hub.dispose(); relay.stop(true); }
+});
+
+test("能连上但不是信箱的地址提示“不是 Tacit 信箱”，不当成连不上", async () => {
+  const hub = await hubFixture();
+  const site = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("not found", { status: 404 }) });
+  try {
+    const url = `http://127.0.0.1:${site.port}`;
+    for (const [route, method, body] of [[path + "/test", "POST", { url }], [path, "PUT", { mode: "custom", url }]] as const) {
+      const response = await hub.admin(route, method, body);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "地址不是 Tacit 信箱" });
+    }
+  } finally { await hub.dispose(); await site.stop(true); }
 });
 
 test("回执还没投出去时删掉记录，回执随删除清掉，原请求不再执行", async () => {
