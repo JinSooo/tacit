@@ -47,16 +47,31 @@ internal fun conversationTitle(private: Boolean) = if (private) "一场私密对
 
 private val speakerPrefix = Regex("^(?:(?:我|对方(?:[ 　]*[0-9]+)?)[：:]|[^：]+：)\\s*")
 
-/** The first line that says something; a line of only punctuation (recognized noise) is skipped. */
-internal fun firstSentence(raw: String): String {
-    val body = readableTranscript(raw).lineSequence().map { it.trim().replaceFirst(speakerPrefix, "") }
-        .firstOrNull { line -> line.any(Char::isLetterOrDigit) }.orEmpty()
-    val ending = body.indexOfFirst { it in "。！？!?…" }
-    return if (ending < 0) body else body.take(ending + 1)
+private fun sentence(line: String): String {
+    val ending = line.indexOfFirst { it in "。！？!?…" }
+    return if (ending < 0) line else line.take(ending + 1)
 }
 
-/** First sentence across a conversation's records in time order. */
-internal fun firstSentence(records: List<top.jinso.tacit.core.HistoryRecord>): String =
-    records.sortedBy { it.start }.asSequence().map { firstSentence(it.body) }.firstOrNull(String::isNotEmpty).orEmpty()
+/** The first line that says something; a line of only punctuation (recognized noise) is skipped. */
+internal fun firstSentence(raw: String): String = sentence(readableTranscript(raw).lineSequence()
+    .map { it.trim().replaceFirst(speakerPrefix, "") }.firstOrNull { line -> line.any(Char::isLetterOrDigit) }.orEmpty())
+
+/**
+ * The line a conversation without a summary shows: the one that says the most, as the Mac timeline drafts do
+ * (2026-11-23: the first line was someone else's misrecognized "싫."). The user's own lines first; under 5
+ * characters counts as filler; then the longest, the earlier on a tie; someone else's only when the user has none.
+ */
+internal fun telltaleSentence(records: List<top.jinso.tacit.core.HistoryRecord>): String {
+    // A turn joins the speaker's consecutive lines, so every sentence in it is a candidate.
+    val lines = records.sortedBy { it.start }.flatMap { readableTranscript(it.body).lines() }.flatMap { raw ->
+        val line = raw.trim()
+        val mine = Regex("^我[：:]").containsMatchIn(line)
+        Regex("[^。！？!?…]+[。！？!?…]*").findAll(line.replaceFirst(speakerPrefix, ""))
+            .map { it.value.trim() }.filter { it.any(Char::isLetterOrDigit) }.map { mine to it }.toList()
+    }
+    fun best(mine: Boolean) = lines.filter { it.first == mine && it.second.count(Char::isLetterOrDigit) >= 5 }
+        .maxByOrNull { it.second.count(Char::isLetterOrDigit) }?.second
+    return best(true) ?: best(false) ?: lines.firstOrNull()?.second.orEmpty()
+}
 
 internal fun retentionLabel(days: Int): String = if (days == 0) "不自动清除" else "$days 天"

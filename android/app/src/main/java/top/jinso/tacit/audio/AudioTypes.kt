@@ -42,6 +42,13 @@ internal object AudioPolicy {
     fun candidate(conversations: Int, seconds: Double) = (conversations >= 2 && seconds >= 15) || seconds >= 45
     fun adjacent(previousEnd: Long, nextStart: Long, previousContext: String, context: String) =
         previousContext == context && nextStart >= previousEnd && nextStart - previousEnd <= 600_000L
+    /**
+     * Speech counted as "me" across a conversation must add up to [ME_PRESENT_SECONDS]. On 2026-11-23 a game the user
+     * never heard put 11.7 s of short lines on voices matching the Mac voiceprint (center .605, as close as the
+     * user's real talks at .55–.59); the user's real conversations had 53–87 s.
+     */
+    fun mePresent(meSeconds: Double) = meSeconds >= ME_PRESENT_SECONDS
+    const val ME_PRESENT_SECONDS = 20.0
     fun conversationAllowed(meMarked: Boolean, mePresentInRetainedAudio: Boolean,
         allowed: Boolean) = allowed && meMarked && mePresentInRetainedAudio
     fun unit(v: FloatArray): FloatArray {

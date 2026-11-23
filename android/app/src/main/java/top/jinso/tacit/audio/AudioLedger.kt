@@ -196,13 +196,16 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
         voice: FloatArray? = meVoice(mac), presence: MutableMap<String, Boolean> = mutableMapOf()): Boolean {
         val conversation = clip.optString("conversation")
         // Judge whole voices, as the Mac does: comparing each short utterance with a low threshold let hours of
-        // speaker playback through on a single chance match.
+        // speaker playback through on a single chance match. Then require enough of "me" in this conversation:
+        // short lines from someone else's game or video still join a me voice at the .6 clustering bar.
         val present = voice != null && allowed && conversation.isNotEmpty() && presence.getOrPut(conversation) {
             val speakers = store.speakers().associateBy { it.getString("id") }
-            store.clips().any { other ->
-                other.optString("conversation") == conversation && store.exists(other.getString("id")) &&
-                    utterances(other).any { u -> isMeSpeaker(speakers[u.getString("speaker")], mac) }
-            }
+            AudioPolicy.mePresent(store.clips().filter { other ->
+                other.optString("conversation") == conversation && store.exists(other.getString("id"))
+            }.sumOf { other ->
+                utterances(other).filter { u -> isMeSpeaker(speakers[u.getString("speaker")], mac) }
+                    .sumOf { u -> u.getInt("length").toDouble() / SAMPLE_RATE }
+            })
         }
         return store.exists(clip.getString("id")) && AudioPolicy.conversationAllowed(
             voice != null, present, allowed)

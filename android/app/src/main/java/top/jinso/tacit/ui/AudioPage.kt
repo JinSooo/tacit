@@ -330,7 +330,7 @@ private fun RecordedConversation(scene: AudioConversationRow, summary: Conversat
         Caption(date(scene.start, "HH:mm"), Modifier.width(56.dp).padding(top = 5.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             // The title and summary once the phone or the Mac has written them; until then the user's own first sentence.
-            Text(summary?.title ?: firstSentence(records).ifBlank { conversationTitle(scene.private) },
+            Text(summary?.title ?: telltaleSentence(records).ifBlank { conversationTitle(scene.private) },
                 style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (summary != null) Text(summary.summary, color = tacitColors.muted, maxLines = 3, overflow = TextOverflow.Ellipsis)

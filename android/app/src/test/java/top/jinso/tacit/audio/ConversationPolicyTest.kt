@@ -23,6 +23,10 @@ class ConversationPolicyTest {
         assertTrue(AudioPolicy.conversationAllowed(true, true, true))
         assertFalse(AudioPolicy.conversationAllowed(true, true, false))
     }
+    @Test fun presenceNeedsTwentySecondsOfMe() {
+        assertFalse(AudioPolicy.mePresent(11.7))
+        assertTrue(AudioPolicy.mePresent(20.0))
+    }
     @Test fun silenceTransitionsInvalidateBufferedAudioIncludingQuickSilenceAndResume() {
         val gate = CaptureSilenceGate()
         assertFalse(gate.drop(0))
