@@ -31,19 +31,20 @@ class SpeechDeviceTest {
             assertTrue(segments.all{it.vector.isNotEmpty()&&it.vector.all{v->v.isFinite()}})
             val text=engine.transcribe(pcm)
             assertTrue("Known phrase should contain 本地 or 记录",text.contains("本地")||text.contains("记录"))
-            // The ~380 MB transcription model is freed once idle and reloads on the next use.
-            assertTrue(engine.transcriberLoaded);assertFalse(engine.releaseIdle(60_000))
-            assertTrue(engine.releaseIdle(0));assertFalse(engine.transcriberLoaded)
+            // Ending a batch releases the model. The next batch must produce the same text.
+            assertTrue(engine.transcriberLoaded)
+            engine.finishTranscription();assertFalse(engine.transcriberLoaded)
             assertEquals(text,engine.transcribe(pcm))
-            // The voiceprint arena (~170 MB once warmed) is freed after a minute idle; reload gives the same vectors.
-            assertTrue(engine.voiceprintLoaded);assertFalse(engine.releaseIdleVoiceprint(60_000))
-            assertTrue(engine.releaseIdleVoiceprint(0));assertFalse(engine.voiceprintLoaded)
+            engine.finishTranscription()
+            // Recreating the ONNX analysis sessions must give the same vectors.
+            assertTrue(engine.voiceprintLoaded)
+            engine.finishAnalysis();assertFalse(engine.voiceprintLoaded)
             val again=engine.segments(pcm)
             assertEquals(segments.size,again.size)
             segments.zip(again).forEach{(a,b)->assertEquals(a.start,b.start);assertTrue(a.vector.contentEquals(b.vector))}
             // Regression: a 30 s span once grew the voiceprint arena by ~580 MB; chunked embedding stays bounded
             // and still matches the same voice.
-            assertTrue(engine.releaseIdleVoiceprint(0))
+            engine.finishAnalysis()
             val before=android.os.Debug.getNativeHeapAllocatedSize()
             val long=FloatArray(SAMPLE_RATE*30){pcm[it%pcm.size]}
             val longVector=requireNotNull(engine.voiceprint(long))

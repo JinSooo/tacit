@@ -1,7 +1,5 @@
 package top.jinso.tacit.audio
 
-import android.os.SystemClock
-
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -142,7 +140,10 @@ internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechE
             tokens = File(dir, "sense-voice/tokens.txt").path, numThreads = 2, debug = false, provider = "cpu")))
         .also { recognizer = it }
     // Loading sessions validates model graph/schema; this never decodes user audio.
-    fun validate() { vad(); speaker(); recognizer() }
+    fun validate() {
+        try { vad(); speaker() } finally { finishAnalysis() }
+        try { recognizer() } finally { finishTranscription() }
+    }
     /**
      * The ONNX arena keeps its peak forever and grows with input length (30 s ≈ 600 MB, 3 s ≈ 100 MB), and
      * real VAD spans run past maxSpeechDuration (p95 13 s). Long spans are embedded in ≤3 s chunks and averaged.
@@ -185,37 +186,33 @@ internal class LocalSpeechEngine(private val dir: File) : AutoCloseable, SpeechE
             detector.acceptWaveform(frame); drain(); offset = end
         }
         detector.flush(); drain()
-        lastSegmented = SystemClock.elapsedRealtime()
         return result
     }
     override fun segments(pcm: FloatArray): List<VoiceSegment> = spans(pcm).mapNotNull { (start, samples) ->
         if (music(samples)) { samples.fill(0f); null }
         else voiceprint(samples)?.let { VoiceSegment(start, samples, it) }
-    }.also { lastSegmented = SystemClock.elapsedRealtime() }
-    private var lastTranscribed = 0L
-    private var lastSegmented = 0L
+    }
     override fun transcribe(samples: FloatArray): String {
         val asr = recognizer(); val stream = asr.createStream()
         return try {
             stream.acceptWaveform(samples, SAMPLE_RATE); asr.decode(stream)
             asr.getResult(stream).text.replace(Regex("<\\|[^|]*\\|>"), "").trim()
-        } finally { stream.release(); lastTranscribed = SystemClock.elapsedRealtime() }
+        } finally { stream.release() }
     }
-    /** Frees the transcription model after [idleMs] without use; the next transcription reloads it. */
-    fun releaseIdle(idleMs: Long): Boolean {
-        val loaded = recognizer ?: return false
-        if (SystemClock.elapsedRealtime() - lastTranscribed < idleMs) return false
-        loaded.release(); recognizer = null
-        return true
+    override fun finishTranscription() {
+        recognizer?.release()
+        recognizer = null
     }
-    /** Voiceprint + VAD hold ~120 MB once warmed (3 s chunks) and never shrink; reloading takes ~0.15 s. */
-    fun releaseIdleVoiceprint(idleMs: Long): Boolean {
-        if (speaker == null && vad == null && tagger == null) return false
-        if (SystemClock.elapsedRealtime() - lastSegmented < idleMs) return false
-        speaker?.release(); speaker = null; vad?.release(); vad = null; tagger?.release(); tagger = null
-        return true
+    /** ONNX arenas retain their peak allocation until the session ends. */
+    override fun finishAnalysis() {
+        speaker?.release()
+        speaker = null
+        vad?.release()
+        vad = null
+        tagger?.release()
+        tagger = null
     }
     internal val transcriberLoaded get() = recognizer != null
     internal val voiceprintLoaded get() = speaker != null
-    override fun close() { recognizer?.release(); speaker?.release(); vad?.release(); tagger?.release() }
+    override fun close() { finishAnalysis(); finishTranscription() }
 }

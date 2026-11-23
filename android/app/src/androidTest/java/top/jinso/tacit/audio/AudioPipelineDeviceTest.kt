@@ -6,9 +6,12 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.UUID
 
 /** Real Keystore/filesystem, synthetic speech engine: exercises policy without consuming user recordings. */
@@ -38,6 +41,41 @@ class AudioPipelineDeviceTest {
             .put("vector", JSONArray(listOf(0f, 1f))).put("seconds", 0.0).put("segments", 0)
             .put("conversations", JSONArray()))
         store.saveSpeakers(store.speakers())
+    }
+
+    @Test fun realSpeechModelsAreReleasedBetweenCaptureBatches() = isolated { store, _ ->
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = SpeechModels(context).current()
+        val fixture = File(context.filesDir, "speech-fixture.pcm")
+        assumeTrue(directory != null && fixture.isFile)
+        val bytes = fixture.readBytes()
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val pcm = ShortArray(bytes.size / 2) { buffer.short }
+        val t = System.currentTimeMillis() - 90_000
+        LocalSpeechEngine(checkNotNull(directory)).use { engine ->
+            val ledger = AudioLedger(store)
+            val first = store.add(pcm, t)
+            val processor = AudioProcessor(store, Any(), object : SpeechEngine by engine {
+                override fun transcribe(samples: FloatArray): String {
+                    assertFalse("Voiceprint and CPU ASR must not stay loaded together", engine.voiceprintLoaded)
+                    return engine.transcribe(samples)
+                }
+            })
+            processor.drain({ true }) { error("Unmarked voice must not publish") }
+            assertTrue(store.exists(first))
+            assertFalse("The voiceprint model outlived its analysis batch", engine.voiceprintLoaded)
+
+            ledger.markMe(store.speakers().first().getString("id"))
+            val second = store.add(pcm, t + 30_000)
+            val published = mutableListOf<AudioPublication>()
+            processor.drain({ true }) {
+                published += it
+                "test:${it.clipId}"
+            }
+            assertEquals(listOf(first, second), published.map { it.clipId })
+            assertTrue(published.all { it.body.contains("本地") || it.body.contains("记录") })
+            assertFalse("The CPU ASR model outlived its transcription batch", engine.transcriberLoaded)
+        }
     }
 
     @Test fun laterMeBackfillsEarlierClipOnlyInSameConversationWithStableNames() = isolated { store, context ->

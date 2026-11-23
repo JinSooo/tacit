@@ -13,6 +13,8 @@ import java.util.Locale
 internal interface SpeechEngine {
     fun segments(pcm: FloatArray): List<VoiceSegment>
     fun transcribe(samples: FloatArray): String
+    fun finishAnalysis() = Unit
+    fun finishTranscription() = Unit
 }
 internal data class AudioPublication(val clipId: String,
     val body: String, val start: Long, val end: Long, val offset: ZoneOffset)
@@ -52,8 +54,14 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
             ledger.prepare()
             store.clips().filter { microphoneClip(it) && store.exists(it.getString("id")) }.sortedBy { it.getLong("start") }
         }
+        val analyzed = try { analyze(clips, ledger, allowed) } finally { speech.finishAnalysis() }
+        if (!analyzed) return
+        try { publishTranscripts(clips, ledger, allowed, publish) } finally { speech.finishTranscription() }
+    }
+
+    private fun analyze(clips: List<JSONObject>, ledger: AudioLedger, allowed: () -> Boolean): Boolean {
         for (clip in clips) {
-            if (!allowed()) return
+            if (!allowed()) return false
             if (clip.getBoolean("analyzed")) {
                 // Clips analyzed before silent audio was dropped at analysis time.
                 if (clip.getJSONArray("utterances").length() == 0) synchronized(lock) {
@@ -68,7 +76,7 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
             val spans = try { speech.segments(pcm) } finally { pcm.fill(0f) }
             try {
                 synchronized(lock) {
-                    if (!allowed() || !store.exists(clip.getString("id"))) return
+                    if (!allowed() || !store.exists(clip.getString("id"))) return false
                     // Only conversations with a voice are worth keeping; silence never waits out the retention period.
                     if (spans.isEmpty()) { store.discard(clip.getString("id")); return@synchronized }
                     val utterances = JSONArray()
@@ -86,6 +94,11 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
                 }
             } finally { spans.forEach { it.samples.fill(0f) } }
         }
+        return true
+    }
+
+    private fun publishTranscripts(clips: List<JSONObject>, ledger: AudioLedger, allowed: () -> Boolean,
+        publish: (AudioPublication) -> String?) {
         // Without a "me" voice nothing is eligible; skip the pass instead of checking every clip.
         val voice = synchronized(lock) { ledger.meVoice(macVoiceprint) } ?: return
         val presence = mutableMapOf<String, Boolean>()
