@@ -33,7 +33,7 @@ import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.*
 import top.jinso.tacit.core.HistoryRecord
-import top.jinso.tacit.data.MacSummary
+import top.jinso.tacit.data.ConversationSummary
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
@@ -62,7 +62,7 @@ import java.util.concurrent.CompletableFuture
     var loaded by remember { mutableStateOf(false) }
     var macVoice by remember { mutableStateOf(false) }
     var loadFailed by remember { mutableStateOf(false) }
-    var summaries by remember { mutableStateOf(emptyMap<String, MacSummary>()) }
+    var summaries by remember { mutableStateOf(emptyMap<String, ConversationSummary>()) }
     var dayEpoch by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
     val includeIgnored = false
     fun work(task: () -> CompletableFuture<Unit>, success: String, after: () -> Unit = {}) {
@@ -101,7 +101,7 @@ import java.util.concurrent.CompletableFuture
                         val mac = audio.macVoiceKnown().get()
                         val scenes = audio.listConversations().get().sortedByDescending { it.start }
                         val text = scenes.flatMap { it.recordIds }.distinct().mapNotNull { app.vault.get(it) }.associateBy { it.id }
-                        val written = app.vault.macSummaries().flatMap { m -> m.recordIds.map { it to m } }.toMap()
+                        val written = app.vault.summaries().flatMap { m -> m.recordIds.map { it to m } }.toMap()
                         Triple(voices to mac, audioConversationRows(scenes, text), written)
                     }
                 }
@@ -321,7 +321,7 @@ private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () 
 }
 
 @Composable
-private fun RecordedConversation(scene: AudioConversationRow, summary: MacSummary?, onConversation: (List<HistoryRecord>) -> Unit) {
+private fun RecordedConversation(scene: AudioConversationRow, summary: ConversationSummary?, onConversation: (List<HistoryRecord>) -> Unit) {
     val records = scene.records
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp)
@@ -329,7 +329,7 @@ private fun RecordedConversation(scene: AudioConversationRow, summary: MacSummar
     ) {
         Caption(date(scene.start, "HH:mm"), Modifier.width(56.dp).padding(top = 5.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            // The Mac's title and summary when it has written them; until then the user's own first sentence.
+            // The title and summary once the phone or the Mac has written them; until then the user's own first sentence.
             Text(summary?.title ?: firstSentence(records).ifBlank { conversationTitle(scene.private) },
                 style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)

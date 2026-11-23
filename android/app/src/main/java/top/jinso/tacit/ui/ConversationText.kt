@@ -55,7 +55,7 @@ internal fun ConversationDetail(
             // Like the Mac: what the conversation was about first, then the cleaned-up transcript.
             val summary = remember(current, changes) {
                 val ids = current.map { it.first.id }.toSet()
-                vault.macSummaries().firstOrNull { m -> m.recordIds.any(ids::contains) }
+                vault.summaries().firstOrNull { m -> m.recordIds.any(ids::contains) }
             }
             DetailTitle(summary?.title ?: conversationTitle(private))
             if (summary != null) {

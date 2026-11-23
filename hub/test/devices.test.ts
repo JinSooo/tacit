@@ -3,7 +3,8 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HubDB } from "../src/db.ts";
-import { conversationsIn, saveSummary } from "../src/conversations.ts";
+import { conversationsIn, saveSummary, selfSummarizingDevices, storedSummary } from "../src/conversations.ts";
+import { conversationStep } from "../src/distill/run.ts";
 import { openRequest, readEnvelope, suite } from "../src/devices/envelope.ts";
 import { startServer } from "../src/server.ts";
 import { validateRecord } from "../../packages/record/index.ts";
@@ -367,5 +368,42 @@ test("手机只能取回自己那几场对话的总结", async () => {
       { record_ids: [mine.id], title: "约会议时间", summary: "定在周五下午三点。", points: ["会议室"] },
     ] } });
     expect((await phone.send("conversations", { from, to: from + 40 * 86_400_000 })).status).toBe(400);
+  } finally { await hub.dispose(); }
+});
+
+test("手机自己写的总结：组成一致才采用，开着时中枢不再重复写", async () => {
+  const hub = await runningHub();
+  try {
+    const phone = await hub.pair(), other = await hub.pair();
+    const audio = (device: string, ref: string, at: string) => fixture({ device, source: "android.audio", kind: "span",
+      source_ref: `audio:${ref}`, t_start: at, t_end: at.replace(":00+", ":30+"), title: "对话记录",
+      body: `[${at.slice(11, 19)}] 我：${"周五下午三点在会议室见，带上新办公室装修的预算表。".repeat(12)}`, capture: { method: "asr" } });
+    const a = audio(phone.device!, "a", "2026-11-08T10:00:00+08:00"), b = audio(phone.device!, "b", "2026-11-08T10:05:00+08:00");
+    const theirs = audio(other.device!, "c", "2026-11-08T10:00:00+08:00");
+    expect((await phone.send("ingest", { records: [a, b] })).body).toMatchObject({ accepted: 2 });
+    expect((await other.send("ingest", { records: [theirs] })).body).toMatchObject({ accepted: 1 });
+    const summary = { title: "新办公室装修预算", summary: "约好周五下午三点在会议室看预算表。", points: ["带上预算表"] };
+    const put = (summaries: unknown[], summarizing = true) => phone.send<{ saved: string[]; stale: string[] }>("conversations.put", { summarizing, summaries });
+
+    // 只交了其中一段（另一段还没传上来时手机分的场）、或者拿别的设备的记录来交，都不采用。
+    expect((await put([{ id: a.id, record_ids: [a.id], ...summary }, { id: theirs.id, record_ids: [theirs.id], ...summary }])).body)
+      .toEqual({ saved: [], stale: [a.id, theirs.id] });
+    expect((await put([{ id: a.id, record_ids: [b.id, a.id], ...summary }])).body).toEqual({ saved: [a.id], stale: [] });
+    const day = Date.parse("2026-11-08T00:00:00+08:00");
+    const g = conversationsIn(hub.db, day, day + 86_400_000, phone.device!)[0]!;
+    expect(storedSummary(hub.db, g)).toEqual(summary);
+    expect([...selfSummarizingDevices(hub.db)]).toEqual([phone.device!]);
+    expect((await put([{ id: a.id, record_ids: [a.id], title: "x".repeat(41), summary: "y", points: [] }])).status).toBe(400);
+
+    // 开着“AI 总结”的手机，中枢只给别的设备写；关掉以后中枢接着写。
+    const calls: string[] = [];
+    const llm = { complete: async <T,>(req: { prompt: string }) => { calls.push(req.prompt); return { ok: true as const, ms: 1, call_id: "c", data: summary as T }; } };
+    hub.db.db.prepare("DELETE FROM conversation_summaries").run();
+    const now = Date.parse("2026-11-08T12:00:00+08:00");
+    expect((await conversationStep({ db: hub.db, llm: llm as never }, now)).calls).toBe(1);
+    expect(storedSummary(hub.db, g)).toBeNull();
+    expect((await put([], false)).body).toEqual({ saved: [], stale: [] });
+    expect((await conversationStep({ db: hub.db, llm: llm as never }, now)).calls).toBe(1);
+    expect(storedSummary(hub.db, g)).toEqual(summary);
   } finally { await hub.dispose(); }
 });

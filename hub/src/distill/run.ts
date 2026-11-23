@@ -26,7 +26,7 @@ import { readGeneral, readTimelineSettings } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
 import { composePolish, composeReview, incrementalReview, reviewPlan, reviewMaterial, type ReviewDetail } from "./day-review.ts";
 import { redactString } from "../redact.ts";
-import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
+import { CONVERSATION_GAP_MS, conversationsIn, groupTurns, saveSummary, selfSummarizingDevices, storedSummary, summaryState, speakerNamer } from "../conversations.ts";
 
 export interface LLM { complete<T>(req: LLMRequest): Promise<LLMResult<T>> }
 export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: string) => void }
@@ -374,11 +374,13 @@ export function conversationTranscript(turns: { at: string; speaker: string; tex
   return `${cps.slice(0, head).join("")}\n（中间省略）\n${cps.slice(cps.length - (budget - head)).join("")}`;
 }
 
-/** 结束超过 10 分钟（不会再接上新的一段）、还没有总结或组成变了的对话，各写一段总结。私密的不发给模型。 */
+/** 结束超过 10 分钟（不会再接上新的一段）、还没有总结或组成变了的对话，各写一段总结。私密的不发给模型；自己写总结的设备跳过。 */
 export async function conversationStep(d: Deps, now: number) {
   const groups = conversationsIn(d.db, now - LIMITS.conversationDays * DAY, now);
   const namer = speakerNamer(d.db);
-  const todo = groups.filter(g => now - g.end_ms >= CONVERSATION_GAP_MS).flatMap(g => {
+  // 自己写总结的设备由它写、跟着记录传上来（见 devices/service.ts 的 conversations.put），这里不重复花一次钱。
+  const selfWritten = selfSummarizingDevices(d.db);
+  const todo = groups.filter(g => now - g.end_ms >= CONVERSATION_GAP_MS && !(g.device && selfWritten.has(g.device))).flatMap(g => {
     const turns = groupTurns(d.db, g, namer());
     return summaryState(g, turns, storedSummary(d.db, g), now) === "waiting" ? [{ g, turns }] : [];
   });

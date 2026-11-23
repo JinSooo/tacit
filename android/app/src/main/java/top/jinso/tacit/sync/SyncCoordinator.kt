@@ -122,7 +122,17 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 val receipt = uploadReceipt(client.send("ingest", JSONObject().put("records", records)), batch.size)
                 vault.applyReceipt(batch.map { it.first }, receipt)
             }
-            // Summaries are a read-only extra: an older Mac without the op must not fail the whole sync.
+            // Summaries are an extra: an older Mac without these ops must not fail the whole sync.
+            try {
+                // Tell the Mac whether this phone writes its own summaries, so the Mac does not pay for a second one.
+                val summarizing = vault.summaryModel()?.optBoolean("enabled") == true
+                val unsent = vault.unsentSummaries()
+                val reply = client.send("conversations.put", JSONObject().put("summarizing", summarizing).put("summaries", JSONArray(unsent.map { s ->
+                    JSONObject().put("id", s.id).put("record_ids", JSONArray(s.recordIds)).put("title", s.title)
+                        .put("summary", s.summary).put("points", JSONArray(s.points))
+                })))
+                vault.markSummariesSent(reply.getJSONArray("saved").strings(), reply.getJSONArray("stale").strings())
+            } catch (error: CancellationException) { throw error } catch (error: DeviceRemoved) { throw error } catch (_: Exception) { }
             try {
                 val now = System.currentTimeMillis(); val from = now - SUMMARY_WINDOW
                 val got = client.send("conversations", JSONObject().put("from", from).put("to", now))

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import { AudioStore } from "../audio.ts";
-import { conversationsIn, storedSummary } from "../conversations.ts";
+import { conversationsIn, saveSummary, setSelfSummarizing, storedSummary } from "../conversations.ts";
 import { InputError, type HubDB } from "../db.ts";
 import { isDatabaseBusy } from "../db-busy.ts";
 import { logFailure } from "../diagnostics.ts";
@@ -298,6 +298,37 @@ export class DeviceService {
     });
   }
 
+  /** 手机自己写好的对话总结：组成和中枢按同一规则分出的那一场完全一致才采用，否则算过期，等下一次同步。 */
+  private putConversations(device: string, body: Record<string, unknown>) {
+    if (typeof body.summarizing !== "boolean") throw new InputError("summarizing 必须是布尔值");
+    const list = body.summaries ?? [];
+    if (!Array.isArray(list) || list.length > 50) throw new InputError("summaries 必须是最多 50 项的数组");
+    const text = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
+    const items = list.map(item => {
+      const it = object(item) ?? {};
+      const ids = it.record_ids, points = it.points ?? [];
+      if (!text(it.id, 26) || !idPattern.test(it.id as string) || !Array.isArray(ids) || ids.length < 1 || ids.length > 500 ||
+        !ids.every(id => typeof id === "string" && idPattern.test(id)) || !text(it.title, 40) || !text(it.summary, 400) ||
+        !Array.isArray(points) || points.length > 5 || !points.every(p => typeof p === "string" && p.length <= 120)) throw new InputError("对话总结格式无效");
+      return { id: it.id as string, record_ids: ids as string[], title: (it.title as string).trim(), summary: (it.summary as string).trim(),
+        points: (points as string[]).map(p => p.trim()).filter(Boolean) };
+    });
+    const first = this.sql.prepare<[string, string], { t_start_ms: number }>("SELECT t_start_ms FROM records WHERE id=? AND device=? AND source='android.audio'");
+    return this.sql.transaction(() => {
+      setSelfSummarizing(this.hub, device, body.summarizing as boolean);
+      const saved: string[] = [], stale: string[] = [];
+      for (const item of items) {
+        const row = first.get(item.record_ids[0]!, device);
+        const g = row && conversationsIn(this.hub, row.t_start_ms, row.t_start_ms, device).find(g => g.record_ids.includes(item.record_ids[0]!));
+        const same = g && g.record_ids.length === item.record_ids.length && g.record_ids.every(id => item.record_ids.includes(id));
+        if (!g || !same || g.private) { stale.push(item.id); continue; }
+        saveSummary(this.hub, g, item);
+        saved.push(item.id);
+      }
+      return { saved, stale };
+    }).immediate();
+  }
+
   private dispatch(device: string, op: string, body: Record<string, unknown>): Result {
     switch (op) {
       case "ingest":
@@ -318,6 +349,7 @@ export class DeviceService {
       case "audio.samples": return ok(this.audio.uploadSamples(body, device));
       case "audio.lines": return ok(this.audio.lines({ ...body, device }, device));
       case "conversations": return ok({ conversations: this.conversations(device, body) });
+      case "conversations.put": return ok(this.putConversations(device, body));
       default: return fail(400, "设备操作无效");
     }
   }

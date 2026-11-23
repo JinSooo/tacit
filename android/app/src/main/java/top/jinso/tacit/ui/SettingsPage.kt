@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import top.jinso.tacit.BuildConfig
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.AudioController
@@ -86,6 +87,7 @@ internal fun SettingsPage(
                 when (selected) {
                     SettingsRoutes.MAC -> MacConnectionPage(app)
                     SettingsRoutes.SPEECH -> SpeechSettings(app, notify, resumed)
+                    SettingsRoutes.SUMMARY -> SummarySettings(app, notify)
                     SettingsRoutes.RETENTION -> AudioStorageSettings(app, notify)
                     SettingsRoutes.BACKGROUND -> BackgroundChecklist(health, ::openMicrophone, ::requestNotifications, notify)
                     Sources.AUDIO -> {
@@ -142,6 +144,12 @@ private fun SettingsHome(
         GroupDivider()
         SettingsRow("语音转写", value = if (ready == false) "未准备" else null, problem = ready == false,
             onClick = { open(SettingsRoutes.SPEECH) })
+        GroupDivider()
+        val summary by produceState<JSONObject?>(null, app) {
+            app.vault.changes.collect { value = withContext(Dispatchers.IO) { app.vault.summaryModel() } }
+        }
+        val (summaryValue, summaryProblem) = summaryRowValue(summary)
+        SettingsRow("AI 总结", value = summaryValue, problem = summaryProblem, onClick = { open(SettingsRoutes.SUMMARY) })
         GroupDivider()
         SettingsRow("录音保留", value = retentionLabel(macDays ?: app.prefs.retentionDays),
             onClick = { open(SettingsRoutes.RETENTION) })

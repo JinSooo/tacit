@@ -51,7 +51,61 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
         db.execSQL("DROP TABLE IF EXISTS conversation_summaries")
         // What the Mac wrote about this phone's own conversations; a cache the next sync replaces.
         db.execSQL("CREATE TABLE IF NOT EXISTS mac_summaries(id TEXT PRIMARY KEY, record_ids TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, points TEXT NOT NULL)")
+        // The model the user filled in for "AI 总结"; its API key stays in this encrypted database.
+        db.execSQL("CREATE TABLE IF NOT EXISTS summary_model(slot INTEGER PRIMARY KEY CHECK(slot=1), data TEXT NOT NULL)")
+        // Summaries this phone wrote itself. sent: 0 waiting for the Mac, 1 adopted, 2 the Mac split the conversation differently.
+        db.execSQL("CREATE TABLE IF NOT EXISTS own_summaries(id TEXT PRIMARY KEY, record_ids TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, points TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0)")
     }
+
+    @Synchronized internal fun summaryModel(): JSONObject? =
+        db.rawQuery("SELECT data FROM summary_model WHERE slot=1", emptyArray<String>()).use { if (it.moveToFirst()) JSONObject(it.getString(0)) else null }
+
+    @Synchronized internal fun saveSummaryModel(data: JSONObject?) {
+        if (data == null) db.delete("summary_model", null, null)
+        else db.execSQL("INSERT OR REPLACE INTO summary_model VALUES(1,?)", arrayOf(data.toString()))
+        changes.value++
+    }
+
+    @Synchronized internal fun ownSummaries(): List<ConversationSummary> = summaryRows("own_summaries", "")
+
+    @Synchronized internal fun saveOwnSummary(s: ConversationSummary) {
+        transaction {
+            // A conversation that grew or shrank replaces the summary of its old shape.
+            for (id in s.recordIds) db.execSQL("DELETE FROM own_summaries WHERE instr(record_ids, ?)>0", arrayOf("\"$id\""))
+            db.execSQL("INSERT OR REPLACE INTO own_summaries VALUES(?,?,?,?,?,?,?,0)", arrayOf(s.id, JSONArray(s.recordIds).toString(),
+                s.start, s.end, s.title, s.summary, JSONArray(s.points).toString()))
+        }
+        changes.value++
+        if (syncConnection()?.optBoolean("removed") == false) onSendableChange()
+    }
+
+    /** Own summaries the Mac has not adopted yet, once every record in them has reached the Mac. */
+    @Synchronized internal fun unsentSummaries(): List<ConversationSummary> = summaryRows("own_summaries", "WHERE sent=0").filter { s ->
+        s.recordIds.all { id -> syncState(id) == "confirmed" }
+    }.take(50)
+
+    @Synchronized internal fun markSummariesSent(saved: List<String>, stale: List<String>) = transaction {
+        saved.forEach { db.execSQL("UPDATE own_summaries SET sent=1 WHERE id=?", arrayOf(it)) }
+        stale.forEach { db.execSQL("UPDATE own_summaries SET sent=2 WHERE id=?", arrayOf(it)) }
+    }
+
+    /** What the list and detail show: the phone's own summary first, the Mac's for conversations the phone did not write. */
+    @Synchronized internal fun summaries(): List<ConversationSummary> {
+        val own = ownSummaries()
+        val covered = own.flatMap { it.recordIds }.toSet()
+        return own + macSummaries().filter { m -> m.recordIds.none(covered::contains) }
+    }
+
+    private fun summaryRows(table: String, where: String): List<ConversationSummary> =
+        db.rawQuery("SELECT id,record_ids,start,end,title,summary,points FROM $table $where ORDER BY start", emptyArray<String>()).use { c ->
+            buildList {
+                while (c.moveToNext()) {
+                    val ids = JSONArray(c.getString(1)); val points = JSONArray(c.getString(6))
+                    add(ConversationSummary(c.getString(0), (0 until ids.length()).map(ids::getString), c.getLong(2), c.getLong(3),
+                        c.getString(4), c.getString(5), (0 until points.length()).map(points::getString)))
+                }
+            }
+        }
 
     /** Replaces every cached summary in [from]..[to] with what the Mac returned for that window. */
     @Synchronized internal fun saveMacSummaries(from: Long, to: Long, list: JSONArray) {
@@ -65,16 +119,7 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
         changes.value++
     }
 
-    @Synchronized internal fun macSummaries(): List<MacSummary> =
-        db.rawQuery("SELECT id,record_ids,start,end,title,summary,points FROM mac_summaries ORDER BY start", emptyArray<String>()).use { c ->
-            buildList {
-                while (c.moveToNext()) {
-                    val ids = JSONArray(c.getString(1)); val points = JSONArray(c.getString(6))
-                    add(MacSummary(c.getString(0), (0 until ids.length()).map(ids::getString), c.getLong(2), c.getLong(3),
-                        c.getString(4), c.getString(5), (0 until points.length()).map(points::getString)))
-                }
-            }
-        }
+    @Synchronized internal fun macSummaries(): List<ConversationSummary> = summaryRows("mac_summaries", "")
     /** Same source/ref returns its original ID, so an interrupted audio publish can finish its metadata.
      * Permission and tombstone rejection still return null; duplicates never rewrite the original. */
     fun ingest(draft: Draft): String? = ingest(draft, ZoneOffset.UTC)
@@ -198,6 +243,9 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
             }
             db.delete("sync_records", "id=?", arrayOf(target))
             if (!enqueue) db.delete("sync_deletes", "id=?", arrayOf(target))
+            // A summary of a conversation that lost a record is wrong now; the phone rewrites it from what is left.
+            db.execSQL("DELETE FROM own_summaries WHERE instr(record_ids, ?)>0", arrayOf("\"$target\""))
+            db.execSQL("DELETE FROM mac_summaries WHERE instr(record_ids, ?)>0", arrayOf("\"$target\""))
             count += db.delete("records", "id=?", arrayOf(target))
         }
         return count
@@ -230,6 +278,8 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
         transaction {
             if (data == null || data.optString("device") != syncConnection()?.optString("device")) {
                 db.delete("sync_deletes", null, null)
+                // A new Mac has none of the phone's summaries yet.
+                db.execSQL("UPDATE own_summaries SET sent=0")
             }
             if (data == null) { db.delete("sync_connection", null, null); db.delete("mac_summaries", null, null) }
             else db.execSQL("INSERT OR REPLACE INTO sync_connection VALUES(1,?)", arrayOf(data.toString()))
@@ -356,6 +406,6 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
     private fun hash(text: String): String = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 }
 
-/** A conversation summary the Mac wrote from this phone's records. */
-internal data class MacSummary(val id: String, val recordIds: List<String>, val start: Long, val end: Long,
+/** A conversation summary of this phone's records, written by the phone itself or by the Mac. */
+internal data class ConversationSummary(val id: String, val recordIds: List<String>, val start: Long, val end: Long,
     val title: String, val summary: String, val points: List<String>)

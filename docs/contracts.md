@@ -522,7 +522,7 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 
 ## 6. 设备配对与同步（v3，2026-11-19）
 
-Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录、它们的删除和修正，以及中枢给这些录音写的对话总结；不在手机上展示其他设备的记录。
+Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录、它们的删除和修正，以及这些录音的对话总结（手机自己写的往上送，中枢写的往下发）；不在手机上展示其他设备的记录。
 
 ### 6.1 加密与身份
 
@@ -579,6 +579,7 @@ Mac 中枢和 Android 之间唯一的通道。只传手机自己采集的记录�
 | `sync` | `{ cursor }`（首次 0） | `{ changes, cursor, more }` | 中枢下发给这台设备的变更，按 `seq` 升序，每页最多 200 条；见 6.6 |
 | `sync.ack` | `{ cursor }` | `{ ok: true }` | 删除 `seq ≤ cursor` 的待下发变更 |
 | `conversations` | `{ from, to }`（毫秒，范围不超过 32 天） | `{ conversations: [{ id, record_ids, start_ms, end_ms, title, summary, points }] }` | 只读：中枢为这台设备自己的录音按场写好的总结（同 `GET /v1/conversations` 的分场和总结）。只返回已有总结且记录全属于调用方的场次；没写总结的场（太短、私密、还在等）不返回，手机照旧显示自己的原文。 |
+| `conversations.put` | `{ summarizing, summaries: [{ id, record_ids, title, summary, points }] }`（`summaries` 最多 50 项；title ≤ 40、summary ≤ 400、points ≤ 5 条且每条 ≤ 120 字符） | `{ saved: [id], stale: [id] }` | 手机每次同步都发：`summarizing` 说明它开没开“AI 总结”，开着时中枢不再给这台设备的对话写总结（已移除的设备不算）。每项是手机按 `conversations` 同一规则分出的一场；`record_ids` 和中枢分出的那一场完全一致、都属于调用方、不私密时才写进 `conversation_summaries`（`saved`），否则 `stale`，手机不再重发。手机只在这一场的记录都已被中枢确认接收后才发。 |
 | `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`（body 带 `conversation_ref`）、`audio.samples`、`audio.lines` | 同 5.4 对应接口 | 同 5.4 | `audio.lines` 对应本机 `POST /v1/audio/lines`（`{ conversation_ref, lines: [{ at, speaker_id, hidden }] }` → `{ stored }`）。设备只可上传分给自己的样本；对话键不能属于其他设备；上传 `audio.lines` 前须已上传该对话的记录或声纹。 |
 
 `android.audio` 记录的 `source_ref` 不能指向其他设备的对话。每次成功解开的请求都更新设备的 `last_seen`。

@@ -23,6 +23,7 @@ class TacitApp : Application() {
         prefs.dropRemovedSettings()
         top.jinso.tacit.sources.Sources.retireRemovedCollectors(this)
         top.jinso.tacit.audio.AudioMaintenanceWorker.schedule(this)
+        Thread({ if (vault.summaryModel()?.optBoolean("enabled") == true) top.jinso.tacit.summary.SummaryWorker.apply(this, true) }, "tacit-summary-start").apply { isDaemon = true }.start()
         Thread({ top.jinso.tacit.data.LegacyFiles.remove(noBackupFilesDir) }, "tacit-legacy-cleanup").apply { isDaemon = true }.start()
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {

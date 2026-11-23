@@ -39,7 +39,7 @@ export const CONVERSATION_GAP_MS = 10 * 60_000;
 export const SUMMARY_MIN_CHARS = 200;
 
 export interface AudioRow { id: string; start_ms: number; end_ms: number; app: string | null; private: boolean; device?: string; source?: string }
-export interface ConversationGroup { id: string; record_ids: string[]; start_ms: number; end_ms: number; app: string | null; private: boolean }
+export interface ConversationGroup { id: string; record_ids: string[]; start_ms: number; end_ms: number; app: string | null; private: boolean; device?: string }
 
 /** 在同一设备和来源内，按会议软件和间隔连成一场。 */
 export function groupConversations(rows: AudioRow[]): ConversationGroup[] {
@@ -52,7 +52,7 @@ export function groupConversations(rows: AudioRow[]): ConversationGroup[] {
     if (g && g.app === r.app && r.start_ms - g.end_ms <= CONVERSATION_GAP_MS) {
       g.record_ids.push(r.id); g.end_ms = Math.max(g.end_ms, r.end_ms); g.private ||= r.private;
     } else {
-      const group = { id: r.id, record_ids: [r.id], start_ms: r.start_ms, end_ms: r.end_ms, app: r.app, private: r.private };
+      const group: ConversationGroup = { id: r.id, record_ids: [r.id], start_ms: r.start_ms, end_ms: r.end_ms, app: r.app, private: r.private, ...(r.device === undefined ? {} : { device: r.device }) };
       out.push(group);
       latest.set(key, group);
     }
@@ -220,6 +220,22 @@ export function storedSummary(db: HubDB, g: ConversationGroup): Summary | null {
 export function saveSummary(db: HubDB, g: ConversationGroup, s: Summary, at = new Date().toISOString()) {
   db.db.prepare("INSERT INTO conversation_summaries VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET record_ids=excluded.record_ids,title=excluded.title,summary=excluded.summary,points=excluded.points,created_at=excluded.created_at")
     .run(g.id, JSON.stringify(g.record_ids), s.title, s.summary, JSON.stringify(s.points), at);
+}
+const SELF_SUMMARIZING = "self_summarizing_devices";
+/** 自己写对话总结的设备（手机开了“AI 总结”）：中枢不再给它们的对话写，只采用它们传上来的。已移除的设备不算。 */
+export function selfSummarizingDevices(db: HubDB): Set<string> {
+  const row = db.db.prepare("SELECT v FROM distill_state WHERE k=?").get(SELF_SUMMARIZING) as { v: string } | undefined;
+  const ids = row ? JSON.parse(row.v) as string[] : [];
+  if (!ids.length) return new Set();
+  const live = new Set((db.db.prepare("SELECT id FROM devices").all() as { id: string }[]).map(r => r.id));
+  return new Set(ids.filter(id => live.has(id)));
+}
+export function setSelfSummarizing(db: HubDB, device: string, on: boolean) {
+  const row = db.db.prepare("SELECT v FROM distill_state WHERE k=?").get(SELF_SUMMARIZING) as { v: string } | undefined;
+  const ids = new Set(row ? JSON.parse(row.v) as string[] : []);
+  if (ids.has(device) === on) return;
+  if (on) ids.add(device); else ids.delete(device);
+  db.db.prepare("INSERT INTO distill_state VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(SELF_SUMMARIZING, JSON.stringify([...ids].sort()));
 }
 /** 真删记录时连带删掉引用它的总结，下一轮按剩下的记录重写。 */
 export function removeSummariesOf(db: HubDB, recordId: string | string[]) {
