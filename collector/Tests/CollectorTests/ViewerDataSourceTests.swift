@@ -1,3 +1,4 @@
+import AppKit
 import CollectorCore
 import CryptoKit
 import Foundation
@@ -133,6 +134,9 @@ private func locateBun() -> String? {
         return (200, Data(#"{"projects":[{"id":"01JAA000000000000000000001","name":"风帆日志","brief":"测试项目","confirmed":1,"last_ms":1763890000000,"thread_count":1}]}"#.utf8))
       case "/v1/now":
         return (200, Data(#"{"now":{"brief":"正在整理航线脚本","updated_at":"2026-11-23T09:30:00Z","feedback":null}}"#.utf8))
+      case "/v1/audio/settings":
+        #expect(request.httpMethod == "PUT")
+        return (200, Data(#"{"retention_days":9}"#.utf8))
       default:
         return (404, Data(#"{"error":"not found"}"#.utf8))
       }
@@ -155,16 +159,19 @@ private func locateBun() -> String? {
 
     let projects = try await adaptive.projects()
     let now = try await adaptive.now()
+    let actions = HubAPI(base: { origin }, token: { "test-token" }, configuration: sessionConfig,
+                         deviceAction: adaptive.sendAction)
+    try await actions.setRetentionDays(9)
 
     #expect(projects.map(\.name) == ["风帆日志"])
     #expect(now?.brief == "正在整理航线脚本")
-    #expect(paths.snapshot == ["/v1/projects", "/v1/now"])
+    #expect(paths.snapshot == ["/v1/projects", "/v1/now", "/v1/audio/settings"])
     #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("viewer-cache.db").path))
   }
 
   // MARK: 2. 401 时调 wipe 并退回 HTTP
 
-  @Test func unauthorized401WipesCacheAndFallsBackToHTTP() async throws {
+  @Test(arguments: [false, true]) func unauthorized401WipesCacheAndFallsBackToHTTP(usingAction: Bool) async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -197,6 +204,7 @@ private func locateBun() -> String? {
     let removedFlag = LockedValue(false)
     let paths = LockedList<String>()
     let wipedReasons = LockedList<ProjectionWipeReason>()
+    let sampleBytes = WorkerLogic.wav(Array(repeating: 0.2, count: 1_600))
 
     StubURLProtocol.handler = { request in
       let path = request.url?.path ?? ""
@@ -220,6 +228,19 @@ private func locateBun() -> String? {
           return (200, try sealReply(bodyJSON: body, nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
         case "projection.ack":
           return (200, try sealReply(bodyJSON: #"{"ok":true}"#, nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
+        case "audio.sample.get":
+          #expect(req.body == ["id": .string("sample-fixture")])
+          let body = #"{"mime":"audio/wav","data_base64":"\#(sampleBytes.base64EncodedString())"}"#
+          return (200, try sealReply(bodyJSON: body, nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
+        case "settings.general.get":
+          return (200, try sealReply(status: 403, bodyJSON: #"{"error":"当前设备权限不足"}"#,
+                                     nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
+        case "segment.delete":
+          let body = #"{"error":"这段记录已更新，请刷新后再确认删除"}"#
+          return (200, try sealReply(status: 409, bodyJSON: body, nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
+        case "delete":
+          let body = #"{"error":"删除已达限额，请稍后重试"}"#
+          return (200, try sealReply(status: 429, bodyJSON: body, nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
         default:
           return (200, try sealReply(status: 400, bodyJSON: #"{"error":"unexpected"}"#, nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
         }
@@ -229,6 +250,9 @@ private func locateBun() -> String? {
            "t_start":"2026-11-23T09:15:00+09:00","title":"HTTP回退记录","body":"通过HTTP读取成功","corrections":[]}
           """
         return (200, Data(body.utf8))
+      case "/v1/audio/settings":
+        #expect(request.httpMethod == "PUT")
+        return (200, Data(#"{"retention_days":9}"#.utf8))
       case "/v1/projects":
         return (200, Data(#"{"projects":[{"id":"01JAA000000000000000000002","name":"HTTP项目","brief":"来自HTTP","confirmed":1,"last_ms":1763890000000,"thread_count":1}]}"#.utf8))
       default:
@@ -291,11 +315,42 @@ private func locateBun() -> String? {
     #expect(FileManager.default.fileExists(atPath: dbPath))
     #expect(FileManager.default.fileExists(atPath: widgetFile.path))
 
-    // 模拟设备被移除 -> 下一次设备请求返回 401。
-    removedFlag.set(true)
-    let fallbackRecord = try await adaptive.record("01JAA000000000000000000099")
-    #expect(fallbackRecord.record.title == "HTTP回退记录")
-    #expect(fallbackRecord.record.body == "通过HTTP读取成功")
+    if usingAction {
+      let actions = HubAPI(base: { origin }, token: { "test-token" }, configuration: sessionConfig,
+                           busyRetryDelays: [], deviceAction: adaptive.sendAction)
+      let day = try #require(TimelineDay.date("2026-11-23"))
+      for (status, message) in [
+        (403, "当前设备权限不足"), (409, "这段记录已更新，请刷新后再确认删除"), (429, "删除已达限额，请稍后重试"),
+      ] {
+        do {
+          switch status {
+          case 403: _ = try await actions.generalSettings()
+          case 409: try await actions.deleteSegment(day: day, id: "segment-fixture", recordIds: ["record-fixture"])
+          default: try await actions.deleteRecord("01JAA000000000000000000099")
+          }
+          Issue.record("应返回 \(status)")
+        } catch let error as HubError {
+          #expect(error.status == status)
+          #expect(error.localizedDescription == message)
+        }
+      }
+      let contents = try FileManager.default.subpathsOfDirectory(atPath: dir.path).sorted()
+      let bytes = try await actions.sample("sample-fixture")
+      #expect(bytes == sampleBytes)
+      let playable = await MainActor.run { NSSound(data: bytes) != nil }
+      #expect(playable)
+      #expect(try FileManager.default.subpathsOfDirectory(atPath: dir.path).sorted() == contents)
+      #expect(!paths.snapshot.contains { $0 != "/v1/device" })
+
+      removedFlag.set(true)
+      try await actions.setRetentionDays(9)
+      #expect(paths.snapshot.last == "/v1/audio/settings")
+    } else {
+      removedFlag.set(true)
+      let fallbackRecord = try await adaptive.record("01JAA000000000000000000099")
+      #expect(fallbackRecord.record.title == "HTTP回退记录")
+      #expect(fallbackRecord.record.body == "通过HTTP读取成功")
+    }
 
     // 验证 wipe 已执行：viewer-cache.db、小组件快照、collector-link.json 均已删除，并已切回 HTTP。
     #expect(adaptive.isUsingCache == false)
@@ -530,6 +585,7 @@ private func locateBun() -> String? {
     let seedSource = """
       import { join } from "node:path";
       import { loadConfig } from "\(repoRoot.path)/hub/src/config.ts";
+      import { writeHubPort } from "\(repoRoot.path)/hub/src/hub-json.ts";
       import { HubDB } from "\(repoRoot.path)/hub/src/db.ts";
       import { DistillStore } from "\(repoRoot.path)/hub/src/distill/store.ts";
       import { incrementalReview } from "\(repoRoot.path)/hub/src/distill/day-review.ts";
@@ -584,6 +640,9 @@ private func locateBun() -> String? {
         factAOpen: "01JAE000000000000000000301",
         factADecision: "01JAE000000000000000000302",
         factBOpen: "01JAE000000000000000000303",
+        pendingA: "01JAE000000000000000000401",
+        pendingB: "01JAE000000000000000000402",
+        sample: "01JAE000000000000000000501",
       };
 
       const ingestRes = db.ingest([
@@ -784,7 +843,39 @@ private func locateBun() -> String? {
       // 写入此刻状态。
       store.setState("now", nowSummary(store, Date.now()));
 
-      console.log(JSON.stringify({ todayDate, yesterdayDate, ids, token: config.token }));
+      // 两份相同的段，记录来自旧版 Mac 身份，和当前登记的本机设备不同。
+      const actionsDates = ["http", "device"].map((channel, channelIndex) => {
+        const date = localDateString(now - (3 + channelIndex) * 24 * 3600_000);
+        const actionStart = startOf(date, 10, 0);
+        const records = Array.from({ length: 201 }, (_, i) => ({
+          id: "01JAE" + String(10000 + channelIndex * 1000 + i).padStart(21, "0"),
+          schema: 1, device: "mac", source: "manual.note", kind: "event",
+          t_start: toLocalIso(actionStart + i * 1000), title: "合成潮汐观测", body: "记录合成潮位。",
+          capture: { method: "manual" }, sensitivity: "normal",
+        }));
+        const result = db.ingest(records);
+        if (result.accepted !== 201) throw new Error("action fixture ingestion failed: " + JSON.stringify(result.rejected[0] ?? result));
+        const item = {
+          id: "seg:" + channel, title: "合成潮汐观测", description: "整理合成潮位数据。",
+          t_start: toLocalIso(actionStart), t_end: toLocalIso(actionStart + 201_000), active_seconds: 201,
+          sources: ["manual.note"], apps: [], evidence: [], record_ids: records.map(record => record.id),
+        };
+        store.upsertDay({ date, detail: { items: [item] } });
+        return date;
+      });
+      for (const [pending, project] of [[ids.pendingA, ids.projA], [ids.pendingB, ids.projB]]) {
+        store.createPending({ id: pending, kind: "project", payload: { project_id: project }, created_at: updatedAt });
+      }
+      db.db.prepare("INSERT INTO voice_samples VALUES (?,?,?,?,?,?)")
+        .run(ids.sample, ids.recT1, ids.factADecision, "audio/wav", Buffer.from("synthetic-wave-bytes"), updatedAt);
+
+      const listener = () => Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+      const firstPort = listener(), secondPort = listener();
+      const restartPort = secondPort.port;
+      writeHubPort(config.dataDir, firstPort.port);
+      firstPort.stop();
+      secondPort.stop();
+      console.log(JSON.stringify({ todayDate, yesterdayDate, actionsDates, ids, token: config.token, restartPort }));
       db.close();
       """
     try Data(seedSource.utf8).write(to: seedScript)
@@ -793,7 +884,8 @@ private func locateBun() -> String? {
     env["RA_DATA_DIR"] = dataDir.path
     env["RA_SECRET_BACKEND"] = "sealed-file"
     env["RA_MASTER_KEY_FILE"] = masterKeyFile.path
-    env["RA_PORT"] = "0"
+    env.removeValue(forKey: "RA_PORT")
+    env["RA_HUB_MODE"] = "mac"
     env["RA_LAN_PORT"] = "0"
 
     let seedProc = Process()
@@ -826,11 +918,17 @@ private func locateBun() -> String? {
         let projB: String
         let threadA: String
         let threadB: String
+        let factAOpen: String
+        let pendingA: String
+        let pendingB: String
+        let sample: String
       }
       let todayDate: String
       let yesterdayDate: String
+      let actionsDates: [String]
       let ids: IDs
       let token: String
+      let restartPort: Int
     }
     let seeded = try JSONDecoder().decode(SeedOutput.self, from: seedStdout)
 
@@ -898,13 +996,14 @@ private func locateBun() -> String? {
     #expect(link.device_id.hasPrefix("mac-"))
 
     // 分别构造 HTTP 数据源与缓存数据源。
-    let api = HubAPI(base: { origin }, token: { seeded.token }, busyRetryDelays: [0.2, 0.5])
+    let config = Config(dataDir: dataDir, bun: bunPath)
+    let api = HubAPI(base: { config.hubURL }, token: { seeded.token }, busyRetryDelays: [0.2, 0.5])
     let httpSource = HTTPViewerDataSource(api: api)
     let widgetFile = dataDir.appendingPathComponent("widget/today.json")
     let adaptiveSource = AdaptiveViewerDataSource(
       http: httpSource,
       dataDir: dataDir,
-      originProvider: { origin },
+      originProvider: { config.hubURL },
       widgetSnapshotURL: widgetFile,
       files: files,
       keys: tempKeys,
@@ -1042,6 +1141,20 @@ private func locateBun() -> String? {
     // 定位私密记录同样走设备协议，与 HTTP 一致。
     #expect(try await adaptiveSource.timelineLocation(record: seeded.ids.recPriv) == (try await httpSource.timelineLocation(record: seeded.ids.recPriv)))
 
+    // 本机管理设备单独调用，故意不给 HTTP token，设备操作误走 HTTP 时测试会失败。
+    let actions = HubAPI(base: { config.hubURL }, token: { nil }, deviceAction: adaptiveSource.sendAction)
+    let ids = seeded.ids
+    let expectedSample = Data("synthetic-wave-bytes".utf8)
+    #expect(try await api.sample(ids.sample) == expectedSample)
+    #expect(try await actions.sample(ids.sample) == expectedSample)
+    #expect(try await actions.pending() == (try await api.pending()))
+    try await api.resolve(ids.pendingA, action: "rename", name: "合成港口")
+    try await actions.resolve(ids.pendingB, action: "rename", name: "合成港口")
+    let pendingAfter = try await actions.pending()
+    #expect(!pendingAfter.contains { $0.id == ids.pendingA || $0.id == ids.pendingB })
+    #expect(try await api.project(ids.projA, level: "brief").name == "合成港口")
+    #expect(try await api.project(ids.projB, level: "brief").name == "合成港口")
+
     // 7. 演示删除：先发布今日小组件快照，再在中枢删除 recT2（属于 seg-t2），验证缓存段消失且小组件更新。
     let publisher = await MainActor.run {
       WidgetSnapshotPublisher(
@@ -1082,5 +1195,202 @@ private func locateBun() -> String? {
     - detailed today records=\(cacheTodayRecords.count) (private record present in both HTTP & cache; absent from widget & viewer-cache.db)
     - after deleting \(seeded.ids.recT2) & \(seeded.ids.recT3): gone=\(afterDeleteSync.goneRecordIDs), today_items_after=\(cacheAfterDelete?.detail?.items?.count ?? 0), widget_segments_before=\(widgetBeforeDelete.segments.count) -> after=\(widgetAfterDelete.segments.count)
     """)
+
+    let httpDay = try #require(TimelineDay.date(seeded.actionsDates[0]))
+    let deviceDay = try #require(TimelineDay.date(seeded.actionsDates[1]))
+    let httpSegment = try #require(try await api.diary(httpDay)?.detail?.items?.first)
+    let deviceSegment = try #require(try await api.diary(deviceDay)?.detail?.items?.first)
+    let httpRecordIDs = try #require(httpSegment.recordIds)
+    let deviceRecordIDs = try #require(deviceSegment.recordIds)
+    #expect(httpRecordIDs.count == 201)
+    #expect(deviceRecordIDs.count == 201)
+    let description = "复核 201 条合成潮位记录。"
+    try await api.correctSegment(day: httpDay, id: httpSegment.id, description: description)
+    try await actions.correctSegment(day: deviceDay, id: deviceSegment.id, description: description)
+    #expect(try await api.diary(httpDay)?.detail?.items?.first?.description == description)
+    #expect(try await api.diary(deviceDay)?.detail?.items?.first?.description == description)
+
+    let factA = try #require(try await api.thread(ids.threadA, level: "detail").facts?.first { $0.id == ids.factAOpen })
+    // 删掉 seg-t2 的记录会清理旧事实，另用仍然存在的证据建立一份等价事实。
+    let factB = try await api.call(Fact.self, "POST", "/v1/facts", [
+      "kind": factA.kind, "text": factA.text, "evidence": [ids.recY2], "thread_id": ids.threadB, "project_id": ids.projB,
+    ])
+    let factText = "确认改用每秒一次采样。"
+    try await api.correct(factA, text: factText)
+    try await actions.correct(factB, text: factText)
+    for fact in [factA, factB] {
+      let threadID = try #require(fact.threadId)
+      let facts = try #require(try await api.thread(threadID, level: "detail").facts)
+      #expect(!facts.contains { $0.id == fact.id })
+      let replacement = try #require(facts.first { $0.text == factText })
+      #expect(replacement.origin == "user")
+      #expect(replacement.kind == fact.kind && replacement.evidence == fact.evidence && replacement.projectId == fact.projectId)
+    }
+
+    // 原文修正的写入、删除与未找到，都通过 UI 使用的 API 比较。
+    func correction(for recordID: String, id: String) -> [String: Any] {
+      [
+        "id": id, "schema": 1, "device": "mac", "source": "manual.correction", "kind": "event",
+        "t_start": "2026-11-01T09:00:00Z", "title": "合成潮位", "body": "确认潮位 15 厘米。",
+        "corrects": recordID, "capture": ["method": "manual"], "sensitivity": "normal",
+      ]
+    }
+    let httpCorrectionID = ULID.make(), deviceCorrectionID = ULID.make()
+    var malformed = correction(for: ids.recY2, id: ULID.make())
+    malformed["body"] = 42
+    let rejected = try await api.call([String: DeviceJSON].self, "POST", "/v1/records", malformed)
+    #expect(rejected["accepted"] == .int(0) && rejected["rejected"]?.arrayValue?.count == 1)
+    do {
+      try await actions.saveManual(malformed)
+      Issue.record("设备协议应拒绝格式错误的手动记录")
+    } catch let error as HubError {
+      #expect(error.status == 400 && error.localizedDescription == "手动记录格式无效")
+    }
+    try await api.saveManual(correction(for: ids.recY1, id: httpCorrectionID))
+    try await actions.saveManual(correction(for: ids.recY2, id: deviceCorrectionID))
+    #expect(try await api.record(ids.recY1).current.body == "确认潮位 15 厘米。")
+    #expect(try await api.record(ids.recY2).current.body == "确认潮位 15 厘米。")
+    try await api.deleteRecord(httpCorrectionID)
+    try await actions.deleteRecord(deviceCorrectionID)
+    for (client, deletedID) in [(api, httpCorrectionID), (actions, deviceCorrectionID)] {
+      do {
+        try await client.deleteRecord(deletedID)
+        Issue.record("重复删除应返回 404")
+      } catch let error as HubError {
+        #expect(error.status == 404 && error.localizedDescription == "记录不存在")
+      }
+    }
+
+    try await api.deleteSegment(day: httpDay, id: httpSegment.id, recordIds: httpRecordIDs)
+    try await actions.deleteSegment(day: deviceDay, id: deviceSegment.id, recordIds: deviceRecordIDs)
+    for day in [httpDay, deviceDay] {
+      #expect(try await api.day(day).isEmpty)
+      #expect((try await api.diary(day)?.detail?.items ?? []).isEmpty)
+    }
+    try await api.removeProject(ids.projA)
+    try await actions.removeProject(ids.projB)
+    #expect(try await api.projects().isEmpty)
+    #expect(try await api.thread(ids.threadA, level: "brief").projectId == nil)
+    #expect(try await api.thread(ids.threadB, level: "brief").projectId == nil)
+
+    let httpSettings = try await api.modelSettings()
+    let model = ModelTierConfig(provider: "openai-compatible", model: "synthetic-tide-model", reasoningEffort: "low")
+    let tiers = httpSettings.tiers.mapValues { _ in model }
+    let savedHTTP = try await api.saveModels(tiers)
+    #expect(savedHTTP.tiers == tiers)
+    #expect(try await actions.modelSettings().tiers == savedHTTP.tiers)
+    _ = try await api.saveModels(httpSettings.tiers)
+    let savedDevice = try await actions.saveModels(tiers)
+    #expect(savedDevice.tiers == savedHTTP.tiers && savedDevice.keys == savedHTTP.keys)
+    #expect(try await api.modelSettings().tiers == savedDevice.tiers)
+    #expect(try await actions.generalSettings() == (try await api.generalSettings()))
+    let originalGeneral = try await api.generalSettings()
+    let savedGeneral = try await api.saveGeneral(["archive_days": 15])
+    _ = try await api.saveGeneral(["archive_days": originalGeneral.archiveDays])
+    #expect(try await actions.saveGeneral(["archive_days": 15]) == savedGeneral)
+    #expect(try await api.generalSettings().archiveDays == 15)
+
+    let provider = "openai-compatible"
+    for client in [api, actions] {
+      try await client.setKey(provider: provider, key: "synthetic-model-key-0123456789")
+      #expect(try await api.modelSettings().keys[provider] == .some(true))
+      try await client.deleteKey(provider: provider)
+      #expect(try await api.modelSettings().keys[provider] == .some(false))
+    }
+    let originalRetention = try await api.retentionDays()
+    try await api.setRetentionDays(12)
+    #expect(try await actions.retentionDays() == 12)
+    try await api.setRetentionDays(originalRetention)
+    try await actions.setRetentionDays(12)
+    #expect(try await api.retentionDays() == 12)
+    var previousPurge: Date?
+    for client in [api, actions] {
+      try await client.purgeAudio()
+      struct AudioSync: Decodable { let purgeBefore: String }
+      let audioSync = try await api.get(AudioSync.self, "/v1/audio/sync", ["device": "mac"])
+      let purgeDate = try #require(ViewerTime.parse(audioSync.purgeBefore))
+      if let previousPurge { #expect(purgeDate >= previousPurge) }
+      previousPurge = purgeDate
+    }
+
+    #expect(try await api.disableRelay().mode == .off)
+    #expect(try await actions.disableRelay().mode == .off)
+    #expect(try await actions.relaySettings().mode == (try await api.relaySettings().mode))
+    #expect(try await actions.hubSettings() == (try await api.hubSettings()))
+    let httpDevices = try #require(try await api.deviceSettings())
+    let deviceDevices = try #require(try await actions.deviceSettings())
+    #expect(httpDevices.hubId == deviceDevices.hubId && deviceDevices.hubId == link.hub_id)
+    #expect(httpDevices.devices.map(\.id).sorted() == deviceDevices.devices.map(\.id).sorted())
+    #expect(deviceDevices.devices.contains { $0.id == link.device_id })
+    #expect(httpDevices.lan.addrs == deviceDevices.lan.addrs && httpDevices.lan.port == deviceDevices.lan.port)
+    for client in [api, actions] {
+      let invitation = try await client.createDeviceInvitation(role: "view")
+      let parsed = try DevicePairingInvitation.parse(invitation.uri)
+      #expect(parsed.hubID == link.hub_id && parsed.role == "view")
+      #expect(try await api.deviceSettings()?.pairing?.expiresAt == invitation.expiresAt)
+      try await client.cancelDeviceInvitation()
+      #expect(try await api.deviceSettings()?.pairing == nil)
+
+      let nextInvitation = try await client.createDeviceInvitation(role: "view")
+      let pair = try DevicePairingInvitation.parse(nextInvitation.uri)
+      let peer = try DeviceClient(hubPublicKeyBase64URL: link.hub_pk, keyStore: InMemoryDeviceKeyStore(),
+                                  transport: DirectDeviceTransport(origin: origin))
+      let device = try await peer.pair(invitation: pair, deviceName: "合成查看端")
+      try await client.updateDeviceRole(device.deviceID, role: "collect")
+      let status = try await api.get([String: DeviceJSON].self, "/v1/settings/devices")
+      let row = try #require(status["devices"]?.arrayValue?.first { $0.objectValue?["id"] == .string(device.deviceID) })
+      #expect(row.objectValue?["role"] == .string("collect"))
+      try await client.removeDevice(device.deviceID)
+      #expect(try await api.deviceSettings()?.devices.contains { $0.id == device.deviceID } == false)
+    }
+    let created = try await actions.requestDistill(kind: "round")  // 设备回复 202
+    #expect(try await api.requestDistill(kind: "round") == created)  // 重复请求返回 200
+    #expect(try await actions.distillRequests().contains(created))
+
+    print("""
+    [ACTIONS EQUIVALENCE OK]
+    - segment correction: 2 descriptions matched; deletion: HTTP=201, device=201, remaining=0
+    - record correction and deletion: both channels stored the correction, then returned the same 404 on repeated deletion
+    - pending: 2 renamed projects; fact correction: 2 replacements retained their original evidence; project removal: 2 detached threads
+    - model and general settings, keys, audio retention and purge, hub settings, relay off: matched
+    - device list, invitation create and cancel, role update and device removal: matched
+    - audio sample: \(expectedSample.count) bytes matched; distill request: new 202, duplicate 200 matched
+    - malformed manual record: HTTP returned rejected entries; device returned 400 without field details
+    """)
+
+    let portAPI = HubAPI(base: { config.hubURL }, token: { seeded.token }, deviceAction: adaptiveSource.sendAction)
+    #expect(try await portAPI.setHubPort(seeded.restartPort))
+    for _ in 0..<50 {
+      if !hubProc.isRunning { break }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    try #require(!hubProc.isRunning, "端口修改后中枢未退出")
+    #expect(hubProc.terminationStatus == 0)
+
+    // 用相同参数手动拉起子进程，等同于 launchd 使用新 hub.json 重启。
+    let restarted = Process()
+    restarted.executableURL = hubProc.executableURL
+    restarted.arguments = hubProc.arguments
+    restarted.environment = env
+    restarted.standardOutput = FileHandle.nullDevice
+    restarted.standardError = FileHandle.nullDevice
+    try restarted.run()
+    defer {
+      if restarted.isRunning {
+        restarted.terminate()
+        restarted.waitUntilExit()
+      }
+    }
+    var ready = false
+    for _ in 0..<50 {
+      if await api.isReachable() { ready = true; break }
+      if !restarted.isRunning { break }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    try #require(ready, "中枢未在新端口启动")
+    #expect(try await actions.hubSettings().port == seeded.restartPort)
+    #expect(try files.collector()?.addrs == [origin.absoluteString])
+    #expect(config.hubURL != origin)
+    print("[PORT RESTART OK] device requests followed hub.json; collector-link.json addrs stayed at the original port")
   }
 }

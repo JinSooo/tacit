@@ -781,6 +781,10 @@ public actor ProjectionSync {
     rawCache.clear()
   }
 
+  public func discardRemovedDevice() async throws {
+    try await wipeAll(reason: .deviceRemoved)
+  }
+
   /// 确保冷启动至少完成一轮拉取；已有游标时立即返回，并发调用合并为同一次拉取。
   public func ensureInitialSync() async throws {
     if try cache.cursor().epoch > 0 { return }

@@ -16,7 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   lazy var hub = HubClient(config: config) { [weak self] _ in
     self?.viewerDataSource.activateIfLinked()
   }
-  lazy var api = HubAPI(base: { [config] in config.hubURL }, token: { [config] in config.token })
+  lazy var api = HubAPI(base: { [config] in config.hubURL }, token: { [config] in config.token },
+                        deviceAction: { [weak self] op, body, timeout in
+    try await self?.viewerDataSource.sendAction(op: op, body: body, timeout: timeout)
+  })
   lazy var viewerDataSource: AdaptiveViewerDataSource = {
     let widgetURL = WidgetSnapshot.fileURL.flatMap { file in
       file.deletingLastPathComponent().deletingLastPathComponent().path == config.dataDir.standardizedFileURL.path ? file : nil

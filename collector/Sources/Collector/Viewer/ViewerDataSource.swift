@@ -2,7 +2,7 @@ import Foundation
 import CollectorCore
 
 /// 查看窗口与桌面小组件的统一读数据源抽象。
-/// 写操作、设置页、待确认与排障接口仍直接走 HubAPI（HTTP）。
+/// 写操作及管理接口由 HubAPI 复用 AdaptiveViewerDataSource 的设备会话。
 protocol ViewerDataSource: Sendable {
   func diary(_ day: Date) async throws -> DayDiary?
   func now() async throws -> NowState?
@@ -432,16 +432,16 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
   private let lock = NSLock()
   private var active: Session?
   private var foreground = false
-  private var disabledByRemoval = false
+  private var disabledReason: ProjectionWipeReason?
 
   var isUsingCache: Bool {
     lock.lock(); defer { lock.unlock() }
-    return active != nil
+    return active != nil && disabledReason == nil
   }
 
   var activeSync: ProjectionSync? {
     lock.lock(); defer { lock.unlock() }
-    return active?.sync
+    return disabledReason == nil ? active?.sync : nil
   }
 
   init(
@@ -505,6 +505,10 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
   /// 本机登记完成后或应用启动时调用：读取 collector-link.json 并启动同步引擎。
   @discardableResult
   func activateIfLinked() -> Bool {
+    activateIfLinked(forActions: false)
+  }
+
+  private func activateIfLinked(forActions: Bool) -> Bool {
     let origin = originProvider()
     let link: LocalDeviceLink?
     do {
@@ -514,24 +518,14 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
     }
     guard let link else { return false }
 
-    let existingToStop: ProjectionSync?
-    let newSync: ProjectionSync
-    let isForeground: Bool
-    do {
-      lock.lock()
-      if disabledByRemoval {
-        lock.unlock()
-        return false
-      }
-      if let current = active, current.link == link, current.origin == origin {
-        lock.unlock()
-        return true
-      }
-      isForeground = foreground
-      existingToStop = active?.sync
-      lock.unlock()
+    // 后台登记与多个页面的初次请求可能同时到达，只创建一份会话。
+    lock.lock()
+    defer { lock.unlock() }
+    if disabledReason == .deviceRemoved || (!forActions && disabledReason != nil) { return false }
+    if let current = active, current.link == link, current.origin == origin { return true }
 
-      newSync = try sessionFactory(
+    do {
+      let newSync = try sessionFactory(
         link,
         origin,
         { [weak self] reason in await self?.handleWipe(reason) },
@@ -544,31 +538,26 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
         calendar: calendar,
         clock: clock
       )
-      let session = Session(link: link, origin: origin, sync: newSync, cached: cached)
-
-      lock.lock()
-      if disabledByRemoval {
-        lock.unlock()
-        return false
+      let previous = active?.sync
+      active = Session(link: link, origin: origin, sync: newSync, cached: cached)
+      if disabledReason == nil {
+        Task {
+          if let previous { await previous.stop() }
+          let state: ProjectionSyncAppState = lock.withLock { foreground ? .foreground : .background }
+          await newSync.setAppState(state)
+          if activeSync === newSync { await newSync.start() }
+        }
       }
-      active = session
-      lock.unlock()
+      return true
     } catch {
       return false
     }
-
-    Task {
-      if let existingToStop { await existingToStop.stop() }
-      await newSync.setAppState(isForeground ? .foreground : .background)
-      await newSync.start()
-    }
-    return true
   }
 
   func setForeground(_ isForeground: Bool) {
     lock.lock()
     foreground = isForeground
-    let sync = active?.sync
+    let sync = disabledReason == nil ? active?.sync : nil
     lock.unlock()
     if let sync {
       Task { await sync.setAppState(isForeground ? .foreground : .background) }
@@ -585,10 +574,7 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
 
   /// 本地写操作完成后清空查询内存缓存并主动拉取最新投影。
   func notifyLocalWrite() {
-    lock.lock()
-    let sync = active?.sync
-    lock.unlock()
-    guard let sync else { return }
+    guard let sync = activeSync else { return }
     sync.rawCache.clear()
     Task { _ = try? await sync.pullToLatest() }
   }
@@ -604,17 +590,20 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
     }
   }
 
-  private func deactivateForRemoval() {
+  private func deactivate(_ reason: ProjectionWipeReason) {
     lock.lock()
-    disabledByRemoval = true
-    active = nil
+    // 管理请求仍使用原设备身份，由中枢判断该角色能否执行该操作。
+    if disabledReason != .deviceRemoved {
+      disabledReason = reason
+      if reason == .deviceRemoved { active = nil }
+    }
     lock.unlock()
   }
 
   private func handleWipe(_ reason: ProjectionWipeReason) async {
     switch reason {
     case .deviceRemoved, .roleDowngraded:
-      deactivateForRemoval()
+      deactivate(reason)
       if reason == .deviceRemoved {
         try? files.removeCollector()
       }
@@ -624,23 +613,49 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
     await onWipeCallback?(reason)
   }
 
-  private func currentSession() -> Session? {
+  private func currentSession(forActions: Bool = false) -> Session? {
     let origin = originProvider()
     lock.lock()
     let current = active
-    let disabled = disabledByRemoval
+    let reason = disabledReason
     lock.unlock()
-    if disabled { return nil }
+    if reason == .deviceRemoved || (!forActions && reason != nil) { return nil }
     if let current, current.origin == origin {
       return current
     }
-    if current != nil {
-      _ = activateIfLinked()
+    if current != nil || forActions {
+      guard activateIfLinked(forActions: forActions) else { return nil }
       lock.lock()
       defer { lock.unlock() }
-      return active
+      return active?.origin == origin ? active : nil
     }
     return nil
+  }
+
+  func sendAction(op: String, body: [String: DeviceJSON], timeout: TimeInterval?) async throws -> DeviceResponsePayload? {
+    // 上传也可能先察觉 401 并移除连接文件。
+    do {
+      if try files.collector() == nil { return nil }
+    } catch {
+      throw HubError(message: "连不上后台服务：设备连接信息读不出来", status: 0)
+    }
+    guard let session = currentSession(forActions: true) else {
+      if lock.withLock({ disabledReason == .deviceRemoved }) { return nil }
+      throw HubError(message: "连不上后台服务：设备连接不可用", status: 0)
+    }
+    do {
+      return try await session.sync.client.send(op: op, body: body, timeout: timeout)
+    } catch DeviceClientError.deviceRemoved {
+      do { try await session.sync.discardRemovedDevice() }
+      catch {
+        await session.sync.stop()
+        session.sync.rawCache.clear()
+        await handleWipe(.deviceRemoved)
+      }
+      return nil
+    } catch let error as DeviceClientError {
+      throw Self.mapDeviceError(error)
+    }
   }
 
   private func route<T>(
@@ -685,6 +700,8 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
       return HubError(message: "连不上后台服务：\(msg)", status: 0)
     case .hubBusy(let msg):
       return HubError(message: msg ?? "数据库忙，稍后再试", status: 503)
+    case .operationError(_, 403, _), .plaintextError(403, _):
+      return HubError(message: "当前设备权限不足", status: 403)
     case .operationError(_, let status, let msg), .plaintextError(let status, let msg):
       return HubError(message: msg ?? "请求失败（\(status)）", status: status)
     case .envelopeTooLarge(let msg):

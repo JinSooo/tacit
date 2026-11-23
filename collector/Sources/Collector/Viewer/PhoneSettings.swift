@@ -151,7 +151,7 @@ struct PhoneSettingsSection: View {
     } catch is CancellationError {
     } catch {
       settings = nil
-      self.error = "暂时无法读取手机连接。"
+      self.error = (error as? HubError)?.actionMessage ?? "暂时无法读取手机连接。"
     }
   }
 
@@ -180,8 +180,9 @@ struct PhoneSettingsSection: View {
       session = active
       sheetOpen = true
     } catch {
-      if sheetOpen { sheetError = "无法生成邀请，请重试。" }
-      else { self.error = "无法生成邀请，请重试。" }
+      let message = (error as? HubError)?.actionMessage ?? "无法生成邀请，请重试。"
+      if sheetOpen { sheetError = message }
+      else { self.error = message }
     }
   }
 
@@ -223,6 +224,10 @@ struct PhoneSettingsSection: View {
         } catch is CancellationError {
           return
         } catch {
+          if let message = (error as? HubError)?.actionMessage {
+            sheetError = message
+            return
+          }
           // 连接暂时中断时，保留邀请并在下一轮再检查。
         }
       }
@@ -245,7 +250,7 @@ struct PhoneSettingsSection: View {
         closeSheet()
         await loadSettings()
       } else {
-        sheetError = "无法取消邀请，请重试。"
+        sheetError = (error as? HubError)?.actionMessage ?? "无法取消邀请，请重试。"
       }
     }
   }
@@ -259,7 +264,7 @@ struct PhoneSettingsSection: View {
       try await store.api.removeDevice(phone.id)
       await loadSettings()
     } catch {
-      self.error = "无法移除手机，请重试。"
+      self.error = (error as? HubError)?.actionMessage ?? "无法移除手机，请重试。"
     }
   }
 
