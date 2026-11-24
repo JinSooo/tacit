@@ -34,6 +34,7 @@ internal fun SettingsPage(
     app: TacitApp,
     resumed: Int,
     notify: (String) -> Unit,
+    offerUndo: (String, suspend () -> Unit) -> Unit,
     selected: String?,
     setRoute: (String?) -> Unit,
     onClose: () -> Unit,
@@ -86,7 +87,7 @@ internal fun SettingsPage(
             ) {
                 when (selected) {
                     SettingsRoutes.MAC -> MacConnectionPage(app)
-                    SettingsRoutes.SPEECH -> SpeechSettings(app, notify, resumed)
+                    SettingsRoutes.SPEECH -> SpeechSettings(app, notify, resumed, offerUndo)
                     SettingsRoutes.SUMMARY -> SummarySettings(app, notify)
                     SettingsRoutes.RETENTION -> AudioStorageSettings(app, notify)
                     SettingsRoutes.BACKGROUND -> BackgroundChecklist(health, ::openMicrophone, ::requestNotifications, notify)

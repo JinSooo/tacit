@@ -34,7 +34,9 @@ import top.jinso.tacit.ui.components.*
 import java.util.concurrent.CompletableFuture
 
 /** Model controls live only in Settings; opening this page never starts a download. */
-@Composable internal fun SpeechSettings(app: TacitApp, notify: (String) -> Unit, resumed: Int) {
+@Composable internal fun SpeechSettings(
+    app: TacitApp, notify: (String) -> Unit, resumed: Int, offerUndo: (String, suspend () -> Unit) -> Unit,
+) {
     val audio = remember(app) { AudioController(app) }
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
@@ -133,11 +135,13 @@ import java.util.concurrent.CompletableFuture
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     }
     Caption("来自 sherpa-onnx 官方发布，下载后校验。")
-    SpeakerSettings(audio, resumed, notify)
+    SpeakerSettings(audio, resumed, notify, offerUndo)
 }
 
 @Composable
-private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (String) -> Unit) {
+private fun SpeakerSettings(
+    audio: AudioController, resumed: Int, notify: (String) -> Unit, offerUndo: (String, suspend () -> Unit) -> Unit,
+) {
     var speakers by remember { mutableStateOf<List<AudioSpeaker>?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
@@ -168,6 +172,28 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
         }
     }
 
+    fun unmark(id: String) {
+        if (busy) return
+        audio.stopPlayback()
+        busy = true
+        scope.launch {
+            try {
+                val undo = withContext(Dispatchers.IO) { audio.unmarkMe(id).get() }
+                refresh++
+                offerUndo("已取消本人标记") {
+                    withContext(Dispatchers.IO) { audio.undoUnmarkMe(undo).get() }
+                    refresh++
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                notify("操作未完成，请检查状态后重试")
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     SectionLabel("你的声音")
     GroupCard {
         val current = speakers
@@ -182,10 +208,7 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
                 SettingsRow(if (speaker.isMe) "我" else speaker.name.orEmpty()) {
                     Row {
                         SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
-                        if (speaker.isMe) TextAction("这不是我", {
-                            audio.stopPlayback()
-                            work({ audio.unmarkMe(speaker.id) }, "已取消本人标记")
-                        }, enabled = !busy)
+                        if (speaker.isMe) TextAction("这不是我", { unmark(speaker.id) }, enabled = !busy)
                         else TextAction("改称呼", {
                             speakerName = speaker.name.orEmpty()
                             naming = speaker.id

@@ -81,9 +81,16 @@ class AudioController(context: Context) {
         runtime.invalidatePolicy()
         return runtime.change { synchronized(runtime.lock) { runtime.ledger.markMe(id) }; runtime.drain() }
     }
-    fun unmarkMe(id: String): CompletableFuture<Unit> {
+    internal fun unmarkMe(id: String): CompletableFuture<VoiceMarkUndo> {
         runtime.invalidatePolicy()
         return runtime.change { synchronized(runtime.lock) { runtime.ledger.unmarkMe(id) } }
+    }
+    internal fun undoUnmarkMe(undo: VoiceMarkUndo): CompletableFuture<Unit> {
+        runtime.invalidatePolicy()
+        return runtime.change {
+            synchronized(runtime.lock) { runtime.ledger.undoUnmarkMe(undo) }
+            runtime.schedule()
+        }
     }
     fun renameSpeaker(id: String, name: String?): CompletableFuture<Unit> = runtime.change {
         synchronized(runtime.lock) { runtime.ledger.rename(id, name) }

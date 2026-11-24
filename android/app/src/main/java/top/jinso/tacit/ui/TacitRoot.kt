@@ -46,6 +46,20 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     LaunchedEffect(timelineItem) { if (timelineItem == null) selectedItem = null }
     val snackbar = remember { SnackbarHostState() }
     fun notify(text: String) { scope.launch { snackbar.showSnackbar(text) } }
+    fun offerUndo(text: String, undo: suspend () -> Unit) {
+        scope.launch {
+            if (snackbar.showSnackbar(text, actionLabel = "撤销", duration = SnackbarDuration.Long) != SnackbarResult.ActionPerformed) {
+                return@launch
+            }
+            try {
+                undo()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                snackbar.showSnackbar("暂时无法撤销，请检查声音标记")
+            }
+        }
+    }
     fun settings(route: String?) {
         hubRoute = route
         settingsOpen = true
@@ -118,7 +132,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                         day, { dayEpoch = it.toEpochDay() }, { selectedItem = it.id }, macProblem, recovery)
                 }
                 else -> SettingsPage(
-                    app, resumed, ::notify, hubRoute, { hubRoute = it }, { settingsOpen = false; hubRoute = null },
+                    app, resumed, ::notify, ::offerUndo, hubRoute, { hubRoute = it }, { settingsOpen = false; hubRoute = null },
                     health, mac?.status, mac?.retentionDays, { healthRefresh++ },
                 )
             }
