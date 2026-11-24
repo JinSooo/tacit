@@ -15,6 +15,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -136,9 +137,22 @@ import top.jinso.tacit.ui.components.*
 
     (message ?: current?.error)?.let { Caption(it, color = tacitColors.attention) }
     if (busy || (current == null && message == null)) ProgressLine()
-    if (current?.name != null) TextAction("断开连接", {
-        action { app.sync.disconnect(); address = null; expanded = false }
-    }, enabled = !busy, color = tacitColors.attention)
+    var confirmDisconnect by rememberSaveable { mutableStateOf(false) }
+    if (current?.name != null) {
+        TextAction("断开连接", { confirmDisconnect = true }, enabled = !busy, color = tacitColors.attention)
+        if (confirmDisconnect) AlertDialog(
+            onDismissRequest = { confirmDisconnect = false },
+            title = { Text("断开连接？") },
+            text = { Text("本机录音会保留，重新连接要在 Mac 上再扫一次码。") },
+            confirmButton = {
+                TextAction("断开", {
+                    confirmDisconnect = false
+                    action { app.sync.disconnect(); address = null; expanded = false }
+                }, enabled = !busy, color = tacitColors.attention)
+            },
+            dismissButton = { TextAction("取消", { confirmDisconnect = false }) },
+        )
+    }
 }
 
 @Composable
