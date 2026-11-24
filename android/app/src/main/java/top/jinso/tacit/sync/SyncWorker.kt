@@ -20,7 +20,8 @@ import java.util.concurrent.TimeUnit.MINUTES
 internal class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val sync = (applicationContext as TacitApp).sync
-        sync.run(inputData.getBoolean("retry", false), periodic = inputData.getBoolean("timeline", false))
+        sync.run(inputData.getBoolean("retry", false), periodic = inputData.getBoolean("timeline", false),
+            fromForeground = inputData.getBoolean("foreground", false))
         Result.success()
     }
 
@@ -37,13 +38,14 @@ internal class SyncWorker(context: Context, params: WorkerParameters) : Coroutin
 
         private var lastRecordTrigger: Long? = null
 
-        @Synchronized fun enqueue(context: Context, newRecord: Boolean = false) {
+        @Synchronized fun enqueue(context: Context, newRecord: Boolean = false, fromForeground: Boolean = false) {
             if (newRecord) {
                 val now = SystemClock.elapsedRealtime()
                 if (lastRecordTrigger?.let { now - it < 30_000 } == true) return
                 lastRecordTrigger = now
             }
             val request = OneTimeWorkRequestBuilder<SyncWorker>().setConstraints(network).addTag(TAG)
+                .setInputData(androidx.work.workDataOf("foreground" to fromForeground))
                 .setInitialDelay(if (newRecord) 30_000 else 0, MILLISECONDS).build()
             // An open/network trigger can advance a delayed send. A new burst can queue behind
             // a running record-triggered job, so its last insert cannot be lost at job completion.

@@ -220,8 +220,9 @@ internal class SyncCoordinator(private val app: TacitApp) {
 
     suspend fun refreshTimeline(foreground: Boolean = false) = withContext(Dispatchers.IO) {
         if (foreground) {
-            // A resume is one sync round. Keeping it here avoids racing a second WorkManager trigger.
-            run(retry = false, fromForeground = true)
+            // A resume is one sync round, run by WorkManager so leaving the app does not cancel it
+            // midway; the unique "now" lane keeps one round when a network trigger is already running.
+            SyncWorker.enqueue(app, fromForeground = true)
             return@withContext
         }
         if (!mutex.tryLock()) return@withContext

@@ -27,7 +27,10 @@ struct ProjectPage: View {
           ongoingWork
         }
         .padding(.horizontal, TimelineReadingLayout.edge)
-        .task(id: store.revision) { await loadContext() }
+        // “正在推进”就是新会话会带入的事项，随整理变化，和下面两块一样自己重读。
+        .task(id: store.revision) {
+          while !Task.isCancelled { await loadContext(); await WindowVisibility.pause(.seconds(180)) }
+        }
         VStack(alignment: .leading, spacing: 12) {
           sectionTitle("最近的进展").padding(.horizontal, TimelineReadingLayout.edge)
           results
@@ -54,6 +57,8 @@ struct ProjectPage: View {
       while !Task.isCancelled { await loadOverview(); await WindowVisibility.pause(.seconds(180)) }
     }
     .task(id: store.revision) {
+      // 数据变化时列表回到第一页，定时重读也随之恢复。
+      loadedMore = false
       await load()
       // 加载过更早的日期就不再定时重读，免得把已展开的旧日期收回去。
       while !Task.isCancelled {
