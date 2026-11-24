@@ -8,7 +8,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -117,7 +116,8 @@ import java.util.concurrent.CompletableFuture
             loaded = true
         } }
     }
-    DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
+    val playingSpeaker by audio.playingSpeaker.collectAsState()
+    val toggleSample = rememberSampleToggle(audio, notify)
     val candidate = if (macVoice || speakers.any { it.isMe }) null else speakers
         .filter { !it.ignored && it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
     val today = LocalDate.now()
@@ -170,14 +170,16 @@ import java.util.concurrent.CompletableFuture
         if (candidate != null) item(key = "voice-${candidate.id}") {
             Column(Modifier.padding(top = 12.dp, end = 12.dp)) {
                 VoiceConfirmation(
-                    candidate, !busy,
-                    play = { work({ audio.playSample(candidate.id) }, "正在试听") },
+                    candidate, !busy, playingSpeaker == candidate.id,
+                    play = { toggleSample(candidate.id) },
                     mark = {
+                        audio.stopPlayback()
                         work({ audio.markMe(candidate.id) }, "已标记为我，将补转写保留期内的录音") {
                             speakers = speakers.map { if (it.id == candidate.id) it.copy(isMe = true) else it }
                         }
                     },
                     ignore = {
+                        audio.stopPlayback()
                         work({ audio.setIgnored(candidate.id, true) }, "好的，换一段再问") {
                             speakers = speakers.filterNot { it.id == candidate.id }
                         }
@@ -321,7 +323,9 @@ private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Mo
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () -> Unit, mark: () -> Unit, ignore: () -> Unit) {
+private fun VoiceConfirmation(
+    speaker: AudioSpeaker, enabled: Boolean, playing: Boolean, play: () -> Unit, mark: () -> Unit, ignore: () -> Unit,
+) {
     val context = LocalActivity.current ?: return
     val seconds by produceState<Int?>(null, speaker.id, speaker.seconds) {
         value = withContext(Dispatchers.IO) {
@@ -342,13 +346,7 @@ private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () 
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilledIconButton(onClick = play, enabled = enabled,
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = tacitColors.fill, contentColor = tacitColors.ink)) {
-                    Icon(Icons.Outlined.PlayArrow, "试听")
-                }
-                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    listOf(6, 12, 18, 10, 22, 14, 8, 16, 24, 12, 6, 14, 20, 10, 16, 8, 12, 18, 10, 6).forEach { height ->
-                        Box(Modifier.width(3.dp).height(height.dp).background(tacitColors.faint, CircleShape))
-                    }
+                    Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, if (playing) "停止试听" else "试听")
                 }
                 seconds?.let { Caption("$it 秒") }
             }

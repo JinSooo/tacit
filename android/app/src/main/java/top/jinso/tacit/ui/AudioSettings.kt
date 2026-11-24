@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,6 +18,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -143,14 +145,15 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
         val result = withContext(Dispatchers.IO) { runCatching { audio.listSpeakers(includeIgnored = true).get() } }
         result.onSuccess { speakers = it }.onFailure { notify("暂时无法读取声音标记") }
     }
-    DisposableEffect(audio) { onDispose { audio.stopPlayback() } }
+    val playingSpeaker by audio.playingSpeaker.collectAsState()
+    val toggleSample = rememberSampleToggle(audio, notify)
 
-    fun work(task: () -> CompletableFuture<Unit>, success: String, update: Boolean = true) {
+    fun work(task: () -> CompletableFuture<Unit>, success: String) {
         scope.launch {
             busy = true
             try {
                 withContext(Dispatchers.IO) { task().get() }
-                if (update) refresh++
+                refresh++
                 notify(success)
             } catch (_: Exception) {
                 notify("操作未完成，请检查状态后重试")
@@ -173,8 +176,9 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
                 if (index > 0) GroupDivider()
                 SettingsRow(if (speaker.isMe) "我" else speaker.name.orEmpty()) {
                     Row {
-                        SpeakerPlay(speaker, !busy) { work({ audio.playSample(speaker.id) }, "正在试听", update = false) }
+                        SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
                         if (speaker.isMe) TextAction("这不是我", {
+                            audio.stopPlayback()
                             work({ audio.unmarkMe(speaker.id) }, "已取消本人标记")
                         }, enabled = !busy)
                         else TextAction("改称呼", {
@@ -193,7 +197,7 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
                     GroupDivider()
                     SettingsRow(speaker.name ?: "声音 ${index + 1}") {
                         Row {
-                            SpeakerPlay(speaker, !busy) { work({ audio.playSample(speaker.id) }, "正在试听", update = false) }
+                            SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
                             TextAction("恢复", { work({ audio.setIgnored(speaker.id, false) }, "已恢复这个声音") }, enabled = !busy)
                         }
                     }
@@ -217,9 +221,23 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
 }
 
 @Composable
-private fun SpeakerPlay(speaker: AudioSpeaker, enabled: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick, enabled = speaker.sampleAvailable && enabled) {
-        Icon(Icons.Outlined.PlayArrow, "试听")
+private fun SpeakerPlay(speaker: AudioSpeaker, enabled: Boolean, playing: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, enabled = enabled && (speaker.sampleAvailable || playing)) {
+        Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, if (playing) "停止试听" else "试听")
+    }
+}
+
+@Composable
+internal fun rememberSampleToggle(audio: AudioController, notify: (String) -> Unit): (String) -> Unit {
+    val scope = rememberCoroutineScope()
+    DisposableEffect(audio) { onDispose { audio.stopPlayback() } }
+    return { id ->
+        val loading = audio.playSample(id)
+        scope.launch {
+            try { withContext(Dispatchers.IO) { loading.get() } }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { notify("暂时无法试听") }
+        }
     }
 }
 

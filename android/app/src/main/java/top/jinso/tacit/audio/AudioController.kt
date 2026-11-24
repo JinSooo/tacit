@@ -113,15 +113,19 @@ class AudioController(context: Context) {
         stopPlayback()
         return runtime.change { synchronized(runtime.lock) { runtime.store.deleteRecord(recordId) } }
     }
-    fun playSample(id: String): CompletableFuture<Unit> = runtime.submit {
-        val pcm = synchronized(runtime.lock) {
-            val span = requireNotNull(runtime.sample(id)) { "试听已过保留期" }
-            val all = runtime.store.pcm(span.first)
-            try { all.copyOfRange(span.second, span.third) } finally { all.fill(0f) }
-        }
-        try { runtime.play(pcm) } finally { pcm.fill(0f) }
+    internal val playingSpeaker get() = runtime.playback.speaker
+    fun playSample(id: String): CompletableFuture<Unit> {
+        val request = runtime.playback.toggle(id) ?: return CompletableFuture.completedFuture(Unit)
+        return runtime.read {
+            val pcm = synchronized(runtime.lock) {
+                val span = requireNotNull(runtime.sample(id)) { "试听已过保留期" }
+                val all = runtime.store.pcm(span.first)
+                try { all.copyOfRange(span.second, span.third) } finally { all.fill(0f) }
+            }
+            try { runtime.play(request, pcm) } finally { pcm.fill(0f) }
+        }.whenComplete { _, error -> if (error != null) runtime.playback.finish(request) }
     }
-    fun stopPlayback() = runtime.stopPlayback()
+    fun stopPlayback() = runtime.playback.stop()
 }
 
 internal class AudioRuntime private constructor(val context: Context) {
@@ -272,7 +276,7 @@ internal class AudioRuntime private constructor(val context: Context) {
     private val policyRevision get() = policyRevisions.get()
     @Volatile var message = "录音未启动"
     private var engine: AcceleratedSpeechEngine? = null
-    private var player: AudioTrack? = null
+    val playback = SamplePlayback()
     fun allowed() = app.prefs.enabled(AUDIO_SOURCE)
     fun invalidatePolicy() { policyRevisions.incrementAndGet() }
     fun report(text: String) { message = text; changed() }
@@ -346,17 +350,30 @@ internal class AudioRuntime private constructor(val context: Context) {
         }
         return null
     }
-    fun play(pcm: FloatArray) {
+    fun play(request: SamplePlayback.Request, pcm: FloatArray) {
         val shorts = ShortArray(pcm.size) { (pcm[it].coerceIn(-1f, 1f) * 32767).toInt().toShort() }
-        val track = AudioTrack.Builder().setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-            .setTransferMode(AudioTrack.MODE_STATIC).setBufferSizeInBytes(shorts.size * 2).build()
-        synchronized(this) { stopPlayback(); player = track }
-        try { track.write(shorts, 0, shorts.size); track.play() } finally { shorts.fill(0) }
+        val track = try {
+            AudioTrack.Builder().setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                .setAudioFormat(AudioFormat.Builder().setSampleRate(SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                .setTransferMode(AudioTrack.MODE_STATIC).setBufferSizeInBytes(shorts.size * 2).build().also { track ->
+                    try { check(track.write(shorts, 0, shorts.size) == shorts.size) }
+                    catch (error: Exception) { track.release(); throw error }
+                }
+        } finally { shorts.fill(0) }
+        playback.play(request, start = {
+            track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
+                override fun onMarkerReached(track: AudioTrack) = playback.finish(request)
+                override fun onPeriodicNotification(track: AudioTrack) = Unit
+            }, android.os.Handler(context.mainLooper))
+            check(track.setNotificationMarkerPosition(pcm.size) == AudioTrack.SUCCESS)
+            track.play()
+        }, close = {
+            runCatching { track.stop() }
+            track.release()
+        })
     }
-    @Synchronized fun stopPlayback() { player?.let { runCatching { it.stop() }; it.release() }; player = null }
     companion object {
         @Volatile private var instance: AudioRuntime? = null
         fun get(context: Context): AudioRuntime = instance ?: synchronized(this) {
