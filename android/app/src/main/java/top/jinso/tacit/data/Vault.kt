@@ -11,6 +11,7 @@ import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import top.jinso.tacit.sync.Change
@@ -393,8 +394,8 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
             put("ref", ref)
             put("title", record.getString("title"))
             put("body", record.getString("body"))
-            put("start", Instant.parse(record.getString("t_start")).toEpochMilli())
-            put("end", record.optionalString("t_end")?.let { Instant.parse(it).toEpochMilli() })
+            put("start", OffsetDateTime.parse(record.getString("t_start")).toInstant().toEpochMilli())
+            put("end", record.optionalString("t_end")?.let { OffsetDateTime.parse(it).toInstant().toEpochMilli() })
             put("app", record.optJSONObject("context")?.optionalString("app"))
             put("sensitivity", record.getString("sensitivity"))
             put("corrects", parent)

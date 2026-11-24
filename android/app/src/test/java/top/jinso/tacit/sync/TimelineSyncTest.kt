@@ -15,12 +15,12 @@ class TimelineSyncTest {
     private val cache = TimelineCache(disk) { today }.apply { bind("test-hub:test-phone") }
     private val sync = TimelineSync(cache)
 
-    @Test fun originalKeepsItsTimestampWhenTheBodySpansPages() = runBlocking {
+    @Test fun originalKeepsItsOffsetTimestampWhenTheBodySpansPages() = runBlocking {
         val start = Instant.parse("2026-11-24T10:17:00Z")
         val rows = readTimelineOriginals(setOf("example")) { _, request ->
             val first = !request.has("cursor")
             val row = JSONObject().put("id", "example").put("source", "mac.wechat")
-                .put("title", "虚构展览").put("t_start", start.toString()).put("body", if (first) "展览将在" else "周六开幕")
+                .put("title", "虚构展览").put("t_start", "2026-11-24T18:17:00+08:00").put("body", if (first) "展览将在" else "周六开幕")
             JSONObject().put("records", JSONArray(listOf(row))).apply { if (first) put("next_cursor", "next") }
         }
         assertEquals(start, rows.single().start)

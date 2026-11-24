@@ -3,6 +3,7 @@ package top.jinso.tacit.sync
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
+import java.time.OffsetDateTime
 
 internal typealias TimelineRequest = suspend (String, JSONObject) -> JSONObject
 internal enum class TimelinePage { COMPLETE, MORE, RESET, REVOKED }
@@ -132,7 +133,7 @@ internal suspend fun readTimelineOriginals(ids: Set<String>, send: TimelineReque
                         val id = record.getString("id")
                         val (_, text) = records.getOrPut(id) {
                             TimelineOriginal(record.getString("source"), record.optionalString("title").orEmpty(), "",
-                                Instant.parse(record.getString("t_start"))) to StringBuilder()
+                                OffsetDateTime.parse(record.getString("t_start")).toInstant()) to StringBuilder()
                         }
                         text.append(record.getString("body"))
                     }
