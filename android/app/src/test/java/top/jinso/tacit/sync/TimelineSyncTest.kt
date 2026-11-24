@@ -15,6 +15,18 @@ class TimelineSyncTest {
     private val cache = TimelineCache(disk) { today }.apply { bind("test-hub:test-phone") }
     private val sync = TimelineSync(cache)
 
+    @Test fun originalKeepsItsTimestampWhenTheBodySpansPages() = runBlocking {
+        val start = Instant.parse("2026-11-24T10:17:00Z")
+        val rows = readTimelineOriginals(setOf("example")) { _, request ->
+            val first = !request.has("cursor")
+            val row = JSONObject().put("id", "example").put("source", "mac.wechat")
+                .put("title", "虚构展览").put("t_start", start.toString()).put("body", if (first) "展览将在" else "周六开幕")
+            JSONObject().put("records", JSONArray(listOf(row))).apply { if (first) put("next_cursor", "next") }
+        }
+        assertEquals(start, rows.single().start)
+        assertEquals("展览将在周六开幕", rows.single().body)
+    }
+
     @Test fun staleFooterNeedsFailedRefreshAndClearsAfterEmptySuccessfulPull() = runBlocking {
         val zone = ZoneId.of("Asia/Taipei")
         val first = Instant.parse("2026-11-24T10:00:00Z")
