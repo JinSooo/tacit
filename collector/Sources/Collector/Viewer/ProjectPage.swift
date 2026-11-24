@@ -9,6 +9,7 @@ struct ProjectPage: View {
   @State private var context = Loader<[HubThread]>()
   @State private var timeline = Loader<HubAPI.TimelineResult>()
   @State private var expandedThread: String?
+  @State private var loadedMore = false
   @State private var expandedSegment: String?
   @State private var loadingMore = false
   @State private var moreError: String?
@@ -48,8 +49,18 @@ struct ProjectPage: View {
         }
       }
     }
-    .task(id: store.revision) { await loadOverview() }
-    .task(id: store.revision) { await load() }
+    // 项目概况和进展随整理更新，页面自己隔几分钟重读。
+    .task(id: store.revision) {
+      while !Task.isCancelled { await loadOverview(); await WindowVisibility.pause(.seconds(180)) }
+    }
+    .task(id: store.revision) {
+      await load()
+      // 加载过更早的日期就不再定时重读，免得把已展开的旧日期收回去。
+      while !Task.isCancelled {
+        await WindowVisibility.pause(.seconds(180))
+        if !loadedMore { await load() }
+      }
+    }
   }
 
   @ViewBuilder private var projectOverview: some View {
@@ -186,6 +197,7 @@ struct ProjectPage: View {
       let page = try await store.dataSource.timeline(projectId: id, before: before)
       guard !Task.isCancelled, revision == store.revision, timeline.value?.nextCursor == before else { return }
       timeline.value = HubAPI.TimelineResult(days: previous.days + page.days, nextCursor: page.nextCursor)
+      loadedMore = true
     } catch is CancellationError {
     } catch {
       guard revision == store.revision else { return }

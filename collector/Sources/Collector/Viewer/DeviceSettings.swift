@@ -62,8 +62,11 @@ struct DeviceSettingsSection: View {
         }
       }
     }
+    // 换后台时整页根视图也会重建（resetForBindingChange）；这里再把本组状态清干净，免得旧后台的弹窗或配对留下来。
     .task(id: store.remoteBackend?.context.binding.route) {
-      settings = nil; error = nil; expandedDevice = nil
+      settings = nil; error = nil; needsUpdate = false; expandedDevice = nil; deviceToRemove = nil
+      copied = false; step = .type
+      closeSheet()
       await reload()
     }
     .alert("移除这台设备？", isPresented: Binding(

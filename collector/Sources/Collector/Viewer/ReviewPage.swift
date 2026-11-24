@@ -71,7 +71,9 @@ private struct ReviewDayContent: View {
   private var cutoff: Date? { review?.detail?.cutoff.flatMap(ViewerTime.parse) }
   private var drafts: [DayDiary.Item] {
     guard isToday else { return [] }
-    return (review?.drafts ?? []).reversed().map(\.item)
+    // 润色后编号不变；两边同时出现时以整理好的为准，列表和页脚都按去重后的算。
+    let polished = Set(items.map(\.id))
+    return (review?.drafts ?? []).reversed().map(\.item).filter { !polished.contains($0.id) }
   }
   private var items: [DayDiary.Item] {
     guard hasSegments else { return [] }
@@ -92,7 +94,8 @@ private struct ReviewDayContent: View {
     .task(id: LoadKey(refresh: refresh, revision: store.revision, density: density)) {
       repeat {
         await load()
-        if !isToday { break }
+        // 往日也会被补整理或每小时整理改写；没有刷新按钮，隔几分钟自己重读。
+        if !isToday { await WindowVisibility.pause(.seconds(180)); continue }
         if await catchUp() { continue }
         await WindowVisibility.pause(.seconds(TimelineCatchUp.isRunning(store.catchUpRequest) ? 10 : 30))
       } while !Task.isCancelled
@@ -120,9 +123,7 @@ private struct ReviewDayContent: View {
       VStack(alignment: .leading, spacing: 14) {
         dayHeader().padding(.horizontal, TimelineReadingLayout.edge)
         LazyVStack(spacing: 0) {
-          let polished = Set(items.map(\.id))
-          // 润色后编号不变；两边同时出现时以整理好的为准。
-          let drafts = self.drafts.filter { !polished.contains($0.id) }
+          let drafts = self.drafts
           let draftIds = Set(drafts.map(\.id))
           let organizingId = TimelineCatchUp.isRunning(store.catchUpRequest) ? drafts.first?.id : nil
           // 草稿和已整理的段按开始时刻统一倒序，不把草稿整组压在最上面。

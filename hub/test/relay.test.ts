@@ -867,6 +867,9 @@ test("信箱限流后整个空间暂停，暂停期间不再发请求，到期�
     hub.db.ingest([doomed]);
     expect(hub.db.delete(doomed.id)).toBe(true);
     await eventually(() => hits.length > 0 || undefined);
+    // 暂停期间状态里给出截止时刻，界面据此写“限流，几点再试”。
+    const paused = (await (await hub.admin(path)).json() as { paused_until: string | null }).paused_until;
+    expect(paused === null ? 0 : Date.parse(paused)).toBeGreaterThan(Date.parse(hub.time()));
     // 第一次 429 之后，至少两轮维护（每轮 5 秒）都不再碰信箱。
     await Bun.sleep(11_000);
     expect(hits).toHaveLength(1);

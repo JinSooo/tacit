@@ -30,11 +30,6 @@ private struct ModelCallsPage: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
-        // 上方分段已经写着“模型整理”，这里不再重复标题。
-        HStack {
-          Spacer()
-          Button("刷新") { Task { await load(reset:true) } }.disabled(busy)
-        }
         Text("正文在本机保存 7 天。删除任一历史记录时，所有调用正文会一并清空，时间和状态保留。")
           .font(.system(size:TextSize.body)).foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
         if let error { Text(error).foregroundStyle(Palette.attention).textSelection(.enabled) }
@@ -49,14 +44,23 @@ private struct ModelCallsPage: View {
         else if cursor != nil { Button("加载更多") { Task { await load(reset:false) } }.frame(maxWidth:.infinity) }
       }
       .frame(maxWidth:1080,alignment:.leading).padding(.horizontal,32).padding(.vertical,24).frame(maxWidth:.infinity)
-    }.task { await load(reset:true) }
+    }.task {
+      // 页面自己刷新；展开了某次调用或加载过更多时不重排列表。
+      await load(reset:true)
+      while !Task.isCancelled {
+        await WindowVisibility.pause(.seconds(30))
+        if selected == nil, !loadedMore { await load(reset:true) }
+      }
+    }
   }
+  @State private var loadedMore = false
   private func load(reset: Bool) async {
     guard !busy else { return }; busy = true; defer { busy = false }
     do {
       let page = try await store.api.modelCalls(cursor:reset ? nil : cursor)
       calls = reset ? page.calls : calls + page.calls.filter { item in !calls.contains(where: { $0.id == item.id }) }
       cursor = page.nextCursor; error = nil
+      if !reset { loadedMore = true }
     } catch is CancellationError {} catch { self.error = error.localizedDescription }
   }
 }
@@ -146,7 +150,6 @@ struct RuntimeSnapshotView: View {
 private struct BackgroundCallsPage: View {
   @Environment(ViewerStore.self) private var store
   @State private var source = "hub"
-  @State private var revision = 0
   @State private var page: BackgroundLogPage?
   @State private var error: String?
   var body: some View {
@@ -154,7 +157,7 @@ private struct BackgroundCallsPage: View {
       VStack(alignment:.leading,spacing:16) {
         HStack {
           Picker("来源",selection:$source) { Text("后台服务").tag("hub"); Text("内容整理").tag("distill"); Text("活动采集").tag("collector") }.frame(maxWidth:240)
-          Spacer(); Button("刷新") { revision += 1 }
+          Spacer()
         }
         Text("展示最近的结构化状态与计数。含原文的诊断行不会显示在这里。").font(.system(size:TextSize.body)).foregroundStyle(Palette.muted)
         if let error { Text(error).foregroundStyle(Palette.attention) }
@@ -166,10 +169,14 @@ private struct BackgroundCallsPage: View {
           }
         } else { ProgressView().frame(maxWidth:.infinity) }
       }.frame(maxWidth:1080,alignment:.leading).padding(32).frame(maxWidth:.infinity)
-    }.task(id:"\(source):\(revision)") {
+    }.task(id: source) {
       page = nil; error = nil
-      do { let value = try await store.api.backgroundLog(source); if !Task.isCancelled { page = value } }
-      catch is CancellationError {} catch { self.error = error.localizedDescription }
+      // 运行状态自己刷新，不放刷新按钮。
+      while !Task.isCancelled {
+        do { let value = try await store.api.backgroundLog(source); if !Task.isCancelled { page = value; error = nil } }
+        catch is CancellationError {} catch { self.error = error.localizedDescription }
+        await WindowVisibility.pause(.seconds(15))
+      }
     }
   }
 }

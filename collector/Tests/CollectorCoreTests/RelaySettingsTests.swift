@@ -121,16 +121,19 @@ private var testCalendar: Calendar {
   #expect(RelaySettingsText.usage(try decodeRelay("{\(base)}")) == nil)
 }
 
-// 2026-11-24：信箱当天额度用完时状态行写“连不上信箱，请检查地址和网络”，让人白查地址；改为说明用完和恢复时刻。
-@Test func limitedRelayExplainsQuotaInsteadOfNetwork() throws {
-  let limited = try decodeRelay("""
-    {"mode":"custom","url":"https://relay.example","connected":false,"last_fetch_at":null,
-     "used_bytes":0,"unprocessable":0,"devices":[],"retiring":[],
-     "usage":{"day":"2026-11-24","requests":17,"by_kind":{"poll":17},
-     "limited_at":"2026-11-24T14:20:00.000Z","requests_before_limit":16}}
-    """)
+// 2026-11-24：信箱限流时状态行写“连不上信箱，请检查地址和网络”，让人白查地址；改为说明限流和再试时刻。
+@Test func limitedRelayExplainsPauseInsteadOfNetwork() throws {
+  let base = """
+    "mode":"custom","url":"https://relay.example","last_fetch_at":null,
+    "used_bytes":0,"unprocessable":0,"devices":[],"retiring":[]
+    """
   var shanghai = Calendar(identifier: .gregorian); shanghai.timeZone = TimeZone(identifier: "Asia/Shanghai")!
-  #expect(RelaySettingsText.connection(limited, calendar: shanghai) == "信箱今天的请求次数用完了，08:00 自动恢复。")
-  #expect(RelaySettingsText.usage(limited)?.text == "17 次")
-  #expect(RelaySettingsText.usage(limited)?.limited == true)
+  let now = ISO8601DateFormatter().date(from: "2026-11-24T14:20:00Z")!  // 北京时间 22:20
+  let paused = try decodeRelay("{\(base),\"connected\":true,\"paused_until\":\"2026-11-24T14:52:00.000Z\"}")
+  #expect(RelaySettingsText.connection(paused, now: now, calendar: shanghai) == "信箱暂时限流，22:52 再试。")
+  let overnight = try decodeRelay("{\(base),\"connected\":true,\"paused_until\":\"2026-11-24T16:30:00.000Z\"}")
+  #expect(RelaySettingsText.connection(overnight, now: now, calendar: shanghai) == "信箱暂时限流，明天 00:30 再试。")
+  // 暂停已过、真的连不上时仍提示检查地址和网络。
+  let offline = try decodeRelay("{\(base),\"connected\":false,\"paused_until\":\"2026-11-24T14:00:00.000Z\"}")
+  #expect(RelaySettingsText.connection(offline, now: now, calendar: shanghai) == "连不上信箱，请检查地址和网络。")
 }

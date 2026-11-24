@@ -618,8 +618,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     updateIcon()
     let f = DateFormatter(); f.dateFormat = "HH:mm"
     let state: String
-    if missingAX { state = "需要辅助功能权限" }
-    else if let p = pausedUntil, paused { state = "已暂停到 \(f.string(from: p))" }
+    // 和主窗口底部一致：暂停优先，其次缺权限，数据源全关时写“未在记录”。
+    if let p = pausedUntil, paused { state = "已暂停到 \(f.string(from: p))" }
+    else if missingAX { state = "需要辅助功能权限" }
+    else if !sources.statuses().contains(where: { DataSourceCatalog.isVisible($0.id) && $0.enabled }) { state = "未在记录" }
     else { state = "正在记录" }
     menu.addItem(disabled(state))
     let pending = hub.pendingCount

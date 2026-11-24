@@ -26,6 +26,8 @@ public struct RelaySettings: Decodable, Sendable {
   public let url: String?
   public let connected: Bool
   public let lastFetchAt: String?
+  /// 被信箱限流后的暂停截止时刻；旧版后台不带这一项。
+  public let pausedUntil: String?
   public let usedBytes: Int?
   public let unprocessable: Int
   public let devices: [Device]
@@ -49,15 +51,14 @@ public enum RelaySettingsText {
     return address
   }
 
-  public static func connection(_ settings: RelaySettings, calendar: Calendar = .current) -> String? {
+  public static func connection(_ settings: RelaySettings, now: Date = Date(), calendar: Calendar = .current) -> String? {
     guard settings.mode == .custom else { return nil }
-    guard settings.connected else {
-      // 被信箱限流时不是地址或网络的问题，别让人去查地址（2026-11-24）。
-      if let usage = settings.usage, usage.limitedAt != nil {
-        return "信箱今天的请求次数用完了，\(ViewerFormat.clock(nextRelayDay(usage.day) ?? Date(), calendar: calendar)) 自动恢复。"
-      }
-      return "连不上信箱，请检查地址和网络。"
+    // 限流不是地址或网络的问题，别让人去查地址（2026-11-24）。
+    if let until = settings.pausedUntil.flatMap(ViewerTime.parse), until > now {
+      let day = calendar.isDate(until, inSameDayAs: now) ? "" : "明天 "
+      return "信箱暂时限流，\(day)\(ViewerFormat.clock(until, calendar: calendar)) 再试。"
     }
+    guard settings.connected else { return "连不上信箱，请检查地址和网络。" }
     guard let date = settings.lastFetchAt.flatMap(ViewerTime.parse) else { return "已连接" }
     return "已连接，上次取信 \(monthDay(date, calendar: calendar)) \(ViewerFormat.clock(date, calendar: calendar))"
   }
@@ -72,17 +73,7 @@ public enum RelaySettingsText {
   public static func usage(_ settings: RelaySettings) -> (text: String, limited: Bool)? {
     guard settings.mode == .custom, let usage = settings.usage else { return nil }
     let count = "\(usage.requests.formatted()) 次"
-    guard usage.limitedAt != nil else { return (count, false) }
-    // 连不上时状态行已经说了用完和恢复时间，这里只给次数。
-    return settings.connected ? ("\(count)，已到信箱今天的上限", true) : (count, true)
-  }
-
-  /// 信箱按 UTC 计日（AGENTS.md 2026-11-24），下一天从 UTC 零点开始。
-  static func nextRelayDay(_ day: String) -> Date? {
-    var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(identifier: "UTC")!
-    let parts = day.split(separator: "-").compactMap { Int($0) }
-    guard parts.count == 3, let start = utc.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])) else { return nil }
-    return utc.date(byAdding: .day, value: 1, to: start)
+    return usage.limitedAt == nil ? (count, false) : ("\(count)，已到信箱今天的上限", true)
   }
 
   public static func retirement(_ settings: RelaySettings, calendar: Calendar = .current) -> String? {

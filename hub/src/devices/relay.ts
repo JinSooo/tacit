@@ -137,6 +137,8 @@ export class RelayService {
     const at = (ms: number | null) => ms === null ? null : new Date(ms).toISOString();
     const describe = (s: Space) => ({
       url: s.url, connected: this.connected.get(s.space) ?? false, last_fetch_at: at(s.last_fetch),
+      // 429 后的暂停截止时刻；界面据此说“限流，几点再试”，不把限流说成连不上。
+      paused_until: at(this.pausedUntil(s.space) || null),
       used_bytes: s.used_bytes, unprocessable: s.discarded,
       devices: this.boxes(s.space).filter(b => b.state === "active" && b.device)
         .map(b => ({ device: b.device!, pending: b.pending })),

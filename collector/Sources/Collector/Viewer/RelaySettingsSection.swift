@@ -72,7 +72,9 @@ struct RelaySettingsSection: View {
       Text("旧信箱将在 7 天后删除，外出的手机要等回到家里网络才能再同步。")
     }
     .task(id: store.remoteBackend?.context.binding.route) {
-      settings = nil; draftAddress = nil; refreshError = nil; actionError = nil; testPassed = false
+      // 开通码属于旧后台，换后台时清掉；递增版本让旧请求的结果不再写回。
+      settings = nil; draftAddress = nil; code = ""; confirmDisable = false
+      refreshError = nil; actionError = nil; testPassed = false; configurationRevision += 1
       while !Task.isCancelled {
         await refresh()
         await WindowVisibility.pause(.seconds(5))
@@ -155,8 +157,10 @@ struct RelaySettingsSection: View {
     defer { action = nil }
     do {
       let updated: RelaySettings
+      let started: Int
       if operation == .disable {
         configurationRevision += 1
+        started = configurationRevision
         updated = try await store.api.disableRelay()
       } else {
         guard let validatedAddress = RelaySettingsText.validatedAddress(address) else {
@@ -170,8 +174,11 @@ struct RelaySettingsSection: View {
           return
         }
         configurationRevision += 1
+        started = configurationRevision
         updated = try await store.api.saveRelay(address: validatedAddress, code: code)
       }
+      // 等待期间换了后台，结果属于旧后台，不写回。
+      guard started == configurationRevision else { return }
       settings = updated
       draftAddress = nil
       code = ""

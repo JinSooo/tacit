@@ -276,7 +276,7 @@ private struct RemoteBackendModelStatusRows: View {
       SettingsRow("整理", value: progress)
     } else {
       switch status?.distill.state {
-      case .working: SettingsRow("整理", value: "正常")
+      case .working: EmptyView()
       case .waiting: SettingsRow("整理", value: "等待首次完成")
       case .failing: SettingsMessage(text: "整理遇到问题，请检查模型设置。")
       case nil: SettingsRow("整理", value: "暂时无法读取")

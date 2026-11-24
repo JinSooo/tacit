@@ -37,6 +37,7 @@ struct ModelSettingsView: View {
 
   var body: some View {
     SettingsForm {
+      if showsStatus {
       Section("整理状态") {
         if let health {
           // 正常时只写最近一次整理的时间，不写“正常”。
@@ -59,6 +60,7 @@ struct ModelSettingsView: View {
             }
           }
         }
+      }
       }
       if let info {
         if let e = info.configError {
@@ -84,9 +86,10 @@ struct ModelSettingsView: View {
       if let error { SettingsMessage(text: error) }
     }
     .task {
-      await load(); await loadTimeline()
-      // 整理状态自己跟上，不让人点“刷新”。
+      // 整理状态和用量自己跟上，不让人点“刷新”；第一次没读到的设置也在这里重试。
       while !Task.isCancelled {
+        if info == nil { await load() }
+        await loadTimeline()
         await loadHealth()
         await WindowVisibility.pause(.seconds(30))
       }
@@ -162,10 +165,19 @@ struct ModelSettingsView: View {
 
   // MARK: 每一档
 
+  /// 远端后台没有状态页入口；正常又没有完成时间时这一组没有内容，不留空卡片。
+  private var showsStatus: Bool {
+    if healthError != nil || !store.isRemoteBackend { return true }
+    guard let health else { return false }
+    if case .working = health.state { return health.lastOkAt != nil }
+    return true
+  }
+
   /// 已保存的三档完全一样、用户也没要求分开时，只显示一组，改动同时写进三档。
   private var sharesOneModel: Bool {
-    guard !splitTiers, let first = saved[Self.tiers[0]] else { return false }
-    return Self.tiers.allSatisfy { saved[$0] == first }
+    // 草稿也要三档相同：有没保存的分档改动时不能折起来藏住它。
+    guard !splitTiers, let first = saved[Self.tiers[0]], let editing = draft[Self.tiers[0]] else { return false }
+    return Self.tiers.allSatisfy { saved[$0] == first && draft[$0] == editing }
   }
 
   @ViewBuilder func tierSection(_ tier: String, info: ModelSettingsInfo, together: Bool = false) -> some View {
