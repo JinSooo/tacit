@@ -9,9 +9,9 @@ import Testing
   #expect(source.overviewStatus(paused: false) == "需要辅助功能权限")
   source.permission = .granted
   #expect(!SourceFilter.attention.includes(source))
-  #expect(source.overviewStatus(paused: true) == "已启用，记录暂停中")
+  #expect(source.overviewStatus(paused: true) == "记录暂停中")
   source.enabled = false
-  #expect(source.overviewStatus(paused: true) == "已停用")
+  #expect(source.overviewStatus(paused: true) == "")
   #expect(!SourceFilter.enabled.includes(source))
 }
 

@@ -202,7 +202,10 @@ struct GeneralPreferencesSection: View {
             .foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
         }
         HStack {
-          Button("恢复默认") { p.restore(context: context) }.disabled(p.busy)
+          // 已经是默认值时“恢复默认”没有用处，不出现。
+          if !p.isDefault(context: context) {
+            Button("恢复默认") { p.restore(context: context) }.disabled(p.busy)
+          }
           Spacer()
           if p.changed(context: context) {
             Button("撤销修改") { p.revert(context: context) }.disabled(p.busy)
@@ -302,16 +305,13 @@ struct HubSettingsView: View {
         let problem = store.sharedError ?? c.hubError
         Text(problem ?? (info == nil ? "正在检查…" : "已连接")).foregroundStyle(problem == nil ? Palette.muted : Palette.attention)
       }
-      SettingsRow("等待保存", value: "\(c.queue) 条")
-      SettingsRow("本次已保存", value: "\(c.sent) 条")
+      if c.queue > 0 { SettingsRow("等待保存", value: "\(Fmt.count(c.queue)) 条") }
       SettingsRow("详细状态") {
         Button("在浏览器中打开") {
           if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务尚未准备好，请稍后重试。" }
         }
       }
-    } header: { Text("连接与保存") } footer: {
-      Note("管理连接仅限这台 Mac。")
-    }
+    } header: { Text("连接与保存") }
   }
 
   private var portSection: some View {
@@ -417,18 +417,18 @@ struct MaintenanceSettingsView: View {
         SettingsMessage(text: "安装不完整，AI 会话和浏览器等数据源暂时不能运行。重新安装 Tacit 就能修好。")
       }
       operation(.syncAll, verb: "同步", job: c.jobs[.syncAll], extra: latest("round")?.statusText,
-                what: "把还没送到后台服务的记录送过去，让文件、日历和各插件读一次新内容，再整理一轮。",
+                what: "把还没送到后台服务的记录送过去，让各数据源读一次新内容，再整理一轮。",
                 sources: "所有开着的数据源", dedupe: "已有的不会重复", distill: "随后整理一轮") {
         store.perform(.maintenance(.syncAll))
       }
       operation(.reimportRecent, verb: "导入", job: c.jobs[.reimportRecent],
                 what: "让插件从 7 天前开始重新读一遍，补上漏掉的记录。",
-                sources: "AI 会话、浏览器、Git 提交，终端命令没有历史可读", dedupe: "已有的不会重复", distill: "按平常的节奏整理") {
+                sources: "AI 会话、浏览器", dedupe: "已有的不会重复", distill: "按平常的节奏整理") {
         store.perform(.maintenance(.reimportRecent))
       }
       operation(.importAll, verb: "导入", job: c.jobs[.importAll],
                 what: "让插件从能读到的最早记录开始导入，可能要几分钟。导入的内容能搜到，AI 工具也能查到。",
-                sources: "AI 会话、浏览器、Git 提交", dedupe: "已有的不会重复", distill: "不自动整理，需要时用下面的“整理启用前的历史”") {
+                sources: "AI 会话、浏览器", dedupe: "已有的不会重复", distill: "不自动整理，需要时用下面的“整理启用前的历史”") {
         store.perform(.maintenance(.importAll))
       }
       Section {

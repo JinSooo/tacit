@@ -33,13 +33,13 @@ public enum SourceFilter: String, CaseIterable {
 extension DataSourceStatus {
   public var category: SourceCategory { SourceCategory.forID(id) }
   public var needsAttention: Bool { enabled && (!ok || needsPermission) }
+  /// 开关已经说明启用与否，这里只写开关说明不了的：缺权限、出错、暂停和来源自己的进度。
   public func overviewStatus(paused: Bool) -> String {
-    if !enabled { return "已停用" }
+    if !enabled { return "" }
     if needsPermission { return "需要\(permissionName ?? "系统")权限" }
     if !ok { return detail.isEmpty ? "运行失败" : detail }
-    if paused { return "已启用，记录暂停中" }
+    if paused { return "记录暂停中" }
     if running { return "正在运行" }
-    if lastRun == nil { return detail.isEmpty ? "已启用，等待活动" : "已启用，\(detail)" }
-    return detail.isEmpty ? "已启用" : detail
+    return detail
   }
 }

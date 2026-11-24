@@ -12,6 +12,10 @@ import SwiftUI
     guard let d = draft, let s = saved else { return false }
     return context ? d.injectTokens != s.injectTokens : d.archiveDays != s.archiveDays
   }
+  func isDefault(context: Bool) -> Bool {
+    guard let d = draft else { return true }
+    return context ? d.injectTokens == 800 : d.archiveDays == 7
+  }
   func restore(context: Bool) {
     if context { draft?.injectTokens = 800 }
     else { draft?.archiveDays = 7 }

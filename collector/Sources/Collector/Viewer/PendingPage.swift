@@ -5,7 +5,6 @@ import CollectorCore
 struct PendingPage: View {
   @Environment(ViewerStore.self) private var store
   @State private var resolved: Set<String> = []
-  @State private var loading = false
 
   var items: [PendingItem] { store.pending.filter { !resolved.contains($0.id) } }
 
@@ -60,12 +59,6 @@ struct PendingPage: View {
     }
     .background(Palette.paper)
     .navigationTitle("待确认")
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Button { Task { loading = true; await store.refreshShared(); resolved = []; loading = false } } label: { PhIcon("arrow-clockwise", size: PhIcon.toolbar) }
-          .disabled(loading).help("刷新").accessibilityLabel("刷新")
-      }
-    }
     .task { await store.refreshShared() }
   }
 

@@ -46,11 +46,9 @@ struct ModelSettingsView: View {
           if let time = health.lastOkAt { SettingsRow("最近完成", value: String(time.prefix(16)).replacingOccurrences(of: "T", with: " ")) }
         }
         if let healthError { SettingsMessage(text: healthError) }
-        HStack {
-          Button("刷新状态") { Task { await loadHealth(); await loadTimeline() } }
-            .disabled(saving)
-          Spacer()
-          if !store.isRemoteBackend {
+        if !store.isRemoteBackend {
+          HStack {
+            Spacer()
             Button("查看用量与详细状态…") {
               if let url = store.api.statusPageURL() { NSWorkspace.shared.open(url) }
             }
@@ -76,7 +74,14 @@ struct ModelSettingsView: View {
       }
       if let error { SettingsMessage(text: error) }
     }
-    .task { await load(); await loadTimeline(); await loadHealth() }
+    .task {
+      await load(); await loadTimeline()
+      // 整理状态自己跟上，不让人点“刷新”。
+      while !Task.isCancelled {
+        await loadHealth()
+        await WindowVisibility.pause(.seconds(30))
+      }
+    }
     .sheet(item: Binding(get: { editingKey.map(KeyTarget.init) }, set: { editingKey = $0?.id })) { target in
       KeyEntrySheet(provider: target.id, label: label(target.id, info: info)) { await load() }
     }
@@ -179,7 +184,7 @@ struct ModelSettingsView: View {
                     prompt: Text(c.provider == "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).labelsHidden()
         }
         if let url = c.baseUrl, !url.isEmpty, !local {
-          SettingsMessage(text: "整理时，记录会发到这个地址。")
+          SettingsMessage(text: "整理时，记录会发到这个地址。", warning: false)
         }
         if localOptions, c.provider == "openai-compatible", let url = c.baseUrl {
           HStack {

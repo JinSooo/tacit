@@ -6,7 +6,6 @@ import CollectorCore
 struct SourcesSettingsView: View {
   @Environment(ViewerStore.self) private var store
   @State private var selected: String?
-  @State private var filter = SourceFilter.all
   private var paused: Bool { if case .paused = store.capture.state { return true }; return false }
 
   var body: some View {
@@ -21,26 +20,14 @@ struct SourcesSettingsView: View {
         SourceDetail(source: source).id(source.id)
       } else {
         SettingsForm {
-          Section {
-            HStack {
-              Text("已启用 \(sources.filter(\.enabled).count) 个，共 \(sources.count) 个")
-              Spacer()
-              if paused { Text("记录已暂停").foregroundStyle(Palette.muted) }
-            }
-            Picker("显示", selection: $filter) {
-              ForEach(SourceFilter.allCases, id: \.self) { Text($0.title).tag($0) }
-            }.pickerStyle(.segmented)
-          } header: { Text("数据源") }
+          // 数据源只有几个，一眼能看完：不放计数和筛选，出问题的行自己标红。
           ForEach(SourceCategory.allCases, id: \.self) { category in
-            let rows = sources.filter { $0.category == category && filter.includes($0) }
+            let rows = sources.filter { $0.category == category }
             if !rows.isEmpty {
               Section(category.title) {
                 ForEach(rows) { source in sourceRow(source) }
               }
             }
-          }
-          if sources.filter({ filter.includes($0) }).isEmpty {
-            Text(filter == .attention ? "没有需要处理的数据源" : "没有符合条件的数据源").foregroundStyle(Palette.muted)
           }
         }
       }
@@ -53,8 +40,11 @@ struct SourcesSettingsView: View {
         HStack {
           VStack(alignment: .leading, spacing: 4) {
             Text(s.title).foregroundStyle(Palette.ink)
-            Text(s.overviewStatus(paused: paused)).font(.system(size: TextSize.caption))
-              .foregroundStyle(s.needsAttention ? Palette.attention : Palette.muted)
+            let status = s.overviewStatus(paused: paused)
+            if !status.isEmpty {
+              Text(status).font(.system(size: TextSize.caption))
+                .foregroundStyle(s.needsAttention ? Palette.attention : Palette.muted)
+            }
           }
           Spacer()
           if let last = s.lastRun {
@@ -63,7 +53,7 @@ struct SourcesSettingsView: View {
           }
           PhIcon("caret-right", size: 14).foregroundStyle(Palette.muted)
         }.contentShape(Rectangle())
-      }.buttonStyle(.plain).accessibilityLabel("\(s.title)，\(s.overviewStatus(paused: paused))，查看详情")
+      }.buttonStyle(.plain).accessibilityLabel([s.title, s.overviewStatus(paused: paused), "查看详情"].filter { !$0.isEmpty }.joined(separator: "，"))
       Toggle(s.title, isOn: Binding(get: { s.enabled }, set: { store.perform(.setSource(s.id, $0)) }))
         .labelsHidden().toggleStyle(.switch).accessibilityLabel("启用" + s.title).disabled(store.extensions.busy)
     }

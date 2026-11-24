@@ -18,11 +18,10 @@ struct ReviewPage: View {
     .background(Palette.paper)
     .navigationTitle("")
     .modifier(QuietPageTitle())
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Button { refresh += 1 } label: { PhIcon("arrow-clockwise", size: PhIcon.toolbar) }
-          .help("刷新").accessibilityLabel("刷新").keyboardShortcut("r", modifiers: .command)
-      }
+    // 页面每 30 秒、窗口重新露出和数据变化时都会自己刷新，不放刷新按钮；⌘R 留给想立刻重读的人。
+    .background {
+      Button("刷新") { refresh += 1 }.keyboardShortcut("r", modifiers: .command)
+        .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
     }
   }
 }
@@ -121,21 +120,19 @@ private struct ReviewDayContent: View {
       VStack(alignment: .leading, spacing: 14) {
         dayHeader().padding(.horizontal, TimelineReadingLayout.edge)
         LazyVStack(spacing: 0) {
-          let drafts = self.drafts
-          let showsProjects = TimelineProjectLabels.showsNames(in: drafts + items)
-          ForEach(drafts) { item in
+          let polished = Set(items.map(\.id))
+          // 润色后编号不变；两边同时出现时以整理好的为准。
+          let drafts = self.drafts.filter { !polished.contains($0.id) }
+          let draftIds = Set(drafts.map(\.id))
+          let organizingId = TimelineCatchUp.isRunning(store.catchUpRequest) ? drafts.first?.id : nil
+          // 草稿和已整理的段按开始时刻统一倒序，不把草稿整组压在最上面。
+          let rows = (drafts + items).sorted { ($0.tStart, $0.id) > ($1.tStart, $1.id) }
+          let showsProjects = TimelineProjectLabels.showsNames(in: rows)
+          ForEach(rows) { item in
             TimelineSegmentRow(day: day, item: item, records: records.value,
                                projectName: showsProjects ? store.project(item.projectId)?.name : nil,
-                               offersThreadStory: true, isDraft: true,
-                               isOrganizing: item.id == drafts.first?.id && TimelineCatchUp.isRunning(store.catchUpRequest),
-                               expanded: expanded == item.id) {
-              expanded = expanded == item.id ? nil : item.id
-            }
-          }
-          ForEach(items) { item in
-            TimelineSegmentRow(day: day, item: item, records: records.value,
-                               projectName: showsProjects ? store.project(item.projectId)?.name : nil,
-                               offersThreadStory: true,
+                               offersThreadStory: true, isDraft: draftIds.contains(item.id),
+                               isOrganizing: item.id == organizingId,
                                expanded: expanded == item.id) {
               expanded = expanded == item.id ? nil : item.id
             }
