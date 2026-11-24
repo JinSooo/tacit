@@ -100,7 +100,10 @@ struct RelaySettingsSection: View {
       HStack(spacing: 8) {
         Spacer()
         Button(action == .test ? "正在测试…" : "测试连接") { Task { await perform(.test) } }
-        Button(action == .save ? "正在保存…" : "保存") { Task { await perform(.save) } }
+        // 没改地址、没填开通码时没有可保存的，不显示“保存”。
+        if settings?.mode != .custom || address != (settings?.url ?? "") || !code.isEmpty || action == .save {
+          Button(action == .save ? "正在保存…" : "保存") { Task { await perform(.save) } }
+        }
       }
     }
     .disabled(action != nil)

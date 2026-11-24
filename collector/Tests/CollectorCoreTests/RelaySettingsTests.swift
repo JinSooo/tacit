@@ -120,3 +120,17 @@ private var testCalendar: Calendar {
   #expect(RelaySettingsText.usage(limited)?.limited == true)
   #expect(RelaySettingsText.usage(try decodeRelay("{\(base)}")) == nil)
 }
+
+// 2026-11-24：信箱当天额度用完时状态行写“连不上信箱，请检查地址和网络”，让人白查地址；改为说明用完和恢复时刻。
+@Test func limitedRelayExplainsQuotaInsteadOfNetwork() throws {
+  let limited = try decodeRelay("""
+    {"mode":"custom","url":"https://relay.example","connected":false,"last_fetch_at":null,
+     "used_bytes":0,"unprocessable":0,"devices":[],"retiring":[],
+     "usage":{"day":"2026-11-24","requests":17,"by_kind":{"poll":17},
+     "limited_at":"2026-11-24T14:20:00.000Z","requests_before_limit":16}}
+    """)
+  var shanghai = Calendar(identifier: .gregorian); shanghai.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+  #expect(RelaySettingsText.connection(limited, calendar: shanghai) == "信箱今天的请求次数用完了，08:00 自动恢复。")
+  #expect(RelaySettingsText.usage(limited)?.text == "17 次")
+  #expect(RelaySettingsText.usage(limited)?.limited == true)
+}
