@@ -111,13 +111,14 @@ internal class SyncCoordinator(private val app: TacitApp) {
             timelineWorkerScheduled = true
         }
         val wait = data.optLong("retryAt") - System.currentTimeMillis()
-        val directRefreshOnly = wait > 0 && !periodic && fromForeground
+        val foregroundRecovery = wait > 0 && !periodic && fromForeground
         if (wait > 0 && !periodic && !fromForeground) {
             if (retry) SyncWorker.retry(app, wait.coerceAtMost(MAX_RETRY))
             return@withLock
         }
         timelineCache.bind(timelineOwner(data))
         val ctx = currentCoroutineContext()
+        var recovered = false
         try {
             val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
             var unavailable: MacUnavailable? = null
@@ -135,13 +136,13 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 { delivery, reply -> applyRelayReceipt(data, delivery, reply) },
                 canResubmit = { it.op != "ingest" || it.ids.all { id -> vault.wire(id) != null } })
             val startingRelay = journal.active
-            if (!directRefreshOnly) {
+            if (!foregroundRecovery) {
                 for (retired in journal.retired().filter { it != startingRelay }) {
                     drainRetired(data, journal, retired, protocol)
                 }
             }
             if (startingRelay != null && !journal.disabled &&
-                (origin == null || !directRefreshOnly && journal.deliveries().any { it.box == startingRelay.down && it.ids.isNotEmpty() })) {
+                (origin == null || !foregroundRecovery && journal.deliveries().any { it.box == startingRelay.down && it.ids.isNotEmpty() })) {
                 ctx.ensureActive()
                 if (origin == null) {
                     pollRelayTimeline(data, journal, startingRelay, protocol, postDue = true,
@@ -167,11 +168,14 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 }, device)
                 journal.finishRound()
                 val role = refreshRelay(data, client, journal)
+                if (foregroundRecovery) {
+                    directSyncRecovered(data, origin, vault::saveSyncConnection)
+                    recovered = true
+                }
                 if ((periodic || fromForeground) && role == "view") {
                     refreshDirectTimeline(deviceClient(data, origin, networkBudget()), role)
                 }
-                if (directRefreshOnly) return@withLock
-                if (wait > 0) return@withLock
+                if (wait > 0 && !recovered) return@withLock
                 data.put("last", origin)
                 pullFromMac(data, client::send)
                 sendDirect(device, client, journal)
@@ -194,20 +198,18 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 }
             }
             data.put("lastSync", System.currentTimeMillis())
-            data.remove("error")
-            data.remove("retryAt")
-            data.remove("failures")
+            data.clearSyncFailure()
             vault.saveSyncConnection(data)
         } catch (error: CancellationException) {
             throw error
         } catch (_: DeviceRemoved) {
             markRemoved(data)
         } catch (error: Exception) {
-            if (directRefreshOnly) {
+            if (error is RelayStatus && error.unauthorized && data.optBoolean("relayDisabled")) timeline.clear()
+            if (foregroundRecovery && !recovered) {
                 timelineCache.refreshFailed()
                 return@withLock
             }
-            if (error is RelayStatus && error.unauthorized && data.optBoolean("relayDisabled")) timeline.clear()
             val failures = (data.optInt("failures") + 1).coerceAtMost(8)
             val delay = (30_000L shl (failures - 1)).coerceAtMost(MAX_RETRY)
             data.put("error", if (data.optBoolean("relayDisabled")) null else syncError(error)).put("failures", failures).put("retryAt", System.currentTimeMillis() + delay)
@@ -570,6 +572,19 @@ internal class SyncCoordinator(private val app: TacitApp) {
 }
 
 internal class InvalidMacAddress : Exception()
+
+private fun JSONObject.clearSyncFailure() {
+    remove("error")
+    remove("retryAt")
+    remove("failures")
+}
+
+/** Remember the authenticated direct route before resuming uploads, which can fail independently. */
+internal fun directSyncRecovered(data: JSONObject, origin: String, save: (JSONObject) -> Unit) {
+    data.put("last", origin)
+    data.clearSyncFailure()
+    save(data)
+}
 
 internal fun syncError(error: Throwable, pairing: Boolean = false): String = when {
     error is InviteExpired || (error is DeviceStatus && error.operation == "pair" && error.status == 403) ->
