@@ -3,6 +3,7 @@ package top.jinso.tacit.sync
 import android.net.ConnectivityManager
 import android.os.Build
 import android.os.SystemClock
+import android.provider.Settings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -56,7 +57,8 @@ internal class SyncCoordinator(private val app: TacitApp) {
             val public = DeviceEnvelope.public(keys).base64url()
             val secret = DeviceEnvelope.secret(keys)
             val wrapped = try { Keys(app).wrapDeviceKey(secret, public).base64url() } finally { secret.fill(0) }
-            val phoneName = Build.MODEL.take(200).ifBlank { "Android" }
+            val customName = runCatching { Settings.Global.getString(app.contentResolver, Settings.Global.DEVICE_NAME) }.getOrNull()
+            val phoneName = pairingDeviceName(customName, Build.MODEL, Build.BRAND)
             pairWithAvailableTransport(invite, keys, phoneName, findMac = {
                 MacDiscovery(app).find(invite.hubId, last, invite.addresses, manual)
             }) { paired, origin ->
