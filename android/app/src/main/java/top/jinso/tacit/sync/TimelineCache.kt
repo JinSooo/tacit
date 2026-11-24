@@ -24,6 +24,8 @@ import javax.crypto.spec.GCMParameterSpec
 internal data class TimelineItem(
     val id: String, val start: Instant, val title: String, val description: String,
     val sources: List<String>, val recordIds: Set<String>,
+    /** 还没被模型整理的草稿段，列表上用空心点，和 Mac 一致。 */
+    val draft: Boolean = false,
 ) {
     fun timeLabel(zone: ZoneId = ZoneId.systemDefault()): String = clockFormat.format(start.atZone(zone))
 }
@@ -49,18 +51,18 @@ private const val TIMELINE_DAYS = 30
 private val clockFormat = DateTimeFormatter.ofPattern("HH:mm")
 internal fun JSONArray.objects() = (0 until length()).map(::getJSONObject)
 
-private fun JSONObject.items(key: String): List<TimelineItem> = optJSONArray(key)?.objects().orEmpty().map { item ->
+private fun JSONObject.items(key: String, draft: Boolean = false): List<TimelineItem> = optJSONArray(key)?.objects().orEmpty().map { item ->
     TimelineItem(
         item.getString("id"), OffsetDateTime.parse(item.getString("t_start")).toInstant(),
         item.getString("title"), (item.optionalString("description") ?: item.optionalString("excerpt")).orEmpty(),
-        item.optJSONArray("sources")?.strings().orEmpty(), item.optJSONArray("record_ids")?.strings().orEmpty().toSet(),
+        item.optJSONArray("sources")?.strings().orEmpty(), item.optJSONArray("record_ids")?.strings().orEmpty().toSet(), draft,
     )
 }
 
 private class CachedDay(val data: JSONObject) {
     private val detail = data.optJSONObject("detail")
     val day = TimelineDay(detail?.optionalString("summary") ?: data.optionalString("brief"),
-        detail?.items("items").orEmpty(), data.items("drafts"))
+        detail?.items("items").orEmpty(), data.items("drafts", draft = true))
     val references = (day.items + day.drafts).flatMap { it.recordIds }.toSet() +
         detail?.optJSONArray("omitted_record_ids")?.strings().orEmpty()
 

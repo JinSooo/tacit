@@ -26,15 +26,15 @@ enum SourceInfo {
     case "mac.screen", "mac.app": return "browser"
     case "mac.browser": return "globe"
     case "claude_code.session": return "asterisk"
-    case "codex.session": return "code"
+    case "codex.session": return "open-ai-logo"
     case "mac.shell": return "terminal-window"
     case "mac.git": return "git-branch"
     case "mac.clipboard": return "clipboard-text"
     case "mac.file": return "file-arrow-down"
     case "mac.calendar": return "calendar-blank"
-    case "mac.wechat": return "chat-circle"
-    case "mac.audio": return "waveform"
-    case "android.audio": return "microphone"
+    case "mac.wechat": return "chats-circle"
+    case "mac.audio": return "microphone"
+    case "android.audio": return "device-mobile-speaker"
     case "android.notification": return "chat-circle-dots"
     case "android.usage": return "device-mobile"
     case "manual.note", "manual.agent": return "pencil-simple-line"
@@ -54,7 +54,9 @@ enum SourceInfo {
   static func icon(_ bundle: String?) -> NSImage? {
     guard let bundle, bundle.contains(".") else { return nil }
     if let hit = cache[bundle] { return hit }
-    let image = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle).map { NSWorkspace.shared.icon(forFile: $0.path) }
+    let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
+      ?? SourceApplication.substitutes[bundle].flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+    let image = url.map { NSWorkspace.shared.icon(forFile: $0.path) }
     cache[bundle] = image
     return image
   }

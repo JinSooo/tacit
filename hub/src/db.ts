@@ -305,7 +305,7 @@ export class HubDB {
         result.accepted++;
       });
       if (result.accepted && this.db.prepare("SELECT 1 FROM devices WHERE role IN ('view','admin') LIMIT 1").get()) {
-        scheduleProjectionDraft(this.db, Date.now() + 30_000);
+        scheduleProjectionDraft(this.db, Date.now());
       }
       return result;
     })();

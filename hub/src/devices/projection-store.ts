@@ -121,7 +121,13 @@ export function withdrawProjectionRecord(sql: SQL, id: string) {
   sql.prepare(enqueue("record_gone", "@id", "'delete'", "", "1", "1")).run({ id });
 }
 
-export function scheduleProjectionDraft(sql: SQL, due: number) {
+export const projectionDraftDelayMs = 30_000;
+// 只有新记录、草稿变了时，最多每 5 分钟给查看端推一次当天（2026-11-24，走信箱时每次推送都占当天的请求数）。
+export const projectionDraftIntervalMs = 5 * 60_000;
+
+export function scheduleProjectionDraft(sql: SQL, time: number) {
+  const flushed = Number(sql.prepare<[], { v: string }>("SELECT v FROM distill_state WHERE k='projection_draft_flushed'").get()?.v ?? 0);
+  const due = Math.max(time + projectionDraftDelayMs, flushed + projectionDraftIntervalMs);
   sql.prepare("INSERT OR IGNORE INTO distill_state(k,v) VALUES ('projection_draft_due',?)").run(String(due));
 }
 
@@ -130,6 +136,7 @@ export function flushProjectionDraft(sql: SQL, time: number, date: string) {
   sql.transaction(() => {
     if (sql.prepare("DELETE FROM distill_state WHERE k='projection_draft_due' AND CAST(v AS INTEGER)<=?").run(time).changes) {
       touchProjectionDay(sql, date);
+      sql.prepare("INSERT INTO distill_state(k,v) VALUES ('projection_draft_flushed',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").run(String(time));
       // 新记录可能让“此刻”变成“有新活动待整理”，一起重算。
       sql.prepare(now).run();
     }

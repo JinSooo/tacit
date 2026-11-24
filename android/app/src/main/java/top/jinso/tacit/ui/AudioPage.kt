@@ -198,12 +198,17 @@ import java.util.concurrent.CompletableFuture
             scenes.filter { it.records.isNotEmpty() }.map { TimelineEntry.Local(it) }).sortedByDescending { it.start }
         entries.forEachIndexed { index, entry ->
             item(key = entry.key) {
-                val axis = if (dayTimeline == null) Modifier else Modifier.timelineAxis(index == 0, index == entries.lastIndex)
+                val summary = (entry as? TimelineEntry.Local)?.scene?.records?.firstNotNullOfOrNull { summaries[it.id] }
+                // 还没整理的段（草稿、手机上还没写总结的对话）用空心点。
+                val draft = when (entry) {
+                    is TimelineEntry.Local -> summary == null
+                    is TimelineEntry.Projected -> entry.item.draft
+                }
+                val axis = if (dayTimeline == null) Modifier else Modifier.timelineAxis(index == 0, index == entries.lastIndex, draft)
                 when (entry) {
-                    is TimelineEntry.Local -> {
-                        val summary = entry.scene.records.firstNotNullOfOrNull { summaries[it.id] }
-                        RecordedConversation(entry.scene, summary, onConversation, axis)
-                    }
+                    // 和其他来源的段混排时才标手机录音图标；只有本机录音时不用强调。
+                    is TimelineEntry.Local -> RecordedConversation(entry.scene, summary, onConversation, axis,
+                        showsSource = dayTimeline != null)
                     is TimelineEntry.Projected -> ProjectedTimelineRow(entry.item, axis) {
                         onTimelineItem(entry.item)
                     }
@@ -358,7 +363,7 @@ private sealed class TimelineEntry(val key: String, val start: Instant) {
 @Composable
 private fun RecordedConversation(
     scene: AudioConversationRow, summary: ConversationSummary?, onConversation: (List<HistoryRecord>) -> Unit,
-    modifier: Modifier,
+    modifier: Modifier, showsSource: Boolean = false,
 ) {
     val records = scene.records
     Row(
@@ -373,6 +378,7 @@ private fun RecordedConversation(
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (summary != null) Text(summary.summary, color = tacitColors.muted, maxLines = 3, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (showsSource) SourceIcon(AUDIO_SOURCE, 14.dp)
                 Caption(durationLabel(conversationDuration(records)))
                 if (scene.private) PrivacyLock()
             }

@@ -22,6 +22,9 @@ public enum SourceApplication {
     }
   }
 
+  /// 没装这个应用时，借用同一家已装应用的图标（Codex 没有独立应用时用 ChatGPT）。
+  public static let substitutes = ["com.openai.codex": "com.openai.chat"]
+
   private static let aliases = [
     "claude": "com.anthropic.claudefordesktop", "claude code": "com.anthropic.claudefordesktop", "claude-code": "com.anthropic.claudefordesktop",
     "codex": "com.openai.codex", "wechat": "com.tencent.xinWeChat", "微信": "com.tencent.xinWeChat",

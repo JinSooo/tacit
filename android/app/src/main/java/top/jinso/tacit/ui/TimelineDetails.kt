@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -32,14 +33,21 @@ import top.jinso.tacit.ui.components.ProgressLine
 import top.jinso.tacit.ui.components.SourceIcon
 
 @Composable
-internal fun Modifier.timelineAxis(first: Boolean, last: Boolean): Modifier {
+internal fun Modifier.timelineAxis(first: Boolean, last: Boolean, draft: Boolean = false): Modifier {
     val line = tacitColors.faint
     val dot = tacitColors.accent
+    val paper = tacitColors.paper
     return drawBehind {
         val x = 47.dp.toPx()
         val y = 26.dp.toPx()
         drawLine(line, Offset(x, if (first) y else 0f), Offset(x, if (last) y else size.height), 1.dp.toPx())
-        drawCircle(dot, 2.5.dp.toPx(), Offset(x, y))
+        if (draft) {
+            // 还没整理的段画空心点（Mac 时间线同样如此），整理好的是实心点。
+            drawCircle(paper, 3.5.dp.toPx(), Offset(x, y))
+            drawCircle(dot, 3.dp.toPx(), Offset(x, y), style = Stroke(1.dp.toPx()))
+        } else {
+            drawCircle(dot, 2.5.dp.toPx(), Offset(x, y))
+        }
     }
 }
 

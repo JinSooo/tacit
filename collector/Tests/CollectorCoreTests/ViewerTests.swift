@@ -397,7 +397,7 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
     #expect(down.boundingBoxOfPath.width > 0 && down.boundingBoxOfPath.height > 0)
     #expect(up.boundingBoxOfPath.width > 0 && up.boundingBoxOfPath.height > 0)
     #expect(PhosphorGlyphs.character("caret-down") != PhosphorGlyphs.character("caret-up"))
-    for name in ["microphone", "chat-circle-dots", "device-mobile"] {
+    for name in ["microphone", "chat-circle-dots", "device-mobile", "device-mobile-speaker", "chats-circle", "open-ai-logo"] {
       let glyph = try #require(PhosphorGlyphs.path(name, font: font), "\(file) 缺少 \(name)")
       #expect(glyph.boundingBoxOfPath.width > 0 && glyph.boundingBoxOfPath.height > 0)
     }

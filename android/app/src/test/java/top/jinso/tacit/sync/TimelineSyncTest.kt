@@ -114,6 +114,20 @@ class TimelineSyncTest {
         assertTrue(cache.snapshots.value.days.isEmpty())
     }
 
+    // 回归（2026-11-24 用户反馈：手机上整理过的段和草稿看不出区别）
+    @Test fun draftsAreMarkedApartFromOrganizedSegments() {
+        val original = day(today, 1)
+        val data = original.getJSONObject("data")
+        val organized = data.getJSONObject("detail").getJSONArray("items").getJSONObject(0)
+        data.put("drafts", JSONArray(listOf(JSONObject(organized.toString()).put("id", "draft"))))
+        val localCache = TimelineCache(disk, isDeleted = { false }) { today }.apply {
+            bind("test-hub:test-phone")
+            apply(1, 1, JSONArray(listOf(original)))
+        }
+        val entries = localCache.snapshots.value.days.getValue(today).entries(today = true)
+        assertEquals(mapOf(organized.getString("id") to false, "draft" to true), entries.associate { it.id to it.draft })
+    }
+
     // 回归（2026-11-24 审查第 2 条）
     @Test fun withdrawingLocalDeleteKeepsOtherSegmentsAndCannotBeUndoneByAnOldReply() {
         val unrelated = today.minusDays(1)
