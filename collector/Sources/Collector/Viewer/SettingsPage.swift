@@ -261,10 +261,9 @@ struct HubSettingsView: View {
         localConnection(c)
       }
       if store.canManageBackend {
+        // 分组表单要直接拿到 Section：不在外面套 .id，换后台时由各分组自己按路由重读（2026-11-24 套 .id 曾让分组错位、标题重复）。
         DeviceSettingsSection()
-          .id(model?.context.binding.route)
         RelaySettingsSection()
-          .id(model?.context.binding.route)
       }
       if !store.isRemoteBackend {
         portSection

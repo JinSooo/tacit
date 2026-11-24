@@ -71,7 +71,8 @@ struct RelaySettingsSection: View {
     } message: {
       Text("旧信箱将在 7 天后删除，外出的手机要等回到家里网络才能再同步。")
     }
-    .task {
+    .task(id: store.remoteBackend?.context.binding.route) {
+      settings = nil; draftAddress = nil; refreshError = nil; actionError = nil; testPassed = false
       while !Task.isCancelled {
         await refresh()
         await WindowVisibility.pause(.seconds(5))

@@ -62,7 +62,10 @@ struct DeviceSettingsSection: View {
         }
       }
     }
-    .task { await reload() }
+    .task(id: store.remoteBackend?.context.binding.route) {
+      settings = nil; error = nil; expandedDevice = nil
+      await reload()
+    }
     .alert("移除这台设备？", isPresented: Binding(
       get: { deviceToRemove != nil },
       set: { if !$0 { deviceToRemove = nil } }
