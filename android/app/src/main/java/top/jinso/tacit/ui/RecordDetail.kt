@@ -2,6 +2,7 @@ package top.jinso.tacit.ui
 
 import android.content.ClipData
 import android.content.ClipDescription
+import android.content.Context
 import android.os.Build
 import android.os.PersistableBundle
 import android.content.ClipboardManager
@@ -34,6 +35,16 @@ import top.jinso.tacit.ui.components.*
 
 internal val correctionOrder = compareBy<HistoryRecord> { it.start }.thenBy { it.id }
 
+internal fun copyRecordText(context: Context, body: String, sensitive: Boolean) {
+    val clip = ClipData.newPlainText("Tacit", body)
+    if (sensitive && Build.VERSION.SDK_INT >= 33) {
+        clip.description.extras = PersistableBundle().apply {
+            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        }
+    }
+    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+}
+
 @Composable
 internal fun RecordDetail(
     record: HistoryRecord, vault: Vault, app: TacitApp, onBack: () -> Unit, notify: (String) -> Unit,
@@ -58,16 +69,7 @@ internal fun RecordDetail(
     Column(Modifier.fillMaxSize()) {
         PageBar("", onBack) {
             IconButton(enabled = body.isNotBlank(), onClick = {
-                val copy = context.getSystemService(ClipboardManager::class.java)
-                val clip = ClipData.newPlainText("Tacit", body)
-                if (record.sensitivity == "private" || latest?.sensitivity == "private") {
-                    if (Build.VERSION.SDK_INT >= 33) {
-                        clip.description.extras = PersistableBundle().apply {
-                            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-                        }
-                    }
-                }
-                copy.setPrimaryClip(clip)
+                copyRecordText(context, body, record.sensitivity == "private" || latest?.sensitivity == "private")
                 notify("已复制")
             }) { Icon(Icons.Outlined.ContentCopy, "复制") }
         }

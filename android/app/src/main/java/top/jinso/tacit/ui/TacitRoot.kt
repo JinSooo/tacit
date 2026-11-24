@@ -100,7 +100,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                         }
                     },
                 )
-                conversation.isNotEmpty() -> ConversationDetail(conversation, app, store, ::back) { reading.detail = it }
+                conversation.isNotEmpty() -> ConversationDetail(conversation, app, store, ::back, ::notify) { reading.detail = it }
                 timelineItem != null -> TimelineDetails(app, timelineItem, timeline.invalidation, ::back) {
                     reading.conversation = it
                 }
