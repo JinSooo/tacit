@@ -71,8 +71,8 @@ import java.util.concurrent.CompletableFuture
     }
     GroupCard {
         // Installed is the normal case; only a missing model gets words.
-        SettingsRow("语音模型", status = if (state.modelsReady) null else "未安装，下载后在手机上转写",
-            problem = !state.modelsReady, value = "279.8 MB")
+        SettingsRow("语音模型", status = if (state.modelsReady) null else "未安装，约 280 MB，下载后在手机上转写",
+            problem = !state.modelsReady)
         GroupDivider()
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (preparation.busy) {
@@ -107,7 +107,7 @@ import java.util.concurrent.CompletableFuture
                 val label = when {
                     preparation.phase == SpeechPreparationPhase.ERROR -> "重试下载"
                     state.modelsReady -> "重新下载"
-                    else -> "下载语音模型（279.8 MB）"
+                    else -> "下载模型"
                 }
                 if (state.modelsReady) TonalButton(label, download, enabled = enabled)
                 else PrimaryButton(label, download, enabled)
@@ -125,8 +125,8 @@ import java.util.concurrent.CompletableFuture
         )
         if (audio.supportsNpu()) {
             GroupDivider()
-            SettingsRow("本机加速", accelerationStatus) {
-                if (!accelerationReady) TonalButton("准备（162 MB）", {
+            SettingsRow("本机加速", if (accelerationReady) accelerationStatus else "约 162 MB") {
+                if (!accelerationReady) TonalButton("准备", {
                     runCatching { audio.downloadAcceleration() }.onFailure { notify(it.message ?: "暂时无法准备加速模型") }
                     preparation = audio.modelPreparation()
                 }, enabled = state.modelsReady && canImport)

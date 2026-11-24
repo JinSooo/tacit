@@ -94,7 +94,7 @@ internal fun RecordDetail(
                     DetailLink(date(change.start, "M 月 d 日 HH:mm") + " 的修正") { onSelect(change) }
                 }
             }
-            if (record.redactions > 0) Caption("已过滤 ${record.redactions} 处凭据", Modifier.padding(top = 12.dp))
+            if (record.redactions > 0) Caption("已隐去 ${record.redactions} 处密钥", Modifier.padding(top = 12.dp))
         }
         GroupDivider()
         Row(

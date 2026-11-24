@@ -83,11 +83,12 @@ internal fun summaryRowValue(saved: JSONObject?): Pair<String?, Boolean> = when 
             OutlinedTextField(model, { model = it.take(200) }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true,
                 label = { Text("模型名") })
             OutlinedTextField(key, { key = it.take(512) }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true,
-                label = { Text(if (hasKey) "API Key（已设置）" else "API Key") },
+                label = { Text("API Key") },
+                placeholder = if (hasKey) { { Text("已设置，留空保持不变") } } else null,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TonalButton("测试连接", { act { withContext(Dispatchers.IO) { SummaryClient(current()).test() }; "可以连上" } },
+                TonalButton("测试连接", { act { withContext(Dispatchers.IO) { SummaryClient(current()).test() }; "连接正常" } },
                     enabled = !busy && base.isNotBlank() && model.isNotBlank())
                 val changed = base != saved?.optString("base").orEmpty() || model != saved?.optString("model").orEmpty() || key.isNotBlank()
                 if (changed) TonalButton("保存", { act { withContext(Dispatchers.IO) { store(enabled) }.also { if (it == null) notify("已保存") } } },
@@ -96,7 +97,7 @@ internal fun summaryRowValue(saved: JSONObject?): Pair<String?, Boolean> = when 
         }
     }
     (message ?: saved?.optString("error")?.takeIf { enabled && it.isNotEmpty() })?.let {
-        Caption(it, color = if (it == "可以连上") tacitColors.muted else tacitColors.attention)
+        Caption(it, color = if (it == "连接正常") tacitColors.muted else tacitColors.attention)
     }
     if (busy) ProgressLine()
 }

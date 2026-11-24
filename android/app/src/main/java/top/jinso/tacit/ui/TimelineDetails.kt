@@ -154,7 +154,7 @@ internal fun TimelineDetails(
                 item(key = row.key) {
                     TextButton(onClick = { onOpenLocal(row.records) }) {
                         Text(if (local.orEmpty().size == 1) "这台手机录的对话"
-                            else "这台手机录的对话 · ${date(row.start, "HH:mm")}")
+                            else "这台手机录的对话，${date(row.start, "HH:mm")}")
                     }
                 }
             }

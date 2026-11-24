@@ -158,6 +158,6 @@ import top.jinso.tacit.ui.components.*
 @Composable
 private fun MacAddressField(address: String, update: (String) -> Unit, busy: Boolean) {
     OutlinedTextField(address, { update(it.take(512)) }, Modifier.fillMaxWidth(),
-        enabled = !busy, label = { Text("Mac 地址（可选）") }, singleLine = true,
+        enabled = !busy, label = { Text("Mac 地址") }, placeholder = { Text("留空自动发现") }, singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
 }

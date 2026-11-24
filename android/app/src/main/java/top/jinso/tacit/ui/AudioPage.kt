@@ -154,7 +154,7 @@ import java.util.concurrent.CompletableFuture
             item(key = "overview") {
                 Text(overview, Modifier.padding(top = 8.dp, end = 12.dp, bottom = 12.dp),
                     style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
-                    fontWeight = FontWeight.Normal, color = tacitColors.readingBody)
+                    fontWeight = FontWeight.Normal, color = tacitColors.ink)
             }
         }
         val notice = recordingNotice(state, app.prefs.audioCaptureWanted, macProblem)
@@ -312,7 +312,7 @@ private fun NoticeText(text: String) {
 private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Modifier, stacked: Boolean = false) {
     val relative = when (day) { today -> "今天"; today.minusDays(1) -> "昨天"; else -> null }
     val weekday = "星期" + "一二三四五六日"[day.dayOfWeek.value - 1]
-    val note = listOfNotNull(relative, weekday).joinToString(" · ")
+    val note = listOfNotNull(relative, weekday).joinToString("，")
     val title = if (day.year == today.year) "${day.monthValue} 月 ${day.dayOfMonth} 日" else "${day.year} 年 ${day.monthValue} 月 ${day.dayOfMonth} 日"
     if (stacked) Column(modifier) {
         Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)

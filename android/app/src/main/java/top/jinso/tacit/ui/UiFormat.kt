@@ -44,6 +44,7 @@ internal fun durationLabel(millis: Long): String {
     return when {
         minutes < 1 -> "不到 1 分钟"
         minutes < 60 -> "$minutes 分钟"
+        minutes % 60 == 0L -> "${minutes / 60} 小时"
         else -> "${minutes / 60} 小时 ${minutes % 60} 分"
     }
 }
