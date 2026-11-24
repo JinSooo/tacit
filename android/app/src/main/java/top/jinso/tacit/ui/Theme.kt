@@ -64,7 +64,7 @@ fun TacitTheme(content: @Composable () -> Unit) {
             inverseSurface = ink, inverseOnSurface = paper, inversePrimary = onAccent,
         )
     }
-    CompositionLocalProvider(localPalette provides palette) {
+    CompositionLocalProvider(localPalette provides palette, LocalReduceMotion provides rememberReduceMotion()) {
         MaterialTheme(colorScheme = colors, typography = tacitTypography, shapes = tacitShapes, content = content)
     }
 }
