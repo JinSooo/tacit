@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import top.jinso.tacit.ui.DelayedAppearance
 import top.jinso.tacit.ui.Motion
 import top.jinso.tacit.ui.tacitColors
 
@@ -194,5 +195,8 @@ internal fun PrivacyLock() {
 /** Thin accent progress line; the Material default is a heavy ink bar on this palette. */
 @Composable
 internal fun ProgressLine(modifier: Modifier = Modifier) {
-    LinearProgressIndicator(modifier.fillMaxWidth(), color = tacitColors.accent, trackColor = tacitColors.fill)
+    // Only a wait the user would notice shows a line; quick local reads show nothing.
+    DelayedAppearance(modifier.fillMaxWidth()) {
+        LinearProgressIndicator(Modifier.fillMaxWidth(), color = tacitColors.accent, trackColor = tacitColors.fill)
+    }
 }
