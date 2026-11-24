@@ -94,6 +94,7 @@ class AudioController(context: Context) {
     fun downloadModels(): CompletableFuture<Unit> = runtime.downloadModels()
     fun supportsNpu() = QnnCatalog.supported()
     fun accelerationState() = runtime.accelerationStatus
+    fun accelerationReady() = runtime.qnnModels.current() != null
     fun downloadAcceleration(): CompletableFuture<Unit> = runtime.downloadAcceleration()
     fun cancelModelDownload() = runtime.cancelModelDownload()
     fun importModels(tree: Uri): CompletableFuture<Unit> = runtime.importModels { runtime.models.import(tree) }
@@ -219,15 +220,13 @@ internal class AudioRuntime private constructor(val context: Context) {
                 // Only native load and pointer switch share the audio worker; network IO never blocks it.
                 submit {
                     cancellation.check()
-                    closeEngine()
-                    models.activate(stage, cancellation)
+                    replaceSpeechEngine(::closeEngine, ::schedule) { models.activate(stage, cancellation) }
                     report("本地语音模型已就绪")
                 }.get()
             } catch (error: Throwable) {
                 if (models.current() != stage) stage.deleteRecursively()
                 throw error
             }
-            schedule()
             Unit
         }, modelWorker).whenComplete { _, error -> modelFinished(error) }
     }
@@ -243,24 +242,22 @@ internal class AudioRuntime private constructor(val context: Context) {
             try {
                 updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, "正在本机验证 NPU 加速")
                 submit {
-                    cancellation.check(); closeEngine()
-                    qnnModels.activate(stage, cancellation)
+                    cancellation.check()
+                    replaceSpeechEngine(::closeEngine, ::schedule) { qnnModels.activate(stage, cancellation) }
                     accelerationStatus = "NPU 模型验证通过，等待处理录音"
                 }.get()
             } catch (error: Throwable) {
                 if (qnnModels.current() != stage) stage.deleteRecursively()
                 throw error
             }
-            schedule(); Unit
+            Unit
         }, modelWorker).whenComplete { _, error -> modelFinished(error) }
     }
     fun importModels(install: () -> java.io.File): CompletableFuture<Unit> {
         beginModelPreparation(SpeechPreparationPhase.IMPORTING)
         return submit {
-            closeEngine()
-            install()
+            replaceSpeechEngine(::closeEngine, ::schedule, install)
             report("本地语音模型已就绪")
-            schedule()
         }.whenComplete { _, error -> modelFinished(error) }
     }
     private val queued = AtomicBoolean(false)

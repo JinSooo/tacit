@@ -41,6 +41,8 @@ import java.util.concurrent.CompletableFuture
     }
     var state by remember { mutableStateOf(audio.state()) }
     var preparation by remember { mutableStateOf(audio.modelPreparation()) }
+    var accelerationReady by remember { mutableStateOf(audio.accelerationReady()) }
+    var accelerationStatus by remember { mutableStateOf(audio.accelerationState()) }
     val models = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
         if (result.resultCode == Activity.RESULT_OK && uri != null)
@@ -49,7 +51,13 @@ import java.util.concurrent.CompletableFuture
     val owner = LocalActivity.current as? LifecycleOwner
     LaunchedEffect(audio, owner) {
         owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            while (true) { state = audio.state(); preparation = audio.modelPreparation(); delay(250) }
+            while (true) {
+                state = audio.state()
+                preparation = audio.modelPreparation()
+                accelerationReady = audio.accelerationReady()
+                accelerationStatus = audio.accelerationState()
+                delay(250)
+            }
         }
     }
     GroupCard {
@@ -86,7 +94,7 @@ import java.util.concurrent.CompletableFuture
                     runCatching { audio.downloadModels() }.onFailure { notify("模型正在准备，请稍后重试") }
                     preparation = audio.modelPreparation()
                 }
-                val enabled = !busy && !state.recording
+                val enabled = !busy
                 val label = when {
                     preparation.phase == SpeechPreparationPhase.ERROR -> "重试下载"
                     state.modelsReady -> "重新下载"
@@ -97,7 +105,7 @@ import java.util.concurrent.CompletableFuture
             }
         }
         GroupDivider()
-        val canImport = !busy && !state.recording && !preparation.busy
+        val canImport = !busy && !preparation.busy
         SettingsRow(
             if (state.modelsReady) "更换模型文件夹" else "导入模型文件夹",
             onClick = if (canImport) {{
@@ -108,8 +116,8 @@ import java.util.concurrent.CompletableFuture
         )
         if (audio.supportsNpu()) {
             GroupDivider()
-            SettingsRow("本机加速", audio.accelerationState()) {
-                TonalButton("准备（162 MB）", {
+            SettingsRow("本机加速", accelerationStatus) {
+                if (!accelerationReady) TonalButton("准备（162 MB）", {
                     runCatching { audio.downloadAcceleration() }.onFailure { notify(it.message ?: "暂时无法准备加速模型") }
                     preparation = audio.modelPreparation()
                 }, enabled = state.modelsReady && canImport)
