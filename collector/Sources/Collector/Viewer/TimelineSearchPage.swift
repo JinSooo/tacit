@@ -48,8 +48,12 @@ struct TimelineSearchPage: View {
               PhIcon("x", size: 13).foregroundStyle(Palette.muted)
             }
             .buttonStyle(.plain).help("清除搜索").accessibilityLabel("清除搜索")
+            .transition(.opacity)
           }
+          if loading { DelayedProgress(size: .mini, label: "正在搜索").transition(.opacity) }
         }
+        .animation(Motion.quick, value: store.timelineSearch.isEmpty)
+        .animation(Motion.quick, value: loading)
         .padding(10).card(Radius.control)
         if !key.text.isEmpty { content }
       }
@@ -66,8 +70,10 @@ struct TimelineSearchPage: View {
   @ViewBuilder private var content: some View {
     if let openError {
       Text(openError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
+        .transition(.notice)
     }
-    if let result, result.query == query {
+    // 打字时先留着上一次的结果，新结果到了再整体淡换，不每敲一个字就塌成空白。
+    if let result {
       let segments = Dictionary(uniqueKeysWithValues: result.segments.map { ($0.date, $0.items) })
       let records = Dictionary(grouping: result.records) { TimelineDay.key($0.start) }
       let dates = Set(segments.keys).union(records.keys).sorted(by: >)
@@ -102,6 +108,8 @@ struct TimelineSearchPage: View {
           }
         }
       }
+      .id(result.query)
+      .transition(.opacity)
       if result.hasMore {
         Button("加载更多结果") { Task { await load(query, previous: result, request: request) } }
           .buttonStyle(.accentLink).font(.system(size: TextSize.caption)).disabled(loading)
@@ -111,15 +119,13 @@ struct TimelineSearchPage: View {
       }
     } else if let loadError {
       Placeholder(kind: .error(loadError) { retry += 1 })
-    } else {
-      ProgressView().controlSize(.small).accessibilityLabel("正在搜索")
     }
   }
 
   private func reset(_ key: QueryKey) async {
     let id = UUID()
     request = id
-    result = nil
+    if key.text.isEmpty { result = nil }
     expanded = nil
     loadError = nil
     openError = nil
@@ -151,14 +157,16 @@ struct TimelineSearchPage: View {
       let priorSegments = previous?.segments ?? []
       let priorRecords = previous?.records ?? []
       let knownDays = Set(priorSegments.map(\.date)), knownRecords = Set(priorRecords.map(\.id))
-      result = Results(query: text, segments: priorSegments + (foundSegments?.days ?? []).filter { !knownDays.contains($0.date) },
-                       labeledProjectDays: labeledDays, records: priorRecords + (foundRecords?.records ?? []).filter { !knownRecords.contains($0.id) },
-                       segmentCursor: foundSegments?.nextCursor,
-                       recordCursor: foundRecords?.nextCursor)
+      let next = Results(query: text, segments: priorSegments + (foundSegments?.days ?? []).filter { !knownDays.contains($0.date) },
+                         labeledProjectDays: labeledDays, records: priorRecords + (foundRecords?.records ?? []).filter { !knownRecords.contains($0.id) },
+                         segmentCursor: foundSegments?.nextCursor,
+                         recordCursor: foundRecords?.nextCursor)
+      // 新的一次搜索整体淡换（列表行不挪位置）；“加载更多”接在下面淡入。
+      withAnimation(previous == nil ? Motion.quick : Motion.standard) { result = next }
     } catch is CancellationError {
     } catch {
       guard id == request, query == text else { return }
-      loadError = error.localizedDescription
+      Motion.animate { loadError = error.localizedDescription }
     }
   }
 

@@ -5,8 +5,8 @@ struct ProjectPage: View {
   let id: String
   @Environment(ViewerStore.self) private var store
   @State private var overview: (revision: Int, brief: String)?
-  @State private var context = Loader<[HubThread]>()
-  @State private var timeline = Loader<HubAPI.TimelineResult>()
+  @State private var context = Loader<[HubThread]>(animated: true)
+  @State private var timeline = Loader<HubAPI.TimelineResult>(animated: true)
   @State private var expandedThread: String?
   @State private var expandedSegment: String?
   @State private var loadingMore = false
@@ -85,7 +85,7 @@ struct ProjectPage: View {
         Text("现在没有正在推进的事。")
           .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
       } else {
-        LazyVStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
           ForEach(list) { thread in
             ProjectContextRow(thread: thread, expanded: expandedThread == thread.id) {
               expandedThread = expandedThread == thread.id ? nil : thread.id
@@ -96,7 +96,7 @@ struct ProjectPage: View {
           .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
       }
     } else {
-      ProgressView().controlSize(.small).accessibilityLabel("正在读取正在推进的事")
+      DelayedProgress(label: "正在读取正在推进的事")
     }
   }
 
@@ -124,6 +124,7 @@ struct ProjectPage: View {
                   }
                 }
               }
+              .transition(.opacity)
             }
           }
         }
@@ -135,10 +136,11 @@ struct ProjectPage: View {
         if let moreError {
           Text(moreError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
             .padding(.horizontal, TimelineReadingLayout.edge)
+            .transition(.notice)
         }
       }
     } else {
-      ProgressView().controlSize(.small).accessibilityLabel("正在读取项目进展")
+      DelayedProgress(label: "正在读取项目进展")
     }
   }
 
@@ -158,7 +160,9 @@ struct ProjectPage: View {
       guard revision == store.revision else { throw CancellationError() }
       return threads
     }
-    if !Task.isCancelled, revision == store.revision { contextRevision = revision }
+    if !Task.isCancelled, revision == store.revision, contextRevision != revision {
+      Motion.animate { contextRevision = revision }
+    }
   }
 
   private func load() async {
@@ -171,7 +175,9 @@ struct ProjectPage: View {
       guard revision == store.revision else { throw CancellationError() }
       return page
     }
-    if !Task.isCancelled, revision == store.revision { loadedRevision = revision }
+    if !Task.isCancelled, revision == store.revision, loadedRevision != revision {
+      Motion.animate { loadedRevision = revision }
+    }
   }
 
   private func loadMore(before: String) async {
@@ -183,7 +189,8 @@ struct ProjectPage: View {
     do {
       let page = try await store.dataSource.timeline(projectId: id, before: before)
       guard !Task.isCancelled, revision == store.revision, timeline.value?.nextCursor == before else { return }
-      timeline.value = HubAPI.TimelineResult(days: previous.days + page.days, nextCursor: page.nextCursor)
+      // 更早的日期接在下面淡入，已读到的部分不动。
+      Motion.animate { timeline.value = HubAPI.TimelineResult(days: previous.days + page.days, nextCursor: page.nextCursor) }
     } catch is CancellationError {
     } catch {
       guard revision == store.revision else { return }
@@ -197,11 +204,12 @@ private struct ProjectContextRow: View {
   let expanded: Bool
   let onToggle: () -> Void
   @Environment(ViewerStore.self) private var store
+  @State private var hovering = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Rectangle().fill(Palette.hairline).frame(height: 1).accessibilityHidden(true)
-      Button(action: onToggle) {
+      Button { Motion.animate { onToggle() } } label: {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
           VStack(alignment: .leading, spacing: 4) {
             Text(thread.title).font(.system(size: TextSize.title, weight: .semibold)).foregroundStyle(Palette.ink)
@@ -219,12 +227,14 @@ private struct ProjectContextRow: View {
           }
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
-          PhIcon(expanded ? "caret-up" : "caret-down", size: 11).foregroundStyle(Palette.muted)
-            .accessibilityHidden(true)
+          DisclosureChevron(expanded: expanded).foregroundStyle(Palette.muted)
         }
-        .multilineTextAlignment(.leading).padding(.vertical, 12).contentShape(Rectangle())
+        .multilineTextAlignment(.leading).padding(.vertical, 12)
+        .background(Palette.fill.opacity(hovering ? 1 : 0))
+        .contentShape(Rectangle())
       }
       .buttonStyle(TimelineRowStyle())
+      .hoverState($hovering)
       .accessibilityValue(expanded ? "已展开" : "已折叠")
       .accessibilityHint(expanded ? "收起这件事的经过" : "展开这件事的经过")
       if expanded {
@@ -234,6 +244,7 @@ private struct ProjectContextRow: View {
             .buttonStyle(.accentLink).font(.system(size: TextSize.caption))
         }
         .padding(.leading, 16).padding(.bottom, 16)
+        .transition(.reveal)
       }
     }
   }

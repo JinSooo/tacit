@@ -42,6 +42,8 @@ struct MenuBarPanel: View {
     .frame(width: Self.width)
     .fixedSize(horizontal: false, vertical: true)
     .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
+    // 面板变高变矮时窗口边缘在动，内容贴着顶边，不跟着居中跳。
+    .frame(maxHeight: .infinity, alignment: .top)
     .task {
       while !Task.isCancelled {
         await load()
@@ -464,15 +466,18 @@ struct PanelButtonStyle: ButtonStyle {
     p.contentView = Self.backdrop(around: host)
     top = anchor.minY - 6
     centerX = anchor.midX
-    resize(to: host.fittingSize)
-    // 和系统菜单栏面板一样快速淡入；不缩放、不滑动，免得像是从别处飞来。
     closing = false
+    let frame = frame(for: host.fittingSize)
+    // 从图标下方淡入，顺势往下落 4pt 到位；不缩放，看得出是从图标展开的。
+    let drop: CGFloat = Motion.reduced ? 0 : 4
+    p.setFrame(frame.offsetBy(dx: 0, dy: drop), display: false)
     p.alphaValue = 0
     p.makeKeyAndOrderFront(nil)
     NSAnimationContext.runAnimationGroup { context in
-      context.duration = 0.12
-      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      context.duration = 0.18
+      context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
       p.animator().alphaValue = 1
+      if drop > 0 { p.animator().setFrame(frame, display: true) }
     }
     button.highlight(true)
     installMonitors()
@@ -483,8 +488,8 @@ struct PanelButtonStyle: ButtonStyle {
     guard let p = panel, p.isVisible, !closing else { return }
     closing = true
     NSAnimationContext.runAnimationGroup({ context in
-      context.duration = 0.1
-      context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+      context.duration = 0.14
+      context.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
       p.animator().alphaValue = 0
     }, completionHandler: { [weak self] in
       MainActor.assumeIsolated {
@@ -541,15 +546,27 @@ struct PanelButtonStyle: ButtonStyle {
     return p
   }
 
-  private func resize(to size: CGSize) {
-    guard let p = panel, size.width > 0, size.height > 0 else { return }
+  private func frame(for size: CGSize) -> CGRect {
     var frame = CGRect(x: centerX - size.width / 2, y: top - size.height, width: size.width, height: size.height)
     // 不超出图标所在屏幕的左右边。
     if let screen = button?.window?.screen ?? NSScreen.main {
       let bounds = screen.frame.insetBy(dx: 8, dy: 0)
       frame.origin.x = min(max(frame.minX, bounds.minX), bounds.maxX - frame.width)
     }
-    p.setFrame(frame, display: true)
+    return frame
+  }
+
+  /// 读完数据后面板变高：顶边不动，底边顺滑地伸缩到位。
+  private func resize(to size: CGSize) {
+    guard let p = panel, size.width > 0, size.height > 0, !closing else { return }
+    let target = frame(for: size)
+    guard abs(target.height - p.frame.height) > 0.5 || abs(target.minX - p.frame.minX) > 0.5 else { return }
+    guard p.isVisible, !Motion.reduced else { p.setFrame(target, display: true); return }
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.22
+      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      p.animator().setFrame(target, display: true)
+    }
   }
 
   private func installMonitors() {

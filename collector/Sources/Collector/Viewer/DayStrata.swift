@@ -66,12 +66,22 @@ struct DayStrata: View {
       let plot = CGRect(x: labelWidth, y: 0, width: max(10, geo.size.width - labelWidth - 6), height: height)
       let _ = { zoom.full = full; zoom.plot = plot }()
       ZStack(alignment: .topLeading) {
-        Canvas { ctx, _ in draw(ctx, plot: plot, domain: d) }
+        // 点“放大到选区 / 看整天”时可见区间顺滑推拉；双指缩放和平移不包动画，直接跟手。
+        StrataCanvas(lower: d.lowerBound.timeIntervalSinceReferenceDate, upper: d.upperBound.timeIntervalSinceReferenceDate) { ctx, domain in
+          draw(ctx, plot: plot, domain: domain)
+        }
         laneLabels
       }
       .contentShape(Rectangle())
       .onContinuousHover { phase in
-        if case .active(let p) = phase { hover = p; zoom.hoverX = p.x } else { hover = nil; zoom.hoverX = nil }
+        // 提示卡出现和收起时淡入淡出，跟着指针移动时不加动画。
+        if case .active(let p) = phase {
+          if hover == nil { withAnimation(Motion.quick) { hover = p } } else { hover = p }
+          zoom.hoverX = p.x
+        } else {
+          withAnimation(Motion.quick) { hover = nil }
+          zoom.hoverX = nil
+        }
       }
       .gesture(
         DragGesture(minimumDistance: 0)
@@ -93,7 +103,7 @@ struct DayStrata: View {
       .overlay(alignment: .topTrailing) { zoomControls }
     }
     .frame(height: height)
-    .animation(.smooth(duration: 0.25), value: lane)
+    .animation(Motion.quick, value: lane)
     .onAppear { zoom.install() }
     .onDisappear { zoom.uninstall() }
     .onChange(of: day) { zoom.window = nil }
@@ -174,11 +184,11 @@ struct DayStrata: View {
     if canZoomToBrush || zoom.window != nil {
       HStack(spacing: 4) {
         if canZoomToBrush, let b = brush {
-          Button { withAnimation(.easeOut(duration: 0.2)) { zoom.show(b) } } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
+          Button { Motion.animate { zoom.show(b) } } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
             .help("放大到选区").accessibilityLabel("放大到选区")
         }
         if zoom.window != nil {
-          Button { withAnimation(.easeOut(duration: 0.2)) { zoom.window = nil } } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
+          Button { Motion.animate { zoom.window = nil } } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
             .help("看整天").accessibilityLabel("看整天")
         }
       }
@@ -392,5 +402,22 @@ struct DayStrata: View {
   func range(_ r: HistoryRecord) -> String {
     guard let e = r.end, ViewerFormat.clock(e) != ViewerFormat.clock(r.start) else { return ViewerFormat.clock(r.start) }
     return "\(ViewerFormat.clock(r.start))–\(ViewerFormat.clock(e))"
+  }
+}
+
+/// 泳道画布：可见区间的起止可以插值，缩放按钮点下去时时间轴顺滑推拉。
+private struct StrataCanvas: View, Animatable {
+  var lower: Double
+  var upper: Double
+  let draw: (GraphicsContext, ClosedRange<Date>) -> Void
+
+  var animatableData: AnimatablePair<Double, Double> {
+    get { AnimatablePair(lower, upper) }
+    set { lower = newValue.first; upper = newValue.second }
+  }
+
+  var body: some View {
+    let domain = Date(timeIntervalSinceReferenceDate: lower)...Date(timeIntervalSinceReferenceDate: max(lower, upper))
+    Canvas { ctx, _ in draw(ctx, domain) }
   }
 }

@@ -356,7 +356,7 @@ struct DeviceSettingsRow: View {
     }
     .font(.system(size: TextSize.body))
     .contentShape(Rectangle())
-    .onHover { hovering = $0 }
+    .hoverState($hovering)
     .contextMenu { actions(inline: false) }
   }
 

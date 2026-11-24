@@ -43,11 +43,12 @@ struct PendingPage: View {
             HStack(spacing: 8) {
               PhIcon(g.symbol, size: 14).foregroundStyle(Palette.muted)
               Text(g.title).sectionTitle()
-              Text("\(g.items.count)").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+              Text("\(g.items.count)").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+                .rollingNumber(g.items.count)
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 340, maximum: 560), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) {
               ForEach(g.items) { item in
-                PendingCard(item: item) { withAnimation(.easeOut(duration: 0.2)) { _ = resolved.insert(item.id) }; Task { await store.refreshShared() } }
+                PendingCard(item: item) { Motion.animate { _ = resolved.insert(item.id) }; Task { await store.refreshShared() } }
                   .transition(.opacity)
               }
             }
@@ -82,12 +83,12 @@ struct TimelinePendingLine: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Button { store.timelinePendingExpanded.toggle() } label: {
+      Button { Motion.animate { store.timelinePendingExpanded.toggle() } } label: {
         HStack(spacing: 8) {
           PhIcon("tray", size: 14)
-          Text("\(Fmt.count(store.pending.count)) 个问题待确认")
+          Text("\(Fmt.count(store.pending.count)) 个问题待确认").rollingNumber(store.pending.count)
           Spacer()
-          PhIcon(store.timelinePendingExpanded ? "caret-down" : "caret-right", size: 11).accessibilityHidden(true)
+          DisclosureChevron(expanded: store.timelinePendingExpanded, sideways: true)
         }
         .padding(.vertical, 4)
       }
@@ -96,10 +97,12 @@ struct TimelinePendingLine: View {
       .accessibilityValue(store.timelinePendingExpanded ? "已展开" : "已折叠")
       if store.timelinePendingExpanded {
         ForEach(store.pending) { item in
-          PendingCard(item: item) { store.didResolvePending(item.id) }
+          PendingCard(item: item) { Motion.animate { store.didResolvePending(item.id) } }
+            .transition(.reveal)
         }
       }
     }
+    .animation(Motion.standard, value: store.pending.map(\.id))
   }
 }
 
@@ -274,7 +277,7 @@ struct PendingCard: View {
         Text(n).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
           .fixedSize(horizontal: false, vertical: true)
       }
-      if busy { ProgressView().controlSize(.small) }
+      if busy { DelayedProgress() }
     }
     .controlSize(.regular)
   }
@@ -303,6 +306,7 @@ struct SamplePlayer: View {
     HStack(spacing: 12) {
       Button { Task { await toggle() } } label: {
         PhIcon(playing ? "pause" : "play", fill: true, size: 12)
+          .id(playing).transition(.opacity)
           .frame(width: 28, height: 28)
           .foregroundStyle(Palette.onAccent)
           .background(Palette.accent, in: Circle())
@@ -323,8 +327,12 @@ struct SamplePlayer: View {
           }
       }
       .frame(height: 24)
+      // 读到真实波形时从平线淡换过去。
+      .id(peaks.isEmpty).transition(.opacity)
       if let error { Text(error).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention).fixedSize() }
     }
+    .animation(Motion.quick, value: playing)
+    .animation(Motion.standard, value: peaks.isEmpty)
     .padding(.vertical, 4)
     .task { await fetch() }
     .onDisappear { sound?.stop(); sound = nil }

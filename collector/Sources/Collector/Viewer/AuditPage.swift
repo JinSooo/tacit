@@ -74,7 +74,7 @@ struct AuditPage: View {
   }
 
   func toggle(_ key: String) {
-    withAnimation(.easeOut(duration: 0.2)) { if expanded.remove(key) == nil { expanded.insert(key) } }
+    Motion.animate { if expanded.remove(key) == nil { expanded.insert(key) } }
   }
 
   func load(reset: Bool) async {
@@ -139,28 +139,27 @@ struct AuditRow: View {
           }
           .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
           Text(read.date.map { ViewerFormat.clock($0) } ?? "").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).frame(width: 40, alignment: .trailing)
-          PhIcon("caret-right", size: 12).foregroundStyle(Palette.faint)
-            .rotationEffect(.degrees(expanded ? 90 : 0))
+          DisclosureChevron(expanded: expanded, size: 12, sideways: true).foregroundStyle(Palette.faint)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .background(hovering ? Palette.fill : .clear)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .onHover { hovering = $0 }
+      .hoverState($hovering)
       if expanded && count == 1 {
         VStack(alignment: .leading, spacing: 4) {
           if read.resultIds.isEmpty { Text("这次没有读到内容").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4) }
           ForEach(Array(Set(read.resultIds)).sorted(), id: \.self) { id in target(id) }
           if read.kind == "context" {
-            Button(showSnapshot ? "收起当时带入" : "查看当时带入") { showSnapshot.toggle() }.buttonStyle(.link).padding(.vertical,8)
-            if showSnapshot { RuntimeSnapshotView(id:read.id) }
+            Button(showSnapshot ? "收起当时带入" : "查看当时带入") { Motion.animate { showSnapshot.toggle() } }.buttonStyle(.link).padding(.vertical,8)
+            if showSnapshot { RuntimeSnapshotView(id:read.id).transition(.reveal) }
           }
           // bytes：返回给 AI 工具的 JSON 大小。
           Text("共返回 \(ViewerFormat.bytes(read.bytes))").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).padding(.top, 4)
         }
         .padding(.leading, 56).padding(.trailing, 16).padding(.bottom, 12)
-        .transition(.opacity)
+        .transition(.reveal)
       }
     }
   }
