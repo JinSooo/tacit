@@ -195,9 +195,9 @@ internal fun <T : Any> rememberLatest(value: T?): T? {
  * Rows only scrolled into view are not new and do not animate.
  */
 @Composable
-internal fun androidx.compose.foundation.lazy.LazyItemScope.itemMotion(): Modifier {
+internal fun Modifier.itemMotion(scope: androidx.compose.foundation.lazy.LazyItemScope): Modifier {
     val reduce = LocalReduceMotion.current
-    return Modifier.animateItem(
-        fadeInSpec = Motion.enter(), placementSpec = if (reduce) null else Motion.place, fadeOutSpec = Motion.exit(),
-    )
+    return with(scope) {
+        animateItem(fadeInSpec = Motion.enter(), placementSpec = if (reduce) null else Motion.place, fadeOutSpec = Motion.exit())
+    }
 }

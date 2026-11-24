@@ -135,7 +135,7 @@ internal fun TimelineDetails(
             }
             local.orEmpty().forEach { row ->
                 item(key = row.key) {
-                    TextButton(onClick = { onOpenLocal(row.records) }, itemMotion()) {
+                    TextButton(onClick = { onOpenLocal(row.records) }, Modifier.itemMotion(this)) {
                         Text(if (local.orEmpty().size == 1) "这台手机录的对话"
                             else "这台手机录的对话 · ${date(row.start, "HH:mm")}")
                     }
@@ -144,13 +144,13 @@ internal fun TimelineDetails(
             // Keyed so the loading line fades out as the originals fade in.
             when {
                 remoteIds?.isEmpty() == true && local.orEmpty().isNotEmpty() -> Unit
-                remoteIds?.isEmpty() == true -> item(key = "none") { Caption("没有可读取的原文", itemMotion()) }
-                offline -> item(key = "offline") { Caption("当前离线，无法读取原文", itemMotion()) }
-                originals == null -> item(key = "loading") { ProgressLine(itemMotion().fillMaxWidth()) }
-                originals.isNullOrEmpty() -> item(key = "none") { Caption("没有可读取的原文", itemMotion()) }
+                remoteIds?.isEmpty() == true -> item(key = "none") { Caption("没有可读取的原文", Modifier.itemMotion(this)) }
+                offline -> item(key = "offline") { Caption("当前离线，无法读取原文", Modifier.itemMotion(this)) }
+                originals == null -> item(key = "loading") { ProgressLine(Modifier.itemMotion(this).fillMaxWidth()) }
+                originals.isNullOrEmpty() -> item(key = "none") { Caption("没有可读取的原文", Modifier.itemMotion(this)) }
                 else -> originals.orEmpty().forEachIndexed { index, record ->
                     item(key = "original-$index") {
-                        Column(itemMotion()) {
+                        Column(Modifier.itemMotion(this)) {
                             Row(verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 SourceIcon(record.source)

@@ -165,14 +165,14 @@ import java.util.concurrent.CompletableFuture
             LazyColumn(Modifier.fillMaxSize().background(tacitColors.paper), contentPadding = PaddingValues(start = 20.dp, end = 8.dp, bottom = 32.dp)) {
                 dayTimeline?.overview?.takeIf { it.isNotBlank() }?.let { overview ->
                     item(key = "overview") {
-                        Text(overview, itemMotion().padding(top = 8.dp, end = 12.dp, bottom = 12.dp),
+                        Text(overview, Modifier.itemMotion(this).padding(top = 8.dp, end = 12.dp, bottom = 12.dp),
                             style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
                             fontWeight = FontWeight.Normal, color = tacitColors.readingBody)
                     }
                 }
                 val notice = recordingNotice(state, app.prefs.audioCaptureWanted, macProblem)
                 if (notice != null) item(key = "notice") {
-                    Box(itemMotion().padding(end = 12.dp, top = 8.dp)) {
+                    Box(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) {
                         val route = notice.route
                         when {
                             notice.start -> NoticeAction(notice.text, "开启", !busy, startRecording)
@@ -181,9 +181,9 @@ import java.util.concurrent.CompletableFuture
                         }
                     }
                 }
-                item(key = "recovery") { Box(itemMotion().padding(end = 12.dp)) { recovery() } }
+                item(key = "recovery") { Box(Modifier.itemMotion(this).padding(end = 12.dp)) { recovery() } }
                 if (candidate != null) item(key = "voice-${candidate.id}") {
-                    Column(itemMotion().padding(top = 12.dp, end = 12.dp)) {
+                    Column(Modifier.itemMotion(this).padding(top = 12.dp, end = 12.dp)) {
                         VoiceConfirmation(
                             candidate, !busy,
                             // Playing shows on the card itself; only a failure needs words.
@@ -212,11 +212,11 @@ import java.util.concurrent.CompletableFuture
                         )
                     }
                 }
-                if (!loaded || busy) item(key = "progress") { ProgressLine(itemMotion().padding(end = 12.dp, top = 8.dp)) }
+                if (!loaded || busy) item(key = "progress") { ProgressLine(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) }
                 if (loadFailed) item(key = "failed") {
-                    Caption("暂时无法读取录音，正在重试。", itemMotion().padding(top = 16.dp), color = tacitColors.attention)
+                    Caption("暂时无法读取录音，正在重试。", Modifier.itemMotion(this).padding(top = 16.dp), color = tacitColors.attention)
                 } else if (loaded && day !in availableDays) item(key = "empty") {
-                    Text("说过的话，会按天写在这里。", itemMotion().padding(top = 48.dp, end = 12.dp),
+                    Text("说过的话，会按天写在这里。", Modifier.itemMotion(this).padding(top = 48.dp, end = 12.dp),
                         style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.Normal, color = tacitColors.muted)
                 }
@@ -231,7 +231,7 @@ import java.util.concurrent.CompletableFuture
                             is TimelineEntry.Local -> summary == null
                             is TimelineEntry.Projected -> entry.item.draft
                         }
-                        val axis = itemMotion().then(if (dayTimeline == null) Modifier else Modifier.timelineAxis(index == 0, index == entries.lastIndex, draft))
+                        val axis = Modifier.itemMotion(this).then(if (dayTimeline == null) Modifier else Modifier.timelineAxis(index == 0, index == entries.lastIndex, draft))
                         when (entry) {
                             // 和其他来源的段混排时才标手机录音图标；只有本机录音时不用强调。
                             is TimelineEntry.Local -> RecordedConversation(entry.scene, summary, onConversation, axis,
@@ -245,7 +245,7 @@ import java.util.concurrent.CompletableFuture
                 val untranscribed = scenes.count { it.records.isEmpty() }
                 if (untranscribed > 0) item(key = "untranscribed-$day") {
                     val other = if (scenes.any { it.records.isNotEmpty() }) "另有 " else ""
-                    Row(itemMotion().padding(vertical = 12.dp)) {
+                    Row(Modifier.itemMotion(this).padding(vertical = 12.dp)) {
                         Box(Modifier.width(56.dp).padding(top = 9.dp)) {
                             Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
                         }
