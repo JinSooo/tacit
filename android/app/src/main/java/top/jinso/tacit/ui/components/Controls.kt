@@ -23,6 +23,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import top.jinso.tacit.ui.DelayedAppearance
+import top.jinso.tacit.ui.ExpandChevron
 import top.jinso.tacit.ui.Motion
 import top.jinso.tacit.ui.tacitColors
 
@@ -83,12 +84,8 @@ internal fun SettingsRow(
         }
         if (trailing != null) trailing()
         else if (onClick != null) {
-            val endIcon = when (expanded) {
-                true -> Icons.Outlined.ExpandLess
-                false -> Icons.Outlined.ExpandMore
-                null -> Icons.Outlined.ChevronRight
-            }
-            Icon(endIcon, null, Modifier.size(16.dp), tint = tacitColors.muted)
+            if (expanded != null) ExpandChevron(expanded, tacitColors.muted)
+            else Icon(Icons.Outlined.ChevronRight, null, Modifier.size(16.dp), tint = tacitColors.muted)
         }
     }
 }
@@ -108,7 +105,7 @@ internal fun NoticeRow(text: String, onClick: () -> Unit) {
 internal enum class Mark { OK, PROBLEM, UNKNOWN }
 
 @Composable
-internal fun StatusMark(mark: Mark) {
+internal fun StatusMark(mark: Mark) = Crossfade(mark, animationSpec = Motion.quick(), label = "status-mark") { mark ->
     when (mark) {
         Mark.OK -> Icon(Icons.Outlined.Check, null, Modifier.size(18.dp), tint = tacitColors.accent)
         Mark.PROBLEM -> Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(18.dp), tint = tacitColors.attention)
