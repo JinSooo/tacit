@@ -19,10 +19,11 @@ class MainActivity : ComponentActivity() {
         val app = application as TacitApp
         setContent { TacitRoot(app, resumed.value) }
         lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                app.sync.refreshTimeline(foreground = true)
                 while (true) {
-                    app.sync.refreshTimeline(foreground = true)
                     delay(30_000)
+                    app.sync.refreshTimeline()
                 }
             }
         }
@@ -30,6 +31,5 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         resumed.value++
-        top.jinso.tacit.sync.SyncWorker.enqueue(this, fromForeground = true)
     }
 }

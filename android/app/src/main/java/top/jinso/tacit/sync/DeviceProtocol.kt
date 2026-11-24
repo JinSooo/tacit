@@ -75,7 +75,9 @@ internal fun macOrigin(input: String): String {
     return "${uri.scheme}://${uri.rawAuthority}"
 }
 
-internal data class DeviceHttpReply(val status: Int, val body: ByteArray = byteArrayOf())
+internal data class DeviceHttpReply(
+    val status: Int, val body: ByteArray = byteArrayOf(), val retryAfter: String? = null,
+)
 internal fun deviceHttp(origin: String, payload: ByteArray?, timeout: Int = if (payload == null) 2_500 else 20_000): DeviceHttpReply {
     val path = if (payload == null) "/v1/device/hello" else "/v1/device"
     val connection = URI(macOrigin(origin) + path).toURL().openConnection(Proxy.NO_PROXY) as HttpURLConnection
