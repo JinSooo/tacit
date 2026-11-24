@@ -189,3 +189,15 @@ internal fun <T : Any> rememberLatest(value: T?): T? {
     @Suppress("UNCHECKED_CAST")
     return holder[0] as T?
 }
+
+/**
+ * A list row that fades in when it is added, fades out when removed, and glides when rows above it come or go.
+ * Rows only scrolled into view are not new and do not animate.
+ */
+@Composable
+internal fun androidx.compose.foundation.lazy.LazyItemScope.itemMotion(): Modifier {
+    val reduce = LocalReduceMotion.current
+    return Modifier.animateItem(
+        fadeInSpec = Motion.enter(), placementSpec = if (reduce) null else Motion.place, fadeOutSpec = Motion.exit(),
+    )
+}
