@@ -10,7 +10,9 @@ import java.net.URL
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CancellationException
+import java.util.concurrent.CompletionException
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
 
 internal data class SpeechModelResource(val path: String, val url: String, val bytes: Long, val sha256: String)
 
@@ -86,6 +88,28 @@ data class SpeechPreparationState(
 ) {
     val busy get() = phase in setOf(SpeechPreparationPhase.DOWNLOADING, SpeechPreparationPhase.VALIDATING, SpeechPreparationPhase.IMPORTING)
     val canCancel get() = busy && phase != SpeechPreparationPhase.IMPORTING && !cancelling
+
+    internal fun finished(error: Throwable?): SpeechPreparationState {
+        var cause = error
+        while (cause is ExecutionException || cause is CompletionException) cause = cause.cause
+        val phase = when (cause) {
+            null -> SpeechPreparationPhase.READY
+            is CancellationException -> SpeechPreparationPhase.CANCELLED
+            else -> SpeechPreparationPhase.ERROR
+        }
+        val message = when (cause) {
+            null -> "本地语音模型已就绪"
+            is CancellationException -> "已取消，未更换现有模型"
+            is java.net.SocketTimeoutException -> "下载超时，请检查网络后重试"
+            is java.net.UnknownHostException, is java.net.ConnectException -> "无法连接模型站点，请检查网络后重试，也可手动导入"
+            is SecurityException -> "无法联网下载，请检查应用网络权限，也可手动导入"
+            is IllegalArgumentException, is IllegalStateException, is java.io.IOException ->
+                cause.message?.takeIf { it.any { char -> char in '\u4e00'..'\u9fff' } }
+                    ?: "模型准备失败，请检查网络、存储空间和模型文件后重试"
+            else -> "模型加载失败，现有模型保持可用，请重试或手动导入"
+        }
+        return copy(phase = phase, message = message, cancelling = false)
+    }
 }
 
 /** Cancellation and pointer commit share a lock, so an accepted cancellation can never activate. */
