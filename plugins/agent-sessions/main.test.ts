@@ -51,6 +51,7 @@ describe("注入过滤列表", async () => {
     command: "<command-name>/synthetic</command-name>扩展正文", task: "<task-notification>完成</task-notification>",
     skill: "Base directory for this skill: /synthetic\n技能说明", summary: "This session is being continued from a previous conversation that ran out of context.",
     interrupted: "[Request interrupted by user]", automation: "You are running an automation. 继续任务",
+    orchestrator: "Delegated task node:delegated-task:fixture (合成任务) in child thread fixture [completed]:\n合成结果",
   };
   for (const rule of injectionRules) test(rule.name, () => expect(cleanUserText(samples[rule.name]!)).toBe(""));
   for (const rule of injectedBlockRules) test(rule.name, async () => {

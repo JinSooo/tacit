@@ -6,6 +6,7 @@ export const injectionRules = [
   { name: "summary", pattern: /^(?:This session is being continued from a previous conversation|The conversation so far has been summarized)/, reason: "压缩摘要是对旧消息的自动复述。" },
   { name: "interrupted", pattern: /^(?:\[Request interrupted|<turn_aborted>)/, reason: "中断提示是客户端状态。" },
   { name: "automation", pattern: /^You are running an automation(?:\.|\s)/, reason: "自动化调度提示并非用户当次输入。" },
+  { name: "orchestrator", pattern: /^(?:Delegated task node:|\[T3 Code: (?:scheduled task|the agent in T3 thread)|\[SYSTEM NOTIFICATION - NOT USER INPUT\])/, reason: "编排器转来的子任务结果、定时任务和系统通知不是用户亲自输入（2026-11-24 曾被当成用户原话出现在时间线草稿里）。" },
 ];
 
 /** 可与真正的用户正文共存的注入块，只剥去块本身。 */

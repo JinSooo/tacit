@@ -1,3 +1,4 @@
+import { readDayEvidence } from "../src/distill/day-evidence.ts";
 import { expect, test } from "bun:test";
 import { toLocalIso } from "../../packages/record/index.ts";
 import { reviewPlan, type DraftItem } from "../src/distill/day-review.ts";
@@ -117,6 +118,16 @@ test("草稿排除各类噪声和私密原文及修正，时间骨架仅供展�
     store.upsertDay({ date, detail: null });
     expect(drafts(store)).toHaveLength(1);
   } finally { ctx.cleanup(); }
+});
+
+test("编排器转来的子任务结果和定时任务不当作本人原话", () => {
+  // 2026-11-24：T3 转来的子任务完成通知被当成用户输入，成了时间线草稿的摘录。
+  const record = fixture({ source: "claude_code.session", source_ref: "orchestrated#a", title: "Claude Code · 苗圃 · 换遮阳网",
+    t_start: at(500), kind: "span", t_end: at(512),
+    body: "[我] 把东侧苗床的遮阳网换成七成密度的。\n\n[AI] 已记下。\n\n[我] [T3 Code: scheduled task \"合成\"]\n合成定时任务。\n\n[AI] 已执行。\n\n[我] Delegated task node:delegated-task:fixture (合成任务) [completed]:\n合成结果。\n\n[AI] 收到。" });
+  const entries = readDayEvidence({ id: record.id, source: record.source, title: record.title, at: record.t_start },
+    record, record.body, false, Date.parse(record.t_start), Date.parse(record.t_end!) + 1) ?? [];
+  expect(entries.filter(e => e.role === "user").map(e => e.text)).toEqual(["把东侧苗床的遮阳网换成七成密度的。"]);
 });
 
 test("摘录优先用本人原话，脱敏后取一句至多 60 字，无本人原话才用对方原话", () => {
