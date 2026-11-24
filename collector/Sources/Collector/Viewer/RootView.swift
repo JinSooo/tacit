@@ -8,7 +8,7 @@ struct RootView: View {
 
   private var columnVisibility: Binding<NavigationSplitViewVisibility> {
     Binding(get: { sidebarVisible ? .all : .detailOnly },
-            set: { sidebarVisible = $0 != .detailOnly })
+            set: { next in Motion.animate(Motion.page) { sidebarVisible = next != .detailOnly } })
   }
 
   private var sidebarAction: String { sidebarVisible ? "隐藏侧栏" : "显示侧栏" }
@@ -57,7 +57,7 @@ struct RootView: View {
   // 导航栈切换页面时会替换工具栏。根页和推入的详情都保留此项，避免标题栏高度变化。
   private var sidebarToggle: some ToolbarContent {
     ToolbarItem(placement: .navigation) {
-      Button { sidebarVisible.toggle() } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar) }
+      Button { Motion.animate(Motion.page) { sidebarVisible.toggle() } } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar) }
         .help(sidebarAction)
         .accessibilityLabel(sidebarAction)
         .accessibilityValue(sidebarVisible ? "已展开" : "已折叠")
@@ -110,12 +110,16 @@ struct Sidebar: View {
             // 一周没有活动的收进“更早”，有新活动自动回到上面；选中的项目在里面时保持展开。
             // 和项目行同一列对齐（系统折叠组的箭头会顶到最左、内容再缩一层，看着像另一种控件）。
             let open = olderExpanded || older.contains { store.section == .project($0.id) }
-            Button { olderExpanded = !open } label: {
-              SidebarLabel(title: "更早", icon: open ? "caret-down" : "caret-right")
-                .foregroundStyle(Palette.muted).contentShape(Rectangle())
+            Button { Motion.animate { olderExpanded = !open } } label: {
+              Label {
+                Text("更早").lineLimit(1)
+              } icon: {
+                DisclosureChevron(expanded: open, size: 16, sideways: true).frame(width: 16)
+              }
+              .foregroundStyle(Palette.muted).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if open { ForEach(older) { projectRow($0) } }
+            if open { ForEach(older) { projectRow($0).transition(.reveal) } }
           }
         }
       }
@@ -126,9 +130,11 @@ struct Sidebar: View {
         if let error = store.projectRemovalError {
           Text(error).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
             .padding(.horizontal, 12)
+            .transition(.notice)
         }
         CaptureFooter()
       }
+      .animation(Motion.standard, value: store.projectRemovalError)
     }
   }
 
@@ -185,6 +191,11 @@ struct CaptureFooter: View {
     .padding(.horizontal, 8).padding(.vertical, 12)
     .overlay(alignment: .top) { Rectangle().fill(Palette.hairline).frame(height: 1) }
     .padding(.horizontal, 8)
+    // 暂停、继续、出错：圆点、标题和按钮一起淡过去，不一下子全换掉。
+    .animation(Motion.standard, value: c.state)
+    .animation(Motion.standard, value: title)
+    .animation(Motion.standard, value: subtitle)
+    .animation(Motion.quick, value: store.section == .settings)
   }
 
   @ViewBuilder var control: some View {

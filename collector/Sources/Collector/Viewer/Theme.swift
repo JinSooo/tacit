@@ -132,8 +132,7 @@ struct CardModifier: ViewModifier {
     content
       .background(hover && hovering ? Palette.fill : Palette.paperRaised, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
       .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Palette.hairline, lineWidth: 1))
-      .animation(.easeOut(duration: 0.15), value: hovering)
-      .onHover { if hover { hovering = $0 } }
+      .hoverState($hovering, enabled: hover)
   }
 }
 
@@ -161,7 +160,9 @@ struct AccentButtonStyle: ButtonStyle {
       .foregroundStyle(Palette.onAccent)
       .padding(.horizontal, 12).frame(minHeight: 24)
       .background(Palette.accent.opacity(configuration.isPressed ? 0.8 : 1), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+      .pressFeedback(configuration.isPressed)
       .opacity(enabled ? 1 : 0.5)
+      .animation(Motion.quick, value: enabled)
       .contentShape(Rectangle())
   }
 }
@@ -176,6 +177,7 @@ struct AccentLinkStyle: ButtonStyle {
     configuration.label
       .foregroundStyle(Palette.accent)
       .opacity(!enabled ? 0.5 : configuration.isPressed ? 0.7 : 1)
+      .pressFeedback(configuration.isPressed)
       .contentShape(Rectangle())
   }
 }
@@ -191,7 +193,7 @@ struct Placeholder: View {
     VStack(spacing: 12) {
       switch kind {
       case .loading:
-        ProgressView().controlSize(.small)
+        DelayedProgress()
       case .error(let message, let retry):
         PhIcon("warning", size: 24).foregroundStyle(Palette.attention)
         Text(message).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).multilineTextAlignment(.center).textSelection(.enabled)

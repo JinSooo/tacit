@@ -17,7 +17,7 @@ struct HistoryPage<Header: View>: View {
   }
 
   @Environment(ViewerStore.self) private var store
-  @State private var activity = Loader<Activity>()
+  @State private var activity = Loader<Activity>(animated: true)
   @State private var loadedKey: LoadKey?
   @State private var selection: Selection?
   @State private var expanded: Set<String> = []
@@ -70,12 +70,15 @@ struct HistoryPage<Header: View>: View {
 
   /// 选中一条记录：展开它所在的段并滚过去。
   private func reveal(_ id: String) {
-    selection = .record(id)
+    // 打开右侧详情和展开所在段一起过渡，再由 scrollTarget 滚过去。
+    Motion.animate(Motion.page) { selection = .record(id) }
     if let block = allBlocks.first(where: { $0.segment.recordIds.contains(id) }) {
-      expanded.insert(block.id)
-      // 所在的段被折进"其他 N 段"时，先展开那一组，否则这一行不在列表里、滚不过去。
-      for case .minor(let group) in SegmentFold.fold(blocks) where group.contains(where: { $0.id == block.id }) {
-        expanded.insert(SegmentListItem.minor(group).id)
+      Motion.animate {
+        expanded.insert(block.id)
+        // 所在的段被折进"其他 N 段"时，先展开那一组，否则这一行不在列表里、滚不过去。
+        for case .minor(let group) in SegmentFold.fold(blocks) where group.contains(where: { $0.id == block.id }) {
+          expanded.insert(SegmentListItem.minor(group).id)
+        }
       }
       scrollTarget = selectedRowID() ?? block.id
     }
@@ -90,18 +93,18 @@ struct HistoryPage<Header: View>: View {
       .background(Palette.paper)
       .onChange(of: scrollTarget) { _, id in
         guard let id else { return }
-        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
+        withAnimation(Motion.page) { proxy.scrollTo(id, anchor: .center) }
         scrollTarget = nil
       }
     }
     .toolbar { toolbar }
-    .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { selection = nil } })) {
+    .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { Motion.animate(Motion.page) { selection = nil } } })) {
       inspector
         .inspectorColumnWidth(min: 300, ideal: 360, max: 520)
         // 检查器打开后要有地方关掉它（以前只能按 Esc，2026-11-10 用户报告）。放在检查器自己的工具栏里。
         .toolbar {
           ToolbarItem(placement: .primaryAction) {
-            Button { selection = nil } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar).scaleEffect(x: -1) }
+            Button { Motion.animate(Motion.page) { selection = nil } } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar).scaleEffect(x: -1) }
               .help("隐藏详情").accessibilityLabel("隐藏详情").keyboardShortcut("i", modifiers: [.command, .option])
           }
         }
@@ -120,7 +123,11 @@ struct HistoryPage<Header: View>: View {
       catch { return }
       scrollTarget = selectedRowID()
     }
-    .onKeyPress(.escape) { if selection != nil { selection = nil; return .handled }; if brush != nil { brush = nil; return .handled }; return .ignored }
+    .onKeyPress(.escape) {
+      if selection != nil { Motion.animate(Motion.page) { selection = nil }; return .handled }
+      if brush != nil { Motion.animate { brush = nil }; return .handled }
+      return .ignored
+    }
   }
 
   @ViewBuilder private var inspector: some View {
@@ -133,7 +140,7 @@ struct HistoryPage<Header: View>: View {
       // 从段里点进来的记录可以回到那一段。
       let parent = allBlocks.first { $0.segment.recordIds.contains(id) }
       RecordInspector(id: id, back: parent.map { b in .init(title: SegmentText.title(b)) { selection = .segment(b.id) } }) { _ in
-        selection = nil
+        Motion.animate(Motion.page) { selection = nil }
       }
       .id(id)
     case nil:
@@ -203,11 +210,12 @@ struct HistoryPage<Header: View>: View {
                 conversationTitles: Dictionary(conversations.flatMap { c in c.title.map { t in c.recordIds.map { ($0, t) } } ?? [] }, uniquingKeysWith: { a, _ in a })) { r in reveal(r.id) }
       if brush != nil || lane != nil {
         HStack(spacing: 8) {
-          if let b = brush { chip("\(ViewerFormat.clock(b.lowerBound))–\(ViewerFormat.clock(b.upperBound))", "clock") { brush = nil } }
-          if let l = lane { chip(l.name, "funnel-simple") { lane = nil } }
-          Text("\(Fmt.count(visible.count)) 条记录").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+          if let b = brush { chip("\(ViewerFormat.clock(b.lowerBound))–\(ViewerFormat.clock(b.upperBound))", "clock") { Motion.animate { brush = nil } } }
+          if let l = lane { chip(l.name, "funnel-simple") { Motion.animate { lane = nil } } }
+          Text("\(Fmt.count(visible.count)) 条记录").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+            .rollingNumber(visible.count)
         }
-        .transition(.opacity)
+        .transition(.notice)
       }
     }
     .padding(.horizontal, HistoryLayout.inset).padding(.vertical, 12)
@@ -216,7 +224,7 @@ struct HistoryPage<Header: View>: View {
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.hairline).frame(height: 1) }
     }
     .zIndex(2)
-    .animation(.easeOut(duration: 0.2), value: brush != nil || lane != nil)
+    .animation(Motion.standard, value: brush != nil || lane != nil)
   }
 
   func chip(_ text: String, _ symbol: String, clear: @escaping () -> Void) -> some View {
@@ -253,12 +261,12 @@ struct HistoryPage<Header: View>: View {
       case .minor(let group):
         let includesOmissions = group.contains { block in block.records.contains { omitted.contains($0.id) } }
         MinorSegmentsRow(blocks: group, expanded: expanded.contains(item.id), includesOmissions: includesOmissions) {
-          withAnimation(.easeOut(duration: 0.2)) { if expanded.contains(item.id) { expanded.remove(item.id) } else { expanded.insert(item.id) } }
+          Motion.animate { if expanded.contains(item.id) { expanded.remove(item.id) } else { expanded.insert(item.id) } }
         }
         .padding(.horizontal, HistoryLayout.inset)
         .id(item.id)
         if expanded.contains(item.id) {
-          ForEach(group) { block in segmentRow(block, omitted: omitted) }
+          ForEach(group) { block in segmentRow(block, omitted: omitted).transition(.reveal) }
         }
       }
     }
@@ -268,8 +276,10 @@ struct HistoryPage<Header: View>: View {
     let hasOmission = block.records.contains { omitted.contains($0.id) }
     SegmentRow(block: block, conversation: conversationNote(block), selected: selection == .segment(block.id),
                expanded: expanded.contains(block.id), includesOmissions: hasOmission) {
-      withAnimation(.easeOut(duration: 0.2)) { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
-      selection = .segment(block.id)
+      Motion.animate {
+        if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) }
+        selection = .segment(block.id)
+      }
     }
     .padding(.horizontal, HistoryLayout.inset)
     .id(block.id)
@@ -278,13 +288,13 @@ struct HistoryPage<Header: View>: View {
         let hasOmission = run.records.contains { omitted.contains($0.id) }
         RecordRow(record: run.newest, run: run, selected: run.records.contains { $0.id == selectedRecord },
                   expanded: false, nested: true, includesOmissions: hasOmission) {
-          selection = .record(run.newest.id)
+          Motion.animate(Motion.page) { selection = .record(run.newest.id) }
         }
         .padding(.horizontal, HistoryLayout.inset)
         .id(run.id)
-        .transition(.opacity)
+        .transition(.reveal)
       }
-      Color.clear.frame(height: 8)
+      Color.clear.frame(height: 8).transition(.identity)
     }
   }
 
@@ -332,7 +342,8 @@ struct HistoryDayStats: View {
     let startLabel = start.map { "开始 " + ViewerFormat.clock($0) }
     let stats = ["\(Fmt.count(count)) 段活动", "活跃 \(Fmt.duration(activeSeconds))"] + (startLabel.map { [$0] } ?? [])
     Text(stats.joined(separator: "，"))
-      .font(.system(size: TextSize.body)).monospacedDigit().foregroundStyle(Palette.muted)
+      .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+      .rollingNumber(stats)
       .multilineTextAlignment(.trailing)
       .help("活跃时长按记录覆盖的时段算，几个来源同时在记录只算一次")
   }
@@ -411,10 +422,11 @@ struct RecordRow: View {
         RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
           .fill(selected ? Palette.accent.opacity(0.13) : (hovering ? Palette.fill : .clear))
       }
+      .animation(Motion.quick, value: selected)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .onHover { hovering = $0 }
+    .hoverState($hovering)
   }
 
   @ViewBuilder var badges: some View {
