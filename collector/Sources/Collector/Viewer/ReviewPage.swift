@@ -12,8 +12,7 @@ struct ReviewPage: View {
         store.reviewDay = $0 == today ? nil : $0
         store.historyFocus = nil
       })
-      ReviewDayContent(day: day, today: today, now: clock.date, refresh: refresh)
-        .id(day.wrappedValue)
+      ReviewDayContent(selectedDay: day, today: today, now: clock.date, refresh: refresh)
     }
     .background(Palette.paper)
     .navigationTitle("")
@@ -37,20 +36,38 @@ struct ReviewWidth: ViewModifier {
 
 private struct ReviewDayContent: View {
   @Environment(ViewerStore.self) private var store
-  @State private var diary = Loader<DayDiary?>()
-  @State private var records = Loader<[HistoryRecord]>()
+  @State private var diary = Loader<DayDiary?>(animated: true)
+  @State private var records = Loader<[HistoryRecord]>(animated: true)
   @State private var loadedRevision: Int?
   @State private var expanded: String?
   @State private var picking = false
+  @Namespace private var densityPill
   @State private var setup: (health: DistillHealth, tools: [AgentToolState])?
   @State private var startupMessage: String?
   @State private var securityEvents = TimelineSecurityEventState()
-  @Binding var day: Date
+  /// 日期栏上选中的那天；切过去后先把那天读好，再整块滑进来，期间仍显示正在看的这一天。
+  @Binding var selectedDay: Date
+  /// 正在显示的那一天（内容、草稿、页脚都按它）。
+  @State private var day: Date
+  /// 日期栏数字的滚动方向：按日期栏上前后两次选中的日子算。
+  @State private var dateEdge: HorizontalEdge = .trailing
+  /// 换天读得慢时把旧的一天压淡，表示正在换。
+  @State private var stale = false
+  @State private var staleTimer: Task<Void, Never>?
   let today: Date
   let now: Date
   let refresh: Int
 
+  init(selectedDay: Binding<Date>, today: Date, now: Date, refresh: Int) {
+    _selectedDay = selectedDay
+    _day = State(initialValue: selectedDay.wrappedValue)
+    self.today = today
+    self.now = now
+    self.refresh = refresh
+  }
+
   private struct LoadKey: Equatable {
+    let day: Date
     let refresh: Int
     let revision: Int
     let density: TimelineDensity
@@ -64,7 +81,8 @@ private struct ReviewDayContent: View {
   }
   private var density: TimelineDensity { store.timelineDensity }
   private var current: Bool { loadedRevision == store.revision }
-  private var review: DayDiary? { current ? diary.value ?? nil : nil }
+  /// 重新读取时继续显示上一版，新内容到了再原位换上，不先清空闪一下。
+  private var review: DayDiary? { diary.value ?? nil }
   private var failed: Bool { review?.failed?.value == true }
   private var isToday: Bool { day == today }
   private var hasSegments: Bool { review?.detail?.items?.allSatisfy { $0.recordIds != nil } == true }
@@ -85,17 +103,28 @@ private struct ReviewDayContent: View {
       if density == .compact {
         compactList
       } else {
-        HistoryPage(day: day, diary: review, dayRecords: current ? records.value : nil,
+        HistoryPage(day: day, diary: current ? review : nil, dayRecords: current ? records.value : nil,
                     dayError: current ? records.error : nil, refresh: refresh) { stats in
           dayHeader(stats: stats)
         }
+        .id(day)
       }
     }
-    .task(id: LoadKey(refresh: refresh, revision: store.revision, density: density)) {
+    // 页首的提示行进出时，下面的时间线一起顺滑让位，不整块跳（挂在整页上，下面的列表也在同一次动画里）。
+    .animation(Motion.standard, value: securityEvents.events.first?.id)
+    .animation(Motion.standard, value: securityEvents.error)
+    .animation(Motion.standard, value: showsSetup && setup != nil)
+    .animation(Motion.standard, value: store.pending.isEmpty)
+    .animation(Motion.standard, value: startupMessage)
+    .onChange(of: selectedDay) { old, new in dateEdge = new < old ? .leading : .trailing }
+    .onDisappear { staleTimer?.cancel() }
+    .task(id: LoadKey(day: selectedDay, refresh: refresh, revision: store.revision, density: density)) {
       repeat {
         await load()
-        // 往日也会被补整理或每小时整理改写；没有刷新按钮，隔几分钟自己重读。
-        if !isToday { await WindowVisibility.pause(.seconds(180)); continue }
+        if selectedDay != today || day != today {
+          // 往日也会被补整理或每小时整理改写；没有刷新按钮，隔几分钟自己重读。
+          await WindowVisibility.pause(.seconds(180)); continue
+        }
         if await catchUp() { continue }
         await WindowVisibility.pause(.seconds(TimelineCatchUp.isRunning(store.catchUpRequest) ? 10 : 30))
       } while !Task.isCancelled
@@ -122,24 +151,33 @@ private struct ReviewDayContent: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         dayHeader().padding(.horizontal, TimelineReadingLayout.edge)
+        // 惰性排版：展开动画时只有看得见的几段逐帧挪位置；全量 VStack 实测每帧都超出 120Hz 的预算。
         LazyVStack(spacing: 0) {
           let drafts = self.drafts
-          let draftIds = Set(drafts.map(\.id))
-          let organizingId = TimelineCatchUp.isRunning(store.catchUpRequest) ? drafts.first?.id : nil
-          // 草稿和已整理的段按开始时刻统一倒序，不把草稿整组压在最上面。
-          let rows = (drafts + items).sorted { ($0.tStart, $0.id) > ($1.tStart, $1.id) }
-          let showsProjects = TimelineProjectLabels.showsNames(in: rows)
-          ForEach(rows) { item in
+          let items = self.items
+          let showsProjects = TimelineProjectLabels.showsNames(in: drafts + items)
+          // 草稿和整理好的段放在同一个列表里、按开始时刻统一倒序：草稿整理好后编号不变，这一行原位换成正式的样子。
+          // drafts 已去掉和整理好的段同编号的那些。
+          let rows = (drafts.map { (item: $0, isDraft: true) } + items.map { (item: $0, isDraft: false) })
+            .sorted { ($0.item.tStart, $0.item.id) > ($1.item.tStart, $1.item.id) }
+          ForEach(rows, id: \.item.id) { row in
+            let item = row.item
             TimelineSegmentRow(day: day, item: item, records: records.value,
                                projectName: showsProjects ? store.project(item.projectId)?.name : nil,
-                               offersThreadStory: true, isDraft: draftIds.contains(item.id),
-                               isOrganizing: item.id == organizingId,
+                               offersThreadStory: true, isDraft: row.isDraft,
+                               isOrganizing: row.isDraft && item.id == drafts.first?.id && TimelineCatchUp.isRunning(store.catchUpRequest),
                                expanded: expanded == item.id) {
               expanded = expanded == item.id ? nil : item.id
             }
+            .transition(.opacity)
           }
         }
+        .id(day)
+        .transition(.dayChange)
+        .opacity(stale ? 0.45 : 1)
         footer.padding(.horizontal, TimelineReadingLayout.edge)
+          .id(day)
+          .transition(.dayChange)
       }
       .modifier(ReviewWidth(maxWidth: TimelineReadingLayout.width))
     }
@@ -151,7 +189,12 @@ private struct ReviewDayContent: View {
       if let stats {
         stats.frame(maxWidth: .infinity, alignment: .trailing)
       }
-      if startupMessage == nil || hasSegments { headline }
+      if startupMessage == nil || hasSegments {
+        headline
+          .id(day)
+          .transition(.dayChange)
+          .opacity(stale ? 0.45 : 1)
+      }
       if let startupMessage {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
           Text(startupMessage).foregroundStyle(Palette.attention)
@@ -166,10 +209,12 @@ private struct ReviewDayContent: View {
             Task { await securityEvents.acknowledge(event, using: store.api) }
           }
           .disabled(securityEvents.acknowledging)
-          if let error = securityEvents.error { SettingsMessage(text: error) }
+          .id(event.id)
+          .transition(.notice)
+          if let error = securityEvents.error { SettingsMessage(text: error).transition(.notice) }
         }
-        if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools) }
-        if !store.pending.isEmpty { TimelinePendingLine() }
+        if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools).transition(.notice) }
+        if !store.pending.isEmpty { TimelinePendingLine().transition(.notice) }
       }
     }
   }
@@ -191,14 +236,18 @@ private struct ReviewDayContent: View {
   private var dateTitle: some View {
     Button { picking = true } label: {
       HStack(alignment: .firstTextBaseline, spacing: 12) {
-        Text(Fmt.date(day)).font(.serif(TextSize.display)).foregroundStyle(Palette.ink)
-        Text(ViewerFormat.weekday(day)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        // 日期栏不动，只有日期数字朝翻页方向滚过去。
+        Text(Fmt.date(selectedDay)).font(.serif(TextSize.display)).foregroundStyle(Palette.ink)
+          .contentTransition(Motion.reduced ? .opacity : .numericText(countsDown: dateEdge == .leading))
+        Text(ViewerFormat.weekday(selectedDay)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+          .contentTransition(.opacity)
       }
+      .animation(Motion.standard, value: selectedDay)
       .padding(.vertical, 4).contentShape(Rectangle())
     }
     .buttonStyle(.plain).help("跳到日期").popover(isPresented: $picking) {
-      DatePicker("选择日期", selection: Binding(get: { day }, set: {
-        day = Calendar.current.startOfDay(for: $0)
+      DatePicker("选择日期", selection: Binding(get: { selectedDay }, set: {
+        selectedDay = Calendar.current.startOfDay(for: $0)
         picking = false
       }), in: ...now, displayedComponents: .date)
         .datePickerStyle(.graphical).labelsHidden().padding(12)
@@ -211,9 +260,9 @@ private struct ReviewDayContent: View {
       HStack(spacing: 0) {
         Button { shift(-1) } label: { PhIcon("caret-left", size: 14) }
           .help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
-        Button("今天") { day = today }.disabled(isToday).keyboardShortcut("t", modifiers: .command)
+        Button("今天") { selectedDay = today }.disabled(selectedDay == today).keyboardShortcut("t", modifiers: .command)
         Button { shift(1) } label: { PhIcon("caret-right", size: 14) }
-          .help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command).disabled(isToday)
+          .help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command).disabled(selectedDay == today)
       }
       .buttonStyle(ReviewDateButtonStyle())
       .font(.system(size: TextSize.body)).fixedSize()
@@ -233,13 +282,18 @@ private struct ReviewDayContent: View {
     return Button {
       guard density != mode else { return }
       store.historyFocus = nil
-      store.timelineDensity = mode
+      Motion.animate { store.timelineDensity = mode }
     } label: {
       Text(title).font(.system(size: TextSize.caption))
         .padding(.horizontal, 8).frame(height: 24)
         .foregroundStyle(selected ? Palette.accent : Palette.muted)
-        .background(selected ? Palette.accent.opacity(0.13) : .clear,
-                    in: RoundedRectangle(cornerRadius: Radius.control - 2))
+        .background {
+          // 选中底块在两档之间滑过去，而不是这边消失那边出现。
+          if selected {
+            RoundedRectangle(cornerRadius: Radius.control - 2).fill(Palette.accent.opacity(0.13))
+              .matchedGeometryEffect(id: "density", in: densityPill)
+          }
+        }
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -247,8 +301,8 @@ private struct ReviewDayContent: View {
   }
 
   private func shift(_ delta: Int) {
-    guard let next = Calendar.current.date(byAdding: .day, value: delta, to: day), next <= today else { return }
-    day = next
+    guard let next = Calendar.current.date(byAdding: .day, value: delta, to: selectedDay), next <= today else { return }
+    selectedDay = next
   }
 
   @ViewBuilder private var headline: some View {
@@ -267,8 +321,8 @@ private struct ReviewDayContent: View {
       Placeholder(kind: .error(error) { Task { await load() } })
     } else if failed && !hasSegments {
       status("最近一次整理失败", color: Palette.attention)
-    } else if !current || diary.value == nil || (!hasContent && records.value == nil) {
-      ProgressView().controlSize(.small).accessibilityLabel("正在读取时间线")
+    } else if diary.value == nil || (!hasContent && records.value == nil) {
+      DelayedProgress(label: "正在读取时间线")
     } else if !drafts.isEmpty {
       EmptyView()
     } else if records.value?.isEmpty == true && review?.detail == nil {
@@ -291,7 +345,8 @@ private struct ReviewDayContent: View {
       if hasSegments, let at = cutoff {
         // 有草稿时截止时间只代表润色到哪，草稿本身已经更新到最新。
         Text("\(drafts.isEmpty ? "内容截至" : "已整理到") \(ReviewTime.clock(at, on: day))\(failed ? "，最近一次整理失败" : "")")
-          .monospacedDigit().foregroundStyle(failed ? Palette.attention : Palette.muted)
+          .foregroundStyle(failed ? Palette.attention : Palette.muted)
+          .rollingNumber(at)
       }
       Spacer(minLength: 0)
       Button("这一天的全部记录") { store.showDayRecords(day) }.buttonStyle(.accentLink)
@@ -337,32 +392,94 @@ private struct ReviewDayContent: View {
   }
 
   private func load() async {
+    let target = selectedDay
     let revision = store.revision
-    if !current {
-      diary.value = nil
-      diary.error = nil
-      records.value = nil
-      records.error = nil
-    }
+    let switching = target != day
+    // 折回正在显示的那天（或同一天刷新）时，之前换天留下的压淡和计时一并撤掉。
+    if switching { markStaleLater() } else { clearStale() }
+    // 被下一次换天取消时不收尾，压淡交给接手的那次读取处理。
+    defer { if switching, !Task.isCancelled { clearStale() } }
     async let readiness: Void = loadSetup()
-    await diary.run {
-      let value = try await store.dataSource.diary(day)
+    var nextDiary: DayDiary?
+    var diaryError: String?
+    do {
+      nextDiary = try await store.dataSource.diary(target)
       try Task.checkCancellation()
-      return value
+    } catch is CancellationError {
+      _ = await readiness
+      return
+    } catch {
+      diaryError = error.localizedDescription
     }
-    let loaded = diary.value ?? nil
-    let hasDiaryItems = loaded?.detail?.items?.allSatisfy { $0.recordIds != nil } == true
-    let hasDiaryDrafts = isToday && !(loaded?.drafts ?? []).isEmpty
+    let hasDiaryItems = nextDiary?.detail?.items?.allSatisfy { $0.recordIds != nil } == true
+    let hasDiaryDrafts = target == today && !(nextDiary?.drafts ?? []).isEmpty
     // 简约档已有整理段或草稿时不拉整天原文，展开单段再按需读取；详细档或空天再拉当天原始记录。
-    if density == .detailed || (!hasDiaryItems && !hasDiaryDrafts) {
-      await records.run {
-        let value = try await store.dataSource.day(day)
+    let needsRecords = density == .detailed || (!hasDiaryItems && !hasDiaryDrafts)
+    var nextRecords: [HistoryRecord]?
+    var recordsError: String?
+    if needsRecords {
+      do {
+        nextRecords = try await store.dataSource.day(target)
         try Task.checkCancellation()
-        return value
+      } catch is CancellationError {
+        _ = await readiness
+        return
+      } catch {
+        recordsError = error.localizedDescription
       }
     }
     _ = await readiness
-    if !Task.isCancelled, revision == store.revision { loadedRevision = revision }
+    guard !Task.isCancelled, target == selectedDay else { return }
+    let settled = revision == store.revision
+    if switching {
+      // 新的一天整块淡换进来（翻页方向由日期栏数字的滚动交代）；详细档带工具栏和右侧详情栏，叠着过渡会闪，直接换。
+      withAnimation(density == .compact ? Motion.page : nil) {
+        day = target
+        expanded = nil
+        diary.value = diaryError == nil ? .some(nextDiary) : nil
+        diary.error = diaryError
+        records.value = nextRecords
+        records.error = recordsError
+        if settled { loadedRevision = revision }
+      }
+    } else if loadedRevision != revision, diaryError != nil || recordsError != nil {
+      // 删除、修正之后重读失败：不能继续摆着删除前的内容，撤下并显示错误和重试。
+      Motion.animate {
+        expanded = nil
+        diary.value = nil
+        diary.error = diaryError ?? recordsError
+        records.value = nil
+        records.error = recordsError
+        if settled { loadedRevision = revision }
+      }
+    } else {
+      diary.apply {
+        if diaryError == nil, diary.value != .some(nextDiary) { diary.value = .some(nextDiary) }
+        if diary.error != diaryError { diary.error = diaryError }
+      }
+      if needsRecords {
+        records.apply {
+          if recordsError == nil, records.value != nextRecords { records.value = nextRecords }
+          if records.error != recordsError { records.error = recordsError }
+        }
+      }
+      if settled { loadedRevision = revision }
+    }
+  }
+
+  private func markStaleLater() {
+    staleTimer?.cancel()
+    staleTimer = Task {
+      try? await Task.sleep(for: Motion.loadingDelay)
+      guard !Task.isCancelled else { return }
+      withAnimation(Motion.quick) { stale = true }
+    }
+  }
+
+  private func clearStale() {
+    staleTimer?.cancel()
+    staleTimer = nil
+    if stale { withAnimation(Motion.quick) { stale = false } }
   }
 }
 
@@ -387,6 +504,8 @@ private struct ReviewDateButtonStyle: ButtonStyle {
       .frame(minWidth: 40, minHeight: 40)
       .foregroundStyle(Palette.muted).opacity(enabled ? 1 : 0.45)
       .background(configuration.isPressed ? Palette.fill : Color.clear, in: RoundedRectangle(cornerRadius: Radius.control))
+      .pressFeedback(configuration.isPressed)
+      .animation(Motion.quick, value: enabled)
   }
 }
 
@@ -413,6 +532,7 @@ private struct ReviewMetadata: View {
 private struct ReviewRowStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label.background(configuration.isPressed ? Palette.fill : Color.clear)
+      .pressFeedback(configuration.isPressed)
   }
 }
 

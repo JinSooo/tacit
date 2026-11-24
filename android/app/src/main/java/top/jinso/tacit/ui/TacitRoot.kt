@@ -2,12 +2,17 @@ package top.jinso.tacit.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterExitState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStoreOwner
@@ -90,13 +95,37 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                     onAudioPage = !settingsOpen,
                 )
             }
-            when {
-                locked -> EmptyState("记录库暂时无法打开", "密钥或数据库不可用，原文件已保留，请勿卸载应用或清除数据。")
-                store == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+            // Only the page's kind and id decide the transition: a background sync that refreshes the record or
+            // timeline data must never make the same page slide in again.
+            val page = when {
+                locked -> Page(PageKind.LOCKED)
+                store == null -> Page(PageKind.LOADING)
+                detail != null -> Page(PageKind.RECORD, detail.id)
+                conversation.isNotEmpty() -> Page(PageKind.CONVERSATION)
+                timelineItem != null -> Page(PageKind.TIMELINE, timelineItem.id)
+                !settingsOpen -> Page(PageKind.HOME)
+                else -> Page(PageKind.SETTINGS)
                 }
-                detail != null -> RecordDetail(
-                    detail, store, app, onBack = ::back, notify = ::notify,
+            val reduceMotion = LocalReduceMotion.current
+            AnimatedContent(
+                page,
+                transitionSpec = { pageTransform(initialState.kind.depth, targetState.kind.depth, reduceMotion) },
+                label = "page",
+            ) { page ->
+                // A page animating out is only a picture of where you were: it no longer takes back presses or taps.
+                val active = transition.targetState == EnterExitState.Visible
+                // A page animating out keeps the data it was showing after the state has moved on.
+                val shownDetail = rememberLatest(detail?.takeIf { page.kind == PageKind.RECORD && it.id == page.id })
+                val shownConversation = rememberLatest(conversation.takeIf { page.kind == PageKind.CONVERSATION && it.isNotEmpty() })
+                val shownItem = rememberLatest(timelineItem?.takeIf { page.kind == PageKind.TIMELINE && it.id == page.id })
+                ActiveScope(active) { Box(Modifier.fillMaxSize().background(tacitColors.paper)) {
+                    when {
+                        page.kind == PageKind.LOCKED -> EmptyState("记录库暂时无法打开", "密钥或数据库不可用，原文件已保留，请勿卸载应用或清除数据。")
+                        page.kind == PageKind.LOADING || store == null -> DelayedAppearance(Modifier.fillMaxSize()) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                        }
+                        page.kind == PageKind.RECORD -> if (shownDetail != null) RecordDetail(
+                            shownDetail, store, app, onBack = ::back, notify = ::notify,
                     onSelect = { reading.detail = it },
                     onDelete = { record ->
                         scope.launch {
@@ -114,11 +143,13 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                         }
                     },
                 )
-                conversation.isNotEmpty() -> ConversationDetail(conversation, app, store, ::back, ::notify) { reading.detail = it }
-                timelineItem != null -> TimelineDetails(app, timelineItem, timeline.invalidation, ::back) {
-                    reading.conversation = it
+                        page.kind == PageKind.CONVERSATION -> if (shownConversation != null) {
+                            ConversationDetail(shownConversation, app, store, ::back, ::notify) { reading.detail = it }
                 }
-                !settingsOpen -> {
+                        page.kind == PageKind.TIMELINE -> if (shownItem != null) {
+                            TimelineDetails(app, shownItem, timeline.invalidation, ::back) { reading.conversation = it }
+                        }
+                        page.kind == PageKind.HOME -> {
                     // A healthy connection is the default, and a failed sync away from home just waits for the Mac;
                     // the recording page only names a connection that needs the user.
                     val macProblem = mac?.status?.let {
@@ -136,9 +167,21 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                     health, mac?.status, mac?.retentionDays, { healthRefresh++ },
                 )
             }
+                    if (!active) Box(Modifier.matchParentSize().pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                        }
+                    })
+                } }
+            }
         }
     }
 }
+
+/** Depth orders the pages: going to a deeper one pushes in, going to a shallower one comes back. */
+private enum class PageKind(val depth: Int) { LOCKED(0), LOADING(0), HOME(0), SETTINGS(1), TIMELINE(1), CONVERSATION(2), RECORD(3) }
+
+private data class Page(val kind: PageKind, val id: String? = null)
 
 private data class ConnectionSummary(val status: MacStatus, val retentionDays: Int?)
 

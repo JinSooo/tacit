@@ -199,7 +199,9 @@ enum Route: Hashable {
       let latest = try await (q, s)
       try Task.checkCancellation()
       guard request == sharedRequest else { return }
-      (pending, speakers) = latest
+      // 待确认多了或少了时，时间线顶部那一行和面板角标一起顺滑变化。
+      let changed = pending.map(\.id) != latest.0.map(\.id)
+      withAnimation(changed ? Motion.standard : nil) { (pending, speakers) = latest }
       sharedError = projectError
     } catch is CancellationError {
     } catch {

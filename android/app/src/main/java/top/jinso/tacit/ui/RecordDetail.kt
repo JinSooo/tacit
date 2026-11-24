@@ -84,7 +84,7 @@ internal fun RecordDetail(
             latest?.let { DetailLink("查看这条修正") { onSelect(it) } }
             if (body != record.body) {
                 DetailLink(if (raw) "收起原文" else if (isAudio) "查看转写原文" else "查看原文", expanded = raw) { raw = !raw }
-                if (raw) ReadingBody(record.body)
+                Reveal(raw) { ReadingBody(record.body) }
             }
             original?.let { DetailLink("查看原记录") { onSelect(it) } }
             if (corrected.isNotEmpty()) {
@@ -164,8 +164,7 @@ internal fun DetailLink(label: String, expanded: Boolean? = null, action: () -> 
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Caption(label)
-        if (expanded != null) Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-            null, Modifier.size(16.dp), tint = tacitColors.muted)
+        if (expanded != null) ExpandChevron(expanded, tacitColors.muted)
     }
 }
 

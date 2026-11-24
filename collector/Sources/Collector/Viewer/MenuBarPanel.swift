@@ -15,9 +15,9 @@ struct MenuBarPanel: View {
   let open: (ViewerEntry) -> Void
   /// 内容高度变化时通知面板窗口跟着调整。
   let onSize: (CGSize) -> Void
-  @State private var now = Loader<NowState?>()
+  @State private var now = Loader<NowState?>(animated: true)
   @State private var hour = Loader<[HistoryRecord]>()
-  @State private var recent = Loader<[HistoryRecord]>()
+  @State private var recent = Loader<[HistoryRecord]>(animated: true)
 
   var body: some View {
     panel
@@ -42,6 +42,8 @@ struct MenuBarPanel: View {
     .frame(width: Self.width)
     .fixedSize(horizontal: false, vertical: true)
     .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
+    // 面板变高变矮时窗口边缘在动，内容贴着顶边，不跟着居中跳。
+    .frame(maxHeight: .infinity, alignment: .top)
     .task {
       while !Task.isCancelled {
         await load()
@@ -106,6 +108,9 @@ struct MenuBarPanel: View {
         Button("去授权…") { store.perform(.requestAX) }.controlSize(.small)
       }
     }
+    .animation(Motion.standard, value: c.state)
+    .animation(Motion.standard, value: title)
+    .animation(Motion.standard, value: subtitle)
   }
 
   var dot: Color {
@@ -171,8 +176,10 @@ struct MenuBarPanel: View {
           if hour.value != nil {
             // rows：结束（没有结束时间的按开始）落在这一小时里的记录条数。
             // 活跃：这些记录时段的并集落在这一小时内的长度，重叠只算一次。
-            Text(rows.isEmpty ? "没有记录" : "\(Fmt.count(rows.count)) 条记录，活跃 \(Fmt.duration(ActiveTime.seconds(rows, within: range)))")
-              .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(.secondary)
+            let summary = rows.isEmpty ? "没有记录" : "\(Fmt.count(rows.count)) 条记录，活跃 \(Fmt.duration(ActiveTime.seconds(rows, within: range)))"
+            Text(summary)
+              .font(.system(size: TextSize.caption)).foregroundStyle(.secondary)
+              .rollingNumber(summary)
           }
         }
         HourBar(records: rows, range: range)
@@ -194,6 +201,7 @@ struct MenuBarPanel: View {
             RecentRow(run: run, index: index, last: index == runs.count - 1) { record in
               open(.record(record.id, record.start))
             }
+            .transition(.notice)
           }
         }
         .padding(.horizontal, 6)
@@ -216,12 +224,14 @@ struct MenuBarPanel: View {
           HStack(spacing: 6) {
             PhIcon("tray", size: 14)
             Text("待确认")
-            Text("\(store.pending.count)").font(.system(size: TextSize.caption, weight: .semibold)).monospacedDigit()
+            Text("\(store.pending.count)").font(.system(size: TextSize.caption, weight: .semibold))
+              .rollingNumber(store.pending.count)
               .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 16)
               .background(.quaternary, in: Capsule())
           }
         }
         .buttonStyle(PanelButtonStyle())
+        .transition(.opacity)
       }
       Spacer()
       Button { open(.settings) } label: { PhIcon("gear-six", size: 16) }
@@ -231,6 +241,7 @@ struct MenuBarPanel: View {
     }
     .font(.system(size: TextSize.body))
     .foregroundStyle(.secondary)
+    .animation(Motion.standard, value: store.pending.isEmpty)
   }
 }
 
@@ -275,7 +286,7 @@ struct RecentRow: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .onHover { hovering = $0 }
+    .hoverState($hovering)
   }
 
   private var axis: some View {
@@ -396,8 +407,9 @@ struct PanelButtonStyle: ButtonStyle {
         .padding(.horizontal, 8).frame(minWidth: 28, minHeight: 28)
         .background(RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
           .fill(.quaternary.opacity(configuration.isPressed || hovering ? 1 : 0)))
+        .pressFeedback(configuration.isPressed)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .hoverState($hovering)
     }
   }
 }
@@ -431,7 +443,11 @@ struct PanelButtonStyle: ButtonStyle {
     self.open = open
   }
 
-  var isShown: Bool { panel?.isVisible == true }
+  /// 正在淡出：此时再点图标算重新打开，不算关闭。
+  private var closing = false
+  /// 每次打开、关闭都加一；淡出结束的回调只收拾属于自己那一次的面板。
+  private var generation = 0
+  var isShown: Bool { panel?.isVisible == true && !closing }
 
   func toggle(from button: NSStatusBarButton) {
     if isShown { close() } else { show(from: button) }
@@ -452,17 +468,45 @@ struct PanelButtonStyle: ButtonStyle {
     p.contentView = Self.backdrop(around: host)
     top = anchor.minY - 6
     centerX = anchor.midX
-    resize(to: host.fittingSize)
+    generation += 1
+    // 淡出途中又被打开：从当前透明度接着淡回来，不先闪成全透明、也不再落一次。
+    let resuming = closing && p.isVisible
+    closing = false
+    let frame = frame(for: host.fittingSize)
+    // 从图标下方淡入，顺势往下落 4pt 到位；不缩放，看得出是从图标展开的。
+    let drop: CGFloat = Motion.reduced || resuming ? 0 : 4
+    p.setFrame(frame.offsetBy(dx: 0, dy: drop), display: false)
+    if !resuming { p.alphaValue = 0 }
     p.makeKeyAndOrderFront(nil)
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.18
+      context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+      p.animator().alphaValue = 1
+      if drop > 0 { p.animator().setFrame(frame, display: true) }
+    }
     button.highlight(true)
     installMonitors()
     onVisibilityChange?(true)
   }
 
   func close() {
-    guard let p = panel, p.isVisible else { return }
-    p.orderOut(nil)
-    p.contentView = nil
+    guard let p = panel, p.isVisible, !closing else { return }
+    closing = true
+    generation += 1
+    let closingGeneration = generation
+    NSAnimationContext.runAnimationGroup({ context in
+      context.duration = 0.14
+      context.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
+      p.animator().alphaValue = 0
+    }, completionHandler: { [weak self] in
+      MainActor.assumeIsolated {
+        // 淡出途中又被打开了，就不再收起。
+        guard let self, self.closing, self.generation == closingGeneration else { return }
+        self.closing = false
+        p.orderOut(nil)
+        p.contentView = nil
+      }
+    })
     button?.highlight(false)
     for m in monitors { NSEvent.removeMonitor(m) }
     monitors = []
@@ -504,19 +548,32 @@ struct PanelButtonStyle: ButtonStyle {
     p.hasShadow = false
     p.hidesOnDeactivate = false
     p.isReleasedWhenClosed = false
-    p.animationBehavior = .utilityWindow
+    // 出现和收起的淡入淡出由 show / close 自己做，不叠系统的窗口动画。
+    p.animationBehavior = .none
     return p
   }
 
-  private func resize(to size: CGSize) {
-    guard let p = panel, size.width > 0, size.height > 0 else { return }
+  private func frame(for size: CGSize) -> CGRect {
     var frame = CGRect(x: centerX - size.width / 2, y: top - size.height, width: size.width, height: size.height)
     // 不超出图标所在屏幕的左右边。
     if let screen = button?.window?.screen ?? NSScreen.main {
       let bounds = screen.frame.insetBy(dx: 8, dy: 0)
       frame.origin.x = min(max(frame.minX, bounds.minX), bounds.maxX - frame.width)
     }
-    p.setFrame(frame, display: true)
+    return frame
+  }
+
+  /// 读完数据后面板变高：顶边不动，底边顺滑地伸缩到位。
+  private func resize(to size: CGSize) {
+    guard let p = panel, size.width > 0, size.height > 0, !closing else { return }
+    let target = frame(for: size)
+    guard abs(target.height - p.frame.height) > 0.5 || abs(target.minX - p.frame.minX) > 0.5 else { return }
+    guard p.isVisible, !Motion.reduced else { p.setFrame(target, display: true); return }
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.22
+      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      p.animator().setFrame(target, display: true)
+    }
   }
 
   private func installMonitors() {

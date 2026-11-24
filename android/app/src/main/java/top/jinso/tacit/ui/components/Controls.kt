@@ -1,5 +1,6 @@
 package top.jinso.tacit.ui.components
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,6 +22,9 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import top.jinso.tacit.ui.DelayedAppearance
+import top.jinso.tacit.ui.ExpandChevron
+import top.jinso.tacit.ui.Motion
 import top.jinso.tacit.ui.tacitColors
 
 @Composable
@@ -80,12 +84,8 @@ internal fun SettingsRow(
         }
         if (trailing != null) trailing()
         else if (onClick != null) {
-            val endIcon = when (expanded) {
-                true -> Icons.Outlined.ExpandLess
-                false -> Icons.Outlined.ExpandMore
-                null -> Icons.Outlined.ChevronRight
-            }
-            Icon(endIcon, null, Modifier.size(16.dp), tint = tacitColors.muted)
+            if (expanded != null) ExpandChevron(expanded, tacitColors.muted)
+            else Icon(Icons.Outlined.ChevronRight, null, Modifier.size(16.dp), tint = tacitColors.muted)
         }
     }
 }
@@ -105,7 +105,7 @@ internal fun NoticeRow(text: String, onClick: () -> Unit) {
 internal enum class Mark { OK, PROBLEM, UNKNOWN }
 
 @Composable
-internal fun StatusMark(mark: Mark) {
+internal fun StatusMark(mark: Mark) = Crossfade(mark, animationSpec = Motion.quick(), label = "status-mark") { mark ->
     when (mark) {
         Mark.OK -> Icon(Icons.Outlined.Check, null, Modifier.size(18.dp), tint = tacitColors.accent)
         Mark.PROBLEM -> Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(18.dp), tint = tacitColors.attention)
@@ -169,7 +169,11 @@ internal fun TextAction(
 @Composable
 internal fun PageBar(title: String, onBack: () -> Unit, close: Boolean = false, actions: @Composable RowScope.() -> Unit = {}) {
     TopAppBar(
-        title = { Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) },
+        title = {
+            Crossfade(title, animationSpec = Motion.quick(), label = "page-title") {
+                Text(it, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            }
+        },
         navigationIcon = {
             IconButton(onClick = onBack) {
                 Icon(if (close) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack, if (close) "关闭" else "返回")
@@ -188,5 +192,8 @@ internal fun PrivacyLock() {
 /** Thin accent progress line; the Material default is a heavy ink bar on this palette. */
 @Composable
 internal fun ProgressLine(modifier: Modifier = Modifier) {
-    LinearProgressIndicator(modifier.fillMaxWidth(), color = tacitColors.accent, trackColor = tacitColors.fill)
+    // Only a wait the user would notice shows a line; quick local reads show nothing.
+    DelayedAppearance(modifier.fillMaxWidth()) {
+        LinearProgressIndicator(Modifier.fillMaxWidth(), color = tacitColors.accent, trackColor = tacitColors.fill)
+    }
 }

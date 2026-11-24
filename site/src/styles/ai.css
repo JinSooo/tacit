@@ -148,6 +148,10 @@
   transform: translateY(-1px) rotate(45deg);
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .ai-source summary::after { transition: transform var(--t-standard) var(--ease); }
+}
+
 .ai-source[open] summary::after {
   transform: translateY(2px) rotate(225deg);
 }

@@ -4,6 +4,7 @@ import android.app.Activity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
@@ -70,8 +71,13 @@ import java.util.concurrent.CompletableFuture
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (preparation.busy) {
                 if (preparation.phase == SpeechPreparationPhase.DOWNLOADING) {
+                    // Progress is polled every 250 ms; following it smoothly keeps the bar from stepping.
+                    val progress by animateFloatAsState(
+                        (preparation.receivedBytes.toFloat() / preparation.totalBytes.coerceAtLeast(1)).coerceIn(0f, 1f),
+                        Motion.polled(), label = "download",
+                    )
                     LinearProgressIndicator(
-                        progress = { (preparation.receivedBytes.toFloat() / preparation.totalBytes.coerceAtLeast(1)).coerceIn(0f, 1f) },
+                        progress = { progress },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Caption(String.format(java.util.Locale.ROOT, "%.1f / %.1f MB",
@@ -149,13 +155,13 @@ private fun SpeakerSettings(
     val playingSpeaker by audio.playingSpeaker.collectAsState()
     val toggleSample = rememberSampleToggle(audio, notify)
 
-    fun work(task: () -> CompletableFuture<Unit>, success: String) {
+    fun work(task: () -> CompletableFuture<Unit>, success: String?, update: Boolean = true) {
         scope.launch {
             busy = true
             try {
                 withContext(Dispatchers.IO) { task().get() }
-                refresh++
-                notify(success)
+                if (update) refresh++
+                success?.let(notify)
             } catch (_: Exception) {
                 notify("操作未完成，请检查状态后重试")
             } finally {
@@ -213,7 +219,8 @@ private fun SpeakerSettings(
                 GroupDivider()
                 SettingsRow("已忽略的声音", value = "${ignored.size} 个",
                     expanded = expanded, onClick = { expanded = !expanded })
-                if (expanded) ignored.forEachIndexed { index, speaker ->
+                Reveal(expanded) {
+                    ignored.forEachIndexed { index, speaker ->
                     GroupDivider()
                     SettingsRow(speaker.name ?: "声音 ${index + 1}") {
                         Row {
@@ -224,6 +231,7 @@ private fun SpeakerSettings(
                 }
             }
         }
+    }
     }
 
     val target = naming

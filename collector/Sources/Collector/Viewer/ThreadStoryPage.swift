@@ -4,7 +4,7 @@ import CollectorCore
 struct ThreadStoryPage: View {
   let id: String
   @Environment(ViewerStore.self) private var store
-  @State private var title = Loader<String>()
+  @State private var title = Loader<String>(animated: true)
   @State private var loadedRevision: Int?
 
   var body: some View {
@@ -18,7 +18,7 @@ struct ThreadStoryPage: View {
             .accessibilityAddTraits(.isHeader)
           StoryUpdates(threadId: id)
         } else {
-          ProgressView().controlSize(.small).accessibilityLabel("正在读取这件事的经过")
+          DelayedProgress(label: "正在读取这件事的经过")
         }
       }
       .modifier(ReviewWidth())
@@ -38,7 +38,9 @@ struct ThreadStoryPage: View {
       guard revision == store.revision else { throw CancellationError() }
       return thread.title ?? "这件事的经过"
     }
-    if !Task.isCancelled, revision == store.revision { loadedRevision = revision }
+    if !Task.isCancelled, revision == store.revision, loadedRevision != revision {
+      Motion.animate { loadedRevision = revision }
+    }
   }
 }
 
@@ -56,7 +58,7 @@ struct TimelineDayHeading: View {
 struct StoryUpdates: View {
   let threadId: String
   @Environment(ViewerStore.self) private var store
-  @State private var story = Loader<[HubAPI.TimelineResult.Day]>()
+  @State private var story = Loader<[HubAPI.TimelineResult.Day]>(animated: true)
   @State private var loadedRevision: Int?
   @State private var expandedRecord: String?
 
@@ -72,13 +74,14 @@ struct StoryUpdates: View {
           updates(days)
         }
       } else {
-        ProgressView().controlSize(.small).accessibilityLabel("正在读取这件事的经过")
+        DelayedProgress(label: "正在读取这件事的经过")
       }
     }
     .task(id: store.revision) { await load() }
   }
 
   private func updates(_ days: [HubAPI.TimelineResult.Day]) -> some View {
+    // 一件事可能跨几百天，按天惰性排版。
     LazyVStack(alignment: .leading, spacing: 12) {
       ForEach(days.reversed()) { group in
         if let day = TimelineDay.date(group.date) {
@@ -113,6 +116,8 @@ struct StoryUpdates: View {
       } while before != nil
       return days
     }
-    if !Task.isCancelled, revision == store.revision { loadedRevision = revision }
+    if !Task.isCancelled, revision == store.revision, loadedRevision != revision {
+      Motion.animate { loadedRevision = revision }
+    }
   }
 }

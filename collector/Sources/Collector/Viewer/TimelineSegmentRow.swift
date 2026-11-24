@@ -38,19 +38,21 @@ struct TimelineSegmentRow: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Button(action: onToggle) {
+      Button { Motion.animate { onToggle() } } label: {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
           HStack(spacing: 4) {
             Text(time).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
             if isOrganizing {
-              ProgressView().controlSize(.mini).accessibilityLabel("正在整理")
+              ProgressView().controlSize(.mini).accessibilityLabel("正在整理").transition(.opacity)
             }
           }
           .frame(width: TimelineReadingLayout.timeWidth, alignment: showsTitle ? .leading : .trailing)
           .padding(.trailing, TimelineReadingLayout.gutter)
           VStack(alignment: .leading, spacing: 8) {
             if showsTitle {
+              // 草稿整理好后原位换成正式标题：字重渐变、文字交叉淡入，看得出“这段刚整理好”。
               Text(item.title).font(.system(size: TextSize.title, weight: isDraft ? .regular : .medium)).foregroundStyle(Palette.ink)
+                .contentTransition(.interpolate)
             }
             description
             HStack(spacing: showsTitle ? 6 : 8) {
@@ -60,7 +62,7 @@ struct TimelineSegmentRow: View {
           }
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
-          PhIcon(expanded ? "caret-up" : "caret-down", size: 11)
+          DisclosureChevron(expanded: expanded)
             .opacity(showsTitle && !hovering && !expanded ? 0 : 1)
             .foregroundStyle(Palette.muted).padding(.leading, 16).accessibilityHidden(true)
         }
@@ -70,13 +72,14 @@ struct TimelineSegmentRow: View {
         .contentShape(Rectangle())
       }
       .buttonStyle(TimelineRowStyle())
-      .onHover { hovering = $0 }
+      .hoverState($hovering)
       .accessibilityValue(expanded ? "已展开" : "已折叠")
       .accessibilityHint(expanded ? "收起原始记录" : "展开原始记录")
       if expanded {
         TimelineSegmentRecords(day: day, item: item, dayRecords: records, alignsTimeLeading: showsTitle,
                                offersThreadStory: offersThreadStory, isDraft: isDraft)
           .padding(.bottom, 16)
+          .transition(.reveal)
       }
     }
     .background(alignment: .leading) {
@@ -85,17 +88,15 @@ struct TimelineSegmentRow: View {
         .accessibilityHidden(true).allowsHitTesting(false)
     }
     .overlay(alignment: .topLeading) {
+      // 同一个圆点：草稿是空心环，整理好后原位填实；展开时染成铜绿。
       let color = expanded ? Palette.accent : Palette.muted
-      Group {
-        if isDraft {
-          Circle().fill(Palette.paper).overlay(Circle().strokeBorder(color, lineWidth: 1))
-            .frame(width: 7, height: 7)
-            .offset(x: TimelineReadingLayout.axis - 3, y: rowPadding + 6)
-        } else {
-          Circle().fill(color).frame(width: 5, height: 5)
-            .offset(x: TimelineReadingLayout.axis - 2, y: rowPadding + 7)
-        }
-      }
+      let diameter: CGFloat = isDraft ? 7 : 5
+      Circle().fill(isDraft ? Palette.paper : color)
+        .overlay(Circle().strokeBorder(color, lineWidth: isDraft ? 1 : 0))
+        .frame(width: diameter, height: diameter)
+        .offset(x: TimelineReadingLayout.axis - (diameter - 1) / 2, y: rowPadding + 9.5 - diameter / 2)
+        .animation(Motion.standard, value: isDraft)
+        .animation(Motion.quick, value: expanded)
       .accessibilityHidden(true).allowsHitTesting(false)
     }
   }
@@ -105,6 +106,7 @@ struct TimelineSegmentRow: View {
       Text(item.description).font(.system(size: TextSize.body))
         .lineSpacing(TextSize.lineSpacing(TextSize.body) + 2)
         .foregroundStyle(Palette.readingBody)
+        .contentTransition(.opacity)
     }
   }
 
@@ -153,6 +155,7 @@ struct TimelineSourceIcons: View {
 struct TimelineRowStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label.background(configuration.isPressed ? Palette.fill : Color.clear)
+      .pressFeedback(configuration.isPressed)
   }
 }
 
@@ -165,7 +168,7 @@ struct TimelineSegmentRecords: View {
   var isDraft = false
 
   @Environment(ViewerStore.self) private var store
-  @State private var records = Loader<[HistoryRecord]>()
+  @State private var records = Loader<[HistoryRecord]>(animated: true)
   @State private var showsBackgroundRecords = false
   @State private var correcting = false
   @State private var confirmsDeletion = false
@@ -188,7 +191,7 @@ struct TimelineSegmentRecords: View {
         Text(error).foregroundStyle(Palette.attention).padding(.leading, TimelineReadingLayout.contentInset)
         Button("重试") { Task { await load() } }.buttonStyle(.accentLink).padding(.leading, TimelineReadingLayout.contentInset)
       } else {
-        ProgressView().controlSize(.small).padding(.leading, TimelineReadingLayout.contentInset).accessibilityLabel("正在读取原始记录")
+        DelayedProgress(label: "正在读取原始记录").padding(.leading, TimelineReadingLayout.contentInset)
       }
       HStack(spacing: 16) {
         if offersThreadStory, let threadId = item.threadId {
@@ -266,7 +269,8 @@ struct TimelineSegmentRecords: View {
       try await store.api.deleteSegment(day: day, id: item.id, recordIds: recordIds)
       store.revision += 1
     } catch {
-      deleteError = error.localizedDescription
+      let message = error.localizedDescription
+      Motion.animate { deleteError = message }
     }
   }
 }
@@ -275,10 +279,10 @@ private struct TimelineRecordDisclosureStyle: DisclosureGroupStyle {
   func makeBody(configuration: Configuration) -> some View {
     VStack(alignment: .leading, spacing: 8) {
       Button {
-        configuration.isExpanded.toggle()
+        Motion.animate { configuration.isExpanded.toggle() }
       } label: {
         HStack(spacing: 8) {
-          PhIcon(configuration.isExpanded ? "caret-down" : "caret-right", size: 11)
+          DisclosureChevron(expanded: configuration.isExpanded, sideways: true)
           configuration.label
         }
         .foregroundStyle(Palette.muted)
@@ -288,7 +292,7 @@ private struct TimelineRecordDisclosureStyle: DisclosureGroupStyle {
       .buttonStyle(.plain)
       .accessibilityValue(configuration.isExpanded ? "已展开" : "已折叠")
       .padding(.leading, TimelineReadingLayout.contentInset)
-      if configuration.isExpanded { configuration.content }
+      if configuration.isExpanded { configuration.content.transition(.reveal) }
     }
   }
 }

@@ -66,12 +66,20 @@ struct DayStrata: View {
       let plot = CGRect(x: labelWidth, y: 0, width: max(10, geo.size.width - labelWidth - 6), height: height)
       let _ = { zoom.full = full; zoom.plot = plot }()
       ZStack(alignment: .topLeading) {
+        // 缩放不做推拉动画：每一帧都要按新刻度重画整天的记录，实测会连续掉帧；双指缩放和平移本来就跟手。
         Canvas { ctx, _ in draw(ctx, plot: plot, domain: d) }
         laneLabels
       }
       .contentShape(Rectangle())
       .onContinuousHover { phase in
-        if case .active(let p) = phase { hover = p; zoom.hoverX = p.x } else { hover = nil; zoom.hoverX = nil }
+        // 提示卡出现和收起时淡入淡出，跟着指针移动时不加动画。
+        if case .active(let p) = phase {
+          if hover == nil { withAnimation(Motion.quick) { hover = p } } else { hover = p }
+          zoom.hoverX = p.x
+        } else {
+          withAnimation(Motion.quick) { hover = nil }
+          zoom.hoverX = nil
+        }
       }
       .gesture(
         DragGesture(minimumDistance: 0)
@@ -93,7 +101,7 @@ struct DayStrata: View {
       .overlay(alignment: .topTrailing) { zoomControls }
     }
     .frame(height: height)
-    .animation(.smooth(duration: 0.25), value: lane)
+    .animation(Motion.quick, value: lane)
     .onAppear { zoom.install() }
     .onDisappear { zoom.uninstall() }
     .onChange(of: day) { zoom.window = nil }
@@ -174,11 +182,11 @@ struct DayStrata: View {
     if canZoomToBrush || zoom.window != nil {
       HStack(spacing: 4) {
         if canZoomToBrush, let b = brush {
-          Button { withAnimation(.easeOut(duration: 0.2)) { zoom.show(b) } } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
+          Button { zoom.show(b) } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
             .help("放大到选区").accessibilityLabel("放大到选区")
         }
         if zoom.window != nil {
-          Button { withAnimation(.easeOut(duration: 0.2)) { zoom.window = nil } } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
+          Button { zoom.window = nil } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
             .help("看整天").accessibilityLabel("看整天")
         }
       }
@@ -394,3 +402,4 @@ struct DayStrata: View {
     return "\(ViewerFormat.clock(r.start))–\(ViewerFormat.clock(e))"
   }
 }
+

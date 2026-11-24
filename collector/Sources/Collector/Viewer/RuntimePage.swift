@@ -71,7 +71,7 @@ private struct ModelCallRow: View {
   let toggle: () -> Void
   var body: some View {
     VStack(alignment:.leading,spacing:0) {
-      Button(action:toggle) {
+      Button { Motion.animate { toggle() } } label: {
         HStack(alignment:.top,spacing:16) {
           VStack(alignment:.leading,spacing:5) {
             Text(call.title).font(.system(size:TextSize.body,weight:.medium)).foregroundStyle(Palette.ink)
@@ -83,7 +83,7 @@ private struct ModelCallRow: View {
             Text(call.date.map { ViewerFormat.dayTitle($0) + " " + ViewerFormat.clock($0) } ?? call.at)
             Text(call.elapsed)
           }.font(.system(size:TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
-          PhIcon(expanded ? "caret-down" : "caret-right",size:12).foregroundStyle(Palette.muted)
+          DisclosureChevron(expanded: expanded, size: 12, sideways: true).foregroundStyle(Palette.muted)
         }.padding(16).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
       }.buttonStyle(.plain).accessibilityLabel("\(call.title)，\(call.status)").accessibilityValue(expanded ? "已展开" : "已收起")
       if expanded {

@@ -103,12 +103,12 @@ struct SetupChecklist: View {
     let agentsReady = tools.contains(where: \.connected)
     if TimelineSetup.shouldShow(permissionsReady: missing.isEmpty, modelReady: modelReady, agentReady: agentsReady) {
       VStack(alignment: .leading, spacing: 0) {
-        Button { expanded.toggle() } label: {
+        Button { Motion.animate { expanded.toggle() } } label: {
           HStack(spacing: 8) {
             PhIcon("check-circle", size: 14)
             Text("还差几步")
             Spacer()
-            PhIcon(expanded ? "caret-down" : "caret-right", size: 11).accessibilityHidden(true)
+            DisclosureChevron(expanded: expanded, sideways: true)
           }.padding(.vertical, 4)
         }
         .buttonStyle(.accentLink).font(.system(size: TextSize.body))
@@ -157,8 +157,10 @@ struct SetupChecklist: View {
 
   func step<Action: View>(done: Bool, title: String, detail: String?, @ViewBuilder action: () -> Action) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
+      // 完成的一步：虚线圈淡换成铜绿勾。
       PhIcon(done ? "check-circle" : "circle-dashed", fill: done, size: 16)
         .foregroundStyle(done ? Palette.accent : Palette.faint)
+        .id(done).transition(.opacity)
         .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
       VStack(alignment: .leading, spacing: 2) {
         Text(title).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(done ? Palette.muted : Palette.ink)
@@ -171,5 +173,6 @@ struct SetupChecklist: View {
       if !done { action().font(.system(size: TextSize.body)) }
     }
     .padding(.vertical, 12)
+    .animation(Motion.standard, value: done)
   }
 }

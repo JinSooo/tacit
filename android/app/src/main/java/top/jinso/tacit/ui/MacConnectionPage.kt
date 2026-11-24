@@ -97,21 +97,25 @@ import top.jinso.tacit.ui.components.*
                 GroupDivider()
                 SettingsRow("被拒", value = "$rejected 条", problem = true,
                     expanded = expanded, onClick = { expanded = !expanded })
-                if (expanded) current.rejected.filterKeys(String::isNotEmpty).forEach { (reason, count) ->
+                Reveal(expanded) {
+                    current.rejected.filterKeys(String::isNotEmpty).forEach { (reason, count) ->
                     GroupDivider()
                     SettingsRow(reason, value = "$count 条")
                 }
             }
+            }
             GroupDivider()
             SettingsRow("Mac 地址", value = current.manual.ifBlank { "自动" }, expanded = manualOpen,
                 onClick = { manualOpen = !manualOpen })
-            if (manualOpen) Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+            Reveal(manualOpen) {
+                Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MacAddressField(displayAddress, { address = it }, busy)
-                if (displayAddress != current.manual) {
+                    Reveal(displayAddress != current.manual) {
                     TonalButton("保存地址", { action { app.sync.updateManual(displayAddress); address = null } }, enabled = !busy)
                 }
             }
+        }
         }
     } else if (current != null) {
         if (current.removed) Caption("已在 Mac 上移除，需重新配对", color = tacitColors.attention)
@@ -129,13 +133,17 @@ import top.jinso.tacit.ui.components.*
             }
             GroupDivider()
             SettingsRow(if (manualOpen) "收起 Mac 地址" else "手动填写 Mac 地址", expanded = manualOpen, onClick = { manualOpen = !manualOpen })
-            if (manualOpen) Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
+            Reveal(manualOpen) {
+                Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                 MacAddressField(displayAddress, { address = it }, busy)
             }
         }
     }
+    }
 
-    (message ?: current?.error)?.let { Caption(it, color = tacitColors.attention) }
+    val problem = message ?: current?.error
+    val shownProblem = rememberLatest(problem)
+    Reveal(problem != null) { shownProblem?.let { Caption(it, color = tacitColors.attention) } }
     if (busy || (current == null && message == null)) ProgressLine()
     var confirmDisconnect by rememberSaveable { mutableStateOf(false) }
     if (current?.name != null) {

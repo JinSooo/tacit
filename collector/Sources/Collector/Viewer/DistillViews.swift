@@ -77,7 +77,7 @@ struct ThreadLine: View {
     .padding(.horizontal, 16).padding(.vertical, 12)
     .background(hovering ? Palette.fill : .clear)
     .contentShape(Rectangle())
-    .onHover { hovering = $0 }
+    .hoverState($hovering)
   }
 }
 
@@ -145,7 +145,7 @@ struct ThreadPage: View {
         EvidenceList(loader: evidence) { Task { await loadEvidence() } }
       }
     }
-    .animation(.easeOut(duration: 0.2), value: depth)
+    .animation(Motion.standard, value: depth)
   }
 }
 
@@ -267,7 +267,7 @@ struct FactGroup: View {
       }
       .card()
       if rows.count > limit {
-        Button(expanded ? "收起" : "展开全部 \(rows.count) 条") { withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() } }
+        Button(expanded ? "收起" : "展开全部 \(rows.count) 条") { Motion.animate { expanded.toggle() } }
           .buttonStyle(.accentLink).font(.system(size: TextSize.caption))
       }
     }
@@ -321,7 +321,7 @@ struct FactRow: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.horizontal, 16).padding(.vertical, 12)
     .contentShape(Rectangle())
-    .onHover { hovering = $0 }
+    .hoverState($hovering)
     .contextMenu {
       if canCorrect { Button("这条不对…", action: onCorrect) }
       if canDetach { Button("不属于这里…") { confirmDetach = true } }
@@ -398,7 +398,7 @@ struct EvidenceRow: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .onHover { hovering = $0 }
+    .hoverState($hovering)
   }
 }
 

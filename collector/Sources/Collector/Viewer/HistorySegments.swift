@@ -85,7 +85,7 @@ struct SegmentRow: View {
           }
           HStack(spacing: 4) {
             Text("\(Fmt.count(block.records.count)) 条").monospacedDigit()
-            PhIcon("caret-right", size: 10).rotationEffect(.degrees(expanded ? 90 : 0))
+            DisclosureChevron(expanded: expanded, size: 10, sideways: true)
           }
           .help(expanded ? "收起原始记录" : "展开 \(block.records.count) 条原始记录")
         }
@@ -103,10 +103,11 @@ struct SegmentRow: View {
         RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
           .fill(selected ? Palette.accent.opacity(0.13) : (hovering ? Palette.fill : .clear))
       }
+      .animation(Motion.quick, value: selected)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .onHover { hovering = $0 }
+    .hoverState($hovering)
   }
 
   /// 涉及的应用和各自的时长，最多列 4 个。
@@ -260,7 +261,7 @@ struct MinorSegmentsRow: View {
         if includesOmissions { TimelineOmissionLabel() }
         HStack(spacing: 4) {
           Text("\(blocks.count) 段零碎活动").monospacedDigit()
-          PhIcon("caret-right", size: 10).rotationEffect(.degrees(expanded ? 90 : 0))
+          DisclosureChevron(expanded: expanded, size: 10, sideways: true)
         }
         .font(.system(size: TextSize.caption))
         .foregroundStyle(Palette.muted)
@@ -275,7 +276,7 @@ struct MinorSegmentsRow: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .onHover { hovering = $0 }
+    .hoverState($hovering)
     .help("每段不到 2 分钟、还没整理的活动，折在一起")
   }
 }

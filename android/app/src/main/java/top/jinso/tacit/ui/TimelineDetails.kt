@@ -3,6 +3,7 @@ package top.jinso.tacit.ui
 import android.net.ConnectivityManager
 import android.net.Network
 import androidx.activity.compose.LocalActivity
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,6 +19,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -43,17 +45,19 @@ internal fun Modifier.timelineAxis(first: Boolean, last: Boolean, draft: Boolean
     val line = tacitColors.faint
     val dot = tacitColors.accent
     val paper = tacitColors.paper
+    // When a draft is written up its hollow dot fills in place rather than swapping.
+    val filled by animateFloatAsState(if (draft) 0f else 1f, Motion.enter(), label = "dot")
     return drawBehind {
         val x = 47.dp.toPx()
         val y = 26.dp.toPx()
         drawLine(line, Offset(x, if (first) y else 0f), Offset(x, if (last) y else size.height), 1.dp.toPx())
-        if (draft) {
             // 还没整理的段画空心点（Mac 时间线同样如此），整理好的是实心点。
-            drawCircle(paper, 3.5.dp.toPx(), Offset(x, y))
-            drawCircle(dot, 3.dp.toPx(), Offset(x, y), style = Stroke(1.dp.toPx()))
-        } else {
-            drawCircle(dot, 2.5.dp.toPx(), Offset(x, y))
+        val hollow = 1f - filled
+        if (hollow > 0f) {
+            drawCircle(paper, 3.5.dp.toPx(), Offset(x, y), alpha = hollow)
+            drawCircle(dot, lerp(3.dp, 2.5.dp, filled).toPx(), Offset(x, y), alpha = hollow, style = Stroke(1.dp.toPx()))
         }
+        if (filled > 0f) drawCircle(dot, 2.5.dp.toPx() * filled, Offset(x, y))
     }
 }
 
@@ -63,8 +67,13 @@ internal fun ProjectedTimelineRow(item: TimelineItem, modifier: Modifier, onClic
         .padding(top = 12.dp, bottom = 12.dp, end = 12.dp)) {
         Caption(item.timeLabel(), Modifier.width(56.dp).padding(top = 5.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            TimelineTitle(item.title)
-            if (item.description.isNotBlank()) Text(item.description, color = tacitColors.muted)
+            // A draft's sentence gives way to the written title and description with a cross-fade, in place.
+            CrossSwap(item.title to item.description) { (title, description) ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TimelineTitle(title)
+                    if (description.isNotBlank()) Text(description, color = tacitColors.muted)
+                }
+            }
             if (item.sources.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     item.sources.distinct().forEach { SourceIcon(it, 14.dp) }
@@ -145,31 +154,34 @@ internal fun TimelineDetails(
         PageBar("原始记录", onBack)
         LazyColumn(contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            item {
+            item(key = "head") {
                 TimelineTitle(item.title)
                 if (item.description.isNotBlank()) Text(item.description, color = tacitColors.muted)
             }
             local.orEmpty().forEach { row ->
                 item(key = row.key) {
-                    TextButton(onClick = { onOpenLocal(row.records) }) {
+                    TextButton(onClick = { onOpenLocal(row.records) }, Modifier.itemMotion(this)) {
                         Text(if (local.orEmpty().size == 1) "这台手机录的对话"
                             else "这台手机录的对话，${date(row.start, "HH:mm")}")
                     }
                 }
             }
+            // Keyed so the loading line fades out as the originals fade in.
             when {
                 remoteIds?.isEmpty() == true && local.orEmpty().isNotEmpty() -> Unit
-                remoteIds?.isEmpty() == true -> item { Caption("没有可读取的原文") }
-                offline -> item {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                remoteIds?.isEmpty() == true -> item(key = "none") { Caption("没有可读取的原文", Modifier.itemMotion(this)) }
+                offline -> item(key = "offline") {
+                    Row(Modifier.itemMotion(this), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Caption("暂时无法读取原文")
                         TextAction("重试", { retries.trySend(Unit) })
                     }
                 }
-                originals == null -> item { ProgressLine(Modifier.fillMaxWidth()) }
-                originals.isNullOrEmpty() -> item { Caption("没有可读取的原文") }
-                else -> originals.orEmpty().forEach { record ->
-                    item {
+                originals == null -> item(key = "loading") { ProgressLine(Modifier.itemMotion(this).fillMaxWidth()) }
+                originals.isNullOrEmpty() -> item(key = "none") { Caption("没有可读取的原文", Modifier.itemMotion(this)) }
+                else -> originals.orEmpty().forEachIndexed { index, record ->
+                    item(key = "original-$index") {
+                        Column(Modifier.itemMotion(this)) {
                         Row(verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             SourceIcon(record.source)
@@ -181,5 +193,6 @@ internal fun TimelineDetails(
                 }
             }
         }
+    }
     }
 }

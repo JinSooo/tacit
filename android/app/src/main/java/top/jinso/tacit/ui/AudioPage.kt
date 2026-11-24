@@ -5,8 +5,12 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -16,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.activity.compose.LocalActivity
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -24,7 +29,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withResumed
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
@@ -119,6 +126,9 @@ import java.util.concurrent.CompletableFuture
     }
     val playingSpeaker by audio.playingSpeaker.collectAsState()
     val toggleSample = rememberSampleToggle(audio, notify)
+    DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
+    // Each day has its own cards, so a sample playing for the old day would keep going with no stop button in sight.
+    LaunchedEffect(day) { audio.stopPlayback() }
     val candidate = if (macVoice || speakers.any { it.isMe }) null else speakers
         .filter { !it.ignored && it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
     val today = LocalDate.now()
@@ -127,39 +137,48 @@ import java.util.concurrent.CompletableFuture
             .flatMap { it.recordIds }.toSet()
         undisplayedConversations(rows, projectedIds).groupBy { LocalDate.parse(date(it.start, "yyyy-MM-dd")) }
     }
-    val dayTimeline = timeline.days[day]
     val availableDays = local.keys + timeline.days.filter { (date, value) ->
         !value.overview.isNullOrBlank() || value.entries(date == today).isNotEmpty()
     }.keys
+    val earlier = availableDays.filter { it < day }.maxOrNull()
+    val later = availableDays.filter { it > day }.minOrNull()
+    val reduceMotion = LocalReduceMotion.current
+    val (shiftIn, shiftOut) = with(LocalDensity.current) { 24.dp.roundToPx() to 16.dp.roundToPx() }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 8.dp, bottom = 32.dp)) {
-        val earlier = availableDays.filter { it < day }.maxOrNull()
-        val later = availableDays.filter { it > day }.minOrNull()
-        item(key = "day") {
-            Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 4.dp), verticalAlignment = Alignment.Top) {
-                DayHeading(day, today, Modifier.weight(1f).padding(top = 8.dp), stacked = true)
-                IconButton(onClick = { earlier?.let(onDay) }, enabled = earlier != null) {
-                    Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "前一天", tint = if (earlier != null) tacitColors.muted else tacitColors.faint)
-                }
-                if (day != today) TextButton(onClick = { onDay(today) }) { Text("今天") }
-                IconButton(onClick = { later?.let(onDay) }, enabled = later != null) {
-                    Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "后一天", tint = if (later != null) tacitColors.muted else tacitColors.faint)
-                }
-                IconButton(onClick = { onOpenSettings(null) }) {
-                    Icon(Icons.Outlined.Settings, "设置", tint = tacitColors.muted)
-                }
+    Column(Modifier.fillMaxSize()) {
+        // The date bar stays put while the day below changes, so the arrows never move under a finger.
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 20.dp, bottom = 4.dp), verticalAlignment = Alignment.Top) {
+            Crossfade(day, Modifier.weight(1f).padding(top = 8.dp), Motion.quick(), label = "day-title") {
+                DayHeading(it, today, stacked = true)
+            }
+            val earlierTint by animateColorAsState(if (earlier != null) tacitColors.muted else tacitColors.faint, Motion.quick(), label = "earlier")
+            val laterTint by animateColorAsState(if (later != null) tacitColors.muted else tacitColors.faint, Motion.quick(), label = "later")
+            IconButton(onClick = { earlier?.let(onDay) }, enabled = earlier != null) {
+                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "前一天", tint = earlierTint)
+            }
+            if (day != today) TextButton(onClick = { onDay(today) }) { Text("今天") }
+            IconButton(onClick = { later?.let(onDay) }, enabled = later != null) {
+                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "后一天", tint = laterTint)
+            }
+            IconButton(onClick = { onOpenSettings(null) }) {
+                Icon(Icons.Outlined.Settings, "设置", tint = tacitColors.muted)
             }
         }
+        AnimatedContent(day, transitionSpec = {
+            dayTransform(later = targetState > initialState, shiftIn, shiftOut, reduceMotion)
+        }, label = "day") { day ->
+            val dayTimeline = timeline.days[day]
+            LazyColumn(Modifier.fillMaxSize().background(tacitColors.paper), contentPadding = PaddingValues(start = 20.dp, end = 8.dp, bottom = 32.dp)) {
         dayTimeline?.overview?.takeIf { it.isNotBlank() }?.let { overview ->
             item(key = "overview") {
-                Text(overview, Modifier.padding(top = 8.dp, end = 12.dp, bottom = 12.dp),
+                        Text(overview, Modifier.itemMotion(this).padding(top = 8.dp, end = 12.dp, bottom = 12.dp),
                     style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
                     fontWeight = FontWeight.Normal, color = tacitColors.ink)
             }
         }
         val notice = recordingNotice(state, app.prefs.audioCaptureWanted, macProblem)
         if (notice != null) item(key = "notice") {
-            Box(Modifier.padding(end = 12.dp, top = 8.dp)) {
+                    Box(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) {
                 val route = notice.route
                 when {
                     notice.start -> NoticeAction(notice.text, "开启", !busy, startRecording)
@@ -168,12 +187,12 @@ import java.util.concurrent.CompletableFuture
                 }
             }
         }
-        item(key = "recovery") { Box(Modifier.padding(end = 12.dp)) { recovery() } }
+                item(key = "recovery") { Box(Modifier.itemMotion(this).padding(end = 12.dp)) { recovery() } }
         if (candidate != null) item(key = "voice-${candidate.id}") {
-            Column(Modifier.padding(top = 12.dp, end = 12.dp)) {
+                    Column(Modifier.itemMotion(this).padding(top = 12.dp, end = 12.dp)) {
                 VoiceConfirmation(
-                    candidate, !busy, playingSpeaker == candidate.id,
-                    play = { toggleSample(candidate.id) },
+                            candidate, !busy, playingSpeaker == candidate.id,
+                            play = { toggleSample(candidate.id) },
                     mark = {
                         audio.stopPlayback()
                         work({ audio.markMe(candidate.id) }, "已标记为我，将补转写保留期内的录音") {
@@ -189,11 +208,11 @@ import java.util.concurrent.CompletableFuture
                 )
             }
         }
-        if ((!loaded && !loadFailed) || busy) item { ProgressLine(Modifier.padding(end = 12.dp, top = 8.dp)) }
-        if (loadFailed) item {
-            Caption("暂时无法读取录音，正在重试。", Modifier.padding(top = 16.dp), color = tacitColors.attention)
+                if ((!loaded && !loadFailed) || busy) item(key = "progress") { ProgressLine(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) }
+                if (loadFailed) item(key = "failed") {
+                    Caption("暂时无法读取录音，正在重试。", Modifier.itemMotion(this).padding(top = 16.dp), color = tacitColors.attention)
         } else if (loaded && day !in availableDays) item(key = "empty") {
-            Text("说过的话，会按天写在这里。", Modifier.padding(top = 48.dp, end = 12.dp),
+                    Text("说过的话，会按天写在这里。", Modifier.itemMotion(this).padding(top = 48.dp, end = 12.dp),
                 style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
                 fontWeight = FontWeight.Normal, color = tacitColors.muted)
         }
@@ -208,7 +227,7 @@ import java.util.concurrent.CompletableFuture
                     is TimelineEntry.Local -> summary == null
                     is TimelineEntry.Projected -> entry.item.draft
                 }
-                val axis = if (dayTimeline == null) Modifier else Modifier.timelineAxis(index == 0, index == entries.lastIndex, draft)
+                        val axis = Modifier.itemMotion(this).then(if (dayTimeline == null) Modifier else Modifier.timelineAxis(index == 0, index == entries.lastIndex, draft))
                 when (entry) {
                     // 和其他来源的段混排时才标手机录音图标；只有本机录音时不用强调。
                     is TimelineEntry.Local -> RecordedConversation(entry.scene, summary, onConversation, axis,
@@ -222,7 +241,7 @@ import java.util.concurrent.CompletableFuture
         val untranscribed = scenes.count { it.records.isEmpty() }
         if (untranscribed > 0) item(key = "untranscribed-$day") {
             val other = if (scenes.any { it.records.isNotEmpty() }) "另有 " else ""
-            Row(Modifier.padding(vertical = 12.dp)) {
+                    Row(Modifier.itemMotion(this).padding(vertical = 12.dp)) {
                 Box(Modifier.width(56.dp).padding(top = 9.dp)) {
                     Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
                 }
@@ -233,6 +252,8 @@ import java.util.concurrent.CompletableFuture
             item(key = "timeline-sync-time") {
                 Caption("已同步到 $synced", Modifier.padding(top = 12.dp, end = 12.dp))
             }
+        }
+    }
         }
     }
 }
@@ -341,6 +362,8 @@ private fun VoiceConfirmation(
             }.getOrNull()
         }
     }
+    // While the sample plays the button stops it and the wave lights up; the controller says when it ends.
+    val wave by animateColorAsState(if (playing) tacitColors.accent else tacitColors.faint, Motion.quick(), label = "wave")
     GroupCard {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("这是你的声音吗？", style = MaterialTheme.typography.titleLarge)
@@ -348,7 +371,15 @@ private fun VoiceConfirmation(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilledIconButton(onClick = play, enabled = enabled,
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = tacitColors.fill, contentColor = tacitColors.ink)) {
-                    Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, if (playing) "停止试听" else "试听")
+                    Crossfade(playing, animationSpec = Motion.quick(), label = "play") {
+                        if (it) Icon(Icons.Outlined.Stop, "停止试听") else Icon(Icons.Outlined.PlayArrow, "试听")
+                    }
+                }
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    listOf(6, 12, 18, 10, 22, 14, 8, 16, 24, 12, 6, 14, 20, 10, 16, 8, 12, 18, 10, 6).forEach { height ->
+                        Box(Modifier.width(3.dp).height(height.dp).background(wave, CircleShape))
+                    }
                 }
                 seconds?.let { Caption("$it 秒") }
             }
@@ -377,16 +408,20 @@ private fun RecordedConversation(
     ) {
         Caption(date(scene.start, "HH:mm"), Modifier.width(56.dp).padding(top = 5.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            // The title and summary once the phone or the Mac has written them. Until then a mixed timeline titles it like the
+            // Mac's drafts ("一场对话" with the most telling sentence under it); the phone-only list uses that sentence as the title.
+            // When the summary arrives it cross-fades in place of the sentence.
             val draftExcerpt = if (summary == null) telltaleSentence(records) else ""
             val title = summary?.title ?: if (showsSource) conversationTitle(scene.private)
                 else draftExcerpt.ifBlank { conversationTitle(scene.private) }
-            Text(title,
-                style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
-                maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (summary != null) {
-                Text(summary.summary, color = tacitColors.muted, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            } else if (showsSource && draftExcerpt.isNotBlank()) {
-                Text(draftExcerpt, color = tacitColors.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val text = summary?.summary ?: draftExcerpt.takeIf { showsSource && it.isNotBlank() }
+            CrossSwap(title to text) { (title, text) ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(title,
+                        style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (text != null) Text(text, color = tacitColors.muted, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (showsSource) SourceIcon(AUDIO_SOURCE, 14.dp)

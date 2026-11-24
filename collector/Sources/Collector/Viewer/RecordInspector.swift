@@ -39,10 +39,10 @@ struct RecordInspector: View {
       let d = try await store.dataSource.record(id)
       // 读不到整场对话时退回显示这条记录的原文，不报错。
       conversation = AudioSource.isAudio(d.record.source) ? try? await store.dataSource.conversation(id) : nil
-      detail = d; error = nil
+      withAnimation(detail == nil ? Motion.standard : nil) { detail = d; error = nil }
     }
     catch is CancellationError {}
-    catch { self.error = error.localizedDescription }
+    catch { let message = error.localizedDescription; Motion.animate { self.error = message } }
   }
 
   func content(_ d: RecordDetail) -> some View {
@@ -66,7 +66,7 @@ struct RecordInspector: View {
             PhIcon("note-pencil", size: 14)
             Text(ViewerFormat.relative(cur.start) == "刚刚" ? "刚刚修正过" : "\(ViewerFormat.relative(cur.start))修正过")
             Spacer()
-            Button(showOriginal ? "收起原文" : "查看原文") { withAnimation(.easeOut(duration: 0.2)) { showOriginal.toggle() } }.buttonStyle(.accentLink)
+            Button(showOriginal ? "收起原文" : "查看原文") { Motion.animate { showOriginal.toggle() } }.buttonStyle(.accentLink)
           }
           .font(.system(size: TextSize.body))
           .foregroundStyle(Palette.muted)
@@ -78,6 +78,7 @@ struct RecordInspector: View {
             Text("原文").sectionTitle()
             RecordBodyText(text: r.body ?? "", source: r.source)
           }
+          .transition(.reveal)
         }
         contextGrid(r)
       }
@@ -188,21 +189,29 @@ struct RecordInspector: View {
         Button {
           NSPasteboard.general.clearContents()
           NSPasteboard.general.setString(conversation.map(ConversationBody.plain) ?? d.current.body ?? d.record.title, forType: .string)
-          copied = true
+          withAnimation(Motion.quick) { copied = true }
           copyReset?.cancel()
           copyReset = Task {
             try? await Task.sleep(for: .seconds(1.5))
-            if !Task.isCancelled { copied = false }
+            if !Task.isCancelled { withAnimation(Motion.quick) { copied = false } }
           }
-        } label: { Label { Text(copied ? "已复制" : "复制") } icon: { PhIcon(copied ? "check" : "copy", size: TextSize.body) } }
+        } label: {
+          Label { Text(copied ? "已复制" : "复制") } icon: {
+            PhIcon(copied ? "check" : "copy", size: TextSize.body).id(copied).transition(.opacity)
+          }
+        }
         Spacer()
         Button("删除") { confirmDelete = true }
           .buttonStyle(RecordActionStyle(attention: true))
           .disabled(busy)
       }
       .buttonStyle(RecordActionStyle())
-      if let deleteError { Text(deleteError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention).textSelection(.enabled) }
+      if let deleteError {
+        Text(deleteError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention).textSelection(.enabled)
+          .transition(.notice)
+      }
     }
+    .animation(Motion.standard, value: deleteError)
     .controlSize(.small)
     .confirmationDialog("删除这条记录？", isPresented: $confirmDelete) {
       Button("删除", role: .destructive) { Task { await delete(d) } }
@@ -232,9 +241,10 @@ private struct RecordActionStyle: ButtonStyle {
       .font(.system(size: TextSize.body))
       .foregroundStyle(attention ? Palette.attention : hovering ? Palette.ink : Palette.muted)
       .opacity(!enabled ? 0.5 : configuration.isPressed ? 0.7 : 1)
+      .pressFeedback(configuration.isPressed)
       .frame(minHeight: 24)
       .contentShape(Rectangle())
-      .onHover { hovering = $0 }
+      .hoverState($hovering)
   }
 }
 
@@ -340,7 +350,7 @@ struct NoteSheet: View {
       Text("补写一条记录").font(.system(size: TextSize.title, weight: .semibold))
       Form {
         DatePicker("开始", selection: $start, in: ...Date())
-        Toggle("持续了一段时间", isOn: $hasEnd.animation(.easeOut(duration: 0.2)))
+        Toggle("持续了一段时间", isOn: $hasEnd.animation(Motion.standard))
         if hasEnd { DatePicker("结束", selection: $end, in: start...) }
         TextField("标题", text: $title, prompt: Text("做了什么"))
       }
@@ -409,10 +419,10 @@ struct ConversationBody: View {
       }
       if let raw = c.records, !raw.isEmpty {
         VStack(alignment: .leading, spacing: 8) {
-          Button(showRaw ? "收起转写原文" : "查看转写原文") { withAnimation(.easeOut(duration: 0.2)) { showRaw.toggle() } }
+          Button(showRaw ? "收起转写原文" : "查看转写原文") { Motion.animate { showRaw.toggle() } }
             .buttonStyle(.accentLink).font(.system(size: TextSize.body))
           if showRaw {
-            Text(raw.map(\.body).joined(separator: "\n")).recordReadingStyle()
+            Text(raw.map(\.body).joined(separator: "\n")).recordReadingStyle().transition(.reveal)
           }
         }
       }
