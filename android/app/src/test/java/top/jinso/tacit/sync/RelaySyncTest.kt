@@ -53,7 +53,8 @@ class RelaySyncTest {
             assertEquals("records.get", request.getString("op"))
             assertFalse(request.getJSONObject("body").has("include_private"))
             if (++pages == 2) throw IOException("合成离线")
-            val record = JSONObject().put("id", "raw").put("source", "mac.wechat").put("body", "仅限内存的合成原文")
+            val record = JSONObject().put("id", "raw").put("source", "mac.wechat")
+                .put("t_start", "2026-11-24T10:00:00Z").put("body", "仅限内存的合成原文")
             val body = JSONObject().put("records", JSONArray(listOf(record))).put("next_cursor", "page-two")
             fake.down[nonce] = seal(nonce, JSONObject().put("status", 200).put("body", body))
         }

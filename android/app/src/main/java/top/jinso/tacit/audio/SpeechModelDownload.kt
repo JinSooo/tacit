@@ -212,3 +212,14 @@ internal fun activatePreparedSpeechModels(stage: File, cancellation: ModelDownlo
         throw error
     }
 }
+
+/** The audio worker serializes model replacement with transcription. The microphone service keeps capturing. */
+internal fun replaceSpeechEngine(closeEngine: () -> Unit, resumeProcessing: () -> Unit, install: () -> Any?) {
+    try {
+        closeEngine()
+        install()
+    } finally {
+        // On failure or cancellation the previous model is still active and can drain queued recordings.
+        resumeProcessing()
+    }
+}

@@ -70,7 +70,10 @@ internal class RelayTimeline(
                 // A busy or failing hub must not abort the whole mailbox drain and hold back recording uploads;
                 // drop this reply and try again later (2026-11-24 review). A failing ack keeps its own count: a
                 // successful pull in between used to reset the shared one, so pull and ack alternated forever.
-                else -> if (op == "projection.ack") retryAck() else retryPull()
+                else -> if (op == "projection.ack") retryAck() else {
+                    if (op == "projection.pull") cache.refreshFailed()
+                    retryPull()
+                }
             }
         } finally {
             pending.remove(op)

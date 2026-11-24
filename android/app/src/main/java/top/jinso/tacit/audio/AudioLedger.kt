@@ -9,6 +9,22 @@ import java.util.UUID
 /** A Mac voiceprint only claims a voice heard for at least this long, so one stray short span cannot pass. */
 internal const val MAC_ME_MIN_SECONDS = 6.0
 
+internal data class VoiceMarkUndo(val speakerId: String, val locallyMarked: Boolean)
+
+internal fun removeVoiceMark(speaker: JSONObject): VoiceMarkUndo {
+    val undo = VoiceMarkUndo(speaker.getString("id"), speaker.optBoolean("me"))
+    speaker.put("me", false).put("notMe", true)
+    return undo
+}
+
+/** Restore a Mac-derived match as a match, without replacing another locally confirmed voice. */
+internal fun restoreVoiceMark(speakers: List<JSONObject>, undo: VoiceMarkUndo): JSONObject? {
+    val target = speakers.firstOrNull { it.getString("id") == undo.speakerId } ?: return null
+    if (!target.optBoolean("notMe") || target.optBoolean("ignored")) return null
+    if (undo.locallyMarked && speakers.any { it !== target && it.optBoolean("me") }) return null
+    return target.put("me", undo.locallyMarked).apply { remove("notMe") }
+}
+
 /**
  * Whether [speaker] is the user: marked "me" on this phone, or a whole voice (its cluster center, never a
  * single utterance) that matches the Mac voiceprint. Labels and transcription consent both use this.
@@ -223,7 +239,17 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
         target.put("ignored", false); store.saveSpeakers(store.speakers())
     }
     /** Also overrides a Mac voiceprint match, so "this is not me" sticks for a voice the Mac claimed. */
-    fun unmarkMe(id: String) { store.saveSpeakers(listOf(speaker(id).put("me", false).put("notMe", true))) }
+    fun unmarkMe(id: String): VoiceMarkUndo {
+        val target = speaker(id)
+        val undo = removeVoiceMark(target)
+        store.saveSpeakers(listOf(target))
+        return undo
+    }
+
+    fun undoUnmarkMe(undo: VoiceMarkUndo) {
+        val restored = checkNotNull(restoreVoiceMark(store.speakers(), undo)) { "声音标记已变更" }
+        store.saveSpeakers(listOf(restored))
+    }
     fun ignore(id: String, ignored: Boolean) {
         store.saveSpeakers(listOf(speaker(id).put("ignored", ignored).apply { if (ignored) put("me", false) }))
     }

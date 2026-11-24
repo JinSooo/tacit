@@ -8,7 +8,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -100,24 +99,26 @@ import java.util.concurrent.CompletableFuture
         // A sync that brings new Mac summaries only touches the vault, so listen to both.
         owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { merge(audio.changes, app.vault.changes).collectLatest {
             state = audio.state()
-            val snapshot = withContext(Dispatchers.IO) {
-                    runCatching {
-                        val voices = audio.listSpeakers(includeIgnored).get()
-                        val mac = audio.macVoiceKnown().get()
-                        val scenes = audio.listConversations().get().sortedByDescending { it.start }
-                        val text = scenes.flatMap { it.recordIds }.distinct().mapNotNull { app.vault.get(it) }.associateBy { it.id }
-                        val written = app.vault.summaries().flatMap { m -> m.recordIds.map { it to m } }.toMap()
-                        Triple(voices to mac, audioConversationRows(scenes, text), written)
-                    }
+            val (voices, conversations, written) = retryAudioPageRead(onFailure = { loadFailed = true }) {
+                withContext(Dispatchers.IO) {
+                    val voices = audio.listSpeakers(includeIgnored).get()
+                    val mac = audio.macVoiceKnown().get()
+                    val scenes = audio.listConversations().get().sortedByDescending { it.start }
+                    val text = scenes.flatMap { it.recordIds }.distinct().mapNotNull { app.vault.get(it) }.associateBy { it.id }
+                    val written = app.vault.summaries().flatMap { m -> m.recordIds.map { it to m } }.toMap()
+                    Triple(voices to mac, audioConversationRows(scenes, text), written)
                 }
-            snapshot.onSuccess { (voices, conversations, written) ->
-                speakers = voices.first; macVoice = voices.second; rows = conversations; summaries = written
             }
-            loadFailed = snapshot.isFailure
+            speakers = voices.first
+            macVoice = voices.second
+            rows = conversations
+            summaries = written
+            loadFailed = false
             loaded = true
         } }
     }
-    DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
+    val playingSpeaker by audio.playingSpeaker.collectAsState()
+    val toggleSample = rememberSampleToggle(audio, notify)
     val candidate = if (macVoice || speakers.any { it.isMe }) null else speakers
         .filter { !it.ignored && it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
     val today = LocalDate.now()
@@ -140,6 +141,7 @@ import java.util.concurrent.CompletableFuture
                 IconButton(onClick = { earlier?.let(onDay) }, enabled = earlier != null) {
                     Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "前一天", tint = if (earlier != null) tacitColors.muted else tacitColors.faint)
                 }
+                if (day != today) TextButton(onClick = { onDay(today) }) { Text("今天") }
                 IconButton(onClick = { later?.let(onDay) }, enabled = later != null) {
                     Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "后一天", tint = if (later != null) tacitColors.muted else tacitColors.faint)
                 }
@@ -152,7 +154,7 @@ import java.util.concurrent.CompletableFuture
             item(key = "overview") {
                 Text(overview, Modifier.padding(top = 8.dp, end = 12.dp, bottom = 12.dp),
                     style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
-                    fontWeight = FontWeight.Normal, color = tacitColors.readingBody)
+                    fontWeight = FontWeight.Normal, color = tacitColors.ink)
             }
         }
         val notice = recordingNotice(state, app.prefs.audioCaptureWanted, macProblem)
@@ -170,14 +172,16 @@ import java.util.concurrent.CompletableFuture
         if (candidate != null) item(key = "voice-${candidate.id}") {
             Column(Modifier.padding(top = 12.dp, end = 12.dp)) {
                 VoiceConfirmation(
-                    candidate, !busy,
-                    play = { work({ audio.playSample(candidate.id) }, "正在试听") },
+                    candidate, !busy, playingSpeaker == candidate.id,
+                    play = { toggleSample(candidate.id) },
                     mark = {
+                        audio.stopPlayback()
                         work({ audio.markMe(candidate.id) }, "已标记为我，将补转写保留期内的录音") {
                             speakers = speakers.map { if (it.id == candidate.id) it.copy(isMe = true) else it }
                         }
                     },
                     ignore = {
+                        audio.stopPlayback()
                         work({ audio.setIgnored(candidate.id, true) }, "好的，换一段再问") {
                             speakers = speakers.filterNot { it.id == candidate.id }
                         }
@@ -185,7 +189,7 @@ import java.util.concurrent.CompletableFuture
                 )
             }
         }
-        if (!loaded || busy) item { ProgressLine(Modifier.padding(end = 12.dp, top = 8.dp)) }
+        if ((!loaded && !loadFailed) || busy) item { ProgressLine(Modifier.padding(end = 12.dp, top = 8.dp)) }
         if (loadFailed) item {
             Caption("暂时无法读取录音，正在重试。", Modifier.padding(top = 16.dp), color = tacitColors.attention)
         } else if (loaded && day !in availableDays) item(key = "empty") {
@@ -223,6 +227,11 @@ import java.util.concurrent.CompletableFuture
                     Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
                 }
                 Caption("$other$untranscribed 段没认出你的声音，未转写")
+            }
+        }
+        timeline.staleTime(day)?.let { synced ->
+            item(key = "timeline-sync-time") {
+                Caption("已同步到 $synced", Modifier.padding(top = 12.dp, end = 12.dp))
             }
         }
     }
@@ -303,7 +312,7 @@ private fun NoticeText(text: String) {
 private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Modifier, stacked: Boolean = false) {
     val relative = when (day) { today -> "今天"; today.minusDays(1) -> "昨天"; else -> null }
     val weekday = "星期" + "一二三四五六日"[day.dayOfWeek.value - 1]
-    val note = listOfNotNull(relative, weekday).joinToString(" · ")
+    val note = listOfNotNull(relative, weekday).joinToString("，")
     val title = if (day.year == today.year) "${day.monthValue} 月 ${day.dayOfMonth} 日" else "${day.year} 年 ${day.monthValue} 月 ${day.dayOfMonth} 日"
     if (stacked) Column(modifier) {
         Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)
@@ -316,7 +325,9 @@ private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Mo
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () -> Unit, mark: () -> Unit, ignore: () -> Unit) {
+private fun VoiceConfirmation(
+    speaker: AudioSpeaker, enabled: Boolean, playing: Boolean, play: () -> Unit, mark: () -> Unit, ignore: () -> Unit,
+) {
     val context = LocalActivity.current ?: return
     val seconds by produceState<Int?>(null, speaker.id, speaker.seconds) {
         value = withContext(Dispatchers.IO) {
@@ -337,13 +348,7 @@ private fun VoiceConfirmation(speaker: AudioSpeaker, enabled: Boolean, play: () 
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilledIconButton(onClick = play, enabled = enabled,
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = tacitColors.fill, contentColor = tacitColors.ink)) {
-                    Icon(Icons.Outlined.PlayArrow, "试听")
-                }
-                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    listOf(6, 12, 18, 10, 22, 14, 8, 16, 24, 12, 6, 14, 20, 10, 16, 8, 12, 18, 10, 6).forEach { height ->
-                        Box(Modifier.width(3.dp).height(height.dp).background(tacitColors.faint, CircleShape))
-                    }
+                    Icon(if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, if (playing) "停止试听" else "试听")
                 }
                 seconds?.let { Caption("$it 秒") }
             }
@@ -372,11 +377,17 @@ private fun RecordedConversation(
     ) {
         Caption(date(scene.start, "HH:mm"), Modifier.width(56.dp).padding(top = 5.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            // The title and summary once the phone or the Mac has written them; until then the user's own first sentence.
-            Text(summary?.title ?: telltaleSentence(records).ifBlank { conversationTitle(scene.private) },
+            val draftExcerpt = if (summary == null) telltaleSentence(records) else ""
+            val title = summary?.title ?: if (showsSource) conversationTitle(scene.private)
+                else draftExcerpt.ifBlank { conversationTitle(scene.private) }
+            Text(title,
                 style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif, fontWeight = FontWeight.Normal,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (summary != null) Text(summary.summary, color = tacitColors.muted, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            if (summary != null) {
+                Text(summary.summary, color = tacitColors.muted, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            } else if (showsSource && draftExcerpt.isNotBlank()) {
+                Text(draftExcerpt, color = tacitColors.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (showsSource) SourceIcon(AUDIO_SOURCE, 14.dp)
                 Caption(durationLabel(conversationDuration(records)))

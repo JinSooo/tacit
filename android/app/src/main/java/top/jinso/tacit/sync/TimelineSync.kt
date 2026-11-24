@@ -2,11 +2,12 @@ package top.jinso.tacit.sync
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
 
 internal typealias TimelineRequest = suspend (String, JSONObject) -> JSONObject
 internal enum class TimelinePage { COMPLETE, MORE, RESET, REVOKED }
 
-internal class TimelineSync(private val cache: TimelineCache) {
+internal class TimelineSync(private val cache: TimelineCache, private val now: () -> Long = System::currentTimeMillis) {
     private var confirmed: ProjectionCursor? = null
 
     fun clear() {
@@ -66,7 +67,7 @@ internal class TimelineSync(private val cache: TimelineCache) {
             cache.reset(epoch)
             return TimelinePage.RESET
         }
-        cache.apply(epoch, page.integer("cursor"), page.getJSONArray("changes"))
+        cache.apply(epoch, page.integer("cursor"), page.getJSONArray("changes"), syncedAt = if (more) null else now())
         if (!more) return TimelinePage.COMPLETE
         check(cache.cursor != previous)
         return TimelinePage.MORE
@@ -113,7 +114,7 @@ internal class TimelineSync(private val cache: TimelineCache) {
     }
 }
 
-internal data class TimelineOriginal(val source: String, val title: String, val body: String)
+internal data class TimelineOriginal(val source: String, val title: String, val body: String, val start: Instant)
 
 /** Results belong to the requesting detail page. This reader has no storage or relay journal. */
 internal suspend fun readTimelineOriginals(ids: Set<String>, send: TimelineRequest): List<TimelineOriginal> {
@@ -130,7 +131,8 @@ internal suspend fun readTimelineOriginals(ids: Set<String>, send: TimelineReque
                         if (record.optBoolean("redacted_private")) continue
                         val id = record.getString("id")
                         val (_, text) = records.getOrPut(id) {
-                            TimelineOriginal(record.getString("source"), record.optionalString("title").orEmpty(), "") to StringBuilder()
+                            TimelineOriginal(record.getString("source"), record.optionalString("title").orEmpty(), "",
+                                Instant.parse(record.getString("t_start"))) to StringBuilder()
                         }
                         text.append(record.getString("body"))
                     }

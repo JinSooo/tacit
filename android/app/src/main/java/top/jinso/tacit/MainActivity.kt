@@ -30,6 +30,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         resumed.value++
-        top.jinso.tacit.sync.SyncWorker.enqueue(this)
+        top.jinso.tacit.sync.SyncWorker.enqueue(this, fromForeground = true)
     }
 }

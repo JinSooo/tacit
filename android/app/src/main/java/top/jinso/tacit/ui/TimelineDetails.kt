@@ -1,9 +1,12 @@
 package top.jinso.tacit.ui
 
+import android.net.ConnectivityManager
+import android.net.Network
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -21,6 +24,8 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.AudioController
@@ -31,6 +36,8 @@ import top.jinso.tacit.ui.components.Caption
 import top.jinso.tacit.ui.components.PageBar
 import top.jinso.tacit.ui.components.ProgressLine
 import top.jinso.tacit.ui.components.SourceIcon
+import top.jinso.tacit.ui.components.TextAction
+import java.util.concurrent.atomic.AtomicReference
 
 @Composable
 internal fun Modifier.timelineAxis(first: Boolean, last: Boolean, draft: Boolean = false): Modifier {
@@ -99,20 +106,39 @@ internal fun TimelineDetails(
     val remoteIds = local?.let { rows -> item.recordIds - rows.flatMap { row -> row.records.map { it.id } }.toSet() }
     var originals by remember(remoteIds, invalidation) { mutableStateOf<List<TimelineOriginal>?>(null) }
     var offline by remember(remoteIds, invalidation) { mutableStateOf(false) }
+    val retries = remember(remoteIds, invalidation) { Channel<Unit>(Channel.CONFLATED) }
     LaunchedEffect(owner, remoteIds, invalidation) {
         if (remoteIds.isNullOrEmpty()) return@LaunchedEffect
         owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            offline = false
+            val connectivity = app.getSystemService(ConnectivityManager::class.java)
+            val activeNetwork = AtomicReference(connectivity.activeNetwork)
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    if (activeNetwork.getAndSet(network) != network) retries.trySend(Unit)
+                }
+                override fun onLost(network: Network) { activeNetwork.updateAndGet { if (it == network) null else it } }
+            }
+            retries.tryReceive()
+            connectivity.registerDefaultNetworkCallback(callback)
             try {
-                originals = app.sync.timelineOriginals(remoteIds)
+                while (true) {
+                    offline = false
+                    try {
+                        originals = app.sync.timelineOriginals(remoteIds)
+                        break
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        offline = true
+                        retries.receive()
+                    }
+                }
                 // Keep the result only while this detail page is visible.
-                kotlinx.coroutines.awaitCancellation()
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                offline = true
+                awaitCancellation()
             } finally {
+                connectivity.unregisterNetworkCallback(callback)
                 originals = null
+                offline = false
             }
         }
     }
@@ -128,14 +154,19 @@ internal fun TimelineDetails(
                 item(key = row.key) {
                     TextButton(onClick = { onOpenLocal(row.records) }) {
                         Text(if (local.orEmpty().size == 1) "这台手机录的对话"
-                            else "这台手机录的对话 · ${date(row.start, "HH:mm")}")
+                            else "这台手机录的对话，${date(row.start, "HH:mm")}")
                     }
                 }
             }
             when {
                 remoteIds?.isEmpty() == true && local.orEmpty().isNotEmpty() -> Unit
                 remoteIds?.isEmpty() == true -> item { Caption("没有可读取的原文") }
-                offline -> item { Caption("当前离线，无法读取原文") }
+                offline -> item {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Caption("暂时无法读取原文")
+                        TextAction("重试", { retries.trySend(Unit) })
+                    }
+                }
                 originals == null -> item { ProgressLine(Modifier.fillMaxWidth()) }
                 originals.isNullOrEmpty() -> item { Caption("没有可读取的原文") }
                 else -> originals.orEmpty().forEach { record ->
@@ -143,9 +174,10 @@ internal fun TimelineDetails(
                         Row(verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             SourceIcon(record.source)
+                            Caption(date(record.start.toEpochMilli(), "HH:mm"))
                             Caption(record.title.ifBlank { sourceName(record.source) })
                         }
-                        Text(record.body, color = tacitColors.readingBody)
+                        SelectionContainer { ReadingBody(record.body) }
                     }
                 }
             }
