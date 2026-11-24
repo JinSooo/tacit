@@ -7,10 +7,11 @@ import SwiftUI
 enum Motion {
   /// 悬停、松手、图标和文字小换、数字滚动。用户反复做的操作都在这一档。
   static var quick: Animation { reduced ? fade : .smooth(duration: 0.15) }
+  // 减少动态效果时，展开、换天、面板这类会挪动位置的变化直接切换；只有悬停、颜色、数字这类原地变化保留短淡换。
   /// 展开收起、内容出现消失、加载变内容、选中块滑动、提示行进出。
-  static var standard: Animation { reduced ? fade : .smooth(duration: 0.26) }
+  static var standard: Animation? { reduced ? nil : .smooth(duration: 0.26) }
   /// 换天、侧栏、详情栏、面板这类整块换位。
-  static var page: Animation { reduced ? fade : .smooth(duration: 0.32) }
+  static var page: Animation? { reduced ? nil : .smooth(duration: 0.32) }
   /// “减少动态效果”下唯一的动画：短淡入淡出，不带位移。
   static let fade = Animation.easeInOut(duration: 0.15)
 
@@ -21,7 +22,7 @@ enum Motion {
   static let loadingDelay: Duration = .milliseconds(350)
 
   /// 包一层 withAnimation，统一从这里走。
-  static func animate<Result>(_ animation: Animation = standard, _ body: () throws -> Result) rethrows -> Result {
+  static func animate<Result>(_ animation: Animation? = standard, _ body: () throws -> Result) rethrows -> Result {
     try withAnimation(animation, body)
   }
 }
@@ -64,7 +65,7 @@ extension View {
   }
 
   /// 内容整体换了一版（例如“复制”→“已复制”、加载 → 内容）：交叉淡入淡出。
-  func crossfade<V: Equatable>(on value: V, _ curve: Animation = Motion.standard) -> some View {
+  func crossfade<V: Equatable>(on value: V, _ curve: Animation? = Motion.standard) -> some View {
     animation(curve, value: value)
   }
 }

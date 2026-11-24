@@ -171,7 +171,7 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
                 if (index > 0) GroupDivider()
                 SettingsRow(if (speaker.isMe) "我" else speaker.name.orEmpty()) {
                     Row {
-                        SpeakerPlay(speaker, !busy) { work({ audio.playSample(speaker.id) }, null, update = false) }
+                        SpeakerPlay(speaker, !busy) { work({ audio.playSample(speaker.id) }, "正在试听", update = false) }
                         if (speaker.isMe) TextAction("这不是我", {
                             work({ audio.unmarkMe(speaker.id) }, "已取消本人标记")
                         }, enabled = !busy)
@@ -192,7 +192,7 @@ private fun SpeakerSettings(audio: AudioController, resumed: Int, notify: (Strin
                         GroupDivider()
                         SettingsRow(speaker.name ?: "声音 ${index + 1}") {
                             Row {
-                                SpeakerPlay(speaker, !busy) { work({ audio.playSample(speaker.id) }, null, update = false) }
+                                SpeakerPlay(speaker, !busy) { work({ audio.playSample(speaker.id) }, "正在试听", update = false) }
                                 TextAction("恢复", { work({ audio.setIgnored(speaker.id, false) }, "已恢复这个声音") }, enabled = !busy)
                             }
                         }

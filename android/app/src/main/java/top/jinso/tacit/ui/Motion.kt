@@ -150,21 +150,41 @@ internal fun <T> CrossSwap(target: T, modifier: Modifier = Modifier, content: @C
     ) { content(it) }
 }
 
+/**
+ * False inside content that is animating out (a page being left, the loading side of a cross-fade that already
+ * finished). Back handling, taps and delayed loading marks only act while their content is still the current one.
+ */
+internal val LocalContentActive = compositionLocalOf { true }
+
+@Composable
+internal fun ActiveScope(active: Boolean, content: @Composable () -> Unit) {
+    val parent = LocalContentActive.current
+    CompositionLocalProvider(LocalContentActive provides (parent && active), content = content)
+}
+
 /** Loading → content as a cross-fade; the loading side is usually invisible because [DelayedAppearance] waits. */
 @Composable
 internal fun LoadCrossfade(loading: Boolean, modifier: Modifier = Modifier, content: @Composable (loading: Boolean) -> Unit) {
-    Crossfade(loading, modifier, animationSpec = Motion.enter(), label = "load", content = content)
+    Crossfade(loading, modifier, animationSpec = Motion.enter(), label = "load") { branch ->
+        ActiveScope(branch == loading) { content(branch) }
+    }
 }
 
-/** Fades its content in only once a wait is noticeable, so quick local reads flash nothing. */
+/**
+ * Fades its content in only once a wait is noticeable, so quick local reads flash nothing. If the wait ends first
+ * (the content is no longer active), it never appears at all.
+ */
 @Composable
 internal fun DelayedAppearance(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val active = LocalContentActive.current
     var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        delay(Motion.LOADING_DELAY_MS)
-        shown = true
+    LaunchedEffect(active) {
+        if (active && !shown) {
+            delay(Motion.LOADING_DELAY_MS)
+            shown = true
+        }
     }
-    val alpha by animateFloatAsState(if (shown) 1f else 0f, Motion.enter(), label = "delayed")
+    val alpha by animateFloatAsState(if (shown && active) 1f else 0f, Motion.enter(), label = "delayed")
     Box(modifier.graphicsLayer { this.alpha = alpha }) { content() }
 }
 

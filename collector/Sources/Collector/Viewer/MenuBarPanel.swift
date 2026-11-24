@@ -445,6 +445,8 @@ struct PanelButtonStyle: ButtonStyle {
 
   /// 正在淡出：此时再点图标算重新打开，不算关闭。
   private var closing = false
+  /// 每次打开、关闭都加一；淡出结束的回调只收拾属于自己那一次的面板。
+  private var generation = 0
   var isShown: Bool { panel?.isVisible == true && !closing }
 
   func toggle(from button: NSStatusBarButton) {
@@ -466,12 +468,15 @@ struct PanelButtonStyle: ButtonStyle {
     p.contentView = Self.backdrop(around: host)
     top = anchor.minY - 6
     centerX = anchor.midX
+    generation += 1
+    // 淡出途中又被打开：从当前透明度接着淡回来，不先闪成全透明、也不再落一次。
+    let resuming = closing && p.isVisible
     closing = false
     let frame = frame(for: host.fittingSize)
     // 从图标下方淡入，顺势往下落 4pt 到位；不缩放，看得出是从图标展开的。
-    let drop: CGFloat = Motion.reduced ? 0 : 4
+    let drop: CGFloat = Motion.reduced || resuming ? 0 : 4
     p.setFrame(frame.offsetBy(dx: 0, dy: drop), display: false)
-    p.alphaValue = 0
+    if !resuming { p.alphaValue = 0 }
     p.makeKeyAndOrderFront(nil)
     NSAnimationContext.runAnimationGroup { context in
       context.duration = 0.18
@@ -487,6 +492,8 @@ struct PanelButtonStyle: ButtonStyle {
   func close() {
     guard let p = panel, p.isVisible, !closing else { return }
     closing = true
+    generation += 1
+    let closingGeneration = generation
     NSAnimationContext.runAnimationGroup({ context in
       context.duration = 0.14
       context.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
@@ -494,7 +501,7 @@ struct PanelButtonStyle: ButtonStyle {
     }, completionHandler: { [weak self] in
       MainActor.assumeIsolated {
         // 淡出途中又被打开了，就不再收起。
-        guard let self, self.closing else { return }
+        guard let self, self.closing, self.generation == closingGeneration else { return }
         self.closing = false
         p.orderOut(nil)
         p.contentView = nil

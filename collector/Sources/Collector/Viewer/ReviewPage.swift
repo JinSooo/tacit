@@ -50,8 +50,10 @@ private struct ReviewDayContent: View {
   @Binding var selectedDay: Date
   /// 正在显示的那一天（内容、草稿、页脚都按它）。
   @State private var day: Date
-  /// 新的一天从哪边进来：往前翻从左，往后翻从右。
+  /// 新的一天从哪边进来：按“正在显示的那天 → 要换上的那天”算，往前翻从左，往后翻从右。
   @State private var dayEdge: HorizontalEdge = .trailing
+  /// 日期栏数字的滚动方向：按日期栏上前后两次选中的日子算。
+  @State private var dateEdge: HorizontalEdge = .trailing
   /// 换天读得慢时把旧的一天压淡，表示正在换。
   @State private var stale = false
   @State private var staleTimer: Task<Void, Never>?
@@ -115,7 +117,8 @@ private struct ReviewDayContent: View {
     .animation(Motion.standard, value: showsSetup && setup != nil)
     .animation(Motion.standard, value: store.pending.isEmpty)
     .animation(Motion.standard, value: startupMessage)
-    .onChange(of: selectedDay) { old, new in dayEdge = new < old ? .leading : .trailing }
+    .onChange(of: selectedDay) { old, new in dateEdge = new < old ? .leading : .trailing }
+    .onDisappear { staleTimer?.cancel() }
     .task(id: LoadKey(day: selectedDay, refresh: refresh, revision: store.revision, density: density)) {
       repeat {
         await load()
@@ -232,7 +235,7 @@ private struct ReviewDayContent: View {
       HStack(alignment: .firstTextBaseline, spacing: 12) {
         // 日期栏不动，只有日期数字朝翻页方向滚过去。
         Text(Fmt.date(selectedDay)).font(.serif(TextSize.display)).foregroundStyle(Palette.ink)
-          .contentTransition(Motion.reduced ? .opacity : .numericText(countsDown: dayEdge == .leading))
+          .contentTransition(Motion.reduced ? .opacity : .numericText(countsDown: dateEdge == .leading))
         Text(ViewerFormat.weekday(selectedDay)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
           .contentTransition(.opacity)
       }
@@ -389,7 +392,8 @@ private struct ReviewDayContent: View {
     let target = selectedDay
     let revision = store.revision
     let switching = target != day
-    if switching { markStaleLater() }
+    // 折回正在显示的那天（或同一天刷新）时，之前换天留下的压淡和计时一并撤掉。
+    if switching { markStaleLater() } else { clearStale() }
     // 被下一次换天取消时不收尾，压淡交给接手的那次读取处理。
     defer { if switching, !Task.isCancelled { clearStale() } }
     async let readiness: Void = loadSetup()
@@ -425,6 +429,13 @@ private struct ReviewDayContent: View {
     guard !Task.isCancelled, target == selectedDay else { return }
     let settled = revision == store.revision
     if switching {
+      // 方向按实际从哪天换到哪天算。先让正在离场的那天带上新方向渲染一帧，再整块换过去。
+      let edge: HorizontalEdge = target < day ? .leading : .trailing
+      if edge != dayEdge {
+        dayEdge = edge
+        try? await Task.sleep(for: .milliseconds(16))
+        guard !Task.isCancelled, target == selectedDay else { return }
+      }
       // 新的一天整块从翻页方向滑进来；详细档带工具栏和右侧详情栏，叠着过渡会闪，直接换。
       withAnimation(density == .compact ? Motion.page : nil) {
         day = target
@@ -432,6 +443,16 @@ private struct ReviewDayContent: View {
         diary.value = diaryError == nil ? .some(nextDiary) : nil
         diary.error = diaryError
         records.value = nextRecords
+        records.error = recordsError
+        if settled { loadedRevision = revision }
+      }
+    } else if loadedRevision != revision, diaryError != nil || recordsError != nil {
+      // 删除、修正之后重读失败：不能继续摆着删除前的内容，撤下并显示错误和重试。
+      Motion.animate {
+        expanded = nil
+        diary.value = nil
+        diary.error = diaryError ?? recordsError
+        records.value = nil
         records.error = recordsError
         if settled { loadedRevision = revision }
       }

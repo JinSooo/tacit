@@ -32,6 +32,8 @@ struct DayStrata: View {
   @State private var hover: CGPoint?
   @State private var dragStart: CGFloat?
   @State private var zoom = StrataZoom()
+  /// 点缩放按钮后时间轴还在推拉的这一小段：画面刻度和点选刻度不一致，先不接点选、提示和框选。
+  @State private var settling = false
   static let axisHeight: CGFloat = 18
   static let chapterHeight: CGFloat = 22
 
@@ -99,7 +101,8 @@ struct DayStrata: View {
             click(g.location, plot: plot, domain: d)
           }
       )
-      .overlay(alignment: .topLeading) { tooltip(plot: plot, domain: d, width: geo.size.width) }
+      .allowsHitTesting(!settling)
+      .overlay(alignment: .topLeading) { if !settling { tooltip(plot: plot, domain: d, width: geo.size.width) } }
       .overlay(alignment: .topTrailing) { zoomControls }
     }
     .frame(height: height)
@@ -177,6 +180,16 @@ struct DayStrata: View {
   }
 
   /// 有框选时可以放大到选区；放大后可以复位。
+  private func animateZoom(_ change: () -> Void) {
+    guard let animation = Motion.standard else { change(); return }
+    settling = true
+    withAnimation(animation, change)
+    Task {
+      try? await Task.sleep(for: .milliseconds(280))
+      settling = false
+    }
+  }
+
   @ViewBuilder var zoomControls: some View {
     let canZoomToBrush = brush.map { b in
       zoom.window.map { b.upperBound.timeIntervalSince(b.lowerBound) < $0.upperBound.timeIntervalSince($0.lowerBound) * 0.9 } ?? true
@@ -184,11 +197,11 @@ struct DayStrata: View {
     if canZoomToBrush || zoom.window != nil {
       HStack(spacing: 4) {
         if canZoomToBrush, let b = brush {
-          Button { Motion.animate { zoom.show(b) } } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
+          Button { animateZoom { zoom.show(b) } } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
             .help("放大到选区").accessibilityLabel("放大到选区")
         }
         if zoom.window != nil {
-          Button { Motion.animate { zoom.window = nil } } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
+          Button { animateZoom { zoom.window = nil } } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
             .help("看整天").accessibilityLabel("看整天")
         }
       }

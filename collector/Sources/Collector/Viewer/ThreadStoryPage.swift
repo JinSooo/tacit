@@ -81,7 +81,8 @@ struct StoryUpdates: View {
   }
 
   private func updates(_ days: [HubAPI.TimelineResult.Day]) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
+    // 一件事可能跨几百天，按天惰性排版。
+    LazyVStack(alignment: .leading, spacing: 12) {
       ForEach(days.reversed()) { group in
         if let day = TimelineDay.date(group.date) {
           VStack(alignment: .leading, spacing: 6) {

@@ -152,8 +152,11 @@
   border-right: 1.5px solid var(--muted);
   border-bottom: 1.5px solid var(--muted);
   transform: rotate(45deg);
-  transition: transform var(--t-standard) var(--ease);
   content: "";
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .day-segment summary::after { transition: transform var(--t-standard) var(--ease); }
 }
 
 .day-segment[open] summary::after {

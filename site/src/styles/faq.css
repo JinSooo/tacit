@@ -60,7 +60,11 @@
   border-bottom: 1px solid currentColor;
   transform: rotate(45deg);
   color: var(--muted);
-  transition: transform var(--t-standard) var(--ease), color var(--t-quick) var(--ease);
+  transition: color var(--t-quick) var(--ease);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .faq-list summary::after { transition: transform var(--t-standard) var(--ease), color var(--t-quick) var(--ease); }
 }
 
 .faq-list details[open] summary::after {

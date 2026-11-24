@@ -78,7 +78,7 @@ internal fun SettingsPage(
         parent = null
     }
     val title = if (selected == Sources.AUDIO) "麦克风" else SettingsRoutes.title(selected) ?: "设置"
-    BackHandler { if (selected != null) back() else onClose() }
+    BackHandler(LocalContentActive.current) { if (selected != null) back() else onClose() }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageBar(title, onBack = { if (selected != null) back() else onClose() })
         val reduceMotion = LocalReduceMotion.current

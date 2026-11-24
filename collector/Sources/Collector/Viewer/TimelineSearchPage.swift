@@ -21,6 +21,8 @@ struct TimelineSearchPage: View {
 
   private struct Results {
     let query: String
+    /// 读到这批结果时的数据版本；删除、修正之后旧结果不再显示。
+    let revision: Int
     let segments: [HubAPI.TimelineResult.Day]
     let labeledProjectDays: Set<String>
     let records: [HistoryRecord]
@@ -72,8 +74,25 @@ struct TimelineSearchPage: View {
       Text(openError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
         .transition(.notice)
     }
-    // 打字时先留着上一次的结果，新结果到了再整体淡换，不每敲一个字就塌成空白。
-    if let result {
+    if let result, result.query == query {
+      results(result)
+      if result.hasMore {
+        Button("加载更多结果") { Task { await load(query, previous: result, request: request) } }
+          .buttonStyle(.accentLink).font(.system(size: TextSize.caption)).disabled(loading)
+      }
+      if let loadError {
+        Text(loadError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
+      }
+    } else if let loadError {
+      Placeholder(kind: .error(loadError) { retry += 1 })
+    } else if let result {
+      // 打字时先淡淡地留着上一次的结果占位，新结果到了再整体淡换，不每敲一个字就塌成空白；占位不能点。
+      results(result).opacity(0.45).allowsHitTesting(false).accessibilityHidden(true)
+    }
+  }
+
+  private func results(_ result: Results) -> some View {
+    VStack(alignment: .leading, spacing: 20) {
       let segments = Dictionary(uniqueKeysWithValues: result.segments.map { ($0.date, $0.items) })
       let records = Dictionary(grouping: result.records) { TimelineDay.key($0.start) }
       let dates = Set(segments.keys).union(records.keys).sorted(by: >)
@@ -110,22 +129,13 @@ struct TimelineSearchPage: View {
       }
       .id(result.query)
       .transition(.opacity)
-      if result.hasMore {
-        Button("加载更多结果") { Task { await load(query, previous: result, request: request) } }
-          .buttonStyle(.accentLink).font(.system(size: TextSize.caption)).disabled(loading)
-      }
-      if let loadError {
-        Text(loadError).font(.system(size: TextSize.caption)).foregroundStyle(Palette.attention)
-      }
-    } else if let loadError {
-      Placeholder(kind: .error(loadError) { retry += 1 })
     }
   }
 
   private func reset(_ key: QueryKey) async {
     let id = UUID()
     request = id
-    if key.text.isEmpty { result = nil }
+    if key.text.isEmpty || result?.revision != key.revision { result = nil }
     expanded = nil
     loadError = nil
     openError = nil
@@ -138,7 +148,8 @@ struct TimelineSearchPage: View {
   }
 
   private func load(_ text: String, previous: Results?, request id: UUID) async {
-    guard id == request, query == text, !loading else { return }
+    guard id == request, query == text, !loading, previous.map({ $0.query == text && $0.revision == store.revision }) ?? true else { return }
+    let revision = store.revision
     loading = true
     loadError = nil
     defer { if id == request { loading = false } }
@@ -157,7 +168,8 @@ struct TimelineSearchPage: View {
       let priorSegments = previous?.segments ?? []
       let priorRecords = previous?.records ?? []
       let knownDays = Set(priorSegments.map(\.date)), knownRecords = Set(priorRecords.map(\.id))
-      let next = Results(query: text, segments: priorSegments + (foundSegments?.days ?? []).filter { !knownDays.contains($0.date) },
+      guard revision == store.revision else { return }
+      let next = Results(query: text, revision: revision, segments: priorSegments + (foundSegments?.days ?? []).filter { !knownDays.contains($0.date) },
                          labeledProjectDays: labeledDays, records: priorRecords + (foundRecords?.records ?? []).filter { !knownRecords.contains($0.id) },
                          segmentCursor: foundSegments?.nextCursor,
                          recordCursor: foundRecords?.nextCursor)

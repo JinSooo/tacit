@@ -150,6 +150,8 @@ struct HistoryPage<Header: View>: View {
 
   private func consumeFocus() {
     guard let id = store.historyFocus, loadedKey == loadKey || dayError != nil else { return }
+    // 换天时新的一天读好之前，旧的一天还在屏幕上；定位目标留给要去的那一天。
+    guard Calendar.current.isDate(store.reviewDay ?? .now, inSameDayAs: day) else { return }
     store.historyFocus = nil
     lane = nil
     brush = nil
