@@ -70,8 +70,8 @@ struct HistoryPage<Header: View>: View {
 
   /// 选中一条记录：展开它所在的段并滚过去。
   private func reveal(_ id: String) {
-    // 打开右侧详情和展开所在段一起过渡，再由 scrollTarget 滚过去。
-    Motion.animate(Motion.page) { selection = .record(id) }
+    // 右侧详情直接出现：它一动，上面的泳道图就要逐帧按新宽度重画整天的记录，实测会连续掉帧。
+    selection = .record(id)
     if let block = allBlocks.first(where: { $0.segment.recordIds.contains(id) }) {
       Motion.animate {
         expanded.insert(block.id)
@@ -98,13 +98,13 @@ struct HistoryPage<Header: View>: View {
       }
     }
     .toolbar { toolbar }
-    .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { Motion.animate(Motion.page) { selection = nil } } })) {
+    .inspector(isPresented: Binding(get: { selection != nil }, set: { if !$0 { selection = nil } })) {
       inspector
         .inspectorColumnWidth(min: 300, ideal: 360, max: 520)
         // 检查器打开后要有地方关掉它（以前只能按 Esc，2026-11-10 用户报告）。放在检查器自己的工具栏里。
         .toolbar {
           ToolbarItem(placement: .primaryAction) {
-            Button { Motion.animate(Motion.page) { selection = nil } } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar).scaleEffect(x: -1) }
+            Button { selection = nil } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar).scaleEffect(x: -1) }
               .help("隐藏详情").accessibilityLabel("隐藏详情").keyboardShortcut("i", modifiers: [.command, .option])
           }
         }
@@ -124,7 +124,7 @@ struct HistoryPage<Header: View>: View {
       scrollTarget = selectedRowID()
     }
     .onKeyPress(.escape) {
-      if selection != nil { Motion.animate(Motion.page) { selection = nil }; return .handled }
+      if selection != nil { selection = nil; return .handled }
       if brush != nil { Motion.animate { brush = nil }; return .handled }
       return .ignored
     }
@@ -140,7 +140,7 @@ struct HistoryPage<Header: View>: View {
       // 从段里点进来的记录可以回到那一段。
       let parent = allBlocks.first { $0.segment.recordIds.contains(id) }
       RecordInspector(id: id, back: parent.map { b in .init(title: SegmentText.title(b)) { selection = .segment(b.id) } }) { _ in
-        Motion.animate(Motion.page) { selection = nil }
+        selection = nil
       }
       .id(id)
     case nil:
@@ -278,10 +278,8 @@ struct HistoryPage<Header: View>: View {
     let hasOmission = block.records.contains { omitted.contains($0.id) }
     SegmentRow(block: block, conversation: conversationNote(block), selected: selection == .segment(block.id),
                expanded: expanded.contains(block.id), includesOmissions: hasOmission) {
-      Motion.animate {
-        if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) }
-        selection = .segment(block.id)
-      }
+      Motion.animate { if expanded.contains(block.id) { expanded.remove(block.id) } else { expanded.insert(block.id) } }
+      selection = .segment(block.id)
     }
     .padding(.horizontal, HistoryLayout.inset)
     .id(block.id)
@@ -290,7 +288,7 @@ struct HistoryPage<Header: View>: View {
         let hasOmission = run.records.contains { omitted.contains($0.id) }
         RecordRow(record: run.newest, run: run, selected: run.records.contains { $0.id == selectedRecord },
                   expanded: false, nested: true, includesOmissions: hasOmission) {
-          Motion.animate(Motion.page) { selection = .record(run.newest.id) }
+          selection = .record(run.newest.id)
         }
         .padding(.horizontal, HistoryLayout.inset)
         .id(run.id)

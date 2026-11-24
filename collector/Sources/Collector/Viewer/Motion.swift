@@ -38,8 +38,9 @@ extension AnyTransition {
   static func slide(from edge: HorizontalEdge) -> AnyTransition {
     guard !Motion.reduced else { return .opacity }
     let d: CGFloat = edge == .leading ? -14 : 14
+    // 离场的那一天先快速淡掉（0.12 秒），新旧两天的文字不在同一处叠太久。
     return .asymmetric(insertion: .opacity.combined(with: .offset(x: d)),
-                       removal: .opacity.combined(with: .offset(x: -d)))
+                       removal: AnyTransition.opacity.animation(.easeOut(duration: 0.12)).combined(with: .offset(x: -d)))
   }
 }
 

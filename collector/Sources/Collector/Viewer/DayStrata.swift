@@ -32,8 +32,6 @@ struct DayStrata: View {
   @State private var hover: CGPoint?
   @State private var dragStart: CGFloat?
   @State private var zoom = StrataZoom()
-  /// 点缩放按钮后时间轴还在推拉的这一小段：画面刻度和点选刻度不一致，先不接点选、提示和框选。
-  @State private var settling = false
   static let axisHeight: CGFloat = 18
   static let chapterHeight: CGFloat = 22
 
@@ -68,10 +66,8 @@ struct DayStrata: View {
       let plot = CGRect(x: labelWidth, y: 0, width: max(10, geo.size.width - labelWidth - 6), height: height)
       let _ = { zoom.full = full; zoom.plot = plot }()
       ZStack(alignment: .topLeading) {
-        // 点“放大到选区 / 看整天”时可见区间顺滑推拉；双指缩放和平移不包动画，直接跟手。
-        StrataCanvas(lower: d.lowerBound.timeIntervalSinceReferenceDate, upper: d.upperBound.timeIntervalSinceReferenceDate) { ctx, domain in
-          draw(ctx, plot: plot, domain: domain)
-        }
+        // 缩放不做推拉动画：每一帧都要按新刻度重画整天的记录，实测会连续掉帧；双指缩放和平移本来就跟手。
+        Canvas { ctx, _ in draw(ctx, plot: plot, domain: d) }
         laneLabels
       }
       .contentShape(Rectangle())
@@ -101,8 +97,7 @@ struct DayStrata: View {
             click(g.location, plot: plot, domain: d)
           }
       )
-      .allowsHitTesting(!settling)
-      .overlay(alignment: .topLeading) { if !settling { tooltip(plot: plot, domain: d, width: geo.size.width) } }
+      .overlay(alignment: .topLeading) { tooltip(plot: plot, domain: d, width: geo.size.width) }
       .overlay(alignment: .topTrailing) { zoomControls }
     }
     .frame(height: height)
@@ -180,16 +175,6 @@ struct DayStrata: View {
   }
 
   /// 有框选时可以放大到选区；放大后可以复位。
-  private func animateZoom(_ change: () -> Void) {
-    guard let animation = Motion.standard else { change(); return }
-    settling = true
-    withAnimation(animation, change)
-    Task {
-      try? await Task.sleep(for: .milliseconds(280))
-      settling = false
-    }
-  }
-
   @ViewBuilder var zoomControls: some View {
     let canZoomToBrush = brush.map { b in
       zoom.window.map { b.upperBound.timeIntervalSince(b.lowerBound) < $0.upperBound.timeIntervalSince($0.lowerBound) * 0.9 } ?? true
@@ -197,11 +182,11 @@ struct DayStrata: View {
     if canZoomToBrush || zoom.window != nil {
       HStack(spacing: 4) {
         if canZoomToBrush, let b = brush {
-          Button { animateZoom { zoom.show(b) } } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
+          Button { zoom.show(b) } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
             .help("放大到选区").accessibilityLabel("放大到选区")
         }
         if zoom.window != nil {
-          Button { animateZoom { zoom.window = nil } } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
+          Button { zoom.window = nil } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
             .help("看整天").accessibilityLabel("看整天")
         }
       }
@@ -418,19 +403,3 @@ struct DayStrata: View {
   }
 }
 
-/// 泳道画布：可见区间的起止可以插值，缩放按钮点下去时时间轴顺滑推拉。
-private struct StrataCanvas: View, Animatable {
-  var lower: Double
-  var upper: Double
-  let draw: (GraphicsContext, ClosedRange<Date>) -> Void
-
-  var animatableData: AnimatablePair<Double, Double> {
-    get { AnimatablePair(lower, upper) }
-    set { lower = newValue.first; upper = newValue.second }
-  }
-
-  var body: some View {
-    let domain = Date(timeIntervalSinceReferenceDate: lower)...Date(timeIntervalSinceReferenceDate: max(lower, upper))
-    Canvas { ctx, _ in draw(ctx, domain) }
-  }
-}
