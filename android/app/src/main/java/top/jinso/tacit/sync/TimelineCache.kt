@@ -37,7 +37,20 @@ internal data class TimelineDay(
         (items + if (today) drafts else emptyList()).distinctBy { it.id }
 }
 
-internal data class TimelineSnapshot(val days: Map<LocalDate, TimelineDay> = emptyMap(), val invalidation: Long = 0)
+internal data class TimelineSnapshot(
+    val days: Map<LocalDate, TimelineDay> = emptyMap(),
+    val invalidation: Long = 0,
+    val lastSync: Long = 0,
+    val refreshFailedAt: Long? = null,
+) {
+    fun staleTime(day: LocalDate, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String? {
+        if (refreshFailedAt == null || day != now.atZone(zone).toLocalDate() || day !in days ||
+            lastSync == 0L || now.toEpochMilli() - lastSync <= 60 * 60_000L) return null
+        val synced = Instant.ofEpochMilli(lastSync).atZone(zone)
+        return if (synced.toLocalDate() == day) clockFormat.format(synced)
+        else DateTimeFormatter.ofPattern("M 月 d 日 HH:mm").format(synced)
+    }
+}
 internal data class ProjectionCursor(val epoch: Long = 0, val seq: Long = 0) {
     fun pullBody() = JSONObject().put("cursor", seq).apply {
         if (epoch > 0) put("epoch", epoch)
@@ -141,6 +154,8 @@ internal class TimelineCache(
 ) {
     private var owner: String? = null
     private var bound = false
+    private var lastSync = 0L
+    private var refreshFailedAt: Long? = null
     private var days = emptyMap<LocalDate, CachedDay>()
     var cursor = ProjectionCursor()
         private set
@@ -161,6 +176,8 @@ internal class TimelineCache(
                 return
             }
             cursor = ProjectionCursor(state.integer("epoch"), state.integer("cursor"))
+            lastSync = state.optLong("lastSync")
+            refreshFailedAt = null
             val stored = state.getJSONObject("days")
             days = stored.keys().asSequence().associate { LocalDate.parse(it) to CachedDay(stored.getJSONObject(it)) }
             withdrawRecords(days.values.flatMap { it.references }.filter(isDeleted).toSet())
@@ -174,6 +191,8 @@ internal class TimelineCache(
     @Synchronized fun clear() {
         val invalidated = days.isNotEmpty() || cursor != ProjectionCursor()
         days = emptyMap()
+        lastSync = 0L
+        refreshFailedAt = null
         cursor = ProjectionCursor()
         publish(invalidated)
         disk.clear()
@@ -184,7 +203,7 @@ internal class TimelineCache(
         cursor = ProjectionCursor(epoch)
     }
 
-    @Synchronized fun apply(epoch: Long, seq: Long, changes: JSONArray) {
+    @Synchronized fun apply(epoch: Long, seq: Long, changes: JSONArray, syncedAt: Long? = null) {
         val changedEpoch = cursor.epoch != 0L && epoch != cursor.epoch
         val previous = if (changedEpoch) ProjectionCursor() else cursor
         val next = if (changedEpoch) mutableMapOf() else days.toMutableMap()
@@ -210,7 +229,7 @@ internal class TimelineCache(
                 }
             }
         }
-        if (seq >= previous.seq) commit(next, ProjectionCursor(epoch, seq), invalidate)
+        if (seq >= previous.seq) commit(next, ProjectionCursor(epoch, seq), invalidate, syncedAt)
     }
 
     @Synchronized fun invalidate(epoch: Long, toSeq: Long, items: JSONArray) {
@@ -236,31 +255,42 @@ internal class TimelineCache(
         commit(next, cursor, invalidate = next != days)
     }
 
+    @Synchronized fun refreshFailed() {
+        refreshFailedAt = System.currentTimeMillis()
+        publish(invalidate = false)
+    }
+
     private fun oldest() = today().minusDays(TIMELINE_DAYS - 1L)
 
     private fun prune() {
         if (days.keys.any { it < oldest() }) commit(days.filterKeys { it >= oldest() }, cursor)
     }
 
-    private fun commit(next: Map<LocalDate, CachedDay>, position: ProjectionCursor, invalidate: Boolean = false) {
-        if (next != days || position != cursor) {
+    private fun commit(
+        next: Map<LocalDate, CachedDay>, position: ProjectionCursor,
+        invalidate: Boolean = false, syncedAt: Long? = null,
+    ) {
+        val timestamp = syncedAt ?: if (invalidate && position.epoch != cursor.epoch) 0 else lastSync
+        if (next != days || position != cursor || timestamp != lastSync) {
             val data = JSONObject()
             next.forEach { (day, value) -> data.put(day.toString(), value.data) }
             try {
                 disk.write(checkNotNull(owner), JSONObject().put("epoch", position.epoch)
-                    .put("cursor", position.seq).put("days", data))
+                    .put("cursor", position.seq).put("days", data).put("lastSync", timestamp))
             } catch (error: Exception) {
                 clear()
                 throw error
             }
             cursor = position
             days = next
+            lastSync = timestamp
         }
+        if (syncedAt != null) refreshFailedAt = null
         publish(invalidate)
     }
 
     private fun publish(invalidate: Boolean) {
         mutable.value = TimelineSnapshot(days.mapValues { it.value.day },
-            mutable.value.invalidation + if (invalidate) 1 else 0)
+            mutable.value.invalidation + if (invalidate) 1 else 0, lastSync, refreshFailedAt)
     }
 }

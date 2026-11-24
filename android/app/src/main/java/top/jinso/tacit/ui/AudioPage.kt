@@ -225,6 +225,11 @@ import java.util.concurrent.CompletableFuture
                 Caption("$other$untranscribed 段没认出你的声音，未转写")
             }
         }
+        timeline.staleTime(day)?.let { synced ->
+            item(key = "timeline-sync-time") {
+                Caption("已同步到 $synced", Modifier.padding(top = 12.dp, end = 12.dp))
+            }
+        }
     }
 }
 

@@ -15,6 +15,32 @@ class TimelineSyncTest {
     private val cache = TimelineCache(disk) { today }.apply { bind("test-hub:test-phone") }
     private val sync = TimelineSync(cache)
 
+    @Test fun staleFooterNeedsFailedRefreshAndClearsAfterEmptySuccessfulPull() = runBlocking {
+        val zone = ZoneId.of("Asia/Taipei")
+        val first = Instant.parse("2026-11-24T10:00:00Z")
+        val later = first.plusSeconds(3601)
+        var time = first
+        val sync = TimelineSync(cache) { time.toEpochMilli() }
+        val page = JSONObject().put("epoch", 1).put("cursor", 1).put("more", false)
+            .put("reset", false).put("changes", JSONArray(listOf(day(today, 1))))
+        sync.applyPage(page, cache.cursor)
+
+        val restored = TimelineCache(disk) { today }.apply { bind("test-hub:test-phone") }
+        assertNull(restored.snapshots.value.staleTime(today, later, zone))
+        restored.refreshFailed()
+        assertEquals("已过一小时的今天仍应显示同步时刻", "18:00", restored.snapshots.value.staleTime(today, later, zone))
+        assertNull(restored.snapshots.value.staleTime(today, first.plusSeconds(3600), zone))
+        assertNull(restored.snapshots.value.staleTime(today.minusDays(1), later, zone))
+
+        time = later
+        cache.refreshFailed()
+        assertEquals("18:00", cache.snapshots.value.staleTime(today, later, zone))
+        sync.pull("view") { operation, _ ->
+            if (operation == "projection.pull") page.put("changes", JSONArray()) else JSONObject().put("ok", true)
+        }
+        assertNull(cache.snapshots.value.staleTime(today, later, zone))
+    }
+
     @Test fun appliesUpsertDeleteRecordGoneAndReset() {
         val yesterday = today.minusDays(1)
         cache.apply(1, 2, JSONArray(listOf(day(today, 1), day(yesterday, 2))))
@@ -199,6 +225,15 @@ class TimelineSyncTest {
         }
         assertEquals(4, calls)
         assertTrue(today in cache.snapshots.value.days)
+    }
+
+    @Test fun resumingCanFindMacOnTheSameWifiBeforeDiscoveryBackoffExpires() = runBlocking {
+        val backoff = DirectDiscoveryBackoff { 10L }
+        try {
+            backoff.find("same-wifi", canRelay = true) { throw MacUnavailable(false) }
+            fail("Expected the Mac to be offline")
+        } catch (_: MacUnavailable) { }
+        assertEquals("http://test-mac", backoff.find("same-wifi", canRelay = true, forceProbe = true) { "http://test-mac" })
     }
 
     private fun day(date: LocalDate, seq: Long): JSONObject {

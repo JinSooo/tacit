@@ -6,7 +6,7 @@ import org.json.JSONObject
 internal typealias TimelineRequest = suspend (String, JSONObject) -> JSONObject
 internal enum class TimelinePage { COMPLETE, MORE, RESET, REVOKED }
 
-internal class TimelineSync(private val cache: TimelineCache) {
+internal class TimelineSync(private val cache: TimelineCache, private val now: () -> Long = System::currentTimeMillis) {
     private var confirmed: ProjectionCursor? = null
 
     fun clear() {
@@ -66,7 +66,7 @@ internal class TimelineSync(private val cache: TimelineCache) {
             cache.reset(epoch)
             return TimelinePage.RESET
         }
-        cache.apply(epoch, page.integer("cursor"), page.getJSONArray("changes"))
+        cache.apply(epoch, page.integer("cursor"), page.getJSONArray("changes"), syncedAt = if (more) null else now())
         if (!more) return TimelinePage.COMPLETE
         check(cache.cursor != previous)
         return TimelinePage.MORE

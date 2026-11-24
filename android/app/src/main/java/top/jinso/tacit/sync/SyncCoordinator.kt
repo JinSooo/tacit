@@ -91,11 +91,12 @@ internal class SyncCoordinator(private val app: TacitApp) {
         }
     }
 
-    suspend fun run(retry: Boolean, periodic: Boolean = false) = mutex.withLock {
+    suspend fun run(retry: Boolean, periodic: Boolean = false, fromForeground: Boolean = false) = mutex.withLock {
         val data = vault.syncConnection() ?: return@withLock
         if (data.optBoolean("removed")) return@withLock
         val wait = data.optLong("retryAt") - System.currentTimeMillis()
-        if (wait > 0 && !periodic) {
+        val directRefreshOnly = wait > 0 && !periodic && fromForeground
+        if (wait > 0 && !periodic && !fromForeground) {
             if (retry) SyncWorker.retry(app, wait.coerceAtMost(MAX_RETRY))
             return@withLock
         }
@@ -104,9 +105,18 @@ internal class SyncCoordinator(private val app: TacitApp) {
         try {
             val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
             var unavailable: MacUnavailable? = null
-            val origin = try { findOrigin(data) } catch (error: MacUnavailable) {
+            val origin = try { findOrigin(data, forceProbe = fromForeground) } catch (error: MacUnavailable) {
                 unavailable = error
                 null
+            }
+            // A foreground resume may refresh the local timeline during audio/relay backoff.
+            if (directRefreshOnly) {
+                if (origin == null) timelineCache.refreshFailed()
+                else {
+                    val client = deviceClient(data, origin, networkBudget())
+                    refreshDirectTimeline(client, refreshRelay(data, client, journal))
+                }
+                return@withLock
             }
             val device = data.getString("device")
             val keys = restoreKeys(data)
@@ -146,7 +156,9 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 }, device)
                 journal.finishRound()
                 val role = refreshRelay(data, client, journal)
-                if (periodic && role == "view") refreshDirectTimeline(deviceClient(data, origin, networkBudget()), role)
+                if ((periodic || fromForeground) && role == "view") {
+                    refreshDirectTimeline(deviceClient(data, origin, networkBudget()), role)
+                }
                 if (wait > 0) return@withLock
                 data.put("last", origin)
                 pullFromMac(data, client::send)
@@ -179,6 +191,10 @@ internal class SyncCoordinator(private val app: TacitApp) {
         } catch (_: DeviceRemoved) {
             markRemoved(data)
         } catch (error: Exception) {
+            if (directRefreshOnly) {
+                timelineCache.refreshFailed()
+                return@withLock
+            }
             if (error is RelayStatus && error.unauthorized && data.optBoolean("relayDisabled")) timeline.clear()
             val failures = (data.optInt("failures") + 1).coerceAtMost(8)
             val delay = (30_000L shl (failures - 1)).coerceAtMost(MAX_RETRY)
@@ -189,7 +205,9 @@ internal class SyncCoordinator(private val app: TacitApp) {
     }
 
     suspend fun refreshTimeline(foreground: Boolean = false) = withContext(Dispatchers.IO) {
-        if (!mutex.tryLock()) return@withContext
+        val requestedAt = System.currentTimeMillis()
+        val uncontended = mutex.tryLock()
+        if (!uncontended) mutex.lock()
         try {
             val data = try {
                 vault.syncConnection()
@@ -205,6 +223,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 timelineWorkerScheduled = true
             }
 
+            if (timelineSnapshots.value.lastSync >= requestedAt) return@withContext
             try {
                 val journal = RelayJournal(data, { vault.saveSyncConnection(data) })
                 val config = journal.active?.takeUnless { journal.disabled }
@@ -213,20 +232,25 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 if (origin != null) {
                     val client = deviceClient(data, origin, budget)
                     refreshDirectTimeline(client, refreshRelay(data, client, journal))
-                } else if (config != null) {
-                    val protocol = DeviceMessages(data.getString("hubKey"), restoreKeys(data), data.getString("device"))
-                    pollRelayTimeline(data, journal, config, protocol, postDue = true, budget = budget)
                 } else if (journal.disabled) {
                     timeline.clear()
+                } else {
+                    timelineCache.refreshFailed()
+                    if (config != null && uncontended) {
+                        // Preserve the mailbox polling cadence when a foreground refresh queued behind a worker.
+                        val protocol = DeviceMessages(data.getString("hubKey"), restoreKeys(data), data.getString("device"))
+                        pollRelayTimeline(data, journal, config, protocol, postDue = true, budget = budget)
+                    }
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: DeviceRemoved) {
                 markRemoved(data)
             } catch (error: RelayStatus) {
-                if (error.unauthorized) timeline.clear()
+                if (error.unauthorized) timeline.clear() else timelineCache.refreshFailed()
             } catch (_: Exception) {
                 // Keep the last confirmed view while the hub is unreachable.
+                timelineCache.refreshFailed()
             }
         } finally {
             mutex.unlock()
@@ -242,6 +266,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
             throw error
         } catch (_: Exception) {
             // A projection failure should not prevent audio sync.
+            timelineCache.refreshFailed()
         }
     }
 
@@ -355,13 +380,15 @@ internal class SyncCoordinator(private val app: TacitApp) {
 
     private data class DirectRoute(val owner: String, val network: Long?, val addresses: String?, val manual: String?)
 
-    private suspend fun findOrigin(data: JSONObject, budget: (() -> Int)? = null): String {
+    private suspend fun findOrigin(
+        data: JSONObject, budget: (() -> Int)? = null, forceProbe: Boolean = false,
+    ): String {
         val connectivity = app.getSystemService(ConnectivityManager::class.java)
         val active = connectivity.activeNetwork
         val route = DirectRoute(timelineOwner(data), active?.networkHandle,
             connectivity.getLinkProperties(active)?.linkAddresses?.toString(), data.optionalString("manual"))
         val canRelay = !data.isNull("relay") && !data.optBoolean("relayDisabled")
-        return directDiscovery.find(route, canRelay) {
+        return directDiscovery.find(route, canRelay, forceProbe) {
             MacDiscovery(app).find(data.getString("hub"), data.optionalString("last"),
                 data.getJSONArray("addresses").strings(), route.manual, budget ?: { Int.MAX_VALUE })
         }
