@@ -50,8 +50,6 @@ private struct ReviewDayContent: View {
   @Binding var selectedDay: Date
   /// 正在显示的那一天（内容、草稿、页脚都按它）。
   @State private var day: Date
-  /// 新的一天从哪边进来：按“正在显示的那天 → 要换上的那天”算，往前翻从左，往后翻从右。
-  @State private var dayEdge: HorizontalEdge = .trailing
   /// 日期栏数字的滚动方向：按日期栏上前后两次选中的日子算。
   @State private var dateEdge: HorizontalEdge = .trailing
   /// 换天读得慢时把旧的一天压淡，表示正在换。
@@ -170,11 +168,11 @@ private struct ReviewDayContent: View {
           }
         }
         .id(day)
-        .transition(.slide(from: dayEdge))
+        .transition(.dayChange)
         .opacity(stale ? 0.45 : 1)
         footer.padding(.horizontal, TimelineReadingLayout.edge)
           .id(day)
-          .transition(.slide(from: dayEdge))
+          .transition(.dayChange)
       }
       .modifier(ReviewWidth(maxWidth: TimelineReadingLayout.width))
     }
@@ -189,7 +187,7 @@ private struct ReviewDayContent: View {
       if startupMessage == nil || hasSegments {
         headline
           .id(day)
-          .transition(.slide(from: dayEdge))
+          .transition(.dayChange)
           .opacity(stale ? 0.45 : 1)
       }
       if let startupMessage {
@@ -429,14 +427,7 @@ private struct ReviewDayContent: View {
     guard !Task.isCancelled, target == selectedDay else { return }
     let settled = revision == store.revision
     if switching {
-      // 方向按实际从哪天换到哪天算。先让正在离场的那天带上新方向渲染一帧，再整块换过去。
-      let edge: HorizontalEdge = target < day ? .leading : .trailing
-      if edge != dayEdge {
-        dayEdge = edge
-        try? await Task.sleep(for: .milliseconds(16))
-        guard !Task.isCancelled, target == selectedDay else { return }
-      }
-      // 新的一天整块从翻页方向滑进来；详细档带工具栏和右侧详情栏，叠着过渡会闪，直接换。
+      // 新的一天整块淡换进来（翻页方向由日期栏数字的滚动交代）；详细档带工具栏和右侧详情栏，叠着过渡会闪，直接换。
       withAnimation(density == .compact ? Motion.page : nil) {
         day = target
         expanded = nil

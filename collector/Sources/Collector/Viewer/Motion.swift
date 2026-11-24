@@ -36,7 +36,7 @@ extension AnyTransition {
   }
   /// 换天的内容：新的一天淡入，旧的一天先快速淡掉（0.12 秒），两天的文字不在同一处叠太久。
   /// 方向交给日期栏的数字滚动；整块位移会让每一行的悬停区域逐帧重算，实测 120Hz 下几乎帧帧超时。
-  static func slide(from edge: HorizontalEdge) -> AnyTransition {
+  static var dayChange: AnyTransition {
     .asymmetric(insertion: .opacity, removal: AnyTransition.opacity.animation(.easeOut(duration: 0.12)))
   }
 }
