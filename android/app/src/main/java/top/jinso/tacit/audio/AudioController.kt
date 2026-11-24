@@ -17,9 +17,6 @@ import top.jinso.tacit.sync.AudioSync
 import top.jinso.tacit.sync.Change
 import top.jinso.tacit.sync.voiceprint
 import java.time.Instant
-import java.util.concurrent.CancellationException
-import java.util.concurrent.CompletionException
-import java.util.concurrent.ExecutionException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,7 +55,11 @@ class AudioController(context: Context) {
     }
     /** Bumps whenever recordings, voices or status change; pages re-read on it instead of polling. */
     val changes: StateFlow<Long> get() = runtime.changes
-    fun state() = AudioState(runtime.recording, runtime.models.current() != null, runtime.message)
+    fun state(): AudioState {
+        val recording = runtime.recording
+        return AudioState(recording, modelsReady(), recordingStatus(recording, runtime.silenced, runtime.playingOut, runtime.message))
+    }
+    internal fun modelsReady() = runtime.models.current() != null
     internal fun storageUsage(): CompletableFuture<AudioStorageUsage> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.storageUsage() }
     }
@@ -189,7 +190,7 @@ internal class AudioRuntime private constructor(val context: Context) {
         check(!modelPreparation.busy) { "模型正在准备，请等待完成或取消下载" }
         ModelDownloadCancellation().also {
             modelCancellation = it
-            modelPreparation = SpeechPreparationState(phase, message = if (phase == SpeechPreparationPhase.IMPORTING) "正在导入并验证模型" else "正在连接模型下载站点")
+            modelPreparation = SpeechPreparationState(phase, message = if (phase == SpeechPreparationPhase.IMPORTING) "等待当前录音处理完成" else "正在连接模型下载站点")
         }
     }
     fun cancelModelDownload() = synchronized(modelLock) {
@@ -201,25 +202,7 @@ internal class AudioRuntime private constructor(val context: Context) {
             message = if (modelPreparation.cancelling) "正在取消，现有模型保持可用" else message)
     }
     private fun modelFinished(error: Throwable?) = synchronized(modelLock) {
-        var cause = error
-        while (cause is ExecutionException || cause is CompletionException) cause = cause.cause
-        val phase = when (cause) {
-            null -> SpeechPreparationPhase.READY
-            is CancellationException -> SpeechPreparationPhase.CANCELLED
-            else -> SpeechPreparationPhase.ERROR
-        }
-        val message = when (cause) {
-            null -> "本地语音模型已就绪"
-            is CancellationException -> "已取消，未更换现有模型"
-            is java.net.SocketTimeoutException -> "下载超时，请检查网络后重试"
-            is java.net.UnknownHostException, is java.net.ConnectException -> "无法连接模型站点，请检查网络后重试，也可手动导入"
-            is SecurityException -> "无法联网下载，请检查应用网络权限，也可手动导入"
-            is IllegalArgumentException, is IllegalStateException, is java.io.IOException ->
-                cause.message?.takeIf { it.any { char -> char in '\u4e00'..'\u9fff' } }
-                    ?: "模型准备失败，请检查网络、存储空间和模型文件后重试"
-            else -> "模型加载失败，现有模型保持可用，请重试或手动导入"
-        }
-        modelPreparation = modelPreparation.copy(phase = phase, message = message, cancelling = false)
+        modelPreparation = modelPreparation.finished(error)
         modelCancellation = null
     }
     fun downloadModels(): CompletableFuture<Unit> {
@@ -230,12 +213,12 @@ internal class AudioRuntime private constructor(val context: Context) {
             }
             try {
                 cancellation.check()
-                updateModelPreparation(SpeechPreparationPhase.VALIDATING, SpeechModelCatalog.totalBytes, "下载校验通过，正在本机加载模型")
+                updateModelPreparation(SpeechPreparationPhase.VALIDATING, SpeechModelCatalog.totalBytes, "等待当前录音处理完成")
                 // Only native load and pointer switch share the audio worker; network IO never blocks it.
-                submit {
+                prepareModel {
                     cancellation.check()
+                    updateModelPreparation(SpeechPreparationPhase.VALIDATING, SpeechModelCatalog.totalBytes, "下载校验通过，正在本机加载模型")
                     replaceSpeechEngine(::closeEngine, ::schedule) { models.activate(stage, cancellation) }
-                    report("本地语音模型已就绪")
                 }.get()
             } catch (error: Throwable) {
                 if (models.current() != stage) stage.deleteRecursively()
@@ -245,18 +228,19 @@ internal class AudioRuntime private constructor(val context: Context) {
         }, modelWorker).whenComplete { _, error -> modelFinished(error) }
     }
     fun downloadAcceleration(): CompletableFuture<Unit> {
-        check(models.current() != null) { "请先准备语音模型" }
         check(QnnCatalog.supported()) { "此加速模型仅适用于骁龙 8 Gen 3（SM8650）" }
         val cancellation = beginModelPreparation(SpeechPreparationPhase.DOWNLOADING)
         synchronized(modelLock) { modelPreparation = modelPreparation.copy(totalBytes = QnnCatalog.archive.bytes) }
         return CompletableFuture.supplyAsync({
+            check(models.current() != null) { "请先准备语音模型" }
             val stage = qnnModels.download(cancellation) { bytes, _ ->
                 updateModelPreparation(SpeechPreparationPhase.DOWNLOADING, bytes, "正在下载加速模型")
             }
             try {
-                updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, "正在本机验证 NPU 加速")
-                submit {
+                updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, "等待当前录音处理完成")
+                prepareModel {
                     cancellation.check()
+                    updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, "正在本机验证 NPU 加速")
                     replaceSpeechEngine(::closeEngine, ::schedule) { qnnModels.activate(stage, cancellation) }
                     accelerationStatus = "NPU 模型验证通过，等待处理录音"
                 }.get()
@@ -269,11 +253,18 @@ internal class AudioRuntime private constructor(val context: Context) {
     }
     fun importModels(install: () -> java.io.File): CompletableFuture<Unit> {
         beginModelPreparation(SpeechPreparationPhase.IMPORTING)
-        return submit {
+        return prepareModel {
+            updateModelPreparation(SpeechPreparationPhase.IMPORTING, 0, "正在导入并验证模型")
             replaceSpeechEngine(::closeEngine, ::schedule, install)
-            report("本地语音模型已就绪")
         }.whenComplete { _, error -> modelFinished(error) }
     }
+
+    // Model operations have their own result in Speech Settings. Leave the recording message alone.
+    private fun prepareModel(block: () -> Unit): CompletableFuture<Unit> = CompletableFuture.supplyAsync({
+        block()
+        changed()
+    }, worker)
+
     private val queued = AtomicBoolean(false)
     @Volatile var requested = false
     val changes = MutableStateFlow(0L)
@@ -281,6 +272,7 @@ internal class AudioRuntime private constructor(val context: Context) {
     @Volatile var recording = false
         set(value) { field = value; changed() }
     @Volatile var silenced = false
+    @Volatile var playingOut = false
     @Volatile var generation = 0L
     private val policyRevisions = java.util.concurrent.atomic.AtomicLong()
     private val policyRevision get() = policyRevisions.get()
@@ -345,7 +337,6 @@ internal class AudioRuntime private constructor(val context: Context) {
                 sourceRef = "audio:${p.clipId}", method = "asr"), offset = p.offset)
         }
         report(when {
-            silenced -> "麦克风正由其他应用使用，等待系统恢复"
             voiceprint == null && synchronized(lock) { store.speakers().none { it.optBoolean("me") } } -> "仅本地识别人声，等待标记“我”"
             recording -> "正在录音，本地转写中"
             else -> "本地音频处理完成"
@@ -390,4 +381,10 @@ internal class AudioRuntime private constructor(val context: Context) {
             instance ?: AudioRuntime(context.applicationContext).also { instance = it }
         }
     }
+}
+
+internal fun recordingStatus(recording: Boolean, silenced: Boolean, playingOut: Boolean, message: String): String = when {
+    recording && silenced -> "麦克风正由其他应用使用，等待系统恢复"
+    recording && playingOut -> "手机正在外放声音，暂不录音"
+    else -> message
 }

@@ -103,7 +103,6 @@ class AudioRecorderService : Service() {
             // cross-process call, so it and the preference-backed permission check run about once a second.
             var reads = 0
             var allowed = true
-            var playingOut = false
             while (running && runtime.requested && token == runtime.generation && allowed) {
                 val poll = reads++ % POLL_EVERY_READS == 0
                 if (poll) {
@@ -113,8 +112,8 @@ class AudioRecorderService : Service() {
                     val music = audioManager.isMusicActive
                     val playing = music && AudioPolicy.speakerPlayback(true,
                         audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type })
-                    if (playing != playingOut) {
-                        playingOut = playing
+                    if (playing != runtime.playingOut) {
+                        runtime.playingOut = playing
                         runtime.report(if (playing) "手机正在外放声音，暂不录音" else "正在录音，音频已加密保存")
                     }
                 }
@@ -130,7 +129,7 @@ class AudioRecorderService : Service() {
                     continue
                 }
                 if (n == 0) continue
-                if (playingOut) {
+                if (runtime.playingOut) {
                     // Drop what the speaker played; the next kept audio starts a fresh segment.
                     block.fill(0); segment.fill(0); used = 0; needsTimestamp = true
                     continue
@@ -157,7 +156,7 @@ class AudioRecorderService : Service() {
             // Same order on the way out: never "not recording" above a recording-time status.
             if (runtime.message.startsWith("正在录音") || runtime.message.startsWith("手机正在外放") ||
                 runtime.message.startsWith("麦克风正由")) runtime.message = "录音已停止"
-            running = false; runtime.recording = false; runtime.silenced = false
+            running = false; runtime.recording = false; runtime.silenced = false; runtime.playingOut = false
             if (token == runtime.generation) runtime.requested = false
             segment.fill(0); block.fill(0)
             if (Build.VERSION.SDK_INT >= 29) callback?.let { cb -> runCatching { input?.unregisterAudioRecordingCallback(cb) } }

@@ -38,32 +38,25 @@ import java.util.concurrent.CompletableFuture
     app: TacitApp, notify: (String) -> Unit, resumed: Int, offerUndo: (String, suspend () -> Unit) -> Unit,
 ) {
     val audio = remember(app) { AudioController(app) }
-    val scope = rememberCoroutineScope()
-    var busy by remember { mutableStateOf(false) }
-    fun work(task: () -> CompletableFuture<Unit>, success: String) {
-        scope.launch {
-            busy = true
-            try { withContext(Dispatchers.IO) { task().get() }; notify(success) }
-            catch (_: Exception) { notify("操作未完成，请检查状态后重试") }
-            finally { busy = false }
-        }
-    }
-    var state by remember { mutableStateOf(audio.state()) }
+    var modelsReady by remember { mutableStateOf<Boolean?>(null) }
     var preparation by remember { mutableStateOf(audio.modelPreparation()) }
-    var accelerationReady by remember { mutableStateOf(audio.accelerationReady()) }
+    var accelerationReady by remember { mutableStateOf(false) }
     var accelerationStatus by remember { mutableStateOf(audio.accelerationState()) }
     val models = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
-        if (result.resultCode == Activity.RESULT_OK && uri != null)
-            work({ audio.importModels(uri) }, "本地语音模型已就绪")
+        if (result.resultCode == Activity.RESULT_OK && uri != null) {
+            runCatching { audio.importModels(uri) }.onFailure { notify("模型正在准备，请稍后重试") }
+            preparation = audio.modelPreparation()
+        }
     }
     val owner = LocalActivity.current as? LifecycleOwner
     LaunchedEffect(audio, owner) {
         owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
-                state = audio.state()
+                val installed = withContext(Dispatchers.IO) { audio.modelsReady() to audio.accelerationReady() }
+                modelsReady = installed.first
+                accelerationReady = installed.second
                 preparation = audio.modelPreparation()
-                accelerationReady = audio.accelerationReady()
                 accelerationStatus = audio.accelerationState()
                 delay(250)
             }
@@ -71,8 +64,8 @@ import java.util.concurrent.CompletableFuture
     }
     GroupCard {
         // Installed is the normal case; only a missing model gets words.
-        SettingsRow("语音模型", status = if (state.modelsReady) null else "未安装，约 280 MB，下载后在手机上转写",
-            problem = !state.modelsReady)
+        SettingsRow("语音模型", status = if (modelsReady == false) "未安装，约 280 MB，下载后在手机上转写" else null,
+            problem = modelsReady == false)
         GroupDivider()
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (preparation.busy) {
@@ -103,20 +96,20 @@ import java.util.concurrent.CompletableFuture
                     runCatching { audio.downloadModels() }.onFailure { notify("模型正在准备，请稍后重试") }
                     preparation = audio.modelPreparation()
                 }
-                val enabled = !busy
+                val enabled = modelsReady != null
                 val label = when {
                     preparation.phase == SpeechPreparationPhase.ERROR -> "重试下载"
-                    state.modelsReady -> "重新下载"
+                    modelsReady == true -> "重新下载"
                     else -> "下载模型"
                 }
-                if (state.modelsReady) TonalButton(label, download, enabled = enabled)
+                if (modelsReady == true) TonalButton(label, download, enabled = enabled)
                 else PrimaryButton(label, download, enabled)
             }
         }
         GroupDivider()
-        val canImport = !busy && !preparation.busy
+        val canImport = modelsReady != null && !preparation.busy
         SettingsRow(
-            if (state.modelsReady) "更换模型文件夹" else "导入模型文件夹",
+            if (modelsReady == true) "更换模型文件夹" else "导入模型文件夹",
             onClick = if (canImport) {{
                 models.launch(android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE)
                     .putExtra(android.content.Intent.EXTRA_LOCAL_ONLY, true)
@@ -129,10 +122,9 @@ import java.util.concurrent.CompletableFuture
                 if (!accelerationReady) TonalButton("准备", {
                     runCatching { audio.downloadAcceleration() }.onFailure { notify(it.message ?: "暂时无法准备加速模型") }
                     preparation = audio.modelPreparation()
-                }, enabled = state.modelsReady && canImport)
+                }, enabled = modelsReady == true && canImport)
             }
         }
-        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     }
     Caption("来自 sherpa-onnx 官方发布，下载后校验。")
     SpeakerSettings(audio, resumed, notify, offerUndo)

@@ -37,7 +37,8 @@ internal class RelayWaiting : IOException()
 internal typealias RelayHttp = (String, String, String?, ByteArray?, Int, Int) -> DeviceHttpReply
 
 internal class RelayMailbox(
-    val config: RelayConfig, private val remainingMillis: (() -> Int)? = null, private val http: RelayHttp = ::relayHttp,
+    val config: RelayConfig, private val remainingMillis: (() -> Int)? = null,
+    private val rateLimit: RelayRateLimit = RelayRateLimit(), private val http: RelayHttp = ::relayHttp,
 ) {
     private val prefix = "/v1/spaces/${config.space}/boxes"
     private val down = "$prefix/${config.down}/messages"
@@ -101,7 +102,12 @@ internal class RelayMailbox(
         // The injected transport uses the same validation and HTTP status rules as production.
         val remaining = remainingMillis?.invoke() ?: timeout
         if (remaining <= 0) throw RelayWaiting()
+        val previous = rateLimit.beforeRequest(config.space)
         val reply = http(method, config.url + path, token, payload, limit, minOf(remaining, timeout))
+        // A public hello can succeed even when this space is still over quota.
+        if (token != null || reply.status == 429) {
+            rateLimit.afterResponse(config.space, previous, reply.status, reply.retryAfter)
+        }
         if (reply.status !in statuses) throw RelayStatus(reply.status)
         return reply
     }
@@ -127,7 +133,7 @@ private fun relayHttp(
             connection.outputStream.use { it.write(payload) }
         }
         val status = connection.responseCode
-        if (status !in 200..299) return DeviceHttpReply(status)
+        if (status !in 200..299) return DeviceHttpReply(status, retryAfter = connection.getHeaderField("Retry-After"))
         val output = ByteArrayOutputStream()
         connection.inputStream.use { input ->
             val buffer = ByteArray(8192)
@@ -147,14 +153,17 @@ private fun relayHttp(
 internal suspend fun pairWithAvailableTransport(
     invite: Invitation, keys: AsymmetricCipherKeyPair, phoneName: String,
     findMac: suspend () -> String,
+    rateLimit: RelayRateLimit = RelayRateLimit(),
     persist: (PairedDevice, String?) -> Unit,
 ) {
     val origin = try { findMac() } catch (error: MacUnavailable) {
         if (invite.relay == null) throw error
         null
     }
-    if (origin == null) pairThroughRelay(invite, keys, phoneName) { persist(it, null) }
-    else {
+    if (origin == null) {
+        val mailbox = RelayMailbox(requireNotNull(invite.relay), rateLimit = rateLimit)
+        pairThroughRelay(invite, keys, phoneName, mailbox) { persist(it, null) }
+    } else {
         val client = DeviceClient(invite.publicKey, keys, { deviceHttp(origin, it) })
         persist(pairDevice(invite, keys, phoneName, client::send), origin)
     }
