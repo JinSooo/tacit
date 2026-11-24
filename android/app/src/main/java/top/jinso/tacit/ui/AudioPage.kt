@@ -99,20 +99,21 @@ import java.util.concurrent.CompletableFuture
         // A sync that brings new Mac summaries only touches the vault, so listen to both.
         owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { merge(audio.changes, app.vault.changes).collectLatest {
             state = audio.state()
-            val snapshot = withContext(Dispatchers.IO) {
-                    runCatching {
-                        val voices = audio.listSpeakers(includeIgnored).get()
-                        val mac = audio.macVoiceKnown().get()
-                        val scenes = audio.listConversations().get().sortedByDescending { it.start }
-                        val text = scenes.flatMap { it.recordIds }.distinct().mapNotNull { app.vault.get(it) }.associateBy { it.id }
-                        val written = app.vault.summaries().flatMap { m -> m.recordIds.map { it to m } }.toMap()
-                        Triple(voices to mac, audioConversationRows(scenes, text), written)
-                    }
+            val (voices, conversations, written) = retryAudioPageRead(onFailure = { loadFailed = true }) {
+                withContext(Dispatchers.IO) {
+                    val voices = audio.listSpeakers(includeIgnored).get()
+                    val mac = audio.macVoiceKnown().get()
+                    val scenes = audio.listConversations().get().sortedByDescending { it.start }
+                    val text = scenes.flatMap { it.recordIds }.distinct().mapNotNull { app.vault.get(it) }.associateBy { it.id }
+                    val written = app.vault.summaries().flatMap { m -> m.recordIds.map { it to m } }.toMap()
+                    Triple(voices to mac, audioConversationRows(scenes, text), written)
                 }
-            snapshot.onSuccess { (voices, conversations, written) ->
-                speakers = voices.first; macVoice = voices.second; rows = conversations; summaries = written
             }
-            loadFailed = snapshot.isFailure
+            speakers = voices.first
+            macVoice = voices.second
+            rows = conversations
+            summaries = written
+            loadFailed = false
             loaded = true
         } }
     }
@@ -140,6 +141,7 @@ import java.util.concurrent.CompletableFuture
                 IconButton(onClick = { earlier?.let(onDay) }, enabled = earlier != null) {
                     Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "前一天", tint = if (earlier != null) tacitColors.muted else tacitColors.faint)
                 }
+                if (day != today) TextButton(onClick = { onDay(today) }) { Text("今天") }
                 IconButton(onClick = { later?.let(onDay) }, enabled = later != null) {
                     Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "后一天", tint = if (later != null) tacitColors.muted else tacitColors.faint)
                 }
@@ -187,7 +189,7 @@ import java.util.concurrent.CompletableFuture
                 )
             }
         }
-        if (!loaded || busy) item { ProgressLine(Modifier.padding(end = 12.dp, top = 8.dp)) }
+        if ((!loaded && !loadFailed) || busy) item { ProgressLine(Modifier.padding(end = 12.dp, top = 8.dp)) }
         if (loadFailed) item {
             Caption("暂时无法读取录音，正在重试。", Modifier.padding(top = 16.dp), color = tacitColors.attention)
         } else if (loaded && day !in availableDays) item(key = "empty") {
