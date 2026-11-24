@@ -8,7 +8,7 @@ struct RootView: View {
 
   private var columnVisibility: Binding<NavigationSplitViewVisibility> {
     Binding(get: { sidebarVisible ? .all : .detailOnly },
-            set: { next in Motion.animate(Motion.page) { sidebarVisible = next != .detailOnly } })
+            set: { sidebarVisible = $0 != .detailOnly })
   }
 
   private var sidebarAction: String { sidebarVisible ? "隐藏侧栏" : "显示侧栏" }
@@ -57,7 +57,8 @@ struct RootView: View {
   // 导航栈切换页面时会替换工具栏。根页和推入的详情都保留此项，避免标题栏高度变化。
   private var sidebarToggle: some ToolbarContent {
     ToolbarItem(placement: .navigation) {
-      Button { Motion.animate(Motion.page) { sidebarVisible.toggle() } } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar) }
+      // 侧栏开合交给系统自己的分栏动画；再套一层 SwiftUI 动画会逐帧重排整页。
+      Button { sidebarVisible.toggle() } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar) }
         .help(sidebarAction)
         .accessibilityLabel(sidebarAction)
         .accessibilityValue(sidebarVisible ? "已展开" : "已折叠")

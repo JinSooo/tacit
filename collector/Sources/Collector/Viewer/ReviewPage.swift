@@ -149,8 +149,8 @@ private struct ReviewDayContent: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         dayHeader().padding(.horizontal, TimelineReadingLayout.edge)
-        // 一天最多 30 段加今天的草稿，普通 VStack 就够；惰性列表在展开时会先估高再修正，下面的段会跳两下。
-        VStack(spacing: 0) {
+        // 惰性排版：展开动画时只有看得见的几段逐帧挪位置；全量 VStack 实测每帧都超出 120Hz 的预算。
+        LazyVStack(spacing: 0) {
           let drafts = self.drafts
           let items = self.items
           let showsProjects = TimelineProjectLabels.showsNames(in: drafts + items)
