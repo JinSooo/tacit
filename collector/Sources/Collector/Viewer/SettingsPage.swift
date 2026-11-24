@@ -12,7 +12,7 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
     case .sources: return "数据源"
     case .models: return "AI 模型"
     case .agents: return "AI 工具"
-    case .hub: return "后台服务"
+    case .hub: return "后台与连接"
     case .privacy: return "隐私"
     case .maintenance: return "维护"
     }
@@ -31,6 +31,7 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
 }
 
 struct SettingsPage: View {
+  @Environment(ViewerStore.self) private var store
   @AppStorage("settings.group") private var group: SettingsGroup = .general
 
   var body: some View {
@@ -48,9 +49,19 @@ struct SettingsPage: View {
         switch group {
         case .general: GeneralSettingsView()
         case .sources: SourcesSettingsView()
-        case .models: ModelSettingsView()
-        case .agents: AgentSettingsView()
-        case .hub: HubSettingsView()
+        case .models:
+          if store.canManageBackend {
+            ModelSettingsView().id(store.remoteBackend?.context.binding.route)
+          } else {
+            directConnectionRequired
+          }
+        case .agents:
+          if store.canManageBackend {
+            AgentSettingsView().id(store.remoteBackend?.context.binding.route)
+          } else {
+            directConnectionRequired
+          }
+        case .hub: HubSettingsView { group = .models }
         case .privacy: PrivacySettingsView()
         case .maintenance: MaintenanceSettingsView()
         }
@@ -59,6 +70,19 @@ struct SettingsPage: View {
     }
     .background(Palette.paper)
     .navigationTitle("设置")
+    .task(id: store.remoteBackend?.context.binding.route) {
+      guard let model = store.remoteBackend, model.isRemote else { return }
+      while !Task.isCancelled {
+        await model.refreshStatus()
+        await WindowVisibility.pause(.seconds(15))
+      }
+    }
+  }
+
+  private var directConnectionRequired: some View {
+    SettingsForm {
+      SettingsMessage(text: RemoteBackendSettingsModel.managementNotice, warning: false)
+    }
   }
 }
 
@@ -133,20 +157,19 @@ struct GeneralSettingsView: View {
 }
 
 private struct LoginStartupSection: View {
+  @Environment(ViewerStore.self) private var store
   @State private var enabled = false
   @State private var installed = false
   @State private var mixed = false
   @State private var busy = false
   @State private var error: String?
-  private var startup: LoginStartup {
-    LoginStartup(home: FileManager.default.homeDirectoryForCurrentUser, dataDir: Config.load().dataDir)
-  }
+  private var startup: LoginStartup? { store.loginStartup }
   var body: some View {
     Section {
       Toggle("登录后自动启动", isOn: Binding(get: { enabled }, set: { value in
         busy = true; error = nil
         Task {
-          do { try startup.setEnabled(value) } catch { self.error = error.localizedDescription }
+          do { try startup?.setEnabled(value) } catch { self.error = error.localizedDescription }
           refresh(); busy = false
         }
       })).toggleStyle(.switch).disabled(!installed || busy)
@@ -159,7 +182,7 @@ private struct LoginStartupSection: View {
       while !Task.isCancelled { refresh(); await WindowVisibility.pause(.seconds(5)) }
     }
   }
-  func refresh() { enabled = startup.enabled; installed = startup.installed; mixed = startup.mixed }
+  func refresh() { enabled = startup?.enabled == true; installed = startup?.installed == true; mixed = startup?.mixed == true }
 }
 
 struct GeneralPreferencesSection: View {
@@ -217,6 +240,7 @@ struct GeneralPreferencesSection: View {
 // MARK: 后台服务
 
 struct HubSettingsView: View {
+  let openModels: () -> Void
   @Environment(ViewerStore.self) private var store
   @Environment(\.openURL) private var openURL
   @State private var info: HubPortSettings?
@@ -227,48 +251,85 @@ struct HubSettingsView: View {
 
   var body: some View {
     let c = store.capture
+    let model = store.remoteBackend
     SettingsForm {
-      Section {
-        SettingsRow("地址") { Text(store.api.base.absoluteString).font(.mono(TextSize.body)).textSelection(.enabled) }
-        SettingsRow("状态") {
-          let problem = store.sharedError ?? c.hubError
-          Text(problem ?? (info == nil ? "正在检查…" : "已连接")).foregroundStyle(problem == nil ? Palette.muted : Palette.attention)
-        }
-        SettingsRow("等待保存", value: "\(c.queue) 条")
-        SettingsRow("本次已保存", value: "\(c.sent) 条")
-        SettingsRow("详细状态") {
-          Button("在浏览器中打开") {
-            if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务尚未准备好，请稍后重试。" }
-          }
-        }
-      } header: { Text("连接与保存") } footer: {
-        Note("管理连接仅限这台 Mac。")
+      if let model {
+        RemoteBackendSettingsSection(model: model, queue: c.queue, sent: c.sent, openModels: openModels)
       }
-      DeviceSettingsSection()
-      RelaySettingsSection()
-      Section("连接设置") {
-        SettingsRow("端口") {
-          HStack(spacing: 8) {
-            TextField("端口", text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
-              .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
-            if let p = Int(port), p != info?.port, info?.locked == false {
-              Button(busy ? "正在重启…" : "保存并重启") { Task { await apply(p) } }.disabled(busy || !(1024...65535).contains(p))
-            }
-          }
-        }
-        if info?.locked == true { SettingsMessage(text: "端口由环境变量 RA_PORT 固定，这里不能改。", warning: false) }
-        if let message { SettingsMessage(text: message, warning: false) }
-        if let error { SettingsMessage(text: error) }
-        Text("仅在端口冲突时修改。保存后后台服务会重启，记录会自动接上。")
-          .foregroundStyle(Palette.muted)
+      if !store.isRemoteBackend {
+        localConnection(c)
+      }
+      if store.canManageBackend {
+        DeviceSettingsSection()
+          .id(model?.context.binding.route)
+        RelaySettingsSection()
+          .id(model?.context.binding.route)
+      }
+      if !store.isRemoteBackend {
+        portSection
       }
     }
+    .tint(Palette.accent)
     .task {
-      // 端口可能在中枢网页上改过：定时刷新，但不覆盖正在输入的内容。
       while !Task.isCancelled {
-        if !busy, info == nil || port == String(info!.port) { await load() }
+        model?.refreshContext()
+        await model?.restoreReplacement()
+        if !store.isRemoteBackend, !busy, info == nil || port == String(info?.port ?? 0) { await load() }
         await WindowVisibility.pause(.seconds(5))
       }
+    }
+    .sheet(isPresented: Binding(get: { model?.showDetails == true }, set: { model?.showDetails = $0 })) {
+      if let model { RemoteBackendDetails(model: model) { model.showDetails = false } }
+    }
+    .sheet(isPresented: Binding(get: { model?.returnPreview != nil }, set: { if !$0 { model?.returnPreview = nil } })) {
+      if let model, let preview = model.returnPreview {
+        RemoteBackendConfirmation(action: .switchBack(preview), cancel: { model.returnPreview = nil },
+                                  confirm: { Task { await model.switchBack() } }, busy: model.switchingBack)
+      }
+    }
+    .sheet(isPresented: Binding(get: { model?.confirmDelete == true }, set: { model?.confirmDelete = $0 })) {
+      if let model {
+        RemoteBackendConfirmation(action: .deleteBackup, cancel: { model.confirmDelete = false },
+                                  confirm: { Task { await model.deleteBackup() } }, busy: model.busy)
+      }
+    }
+  }
+
+  private func localConnection(_ c: CaptureSnapshot) -> some View {
+    Section {
+      SettingsRow("地址") { Text(store.api.base.absoluteString).font(.mono(TextSize.body)).textSelection(.enabled) }
+      SettingsRow("状态") {
+        let problem = store.sharedError ?? c.hubError
+        Text(problem ?? (info == nil ? "正在检查…" : "已连接")).foregroundStyle(problem == nil ? Palette.muted : Palette.attention)
+      }
+      SettingsRow("等待保存", value: "\(c.queue) 条")
+      SettingsRow("本次已保存", value: "\(c.sent) 条")
+      SettingsRow("详细状态") {
+        Button("在浏览器中打开") {
+          if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务尚未准备好，请稍后重试。" }
+        }
+      }
+    } header: { Text("连接与保存") } footer: {
+      Note("管理连接仅限这台 Mac。")
+    }
+  }
+
+  private var portSection: some View {
+    Section("连接设置") {
+      SettingsRow("端口") {
+        HStack(spacing: 8) {
+          TextField("端口", text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
+            .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
+          if let p = Int(port), p != info?.port, info?.locked == false {
+            Button(busy ? "正在重启…" : "保存并重启") { Task { await apply(p) } }.disabled(busy || !(1024...65535).contains(p))
+          }
+        }
+      }
+      if info?.locked == true { SettingsMessage(text: "端口由环境变量 RA_PORT 固定，这里不能改。", warning: false) }
+      if let message { SettingsMessage(text: message, warning: false) }
+      if let error { SettingsMessage(text: error) }
+      Text("仅在端口冲突时修改。保存后后台服务会重启，记录会自动接上。")
+        .foregroundStyle(Palette.muted)
     }
   }
 
@@ -376,11 +437,16 @@ struct MaintenanceSettingsView: View {
             DatePicker("从", selection: $backfillFrom, in: ...backfillTo, displayedComponents: .date).labelsHidden()
             Text("至").foregroundStyle(Palette.muted)
             DatePicker("至", selection: $backfillTo, in: backfillFrom...Date(), displayedComponents: .date).labelsHidden()
-            Button("整理") { Task { await requestBackfill() } }.disabled(latest("backfill").map { !$0.finished } ?? false)
+            Button("整理") { Task { await requestBackfill() } }
+              .disabled(!store.canManageBackend || latest("backfill").map { !$0.finished } == true)
           }
         }
-        if let r = latest("backfill") { SettingsMessage(text: r.statusText, warning: r.status == "failed") }
-        if let requestError { SettingsMessage(text: requestError) }
+        if store.canManageBackend {
+          if let r = latest("backfill") { SettingsMessage(text: r.statusText, warning: r.status == "failed") }
+          if let requestError { SettingsMessage(text: requestError) }
+        } else {
+          SettingsMessage(text: RemoteBackendSettingsModel.managementNotice, warning: false)
+        }
         facts(what: "把所选日期里、开始整理之前就有的记录交给 AI，整理出事项、项目和每日时间线。", sources: "已有的记录，不重新采集",
               dedupe: "已经整理过的记录不会重复整理", distill: "会调用 AI 模型，同一段日期可以再整理一次")
       } header: {
@@ -402,7 +468,8 @@ struct MaintenanceSettingsView: View {
         Note("只复制密钥，不含历史记录和录音。换电脑时，密钥和数据目录都要带上，缺一个都打不开。")
       }
     }
-    .task {
+    .task(id: store.canManageBackend) {
+      guard store.canManageBackend else { return }
       // 有排队或执行中的请求时 3 秒刷新一次，否则 30 秒。
       while !Task.isCancelled {
         await loadRequests()
@@ -445,11 +512,13 @@ struct MaintenanceSettingsView: View {
 
   func latest(_ kind: String) -> DistillRequestInfo? { requests.first { $0.kind == kind } }
   func loadRequests() async {
+    guard store.canManageBackend, !Task.isCancelled else { return }
     do { requests = try await store.api.distillRequests(); requestError = nil }
     catch is CancellationError {}
     catch { requestError = error.localizedDescription }
   }
   func requestBackfill() async {
+    guard store.canManageBackend else { return }
     do {
       try await store.api.requestDistill(kind: "backfill", range: DistillDateRange(start: backfillFrom, end: backfillTo))
       await loadRequests()

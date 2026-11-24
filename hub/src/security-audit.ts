@@ -3,7 +3,7 @@ import type { HubDB } from "./db.ts";
 
 type SQL = HubDB["db"];
 type Action = "pair.create" | "pair.complete" | "device.local_register" | "device.remove" | "device.role_change" |
-  "key.set" | "key.delete" | "relay.change" | "remote.delete" | "local.delete" | "auth.denied";
+  "key.set" | "key.delete" | "relay.change" | "remote.delete" | "local.delete" | "auth.denied" | "history.import";
 
 export const deviceRoleSchema = `
 ALTER TABLE devices ADD COLUMN role TEXT NOT NULL DEFAULT 'collect' CHECK(role IN ('collect','view','admin','agent'));

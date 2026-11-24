@@ -122,6 +122,29 @@ export function sliceStep(db: HubDB, backfill = false, now = Date.now(), enabled
       }
       store.setState("backfill_done", true);
     }
+    // 导入的日期可能远早于增量启用点。按中枢本地日处理，今日未闭合的片段下一轮再看。
+    const imported = db.db.prepare<[string], { date: string }>("SELECT date FROM history_import_days WHERE date<=? ORDER BY date").all(localDate(now));
+    const dequeue = db.db.prepare("DELETE FROM history_import_days WHERE date=?");
+    const queued: { date: string; start: number; next: number }[] = [];
+    for (const { date } of imported) {
+      const start = /^\d{4}-\d{2}-\d{2}$/.test(date) ? localDayStart(date) : null;
+      if (start === null) { dequeue.run(date); continue; }
+      const next = new Date(start); next.setDate(next.getDate() + 1);
+      queued.push({ date, start, next: next.getTime() });
+    }
+    if (queued.length) {
+      // 从最早的导入日一直切到现在，一个窗口处理：跨午夜的录音和实时会话不会在日界被拆开，
+      // 按正常规则闭合（未安静满的下一轮再看）；标记重整沿用新片段及其录音覆盖的日期。
+      const r = persistFrames(db, Math.min(...queued.map(q => q.start)) - 1, now, now + 1);
+      created += r.frames.length;
+      markFrameReviewDays(store, r.frames, now + 1);
+      const unframed = db.db.prepare(`SELECT 1 FROM records r WHERE t_start_ms>=? AND t_start_ms<?
+          AND source<>'manual.correction' AND NOT EXISTS(SELECT 1 FROM frame_records f WHERE f.record_id=r.id) LIMIT 1`);
+      for (const q of queued) {
+        // 结束时刻异常（晚于现在很多）的记录闭合不了：日终满 48 小时就出队，留在“未入时间线”。
+        if (q.next <= now && (!unframed.get(q.start, q.next) || q.next + 48 * 3_600_000 <= now)) dequeue.run(q.date);
+      }
+    }
     const result = persistFrames(db, cursor, now);
     created += result.frames.length; touched.push(...result.frames);
     store.setState("cursor_ms", result.cursor_ms);

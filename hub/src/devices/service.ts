@@ -11,8 +11,9 @@ import { logFailure } from "../diagnostics.ts";
 import { deviceKeychain, relayKeychain, type DeviceKeyStorage, type RelayKeyStorage } from "../keys.ts";
 import { base64url, deviceID, identityFromRaw, invalidEnvelope, object,
   openRequest, readEnvelope, responseSealer, suite, unpaired, validateRequest, WireError } from "./envelope.ts";
-import { allocateDeviceID, deviceAccess, deviceList, registerLocalDevices, removeDevice, updateDeviceRole } from "./store.ts";
-import { auditOp, devicePermissionDenied, isPairingRole, operationAccess, projectionReads, projectionRoles, type DeviceRole, type PairingRole } from "./permissions.ts";
+import { allocateDeviceID, deviceAccess, deviceList, enrollRemoteAgent, registerLocalDevices, removeDevice, updateDeviceRole } from "./store.ts";
+import { historyImportOps, auditOp, devicePermissionDenied, isPairingRole, operationAccess, projectionReads, projectionRoles, type DeviceRole, type PairingRole } from "./permissions.ts";
+import { historyImport } from "./history-import.ts";
 import { auditSecurity, remoteDeleteLimit, reserveRemoteDelete } from "../security-audit.ts";
 import { deleteTimelineSegment } from "../timeline.ts";
 import { DistillStore } from "../distill/store.ts";
@@ -23,6 +24,9 @@ import { localDateString } from "../distill/requests.ts";
 import { viewerOperation, viewerOperationNeedsRelayLock, type ViewerActor, type ViewerOperation } from "./viewer-operations.ts";
 import { hubStatus } from "../status.ts";
 import { dayMs, type RelayConfig, type RelayRequest } from "./relay-store.ts";
+
+import { httpOrigin } from "./http-origin.ts";
+import { pairReceiptKey, pairRequestHash, prunePairReceipts, recoverPairReceipt, savePairReceipt } from "./pair-receipt.ts";
 
 const invitationMs = 10 * 60_000;
 const idPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -143,6 +147,7 @@ export class DeviceService {
     let version = this.sql.pragma("data_version", { simple: true });
     this.devicePoll = setInterval(() => {
       try {
+        prunePairReceipts(this.sql, this.clock());
         const next = this.sql.pragma("data_version", { simple: true });
         if (next === version) return;
         version = next;
@@ -285,8 +290,10 @@ export class DeviceService {
   }
 
   /** 创建配对邀请并持久化到数据库，供本机 HTTP 接口与 CLI `pair` 共用。 */
-  async createPairing(options: { role?: unknown; viewer?: unknown; relayUrl?: string; openListener?: boolean; actor?: ViewerActor } = {}): Promise<{ uri: string; expires_at: string; role: PairingRole }> {
+  async createPairing(options: { role?: unknown; viewer?: unknown; relayUrl?: string; address?: string; openListener?: boolean; actor?: ViewerActor } = {}): Promise<{ uri: string; expires_at: string; role: PairingRole }> {
     if (options.viewer !== undefined && options.viewer !== true && options.viewer !== false) throw new InputError("viewer 必须是布尔值");
+    const address = httpOrigin(options.address);
+    if (options.address !== undefined && !address) throw new InputError("--address 必须是 http 或 https origin");
     const role = options.role === undefined ? options.viewer === true ? "view" : "collect" : options.role;
     if (!isPairingRole(role)) throw new InputError("设备角色无效");
     const openListener = options.openListener ?? true;
@@ -333,7 +340,9 @@ export class DeviceService {
       const expires_at = new Date(expires).toISOString();
       const payload = {
         v: 1, hub_id: identity.hubID, name: this.name, pk: identity.publicKey.toString("base64url"),
-        code: code.toString("base64url"), addrs: this.addresses, expires_at, role, ...(relay ? { relay } : {}),
+        code: code.toString("base64url"),
+        addrs: address ? [address, ...this.addresses.filter(addr => httpOrigin("http://" + addr) !== address)] : this.addresses,
+        expires_at, role, ...(relay ? { relay } : {}),
       };
       audit(true);
       return { uri: `tacit://pair?d=${Buffer.from(JSON.stringify(payload)).toString("base64url")}`, expires_at, role };
@@ -588,7 +597,7 @@ export class DeviceService {
     const execute = async () => {
       if (this.stopped || this.boundHubID() !== identity.hubID) throw unpaired();
       if (device !== null) this.touch(device, registered!.public_key);
-      return await this.execute(input, nonce, device, pairKey, identity.hubID, context,
+      return await this.execute(input, nonce, device, pairKey, identity.hubID, envelope.ct.length - suite.aead.tagSize, context,
         context && createHash("sha256").update(envelope.enc).update(envelope.ct).digest("hex"));
     };
     // 邮件取信和设置已经在同一队列里，直连配对也在此队列里分配信箱。
@@ -630,7 +639,7 @@ export class DeviceService {
   }
 
   private async execute(input: Record<string, unknown> | null, nonce: string, device: string | null,
-                        pairKey: Buffer | null, hubID: string, context?: RelayRequest, hash?: string): Promise<Result | null> {
+                        pairKey: Buffer | null, hubID: string, requestBytes: number, context?: RelayRequest, hash?: string): Promise<Result | null> {
     const space = context?.mailbox.space, up = context?.mailbox.up;
     let retryRead = false;
     if (context) {
@@ -642,7 +651,6 @@ export class DeviceService {
         if (receipt.result !== "null") return JSON.parse(receipt.result) as Result;
         retryRead = true;
       }
-      if (context.mailbox.state === "pair_reply") return null;
     }
     const now = this.clock();
     const saveReceipt = (result: string) => {
@@ -671,14 +679,14 @@ export class DeviceService {
         .run(device ?? "", nonce, now).changes > 0;
       const replay = () => context ? null : fail(400, "请求 nonce 已使用");
       if (device === null && op === "pair") {
-        if (this.sql.prepare("SELECT 1 FROM device_nonces WHERE device='' AND nonce=?").get(nonce)) return replay();
-        return await this.pair(body, pairKey!, hubID, context, claim, remember);
+        return await this.pair(body, pairKey!, hubID, nonce, context, claim, remember);
       }
+      if (context?.mailbox.state === "pair_reply") return null;
       const memoryOnly = op === "audio.sample.get" || op === "runtime.call";
       const result = this.sql.transaction(() => {
         if (!retryRead && !claim()) return replay();
         try {
-          const dispatched = device === null ? fail(400, "配对信封只允许 pair") : this.dispatch(device, op, body, !!context);
+          const dispatched = device === null ? fail(400, "配对信封只允许 pair") : this.dispatch(device, op, body, !!context, hubID, requestBytes);
           if (typeof dispatched !== "function") return remember(dispatched);
           // An interrupted async mutation must never be replayed. Keep a reply
           // for the caller even if the process stops before the result is recorded.
@@ -712,9 +720,27 @@ export class DeviceService {
     }
   }
 
-  private async pair(body: Record<string, unknown>, publicKey: Buffer, hubID: string, context: RelayRequest | undefined,
+  private async pair(body: Record<string, unknown>, publicKey: Buffer, hubID: string, nonce: string, context: RelayRequest | undefined,
                      claim: () => boolean, remember: (result: Result) => Result) {
-    const invite = this.currentInvite(), code = base64url(body.code, 16);
+    const now = this.clock(), invite = this.currentInvite(now), code = base64url(body.code, 16);
+    const key = code && pairReceiptKey(code);
+    const platform = body.platform;
+    const name = typeof body.name === "string" && body.name.length <= 200 && body.name.trim();
+    const validDevice = (platform === "mac" || platform === "android") && name;
+    const request = validDevice ? pairRequestHash(publicKey, platform, body.name as string) : null;
+    if (key && request) {
+      const recovered = this.sql.transaction(() => {
+        const reply = recoverPairReceipt(this.sql, key, request, hubID, this.clock(), context);
+        if (!reply) return null;
+        claim();
+        return remember(ok(reply));
+      }).immediate();
+      if (recovered) return recovered;
+    }
+    if (context?.mailbox.state === "pair_reply") return null;
+    if (this.sql.prepare("SELECT 1 FROM device_nonces WHERE device='' AND nonce=?").get(nonce)) {
+      return context ? null : fail(400, "请求 nonce 已使用");
+    }
     const valid = invite && code && timingSafeEqual(code, invite.code) &&
       (!context || invite.relay?.space === context.mailbox.space && invite.relay.up === context.mailbox.up);
     const commitError = (result: Result, code: string) => this.sql.transaction(() => {
@@ -723,15 +749,10 @@ export class DeviceService {
       return remember(result);
     }).immediate();
     if (!valid) return commitError(fail(403, "配对邀请无效或已过期"), "invite_invalid");
-    const platform = body.platform;
-    if ((platform !== "android" && platform !== "mac") || typeof body.name !== "string" || !body.name.trim() || body.name.length > 200) {
-      return commitError(fail(400, "设备名称或平台无效"), "platform_or_name_invalid");
-    }
+    if (!validDevice) return commitError(fail(400, "设备名称或平台无效"), "platform_or_name_invalid");
     if (platform === "android" && invite.role === "admin") return commitError(fail(403, devicePermissionDenied), "platform_role");
-    const name = body.name.trim();
-    if (this.sql.prepare("SELECT 1 FROM devices WHERE public_key=? AND local_only=1").get(publicKey)) {
-      return commitError(fail(409, "公钥已用于本机登记"), "key_conflict");
-    }
+    const conflictingKey = () => this.sql.prepare("SELECT 1 FROM devices WHERE public_key=? AND (local_only=1 OR role='agent')").get(publicKey);
+    if (conflictingKey()) return commitError(fail(409, "公钥已用于其他设备"), "key_conflict");
     const device_id = allocateDeviceID(this.sql, platform);
     let provisioned: Awaited<ReturnType<RelayService["provisionDevice"]>>;
     try { provisioned = await this.relay.provisionDevice(device_id); }
@@ -753,17 +774,22 @@ export class DeviceService {
           auditSecurity(this.sql, "pair.complete", { ok: false, code: "invite_invalid", now: this.clock() });
           return remember(fail(403, "配对邀请无效或已过期"));
         }
+        if (conflictingKey()) {
+          auditSecurity(this.sql, "pair.complete", { ok: false, code: "key_conflict", now: this.clock() });
+          return remember(fail(409, "公钥已用于其他设备"));
+        }
         this.sql.prepare("DELETE FROM distill_state WHERE k=?").run(inviteKey);
         this.sql.prepare("INSERT INTO devices(id,name,platform,public_key,paired_at,last_seen,role) VALUES(?,?,?,?,?,?,?)")
           .run(device_id, name, platform, publicKey, at, at, invite.role);
         auditSecurity(this.sql, "pair.complete", { actor: device_id, target: device_id, code: invite.role, now: this.clock() });
         if (projectionRoles(invite.role)) touchProjectionDay(this.sql, localDateString(this.clock()));
         if (provisioned) this.relay.setState(provisioned.box, "active");
-        if (context) {
-          this.sql.prepare("UPDATE relay_mailboxes SET state='pair_reply', device=?, token=NULL WHERE space=? AND up=?")
-            .run(device_id, context.mailbox.space, context.mailbox.up);
-        } else this.relay.revokeInvite(invite.relay);
-        return remember(ok({ device_id, hub_id: hubID, name, role: invite.role, ...(provisioned ? { relay: provisioned.relay } : {}) }));
+        // A lost direct reply can be recovered through the original temporary mailbox.
+        const mailbox = context?.mailbox ?? invite.relay;
+        if (mailbox) this.relay.retainPairReply(mailbox, device_id);
+        const reply = { device_id, hub_id: hubID, hub_name: this.name, name, role: invite.role, ...(provisioned ? { relay: provisioned.relay } : {}) };
+        savePairReceipt(this.sql, key!, request!, invite.expires, reply, invite.relay);
+        return remember(ok(reply));
       }).immediate();
       if (result?.status !== 200) {
         if (provisioned) this.relay.revokeDevice(device_id);
@@ -875,10 +901,12 @@ export class DeviceService {
     return { status: response.status, body: await response.json() as object };
   }
 
-  private dispatch(device: string, op: string, body: Record<string, unknown>, fromRelay: boolean): Result | (() => Promise<Result>) {
+  private dispatch(device: string, op: string, body: Record<string, unknown>, fromRelay: boolean, hubID: string, requestBytes: number): Result | (() => Promise<Result>) {
     const access = deviceAccess(this.sql, device);
     if (!access) throw unpaired();
     const { role, projection_reset, local_only } = access;
+    // AI 工具身份只直连（6.12.2），不分配信箱，也不接受经信箱转来的任何操作。
+    if (fromRelay && role === "agent") return this.denied(device, op);
     // Former viewers can pull the withdrawal control message, with no data or usable cursor.
     if (op === "projection.pull" && role === "collect" && projection_reset) {
       return ok({ kind: "projection.reset", epoch: projectionHead(this.sql).epoch, reset: true,
@@ -899,6 +927,18 @@ export class DeviceService {
         throw new InputError("include_private 无效");
       }
       return ok(projection.read(op, body, max, includePrivate));
+    }
+    if (op === "agent.enroll") {
+      if (access.platform !== "mac" || local_only) return this.denied(device, op);
+      const device_id = enrollRemoteAgent(this.sql, device, body.agent_pk, this.clock());
+      return ok({ device_id, hub_id: this.boundHubID()! });
+    }
+    if (historyImportOps.has(op)) {
+      if (local_only || access.platform !== "mac") return this.denied(device, op);
+      if (op === "history.import.batch" && requestBytes > (fromRelay ? relayProjectionBytes : 4 * 1024 * 1024)) {
+        return { status: 413, body: { error: "batch_too_large" } };
+      }
+      return historyImport(this.hub, device, hubID, this.clock(), op, body);
     }
     if (op.startsWith("agent.")) {
       if (fromRelay) return this.denied(device, op);

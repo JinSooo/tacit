@@ -17,7 +17,13 @@ const projectionOps = new Set(["projection.pull", "projection.ack", "events.subs
 export const projectionReads = new Set(["records.get", "records.list", "history.segments", "conversations.detail", "timeline.query", "timeline.locate"]);
 const agentOps = new Set(["agent.now", "agent.get", "agent.search", "agent.timeline", "agent.context", "agent.append", "agent.audit_sync"]);
 const statusOps = new Set(["status.get", "diagnostics.get"]);
+export const historyImportOps = new Set([
+  "history.import.begin", "history.import.batch", "history.import.status", "history.import.finish",
+  "history.import.changes", "history.import.verify",
+]);
 const adminOps = new Set([
+  "agent.enroll",
+  ...historyImportOps,
   "devices.role.update", "devices.remove", "devices.pairing.create", "devices.pairing.cancel", "devices.list",
   "records.create", "segment.correct", "segment.delete", "project.remove", "distill.request", "audit.list",
   "pending.list", "pending.resolve", "facts.create", "facts.detach",

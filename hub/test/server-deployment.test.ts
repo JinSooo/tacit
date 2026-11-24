@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -311,9 +311,9 @@ test("runSupervisor：转发 SIGTERM/SIGINT 并等待子进程退出，子进程
   expect(received).toEqual(["SIGINT"]);
 });
 
-test.skipIf(bindDenied)("CLI pair --role admin 邀请 5 分钟有效，且另一个运行中的 serve 进程可直接完成配对并调用 status.get", async () => {
+test.skipIf(bindDenied)("CLI pair 管理邀请 5 分钟有效，显式地址排首位，且运行中的 serve 可完成配对", async () => {
   const dir = makeTempDir();
-  const { env } = sealedEnv(dir, { RA_LAN_PORT: "0", TZ: "Asia/Shanghai" });
+  const { env } = sealedEnv(dir, { RA_LAN_PORT: "48611", TZ: "Asia/Shanghai" });
 
   // 先启动 serve（server 模式）
   const child = Bun.spawn([process.execPath, cli, "serve"], { env, stdout: "pipe", stderr: "pipe" });
@@ -329,15 +329,28 @@ test.skipIf(bindDenied)("CLI pair --role admin 邀请 5 分钟有效，且另一
     lanPort = Number(match![1]);
   } finally { reader.releaseLock(); }
 
+  for (const invalid of ["ftp://server.test", "https://server.test/path", "https://user@server.test",
+    "https://server.test?", "https://server.test#", "https:server.test", "https://server.test:65536"]) {
+    const failed = spawnSync(process.execPath, [cli, "pair", "--role", "admin", "--address", invalid], { env, encoding: "utf8" });
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toContain("--address 必须是 http 或 https origin");
+    expect(failed.stdout).toBe("");
+  }
   // 在另一个进程里执行 CLI pair --role admin
   const before = Date.now();
-  const pairRes = spawnSync(process.execPath, [cli, "pair", "--role", "admin"], { env, encoding: "utf8" });
+  const pairRes = spawnSync(process.execPath, [cli, "pair", "--role", "admin", "--address", "https://server.example.test:48619/"], { env, encoding: "utf8" });
   const after = Date.now();
   expect(pairRes.status).toBe(0);
   const uri = pairRes.stdout.trim();
   expect(uri.startsWith("tacit://pair?d=")).toBe(true);
   const pairing = decodePairing(uri);
   expect(pairing.role).toBe("admin");
+  expect(pairing.addrs).toEqual([
+    "https://server.example.test:48619",
+    ...[...new Set(Object.values(networkInterfaces()).flatMap(interfaces =>
+      (interfaces ?? []).filter(item => item.family === "IPv4" && !item.internal).map(item => item.address)
+    ))].map(ip => `${ip}:${lanPort}`),
+  ]);
   const ttl = Date.parse(pairing.expires_at) - before;
   expect(ttl).toBeGreaterThanOrEqual(5 * 60_000 - 2_000);
   expect(Date.parse(pairing.expires_at) - after).toBeLessThanOrEqual(5 * 60_000 + 2_000);

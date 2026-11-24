@@ -6,7 +6,8 @@ import { toLocalIso, ulid } from "../../../packages/record/index.ts";
 import { normalizeGitRemote, originArgs, projectForPath, projectForRemote, repoContainsPath, repositoryArgs, repositoryRoot } from "../repo-identity.ts";
 import type { DeviceClient } from "../devices/client.ts";
 import { object } from "../devices/envelope.ts";
-import { atomicWrite, contextAccount, missing, readAgentKey, type AgentLink, type AgentSecrets } from "./identity.ts";
+import type { RemoteHubBinding } from "../hub-binding.ts";
+import { agentAccount, atomicWrite, contextAccount, missing, readAgentKey, type AgentLink, type AgentSecrets } from "./identity.ts";
 
 const maxAge = 7 * 86_400_000;
 const maxQueue = 500;
@@ -57,13 +58,14 @@ export class ContextCache {
   private readonly root: string;
   private readonly scope: string;
 
-  constructor(dir: string, link: AgentLink, private readonly secrets: AgentSecrets) {
+  constructor(dir: string, link: AgentLink, private readonly secrets: AgentSecrets,
+              private readonly remote?: RemoteHubBinding | null) {
     this.scope = `${link.hub_id}-${link.device_id}`;
-    this.root = join(dir, "agent-context-cache", this.scope);
+    this.root = join(remote ? join(dir, remote.dir) : dir, "agent-context-cache", this.scope);
   }
 
   private async key(signal: AbortSignal, create = false) {
-    const hex = await readAgentKey(this.secrets, contextAccount, signal, create);
+    const hex = await readAgentKey(this.secrets, agentAccount(contextAccount, this.remote), signal, create);
     return hex === null ? null : Buffer.from(hex, "hex");
   }
 
@@ -129,7 +131,8 @@ export class ContextCache {
     }
   }
 
-  async offline(params: URLSearchParams, remote: string | null, signal: AbortSignal, now = Date.now()) {
+  /** `beforeWrite` 在落盘审计前同步调用（例如复查后台绑定），抛错即放弃这次离线带入、不留审计。 */
+  async offline(params: URLSearchParams, remote: string | null, signal: AbortSignal, now = Date.now(), beforeWrite?: () => void) {
     const cwd = params.get("cwd")!;
     const key = await this.key(signal);
     const match = key && await this.find(cwd, remote, key, signal);
@@ -137,10 +140,14 @@ export class ContextCache {
     if (!key || !match || !synced || synced > now || now - synced > maxAge || !match.text.trim()) return "";
     const id = ulid(now);
     const entries = join(this.root, "audit");
-    await this.write(`audit/${id}.enc`, {
+    beforeWrite?.();
+    const entry = `audit/${id}.enc`;
+    await this.write(entry, {
       id, at: new Date(now).toISOString(), tool: params.get("tool"), session: params.get("session") ?? undefined, cwd,
       project_id: match.project_id, result_ids: match.result_ids, cached: true,
     }, key, signal);
+    // 写入途中后台被切换：撤回这条审计，免得旧后台记下一次没有发生的带入。
+    try { beforeWrite?.(); } catch (error) { await rm(join(this.root, entry), { force: true }); throw error; }
     const pending = await this.names(entries);
     for (const name of pending.slice(0, Math.max(0, pending.length - maxQueue))) {
       signal.throwIfAborted();

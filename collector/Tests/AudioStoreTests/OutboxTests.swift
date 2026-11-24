@@ -35,11 +35,16 @@ private func outboxRecord(_ body: String = "合成待发送记录") -> Record {
   var bytes = try Data(contentsOf: file); bytes[bytes.count - 1] ^= 1; try bytes.write(to: file)
   let recovered = try OutboxStore(dataDirectory: root, key: key)
   #expect(recovered.restore(limit: 10).records == [b]); #expect(recovered.restore(limit: 10).unreadable == 1)
-  #expect(throws: (any Error).self) { try recovered.append(a) }
-  #expect(throws: (any Error).self) { try recovered.acknowledge([a.id]) }
-  #expect(try Data(contentsOf: file) == bytes)
+  #expect(!FileManager.default.fileExists(atPath: file.path))
+  #expect(recovered.count == 1 && recovered.quarantined == 1)
+  let quarantine = store.root.appendingPathComponent("quarantine")
+  let isolated = try #require(FileManager.default.contentsOfDirectory(at: quarantine, includingPropertiesForKeys: nil).first)
+  #expect(try Data(contentsOf: isolated) == bytes)
+  #expect(try recovered.append(a) == a)
   let wrong = try OutboxStore(dataDirectory: root, key: SymmetricKey(size: .bits256))
-  #expect(wrong.restore(limit: 10).unreadable == 2); #expect(wrong.count == 2)
+  #expect(wrong.restore(limit: 10).unreadable == 3)
+  #expect(wrong.count == 0 && wrong.quarantined == 3)
+  #expect(try Data(contentsOf: isolated) == bytes)
 }
 @Test func outboxRestoreIsBoundedAndKeepsOverflowUntilAcknowledged() throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -145,4 +150,19 @@ private func outboxRecord(_ body: String = "合成待发送记录") -> Record {
   #expect(buffer.batch(limit: 2).map(\.id) == [disk.id, fallback.id])
   try buffer.acknowledge([disk.id], at: 63)
   #expect(buffer.batch(limit: 2).map(\.id) == [fallback.id])
+}
+
+@Test func eligibleBatchPublishesCorruptFileQuarantineImmediately() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let store = try OutboxStore(dataDirectory: root, key: SymmetricKey(size: .bits256))
+  let buffer = OutboxBuffer { store }
+  let record = outboxRecord()
+  buffer.retry(at: 0)
+  buffer.enqueue([record], at: 1)
+  try Data("invalid ciphertext".utf8).write(to: store.root.appendingPathComponent(record.id + ".enc"))
+  #expect(buffer.count == 1)
+  #expect(buffer.eligibleBatch(limit: 10, excluding: []) { _ in true }.isEmpty)
+  #expect(buffer.count == 0)
+  #expect(buffer.status.quarantined == 1)
 }

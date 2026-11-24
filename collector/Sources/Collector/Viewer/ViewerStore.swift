@@ -3,6 +3,7 @@ import SwiftUI
 // 只引入用到的类型：CollectorCore 里有个叫 Observation 的结构体，会挡住 @Observable 宏展开要找的 Observation 模块。
 import enum CollectorCore.CaptureFooterStatus
 import struct CollectorCore.Project
+import struct CollectorCore.LoginStartup
 import struct CollectorCore.DistillRequestInfo
 import struct CollectorCore.PendingItem
 import struct CollectorCore.Speaker
@@ -91,8 +92,8 @@ enum Route: Hashable {
   var speakers: [Speaker] = []
   var sharedError: String?
   var capture = CaptureSnapshot()
-  let preferences = SettingsPreferences()
-  let extensions = ExtensionSettings()
+  private(set) var preferences = SettingsPreferences()
+  private(set) var extensions = ExtensionSettings()
 
   /// nil 时跟随今天，手动选中以往日期时保留选择。
   var reviewDay: Date?
@@ -106,6 +107,7 @@ enum Route: Hashable {
   var catchUpRequest: DistillRequestInfo?
   @ObservationIgnored var catchUpRequestedAt: Date?
   @ObservationIgnored private var sharedRequest = 0
+  @ObservationIgnored private var bindingRevision = 0
   /// 进入详细时间线后要定位的原始记录。
   var historyFocus: String?
   /// 记录被删除、补写或修正后递增，各页据此重新读取。
@@ -118,11 +120,21 @@ enum Route: Hashable {
   @ObservationIgnored var onRevision: (() -> Void)?
   @ObservationIgnored var onDeviceSettingsUpdate: ((DeviceSettings?, String?) -> Void)?
 
-  init(api: HubAPI, dataSource: (any ViewerDataSource)? = nil, device: String, controls: CaptureControlling?) {
+  let loginStartup: LoginStartup?
+  private let needsDirectConnection: () -> Bool
+  var agentNeedsDirectConnection: Bool { needsDirectConnection() }
+  var remoteBackend: RemoteBackendSettingsModel?
+  var isRemoteBackend: Bool { remoteBackend?.isRemote == true }
+  var canManageBackend: Bool { remoteBackend?.canManageBackend ?? true }
+
+  init(api: HubAPI, dataSource: (any ViewerDataSource)? = nil, device: String, controls: CaptureControlling?,
+       loginStartup: LoginStartup? = nil, agentNeedsDirectConnection: @escaping () -> Bool = { false }) {
     self.api = api
     self.dataSource = dataSource ?? HTTPViewerDataSource(api: api)
     self.device = device
     self.controls = controls
+    self.loginStartup = loginStartup
+    self.needsDirectConnection = agentNeedsDirectConnection
   }
 
   /// 远程下推同步到达后刷新侧栏项目；有删除或重置时递增 revision 触发界面重读（不反触发本地写回调）。
@@ -132,11 +144,38 @@ enum Route: Hashable {
       revision += 1
       suppressRevisionCallback = false
     }
+    let binding = bindingRevision
     Task {
-      if let latestProjects = try? await dataSource.projects() {
+      if let latestProjects = try? await dataSource.projects(), binding == bindingRevision {
         projects = latestProjects
       }
     }
+  }
+
+  func resetForBindingChange() {
+    bindingRevision += 1
+    sharedRequest += 1
+    remoteBackend?.refreshContext()
+    if section != .settings { section = .review }
+    path = []
+    projects = []
+    projectToRemove = nil
+    removingProject = false
+    projectRemovalError = nil
+    pending = []
+    speakers = []
+    sharedError = nil
+    preferences = SettingsPreferences()
+    extensions = ExtensionSettings()
+    reviewDay = nil
+    timelineSearch = ""
+    timelinePendingExpanded = false
+    catchUpRequest = nil
+    catchUpRequestedAt = nil
+    historyFocus = nil
+    suppressRevisionCallback = true
+    revision += 1
+    suppressRevisionCallback = false
   }
 
   func refreshShared() async {

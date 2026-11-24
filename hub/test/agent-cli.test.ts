@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -7,6 +7,11 @@ import { createHandler } from "../src/server.ts";
 import { connectAgent } from "../src/agents-install.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { fixture, networkDenied, reviewEvidence, setup } from "./helpers.ts";
+
+import { readHub, sessionContext } from "../src/agent-cli/client.ts";
+import { ContextCache } from "../src/agent-cli/context-cache.ts";
+import { contextAccount, deviceAccount, ensureAgentIdentity, type AgentLink, type AgentSecrets } from "../src/agent-cli/identity.ts";
+import { identityFromRaw, openRequest, readEnvelope, responseSealer } from "../src/devices/envelope.ts";
 
 const cli = resolve(import.meta.dir, "../src/cli.ts");
 const token = "synthetic-agent-cli-secret";
@@ -226,4 +231,119 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
       expect(empty.stdout).toBe(""); expect(empty.stderr).toBe(""); expect(empty.code).toBe(0);
     }
   } finally { await server.stop(true); ctx.cleanup(); }
+});
+
+test.skipIf(bindDenied)("Agent 跟随远端绑定，私钥、端口和离线带入与本机隔离", async () => {
+  const ctx = environment();
+  const hubIdentity = await identityFromRaw("45".repeat(32));
+  const localIdentity = await identityFromRaw("46".repeat(32));
+  const agentHex = "47".repeat(32);
+  const agent = await identityFromRaw(agentHex);
+  const remote = {
+    hub_id: hubIdentity.hubID, hub_pk: hubIdentity.publicKey.toString("base64url"),
+    dir: `remote-${hubIdentity.hubID}`,
+  };
+  const data = join(ctx.dir, remote.dir), localPath = join(ctx.dir, "agent-link.json"), remotePath = join(data, "agent-link.json");
+  const binding = join(ctx.dir, "hub-binding.json");
+  const bind = (phase: string, generation = 1) => writeFileSync(binding, JSON.stringify({
+    version: 1, generation, target: "remote", phase, remote, updated_at: new Date().toISOString(),
+  }), { mode: 0o600 });
+  const cwd = ctx.dir;
+  const payload = { project_id: "01KAB4R0S00000000000000000", text: "远端合成上下文", cache: {
+    keys: { repos: [cwd] }, ignored_repos: [], result_ids: [], synced_at: new Date().toISOString(),
+  } };
+  const localLink: AgentLink = {
+    hub_id: localIdentity.hubID, hub_pk: localIdentity.publicKey.toString("base64url"),
+    device_id: "agent-aaaaaaaa", address: "http://127.0.0.1:48615",
+  };
+  const link: AgentLink = {
+    hub_id: remote.hub_id, hub_pk: remote.hub_pk, device_id: "agent-bbbbbbbb", address: "http://127.0.0.1:48614",
+  };
+  const keys = new Map<string, string>([[deviceAccount, agentHex], [contextAccount, "48".repeat(32)]]);
+  const reads: string[] = [];
+  const secrets: AgentSecrets = {
+    async read(account) { reads.push(account); return keys.get(account) ?? null; },
+    async create(account, value) { keys.set(account, value); },
+  };
+  const env = { RA_DATA_DIR: ctx.dir, RA_PORT: "48615" };
+  const options = { env, secrets }, signal = () => AbortSignal.timeout(2000);
+  const params = new URLSearchParams({ tool: "codex", cwd });
+  const outputs: string[] = [], emit = (value: string) => outputs.push(value);
+  let server: Bun.Server<unknown> | undefined;
+  try {
+    mkdirSync(data);
+    writeFileSync(localPath, JSON.stringify(localLink));
+    writeFileSync(remotePath, JSON.stringify(link));
+
+    // Missing and preparing bindings continue to use the retained local identity.
+    expect(await ensureAgentIdentity(options)).toEqual(localLink);
+    bind("preparing");
+    expect(await ensureAgentIdentity(options)).toEqual(localLink);
+    await new ContextCache(ctx.dir, localLink, secrets).refresh({ ...payload, text: "旧本机上下文" }, cwd, null, signal());
+    expect(await new ContextCache(ctx.dir, localLink, secrets).offline(params, null, signal())).toContain("旧本机上下文");
+
+    bind("committed");
+    const remoteDeviceAccount = `${deviceAccount}.${remote.hub_id}`;
+    const remoteCacheAccount = `${contextAccount}.${remote.hub_id}`;
+    // Invalid local link and a present local token would expose any accidental fallback.
+    writeFileSync(localPath, "{broken");
+    reads.length = 0;
+    await expect(readHub("now", params, signal(), undefined, options)).rejects.toThrow("远端 Agent 私钥");
+    expect(reads).toEqual([remoteDeviceAccount]);
+    await expect(ensureAgentIdentity(options)).rejects.toThrow("远端 Agent 私钥");
+    writeFileSync(remotePath, JSON.stringify(localLink));
+    await expect(readHub("now", params, signal(), undefined, options)).rejects.toThrow("远端 Agent 连接配置");
+    writeFileSync(remotePath, JSON.stringify(link));
+    keys.set(remoteDeviceAccount, agentHex);
+
+    await expect(readHub("now", params, signal(), undefined, options)).rejects.toThrow("无法直连远端");
+    await sessionContext(params, signal(), emit, options);
+    expect(outputs).toEqual([""]);
+    expect(keys.has(remoteCacheAccount)).toBe(false);
+
+    server = Bun.serve({ hostname: "127.0.0.1", port: 48614, async fetch(request) {
+      expect(new URL(request.url).pathname).toBe("/v1/device");
+      const envelope = await readEnvelope(request, false);
+      expect(envelope.device).toBe(link.device_id);
+      const input = await openRequest(envelope, hubIdentity.keys, agent.keys.publicKey);
+      expect(input?.op).toBe("agent.context");
+      const seal = await responseSealer(hubIdentity.keys, agent.keys.publicKey, input!.nonce as string);
+      return Response.json(await seal({ status: 200, body: payload }));
+    } });
+    await sessionContext(params, signal(), emit, options);
+    expect(outputs.at(-1)).toBe(payload.text);
+    expect(keys.has(remoteCacheAccount)).toBe(true);
+    expect(reads.some(account => account === deviceAccount || account === contextAccount)).toBe(false);
+    await server.stop(true); server = undefined;
+
+    bind("switching_back", 2);
+    await sessionContext(params, signal(), emit, options);
+    expect(outputs.at(-1)).toContain(payload.text);
+    expect(outputs.at(-1)).not.toContain("旧本机上下文");
+  } finally { await server?.stop(true); ctx.cleanup(); }
+});
+
+test("Agent rejects both existing and newly staged credentials while re-pairing an active generation", async () => {
+  const ctx = environment();
+  try {
+    const hub = await identityFromRaw("45".repeat(32));
+    const remote = { hub_id: hub.hubID, hub_pk: hub.publicKey.toString("base64url"), dir: `remote-${hub.hubID}` };
+    const data = join(ctx.dir, remote.dir);
+    mkdirSync(data);
+    const marker = join(data, "repair-transaction.json");
+    writeFileSync(join(ctx.dir, "hub-binding.json"), JSON.stringify({ version: 1, generation: 1,
+      target: "remote", phase: "committed", remote, updated_at: new Date().toISOString() }), { mode: 0o600 });
+    writeFileSync(join(data, "agent-link.json"), JSON.stringify({ ...remote,
+      device_id: "agent-bbbbbbbb", address: "http://127.0.0.1:48729" }));
+    let reads = 0;
+    const options = { env: { RA_DATA_DIR: ctx.dir }, secrets: {
+      async read() { reads++; writeFileSync(marker, "fixture"); return "47".repeat(32); },
+      async create() { throw new Error("unexpected registration"); },
+    } };
+    const params = new URLSearchParams({ tool: "codex" });
+    for (const operation of ["now", "append"]) {
+      await expect(readHub(operation, params, AbortSignal.timeout(1000), undefined, options)).rejects.toThrow("正在恢复");
+    }
+    expect(reads).toBe(1);
+  } finally { ctx.cleanup(); }
 });

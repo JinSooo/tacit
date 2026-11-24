@@ -10,13 +10,14 @@ import { requestsSchema, regenDaysRequestsSchema } from "./distill/requests.ts";
 import { conversationSchema, lineSchema } from "./conversations.ts";
 import { DistillStore } from "./distill/store.ts";
 import { createHash } from "node:crypto";
-import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
+import { ulid, validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { redactRecord } from "./redact.ts";
 import { recordDeviceFilter, SKELETON_SOURCES, sourceList } from "./record-sources.ts";
 import { registerAgentAudit, stopAgentAudit } from "./agent-audit.ts";
 import { relaySchema } from "./devices/relay-store.ts";
 import { projectionSchema, projectionWithdrawal, scheduleProjectionDraft } from "./devices/projection-store.ts";
 import { deviceRoleSchema, pruneSecurityAudit, securityEventsSchema } from "./security-audit.ts";
+import { historyImportSchema } from "./devices/history-import.ts";
 import { deviceSchema } from "./devices/store.ts";
 import { runtimeSchema, expireSnapshots, eraseSnapshots, sanitizeStoredModelErrors } from "./runtime-log.ts";
 
@@ -34,12 +35,18 @@ function setCipher(db: DatabaseTypes.Database, key: string): void {
   db.pragma(`key='${key.replaceAll("'", "''")}'`);
 }
 
-/** 用只读方式验证密钥能否打开已有加密库，不改动文件、不触发迁移。 */
+/** 打开已有加密库，不改动文件、不触发迁移。 */
+export function openHistoryReadOnly(file: string, key: string) {
+  if (!key) throw new Error("数据库密钥不能为空");
+  const db = new Database(file, { readonly: true, fileMustExist: true });
+  try { setCipher(db, key); return db; }
+  catch (error) { db.close(); throw error; }
+}
+
 export function verifyDbKey(file: string, key: string): boolean {
   let db: DatabaseTypes.Database | undefined;
   try {
-    db = new Database(file, { readonly: true, fileMustExist: true });
-    setCipher(db, key);
+    db = openHistoryReadOnly(file, key);
     db.pragma("user_version", { simple: true });
     return true;
   } catch {
@@ -94,9 +101,9 @@ export function bigram(text: string): string {
 const fields = ["id", "schema", "device", "source", "source_ref", "kind", "t_start", "t_end", "context", "people", "title", "body", "media", "capture", "sensitivity", "redactions", "corrects", "t_received"] as const;
 const jsonFields = new Set(["context", "people", "media", "capture"]);
 type Row = { rowid: number; t_start_ms: number } & Record<string, unknown>;
-function decode(row: Row, body: boolean, received: false): RecordV1;
-function decode(row: Row, body?: boolean): StoredRecord;
-function decode(row: Row, body = true, received = true): RecordV1 {
+export function decode(row: Row, body: boolean, received: false): RecordV1;
+export function decode(row: Row, body?: boolean): StoredRecord;
+export function decode(row: Row, body = true, received = true): RecordV1 {
   const result: Record<string, unknown> = {};
   for (const field of fields) {
     if ((!body && field === "body") || (!received && field === "t_received")) continue;
@@ -110,26 +117,35 @@ function decode(row: Row, body = true, received = true): RecordV1 {
 export class HubDB {
   readonly db: DatabaseTypes.Database;
   private snapshotTimer?: ReturnType<typeof setInterval>;
+  private insertStoredStmt?: DatabaseTypes.Statement;
+  private indexStoredStmt?: DatabaseTypes.Statement;
   private recordByIdStmt?: DatabaseTypes.Statement<[string], Row>;
   private correctionsByTargetStmt?: DatabaseTypes.Statement<[string], Row>;
-  constructor(file: string, key: string) {
+  constructor(file: string, key: string, { frozen = false, ...options }: { fileMustExist?: boolean; frozen?: boolean } = {}) {
     if (!key) throw new Error("数据库密钥不能为空");
-    this.db = new Database(file);
+    this.db = new Database(file, options);
     let migrating = false;
     try {
-      if (file !== ":memory:") chmodSync(file, 0o600);
+      if (!frozen && file !== ":memory:") chmodSync(file, 0o600);
       setCipher(this.db, key);
       this.db.pragma("busy_timeout=5000");
       const version = this.db.pragma("user_version", { simple: true }) as number;
-      if (version > 18) throw new Error("数据库版本比当前 hub 新");
+      if (version > 19) throw new Error("数据库版本比当前 hub 新");
+      if (frozen) {
+        if (version !== 19 || this.db.pragma("journal_mode", { simple: true }) !== "delete") {
+          throw new Error("snapshot_schema_unsupported");
+        }
+        this.db.pragma("secure_delete=ON");
+        return;
+      }
       this.db.pragma("secure_delete=ON");
       // 保留回滚日志模式；加密 WAL 也可能保留已删除内容的旧加密页。
       this.db.pragma("journal_mode=DELETE");
       // 必须先拿写锁再读取版本，等待另一进程迁移完成后才能决定迁移步骤。
       this.db.transaction(() => {
         const version = this.db.pragma("user_version", { simple: true }) as number;
-        if (version > 18) throw new Error("数据库版本比当前 hub 新");
-        migrating = version < 18;
+        if (version > 19) throw new Error("数据库版本比当前 hub 新");
+        migrating = version < 19;
         if (version > 0 && migrating && file !== ":memory:") ensureMigrationBackup(file, key, version);
         if (version === 0) {
           this.db.exec(`
@@ -198,10 +214,11 @@ export class HubDB {
             PRAGMA user_version=17;`);
         }
         if (version < 18) this.db.exec(securityEventsSchema);
+        if (version < 19) this.db.exec(historyImportSchema);
       }).immediate();
       migrating = false;
       const backups = file === ":memory:" ? [] : readdirSync(dirname(file)).filter(name =>
-        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|1[0-7])\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
+        name.startsWith(`${basename(file)}.migration-v`) && /^(?:[1-9]|1[0-8])\.bak$/.test(name.slice(`${basename(file)}.migration-v`.length)));
       if (backups.length) {
         if (this.db.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("迁移后完整性检查失败，已保留备份");
         for (const backup of backups) {
@@ -236,8 +253,6 @@ export class HubDB {
       const result: IngestResult = { accepted: 0, duplicates: 0, rejected: [] };
       const exists = this.db.prepare(`SELECT 1 FROM records WHERE id=? OR (source=? AND source_ref=?)
         UNION ALL SELECT 1 FROM tombstones WHERE id=? OR (source=? AND source_ref=?) LIMIT 1`);
-      const insert = this.db.prepare(`INSERT INTO records (${fields.map(f => `"${f}"`).join(",")},t_start_ms) VALUES (${[...fields, "t_start_ms"].map(() => "?").join(",")})`);
-      const index = this.db.prepare("INSERT INTO records_fts(rowid,title,body) VALUES(?,?,?)");
       const owner = this.db.prepare("SELECT 1 FROM records WHERE id=? AND device=?");
       const correction = this.db.prepare(`
         INSERT INTO device_changes(device,kind,record_id,created_at)
@@ -263,6 +278,9 @@ export class HubDB {
         if (["mac.browser", "claude_code.session", "codex.session"].includes(r.source) && !r.source_ref) {
           result.rejected.push({ index: i, errors: ["/source_ref 重读外部存储的来源必须提供稳定键"] }); return;
         }
+        if (r.source === "manual.correction" && r.source_ref?.startsWith("history-private:")) {
+          result.rejected.push({ index: i, errors: ["/source_ref 为本机私密核对保留"] }); return;
+        }
         if (r.source === "manual.correction" && !r.corrects) {
           result.rejected.push({ index: i, errors: ["/corrects 修正记录必须指向原记录"] }); return;
         }
@@ -279,12 +297,7 @@ export class HubDB {
           }
         }
         const record: StoredRecord = { ...redactRecord(r), t_received: new Date().toISOString() };
-        const values = fields.map(f => {
-          const value = record[f];
-          return value === undefined ? null : jsonFields.has(f) ? JSON.stringify(value) : value;
-        });
-        const inserted = insert.run(...values, Date.parse(r.t_start));
-        index.run(inserted.lastInsertRowid, bigram(record.title), bigram(record.body));
+        this.insertStoredRecord(record);
         if (record.source === "manual.correction" && record.corrects) {
           correction.run(record.id, record.t_received, record.corrects);
           projectionWithdrawal(this.db, () => new DistillStore(this).correctRecord(record.corrects!));
@@ -296,6 +309,32 @@ export class HubDB {
       }
       return result;
     })();
+  }
+
+  private insertStoredRecord(record: StoredRecord) {
+    const insert = this.insertStoredStmt ??= this.db.prepare(`INSERT INTO records (${fields.map(f => `"${f}"`).join(",")},t_start_ms)
+      VALUES (${[...fields, "t_start_ms"].map(() => "?").join(",")})`);
+    const values = fields.map(field => {
+      const value = record[field];
+      return value === undefined ? null : jsonFields.has(field) ? JSON.stringify(value) : value;
+    });
+    const { lastInsertRowid } = insert.run(...values, Date.parse(record.t_start));
+    (this.indexStoredStmt ??= this.db.prepare("INSERT INTO records_fts(rowid,title,body) VALUES(?,?,?)"))
+      .run(lastInsertRowid, bigram(record.title), bigram(record.body));
+  }
+
+  /** The source text already passed ingest and redaction. Preserve every stored character. */
+  withdrawHistoryPrivacy(root: string, current: StoredRecord) {
+    const now = new Date();
+    const at = new Date(Math.max(now.getTime(), Date.parse(current.t_start) + 1)).toISOString();
+    const id = ulid();
+    this.insertStoredRecord({
+      id, schema: 1, device: current.device, source: "manual.correction", kind: "event",
+      source_ref: `history-private:${current.id}:${id}`, t_start: at, title: current.title, body: current.body,
+      corrects: root, capture: { method: "manual" }, sensitivity: "private", redactions: current.redactions ?? 0,
+      t_received: now.toISOString(),
+    });
+    projectionWithdrawal(this.db, () => new DistillStore(this).correctRecord(root));
   }
 
   list(params: URLSearchParams, { collapseScreenMatches = false, prioritizeContent = false, recordFilter = "" } = {}): { records: Partial<StoredRecord>[]; next_cursor: string | null } {
@@ -427,10 +466,16 @@ export class HubDB {
     return projectionWithdrawal(this.db, () => {
       const input = JSON.stringify([...new Set(ids)]);
       const rows = this.db.prepare<[string, string | null, string | null], Row & { device: string; corrects: string | null; id: string }>(`
-        WITH targets AS (
+        WITH RECURSIVE targets(id) AS (
           SELECT id FROM records WHERE id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR device=?)
+          UNION
+          SELECT r.id FROM records r JOIN targets t ON r.corrects=t.id WHERE r.source='manual.correction'
+          UNION
+          SELECT r.id FROM records r JOIN targets t
+            ON r.source_ref >= 'history-private:' || t.id || ':' AND r.source_ref < 'history-private:' || t.id || ';'
+            WHERE r.source='manual.correction'
         )
-        SELECT rowid,* FROM records WHERE id IN targets OR (source='manual.correction' AND corrects IN targets)
+        SELECT rowid,* FROM records WHERE id IN targets
       `).all(input, device ?? null, device ?? null);
       authorize?.(rows);
       if (device !== undefined) {
@@ -447,6 +492,9 @@ export class HubDB {
       store.removeRecords(rows.map(r => ({ id: r.id as string, time: r.t_start as string })));
       const deleted = new Set(rows.map(r => r.id));
       const corrected = new Set<string>();
+      const privateRoots = new Set(rows.flatMap(row =>
+        row.corrects && !deleted.has(row.corrects) &&
+          typeof row.source_ref === "string" && row.source_ref.startsWith("history-private:") ? [row.corrects] : []));
       const tombstone = this.db.prepare("INSERT INTO tombstones(id,source,source_ref,content_hash,deleted_at) VALUES(?,?,?,?,?)");
       const fts = this.db.prepare("DELETE FROM records_fts WHERE rowid=?"), record = this.db.prepare("DELETE FROM records WHERE id=?");
       const at = new Date().toISOString();
@@ -463,7 +511,11 @@ export class HubDB {
         tombstone.run(r.id,r.source,r.source_ref,contentHash,at); fts.run(r.rowid); record.run(r.id);
         if (r.corrects && !deleted.has(r.corrects)) corrected.add(r.corrects as string);
       }
-      for (const id of corrected) store.correctRecord(id);
+      for (const id of corrected) {
+        const remaining = privateRoots.has(id) ? this.effective(id) : null;
+        if (remaining && remaining.sensitivity !== "private") this.withdrawHistoryPrivacy(id, remaining);
+        else store.correctRecord(id);
+      }
       return rows.length;
     });
   }

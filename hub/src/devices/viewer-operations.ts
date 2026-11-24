@@ -40,7 +40,8 @@ const routes: ReadonlyMap<string, Route> = new Map<string, Route>([
   ["audio.purge", { method: "POST", path: "/v1/audio/purge" }],
   ["speakers.list", { method: "GET", path: "/v1/speakers" }],
   ["audio.sample.get", { method: "GET", path: "/v1/audio/samples/:id", params: { id: safeID }, binary: true }],
-  ["status.get", { method: "GET", path: "/v1/status", native: true }],
+  // read_nonce：Mac 探测连接和信箱核对时用来强制取一份新回执，后台忽略它的值（2026-11-24 虚拟机联调发现被当成未登记参数拒绝）。
+  ["status.get", { method: "GET", path: "/v1/status", native: true, body: ["read_nonce"] }],
   ["diagnostics.get", { method: "GET", path: "/v1/runtime/background" }],
   ["runtime.models", { method: "GET", path: "/v1/runtime/models", query: pagination }],
   ["runtime.call", { method: "GET", path: "/v1/runtime/calls/:id", params: { id: safeID } }],

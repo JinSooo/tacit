@@ -208,6 +208,14 @@ public enum AudioProxy {
 
   /// 将错误映射为固定类别码，不向子进程或日志泄露底层正文。
   public static func mapError(_ error: Error) -> (status: Int, code: String) {
+    switch error {
+    case is RemoteSwitchWriteGate.Paused:
+      return (503, "remote_delivery_paused")
+    case RemoteDeviceSession.Failure.awaitingReceipt, RemoteDeviceSession.Failure.unavailable,
+         RemoteDeviceSession.Failure.journalFull, RelayMailboxError.rateLimited:
+      return (503, "remote_delivery_pending")
+    default: break
+    }
     if let channelError = error as? StdioChannelError {
       switch channelError {
       case .unsupportedOp: return (403, "unsupported_op")

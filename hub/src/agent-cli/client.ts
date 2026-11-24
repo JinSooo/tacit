@@ -1,32 +1,59 @@
+import { lstatSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { readHubBinding } from "../hub-binding.ts";
 import { dataDirOf, resolvePort } from "../hub-json.ts";
 
 import { DeviceTransportError, type DeviceClient } from "../devices/client.ts";
 import { object } from "../devices/envelope.ts";
 import { ContextCache, gitOrigin, readContextResult } from "./context-cache.ts";
-import { agentSecrets, linkedClient, readAgentLink, type AgentClientOptions } from "./identity.ts";
+import { agentSecrets, linkedClient, readBoundAgentLink, type AgentClientOptions } from "./identity.ts";
 
 export class AgentError extends Error {
   constructor(message: string, readonly unavailable = false) { super(message); }
 }
 
+function readBinding(dir: string) {
+  try { return readHubBinding(dir); }
+  catch { throw new AgentError("无法读取 Tacit 后台绑定"); }
+}
+
 async function connection(params: URLSearchParams, signal: AbortSignal, options: AgentClientOptions) {
-  if (params.get("tool") === "claude-desktop") return null;
   const env = options.env ?? process.env, dir = dataDirOf(env);
-  const link = await readAgentLink(dir, signal).catch(() => { throw new AgentError("无法读取 Agent 连接配置"); });
-  if (!link) return null;
+  const binding = readBinding(dir);
+  const { remote } = binding;
+  const checkBinding = () => {
+    if (remote && lstatSync(join(dir, remote.dir, "repair-transaction.json"), { throwIfNoEntry: false })) {
+      throw new AgentError("Tacit 正在恢复远端连接，请稍后重试");
+    }
+    const current = readBinding(dir);
+    if (current.generation !== binding.generation || current.remote?.hub_id !== remote?.hub_id) {
+      throw new AgentError("Tacit 后台已切换，请重试");
+    }
+  };
+  checkBinding();
+  if (params.get("tool") === "claude-desktop") {
+    if (remote) throw new AgentError("Claude Desktop 的本机连接在远端模式下不可用");
+    return { linked: null, checkBinding };
+  }
+  const link = await readBoundAgentLink(dir, signal, remote).catch(() => {
+    throw new AgentError(remote ? "无法读取远端 Agent 连接配置，请在 Tacit 中检查登记" : "无法读取 Agent 连接配置");
+  });
+  if (!link) return { linked: null, checkBinding };
   const secrets = options.secrets ?? agentSecrets(dir);
   return {
-    cache: new ContextCache(dir, link, secrets),
-    async client(signal: AbortSignal) {
-      try { return await linkedClient(link, env, dir, secrets, signal); }
-      catch { throw new AgentError("无法读取 Agent 设备私钥或地址"); }
+    checkBinding, remote,
+    linked: {
+      cache: new ContextCache(dir, link, secrets, remote),
+      async client(signal: AbortSignal) {
+        try { return await linkedClient(link, env, dir, secrets, signal, remote); }
+        catch { throw new AgentError(remote ? "无法读取远端 Agent 私钥，请在 Tacit 中检查登记" : "无法读取 Agent 设备私钥或地址"); }
+      },
     },
   };
 }
 
-async function request(client: DeviceClient, kind: string, body: object, signal: AbortSignal) {
+async function request(client: DeviceClient, kind: string, body: object, signal: AbortSignal, remote = false) {
   let reply: Awaited<ReturnType<DeviceClient["send"]>>;
   try { reply = await client.send(`agent.${kind}`, body, { signal }); }
   catch (error) {
@@ -34,7 +61,9 @@ async function request(client: DeviceClient, kind: string, body: object, signal:
     if (error instanceof DeviceTransportError) {
       throw new AgentError(`hub 查询失败（HTTP ${error.status}）`, error.status >= 500);
     }
-    if (error instanceof TypeError) throw new AgentError("当前无法连接 Tacit 中枢", true);
+    if (error instanceof TypeError) {
+      throw new AgentError(remote ? "当前无法直连远端 Tacit 中枢" : "当前无法连接 Tacit 中枢", true);
+    }
     throw new AgentError("无法验证 Tacit 中枢的设备响应");
   }
   if (reply.status === 200) return reply.body;
@@ -46,20 +75,26 @@ async function request(client: DeviceClient, kind: string, body: object, signal:
 }
 
 export async function readHub(kind: string, params: URLSearchParams, signal: AbortSignal, body?: unknown, options: AgentClientOptions = {}) {
-  const linked = await connection(params, signal, options);
-  if (!linked) return legacy(kind, params, signal, body, options.env);
+  const { linked, checkBinding, remote } = await connection(params, signal, options);
+  if (!linked) {
+    checkBinding();
+    return legacy(kind, params, signal, body, options.env);
+  }
   const client = await linked.client(signal);
-  const result = await request(client, kind, { ...object(body), ...Object.fromEntries(params) }, signal);
+  checkBinding();
+  const result = await request(client, kind, { ...object(body), ...Object.fromEntries(params) }, signal, !!remote);
   // A slow audit upload must not hold the interactive tool call open.
   await linked.cache.syncAudit(client, AbortSignal.any([signal, AbortSignal.timeout(300)])).catch(() => {});
   return result;
 }
 
 export async function sessionContext(params: URLSearchParams, signal: AbortSignal, emit: (text: string) => void, options: AgentClientOptions = {}) {
-  const linked = await connection(params, signal, options);
+  const { linked, checkBinding, remote } = await connection(params, signal, options);
   if (!linked) {
+    checkBinding();
     const result = readContextResult(await legacy("context", params, signal, undefined, options.env));
     if (!result) throw new AgentError("hub 上下文格式无效");
+    checkBinding();
     if (!signal.aborted) emit(result.text);
     return;
   }
@@ -69,18 +104,24 @@ export async function sessionContext(params: URLSearchParams, signal: AbortSigna
   let client: DeviceClient, result: ReturnType<typeof readContextResult>;
   try {
     client = await linked.client(querySignal);
-    const remote = await remoteProbe;
+    const repoRemote = await remoteProbe;
+    checkBinding();
     result = readContextResult(await request(client, "context", {
-      ...Object.fromEntries(params), cache: true, ...(remote ? { remote } : {}),
-    }, querySignal));
+      ...Object.fromEntries(params), cache: true, ...(repoRemote ? { remote: repoRemote } : {}),
+    }, querySignal, !!remote));
     if (!result) throw new AgentError("hub 上下文格式无效");
   } catch (error) {
     if (signal.aborted || (!querySignal.aborted && !(error instanceof AgentError && error.unavailable))) throw error;
-    const cached = await linked.cache.offline(params, await remoteProbe, signal);
+    // 先确认绑定没换，再写离线审计，免得在旧后台的缓存目录留下没发出的审计。
+    const repoRemote = await remoteProbe;
+    checkBinding();
+    const cached = await linked.cache.offline(params, repoRemote, signal, Date.now(), checkBinding);
+    checkBinding();
     if (!signal.aborted) emit(cached);
     return;
   }
   if (signal.aborted) return;
+  checkBinding();
   emit(result.text);
   await Promise.allSettled([
     linked.cache.refresh(result, cwd, await remoteProbe, signal),

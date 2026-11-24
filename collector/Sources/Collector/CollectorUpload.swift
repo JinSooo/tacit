@@ -9,6 +9,7 @@ actor CollectorUpload {
   struct Delivery {
     let records: [Record]
     let body: Data
+    let route: HubBinding.Route
   }
 
   enum Failure: Error { case noToken, batchTooLarge }
@@ -39,14 +40,15 @@ actor CollectorUpload {
     self.keys = keys
     self.session = session
     self.deviceSession = deviceSession ?? HostDeviceSession(
-      origin: { config.hubURL }, files: resolvedFiles, keys: keys, session: session, log: log
+      origin: { config.hubURL }, files: resolvedFiles, keys: keys, session: session, log: log,
+      remoteAccess: RemoteDeviceAccess(dataDirectory: config.dataDir)
     )
     self.log = log
     self.onLinked = onLinked
   }
 
   func prepare() async {
-    guard !prepareStopped, !preparing, ProcessInfo.processInfo.systemUptime >= prepareAfter else { return }
+    guard config.allowsLocalHub, !prepareStopped, !preparing, ProcessInfo.processInfo.systemUptime >= prepareAfter else { return }
     preparing = true
     defer {
       preparing = false
@@ -73,23 +75,34 @@ actor CollectorUpload {
     }
   }
 
-  func send(_ pending: [Record]) async throws -> Delivery {
-    if let conn = try await deviceSession.connection() {
-      let records = try Self.batch(pending, legacyDevice: nil, assignedDevice: conn.link.device_id)
-      do {
-        let reply = try await conn.client.send(op: "ingest", body: Body(device: nil, records: records))
-        return Delivery(records: records, body: reply.bodyData)
-      } catch DeviceClientError.deviceRemoved {
-        prepareStopped = true
-        await deviceSession.handleDeviceRemoved()
-        // 只重传被拒绝的那一批。保留原来的记录 ID 与本机队列内容。
-        return try await sendLegacy(Array(pending.prefix(records.count)))
-      }
-    }
-    return try await sendLegacy(pending)
+  func remoteSession(for route: HubBinding.Route) async throws -> RemoteDeviceSession? {
+    try await deviceSession.connection(for: route)?.remoteSession
   }
 
-  private func sendLegacy(_ pending: [Record]) async throws -> Delivery {
+  func send(_ pending: [Record], on expected: HubBinding.Route? = nil,
+            beforeRemoteSubmit: (([String]) async throws -> Void)? = nil) async throws -> Delivery {
+    let route = try config.hubRoute()
+    if let expected, expected != route { throw HubBinding.Failure.changed }
+    if let conn = try await deviceSession.connection(for: route) {
+      let records = try Self.batch(pending, legacyDevice: nil, assignedDevice: conn.deviceID)
+      if route.remote != nil {
+        try await beforeRemoteSubmit?(records.map(\.id))
+      }
+      do {
+        let reply = try await conn.client.send(op: "ingest", body: Body(device: nil, records: records))
+        return Delivery(records: records, body: reply.bodyData, route: route)
+      } catch DeviceClientError.deviceRemoved where route.remote == nil {
+        prepareStopped = true
+        await deviceSession.handleDeviceRemoved(on: route)
+        // 只重传被拒绝的那一批。保留原来的记录 ID 与本机队列内容。
+        return try await sendLegacy(Array(pending.prefix(records.count)), on: route)
+      }
+    }
+    return try await sendLegacy(pending, on: route)
+  }
+
+  private func sendLegacy(_ pending: [Record], on route: HubBinding.Route) async throws -> Delivery {
+    guard route.remote == nil, try config.hubRoute() == route else { throw HubBinding.Failure.changed }
     guard let token = config.token, !token.isEmpty else { throw Failure.noToken }
     let records = try Self.batch(pending, legacyDevice: config.device, assignedDevice: nil)
     var request = URLRequest(url: config.hubURL.appendingPathComponent("v1/ingest"), timeoutInterval: 15)
@@ -101,7 +114,7 @@ actor CollectorUpload {
     guard reply.statusCode == 200 else {
       throw DeviceClientError.plaintextError(status: reply.statusCode, message: nil)
     }
-    return Delivery(records: records, body: reply.body)
+    return Delivery(records: records, body: reply.body, route: route)
   }
 
   private static func encoder() -> JSONEncoder {

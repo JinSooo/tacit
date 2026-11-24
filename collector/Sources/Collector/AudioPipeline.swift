@@ -79,6 +79,13 @@ final class AudioPipeline {
     }
     SherpaOnnxVoiceActivityDetectorFlush(vad); try drain(); speechActive = false
   }
+  func finishForHubSwitch() throws {
+    try flush()
+    SherpaOnnxVoiceActivityDetectorReset(vad)
+    origin = nil
+    nextTime = nil
+    skippedSilence = true // Recreate the resampler on the first frame on the new target.
+  }
   private func drain() throws {
     while SherpaOnnxVoiceActivityDetectorEmpty(vad) == 0 {
       guard let segment = SherpaOnnxVoiceActivityDetectorFront(vad), let origin else { throw AudioCaptureError("VAD 人声段读取失败") }

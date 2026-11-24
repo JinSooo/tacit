@@ -1,3 +1,4 @@
+import { readHubBinding } from "./hub-binding.ts";
 // 应用自己完成安装后的准备：数据目录与密钥、AI 工具连接路径、后台服务的启动配置。
 // 安装包首次打开、升级后打开，以及源码安装的 install.sh 都走这里；重复运行只改有变化的部分。
 import { accessSync, chmodSync, closeSync, constants, existsSync, fchmodSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -122,9 +123,10 @@ function readJSON(file: string): any {
 
 export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted: boolean }> {
   const home = o.home ?? homedir(), env = o.env ?? process.env, log = o.log ?? (m => console.log(m));
-  const runtime = join(o.app, "Contents/Resources/runtime"), bun = join(o.app, "Contents/MacOS/bun");
+  const runtime = join(o.app, "Contents/Resources/runtime"), bun = join(o.app, "Contents/Helpers/Tacit");
   if (!existsSync(join(runtime, "hub/src/cli.ts")) || !executable(bun)) throw new SetupError("Tacit 安装包不完整");
   const data = dataDirOf(env);
+  const { remote } = readHubBinding(data);
   const launchctl = o.launchctl ?? ((args: string[]) => spawnSync("/bin/launchctl", args, { stdio: "ignore" }).status ?? 1);
   const domain = `gui/${process.getuid?.() ?? 0}`;
   const version = (o.version ?? (app => {
@@ -134,8 +136,10 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
 
   const stampFile = join(data, "app-setup.json");
   const previous = readJSON(stampFile) as Stamp | null;
-  const distill = o.distill ?? previous?.distill ?? true;
-  const full = !!o.install || previous?.app !== o.app || previous?.version !== version;
+  const distill = (remote ? previous?.distill : o.distill ?? previous?.distill) ?? true;
+  // 运行时换过位置（2026-11-24 从 Contents/MacOS/bun 移到 Contents/Helpers/Tacit）也要重新准备，AI 工具连接才会改到新路径；同版本重装时也成立。
+  const full = !!o.install || previous?.app !== o.app || previous?.version !== version
+    || readJSON(join(data, "collector.json"))?.bun !== bun;
 
   mkdirSync(join(data, "logs"), { recursive: true });
   chmodSync(data, 0o700);
@@ -143,7 +147,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
   try { fchmodSync(setupLog, 0o600); } finally { closeSync(setupLog); }
   if (full) {
     // 前台创建或读取钥匙串里的数据库密钥，并试开一次数据库，失败当场可见。
-    await (o.initialize ?? (async () => {
+    if (!remote) await (o.initialize ?? (async () => {
       const [{ loadConfig }, { HubDB }] = await Promise.all([import("./config.ts"), import("./db.ts")]);
       const config = loadConfig(env);
       // 打开失败的消息可能带出密钥，只报原因类别。
@@ -171,7 +175,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
   const path = servicePath(bun, home, search, log);
   const layout: ServiceLayout = { app: o.app, runtime, bun, data, path };
   const changed = new Set<Job>();
-  for (const job of JOBS) {
+  for (const job of remote ? ["collector"] as const : JOBS) {
     const file = join(agents, `${label(job)}.plist`);
     if (job === "distill" && !distill) {
       if (existsSync(file)) { rmSync(file); changed.add(job); }
@@ -200,9 +204,9 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     }
     throw new SetupError(`后台任务 ${label(job)} 没能加载，请重新打开 Tacit`);
   };
-  const restart = full || changed.has("hub") || changed.has("distill");
+  const restart = !remote && (full || changed.has("hub") || changed.has("distill"));
   if (restart) for (const job of ["distill", "hub"] as const) await unload(job);
-  if (restart || !loaded("hub")) {
+  if (!remote && (restart || !loaded("hub"))) {
     await load("hub");
     const { port } = resolvePort(env, data);
     const healthy = o.healthy ?? (async (p: number) => {
@@ -214,7 +218,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     });
     if (!(await healthy(port))) throw new SetupError("后台服务没能启动，请查看 logs/hub.log");
   }
-  if (distill && (restart || !loaded("distill"))) await load("distill");
+  if (!remote && distill && (restart || !loaded("distill"))) await load("distill");
   // 先记下已完成，采集端启动后自己再跑一次时就不会重复初始化。
   if (full || previous?.distill !== distill) writePrivate(stampFile, JSON.stringify({ app: o.app, version, distill } satisfies Stamp) + "\n");
   if (o.install) await load("collector");

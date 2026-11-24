@@ -43,6 +43,7 @@ public final class RawReadMemoryCache: @unchecked Sendable {
   private var head: Node? // MRU
   private var tail: Node? // LRU
   private var currentBytes: Int = 0
+  private var retired = false
 
   public init(
     maxBytes: Int = RawReadMemoryCache.defaultMaxBytes,
@@ -92,7 +93,7 @@ public final class RawReadMemoryCache: @unchecked Sendable {
     if let existing = map[key] {
       removeNodeLocked(existing)
     }
-    guard data.count <= maxBytes else { return }
+    guard !retired, data.count <= maxBytes else { return }
 
     let node = Node(
       key: key,
@@ -129,7 +130,17 @@ public final class RawReadMemoryCache: @unchecked Sendable {
 
   /// 清空全部内存缓存（锁屏、关窗、设备移除或重置时调用）。
   public func clear() {
-    lock.lock(); defer { lock.unlock() }
+    lock.withLock { clearLocked() }
+  }
+
+  public func retire() {
+    lock.withLock {
+      retired = true
+      clearLocked()
+    }
+  }
+
+  private func clearLocked() {
     map.removeAll()
     head = nil
     tail = nil
@@ -211,6 +222,7 @@ public protocol ProjectionEventStream: Sendable {
 public struct URLSessionProjectionEventStream: ProjectionEventStream, Sendable {
   public let origin: URL
   private let session: URLSession
+  private let rejectsRedirects: Bool
 
   private static let sharedSession: URLSession = {
     let config = URLSessionConfiguration.ephemeral
@@ -222,12 +234,13 @@ public struct URLSessionProjectionEventStream: ProjectionEventStream, Sendable {
     return URLSession(configuration: config)
   }()
 
-  public init(origin: URL, session: URLSession? = nil) throws {
+  public init(origin: URL, session: URLSession? = nil, rejectsRedirects: Bool = false) throws {
     guard let normalized = DevicePairingInvitation.normalizeOrigin(origin.absoluteString) else {
       throw DeviceClientError.invalidRequest("中枢直连地址无效")
     }
     self.origin = normalized
     self.session = session ?? Self.sharedSession
+    self.rejectsRedirects = rejectsRedirects
   }
 
   public func subscribe(authEnvelope: Data) async throws -> AsyncThrowingStream<ProjectionEvent, Error> {
@@ -242,6 +255,7 @@ public struct URLSessionProjectionEventStream: ProjectionEventStream, Sendable {
     }
 
     let task = session.webSocketTask(with: wsURL)
+    if rejectsRedirects { task.delegate = NoRedirectSessionDelegate.shared }
     task.resume()
     do {
       try await task.send(.string(authText))
@@ -363,6 +377,13 @@ public enum RelayPushMessage: Equatable, Sendable {
 
   private struct MovedWire: Decodable {
     let relay: DeviceRelayConfig?
+
+    init(from decoder: Decoder) throws {
+      enum Key: CodingKey { case relay }
+      let values = try decoder.container(keyedBy: Key.self)
+      if try values.decodeNil(forKey: .relay) { relay = nil }
+      else { relay = try values.decode(DeviceRelayConfig.self, forKey: .relay) }
+    }
   }
 
   public static func decode(from plaintext: Data) throws -> RelayPushMessage {
@@ -444,10 +465,29 @@ public struct HTTPRelayMailboxClient: RelayMailboxClient, Sendable {
     self.requestTimeout = requestTimeout
   }
 
+  public func messageByteLimit() async throws -> Int {
+    struct Hello: Decodable {
+      struct Limits: Decodable { let message_bytes: Int }
+      let tacit_relay: Int
+      let limits: Limits
+    }
+    guard let url = URL(string: config.url + "/v1/hello") else { throw RelayMailboxError.invalidResponse }
+    let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: requestTimeout)
+    let (data, status) = try await perform(request)
+    guard status == 200 else { throw classify(status) }
+    guard let hello = try? JSONDecoder().decode(Hello.self, from: data),
+          hello.tacit_relay == 1, hello.limits.message_bytes > 0 else { throw RelayMailboxError.invalidResponse }
+    return hello.limits.message_bytes
+  }
+
   public func listDownMessages(after: String? = nil, limit: Int = 100) async throws -> (messages: [RelayMessageMeta], next: String?) {
     let clamped = max(1, min(100, limit))
     var query = "limit=\(clamped)"
-    if let after { query = "after=\(after)&\(query)" }
+    if let after {
+      guard after.utf8.count <= 15, !after.isEmpty,
+            after.utf8.allSatisfy({ (48...57).contains($0) }) else { throw RelayMailboxError.invalidResponse }
+      query = "after=\(after)&\(query)"
+    }
     guard let url = URL(string: "\(config.url)/v1/spaces/\(config.space)/boxes/\(config.down)/messages?\(query)") else {
       throw RelayMailboxError.invalidResponse
     }
@@ -473,6 +513,7 @@ public struct HTTPRelayMailboxClient: RelayMailboxClient, Sendable {
     req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
     let (data, status) = try await perform(req)
     guard status == 200 else { throw classify(status) }
+    guard data.count <= DeviceProtocol.maxEnvelopeBytes else { throw RelayMailboxError.invalidResponse }
     return data
   }
 
@@ -504,7 +545,11 @@ public struct HTTPRelayMailboxClient: RelayMailboxClient, Sendable {
     let data: Data
     let response: URLResponse
     do {
-      (data, response) = try await session.data(for: request)
+      (data, response) = try await session.data(for: request, delegate: NoRedirectSessionDelegate.shared)
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch let error as URLError where error.code == .cancelled {
+      throw CancellationError()
     } catch {
       throw RelayMailboxError.transportError(error.localizedDescription)
     }
@@ -532,17 +577,29 @@ public struct RelayDeviceTransport: DeviceTransport, Sendable {
   public let replyTimeout: TimeInterval
   public let pollInterval: TimeInterval
   private let mailbox: any RelayMailboxClient
+  private let onDelivered: (@Sendable () async -> Void)?
 
   public init(
     mailbox: any RelayMailboxClient,
     replyTimeout: TimeInterval = 20,
     pollInterval: TimeInterval = 0.25,
-    maxEnvelopeBytes: Int = RelayDeviceTransport.maxRelayEnvelopeBytes
+    maxEnvelopeBytes: Int = RelayDeviceTransport.maxRelayEnvelopeBytes,
+    onDelivered: (@Sendable () async -> Void)? = nil
   ) {
     self.mailbox = mailbox
+    self.onDelivered = onDelivered
     self.replyTimeout = replyTimeout
     self.pollInterval = pollInterval
     self.maxEnvelopeBytes = maxEnvelopeBytes
+  }
+
+  func reportingDelivery(_ callback: (@Sendable () async -> Void)?) -> Self {
+    Self(mailbox: mailbox, replyTimeout: replyTimeout, pollInterval: pollInterval,
+         maxEnvelopeBytes: maxEnvelopeBytes, onDelivered: callback)
+  }
+
+  func confirmAuthenticatedReply(_ nonce: String) async {
+    try? await mailbox.deleteDownMessage(id: nonce)
   }
 
   public func send(_ request: SealedDeviceRequest) async throws -> DeviceTransportResponse {
@@ -551,17 +608,25 @@ public struct RelayDeviceTransport: DeviceTransport, Sendable {
     }
     do {
       try await mailbox.putUpMessage(id: request.nonce, data: request.wireData)
+    } catch RelayMailboxError.unauthorized(status: 401) {
+      throw RelayMailboxError.unauthorized(status: 401)
+    } catch is CancellationError {
+      throw CancellationError()
     } catch {
       throw DeviceClientError.transportError("信箱发送失败：\(error)")
     }
+    await onDelivered?()
     let deadline = Date().addingTimeInterval(replyTimeout)
     while Date() < deadline {
       do {
         let data = try await mailbox.getDownMessage(id: request.nonce)
-        try? await mailbox.deleteDownMessage(id: request.nonce)
         return DeviceTransportResponse(statusCode: 200, body: data)
       } catch RelayMailboxError.notFound {
         try await Task.sleep(nanoseconds: UInt64(max(0.02, pollInterval) * 1_000_000_000))
+      } catch RelayMailboxError.unauthorized(status: 401) {
+        throw RelayMailboxError.unauthorized(status: 401)
+      } catch is CancellationError {
+        throw CancellationError()
       } catch {
         throw DeviceClientError.transportError("信箱等待回复失败：\(error)")
       }
@@ -614,6 +679,25 @@ public enum ProjectionEndpointSelector {
       return .relay(relay)
     }
     return nil
+  }
+}
+
+/// The remote viewer's direct subscription follows the same endpoint as its encrypted requests.
+public struct RemoteProjectionEventStream: ProjectionEventStream {
+  public let deviceSession: RemoteDeviceSession
+  private let session: URLSession?
+
+  public init(deviceSession: RemoteDeviceSession, session: URLSession? = nil) {
+    self.deviceSession = deviceSession
+    self.session = session
+  }
+
+  public func subscribe(authEnvelope: Data) async throws -> AsyncThrowingStream<ProjectionEvent, Error> {
+    guard case .direct(let origin) = try await deviceSession.selectedEndpoint() else {
+      throw RemoteDeviceSession.Failure.unavailable
+    }
+    return try await URLSessionProjectionEventStream(origin: origin, session: session, rejectsRedirects: true)
+      .subscribe(authEnvelope: authEnvelope)
   }
 }
 
@@ -723,7 +807,9 @@ public actor ProjectionSync {
 
   private let eventStream: (any ProjectionEventStream)?
   private let relayMailbox: (any RelayMailboxClient)?
+  private let deviceSession: RemoteDeviceSession?
   private let clock: @Sendable () -> Date
+  private let retireOnAccessLoss: Bool
   private let onWipe: (@Sendable (ProjectionWipeReason) async -> Void)?
   private let onRelayMoved: (@Sendable (DeviceRelayConfig?) async -> Void)?
   private let onUpdate: (@Sendable (ProjectionSyncResult) async -> Void)?
@@ -738,11 +824,13 @@ public actor ProjectionSync {
     rawCache: RawReadMemoryCache = RawReadMemoryCache(),
     eventStream: (any ProjectionEventStream)? = nil,
     relayMailbox: (any RelayMailboxClient)? = nil,
+    deviceSession: RemoteDeviceSession? = nil,
     foregroundPollInterval: TimeInterval = ProjectionSync.defaultForegroundPollInterval,
     backgroundPollInterval: TimeInterval = ProjectionSync.defaultBackgroundPollInterval,
     pullLimit: Int = 50,
     windowDays: Int = 90,
     clock: @escaping @Sendable () -> Date = { Date() },
+    retireOnAccessLoss: Bool = false,
     onWipe: (@Sendable (ProjectionWipeReason) async -> Void)? = nil,
     onRelayMoved: (@Sendable (DeviceRelayConfig?) async -> Void)? = nil,
     onUpdate: (@Sendable (ProjectionSyncResult) async -> Void)? = nil
@@ -752,11 +840,13 @@ public actor ProjectionSync {
     self.rawCache = rawCache
     self.eventStream = eventStream
     self.relayMailbox = relayMailbox
+    self.deviceSession = deviceSession
     self.foregroundPollInterval = max(0.05, foregroundPollInterval)
     self.backgroundPollInterval = max(0.05, backgroundPollInterval)
     self.pullLimit = max(1, min(200, pullLimit))
     self.windowDays = max(1, min(365, windowDays))
     self.clock = clock
+    self.retireOnAccessLoss = retireOnAccessLoss
     self.onWipe = onWipe
     self.onRelayMoved = onRelayMoved
     self.onUpdate = onUpdate
@@ -768,12 +858,19 @@ public actor ProjectionSync {
   }
 
   /// 调用方告知前后台切换；切回前台时立即唤醒等待中的轮询定时器。
-  public func setAppState(_ newState: ProjectionSyncAppState) {
+  public func setAppState(_ newState: ProjectionSyncAppState) async {
     let previous = appState
     appState = newState
+    await deviceSession?.setForeground(newState == .foreground)
     if previous != newState && newState == .foreground {
       wakeSleep()
     }
+  }
+
+  public func canReadPrivate() async -> Bool {
+    guard let deviceSession else { return true }
+    if case .direct = try? await deviceSession.selectedEndpoint() { return true }
+    return false
   }
 
   /// 清空按需原文内存 LRU（锁屏或关闭窗口时调用）。
@@ -852,6 +949,7 @@ public actor ProjectionSync {
         }
         throw error
       }
+      try validateCacheWrite()
       conflictRetries = 0
 
       if page.reset {
@@ -977,11 +1075,10 @@ public actor ProjectionSync {
           return RelayDownPollResult(processedMessages: processed, outcomes: outcomes, relayDisabled: true)
         }
 
-        var outcome: RelayPushOutcome = .ignored
-        if let plaintext = try? await client.openPushEnvelope(wireData: wireData, messageID: message.id),
-           let push = try? RelayPushMessage.decode(from: plaintext) {
-          outcome = try await handleRelayPush(push)
-        }
+        guard let plaintext = try? await client.openPushEnvelope(wireData: wireData, messageID: message.id),
+              let push = try? RelayPushMessage.decode(from: plaintext) else { continue }
+        if case .unknown = push { continue }
+        let outcome = try await handleRelayPush(push)
         outcomes.append(outcome)
         processed += 1
         try? await relayMailbox.deleteDownMessage(id: message.id)
@@ -1096,8 +1193,15 @@ public actor ProjectionSync {
 
   // MARK: - 后台运行循环（直连订阅 + 断线退回前后台轮询）
 
-  public func start() {
+  public func start() async {
     guard loopTask == nil else { return }
+    if let deviceSession {
+      await deviceSession.setProjectionConsumer { [weak self] push in
+        guard let self else { throw CancellationError() }
+        let result = try await self.handleRelayPush(push)
+        await self.notifyPushUpdate(result)
+      }
+    }
     loopTask = Task { [weak self] in
       guard let self else { return }
       await self.runLoop()
@@ -1109,6 +1213,15 @@ public actor ProjectionSync {
     loopTask = nil
     isUsingEventStream = false
     wakeSleep()
+  }
+
+  private func notifyPushUpdate(_ outcome: RelayPushOutcome) async {
+    // Pull paths notify as they apply pages. A delta applied directly needs the same update.
+    if case .appliedDelta(let changes, _) = outcome {
+      await onUpdate?(ProjectionSyncResult(pagesFetched: 0, upsertedCount: changes.upsertedCount,
+        deletedCount: changes.deletedCount, goneRecordIDs: changes.goneRecordIDs, cursor: changes.cursor,
+        didReset: changes.wasReset))
+    }
   }
 
   private func runLoop() async {
@@ -1243,7 +1356,7 @@ public actor ProjectionSync {
             try await wipeAll(reason: .deviceRemoved)
             throw error
           }
-          if case .operationError(_, status: 403, _) = error {
+          if !retireOnAccessLoss, case .operationError(_, status: 403, _) = error {
             try await wipeAll(reason: .roleDowngraded)
             throw error
           }
@@ -1255,6 +1368,7 @@ public actor ProjectionSync {
           throw error
         }
 
+        try validateCacheWrite()
         for id in page.missing { missing.insert(id) }
         for item in page.records {
           guard var obj = item.objectValue, let id = obj["id"]?.stringValue else { continue }
@@ -1391,12 +1505,13 @@ public actor ProjectionSync {
     } catch let error as DeviceClientError {
       if case .deviceRemoved = error {
         try await wipeAll(reason: .deviceRemoved)
-      } else if case .operationError(_, status: 403, _) = error {
+      } else if !retireOnAccessLoss, case .operationError(_, status: 403, _) = error {
         try await wipeAll(reason: .roleDowngraded)
       }
       throw error
     }
 
+    try validateCacheWrite()
     if useCache {
       var recordIDs = extraRecordIDs
       if let ids = payload.body["record_ids"]?.arrayValue {
@@ -1414,12 +1529,20 @@ public actor ProjectionSync {
     return payload
   }
 
+  private func validateCacheWrite() throws {
+    try cache.checkActive()
+    if retireOnAccessLoss { try client.validateCurrentIdentity() }
+  }
+
   private func handleClientError(_ error: DeviceClientError, conflictRetries: inout Int) async throws -> Bool {
     switch error {
     case .deviceRemoved:
       try await wipeAll(reason: .deviceRemoved)
       return false
     case .operationError(_, status: 403, _):
+      try await wipeAll(reason: .roleDowngraded)
+      return false
+    case .plaintextError(status: 403, _) where !retireOnAccessLoss:
       try await wipeAll(reason: .roleDowngraded)
       return false
     case .operationError(_, status: 409, _):
@@ -1438,6 +1561,14 @@ public actor ProjectionSync {
   }
 
   private func wipeAll(reason: ProjectionWipeReason) async throws {
+    if retireOnAccessLoss && (reason == .deviceRemoved || reason == .roleDowngraded) {
+      cache.retire()
+      rawCache.retire()
+      stop()
+      // The owner fences the session before removing the persisted cache shared by generations.
+      await onWipe?(reason)
+      return
+    }
     try cache.wipe()
     rawCache.clear()
     stop()

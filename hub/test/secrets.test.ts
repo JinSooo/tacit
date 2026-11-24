@@ -1,3 +1,4 @@
+import { checkAccount } from "../src/secrets/accounts.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -254,6 +255,24 @@ test("keychain 后端：create 不覆盖已有条目；失败只给固定类别�
   expect(reason(() => keychainStore(() => ({ status: 0, stdout: "\n" })).read("db-key"))).toBe("keychain_read");
   expect(reason(() => keychainStore(() => ({ status: 1, stdout: "" })).write("db-key", DB_KEY))).toBe("keychain_write");
   expect(reason(() => keychainStore(() => ({ status: 1, stdout: "" })).remove("db-key"))).toBe("keychain_delete");
+});
+
+test("远端 Agent 的钥匙串账户只接受规范的后台 ID，本机账户仍可读写", () => {
+  const { calls, run } = fakeSecurity();
+  const keychain = keychainStore(run);
+  for (const base of ["agent-device-key", "agent-context-cache-key"]) {
+    const hubID = "a".repeat(25) + "4";
+    for (const account of [base, base + "." + hubID]) {
+      expect(keychain.create(account, DEVICE_KEY)).toBe(true);
+      expect(keychain.read(account)).toBe(DEVICE_KEY);
+      expect(reason(() => checkAccount(account, "sealed-file"))).toBe("backend_unsupported");
+    }
+    const before = calls.length;
+    for (const suffix of ["", "a".repeat(25), "a".repeat(27), "a".repeat(25) + "b", hubID + "\n", "../" + hubID, hubID.toUpperCase()]) {
+      expect(reason(() => keychain.read(base + "." + suffix))).toBe("invalid_account");
+    }
+    expect(calls).toHaveLength(before);
+  }
 });
 
 // ---------------- 后端选择与 loadConfig ----------------

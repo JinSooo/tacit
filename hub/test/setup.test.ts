@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { identityFromRaw } from "../src/devices/envelope.ts";
 import { plist, servicePath, setup } from "../src/setup.ts";
 
 function fixture() {
@@ -11,8 +12,8 @@ function fixture() {
   const app = join(root, "Applications/Tacit.app"), home = join(root, "home"), data = join(root, "data");
   mkdirSync(join(app, "Contents/Resources/runtime/hub/src"), { recursive: true });
   writeFileSync(join(app, "Contents/Resources/runtime/hub/src/cli.ts"), "");
-  mkdirSync(join(app, "Contents/MacOS"), { recursive: true });
-  writeFileSync(join(app, "Contents/MacOS/bun"), "#!/bin/sh\n", { mode: 0o755 });
+  mkdirSync(join(app, "Contents/Helpers"), { recursive: true });
+  writeFileSync(join(app, "Contents/Helpers/Tacit"), "#!/bin/sh\n", { mode: 0o755 });
   mkdirSync(home);
   const calls: string[] = [], events: string[] = [];
   let version = "v1";
@@ -36,7 +37,7 @@ function fixture() {
 // 回归：中枢的 launchd 任务没有 PATH，设置页“测试连接”调 codex 时报“无法启动 codex”，整理进程却正常。2026-11-10 在真实界面上发现。
 test("中枢和整理进程带同一个 PATH，采集端由应用包启动", () => {
   const layout = { app: "/Applications/Tacit.app", runtime: "/Applications/Tacit.app/Contents/Resources/runtime",
-    bun: "/Applications/Tacit.app/Contents/MacOS/bun", data: "/d", path: "/tools:/usr/bin" };
+    bun: "/Applications/Tacit.app/Contents/Helpers/Tacit", data: "/d", path: "/tools:/usr/bin" };
   for (const job of ["hub", "distill"] as const) {
     expect(plist(job, layout)).toContain("<key>PATH</key><string>/tools:/usr/bin</string>");
     expect(plist(job, layout)).toContain(`<string>${layout.bun}</string><string>${layout.runtime}/hub/src/cli.ts</string>`);
@@ -69,7 +70,7 @@ test("首次打开完整准备；之后打开没有变化时不重启后台；�
     expect(f.events).toEqual(["init", "relocate", "frozen", "health"]);
     for (const job of ["hub", "distill", "collector"]) expect(existsSync(join(f.agents, `dev.record-anything.${job}.plist`))).toBe(true);
     expect(f.calls.filter(c => c.startsWith("bootstrap")).map(c => c.split("/").pop())).toEqual(["dev.record-anything.hub.plist", "dev.record-anything.distill.plist"]);
-    expect(JSON.parse(readFileSync(join(f.data, "collector.json"), "utf8")).bun).toBe(join(f.app, "Contents/MacOS/bun"));
+    expect(JSON.parse(readFileSync(join(f.data, "collector.json"), "utf8")).bun).toBe(join(f.app, "Contents/Helpers/Tacit"));
 
     f.calls.length = 0; f.events.length = 0;
     // 后台已在运行：只核对，不初始化、不重启。
@@ -81,6 +82,14 @@ test("首次打开完整准备；之后打开没有变化时不重启后台；�
     f.events.length = 0; f.setVersion("v2");
     expect((await f.run()).full).toBe(true);
     expect(f.events).toContain("init");
+
+    // 2026-11-24 回归：同版本重装但运行时换了位置（旧版在 Contents/MacOS/bun），也要重新准备并迁移 AI 工具连接。
+    const collector = join(f.data, "collector.json");
+    writeFileSync(collector, JSON.stringify({ ...JSON.parse(readFileSync(collector, "utf8")), bun: join(f.app, "Contents/MacOS/bun") }));
+    f.events.length = 0;
+    expect((await f.run()).full).toBe(true);
+    expect(f.events).toContain("relocate");
+    expect(JSON.parse(readFileSync(collector, "utf8")).bun).toBe(join(f.app, "Contents/Helpers/Tacit"));
   } finally { f.cleanup(); }
 });
 
@@ -139,5 +148,40 @@ test("后台在运行时重新准备：等旧任务退完再加载，加载失�
     })).rejects.toThrow("dev.record-anything.hub 没能加载");
     expect(logs.filter(line => line.includes("dev.record-anything.hub") && line.includes("launchctl 退出码 5"))).toHaveLength(5);
     expect(statSync(setupLog).mode & 0o777).toBe(0o600);
+  } finally { f.cleanup(); }
+});
+
+test("已提交的远端绑定在安装和升级时只准备采集，保留封存的中枢数据和任务定义", async () => {
+  const f = fixture();
+  try {
+    const identity = await identityFromRaw("61".repeat(32));
+    const bind = (phase: "committed" | "switching_back") => writeFileSync(join(f.data, "hub-binding.json"), JSON.stringify({
+      version: 1, generation: 1, target: "remote", phase,
+      remote: { hub_id: identity.hubID, hub_pk: identity.publicKey.toString("base64url"), dir: "remote-" + identity.hubID },
+      updated_at: new Date().toISOString(),
+    }), { mode: 0o600 });
+    const manual = join(f.data, "launch-agents");
+    mkdirSync(manual, { recursive: true });
+    const hub = join(manual, "dev.record-anything.hub.plist"), db = join(f.data, "history.db");
+    writeFileSync(hub, "原本机后台任务");
+    writeFileSync(db, "合成封存库");
+    writeFileSync(join(f.data, "app-setup.json"), JSON.stringify({ app: f.app, version: "old", distill: true }));
+    bind("committed");
+    expect(await f.run({ install: true, distill: false })).toEqual({ full: true, restarted: false });
+    expect(f.events).toEqual(["relocate", "frozen"]);
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]).toEndWith("dev.record-anything.collector.plist");
+    expect(readdirSync(f.agents)).toEqual(["dev.record-anything.collector.plist"]);
+    expect(readFileSync(hub, "utf8")).toBe("原本机后台任务");
+    expect(readFileSync(db, "utf8")).toBe("合成封存库");
+    expect(JSON.parse(readFileSync(join(f.data, "app-setup.json"), "utf8")).distill).toBe(true);
+
+    bind("switching_back");
+    f.calls.length = 0;
+    f.events.length = 0;
+    f.setVersion("v2");
+    expect(await f.run()).toEqual({ full: true, restarted: false });
+    expect(f.calls).toEqual([]);
+    expect(f.events).toEqual(["relocate", "frozen"]);
   } finally { f.cleanup(); }
 });

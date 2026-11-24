@@ -14,6 +14,7 @@ struct ModelSettingsView: View {
   @State private var error: String?
   @State private var saving = false
   @State private var tests: [String: TestState] = [:]
+  @State private var testingConnection = false
   @State private var localModels: [String: [String]] = [:]
   @State private var localModelErrors: [String: String] = [:]
   @State private var localModelLoading: Set<String> = []
@@ -39,7 +40,8 @@ struct ModelSettingsView: View {
           switch health.state {
           case .working: SettingsRow("后台整理", value: "正常")
           case .waiting: SettingsRow("后台整理", value: "等待首次完成")
-          case .failing(let reason): SettingsMessage(text: reason)
+          case .failing(let reason):
+            SettingsMessage(text: store.isRemoteBackend ? "整理遇到问题，请检查远端模型设置。" : reason)
           }
           if let time = health.lastOkAt { SettingsRow("最近完成", value: String(time.prefix(16)).replacingOccurrences(of: "T", with: " ")) }
         }
@@ -48,13 +50,17 @@ struct ModelSettingsView: View {
           Button("刷新状态") { Task { await loadHealth(); await loadTimeline() } }
             .disabled(saving)
           Spacer()
-          Button("查看用量与详细状态…") {
-            if let url = store.api.statusPageURL() { NSWorkspace.shared.open(url) }
+          if !store.isRemoteBackend {
+            Button("查看用量与详细状态…") {
+              if let url = store.api.statusPageURL() { NSWorkspace.shared.open(url) }
+            }
           }
         }
       }
       if let info {
-        if let e = info.configError { SettingsMessage(text: "模型配置文件有问题，整理会失败，保存一次就能修好：\(e)") }
+        if let e = info.configError {
+          SettingsMessage(text: store.isRemoteBackend ? "请填写远端后台使用的 API 模型。" : "模型配置文件有问题，整理会失败，保存一次就能修好：\(e)")
+        }
         ForEach(Self.tiers, id: \.self) { tier in tierSection(tier, info: info) }.disabled(saving)
         timelineSection
         keysSection(info)
@@ -62,7 +68,7 @@ struct ModelSettingsView: View {
           HStack {
             Spacer()
             Button("撤销修改") { draft = saved; timelineDraft = timelineSaved }.disabled(saving)
-            Button(saving ? "正在保存…" : "保存") { Task { await save() } }.keyboardShortcut(.defaultAction).disabled(saving)
+            Button(saving ? "正在保存…" : "保存") { Task { await save() } }.keyboardShortcut(.defaultAction).disabled(saving || !canSaveModels)
           }
         }
       } else if error == nil {
@@ -140,15 +146,18 @@ struct ModelSettingsView: View {
   // MARK: 每一档
 
   @ViewBuilder func tierSection(_ tier: String, info: ModelSettingsInfo) -> some View {
-    let config = Binding(get: { draft[tier] ?? ModelTierConfig(provider: "codex-cli", model: "") }, set: { draft[tier] = $0 })
+    let remote = store.isRemoteBackend
+    let config = Binding(get: { draft[tier] ?? ModelTierConfig(provider: remote ? "" : "codex-cli", model: "") },
+                         set: { draft[tier] = $0 })
     let c = config.wrappedValue
     let provider = info.providers.first { $0.id == c.provider }
     let local = Self.isLoopback(c.baseUrl)
-    let localOptions = Self.showsLocalModelOptions && local
+    let localOptions = !remote && Self.showsLocalModelOptions && local
     Section {
       Picker("提供商", selection: Binding(get: { choice(c) }, set: { apply($0, to: config, info: info) })) {
-        ForEach(info.providers, id: \.id) { Text($0.label).tag($0.id) }
-        if Self.showsLocalModelOptions {
+        if remote && c.provider.isEmpty { Text("选择提供商").tag("") }
+        ForEach(info.availableProviders(remote: remote), id: \.id) { Text($0.label).tag($0.id) }
+        if !remote && Self.showsLocalModelOptions {
           Divider()
           ForEach(Self.presets, id: \.id) { Text($0.label).tag($0.id) }
         }
@@ -161,7 +170,7 @@ struct ModelSettingsView: View {
               .fixedSize()
           }
           Button(tests[tier] == .running ? "正在测试…" : "测试连接") { Task { await test(tier) } }
-            .disabled(tests[tier] == .running || c.model.isEmpty)
+            .disabled(testingConnection || c.provider.isEmpty || c.model.isEmpty)
         }
       }
       if provider?.baseUrl == true {
@@ -181,7 +190,9 @@ struct ModelSettingsView: View {
             Button("刷新模型") { Task { await loadLocalModels(url) } }.disabled(localModelLoading.contains(url))
           }
         }
-        if local {
+        if remote {
+          Text("模型地址须能从远端后台访问，localhost 指远端后台所在的机器。").foregroundStyle(Palette.muted)
+        } else if local {
           Text("本机地址也可能转发到云端，实际运行位置由模型服务决定。").foregroundStyle(Palette.muted)
         }
       }
@@ -214,7 +225,10 @@ struct ModelSettingsView: View {
 
   @ViewBuilder func keysSection(_ info: ModelSettingsInfo) -> some View {
     let usedProviders = Set(draft.values.filter { !Self.isLoopback($0.baseUrl) }.map(\.provider))
-    let keyProviders = info.providers.filter { $0.needsKey && (usedProviders.contains($0.id) || (info.keys[$0.id] ?? nil) == true) }
+    let remote = store.isRemoteBackend
+    let keyProviders = info.availableProviders(remote: remote).filter {
+      $0.needsKey && (remote || usedProviders.contains($0.id) || (info.keys[$0.id] ?? nil) == true)
+    }
     if !keyProviders.isEmpty {
     Section {
       ForEach(keyProviders, id: \.id) { p in
@@ -223,7 +237,7 @@ struct ModelSettingsView: View {
             switch info.keys[p.id] ?? nil {
             case true?: Text("已设置").foregroundStyle(Palette.muted)
             case false?: Text("未设置").foregroundStyle(Palette.muted)
-            case nil: Text("读不到钥匙串").foregroundStyle(Palette.attention)
+            case nil: Text(remote ? "无法读取密钥状态" : "读不到钥匙串").foregroundStyle(Palette.attention)
             }
             Button("设置…") { editingKey = p.id }
             if (info.keys[p.id] ?? nil) == true { Button("删除…", role: .destructive) { removingKey = p.id } }
@@ -233,7 +247,7 @@ struct ModelSettingsView: View {
     } header: {
       Text("API key")
     } footer: {
-      Note("key 存在这台 Mac 的钥匙串里，设置后不再显示。同一个提供商共用一个 key。")
+      Note(remote ? "密钥加密保存在远端后台，设置后不再显示。" : "key 存在这台 Mac 的钥匙串里，设置后不再显示。同一个提供商共用一个 key。")
     }
     }
   }
@@ -291,6 +305,7 @@ struct ModelSettingsView: View {
   }
 
   func load() async {
+    guard store.canManageBackend, !Task.isCancelled else { return }
     do {
       let i = try await store.api.modelSettings()
       info = i
@@ -317,6 +332,7 @@ struct ModelSettingsView: View {
   }
 
   private func loadTimeline() async {
+    guard store.canManageBackend, !Task.isCancelled else { return }
     let previous = timelineSaved
     do {
       let settings = try await store.api.generalSettings()
@@ -327,7 +343,15 @@ struct ModelSettingsView: View {
     catch is CancellationError {} catch { timelineError = error.localizedDescription }
   }
 
+  private var canSaveModels: Bool {
+    !store.isRemoteBackend || draft == saved || Self.tiers.allSatisfy { tier in
+      guard let config = draft[tier], !config.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+      return info?.availableProviders(remote: true).contains(where: { $0.id == config.provider }) == true
+    }
+  }
+
   func save() async {
+    guard store.canManageBackend, canSaveModels else { return }
     saving = true; defer { saving = false }
     error = nil
     var values: [String: Any] = [:]
@@ -352,7 +376,7 @@ struct ModelSettingsView: View {
         let i = try await store.api.saveModels(draft)
         info = i; saved = i.tiers; draft = i.tiers
       }
-      if !values.isEmpty {
+      if !values.isEmpty, store.canManageBackend {
         let settings = try await store.api.saveGeneral(values)
         timelineDraft = TimelineDraft(settings)
         applyTimeline(settings)
@@ -361,7 +385,14 @@ struct ModelSettingsView: View {
   }
 
   func test(_ tier: String) async {
-    guard let c = draft[tier] else { return }
+    guard store.canManageBackend else { return }
+    // 远端后台同一时间只接受一次连接测试，本页也只放行一个。
+    guard let c = draft[tier], !testingConnection else { return }
+    testingConnection = true
+    defer {
+      testingConnection = false
+      if tests[tier] == .running { tests[tier] = nil }
+    }
     tests[tier] = .running
     do {
       let r = try await store.api.testModel(tier: tier, config: c)
@@ -371,6 +402,7 @@ struct ModelSettingsView: View {
   }
 
   func removeKey(_ provider: String) async {
+    guard store.canManageBackend else { return }
     do { try await store.api.deleteKey(provider: provider); await load() }
     catch { self.error = error.localizedDescription }
   }
@@ -391,7 +423,8 @@ private struct KeyEntrySheet: View {
     VStack(alignment: .leading, spacing: 12) {
       Text("设置 \(label) 的 API key").font(.system(size: TextSize.body, weight: .semibold))
       SecureField("API key", text: $key).frame(width: 360)
-      Text("存在这台 Mac 的钥匙串里，设置后不再显示。").foregroundStyle(Palette.muted)
+      Text(store.isRemoteBackend ? "密钥加密保存在远端后台，设置后不再显示。" : "存在这台 Mac 的钥匙串里，设置后不再显示。")
+        .foregroundStyle(Palette.muted)
       if let error { SettingsMessage(text: error) }
       HStack {
         Spacer()
@@ -406,6 +439,7 @@ private struct KeyEntrySheet: View {
   }
 
   func save() async {
+    guard store.canManageBackend else { return }
     busy = true; defer { busy = false }
     do {
       try await store.api.setKey(provider: provider, key: key.trimmingCharacters(in: .whitespaces))

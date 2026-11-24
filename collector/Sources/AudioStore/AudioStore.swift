@@ -138,12 +138,16 @@ public final class AudioStore {
     return try AES.GCM.open(AES.GCM.SealedBox(combined: Data(contentsOf: url)), using: key)
   }
   /// 调用者必须确保 worker 没在处理这些目录；open 对话始终保留。
-  @discardableResult public func cleanup(now: Date, retentionDays: Int, purgeBefore: Date? = nil, deleting: [String] = []) throws -> [String] {
+  @discardableResult public func cleanup(now: Date, retentionDays: Int, purgeBefore: Date? = nil, deleting: [String] = [],
+                                         preservingPending: Bool = false) throws -> [String] {
     guard (0...365).contains(retentionDays), deleting.allSatisfy(AudioPolicy.validID) else { throw AudioError.invalidMetadata }
     let all = try conversations(readOnly: true)
     var deleted: [String] = []
-    for meta in all where meta.status != .open && (deleting.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: now, retentionDays: retentionDays, purgeBefore: purgeBefore)) {
-      try fm.removeItem(at: directory(for: meta)); deleted.append(meta.id)
+    for meta in all where meta.status != .open {
+      if deleting.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: now, retentionDays: retentionDays,
+        purgeBefore: purgeBefore, preservingPending: preservingPending) {
+        try fm.removeItem(at: directory(for: meta)); deleted.append(meta.id)
+      }
     }
     // 已不在本机的目录也可以确认删除，仍在录的不能 ack。
     return Array(Set(deleted + deleting.filter { id in !all.contains { $0.id == id && $0.status == .open } }))

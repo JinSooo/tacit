@@ -30,12 +30,13 @@ public enum SecurityCLI {
 
   /// `security -i` 的一行写入命令。不带 `-U`：已有条目不覆盖（并发首次创建时先写入者胜出）。
   /// 只接受固定字符集，命令行里不会出现需要转义的内容。
-  public static func addGenericPasswordCommand(service: String, account: String, hexValue: String) throws -> Data {
+  public static func addGenericPasswordCommand(service: String, account: String, hexValue: String, replace: Bool = false) throws -> Data {
     let name = #/^[A-Za-z0-9._:-]{1,128}$/#
     guard service.wholeMatch(of: name) != nil, account.wholeMatch(of: name) != nil,
-          !hexValue.isEmpty, hexValue.count <= 256, hexValue.allSatisfy(\.isHexDigit) else {
+          !hexValue.isEmpty, hexValue.count <= (account.hasPrefix("relay-device-") ? 400 : 256), hexValue.allSatisfy(\.isHexDigit) else {
       throw Failure(status: -2)
     }
-    return Data("add-generic-password -s \(service) -a \(account) -w \(hexValue)\n".utf8)
+    let update = replace ? " -U" : ""
+    return Data("add-generic-password\(update) -s \(service) -a \(account) -w \(hexValue)\n".utf8)
   }
 }

@@ -14,11 +14,13 @@ public struct OutboxStatus: Equatable, Sendable {
   public let bytes: Int64
   public let dropped: Int
   public let degraded: Bool
+  public let quarantined: Int
 
-  public init(bytes: Int64 = 0, dropped: Int = 0, degraded: Bool = true) {
+  public init(bytes: Int64 = 0, dropped: Int = 0, degraded: Bool = true, quarantined: Int = 0) {
     self.bytes = bytes
     self.dropped = dropped
     self.degraded = degraded
+    self.quarantined = quarantined
   }
 }
 
@@ -126,6 +128,7 @@ public enum CollectorStatus {
       status["outboxBytes"] = outbox.bytes
       status["outboxDropped"] = outbox.dropped
       status["outboxDegraded"] = outbox.degraded
+      status["outboxQuarantined"] = outbox.quarantined
       let data = try JSONSerialization.data(withJSONObject: status, options: [.prettyPrinted, .sortedKeys])
       try PrivateFile.write(data, to: url)
     } catch {

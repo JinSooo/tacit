@@ -37,20 +37,48 @@ import CollectorCore
     if let window { WindowVisibility.update(window) }
   }
 
+  /// 换一份全新的根视图，丢掉旧后台留下的页面状态。只换视图、不换窗口内容控制器：
+  /// 换控制器会让系统按新内容重算窗口大小，切换后台后窗口忽大忽小（2026-11-24 虚拟机联调发现）。
+  func replaceRoot() {
+    rootGeneration += 1
+    hosting?.rootView = Self.root(store, rootGeneration)
+  }
+
+  private var hosting: NSHostingController<AnyView>?
+  private var rootGeneration = 0
+  static let minimumContentSize = NSSize(width: 1080, height: 640)
+
+  private static func root(_ store: ViewerStore, _ generation: Int) -> AnyView {
+    AnyView(RootView().environment(store).id(generation))
+  }
+
+  /// 保存的位置可能来自更大的屏幕，打开时收进当前屏幕的可见区域。
+  static func fit(_ frame: NSRect, in visible: NSRect) -> NSRect {
+    let width = min(frame.width, visible.width), height = min(frame.height, visible.height)
+    let x = min(max(frame.minX, visible.minX), visible.maxX - width)
+    let y = min(max(frame.minY, visible.minY), visible.maxY - height)
+    return NSRect(x: x, y: y, width: width, height: height)
+  }
+
   private func makeWindow() -> NSWindow {
-    let hosting = NSHostingController(rootView: RootView().environment(store))
+    let hosting = NSHostingController(rootView: Self.root(store, rootGeneration))
     hosting.sceneBridgingOptions = [.toolbars, .title]
+    // 窗口大小只由用户和上次保存的位置决定，不随 SwiftUI 内容的理想尺寸变化。
+    hosting.sizingOptions = []
+    self.hosting = hosting
     let w = NSWindow(contentViewController: hosting)
     w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
     w.toolbarStyle = .unified
     // 首次打开就可能落在无标题页面。后续页面标题由 SwiftUI 桥接到窗口。
     w.title = ""
-    w.contentMinSize = NSSize(width: 1080, height: 640)
+    w.contentMinSize = Self.minimumContentSize
     w.setContentSize(NSSize(width: 1360, height: 880))
     w.isReleasedWhenClosed = false
     w.delegate = self
     if !w.setFrameUsingName("RecordAnythingMain") { w.center() }
+    // 设自动保存名会再套一次保存的位置（换过分辨率时系统还会按比例放大），所以最后再收进屏幕。
     w.setFrameAutosaveName("RecordAnythingMain")
+    if let visible = (w.screen ?? NSScreen.main)?.visibleFrame { w.setFrame(Self.fit(w.frame, in: visible), display: false) }
     return w
   }
 

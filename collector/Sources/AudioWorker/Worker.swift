@@ -55,6 +55,8 @@ final class StdioHubTransport: HubTransport {
       try channel.writeLine(encoder.encode(req))
       guard let line = try channel.readLine() else { throw WorkerError.http }
       let reply = try decoder.decode(AudioProxyResponse.self, from: line)
+      if reply.id == id, reply.error == "remote_delivery_pending" { throw WorkerError.pendingDelivery }
+      if reply.id == id, reply.error == "remote_delivery_paused" { throw WorkerError.deliveryPaused }
       guard reply.id == id, reply.ok, reply.status == 200, let replyBody = reply.body else {
         throw WorkerError.http
       }
@@ -74,11 +76,12 @@ struct SpeakerCache: Codable {
 }
 final class Worker {
   let store: AudioStore; let hub: any HubTransport; let device: String
+  let remoteDelivery: Bool
   let loadModels: () throws -> any Inference
   let decode: (Data) throws -> [Float]
   private var models: (any Inference)?
-  init(store: AudioStore, hub: any HubTransport, device: String, decode: @escaping (Data) throws -> [Float] = AudioCodec.decode, loadModels: @escaping () throws -> any Inference) {
-    self.store = store; self.hub = hub; self.device = device; self.decode = decode; self.loadModels = loadModels
+  init(store: AudioStore, hub: any HubTransport, device: String, remoteDelivery: Bool = false, decode: @escaping (Data) throws -> [Float] = AudioCodec.decode, loadModels: @escaping () throws -> any Inference) {
+    self.store = store; self.hub = hub; self.device = device; self.remoteDelivery = remoteDelivery; self.decode = decode; self.loadModels = loadModels
   }
   func inference() throws -> any Inference {
     if let models { return models }; let m = try loadModels(); models = m; return m
@@ -196,7 +199,8 @@ final class Worker {
     var failures = 0
     for var meta in all where meta.status == .closed || (meta.status == .failed && (meta.attempts ?? 0) < 3) || (meta.status == .waiting_me && sync.voiceprint != nil) {
       // 删除同步由采集端执行；尚未 ack 的删除或清理不得重新上传。
-      if sync.delete_conversations.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: Date(), retentionDays: sync.retention_days, purgeBefore: AudioPolicy.date(sync.purge_before)) { continue }
+      if sync.delete_conversations.contains(meta.id) || AudioPolicy.shouldDelete(meta, now: Date(), retentionDays: sync.retention_days,
+        purgeBefore: AudioPolicy.date(sync.purge_before), preservingPending: remoteDelivery) { continue }
       let start = Date()
       do {
         meta.segments.sort {
@@ -230,13 +234,20 @@ final class Worker {
             labels[speaker.local] = WorkerLogic.isSelf(speaker, voiceprint: voiceprint.vector, threshold: voiceprint.threshold) ? "我" : "对方"
           }
           let speech = WorkerLogic.cleanTranscript(kept.filter { meeting || $0.segment.track == .mic })
-          let record = WorkerLogic.record(meta: meta, device: device, lines: speech, labels: labels, ids: [:], retention: sync.retention_days)
+          var record = WorkerLogic.record(meta: meta, device: device, lines: speech, labels: labels, ids: [:], retention: sync.retention_days)
+          if remoteDelivery { record["id"] = meta.id }
           guard (record["body"] as! String).unicodeScalars.count <= 200000 else { throw WorkerError.recordTooLarge }
           let response = try await post("/v1/ingest", ["device": device, "records": [record]])
           guard let receipt = DeliveryReceipt.decode(response, batchCount: 1), receipt.rejected.isEmpty else { throw WorkerError.response }
         }
         var completed = meta
         try completed.transition(to: next, at: Date()); try store.writeMetadata(completed); meta = completed
+      } catch WorkerError.deliveryPaused {
+        return failures
+      } catch WorkerError.pendingDelivery {
+        // A mailbox receipt may arrive after this worker's request budget.
+        // Retain the audio and its retry budget for the next run.
+        continue
       } catch {
         failures += 1
         // 不序列化底层异常；HTTP 错误可能携带请求内容或服务端转写文字。
@@ -258,7 +269,9 @@ final class Worker {
       if current?.version == SpeakerCache.current { continue }
       var sorted = meta
       sorted.segments.sort { AudioPolicy.date($0.t_start)! == AudioPolicy.date($1.t_start)! ? $0.file < $1.file : AudioPolicy.date($0.t_start)! < AudioPolicy.date($1.t_start)! }
-      do { try await relabel(sorted) } catch { relabelLeft = true; failures += 1; fputs("\(meta.id) relabel_failed\n", stderr) }
+      do { try await relabel(sorted) }
+      catch WorkerError.deliveryPaused { return failures }
+      catch { relabelLeft = true; failures += 1; fputs("\(meta.id) relabel_failed\n", stderr) }
     }
     let marker = store.root.appendingPathComponent(WorkerLogic.relabelMarker)
     if !relabelLeft, !FileManager.default.fileExists(atPath: marker.path) { FileManager.default.createFile(atPath: marker.path, contents: Data(), attributes: [.posixPermissions: 0o600]) }
@@ -289,7 +302,8 @@ final class Worker {
           let clip = ["mime": "audio/wav", "data": WorkerLogic.wav(WorkerLogic.normalize(Array(samples[best.range.lowerBound..<end]))).base64EncodedString()]
           _ = try await post("/v1/audio/samples", ["request_id": request.id, "clips": [clip]])
         }
-      } catch { failures += 1; fputs("\(meta.id) sample_failed\n", stderr) }
+      } catch WorkerError.deliveryPaused { return failures }
+      catch { failures += 1; fputs("\(meta.id) sample_failed\n", stderr) }
     }
     return failures
   }

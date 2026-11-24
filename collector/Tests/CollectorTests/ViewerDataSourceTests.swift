@@ -154,7 +154,7 @@ private func locateBun() -> String? {
       urlSession: makeStubSession()
     )
 
-    #expect(adaptive.activateIfLinked() == false)
+    #expect(await adaptive.activateIfLinked() == false)
     #expect(adaptive.isUsingCache == false)
 
     let projects = try await adaptive.projects()
@@ -305,7 +305,7 @@ private func locateBun() -> String? {
     )
     defer { adaptive.stop() }
 
-    #expect(adaptive.activateIfLinked() == true)
+    #expect(await adaptive.activateIfLinked() == true)
     #expect(adaptive.isUsingCache == true)
 
     // 先从缓存读一次，确认 viewer-cache.db 与小组件快照均存在。
@@ -449,7 +449,7 @@ private func locateBun() -> String? {
     )
     defer { adaptive.stop() }
 
-    #expect(adaptive.activateIfLinked() == true)
+    #expect(await adaptive.activateIfLinked() == true)
     let sync = try #require(adaptive.activeSync)
 
     // 首次读取命中中枢，写入内存 LRU；第二次直接命中内存。
@@ -869,8 +869,9 @@ private func locateBun() -> String? {
       db.db.prepare("INSERT INTO voice_samples VALUES (?,?,?,?,?,?)")
         .run(ids.sample, ids.recT1, ids.factADecision, "audio/wav", Buffer.from("synthetic-wave-bytes"), updatedAt);
 
-      const listener = () => Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-      const firstPort = listener(), secondPort = listener();
+      const listener = (port: number) => Bun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } });
+      const firstPort = listener(Number(process.env.TACIT_SWIFT_TEST_HUB_PORT ?? "0"));
+      const secondPort = listener(Number(process.env.TACIT_SWIFT_TEST_HUB_RESTART_PORT ?? "0"));
       const restartPort = secondPort.port;
       writeHubPort(config.dataDir, firstPort.port);
       firstPort.stop();
@@ -1011,7 +1012,7 @@ private func locateBun() -> String? {
     )
     defer { adaptiveSource.stop() }
 
-    #expect(adaptiveSource.activateIfLinked() == true)
+    #expect(await adaptiveSource.activateIfLinked() == true)
     #expect(adaptiveSource.isUsingCache == true)
     let sync = try #require(adaptiveSource.activeSync)
     let initialSync = try await sync.pullToLatest()

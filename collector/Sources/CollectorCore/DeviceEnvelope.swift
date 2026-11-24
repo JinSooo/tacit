@@ -385,10 +385,22 @@ public struct SealedDeviceRequest: Equatable, Sendable {
   public let wireData: Data
   public let nonce: String
 
+  let operation: String?
+  let body: [String: DeviceJSON]?
+  let plaintextBytes: Int
+
   public init(envelope: DeviceRequestEnvelope, wireData: Data, nonce: String) {
+    self.init(envelope: envelope, wireData: wireData, nonce: nonce, operation: nil, body: nil, plaintextBytes: 0)
+  }
+
+  init(envelope: DeviceRequestEnvelope, wireData: Data, nonce: String,
+       operation: String?, body: [String: DeviceJSON]?, plaintextBytes: Int) {
     self.envelope = envelope
     self.wireData = wireData
     self.nonce = nonce
+    self.operation = operation
+    self.body = body
+    self.plaintextBytes = plaintextBytes
   }
 }
 
@@ -663,7 +675,8 @@ public enum DeviceEnvelope {
     } catch {
       throw DeviceClientError.invalidEnvelope("请求信封编码失败")
     }
-    return SealedDeviceRequest(envelope: envelope, wireData: wireData, nonce: resolvedNonce)
+    return SealedDeviceRequest(envelope: envelope, wireData: wireData, nonce: resolvedNonce,
+                               operation: op, body: body, plaintextBytes: plaintext.count)
   }
 
   /// 接受任意可编码为 JSON 对象的请求体，构造并封装请求。

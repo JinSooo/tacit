@@ -10,10 +10,12 @@ import CollectorCore
   private let icons: URL
   private let clock: @Sendable () -> Date
   private let calendar: Calendar
+  private let hubRoute: @Sendable () throws -> HubBinding.Route
   private let reloadTimelines: @Sendable () -> Void
   private let logger = Logger(subsystem: "dev.record-anything.collector", category: "widget")
   private var timer: Timer?
   private var request: Task<Void, Never>?
+  private var snapshotRevision = 0
 
   init(
     dataSource: any ViewerDataSource,
@@ -21,7 +23,8 @@ import CollectorCore
     clock: @escaping @Sendable () -> Date = { Date() },
     calendar: Calendar = .current,
     reloadTimelines: @escaping @Sendable () -> Void = { WidgetCenter.shared.reloadAllTimelines() },
-    stopStaleExtension: Bool = true
+    stopStaleExtension: Bool = true,
+    hubRoute: @escaping @Sendable () throws -> HubBinding.Route = { .local }
   ) {
     self.dataSource = dataSource
     self.file = file
@@ -29,6 +32,7 @@ import CollectorCore
     self.clock = clock
     self.calendar = calendar
     self.reloadTimelines = reloadTimelines
+    self.hubRoute = hubRoute
     // 升级后快照内容可能没变，系统会一直沿用旧版画面；每次启动主动重绘一次。
     // 升级前就在跑的扩展进程不会被系统换掉，重绘全部报版本不符，先结束它。
     if stopStaleExtension {
@@ -101,6 +105,8 @@ import CollectorCore
 
   /// 执行一次小组件快照生成或跨天清理（供定时刷新及单测直接调用）。
   func refreshNow(invalidate: Bool = false, at referenceNow: Date? = nil) async {
+    guard let route = try? hubRoute() else { removeSnapshot(); return }
+    let revision = snapshotRevision
     let now = referenceNow ?? clock()
     let day = TimelineDay.key(now, calendar: calendar)
     let existing = WidgetSnapshot.readToday(from: file, now: now, calendar: calendar)
@@ -108,7 +114,8 @@ import CollectorCore
     do {
       let diary = try await dataSource.diary(now)
       try Task.checkCancellation()
-      guard day == TimelineDay.key(clock(), calendar: calendar) else { return }
+      guard snapshotRevision == revision, (try? hubRoute()) == route,
+            day == TimelineDay.key(clock(), calendar: calendar) else { return }
       // 草稿可早于当天概述出现，是否发布由快照投影后的内容决定。
       let snapshot = WidgetSnapshot(diary: diary, now: now, calendar: calendar, iconFor: publishIcon)
       if snapshot.summary == nil && snapshot.segments.isEmpty {
@@ -125,13 +132,14 @@ import CollectorCore
     } catch is CancellationError {
       return
     } catch {
-      guard !Task.isCancelled else { return }
+      guard !Task.isCancelled, snapshotRevision == revision, (try? hubRoute()) == route else { return }
       removeSnapshot()
       logger.error("Unable to update widget snapshot: \((error as NSError).code, privacy: .public)")
     }
   }
 
   func clearSnapshot() {
+    snapshotRevision += 1
     request?.cancel()
     removeSnapshot()
   }

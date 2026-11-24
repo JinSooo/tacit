@@ -40,6 +40,9 @@ enum Fmt {
     return "\(year)\(c.month!) 月 \(c.day!) 日"
   }
 
+  /// "11 月 24 日 09:00"；不是今年的带上年份。
+  static func dateTime(_ d: Date) -> String { "\(date(d)) \(ViewerFormat.clock(d))" }
+
   static func range(_ a: Date, _ b: Date?) -> String {
     guard let b, ViewerFormat.clock(b) != ViewerFormat.clock(a) else { return ViewerFormat.clock(a) }
     return "\(ViewerFormat.clock(a))–\(ViewerFormat.clock(b))"

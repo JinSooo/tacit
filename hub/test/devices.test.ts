@@ -22,16 +22,16 @@ import { deviceAccount, ensureAgentIdentity, fileAgentSecrets } from "../src/age
 
 const minute = 60_000;
 
-async function runningHub(beforeModelKeySet?: () => Promise<void>) {
+async function runningHub(beforeModelKeySet?: () => Promise<void>, ports?: { local: number; lan: number }) {
   const modelKeys = new Map<string, string>();
   const ctx = setup();
-  const probe = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: () => new Response() });
+  const probe = Bun.serve({ hostname: "0.0.0.0", port: ports?.lan ?? 0, fetch: () => new Response() });
   const lanPort = probe.port!;
   await probe.stop(true);
   writeFileSync(join(ctx.dir, "hub.json"), JSON.stringify({ lan_port: lanPort }));
   let now = Date.now(), key: string | null = null, writes = 0;
   const options = {
-    db: ctx.db, token: ctx.config.token, agentToken: ctx.config.agentToken, port: 0, settings: { dataDir: ctx.dir, env: {}, keychain: {
+    db: ctx.db, token: ctx.config.token, agentToken: ctx.config.agentToken, port: ports?.local ?? 0, settings: { dataDir: ctx.dir, env: {}, keychain: {
       async has(provider: string) { return modelKeys.has(provider); },
       async set(provider: string, key: string) { await beforeModelKeySet?.(); modelKeys.set(provider, key); },
       async remove(provider: string) { return modelKeys.delete(provider); },
@@ -121,14 +121,38 @@ test("最后一个邀请过期后关闭监听，过期、替换、作废和已�
     expect((await client.send("pair", await client.pairingBody(revoked), { ts: expired.expires_at })).status).toBe(403);
 
     const single = await hub.invite();
-    const pairBody = await client.pairingBody(single);
+    const other = await DeviceClient.fromInvite(single, hub.lan);
     const results = await Promise.all([
-      client.send("pair", pairBody, { ts: expired.expires_at }),
-      client.send("pair", pairBody, { ts: expired.expires_at }),
+      client.send("pair", await client.pairingBody(single), { ts: expired.expires_at }),
+      other.send("pair", await other.pairingBody(single), { ts: expired.expires_at }),
     ]);
     expect(results.map(r => r.status).sort()).toEqual([200, 403]);
     expect(await (await hub.settings()).json()).toMatchObject({ pairing: null });
     expect(hub.writes).toBe(1);
+  } finally { await hub.dispose(); }
+});
+
+test("配对回执丢失后跨重启重放同一请求，仅原请求者可取回原设备和实际角色", async () => {
+  const hub = await runningHub(undefined, { local: 48613, lan: 48612 });
+  try {
+    const invite = await hub.invite("admin");
+    const client = await DeviceClient.fromInvite(invite, hub.lan);
+    const body = { ...await client.pairingBody(invite), name: "合成 Mac", platform: "mac" };
+    const nonce = randomBytes(16).toString("base64url");
+    const first = await client.send("pair", body, { nonce });
+    expect(first).toEqual({ status: 200, body: {
+      device_id: expect.stringMatching(/^mac-/), hub_id: invite.hub_id, hub_name: invite.name, name: "合成 Mac", role: "admin",
+    } });
+    await hub.restart();
+    expect(await client.send("pair", body, { nonce })).toEqual(first);
+    expect(await client.send("pair", body)).toEqual(first);
+    expect((await client.send("pair", { ...body, name: "不同的请求" })).status).toBe(403);
+    const other = await DeviceClient.fromInvite(invite, hub.lan);
+    expect((await other.pair(invite, "mac")).status).toBe(403);
+    expect(hub.db.db.prepare("SELECT id FROM devices").all()).toEqual([{ id: first.body.device_id }]);
+    expect(hub.db.db.prepare("SELECT id FROM issued_device_ids").all()).toEqual([{ id: first.body.device_id }]);
+    hub.advance(5 * minute);
+    expect((await client.send("pair", body, { ts: new Date(hub.time()).toISOString() })).status).toBe(403);
   } finally { await hub.dispose(); }
 });
 
@@ -323,7 +347,7 @@ test("v12 加密数据库迁移到 v16，保留记录并清理验证通过的备
     hub.db.close();
     const migrated = new HubDB(hub.file, hub.config.dbKey);
     try {
-      expect(migrated.db.pragma("user_version", { simple: true })).toBe(18);
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(19);
       expect(migrated.get(record.id)).toMatchObject({ id: record.id });
       expect(migrated.db.prepare("SELECT * FROM devices").all()).toEqual([]);
       expect(existsSync(hub.file + ".migration-v12.bak")).toBe(false);
@@ -437,7 +461,7 @@ test("v15 升级 v16，旧查看设备迁为 view、Android 保持 collect，验
     hub.db.close();
     const migrated = new HubDB(hub.file, hub.config.dbKey);
     try {
-      expect(migrated.db.pragma("user_version", { simple: true })).toBe(18);
+      expect(migrated.db.pragma("user_version", { simple: true })).toBe(19);
       expect(migrated.db.prepare("SELECT id,role FROM devices ORDER BY id").all()).toEqual([
         { id: "android-testaaaa", role: "collect" }, { id: "mac-testaaaa", role: "view" },
       ]);
@@ -458,7 +482,8 @@ test("角色矩阵覆盖设备写入、投影、原文、AI、状态、编辑、
     [["status.get", "diagnostics.get"], ["view", "admin"]],
     [["records.create", "segment.correct", "facts.update", "pending.resolve", "distill.request"], ["admin"]],
     [["segment.delete", "project.remove"], ["admin"]],
-    [["devices.role.update", "settings.models", "runtime.calls", "audit.list", "audio.settings.put"], ["admin"]],
+    [["history.import.begin", "history.import.batch", "history.import.status", "history.import.finish", "history.import.changes", "history.import.verify"], ["admin"]],
+    [["agent.enroll", "devices.role.update", "settings.models", "runtime.calls", "audit.list", "audio.settings.put"], ["admin"]],
   ];
   for (const [ops, allowed] of groups) for (const op of ops) for (const role of roles) {
     expect(operationAccess(role, op)).toBe(allowed.includes(role) ? "allow" : "deny");
@@ -949,6 +974,9 @@ test("查看窗口的所有 op 沿用原 HTTP 状态和响应形状", async () =
       const { generated_at, ...rest } = v;
       return { ...rest, hub: { ...rest.hub, uptime_s: 0, started_at: "" }, devices: rest.devices.map((d: any) => ({ ...d, last_seen: "" })) };
     });
+    // 2026-11-24 虚拟机联调回归：Mac 探测连接时带 read_nonce，后台不能当成未登记参数拒绝。
+    expect((await admin.send("status.get", { read_nonce: "probe-0001" })).status).toBe(200);
+    expect((await admin.send("status.get", { unknown_field: 1 })).status).toBe(400);
     await pair("diagnostics.get", "GET", "/v1/runtime/background?source=hub");
     await pair("runtime.background", "GET", "/v1/runtime/background?source=distill", { source: "distill" });
     await pair("audit.list", "GET", "/v1/audit?limit=1&tool=codex", { limit: 1, tool: "codex" });
@@ -1025,6 +1053,52 @@ test("查看窗口 op 拒绝无效路径、额外字段以及查看与 Agent 越
         expect((await client.send(op, {})).status).toBe(403);
       }
     }
+  } finally { await hub.dispose(); }
+});
+
+test("仅远端管理 Mac 能登记 AI 身份，父设备降权或移除时撤销并审计", async () => {
+  const hub = await runningHub(undefined, { local: 48613, lan: 48612 });
+  try {
+    const parent = await hub.pair("admin"), another = await hub.pair("admin");
+    const viewer = await hub.pair("view"), collector = await hub.pair();
+    const { admin: local, agent: localAgent } = await localClients(hub);
+    const keys = await suite.kem.generateKeyPair();
+    const agent_pk = Buffer.from(await suite.kem.serializePublicKey(keys.publicKey)).toString("base64url");
+    for (const client of [local, localAgent, viewer, collector]) {
+      expect((await client.send("agent.enroll", { agent_pk })).status).toBe(403);
+    }
+    expect((await parent.send("agent.enroll", { agent_pk: "invalid" })).status).toBe(400);
+    const enrollment = await parent.send<{ device_id: string; hub_id: string }>("agent.enroll", { agent_pk });
+    const { device_id, hub_id } = enrollment.body;
+    expect(enrollment).toEqual({ status: 200, body: {
+      device_id: expect.stringMatching(/^agent-/), hub_id: (await (await hub.settings()).json()).hub_id,
+    } });
+    expect(hub.db.db.prepare("SELECT role,local_only FROM devices WHERE id=?").get(device_id)).toEqual({ role: "agent", local_only: 0 });
+    expect(await parent.send("agent.enroll", { agent_pk })).toEqual(enrollment);
+    expect((await another.send("agent.enroll", { agent_pk })).status).toBe(409);
+    const invite = await hub.invite("admin");
+    expect((await (await DeviceClient.fromInvite(invite, hub.lan, keys)).pair(invite, "mac")).status).toBe(409);
+
+    const agent = new DeviceClient(parent.hub, keys, hub.lan);
+    agent.device = device_id;
+    expect((await agent.send("agent.now", { tool: "codex" })).status).toBe(200);
+    expect((await agent.send("agent.enroll", { agent_pk })).status).toBe(403);
+    expect((await hub.settings(`/${device_id}/role`, "PUT", { role: "admin" })).status).toBe(403);
+
+    expect((await another.send("devices.role.update", { id: parent.device, role: "view" })).status).toBe(200);
+    expect((await parent.send("agent.enroll", { agent_pk })).status).toBe(403);
+    await expect(agent.send("agent.now", { tool: "codex" })).rejects.toMatchObject({ status: 401 });
+    const renewed = await another.send<{ device_id: string; hub_id: string }>("agent.enroll", { agent_pk });
+    const replacement = renewed.body.device_id;
+    expect(renewed).toEqual({ status: 200, body: { device_id: expect.stringMatching(/^agent-/), hub_id } });
+    expect(replacement).not.toBe(device_id);
+    agent.device = replacement;
+    expect((await agent.send("agent.now", { tool: "codex" })).status).toBe(200);
+    expect((await hub.settings(`/${another.device}`, "DELETE")).status).toBe(200);
+    await expect(agent.send("agent.now", { tool: "codex" })).rejects.toMatchObject({ status: 401 });
+
+    expect(hub.db.db.prepare("SELECT target FROM security_audit WHERE action='device.remove' AND detail_code='parent_revoked' ORDER BY rowid").all())
+      .toEqual([{ target: device_id }, { target: replacement }]);
   } finally { await hub.dispose(); }
 });
 
@@ -1152,4 +1226,31 @@ test("写入模型密钥期间移除远程设备，仍会提示远程操作", as
     resume.resolve();
     await hub.dispose();
   }
+});
+
+test("历史导入仅远端管理 Mac 可用，拒绝冒充现有或导入授权后配对的设备", async () => {
+  const hub = await runningHub(undefined, { local: 48620, lan: 48621 });
+  try {
+    const admin = await hub.pair("admin"), viewer = await hub.pair("view"), other = await hub.pair("admin");
+    const { hub_id } = await (await hub.settings()).json() as { hub_id: string };
+    const begin = { hub_id, snapshot_id: "b".repeat(64),
+      identities: [{ device: "mac", kind: "mac", sources: ["mac.screen"] }] };
+    expect((await viewer.send("history.import.begin", begin)).status).toBe(403);
+    const moveToLocal = hub.db.db.prepare("UPDATE devices SET local_only=1 WHERE id=?");
+    moveToLocal.run(other.device);
+    const local = new DeviceClient(other.hub, other.keys, hub.origin);
+    local.device = other.device;
+    expect((await local.send("history.import.begin", begin)).status).toBe(403);
+    expect(await admin.send("history.import.begin", { ...begin, identities: [{ ...begin.identities[0], device: other.device }] }))
+      .toEqual({ status: 403, body: { error: "device_collision" } });
+    const futureIdentity = "mac-zzzzzzzz";
+    const started = await admin.send<{ session_id: string }>("history.import.begin", { ...begin,
+      identities: [...begin.identities, { device: futureIdentity, kind: "mac", sources: ["mac.screen"] }] });
+    expect(started.status).toBe(200);
+    hub.db.db.prepare("INSERT INTO issued_device_ids VALUES(?)").run(futureIdentity);
+    const record = fixture({ device: futureIdentity });
+    expect(await admin.send("history.import.batch", { session_id: started.body.session_id, batch_number: 1, records: [record] }))
+      .toMatchObject({ status: 200, body: { items: [{ id: record.id, status: "rejected", code: "device_collision" }] } });
+    expect(hub.db.get(record.id)).toBeNull();
+  } finally { await hub.dispose(); }
 });

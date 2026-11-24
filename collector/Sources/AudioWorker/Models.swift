@@ -2,7 +2,7 @@ import Foundation
 import CSherpa
 import CollectorCore
 
-enum WorkerError: String, Error { case arguments, models, embedding, transcription, http, response, cache, recordTooLarge }
+enum WorkerError: String, Error { case arguments, models, embedding, transcription, http, response, cache, recordTooLarge, pendingDelivery, deliveryPaused }
 final class Strings {
   var pointers: [UnsafeMutablePointer<CChar>] = []
   func c(_ value: String) -> UnsafePointer<CChar> { let p = strdup(value)!; pointers.append(p); return UnsafePointer(p) }

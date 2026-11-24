@@ -42,6 +42,16 @@ restore_file() {
 
 restore_install() {
   failed=0
+  rollback_remote=false
+  # 与 hub/src/hub-binding.ts 同一套判定：文件存在（含悬空链接）就必须合法；损坏时按远端处理，不拉起本机后台和整理。
+  # 不在 shell 里预判文件是否存在（目录无权限时 -e 会误判为不存在），一律交给读取器。
+  if ! rollback_remote="$("$BUN" --no-env-file -e '
+    const { readHubBinding } = await import(process.argv[1]);
+    console.log(readHubBinding(process.argv[2]).remote !== null);
+  ' "$REPO/hub/src/hub-binding.ts" "$DATA" 2>/dev/null)"; then
+    printf '%s\n' '{"code":"install_binding_invalid"}' >&2
+    rollback_remote=true
+  fi
   if [ "$setup_started" = 1 ]; then
     for job in collector distill hub; do
       launchctl bootout "$DOMAIN/dev.record-anything.$job" >/dev/null 2>&1 || true
@@ -63,6 +73,7 @@ restore_install() {
   if [ -d "$staging/previous.bundle" ]; then mv "$staging/previous.bundle" "$LEGACY" || failed=1; fi
   if [ "$setup_started" = 1 ]; then
     for job in hub distill collector; do
+      if [ "$rollback_remote" = true ] && [ "$job" != collector ]; then continue; fi
       file="$(job_plist "$job")"
       restore_file "$staging/LaunchAgents/$file" "$HOME/Library/LaunchAgents/$file" || failed=1
       restore_file "$staging/launch-agents/$file" "$DATA/launch-agents/$file" || failed=1
@@ -72,6 +83,7 @@ restore_install() {
     done
   fi
   while IFS= read -r job; do
+    if [ "$rollback_remote" = true ] && [ "$job" != collector ]; then continue; fi
     target="$DOMAIN/dev.record-anything.$job"
     file="$(job_plist "$job")"
     plist="$HOME/Library/LaunchAgents/$file"
@@ -185,7 +197,7 @@ step "初始化数据、连接 AI 工具并启动后台服务"
 # 与安装包首次打开走同一套准备流程（hub/src/setup.ts）。
 if [ "${RA_NO_DISTILL:-0}" = 1 ]; then NO_DISTILL=--no-distill; else NO_DISTILL=""; fi
 setup_started=1
-"$APP/Contents/MacOS/bun" "$RUNTIME/hub/src/cli.ts" setup --app "$APP" --install $NO_DISTILL
+"$APP/Contents/Helpers/Tacit" "$RUNTIME/hub/src/cli.ts" setup --app "$APP" --install $NO_DISTILL
 if [ -n "$backup" ]; then
   # 新启动项加载后再撤下旧路径，避免相同包标识的两个应用同时留在“应用程序”。
   mv "$LEGACY" "$staging/previous.bundle"

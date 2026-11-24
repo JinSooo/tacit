@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { link, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { readHubBinding, type RemoteHubBinding } from "../hub-binding.ts";
 import { dataDirOf, resolvePort } from "../hub-json.ts";
 import { base32, base64url, identityFromRaw, object, suite } from "../devices/envelope.ts";
 import { DeviceClient } from "../devices/client.ts";
@@ -9,7 +10,9 @@ import { createKeychainAsync, readKeychainAsync } from "../secrets/keychain.ts";
 
 export const deviceAccount = "agent-device-key";
 export const contextAccount = "agent-context-cache-key";
-type Account = typeof deviceAccount | typeof contextAccount;
+type AccountBase = typeof deviceAccount | typeof contextAccount;
+type Account = AccountBase | `${AccountBase}.${string}`;
+export const agentAccount = (base: AccountBase, remote?: RemoteHubBinding | null): Account => remote ? `${base}.${remote.hub_id}` : base;
 
 export interface AgentSecrets {
   read(account: Account, signal: AbortSignal): Promise<string | null>;
@@ -101,10 +104,19 @@ export async function readAgentLink(dir: string, signal: AbortSignal): Promise<A
   return linkFrom(JSON.parse(raw));
 }
 
-export async function linkedClient(link: AgentLink, env: NodeJS.ProcessEnv, dir: string, secrets: AgentSecrets, signal: AbortSignal) {
-  const hex = await readAgentKey(secrets, deviceAccount, signal);
+export async function readBoundAgentLink(dir: string, signal: AbortSignal, remote: RemoteHubBinding | null) {
+  const link = await readAgentLink(remote ? join(dir, remote.dir) : dir, signal);
+  if (remote && (!link || link.hub_id !== remote.hub_id || link.hub_pk !== remote.hub_pk)) {
+    throw new Error("远端 Agent 连接配置缺失或与后台绑定不匹配");
+  }
+  return link;
+}
+
+export async function linkedClient(link: AgentLink, env: NodeJS.ProcessEnv, dir: string, secrets: AgentSecrets,
+                                   signal: AbortSignal, remote?: RemoteHubBinding | null) {
+  const hex = await readAgentKey(secrets, agentAccount(deviceAccount, remote), signal);
   if (hex === null) throw new Error("Agent 私钥缺失，请重新登记设备");
-  const loopback = new URL(link.address).hostname === "127.0.0.1";
+  const loopback = !remote && new URL(link.address).hostname === "127.0.0.1";
   const configured = loopback ? resolvePort(env, dir) : null;
   const address = configured && configured.source !== "default" && configured.port > 0
     ? `http://127.0.0.1:${configured.port}` : link.address;
@@ -118,7 +130,13 @@ export async function linkedClient(link: AgentLink, env: NodeJS.ProcessEnv, dir:
 export async function ensureAgentIdentity(options: AgentClientOptions = {}) {
   const env = options.env ?? process.env, dir = dataDirOf(env);
   const signal = AbortSignal.timeout(10_000);
-  const existing = await readAgentLink(dir, signal);
+  const { remote } = readHubBinding(dir);
+  const existing = await readBoundAgentLink(dir, signal, remote);
+  if (remote) {
+    const hex = await readAgentKey(options.secrets ?? agentSecrets(dir), agentAccount(deviceAccount, remote), signal);
+    if (!hex) throw new Error("远端 Agent 私钥缺失，请在 Tacit 中重新登记设备");
+    return existing!;
+  }
   if (existing) return existing;
   const { port } = resolvePort(env, dir);
   if (!port) throw new Error("Agent 登记需要可连接的本机中枢端口");

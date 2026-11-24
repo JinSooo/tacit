@@ -6,31 +6,47 @@ public struct LoginStartup {
   public static let jobs = ["hub", "distill", "collector"]
   public let agents: URL
   public let manual: URL
+  private let dataDir: URL
   private let fm = FileManager.default
+  private let beginWrite: () throws -> Void
+  private let endWrite: () -> Void
 
-  public init(home: URL, dataDir: URL) {
+  public init(home: URL, dataDir: URL, beginWrite: @escaping () throws -> Void = {},
+              endWrite: @escaping () -> Void = {}) {
+    self.dataDir = dataDir
+    self.beginWrite = beginWrite
+    self.endWrite = endWrite
     agents = home.appendingPathComponent("Library/LaunchAgents")
     manual = dataDir.appendingPathComponent("launch-agents")
   }
   public func file(_ job: String, enabled: Bool) -> URL {
     (enabled ? agents : manual).appendingPathComponent("dev.record-anything.\(job).plist")
   }
+  private var relevantJobs: [String] {
+    (try? HubBinding.read(from: dataDir).route.remote) != nil ? ["collector"] : Self.jobs
+  }
   public var installed: Bool {
-    ["hub", "collector"].allSatisfy { job in
+    relevantJobs.filter { $0 != "distill" }.allSatisfy { job in
       fm.fileExists(atPath: file(job, enabled: true).path) || fm.fileExists(atPath: file(job, enabled: false).path)
     }
   }
   public var enabled: Bool {
-    installed && Self.jobs.allSatisfy { !fm.fileExists(atPath: file($0, enabled: false).path) }
+    installed && relevantJobs.allSatisfy { !fm.fileExists(atPath: file($0, enabled: false).path) }
   }
   public var mixed: Bool {
-    Self.jobs.contains { fm.fileExists(atPath: file($0, enabled: true).path) }
-      && Self.jobs.contains { fm.fileExists(atPath: file($0, enabled: false).path) }
+    relevantJobs.contains { fm.fileExists(atPath: file($0, enabled: true).path) }
+      && relevantJobs.contains { fm.fileExists(atPath: file($0, enabled: false).path) }
   }
 
   public func setEnabled(_ enabled: Bool) throws {
+    do { try beginWrite() } catch { throw StartupError.switching }
+    defer { endWrite() }
+    guard let binding = try? HubBinding.read(from: dataDir),
+          binding.phase == .committed || LocalServiceStartupPolicy.allowsBackground(in: dataDir) else {
+      throw StartupError.switching
+    }
     guard installed else { throw StartupError.notInstalled }
-    let moves = Self.jobs.compactMap { job -> (URL, URL)? in
+    let moves = relevantJobs.compactMap { job -> (URL, URL)? in
       let from = file(job, enabled: !enabled), to = file(job, enabled: enabled)
       guard fm.fileExists(atPath: from.path) else { return nil }
       return (from, to)
@@ -48,7 +64,9 @@ public struct LoginStartup {
   }
 
   /// Finder 手动启动时，即使登录自启关闭，也启动本次使用所需的两个后台任务。
-  public func startServices() {
+  public func startServices(launchctl override: (([String]) -> Int32)? = nil) {
+    guard LocalServiceStartupPolicy.allowsBackground(in: dataDir) else { return }
+    let launchctl = override ?? self.launchctl
     let domain = "gui/\(getuid())"
     for job in ["hub", "distill"] {
       let definition = file(job, enabled: true)
@@ -67,9 +85,10 @@ public struct LoginStartup {
   }
 
   enum StartupError: LocalizedError {
-    case notInstalled, duplicate
+    case notInstalled, duplicate, switching
     var errorDescription: String? {
       switch self {
+      case .switching: return "后台正在切换，登录启动暂时无法更改。"
       case .notInstalled: return "启动配置不完整，请重新安装应用后再试。"
       case .duplicate: return "发现重复的启动配置，未作更改。请重新安装应用后再试。"
       }

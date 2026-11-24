@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { applyTimezone, dataDirOf, timezoneStatus } from "./hub-json.ts";
+import { httpOrigin } from "./devices/http-origin.ts";
 import type { HubDB as Database } from "./db.ts";
 
 /** 错误消息可能夹带路径、凭据或记录正文。 */
@@ -132,6 +133,8 @@ async function serve(args: string[] = []): Promise<void> {
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, name] = argv;
+  if (command === "history-export") return (await import("./history-export.ts")).runHistoryExport(argv.slice(1));
+  if (command === "history-reconcile") return (await import("./history-reconcile.ts")).historyReconcileCommand(argv.slice(1));
   if (command === "serve") return serve(argv.slice(1));
   if (command === "run") {
     const localStatusPort = parseLocalStatusPort(argv.slice(1));
@@ -150,21 +153,22 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "pair") {
-    let role: string | undefined;
-    let relayUrl: string | undefined;
-    for (let i = 1; i < argv.length; i++) {
-      const flag = argv[i];
-      if (flag === "--role") {
-        if (role !== undefined || i + 1 >= argv.length) throw new Error("用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]");
-        role = argv[++i];
-      } else if (flag === "--relay") {
-        if (relayUrl !== undefined || i + 1 >= argv.length) throw new Error("用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]");
-        relayUrl = argv[++i];
-      } else {
-        throw new Error("用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]");
+    const usage = "用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>] [--address <origin>]";
+    const flags = new Map<string, string>();
+    for (let i = 1; i < argv.length; i += 2) {
+      const flag = argv[i]!, value = argv[i + 1];
+      if (!["--role", "--relay", "--address"].includes(flag) || flags.has(flag) || !value || value.startsWith("--")) {
+        throw new Error(usage);
       }
+      flags.set(flag, value);
     }
-    if (!role) throw new Error("用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]");
+    const role = flags.get("--role"), relayUrl = flags.get("--relay"), address = flags.get("--address");
+    if (!role) throw new Error(usage);
+    if (address !== undefined && !httpOrigin(address)) {
+      console.error("--address 必须是 http 或 https origin");
+      process.exitCode = 1;
+      return;
+    }
     applyTimezone(process.env, dataDirOf());
     const [{ loadConfig }, { HubDB, InputError }, { DeviceService }, { WireError }] = await Promise.all([
       import("./config.ts"), import("./db.ts"), import("./devices/service.ts"), import("./devices/envelope.ts"),
@@ -173,7 +177,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
     const devices = new DeviceService(db, config.lanPort);
     try {
-      const invite = await devices.createPairing({ role, relayUrl, openListener: false });
+      const invite = await devices.createPairing({ role, relayUrl, address, openListener: false });
       console.log(invite.uri);
       process.stderr.write(`已创建 ${invite.role} 配对邀请，有效期至 ${invite.expires_at}（仅可使用一次）\n`);
     } catch (error) {
@@ -395,7 +399,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     finally { db.close(); }
     return;
   }
-  if (command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts run | serve [--local-status-port <port>] | pair --role <collect|view|admin> [--relay <url>] | devices list|set-role|remove | init | open [--print] | keys export|import-db-key | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url> | --transport stdio] [--device <id>] -- <插件命令...>");
+  if (command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts run | serve [--local-status-port <port>] | pair --role <collect|view|admin> [--relay <url>] [--address <origin>] | devices list|set-role|remove | init | open [--print] | keys export|import-db-key | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url> | --transport stdio] [--device <id>] -- <插件命令...>");
   if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
   let runPluginDevice: string | undefined;
   if (command === "run-plugin") {

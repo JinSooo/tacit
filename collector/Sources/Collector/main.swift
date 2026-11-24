@@ -13,23 +13,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   init(config: Config) { self.config = config }
   let toggles = SourceToggles(store: UserDefaults.standard)
   lazy var sources = DataSourceRegistry(toggles: toggles)
+  lazy var remoteAccess = RemoteDeviceAccess(dataDirectory: config.dataDir, writeGate: switchWriteGate)
   lazy var deviceSession = HostDeviceSession(
     origin: { [config] in config.hubURL },
     files: LocalDeviceLink.Files(directory: config.dataDir),
-    keys: .keychain
+    keys: .keychain, remoteAccess: remoteAccess
   )
-  lazy var hub = HubClient(config: config, deviceSession: deviceSession, onHealthEvent: { [weak self] in
+  let switchWriteGate = RemoteSwitchWriteGate()
+  lazy var remotePairing = RemotePairing(dataDirectory: config.dataDir)
+  lazy var hub = HubClient(config: config, deviceSession: deviceSession, writeGate: switchWriteGate, onHealthEvent: { [weak self] in
     nonisolated(unsafe) let delegate = self
     DispatchQueue.main.async { delegate?.writeStatus() }
-  }) { [weak self] _ in
+  }, onLinked: { [weak self] _ in
     nonisolated(unsafe) let delegate = self
-    delegate?.viewerDataSource.activateIfLinked()
+    DispatchQueue.main.async {
+      guard let source = delegate?.viewerDataSource else { return }
+      Task { await source.activateIfLinked() }
+    }
     DispatchQueue.main.async { delegate?.writeStatus(forceReport: true) }
-  }
-  lazy var api = HubAPI(base: { [config] in config.hubURL }, token: { [config] in config.token },
-                        deviceAction: { [weak self] op, body, timeout in
-    try await self?.viewerDataSource.sendAction(op: op, body: body, timeout: timeout)
   })
+  lazy var api = HubAPI(base: { [config] in config.hubURL }, token: { [config] in config.token },
+                        deviceAction: { [weak self] op, body, timeout, route in
+    try await self?.viewerDataSource.sendAction(op: op, body: body, timeout: timeout, on: route)
+  }, hubRoute: { [config] in try config.hubRoute() }, writeGate: switchWriteGate)
   lazy var viewerDataSource: AdaptiveViewerDataSource = {
     let widgetURL = WidgetSnapshot.fileURL.flatMap { file in
       file.deletingLastPathComponent().deletingLastPathComponent().path == config.dataDir.standardizedFileURL.path ? file : nil
@@ -48,26 +54,217 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
           delegate.viewer.store.applyRemoteSync(reloadViews: needsReload)
         }
       },
-      onWipe: { [weak self] _ in
+      onWipe: { [weak self] reason in
         let delegate = self
         await MainActor.run {
           guard let delegate, !delegate.terminating else { return }
-          delegate.widgetPublisher?.clearSnapshot()
+          if !delegate.config.allowsLocalHub, reason == .deviceRemoved || reason == .roleDowngraded {
+            delegate.resetViewerForBindingChange()
+          } else {
+            delegate.widgetPublisher?.clearSnapshot()
+          }
         }
+      },
+      remoteAccess: remoteAccess,
+      onBindingChanged: { [weak self] in
+        let delegate = self
+        await MainActor.run { delegate?.resetViewerForBindingChange() }
       }
     )
   }()
   @MainActor private lazy var deviceDiscovery = DeviceDiscovery(advertiser: BonjourDeviceAdvertiser())
-  lazy var audio = AudioCoordinator(config: config, deviceSession: deviceSession)
-  lazy var plugins = PluginScheduler(config: config, deviceSession: deviceSession)
+  lazy var audio = AudioCoordinator(config: config, deviceSession: deviceSession, writeGate: switchWriteGate)
+  lazy var plugins = PluginScheduler(config: config, deviceSession: deviceSession, writeGate: switchWriteGate)
+  private lazy var loginStartup = LoginStartup(home: FileManager.default.homeDirectoryForCurrentUser, dataDir: config.dataDir,
+                                              beginWrite: switchWriteGate.begin, endWrite: switchWriteGate.end)
+  @MainActor lazy var historyImporter = HistoryImporter(directory: config.dataDir, gate: switchWriteGate, operations: .init(
+    binding: { [config] in try HubBinding.read(from: config.dataDir) },
+    budget: { [unowned self] route in
+      guard let session = try await self.deviceSession.connection(for: route)?.remoteSession else {
+        throw HistoryImporter.Failure.offline
+      }
+      return try await session.historyImportRecordBudget()
+    },
+    send: { [unowned self] route, op, body in
+      guard let connection = try await self.deviceSession.connection(for: route) else { throw HistoryImporter.Failure.offline }
+      return try await connection.client.send(op: op, body: body, timeout: 12).bodyData
+    },
+    export: { [config] cursor, limit in
+      guard let runtime = config.repo else { throw FrozenHistoryCommands.Failure.subprocess }
+      return try await FrozenHistoryCommands(runtime: runtime, bun: config.bun, directory: config.dataDir)
+        .export(after: cursor, limit: limit)
+    },
+    apply: { [config] changes in
+      guard let runtime = config.repo else { throw FrozenHistoryCommands.Failure.subprocess }
+      try await FrozenHistoryCommands(runtime: runtime, bun: config.bun, directory: config.dataDir).apply(changes)
+    },
+    mayImport: { [unowned self] route in await self.hub.mayImportHistory(on: route) },
+    deviceID: { [config] remote in try RemoteDeviceLink.read(from: config.dataDir, identity: remote).device_id }
+  ))
+
+  func previewLocalHistory() async throws -> LocalHistoryPreview {
+    try await LocalHistoryPreview.load(config: config)
+  }
+
+  func previewSwitchBackPendingCount() async throws -> Int {
+    try await hub.switchBackPendingCount(on: config.hubRoute())
+  }
+
+  @MainActor private func returnToLocal(allowEmptyHistory: Bool) async throws {
+    let backup = try historyImporter.backupInfo()
+    let empty = backup.recovery == .emptyLocalBackend
+    guard empty == allowEmptyHistory else { throw RemoteSwitch.Failure.reconciliationIncomplete }
+    try await remoteSwitch.switchBack(allowEmptyHistory: empty, preflight: { [unowned self] _ in
+      let current = try self.historyImporter.backupInfo()
+      return current.recovery == backup.recovery
+    }, reconcile: { [unowned self] route in
+      let result = await self.historyImporter.reconcileForReturn(on: route)
+      return result == (empty ? .emptyLocalBackend : .reconciled)
+    })
+    await historyImporter.tick()
+  }
+
+  @MainActor lazy var remoteSwitch = RemoteSwitch(
+    persistence: DiskRemoteSwitchPersistence(directory: config.dataDir),
+    services: LaunchdRemoteSwitchServices(config: config, startup: loginStartup),
+    runtime: .init(gate: switchWriteGate, settled: { [unowned self] in
+      guard await remoteAccess.isMailboxIdleForSwitch(), await audio.isSettledForSwitch() else { return false }
+      return try await hub.settleForSwitch()
+    }, suspendBonjour: { [unowned self] suspended in
+      deviceDiscovery.setSuspended(suspended)
+    }, publish: { [unowned self] previousLocal, from, to, publish in
+      try await hub.publishSwitch(previousLocal: previousLocal, from: from, to: to) {
+        try self.audio.publishSwitch(to: to, commit: publish)
+      }
+    }, bindingChanged: { [unowned self] in
+      await viewerDataSource.refreshBindingAfterSwitch()
+      viewer.store.remoteBackend?.refreshContext()
+      Task { @MainActor [weak self] in await self?.historyImporter.tick() }
+    }, finishCommit: { [unowned self] local, remote in
+      try await hub.finishSwitchToRemote(from: local, to: remote)
+    }, finishReturn: { [unowned self] previousLocal, remote, local in
+      try await hub.finishSwitchBack(previousLocal: previousLocal, remote: remote, local: local)
+    }),
+    pairing: remotePairing
+  )
+  @MainActor private func makeRemoteBackendSettings() -> RemoteBackendSettingsModel {
+    let directory = config.dataDir
+    let persistence = DiskRemoteSwitchPersistence(directory: directory)
+    return RemoteBackendSettingsModel(operations: .init(
+      context: { [unowned self] in
+        let binding = try persistence.binding()
+        let replacement = try remotePairing.retainedReplacement(for: binding)
+        let link = replacement?.collectorLink ?? binding.remote.flatMap { try? RemoteDeviceLink.read(from: directory, identity: $0) }
+        var frozen = false
+        do { try remoteAccess.validate(binding.route) }
+        catch RemoteDeviceAccess.Failure.frozen { frozen = true }
+        return .init(binding: binding, link: link, checkpoint: try persistence.checkpoint()?.step,
+                     agentNeedsDirect: binding.remote.map { !persistence.hasAgentLink(for: $0) } ?? false, frozen: frozen,
+                     rePairing: try remoteSwitch.rePairingState(),
+                     retained: binding.phase == .local ? (try? remotePairing.retainedRemotes()) ?? [] : [],
+                     cleanupRequired: !((try? remotePairing.remotesRequiringRePairingCleanup()) ?? []).isEmpty,
+                     preparationUsesMailbox: try remotePairing.preparedUsesMailbox(binding))
+      },
+      prepare: { [unowned self] invitation, address, delivered in
+        let parsed = try DevicePairingInvitation.parse(invitation)
+        let identity = try HubBinding.Remote(hubID: parsed.hubID, hubPublicKey: parsed.hubPublicKeyBase64URL)
+        let last = try? RemoteDeviceLink.read(from: directory, identity: identity).addresses.first
+        return try await remotePairing.prepare(invitation: invitation, deviceName: Host.current().localizedName ?? "Mac",
+          lastSuccessfulAddress: last, manualAddress: address, onMailboxDelivered: delivered)
+      },
+      prepareAgain: { [unowned self] invitation, address, delivered in
+        try await remotePairing.prepareRePairing(invitation: invitation, deviceName: Host.current().localizedName ?? "Mac",
+          manualAddress: address, onMailboxDelivered: delivered)
+      },
+      preparedAgain: { [unowned self] in try await remotePairing.preparedRePairing() },
+      previewSwitch: { [unowned self] in
+        async let history = self.previewLocalHistory()
+        guard let devices = try await api.deviceSettings() else { throw HubError.needsLocalHub }
+        return try await .init(history: history, phones: devices.displayedDevices.filter { $0.platform == "android" },
+                               path: HistoryBackupFiles(directory: directory).database.path)
+      },
+      commit: { [unowned self] binding, prepared in
+        if let prepared { try await remoteSwitch.commit(prepared: prepared) }
+        else if let remote = binding.remote {
+          let replacement = try remotePairing.retainedReplacement(for: binding)
+          let needsDirect = replacement.map { $0.agentLink == nil } ?? !persistence.hasAgentLink(for: remote)
+          try await remoteSwitch.commit(prepared: binding, agentNeedsDirectConnection: needsDirect)
+        } else { throw HubBinding.Failure.changed }
+      },
+      commitAgain: { [unowned self] in try await remoteSwitch.commitRePairing($0) },
+      cancel: { [unowned self] in try await remotePairing.cancelPreparation(replacing: $0) },
+      reauthenticate: { [unowned self] manual in
+        let route = try remoteAccess.route()
+        guard let identity = route.remote else { throw RemoteDeviceAccess.Failure.unavailable }
+        let link = try RemoteDeviceLink.read(from: directory, identity: identity)
+        let endpoint = await ProjectionEndpointSelector.select(localPort: nil, inviteAddresses: link.addresses,
+          manualAddresses: [manual].compactMap { $0 }, expectedHubID: identity.hub_id) { url, hubID in
+            guard let direct = try? RemotePairing.DirectEndpoint(origin: url),
+                  let hello = try? await direct.hello() else { return false }
+            return hello.hubID == hubID && hello.v == DeviceProtocol.version
+          }
+        guard case .direct(let url) = endpoint else { throw RemoteDeviceAccess.Failure.unavailable }
+        try await remoteAccess.reauthenticate(route, transport: DirectDeviceTransport(origin: url, requestTimeout: 5), authenticatedAddress: url)
+        await viewerDataSource.refreshBindingAfterSwitch()
+        hub.flush()
+      },
+      channel: { [unowned self] route in
+        guard let session = try await deviceSession.connection(for: route)?.remoteSession else { return .unavailable }
+        switch await session.connectionState() {
+        case .unavailable: return .unavailable
+        case .unconfirmed(.direct): return .unconfirmed(.direct)
+        case .unconfirmed(.relay): return .unconfirmed(.relay)
+        case .connected(.direct): return .connected(.direct)
+        case .connected(.relay): return .connected(.relay)
+        }
+      },
+      status: { [unowned self] in
+        let result = await api.diagnosticStatus()
+        guard let data = result.status else { throw HubError.remoteUnavailable }
+        return try HubJSON.decoder().decode(RemoteBackendStatus.self, from: data)
+      },
+      pause: { [unowned self] paused in
+        do { try await historyImporter.setPaused(paused); await historyImporter.refreshPresentation() }
+        catch { await historyImporter.refreshPresentation(operationError: error); throw error }
+      },
+      deleteBackup: { [unowned self] in
+        do { try await historyImporter.deleteBackup() }
+        catch { await historyImporter.refreshPresentation(operationError: error); throw error }
+      },
+      previewReturn: { [unowned self] in try await previewSwitchBackPendingCount() },
+      switchBack: { [unowned self] in try await returnToLocal(allowEmptyHistory: $0) },
+      cancelReturn: { [unowned self] in try await remoteSwitch.cancelSwitchBack() },
+      recover: { [unowned self] in try await remoteSwitch.recover() },
+      reconnect: { [unowned self] link, address in
+        let identity = try HubBinding.Remote(hubID: link.hub_id, hubPublicKey: link.hub_pk)
+        return try await remotePairing.prepareRetained(remote: identity, manualAddress: address)
+      },
+      cancelRePairing: { [unowned self] in try await remoteSwitch.cancelRePairing() },
+      retryIssue: { [unowned self] id in
+        try await historyImporter.retryIssue(id: id)
+        Task { @MainActor [weak self] in await self?.historyImporter.tick() }
+      },
+      keepIssue: { [unowned self] in try await historyImporter.abandonIssue(id: $0) },
+      dismissCleanup: { [unowned self] in try await remotePairing.dismissRePairingCleanup() }
+    ))
+  }
+
   lazy var viewer: ViewerWindow = MainActor.assumeIsolated {
-    let store = ViewerStore(api: api, dataSource: viewerDataSource, device: config.device, controls: self)
+    let store = ViewerStore(api: api, dataSource: viewerDataSource, device: config.device, controls: self,
+                            loginStartup: loginStartup, agentNeedsDirectConnection: { [weak self] in
+      self?.remoteSwitch.agentNeedsDirectConnection ?? false
+    })
+    let backend = makeRemoteBackendSettings()
+    store.remoteBackend = backend
+    historyImporter.onChange = { [weak backend] progress, backup in
+      backend?.updateImport(progress, backup: backup)
+    }
     store.onRevision = { [weak self] in
       self?.viewerDataSource.notifyLocalWrite()
       self?.widgetPublisher?.refresh(invalidate: true)
     }
     store.onDeviceSettingsUpdate = { [weak self] settings, invitationHubId in
-      guard let self, !self.terminating else { return }
+      guard let self, !self.terminating, self.config.allowsLocalHub else { return }
       self.deviceDiscovery.update(settings, invitationHubId: invitationHubId)
     }
     let window = ViewerWindow(store: store)
@@ -77,6 +274,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     return window
   }
+  @MainActor private func resetViewerForBindingChange() {
+    guard !terminating else { return }
+    widgetPublisher?.clearSnapshot()
+    panel.close()
+    viewer.store.resetForBindingChange()
+    // Replace the root to discard view-local loaders and expanded raw records.
+    viewer.replaceRoot()
+    if !config.allowsLocalHub { deviceDiscovery.update(nil) }
+    widgetPublisher?.refresh()
+  }
+
   private var widgetPublisher: WidgetSnapshotPublisher?
   private var readyForTimelineURL = false
   private var pendingTimelineDay: Date?
@@ -122,13 +330,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func applicationDidFinishLaunching(_ n: Notification) {
     terminationSignal = TerminationSignal { NSApp.terminate(nil) }
-    let startup = LoginStartup(home: FileManager.default.homeDirectoryForCurrentUser, dataDir: config.dataDir)
-    guard AppSetup.start(config: config, startup: startup) else { return }
+    Task { @MainActor [weak self] in
+      guard let self, AppSetup.checkPlacement() else { return }
+      do { try await self.remoteSwitch.recover() }
+      catch { NSLog("record-anything: %@", error.localizedDescription) }
+      guard !self.terminating else { return }
+      self.finishLaunchingAfterRecovery()
+    }
+  }
+
+  @MainActor private func finishLaunchingAfterRecovery() {
+    AppSetup.start(config: config, startup: loginStartup, writeGate: switchWriteGate)
+    viewer.store.remoteBackend?.refreshContext()
+    if let failure = remoteSwitch.lastFailure { viewer.store.remoteBackend?.error = failure }
     MainActor.assumeIsolated {
       WindowVisibility.onChange = { [weak self] _ in self?.updateSyncForeground() }
     }
-    viewerDataSource.activateIfLinked()
+    let source = viewerDataSource
+    Task { await source.activateIfLinked() }
+    let pairing = remotePairing
+    Task { try? await pairing.cleanupExpiredPreparations() }
     hub.flush()
+    Task { @MainActor [weak self] in await self?.historyImporter.tick() }
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     // 左键弹面板，右键（或按住 control 点）弹菜单。菜单不常驻在 statusItem 上，否则左键也会弹菜单。
     statusMenu.delegate = self
@@ -140,12 +363,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if audio.initiallyBlocked { toggles.setEnabled("audio", false) }
     sources.launch(paused: paused)
     updateIcon()
-    MainActor.assumeIsolated { deviceDiscovery.refreshIfDue(api: api) }
+    MainActor.assumeIsolated {
+      if config.allowsLocalHub { deviceDiscovery.refreshIfDue(api: api) }
+      else { deviceDiscovery.update(nil) }
+    }
 
     timers = [
       Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.tick() },
       Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateAudio() },
-      Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.hub.flush() },
+      Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        Task { await source.refreshBinding() }
+        self?.hub.flush()
+        Task { @MainActor [weak self] in await self?.historyImporter.tick() }
+      },
       Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.writeStatus() },
       Timer.scheduledTimer(withTimeInterval: config.pluginInterval, repeats: true) { [weak self] _ in self?.plugins.runAll() },
     ]
@@ -157,7 +387,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
        let plugins = Bundle.main.builtInPlugInsURL,
        FileManager.default.fileExists(atPath: plugins.appendingPathComponent("TacitWidget.appex").path) {
       MainActor.assumeIsolated {
-        widgetPublisher = WidgetSnapshotPublisher(dataSource: viewerDataSource, file: file)
+        widgetPublisher = WidgetSnapshotPublisher(dataSource: viewerDataSource, file: file,
+                                                  hubRoute: { [config] in try config.hubRoute() })
         widgetPublisher?.refresh()
       }
       ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -531,7 +762,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var statusReporting = false
 
   func writeStatus(forceReport: Bool = false) {
-    MainActor.assumeIsolated { deviceDiscovery.refreshIfDue(api: api) }
+    MainActor.assumeIsolated {
+      if config.allowsLocalHub { deviceDiscovery.refreshIfDue(api: api) }
+      else { deviceDiscovery.update(nil) }
+    }
     let enabledSources = Dictionary(uniqueKeysWithValues: DataSourceCatalog.all.map { ($0.id, enabled($0.id)) })
     captureQueue.async { [self] in
       let nowDate = Date()
@@ -567,8 +801,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       statusReporting = true
       let deviceSession = self.deviceSession
       nonisolated(unsafe) weak let weakSelf = self
+      let gate = switchWriteGate
       Task {
-        let sent = (try? await deviceSession.send(op: "collector.status", body: report)) != nil
+        let sent: Bool
+        if (try? gate.begin()) != nil {
+          sent = (try? await deviceSession.send(op: "collector.status", body: report)) != nil
+          gate.end()
+        } else {
+          sent = false
+        }
         weakSelf?.captureQueue.async {
           guard let self = weakSelf else { return }
           self.statusReporting = false

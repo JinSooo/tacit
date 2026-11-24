@@ -153,6 +153,7 @@ struct DeviceSettingsSection: View {
   }
 
   private func loadSettings() async {
+    guard store.canManageBackend, !Task.isCancelled else { return }
     do {
       let result = try await store.api.deviceSettings()
       try Task.checkCancellation()
@@ -168,7 +169,7 @@ struct DeviceSettingsSection: View {
   }
 
   private func createInvitation(_ role: DeviceSettings.Role, platform: String) async {
-    guard !busy else { return }
+    guard !busy, store.canManageBackend else { return }
     busy = true
     defer { busy = false }
     error = nil
@@ -182,6 +183,7 @@ struct DeviceSettingsSection: View {
         return
       }
       settings = before
+      guard store.canManageBackend else { return }
       let invitation = try await store.api.createDeviceInvitation(role: role.rawValue)
       guard let expires = ViewerTime.parse(invitation.expiresAt) else {
         throw HubError(message: "邀请有效期格式错误", status: 0)
@@ -201,7 +203,7 @@ struct DeviceSettingsSection: View {
   private func waitForDevice(_ active: Session) async {
     // 第一次读打开邀请后的监听状态，之后只用两秒轮询确认配对结果。
     var updateDiscovery = true
-    while !Task.isCancelled {
+    while !Task.isCancelled && store.canManageBackend {
       if !busy {
         do {
           let result = try await store.api.deviceSettings()
@@ -250,7 +252,7 @@ struct DeviceSettingsSection: View {
   }
 
   private func cancelInvitation() async {
-    guard !busy, connectedDevice == nil else { return }
+    guard !busy, store.canManageBackend, connectedDevice == nil else { return }
     busy = true
     defer { busy = false }
     sheetError = nil
@@ -270,7 +272,7 @@ struct DeviceSettingsSection: View {
   }
 
   private func mutate(failure: String, operation: () async throws -> Void) async {
-    guard !busy else { return }
+    guard !busy, store.canManageBackend else { return }
     busy = true
     defer { busy = false }
     error = nil

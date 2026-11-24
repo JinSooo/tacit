@@ -11,15 +11,16 @@ import { projectionHead, pruneProjection, resetProjection, relayProjectionBytes 
 import type { ProjectionPage } from "../src/devices/projection.ts";
 import { dayMs, type RelayConfig } from "../src/devices/relay-store.ts";
 import { startServer } from "../src/server.ts";
+import { suite } from "../src/devices/envelope.ts";
 import { decodePairing, DeviceClient, type ResponseEnvelope } from "../src/devices/client.ts";
 import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 
 const path = "/v1/settings/relay";
 const id = () => randomBytes(16).toString("base64url");
 
-async function hubFixture(restart?: () => void) {
+async function hubFixture(restart?: () => void, ports?: { local: number; lan: number }) {
   const ctx = setup();
-  const probe = Bun.serve({ hostname: "0.0.0.0", port: 0, fetch: () => new Response() });
+  const probe = Bun.serve({ hostname: "0.0.0.0", port: ports?.lan ?? 0, fetch: () => new Response() });
   const lanPort = probe.port!;
   await probe.stop(true);
   writeFileSync(join(ctx.dir, "hub.json"), JSON.stringify({ lan_port: lanPort }));
@@ -27,7 +28,7 @@ async function hubFixture(restart?: () => void) {
   let key: string | null = null;
   const credentials = new Map<string, string>();
   const options = {
-    db: ctx.db, token: ctx.config.token, agentToken: "fixture-agent-token", port: 0, settings: { dataDir: ctx.dir, restart, probePort: async () => {} },
+    db: ctx.db, token: ctx.config.token, agentToken: "fixture-agent-token", port: ports?.local ?? 0, settings: { dataDir: ctx.dir, restart, probePort: async () => {} },
     deviceDeps: {
       name: "测试中枢", addresses: () => ["192.0.2.2"], now: () => now,
       keys: { read: () => key, write: (value: string) => { key = value; } },
@@ -181,8 +182,8 @@ test("管理令牌隔离，真实信箱上传、跨重启防重放并丢弃错�
   } finally { await hub.dispose(); relay.stop(true); }
 });
 
-test("信箱配对回复保留到手机读删，直连配对也发放设备信箱", async () => {
-  const hub = await hubFixture(), relay = relayFixture();
+test("配对回执跨重启和直连/信箱可恢复，两个临时信箱到期关闭", async () => {
+  const hub = await hubFixture(undefined, { local: 48617, lan: 48616 }), relay = relayFixture({ port: 48618 });
   try {
     await configure(hub, relay.url);
     const { pairing, phone } = await hub.invite();
@@ -190,7 +191,8 @@ test("信箱配对回复保留到手机读删，直连配对也发放设备信�
     expect(temporary.url).toBe(relay.url);
     expect(typeof temporary.token).toBe("string");
     expect((await remote(temporary, temporary.up)).status).toBe(403);
-    const nonce = await submit(temporary, phone, "pair", await phone.pairingBody(pairing), hub.time());
+    const body = await phone.pairingBody(pairing);
+    const nonce = await submit(temporary, phone, "pair", body, hub.time());
     const paired = await reply<{ device_id: string; relay: RelayConfig }>(phone, temporary, nonce);
     expect(paired).toMatchObject({ status: 200, body: { relay: { url: relay.url } } });
     phone.device = paired.body.device_id;
@@ -201,11 +203,44 @@ test("信箱配对回复保留到手机读删，直连配对也发放设备信�
     expect((await remote(temporary, temporary.down, "DELETE", nonce)).status).toBe(200);
     await hub.stop();
     hub.start();
-    await eventually(async () => (await remote(temporary, temporary.down)).status === 401 || undefined);
-    const direct = await hub.invite();
-    const directReply = await direct.phone.send<{ relay: RelayConfig }>("pair", await direct.phone.pairingBody(direct.pairing));
-    expect(directReply).toMatchObject({ status: 200, body: { relay: { url: relay.url } } });
-    await eventually(async () => (await remote(direct.pairing.relay!, direct.pairing.relay!.down)).status === 401 || undefined);
+    const retryDirect = new DeviceClient(phone.hub, phone.keys, hub.lan);
+    expect(await retryDirect.send("pair", body, { nonce })).toEqual(paired);
+
+    const inviteResponse = await hub.admin("/v1/settings/devices/pairing", "POST", { role: "admin" });
+    const directInvite = decodePairing((await inviteResponse.json() as { uri: string }).uri);
+    const direct = await DeviceClient.fromInvite(directInvite, hub.lan);
+    const directBody = { ...await direct.pairingBody(directInvite), name: "合成管理 Mac", platform: "mac" };
+    type AdminReceipt = { device_id: string; hub_id: string; relay: RelayConfig };
+    const directReply = await direct.send<AdminReceipt>("pair", directBody);
+    expect(directReply).toMatchObject({ status: 200, body: { role: "admin", relay: { url: relay.url } } });
+    const retryBox = directInvite.relay!;
+    const retryNonce = await submit(retryBox, direct, "pair", directBody, hub.time());
+    expect(await reply(direct, retryBox, retryNonce)).toEqual(directReply);
+    expect(hub.db.db.prepare("SELECT id FROM devices").all()).toHaveLength(2);
+
+    direct.device = directReply.body.device_id;
+    const agent = await suite.kem.generateKeyPair();
+    const agent_pk = Buffer.from(await suite.kem.serializePublicKey(agent.publicKey)).toString("base64url");
+    const agentBox = directReply.body.relay;
+    const enrollment = await reply<Record<string, unknown>>(direct, agentBox, await submit(agentBox, direct, "agent.enroll", { agent_pk }, hub.time()));
+    expect(enrollment).toEqual({ status: 200, body: { device_id: expect.stringMatching(/^agent-/), hub_id: directInvite.hub_id } });
+    expect(await direct.send("agent.enroll", { agent_pk })).toEqual(enrollment);
+    expect(hub.db.db.prepare("SELECT id FROM devices WHERE role='agent'").all()).toHaveLength(1);
+    // A1 审查回归：低阶公钥不能登记；换信箱时只直连的 AI 身份不分配信箱。
+    expect((await direct.send("agent.enroll", { agent_pk: Buffer.alloc(32).toString("base64url") })).status).toBe(400);
+    const other = relayFixture();
+    try {
+      await configure(hub, other.url);
+      expect(hub.db.db.prepare("SELECT b.device FROM relay_mailboxes b JOIN devices d ON d.id=b.device WHERE d.role='agent'").all()).toEqual([]);
+      expect(hub.db.db.prepare("SELECT b.device FROM relay_mailboxes b WHERE b.device=?").all(direct.device)).not.toEqual([]);
+    } finally { await configure(hub, relay.url); other.stop(true); }
+
+    hub.advance(10 * 60_000);
+    await hub.stop();
+    hub.start();
+    for (const box of [temporary, retryBox]) {
+      await eventually(async () => (await remote(box, box.down)).status === 401 || undefined);
+    }
   } finally { await hub.dispose(); relay.stop(true); }
 });
 
@@ -311,7 +346,7 @@ test("v13 加密数据库升级到 v16，保留配对记录并清理迁移备份
     ctx.db.close();
     const db = new HubDB(ctx.file, ctx.config.dbKey);
     try {
-      expect(db.db.pragma("user_version", { simple: true })).toBe(18);
+      expect(db.db.pragma("user_version", { simple: true })).toBe(19);
       expect(db.db.prepare("SELECT id FROM devices").all()).toEqual([{ id: "android-abcd2345" }]);
       expect(db.db.prepare("SELECT * FROM device_nonces").all()).toEqual([]);
       expect(existsSync(ctx.file + ".migration-v13.bak")).toBe(false);
@@ -759,4 +794,44 @@ test("信箱查看窗口 op 走共享设置逻辑，禁私密读取，按完整�
     await hub.dispose();
     await relay.server.stop(true);
   }
+}, 15_000);
+
+test("历史导入经真实信箱在同一事务留下上行收据，换 nonce 重放与超限有确定回复", async () => {
+  const limits = { ...defaultLimits };
+  const hub = await hubFixture(undefined, { local: 48622, lan: 48623 }), relay = relayFixture({ port: 48624, limits });
+  try {
+    await configure(hub, relay.url);
+    const admin = await hub.pair(true);
+    expect((await hub.admin("/v1/settings/devices/" + admin.device + "/role", "PUT", { role: "admin" })).status).toBe(200);
+    const { hub_id } = await (await hub.admin("/v1/settings/devices")).json() as { hub_id: string };
+    const box = await deviceConfig(admin);
+    const send = async <T>(op: string, args: object) => reply<T>(admin, box, await submit(box, admin, op, args, hub.time()));
+    const started = await send<{ session_id: string }>("history.import.begin", { hub_id, snapshot_id: "c".repeat(64),
+      identities: [{ device: "mac", kind: "mac", sources: ["mac.screen"] }] });
+    expect(started.status).toBe(200);
+    const record = fixture({ body: "虚构的信箱导入正文" });
+    const batch = { session_id: started.body.session_id, batch_number: 1, records: [record] };
+    await hub.stop();
+    const nonce = await submit(box, admin, "history.import.batch", batch, hub.time());
+    limits.space_bytes = 1;
+    hub.start();
+    const pending = await eventually(() => hub.db.db.prepare<[string], { result: string }>(
+      "SELECT result FROM relay_receipts WHERE id=?").get(nonce));
+    expect(hub.db.get(record.id)?.body).toBe(record.body);
+    expect(JSON.parse(pending.result)).toMatchObject({
+      status: 200, body: { items: [{ id: record.id, status: "added", remote_id: record.id }] },
+    });
+    await hub.stop();
+    limits.space_bytes = defaultLimits.space_bytes;
+    hub.start();
+    const response = await reply(admin, box, nonce);
+    expect(response).toEqual(JSON.parse(pending.result));
+    expect(await send("history.import.batch", batch)).toEqual(response);
+    const records = Array.from({ length: 4 }, () => fixture({ body: "g".repeat(170_000) }));
+    expect(await send("history.import.batch", { ...batch, batch_number: 2, records }))
+      .toEqual({ status: 413, body: { error: "batch_too_large" } });
+    expect(hub.db.db.prepare("SELECT COUNT(*) AS n FROM history_import_batches").get()).toEqual({ n: 1 });
+    expect(hub.db.get(record.id)?.body).toBe(record.body);
+    expect(hub.db.get(records[0]!.id)).toBeNull();
+  } finally { await hub.dispose(); await relay.stop(); }
 }, 15_000);

@@ -29,7 +29,7 @@ hdiutil create -quiet -volname "Tacit $VERSION" -srcfolder "$STAGE" -fs HFS+ -fo
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MNT" "$DMG"
 codesign --verify --deep --strict "$MNT/Tacit.app"
 [ -x "$MNT/Tacit.app/Contents/PlugIns/TacitWidget.appex/Contents/MacOS/TacitWidget" ]
-"$MNT/Tacit.app/Contents/MacOS/bun" --version >/dev/null
+"$MNT/Tacit.app/Contents/Helpers/Tacit" --version >/dev/null
 [ -f "$MNT/Tacit.app/Contents/Resources/runtime/hub/src/cli.ts" ] && [ -f "$MNT/Tacit.app/Contents/Resources/uninstall.sh" ]
 hdiutil detach -quiet "$MNT"
 

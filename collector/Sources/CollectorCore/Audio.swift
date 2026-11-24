@@ -112,9 +112,12 @@ public enum AudioPolicy {
   private static let fractional: ISO8601DateFormatter = {
     let f = ISO8601DateFormatter(); f.formatOptions.insert(.withFractionalSeconds); return f
   }()
-  public static func shouldDelete(_ meta: AudioMetadata, now: Date, retentionDays: Int, purgeBefore: Date? = nil) -> Bool {
+  public static func shouldDelete(_ meta: AudioMetadata, now: Date, retentionDays: Int, purgeBefore: Date? = nil,
+                                  preservingPending: Bool = false) -> Bool {
     guard meta.status != .open, let end = date(meta.t_end) else { return false }
-    return (retentionDays > 0 && end < now.addingTimeInterval(-Double(retentionDays) * 86400)) || purgeBefore.map { end < $0 } == true
+    if let purgeBefore, end < purgeBefore { return true }
+    if preservingPending, [.closed, .waiting_me, .failed].contains(meta.status) { return false }
+    return retentionDays > 0 && end < now.addingTimeInterval(-Double(retentionDays) * 86400)
   }
 }
 

@@ -149,6 +149,10 @@ public struct DevicePairingInvitation: Equatable, Sendable {
 
   /// 解析并校验 `tacit://pair?d=...` 邀请链接。
   public static func parse(_ input: String, now: Date = Date()) throws -> DevicePairingInvitation {
+    try parse(input, now: now, allowExpired: false)
+  }
+
+  static func parse(_ input: String, now: Date, allowExpired: Bool) throws -> DevicePairingInvitation {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let components = URLComponents(string: trimmed),
           components.scheme == "tacit",
@@ -204,7 +208,7 @@ public struct DevicePairingInvitation: Equatable, Sendable {
     guard let expiresAt = DeviceProtocol.parseRFC3339(wire.expires_at) else {
       throw DeviceClientError.invalidInvitation("邀请过期时间无效")
     }
-    guard expiresAt > now else {
+    guard allowExpired || expiresAt > now else {
       throw DeviceClientError.inviteExpired
     }
     if let role = wire.role, !["collect", "view", "admin"].contains(role) {
@@ -263,12 +267,16 @@ public struct PairedDevice: Equatable, Sendable {
   public let hubID: String
   public let name: String
   public let relay: DeviceRelayConfig?
+  public let role: String?
+  public let hubName: String?
 
-  public init(deviceID: String, hubID: String, name: String, relay: DeviceRelayConfig? = nil) {
+  public init(deviceID: String, hubID: String, name: String, relay: DeviceRelayConfig? = nil, role: String? = nil, hubName: String? = nil) {
     self.deviceID = deviceID
     self.hubID = hubID
     self.name = name
     self.relay = relay
+    self.role = role
+    self.hubName = hubName
   }
 }
 
@@ -293,9 +301,16 @@ public struct DeviceTransportResponse: Equatable, Sendable {
   public let statusCode: Int
   public let body: Data
 
+  let authenticatedNonce: String?
+
   public init(statusCode: Int, body: Data = Data()) {
+    self.init(statusCode: statusCode, body: body, authenticatedNonce: nil)
+  }
+
+  init(statusCode: Int, body: Data, authenticatedNonce: String?) {
     self.statusCode = statusCode
     self.body = body
+    self.authenticatedNonce = authenticatedNonce
   }
 }
 
@@ -471,7 +486,9 @@ private struct PairResponseBody: Decodable {
   let device_id: String
   let hub_id: String
   let name: String
+  let hub_name: String?
   let relay: DeviceRelayConfig?
+  let role: String?
 }
 
 /// 设备协议客户端：管理请求封包、响应解包、配对与错误分类，传输层与私钥存储均通过协议注入。
@@ -484,6 +501,9 @@ public actor DeviceClient {
   private let keyStore: any DeviceKeyStore
   private let transport: any DeviceTransport
   private let clock: @Sendable () -> Date
+  private let cachePrivateKey: Bool
+  private let validateRequest: @Sendable () throws -> Void
+  private let onAuthorizationFailure: (@Sendable () -> Void)?
   private var cachedPrivateKey: Curve25519.KeyAgreement.PrivateKey?
   private var isPairing = false
 
@@ -492,7 +512,10 @@ public actor DeviceClient {
     deviceID: String? = nil,
     keyStore: any DeviceKeyStore,
     transport: any DeviceTransport,
-    clock: @escaping @Sendable () -> Date = { Date() }
+    clock: @escaping @Sendable () -> Date = { Date() },
+    cachePrivateKey: Bool = true,
+    validateRequest: @escaping @Sendable () throws -> Void = {},
+    onAuthorizationFailure: (@Sendable () -> Void)? = nil
   ) throws {
     if let deviceID, !DeviceProtocol.isValidDeviceID(deviceID) {
       throw DeviceClientError.invalidRequest("设备编号格式无效")
@@ -503,6 +526,9 @@ public actor DeviceClient {
     self.keyStore = keyStore
     self.transport = transport
     self.clock = clock
+    self.cachePrivateKey = cachePrivateKey
+    self.validateRequest = validateRequest
+    self.onAuthorizationFailure = onAuthorizationFailure
   }
 
   public init(
@@ -510,10 +536,14 @@ public actor DeviceClient {
     deviceID: String? = nil,
     keyStore: any DeviceKeyStore,
     transport: any DeviceTransport,
-    clock: @escaping @Sendable () -> Date = { Date() }
+    clock: @escaping @Sendable () -> Date = { Date() },
+    cachePrivateKey: Bool = true,
+    validateRequest: @escaping @Sendable () throws -> Void = {},
+    onAuthorizationFailure: (@Sendable () -> Void)? = nil
   ) throws {
     let key = try DeviceEnvelope.publicKey(base64URL: hubPublicKeyBase64URL)
-    try self.init(hubPublicKey: key, deviceID: deviceID, keyStore: keyStore, transport: transport, clock: clock)
+    try self.init(hubPublicKey: key, deviceID: deviceID, keyStore: keyStore, transport: transport, clock: clock,
+                  cachePrivateKey: cachePrivateKey, validateRequest: validateRequest, onAuthorizationFailure: onAuthorizationFailure)
   }
 
   public init(
@@ -528,6 +558,9 @@ public actor DeviceClient {
     self.keyStore = keyStore
     self.transport = transport
     self.clock = clock
+    self.cachePrivateKey = true
+    self.validateRequest = {}
+    self.onAuthorizationFailure = nil
   }
 
   /// 读取或生成本设备私钥并返回 base64url 公钥。
@@ -545,6 +578,7 @@ public actor DeviceClient {
     if isRemoved {
       throw DeviceClientError.deviceRemoved(message: nil)
     }
+    try validateRequest()
     let currentDeviceID = deviceID
     let privateKey = try resolvePrivateKey(createIfMissing: currentDeviceID == nil)
     return try DeviceEnvelope.makeRequest(
@@ -591,6 +625,7 @@ public actor DeviceClient {
     if isRemoved {
       throw DeviceClientError.deviceRemoved(message: nil)
     }
+    try validateRequest()
     let currentDeviceID = deviceID
     let privateKey = try resolvePrivateKey(createIfMissing: currentDeviceID == nil)
     let sealed = try DeviceEnvelope.makeRequest(
@@ -609,6 +644,7 @@ public actor DeviceClient {
     if isRemoved {
       throw DeviceClientError.deviceRemoved(message: nil)
     }
+    try validateRequest()
     let currentDeviceID = deviceID
     let privateKey = try resolvePrivateKey(createIfMissing: currentDeviceID == nil)
     let sealed = try DeviceEnvelope.makeRequest(
@@ -648,48 +684,57 @@ public actor DeviceClient {
     deviceName: String,
     platform: DevicePlatform = .mac
   ) async throws -> PairedDevice {
-    if isRemoved {
-      throw DeviceClientError.deviceRemoved(message: nil)
-    }
-    guard deviceID == nil else {
-      throw DeviceClientError.invalidRequest("当前客户端已配对")
-    }
-    guard !isPairing else {
-      throw DeviceClientError.invalidRequest("配对正在进行中")
-    }
-    isPairing = true
-    defer { isPairing = false }
-    guard invitation.hubID == hubID,
-          invitation.hubPublicKeyData == hubPublicKey.rawRepresentation else {
+    try validatePair(invitation)
+    let key = try resolvePrivateKey(createIfMissing: true)
+    let sealed = try Self.makePairRequest(invitation: invitation, deviceName: deviceName,
+                                          platform: platform, publicKey: key.publicKey, timestamp: clock())
+    return try await pair(invitation: invitation, sealed: sealed)
+  }
+
+  static func makePairRequest(invitation: DevicePairingInvitation, deviceName: String,
+                              platform: DevicePlatform = .mac, publicKey: Curve25519.KeyAgreement.PublicKey,
+                              timestamp: Date) throws -> SealedDeviceRequest {
+    let name = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty, name.count <= 200 else { throw DeviceClientError.invalidRequest("设备名称无效") }
+    return try DeviceEnvelope.makeRequest(
+      op: "pair", body: PairRequestBody(code: invitation.code,
+        device_pk: DeviceEnvelope.publicKeyBase64URL(publicKey), name: name, platform: platform.rawValue),
+      deviceID: nil, hubPublicKey: try DeviceEnvelope.publicKey(base64URL: invitation.hubPublicKeyBase64URL),
+      senderPrivateKey: nil, timestamp: timestamp
+    )
+  }
+
+  private func validatePair(_ invitation: DevicePairingInvitation) throws {
+    if isRemoved { throw DeviceClientError.deviceRemoved(message: nil) }
+    guard deviceID == nil, !isPairing else { throw DeviceClientError.invalidRequest("当前客户端已配对或正在配对") }
+    guard invitation.hubID == hubID, invitation.hubPublicKeyData == hubPublicKey.rawRepresentation else {
       throw DeviceClientError.invalidInvitation("邀请所属中枢与当前客户端不一致")
     }
-    guard invitation.expiresAt > clock() else {
-      throw DeviceClientError.inviteExpired
-    }
-    let trimmedName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmedName.isEmpty, trimmedName.count <= 200 else {
-      throw DeviceClientError.invalidRequest("设备名称无效")
-    }
-    let privateKey = try resolvePrivateKey(createIfMissing: true)
-    let body = PairRequestBody(
-      code: invitation.code,
-      device_pk: DeviceEnvelope.publicKeyBase64URL(privateKey.publicKey),
-      name: trimmedName,
-      platform: platform.rawValue
-    )
-    let reply = try await send(op: "pair", body: body, as: PairResponseBody.self)
+    guard invitation.expiresAt > clock() else { throw DeviceClientError.inviteExpired }
+  }
+
+  func pair(invitation: DevicePairingInvitation, sealed: SealedDeviceRequest) async throws -> PairedDevice {
+    try validatePair(invitation)
+    isPairing = true
+    defer { isPairing = false }
+    let privateKey = try resolvePrivateKey(createIfMissing: false)
+    let response = try await dispatch(op: "pair", sealed: sealed, currentDeviceID: nil, privateKey: privateKey)
+    let reply = try response.decodeBody(PairResponseBody.self)
     guard reply.hub_id == invitation.hubID else {
       throw DeviceClientError.invalidEnvelope("配对回复的 hub_id 与邀请不匹配")
     }
     guard DeviceProtocol.isValidDeviceID(reply.device_id) else {
       throw DeviceClientError.invalidEnvelope("配对回复的 device_id 格式无效")
     }
+    await (transport as? RelayDeviceTransport)?.confirmAuthenticatedReply(sealed.nonce)
     self.deviceID = reply.device_id
     return PairedDevice(
       deviceID: reply.device_id,
       hubID: reply.hub_id,
       name: reply.name,
-      relay: reply.relay
+      relay: reply.relay,
+      role: reply.role,
+      hubName: reply.hub_name
     )
   }
 
@@ -704,7 +749,7 @@ public actor DeviceClient {
       throw DeviceClientError.keyStoreError(error.localizedDescription)
     }
     if let loaded {
-      cachedPrivateKey = loaded
+      if cachePrivateKey { cachedPrivateKey = loaded }
       return loaded
     }
     guard createIfMissing else {
@@ -729,6 +774,7 @@ public actor DeviceClient {
     privateKey: Curve25519.KeyAgreement.PrivateKey,
     timeout: TimeInterval? = nil
   ) async throws -> DeviceResponsePayload {
+    try validateRequest()
     if sealed.wireData.count > transport.maxEnvelopeBytes {
       throw DeviceClientError.envelopeTooLarge(message: nil)
     }
@@ -742,6 +788,7 @@ public actor DeviceClient {
       let message = parsePlaintextErrorMessage(reply.body)
       switch reply.statusCode {
       case 401 where currentDeviceID != nil:
+        onAuthorizationFailure?()
         isRemoved = true
         throw DeviceClientError.deviceRemoved(message: message)
       case 413:
@@ -754,11 +801,15 @@ public actor DeviceClient {
     }
     let payload = try DeviceEnvelope.openResponse(
       wireData: reply.body,
-      requestNonce: sealed.nonce,
+      requestNonce: reply.authenticatedNonce ?? sealed.nonce,
       recipientPrivateKey: privateKey,
       hubPublicKey: hubPublicKey
     )
+    if op != "pair" {
+      await (transport as? RelayDeviceTransport)?.confirmAuthenticatedReply(sealed.nonce)
+    }
     if payload.status == 401, currentDeviceID != nil {
+      onAuthorizationFailure?()
       isRemoved = true
       throw DeviceClientError.deviceRemoved(message: payload.errorMessage)
     }
@@ -767,4 +818,6 @@ public actor DeviceClient {
     }
     return payload
   }
+
+  nonisolated func validateCurrentIdentity() throws { try validateRequest() }
 }

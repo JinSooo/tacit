@@ -44,11 +44,12 @@ final class BonjourDeviceAdvertiser: NSObject, DeviceAdvertising, NetServiceDele
   private let advertiser: DeviceAdvertising
   private var lastPoll: TimeInterval = -.infinity
   private var poll: Task<Void, Never>?
+  private var suspended = false
 
   init(advertiser: DeviceAdvertising) { self.advertiser = advertiser }
 
   func refreshIfDue(api: HubAPI, uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-    guard poll == nil, uptime - lastPoll >= 60 else { return }
+    guard !suspended, poll == nil, uptime - lastPoll >= 60 else { return }
     lastPoll = uptime
     poll = Task {
       let settings = try? await api.deviceSettings()
@@ -65,9 +66,15 @@ final class BonjourDeviceAdvertiser: NSObject, DeviceAdvertising, NetServiceDele
     apply(settings, invitationHubId: invitationHubId)
   }
 
+  func setSuspended(_ suspended: Bool) {
+    self.suspended = suspended
+    if suspended { update(nil) }
+    else { lastPoll = -.infinity }
+  }
+
   private func apply(_ settings: DeviceSettings?, invitationHubId: String? = nil) {
     let next: DeviceAdvertisement?
-    if let settings, settings.lan.open, (1...65535).contains(settings.lan.port),
+    if !suspended, let settings, settings.lan.open, (1...65535).contains(settings.lan.port),
        let hubId = invitationHubId ?? settings.hubId, !hubId.isEmpty {
       next = DeviceAdvertisement(hubId: hubId, port: settings.lan.port)
     } else {

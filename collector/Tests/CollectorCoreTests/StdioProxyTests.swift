@@ -181,10 +181,10 @@ import Testing
     try files.write(.collector, JSONSerialization.data(withJSONObject: obj))
 
     #expect(await session.currentLink()?.device_id == "mac-abcd2345")
-    #expect(try await session.connection()?.link.device_id == "mac-abcd2345")
+    #expect(try await session.connection()?.deviceID == "mac-abcd2345")
 
     // handleDeviceRemoved 撤下连接文件并停用本轮设备协议。
-    await session.handleDeviceRemoved()
+    await session.handleDeviceRemoved(on: .local)
     #expect(await session.currentLink() == nil)
     #expect(try files.collector() == nil)
   }

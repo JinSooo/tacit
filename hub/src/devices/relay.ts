@@ -75,6 +75,8 @@ export class RelayService {
   start() {
     const now = this.clock();
     this.sql.prepare("UPDATE relay_mailboxes SET state='revoked', token=NULL WHERE state='staging' OR (state='invite' AND (expires_at IS NULL OR expires_at<=?))").run(now);
+    // AI 工具身份只直连：启动时撤下任何仍挂在它名下的信箱（不再轮询、不再投递）。
+    this.sql.prepare("UPDATE relay_mailboxes SET state='revoked', token=NULL WHERE state<>'revoked' AND device IN (SELECT id FROM devices WHERE role='agent')").run();
     this.lastTick = now;
     this.kick(true);
     this.timer = setInterval(() => {
@@ -239,7 +241,7 @@ export class RelayService {
     const old = this.current();
     if (url !== null) await this.hello(url);
     if ((old?.url ?? null) === url) return;
-    const devices = this.sql.prepare<[], { id: string; public_key: Buffer }>("SELECT id, public_key FROM devices WHERE local_only=0").all();
+    const devices = this.sql.prepare<[], { id: string; public_key: Buffer }>("SELECT id, public_key FROM devices WHERE local_only=0 AND role<>'agent'").all();
     let next: Space | null = null;
     const configs = new Map<string, ReturnType<typeof relayConfig>>();
     try {
@@ -330,6 +332,12 @@ export class RelayService {
     this.sql.prepare("UPDATE relay_mailboxes SET state=? WHERE space=? AND up=?").run(state, box.space, box.up);
   }
 
+  retainPairReply(box: Pick<Mailbox, "space" | "up">, device: string) {
+    // Keep the temporary mailbox addressable until the invitation's original expiry.
+    this.sql.prepare("UPDATE relay_mailboxes SET state='pair_reply', device=?, token=NULL WHERE space=? AND up=? AND state='invite'")
+      .run(device, box.space, box.up);
+  }
+
   revokeInvite(invite: ReturnType<typeof relayConfig> | null | undefined) {
     if (invite) {
       this.sql.prepare("UPDATE relay_mailboxes SET state='revoked', token=NULL WHERE space=? AND up=? AND state='invite'")
@@ -381,7 +389,7 @@ export class RelayService {
       try {
         const box = object(JSON.parse(event.data))?.box;
         if (typeof box === "string" && base64url(box, 16) &&
-            this.sql.prepare("SELECT 1 FROM relay_mailboxes WHERE space=? AND up=? AND state IN ('active','invite')").get(space.space, box)) {
+            this.sql.prepare("SELECT 1 FROM relay_mailboxes WHERE space=? AND up=? AND state IN ('active','invite','pair_reply')").get(space.space, box)) {
           this.kick(false, space.space, box);
         }
       } catch { /* 信箱通知只是取信提示。 */ }
@@ -663,15 +671,7 @@ export class RelayService {
           this.sql.prepare("UPDATE relay_mailboxes SET pending=? WHERE space=? AND up=?").run(pending, box.space, box.up);
         }
         if (inventory || box.state === "pair_reply") {
-          let waiting = false;
-          for await (const message of this.messages(space, token, box.down)) {
-            bytes += message.size;
-            waiting = true;
-          }
-          if (box.state === "pair_reply" && !waiting &&
-              !this.sql.prepare("SELECT 1 FROM relay_receipts WHERE space=? AND up=?").get(box.space, box.up)) {
-            await this.deleteBoxes(space, token, box);
-          }
+          for await (const message of this.messages(space, token, box.down)) bytes += message.size;
         }
       } catch (error) {
         if (this.shutdown.signal.aborted || this.connected.get(space.space) === false) throw error;

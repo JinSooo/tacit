@@ -47,7 +47,7 @@ private func fixture() -> DeviceSettings {
 @Test func deviceActionsPreserveHubConflictAndForbiddenMessages() async {
   let messages = ["devices.remove": HubError(message: "不能移除最后一台管理设备", status: 409),
                   "devices.role.update": HubError(message: "手机只能使用采集权限", status: 403)]
-  let api = HubAPI(base: { URL(string: "http://unused.test")! }, token: { nil }, deviceAction: { op, _, _ in
+  let api = HubAPI(base: { URL(string: "http://unused.test")! }, token: { nil }, deviceAction: { op, _, _, _ in
     let reply = try #require(messages[op])
     throw AdaptiveViewerDataSource.mapDeviceError(.operationError(op: op, status: reply.status, message: reply.message))
   })
@@ -68,7 +68,7 @@ private func fixture() -> DeviceSettings {
 
 @MainActor @Test func acknowledgingTimelineSecurityEventRemovesIt() async throws {
   let event = TimelineSecurityEvent(id: "fixture-event", action: .modelKeyChange)
-  let api = HubAPI(base: { URL(string: "http://unused.test")! }, token: { nil }, deviceAction: { op, fields, _ in
+  let api = HubAPI(base: { URL(string: "http://unused.test")! }, token: { nil }, deviceAction: { op, fields, _, _ in
     switch op {
     case "settings.security-events.list":
       let body: [String: DeviceJSON] = ["events": .array([.object(["id": .string(event.id), "action": .string("key.set")])])]

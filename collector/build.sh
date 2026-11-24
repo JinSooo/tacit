@@ -79,20 +79,29 @@ iconutil -c icns build/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf build/AppIcon.iconset
 # 第二个可执行文件由转写任务提供；不存在时采集端照常构建。
 if [ -f "$BIN/ra-audio-worker" ]; then cp "$BIN/ra-audio-worker" "$APP/Contents/MacOS/"; fi
-# 后台服务的运行时随应用分发，用户不用自己装 Bun。保留 Bun 官方签名（含 JIT 所需的权限），不重签。
+# 后台服务的运行时随应用分发，用户不用自己装 Bun。来源必须是 Bun 官方签名的版本；拷进应用后用本应用的证书重签，
+# 原样沿用它的权限（JIT 等），文件名叫 Tacit、放在 Helpers 里：系统“后台运行”提示写的是这个程序的签名者或文件名，
+# 保留官方签名时显示 Bun 作者的名字，重签后显示 “bun”（2026-11-24 虚拟机联调发现）。
 BUN_SRC="$(/usr/bin/readlink -f "$(command -v bun)")"
 codesign -dv "$BUN_SRC" 2>&1 | grep -q '^TeamIdentifier=7FRXF46ZSN$' || { echo "$BUN_SRC 不是 Bun 官方签名的版本" >&2; exit 1; }
 lipo -archs "$BUN_SRC" | grep -qw arm64 || { echo "$BUN_SRC 不含 arm64" >&2; exit 1; }
-cp "$BUN_SRC" "$APP/Contents/MacOS/bun"
+RUNTIME_BIN="$APP/Contents/Helpers/Tacit"
+mkdir -p "$APP/Contents/Helpers"
+cp "$BUN_SRC" "$RUNTIME_BIN"
+codesign -d --entitlements - --xml "$RUNTIME_BIN" > build/bun.entitlements 2>/dev/null
+grep -q "com.apple.security.cs.allow-jit" build/bun.entitlements || { echo "没有读到 Bun 的 JIT 权限" >&2; exit 1; }
 # 卸载脚本随应用分发，安装包用户也能完整卸载。
 cp ../uninstall.sh "$APP/Contents/Resources/uninstall.sh"
 mkdir -p "$APP/Contents/Resources/scripts"
 cp ../scripts/mac-app.sh "$APP/Contents/Resources/scripts/mac-app.sh"
+# 自签名证书没有团队编号。开了加固运行时后，SIP 开着的 Mac 会按“团队不同”拒绝加载自带的语音库，
+# 应用一打开就崩（2026-11-24 在 SIP 开启的虚拟机里发现，开发机关了 SIP 看不到），所以关掉库校验。
 cat > build/audio.entitlements <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>com.apple.security.device.audio-input</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
 </dict></plist>
 PLIST
 cp build/audio.entitlements build/app.entitlements
@@ -109,6 +118,7 @@ KC="$HOME/Library/Keychains/ra-dev.keychain-db"
 for lib in "$APP/Contents/Frameworks/"*.dylib; do
   codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime "$lib"
 done
+codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements build/bun.entitlements "$RUNTIME_BIN"
 if [ -f "$APP/Contents/MacOS/ra-audio-worker" ]; then
   codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements build/audio.entitlements "$APP/Contents/MacOS/ra-audio-worker"
 fi
@@ -117,3 +127,14 @@ codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlem
 codesign -d -r- "$APP" 2>&1 | grep designated
 codesign --verify --deep --strict "$APP"
 codesign -d --entitlements - "$APP"
+# 回归检查：加载自带动态库的两个程序必须带上关闭库校验的授权，见上方 audio.entitlements 的说明。
+for bin in "$APP" "$APP/Contents/MacOS/ra-audio-worker"; do
+  [ -e "$bin" ] || continue
+  codesign -d --entitlements - --xml "$bin" 2>/dev/null | grep -q "com.apple.security.cs.disable-library-validation" \
+    || { echo "$bin 缺少 disable-library-validation 授权，SIP 开着的 Mac 上会打不开" >&2; exit 1; }
+done
+# 回归检查：自带的 Bun 由本应用的证书签名，且重签后仍能运行（JIT 权限生效）。
+codesign -dvv "$RUNTIME_BIN" 2>&1 | grep -q '^Authority=Record Anything Dev$' \
+  || { echo "自带的运行时没有用本应用的证书重签，系统后台提示会显示 Bun 作者的名字" >&2; exit 1; }
+[ "$("$RUNTIME_BIN" -e 'let s = 0; for (let i = 0; i < 1e6; i++) s += i; console.log(s)')" = "499999500000" ] \
+  || { echo "重签后的运行时无法运行" >&2; exit 1; }

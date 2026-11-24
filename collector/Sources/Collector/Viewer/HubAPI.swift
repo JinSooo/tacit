@@ -5,11 +5,15 @@ struct HubError: LocalizedError {
   let message: String
   let status: Int
   var errorDescription: String? { message }
+  static let needsLocalHub = HubError(message: "需要连接这台 Mac 的后台", status: 0)
+  static let invalidBinding = HubError(message: "后台连接配置无法读取", status: 0)
+  static let remoteUnavailable = HubError(message: "远端后台连接不可用", status: 0)
+  static let needsDirectHub = HubError(message: "需要直连远端后台才能读取这些内容", status: 0)
   var actionMessage: String? { [403, 409, 429].contains(status) ? message : nil }
 }
 
 final class HubAPI: @unchecked Sendable {
-  typealias DeviceAction = (String, [String: DeviceJSON], TimeInterval?) async throws -> DeviceResponsePayload?
+  typealias DeviceAction = (String, [String: DeviceJSON], TimeInterval?, HubBinding.Route?) async throws -> DeviceResponsePayload?
 
   struct DeviceOperation {
     let name: String
@@ -30,13 +34,18 @@ final class HubAPI: @unchecked Sendable {
   private let session: URLSession
   private let busyRetryDelays: [TimeInterval]
   private let deviceAction: DeviceAction?
+  private let writeGate: RemoteSwitchWriteGate?
+  private let hubRoute: () throws -> HubBinding.Route
 
   init(base: @escaping () -> URL, token: @escaping () -> String?, configuration: URLSessionConfiguration = .ephemeral,
-       busyRetryDelays: [TimeInterval] = [1, 2], deviceAction: DeviceAction? = nil) {
+       busyRetryDelays: [TimeInterval] = [1, 2], deviceAction: DeviceAction? = nil,
+       hubRoute: @escaping () throws -> HubBinding.Route = { .local }, writeGate: RemoteSwitchWriteGate? = nil) {
     self.baseURL = base
     self.tokenProvider = token
     self.busyRetryDelays = busyRetryDelays
     self.deviceAction = deviceAction
+    self.hubRoute = hubRoute
+    self.writeGate = writeGate
     configuration.timeoutIntervalForRequest = 20
     configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
     session = URLSession(configuration: configuration)
@@ -46,12 +55,21 @@ final class HubAPI: @unchecked Sendable {
     _ path: String, query: [String: String?] = [:], method: String = "GET", body: Data? = nil,
     timeout: TimeInterval? = nil, authenticated: Bool = true, device: DeviceOperation? = nil
   ) async throws -> Data {
+    let writing = method != "GET"
+    if writing { try writeGate?.begin() }
+    defer { if writing { writeGate?.end() } }
+    guard let route = try? hubRoute() else { throw HubError.invalidBinding }
+    func checkBinding() throws {
+      guard (try? hubRoute()) == route else { throw CancellationError() }
+    }
     if let device, let deviceAction {
       let fields = try body.map { try JSONDecoder().decode([String: DeviceJSON].self, from: $0) } ?? [:]
       let parameters = fields.merging(device.parameters) { _, parameter in parameter }
       for wait in busyRetryDelays.map(Optional.some) + [nil] {
+        try checkBinding()
         do {
-          if let reply = try await deviceAction(device.name, parameters, timeout) {
+          if let reply = try await deviceAction(device.name, parameters, timeout, route) {
+            try checkBinding()
             return try device.responseData(reply)
           }
           break
@@ -61,6 +79,8 @@ final class HubAPI: @unchecked Sendable {
         }
       }
     }
+    try checkBinding()
+    guard route.remote == nil else { throw device == nil ? HubError.needsLocalHub : HubError.remoteUnavailable }
     var c = URLComponents(url: base, resolvingAgainstBaseURL: false)!
     c.path = path
     let items = query.compactMap { k, v in v.map { URLQueryItem(name: k, value: $0) } }
@@ -80,10 +100,12 @@ final class HubAPI: @unchecked Sendable {
     var data = Data(), status = 0
     // 503 表示撞上整理进程的写锁、整笔已回滚，重试不会重复写入；稍等再试，不让删除这类操作直接失败。
     for wait in busyRetryDelays.map(Optional.some) + [nil] {
+      try checkBinding()
       let response: URLResponse
       do { (data, response) = try await session.data(for: r) }
       catch let e as URLError where e.code == .cancelled { throw CancellationError() }
       catch { throw HubError(message: "连不上后台服务：\(error.localizedDescription)", status: 0) }
+      try checkBinding()
       status = (response as? HTTPURLResponse)?.statusCode ?? 0
       guard status == 503, let wait else { break }
       try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
@@ -96,6 +118,12 @@ final class HubAPI: @unchecked Sendable {
   }
 
   func isReachable() async -> Bool {
+    guard let route = try? hubRoute() else { return false }
+    if route.remote != nil { return await diagnosticStatus().reachable }
+    return await localHealth()
+  }
+
+  private func localHealth() async -> Bool {
     struct Health: Decodable { let ok: Bool }
     guard let data = try? await request("/v1/health", timeout: 3, authenticated: false),
           let health = try? JSONDecoder().decode(Health.self, from: data) else { return false }
@@ -103,13 +131,18 @@ final class HubAPI: @unchecked Sendable {
   }
 
   func diagnosticStatus() async -> (reachable: Bool, status: Data?) {
-    guard await isReachable(), !Task.isCancelled else { return (false, nil) }
+    guard let route = try? hubRoute() else { return (false, nil) }
+    if route.remote != nil {
+      let data = try? await request("/v1/status", timeout: 3, device: .init("status.get"))
+      return (data != nil, data)
+    }
+    guard await localHealth(), !Task.isCancelled else { return (false, nil) }
     return (true, try? await request("/v1/status", timeout: 3, device: .init("status.get")))
   }
 
   /// 中枢网页的状态页地址，和 `bun hub/src/cli.ts open` 一样把 token 放在 hash 里（不会发给服务器）。
   func statusPageURL() -> URL? {
-    guard let token = tokenProvider(), !token.isEmpty,
+    guard let route = try? hubRoute(), route.remote == nil, let token = tokenProvider(), !token.isEmpty,
           let encoded = token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return nil }
     return URL(string: "\(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/#token=\(encoded)&status")
   }
@@ -391,6 +424,21 @@ struct ModelSettingsInfo: Decodable {
   let keys: [String: Bool?]
   let providers: [ProviderInfo]
   let tierInfo: [String: TierInfo]
+
+  private enum CodingKeys: String, CodingKey { case tiers, configError, keys, providers, tierInfo }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    tiers = try values.decodeIfPresent([String: ModelTierConfig].self, forKey: .tiers) ?? [:]
+    configError = try values.decodeIfPresent(String.self, forKey: .configError)
+    keys = try values.decode([String: Bool?].self, forKey: .keys)
+    providers = try values.decode([ProviderInfo].self, forKey: .providers)
+    tierInfo = try values.decode([String: TierInfo].self, forKey: .tierInfo)
+  }
+
+  func availableProviders(remote: Bool) -> [ProviderInfo] {
+    providers.filter { !remote || $0.id == "anthropic" || $0.id == "openai-compatible" }
+  }
 }
 struct GeneralSettingsInfo: Decodable, Equatable {
   enum PolishTiming: String, Decodable { case afterSegment = "after_segment", hourly, nightly }

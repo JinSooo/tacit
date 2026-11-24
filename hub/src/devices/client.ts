@@ -1,9 +1,11 @@
+import type { RelayConfig } from "./relay-store.ts";
+import type { PairReceipt } from "./pair-receipt.ts";
 import type { PairingRole } from "./permissions.ts";
 import { randomBytes } from "node:crypto";
 import { requestInfo, responseInfo, suite, utf8 } from "./envelope.ts";
 
 export interface Pairing {
-  v: 1; role: PairingRole; name: string; hub_id: string; pk: string; code: string; addrs: string[]; expires_at: string;
+  v: 1; role: PairingRole; name: string; hub_id: string; pk: string; code: string; addrs: string[]; expires_at: string; relay?: RelayConfig;
 }
 export interface DevicePlaintext {
   op: string; ts: string; nonce: string; body: object;
@@ -72,7 +74,7 @@ export class DeviceClient {
   }
 
   async pair(pairing: Pairing, platform = "android") {
-    const result = await this.send<{ device_id: string }>("pair", { ...await this.pairingBody(pairing), platform });
+    const result = await this.send<PairReceipt>("pair", { ...await this.pairingBody(pairing), platform });
     if (result.status === 200) this.device = result.body.device_id;
     return result;
   }

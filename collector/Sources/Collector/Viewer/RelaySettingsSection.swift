@@ -124,7 +124,7 @@ struct RelaySettingsSection: View {
   }
 
   private func refresh() async {
-    guard action != .save, action != .disable else { return }
+    guard store.canManageBackend, !Task.isCancelled, action != .save, action != .disable else { return }
     let revision = configurationRevision
     do {
       let updated = try await store.api.relaySettings()
@@ -139,7 +139,7 @@ struct RelaySettingsSection: View {
   }
 
   private func perform(_ operation: Action) async {
-    guard action == nil else { return }
+    guard store.canManageBackend, action == nil else { return }
     action = operation
     actionError = nil
     testPassed = false

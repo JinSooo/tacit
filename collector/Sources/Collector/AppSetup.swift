@@ -1,14 +1,15 @@
 import AppKit
 import CollectorCore
 
-/// 应用包自带的后台运行目录和 bun（安装包和 install.sh 构建的应用都有）。
+/// 应用包自带的后台运行目录和运行时 Contents/Helpers/Tacit（即 Bun，安装包和 install.sh 构建的应用都有）。
 struct Bundled {
   let runtime: String
   let bun: String
   static let current: Bundled? = {
     guard let resources = Bundle.main.resourceURL, let executable = Bundle.main.executableURL else { return nil }
     let runtime = resources.appendingPathComponent("runtime").path
-    let bun = executable.deletingLastPathComponent().appendingPathComponent("bun").path
+    let bun = executable.deletingLastPathComponent().deletingLastPathComponent()
+      .appendingPathComponent("Helpers/Tacit").path
     guard FileManager.default.fileExists(atPath: runtime + "/hub/src/cli.ts"),
           FileManager.default.isExecutableFile(atPath: bun) else { return nil }
     return Bundled(runtime: runtime, bun: bun)
@@ -17,19 +18,38 @@ struct Bundled {
 
 /// 启动时的安装准备：首次打开或升级后初始化数据与密钥、写后台服务配置并启动；之后每次打开只核对有无变化。
 enum AppSetup {
-  /// 返回 false 表示应用不在可运行的位置，已提示用户并即将退出。
-  static func start(config: Config, startup: LoginStartup) -> Bool {
+  @MainActor static func checkPlacement() -> Bool {
+    let placement = AppPlacement.of(bundlePath: Bundle.main.bundlePath,
+                                    home: FileManager.default.homeDirectoryForCurrentUser.path)
+    guard placement == .mustMove else { return true }
+    askToMove()
+    return false
+  }
+
+  static func start(config: Config, startup: LoginStartup, writeGate: RemoteSwitchWriteGate? = nil) {
     let bundle = Bundle.main.bundlePath
     switch AppPlacement.of(bundlePath: bundle, home: FileManager.default.homeDirectoryForCurrentUser.path) {
-    case .mustMove:
-      MainActor.assumeIsolated { askToMove() }
-      return false
     case .installed where Bundled.current != nil:
-      DispatchQueue.global(qos: .utility).async { run(config: config, app: bundle) }
+      DispatchQueue.global(qos: .utility).async {
+        do { try writeGate?.begin() } catch { return }
+        defer { writeGate?.end() }
+        guard shouldRunBundledSetup(in: config.dataDir) else { return }
+        run(config: config, app: bundle)
+      }
     default:
-      DispatchQueue.global(qos: .utility).async { startup.startServices() }
+      DispatchQueue.global(qos: .utility).async {
+        do { try writeGate?.begin() } catch { return }
+        defer { writeGate?.end() }
+        startup.startServices()
+      }
     }
-    return true
+  }
+
+  /// Remote-aware setup still refreshes the installed collector and AI launch configuration.
+  /// A local recovery must restore its definitions before the bundled installer can touch the DB.
+  static func shouldRunBundledSetup(in directory: URL) -> Bool {
+    guard let binding = try? HubBinding.read(from: directory) else { return false }
+    return binding.phase == .committed || LocalServiceStartupPolicy.allowsBackground(in: directory)
   }
 
   private static func run(config: Config, app: String) {

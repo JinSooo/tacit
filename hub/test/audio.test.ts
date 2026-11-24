@@ -51,7 +51,7 @@ test("v4 加密库事务升级 v5，保留旧数据并可重复打开", () => {
   for (let i=0;i<2;i++) {
     const upgraded = new HubDB(ctx.file,ctx.config.dbKey);
     try {
-      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(18);
+      expect(upgraded.db.pragma("user_version",{ simple: true })).toBe(19);
       expect(upgraded.get(record.id)?.body).toBe(record.body);
       expect(new AudioStore(upgraded).settings()).toEqual({ retention_days: 7 });
     } finally { upgraded.close(); }

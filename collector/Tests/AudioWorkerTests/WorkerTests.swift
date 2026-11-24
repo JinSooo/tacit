@@ -21,6 +21,8 @@ final class FakeHub: HubTransport {
   var paths: [String] = []
   var records: [[String: Any]] = []
   var requests: [[String: Any]] = []
+  var purgeBefore: String?
+  var deleted: [String] = []
   var samples: [[String: Any]] = []
   var uploads: [[String: Any]] = []
   var lineUploads: [[String: Any]] = []
@@ -30,7 +32,7 @@ final class FakeHub: HubTransport {
     var reply: [String: Any] = [:]
     if path.hasPrefix("/v1/audio/sync?") {
       let vector: [Float] = hit ? [1] + Array(repeating: 0, count: 511) : [0, 1] + Array(repeating: 0, count: 510)
-      reply = ["retention_days": 7, "voiceprint": voice ? ["vector": vector, "threshold": 0.49] : NSNull(), "sample_requests": requests, "delete_conversations": [], "purge_before": NSNull()]
+      reply = ["retention_days": 7, "voiceprint": voice ? ["vector": vector, "threshold": 0.49] : NSNull(), "sample_requests": requests, "delete_conversations": deleted, "purge_before": purgeBefore as Any? ?? NSNull()]
     } else if path == "/v1/audio/embeddings" {
       let speakers = json["speakers"] as! [[String: Any]]
       uploads.append(json)
@@ -52,10 +54,10 @@ final class FakeHub: HubTransport {
     return try JSONSerialization.data(withJSONObject: reply)
   }
 }
-func fixture(_ samples: [[Float]], meetings: [String] = [], encode: ([Float]) throws -> Data = AudioCodec.encode) throws -> (URL, AudioStore, AudioMetadata) {
+func fixture(_ samples: [[Float]], meetings: [String] = [], age: TimeInterval = 120, encode: ([Float]) throws -> Data = AudioCodec.encode) throws -> (URL, AudioStore, AudioMetadata) {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent("worker-test-" + UUID().uuidString)
   let store = try AudioStore(dataDirectory: root, key: SymmetricKey(size: .bits256))
-  let start = Date().addingTimeInterval(-120)
+  let start = Date().addingTimeInterval(-age)
   var meta = AudioMetadata(start: start); meta.meeting_apps = meetings
   var offset = 0.0
   for (i, audio) in samples.enumerated() {
@@ -402,7 +404,8 @@ func clusterProbe() throws {
   #expect(try store.conversations().first?.status == .done)
 }
 
-@Test func workerRunsOverStdioProxyWithoutTokenFile() async throws {
+@Test(arguments: [false, true])
+func workerRunsOverStdioProxyWithoutTokenFile(switchWhileTranscribing: Bool) async throws {
   let step = 2.0 * Double.pi * 440.0 / 16000.0
   let synthetic: [Float] = (0..<96000).map { Float(sin(Double($0) * step) * 0.2) }
   let (root, store, _) = try fixture([synthetic], encode: { _ in Data([1, 2, 3]) })
@@ -423,9 +426,13 @@ func clusterProbe() throws {
 
   var ops: [String] = []
   var ingestedDevices: [String] = []
+  let gate = RemoteSwitchWriteGate()
   let proxyTask = Task.detached {
     await AudioProxy.serve(channel: hostChannel, deviceID: "mac-abcd2345") { op, body in
       ops.append(op)
+      if switchWhileTranscribing && op == "ingest" { gate.setPaused(true) }
+      try gate.begin()
+      defer { gate.end() }
       let replyObj: [String: Any]
       switch op {
       case "audio.sync":
@@ -459,7 +466,33 @@ func clusterProbe() throws {
   try? hostToWorker.fileHandleForWriting.close()
 
   #expect(failures == 0)
-  #expect(try store.conversations().first?.status == .done)
+  let conversation = try #require(try store.conversations().first)
+  #expect(conversation.status == (switchWhileTranscribing ? .closed : .done))
+  #expect((conversation.attempts ?? 0) == 0)
   #expect(ops == ["audio.sync", "ingest"])
-  #expect(ingestedDevices == ["mac-abcd2345"])
+  #expect(ingestedDevices == (switchWhileTranscribing ? [] : ["mac-abcd2345"]))
+}
+
+@Test(arguments: ["remote", "local", "purged", "deleted"])
+func workerProcessesExpiredPendingAudioOnlyOnRemoteAndHonorsExplicitDeletion(mode: String) async throws {
+  let samples = (0..<96_000).map { Float(sin(Double($0) * 0.17) * 0.2) }
+  let (root, store, meta) = try fixture([samples], age: 8 * 86_400, encode: { _ in Data([1]) })
+  defer { try? FileManager.default.removeItem(at: root) }
+  let hub = FakeHub()
+  if mode == "purged" { hub.purgeBefore = LocalTime.iso(Date().addingTimeInterval(-7 * 86_400)) }
+  if mode == "deleted" { hub.deleted = [meta.id] }
+  let inference = FakeModels()
+  let worker = Worker(store: store, hub: hub, device: "mac-fixture", remoteDelivery: mode != "local",
+                      decode: { _ in samples }, loadModels: { inference })
+  #expect(try await worker.run() == 0)
+  if mode == "remote" {
+    #expect(try store.conversations().first?.status == .done)
+    #expect(hub.records.first?["id"] as? String == meta.id)
+    #expect(inference.transcriptions == 1)
+    #expect(try store.cleanup(now: Date(), retentionDays: 7, preservingPending: true) == [meta.id])
+  } else {
+    #expect(try store.conversations().first?.status == .closed)
+    #expect(hub.records.isEmpty)
+    #expect(inference.transcriptions == 0)
+  }
 }

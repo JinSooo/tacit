@@ -392,6 +392,7 @@ public final class ProjectionCache: @unchecked Sendable {
   private let lock = NSLock()
   private var db: OpaquePointer?
   private var cachedKey: SymmetricKey?
+  private var retired = false
 
   public init(
     dataDirectory: URL,
@@ -763,6 +764,47 @@ public final class ProjectionCache: @unchecked Sendable {
     }
   }
 
+  /// Fence an old handle before another generation opens the same database path.
+  public func retire() {
+    lock.withLock {
+      retired = true
+      closeLocked()
+      cachedKey = nil
+    }
+  }
+
+  func checkActive() throws {
+    try lock.withLock {
+      guard !retired else { throw HubBinding.Failure.changed }
+    }
+  }
+
+  /// Reset the persisted cache even if the app was stopped at the time of the switch.
+  @discardableResult
+  public static func prepareBinding(_ route: HubBinding.Route, in directory: URL, widgetSnapshotURL: URL?) throws -> Bool {
+    let marker = "viewer-cache.binding"
+    let previous = try BindingFile.read(marker, in: directory)
+    if previous == nil && route == .local { return false }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    let current = try encoder.encode(route)
+    guard current != previous else { return false }
+    try discardPersisted(in: directory, widgetSnapshotURL: widgetSnapshotURL)
+    try BindingFile.write(current, named: marker, in: directory)
+    return true
+  }
+
+  /// Use after any live handle has been retired, including a process restart with rejected credentials.
+  public static func discardPersisted(in directory: URL, widgetSnapshotURL: URL?) throws {
+    let database = directory.appendingPathComponent(databaseFileName)
+    let databasePaths = ["", "-journal", "-wal", "-shm"].map { database.path + $0 }
+    for path in databasePaths + [widgetSnapshotURL?.path].compactMap({ $0 }) {
+      if unlink(path) != 0 && errno != ENOENT {
+        throw ProjectionCacheError.invalidPath("无法删除文件：\(path)（errno=\(errno)）")
+      }
+    }
+  }
+
   /// 整库清空入口：关闭 SQLite，删除数据库文件及附属文件，同时删除注入的小组件快照。
   public func wipe() throws {
     try lock.withLock {
@@ -795,6 +837,7 @@ public final class ProjectionCache: @unchecked Sendable {
   }
 
   private func openDatabaseLocked() throws -> OpaquePointer {
+    guard !retired else { throw HubBinding.Failure.changed }
     if let db { return db }
     let fm = FileManager.default
     try rejectSymlink(dataDirectory)
@@ -878,6 +921,7 @@ public final class ProjectionCache: @unchecked Sendable {
   }
 
   private func wipeLocked() throws {
+    guard !retired else { throw HubBinding.Failure.changed }
     closeLocked()
     let suffixes = ["", "-journal", "-wal", "-shm"]
     for suffix in suffixes {
