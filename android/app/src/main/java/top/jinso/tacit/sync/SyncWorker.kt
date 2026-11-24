@@ -49,7 +49,7 @@ internal class SyncWorker(context: Context, params: WorkerParameters) : Coroutin
                 .setInitialDelay(if (newRecord) 30_000 else 0, MILLISECONDS).build()
             // An open/network trigger can advance a delayed send. A new burst can queue behind
             // a running record-triggered job, so its last insert cannot be lost at job completion.
-            val lane = if (newRecord) "record" else "now"
+            val lane = if (newRecord) "record" else if (fromForeground) "foreground" else "now"
             val policy = if (newRecord) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP
             WorkManager.getInstance(context).enqueueUniqueWork("$TAG-$lane", policy, request)
         }

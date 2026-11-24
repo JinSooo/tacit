@@ -112,6 +112,8 @@ internal class SyncCoordinator(private val app: TacitApp) {
         }
         val wait = data.optLong("retryAt") - System.currentTimeMillis()
         val foregroundRecovery = wait > 0 && !periodic && fromForeground
+        val repeatRound = fromForeground && !periodic &&
+            foregroundRoundIsRepeat(data.optLong("lastSync"), System.currentTimeMillis(), wait)
         if (wait > 0 && !periodic && !fromForeground) {
             if (retry) SyncWorker.retry(app, wait.coerceAtMost(MAX_RETRY))
             return@withLock
@@ -127,7 +129,15 @@ internal class SyncCoordinator(private val app: TacitApp) {
                 null
             }
             // A foreground resume may refresh the local timeline during audio/relay backoff.
-            if (fromForeground && origin == null) timelineCache.refreshFailed()
+            if (fromForeground && origin == null && !repeatRound) timelineCache.refreshFailed()
+            if (repeatRound) {
+                // A full round just finished; only the direct timeline is worth refreshing, no mailbox traffic.
+                if (origin != null) {
+                    val client = deviceClient(data, origin, networkBudget())
+                    refreshDirectTimeline(client, refreshRelay(data, client, journal))
+                }
+                return@withLock
+            }
             val device = data.getString("device")
             val keys = restoreKeys(data)
             val hubKey = data.getString("hubKey")
@@ -220,8 +230,22 @@ internal class SyncCoordinator(private val app: TacitApp) {
 
     suspend fun refreshTimeline(foreground: Boolean = false) = withContext(Dispatchers.IO) {
         if (foreground) {
-            // A resume is one sync round, run by WorkManager so leaving the app does not cancel it
-            // midway; the unique "now" lane keeps one round when a network trigger is already running.
+            // Show the cached timeline at once, even offline; the network round waits for a connection.
+            val data = try {
+                vault.syncConnection()
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                timeline.clear()
+                return@withContext
+            }
+            if (data == null || data.optBoolean("removed")) {
+                timeline.clear()
+                return@withContext
+            }
+            timelineCache.bind(timelineOwner(data))
+            // WorkManager runs the round so leaving the app does not cancel it midway. Its own lane keeps
+            // the foreground flag from being swallowed by a queued network trigger; a round that follows a
+            // just-finished one skips the mailbox (foregroundRoundIsRepeat).
             SyncWorker.enqueue(app, fromForeground = true)
             return@withContext
         }
