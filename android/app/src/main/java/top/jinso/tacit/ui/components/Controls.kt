@@ -1,5 +1,6 @@
 package top.jinso.tacit.ui.components
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,6 +22,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import top.jinso.tacit.ui.Motion
 import top.jinso.tacit.ui.tacitColors
 
 @Composable
@@ -169,7 +171,11 @@ internal fun TextAction(
 @Composable
 internal fun PageBar(title: String, onBack: () -> Unit, close: Boolean = false, actions: @Composable RowScope.() -> Unit = {}) {
     TopAppBar(
-        title = { Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) },
+        title = {
+            Crossfade(title, animationSpec = Motion.quick(), label = "page-title") {
+                Text(it, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            }
+        },
         navigationIcon = {
             IconButton(onClick = onBack) {
                 Icon(if (close) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack, if (close) "关闭" else "返回")
