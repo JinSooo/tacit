@@ -30,8 +30,8 @@ private struct ModelCallsPage: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
+        // 上方分段已经写着“模型整理”，这里不再重复标题。
         HStack {
-          Text("模型整理").font(.serif(TextSize.title,.semibold))
           Spacer()
           Button("刷新") { Task { await load(reset:true) } }.disabled(busy)
         }

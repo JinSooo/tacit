@@ -4,6 +4,7 @@ import CollectorCore
 struct ProjectPage: View {
   let id: String
   @Environment(ViewerStore.self) private var store
+  @AppStorage("viewer.sidebarVisible") private var sidebarVisible = true
   @State private var overview: (revision: Int, brief: String)?
   @State private var context = Loader<[HubThread]>()
   @State private var timeline = Loader<HubAPI.TimelineResult>()
@@ -52,7 +53,8 @@ struct ProjectPage: View {
   }
 
   @ViewBuilder private var projectOverview: some View {
-    let showsName = store.section != .project(id)
+    // 侧栏里选中的项目已经写着名字；侧栏收起时页面自己写出来。
+    let showsName = store.section != .project(id) || !sidebarVisible
     let brief = overview?.revision == store.revision ? overview?.brief : nil
     if showsName || brief != nil {
       VStack(alignment: .leading, spacing: 8) {

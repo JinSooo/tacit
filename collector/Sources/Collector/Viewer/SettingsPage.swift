@@ -194,8 +194,6 @@ struct GeneralPreferencesSection: View {
       if let d = Binding($p.draft) {
         if context {
           row("自动带入的长度上限", value: d.injectTokens, key: "inject_tokens", unit: "token")
-          Text("调大可带入更多背景，也会占用更多 AI 上下文。超出时先舍弃较旧事项，不影响历史记录的保存和主动查询。")
-            .foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
         } else {
           row("没有新活动多久后归档", value: d.archiveDays, key: "archive_days", unit: "使用天")
           Text("从最后活动的次日起，只计有记录的日期。归档后仍可搜索和查看。")
@@ -221,8 +219,8 @@ struct GeneralPreferencesSection: View {
     } header: { Text(context ? "自动带入项目进展" : "事项整理") }
     footer: {
       Note(context
-        ? "Claude Code、Codex 新会话开始时带入当前项目摘要。默认 800 token 是模型的文字计量预算（中文通常约数百字），并非按你的记录量计算；更早、更细的内容可由 AI 主动查询。"
-        : "只算有历史记录的日子，最后活动和提问当天不算。归档后不再自动带入，也不再问，仍然搜得到。")
+        ? "新会话按这个长度带入当前项目的进展，超出时先舍弃较旧的事项；更早、更细的内容 AI 会自己查。"
+        : "只算有记录的日子，最后活动当天不算。归档后不再自动带入，仍然搜得到。")
     }
     .task { await p.load(api: store.api) }
   }
@@ -301,9 +299,11 @@ struct HubSettingsView: View {
   private func localConnection(_ c: CaptureSnapshot) -> some View {
     Section {
       SettingsRow("地址") { Text(store.api.base.absoluteString).font(.mono(TextSize.body)).textSelection(.enabled) }
-      SettingsRow("状态") {
-        let problem = store.sharedError ?? c.hubError
-        Text(problem ?? (info == nil ? "正在检查…" : "已连接")).foregroundStyle(problem == nil ? Palette.muted : Palette.attention)
+      // 连得上就不占一行，只有检查中或出问题时才说。
+      if let problem = store.sharedError ?? c.hubError {
+        SettingsRow("状态") { Text(problem).foregroundStyle(Palette.attention) }
+      } else if info == nil {
+        SettingsRow("状态", value: "正在检查…")
       }
       if c.queue > 0 { SettingsRow("等待保存", value: "\(Fmt.count(c.queue)) 条") }
       SettingsRow("详细状态") {
@@ -409,7 +409,7 @@ struct MaintenanceSettingsView: View {
     SettingsForm {
       Section {
         SettingsRow("运行记录") {
-          Button("打开运行记录") { store.path.append(.runtime) }
+          Button("打开") { store.path.append(.runtime) }
         }
         DiagnosticSettingsRow()
       }
@@ -417,17 +417,17 @@ struct MaintenanceSettingsView: View {
         SettingsMessage(text: "安装不完整，AI 会话和浏览器等数据源暂时不能运行。重新安装 Tacit 就能修好。")
       }
       operation(.syncAll, verb: "同步", job: c.jobs[.syncAll], extra: latest("round")?.statusText,
-                what: "把还没送到后台服务的记录送过去，让各数据源读一次新内容，再整理一轮。",
+                what: "把还没保存的记录送到后台服务，让开着的数据源读一次新内容，再整理一轮。",
                 sources: "所有开着的数据源", dedupe: "已有的不会重复", distill: "随后整理一轮") {
         store.perform(.maintenance(.syncAll))
       }
       operation(.reimportRecent, verb: "导入", job: c.jobs[.reimportRecent],
-                what: "让插件从 7 天前开始重新读一遍，补上漏掉的记录。",
+                what: "从 7 天前重新读一遍 AI 会话和浏览器，补上漏掉的记录。",
                 sources: "AI 会话、浏览器", dedupe: "已有的不会重复", distill: "按平常的节奏整理") {
         store.perform(.maintenance(.reimportRecent))
       }
       operation(.importAll, verb: "导入", job: c.jobs[.importAll],
-                what: "让插件从能读到的最早记录开始导入，可能要几分钟。导入的内容能搜到，AI 工具也能查到。",
+                what: "从能读到的最早记录开始导入 AI 会话和浏览器，可能要几分钟。导入后能搜到，AI 工具也能查到。",
                 sources: "AI 会话、浏览器", dedupe: "已有的不会重复", distill: "不自动整理，需要时用下面的“整理启用前的历史”") {
         store.perform(.maintenance(.importAll))
       }
@@ -493,16 +493,12 @@ struct MaintenanceSettingsView: View {
   }
 
   /// AGENTS.md：每个维护操作写明做什么、读哪些来源、是否去重、是否整理。
+  /// 一句做什么，下面一行写读哪些来源、是否去重、是否整理；四项都直接看得到，不用再点开。
   func facts(what: String, sources: String, dedupe: String, distill: String) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(what)
-      DisclosureGroup("读取范围与处理方式") {
-        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 4) {
-          GridRow { Text("读取"); Text(sources) }
-          GridRow { Text("去重"); Text(dedupe) }
-          GridRow { Text("整理"); Text(distill) }
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
-      }
+      let gap = sources.first.map { $0.isASCII ? " " : "" } ?? ""
+      Text("读取\(gap)\(sources)，\(dedupe)，\(distill)。").font(.system(size: TextSize.caption))
     }
     .foregroundStyle(Palette.muted)
     .multilineTextAlignment(.leading)
@@ -547,7 +543,7 @@ enum KeyBackup {
       return (p.terminationStatus, String(decoding: data, as: UTF8.self))
     }.value
     guard result.status == 0, !result.out.isEmpty else {
-      return .failed("钥匙串里有密钥没读到，备份不完整，所以没有复制。可以在终端运行 bun hub/src/cli.ts keys export 看是哪一把。")
+      return .failed("钥匙串里有密钥没读到，备份不完整，所以没有复制。可以复制上面的诊断信息排查。")
     }
     let pb = NSPasteboard.general
     pb.declareTypes([.string, .init("org.nspasteboard.ConcealedType"), .init("org.nspasteboard.TransientType")], owner: nil)

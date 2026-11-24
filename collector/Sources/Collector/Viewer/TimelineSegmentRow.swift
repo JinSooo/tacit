@@ -196,12 +196,15 @@ struct TimelineSegmentRecords: View {
         }
         if !isDraft {
           Button("这段写得不对") { correcting = true }.buttonStyle(.accentLink)
-          Button("删除这段记录") {
+          // 删除和记录详情一样：放在右端、只染胭脂色文字，离常用操作远一点。
+          Spacer(minLength: 16)
+          Button("删除") {
             guard let members = item.recordIds, !members.isEmpty else { return }
             deletionMembers = members
             confirmsDeletion = true
           }
-          .buttonStyle(.accentLink).disabled(deleting || item.recordIds?.isEmpty != false)
+          .buttonStyle(.plain).foregroundStyle(Palette.attention)
+          .disabled(deleting || item.recordIds?.isEmpty != false)
         }
       }
       .padding(.leading, TimelineReadingLayout.contentInset)

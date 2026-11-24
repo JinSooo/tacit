@@ -58,7 +58,7 @@ struct AuditPage: View {
     .toolbar {
       ToolbarItem(placement: .principal) {
         Picker("工具", selection: $tool) {
-          Text("全部").tag(""); Text("Claude Desktop").tag("claude-desktop"); Text("Claude Code").tag("claude-code"); Text("Codex").tag("codex")
+          Text("全部").tag(""); Text("Claude Code").tag("claude-code"); Text("Codex").tag("codex")
         }
         .pickerStyle(.segmented).labelsHidden()
       }
@@ -153,7 +153,7 @@ struct AuditRow: View {
           if read.resultIds.isEmpty { Text("这次没有读到内容").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4) }
           ForEach(Array(Set(read.resultIds)).sorted(), id: \.self) { id in target(id) }
           if read.kind == "context" {
-            Button(showSnapshot ? "收起当时带入" : "查看当时带入") { showSnapshot.toggle() }.buttonStyle(.link).padding(.vertical,8)
+            Button(showSnapshot ? "收起当时带入" : "查看当时带入") { showSnapshot.toggle() }.buttonStyle(.accentLink).padding(.vertical,8)
             if showSnapshot { RuntimeSnapshotView(id:read.id) }
           }
           // bytes：返回给 AI 工具的 JSON 大小。
@@ -181,14 +181,12 @@ struct AuditRow: View {
       }
       .padding(.vertical, 4)
       .contentShape(Rectangle())
-      if t.kind == "thread" { label }
-      else {
-        Button {
-          if t.kind == "project" { store.section = .project(id) }
-          else { store.path.append(.reviewRecord(id)) }
-        } label: { label }
-        .buttonStyle(.plain)
-      }
+      Button {
+        if t.kind == "thread" { store.path.append(.threadStory(id)) }
+        else if t.kind == "project" { store.section = .project(id) }
+        else { store.path.append(.reviewRecord(id)) }
+      } label: { label }
+      .buttonStyle(.plain)
     }
   }
 

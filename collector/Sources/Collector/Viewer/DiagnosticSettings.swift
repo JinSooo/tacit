@@ -64,6 +64,8 @@ private struct DiagnosticPreview: View {
           let pasteboard = NSPasteboard.general
           pasteboard.clearContents()
           copied = pasteboard.setString(summary, forType: .string)
+          // 1.5 秒后复原，再按还能复制，和记录详情的复制一致。
+          Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
         }
         .disabled(summary == nil)
         .keyboardShortcut(.defaultAction)

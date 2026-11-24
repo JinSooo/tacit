@@ -461,13 +461,13 @@ struct ReviewItemPage: View {
         } else if item.value == nil {
           Placeholder(kind: .loading)
         } else {
-          Placeholder(kind: .empty("clock-counter-clockwise", "这件事已更新，可返回查看当天回顾"))
+          Placeholder(kind: .empty("clock-counter-clockwise", "这件事已更新，可返回查看当天的时间线"))
         }
       }
       .modifier(ReviewWidth())
     }
     .background(Palette.paper)
-    .navigationTitle("回顾")
+    .navigationTitle("时间线")
     .toolbar { BackButton() }
     .task(id: store.revision) { await load() }
   }

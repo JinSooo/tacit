@@ -84,7 +84,7 @@ struct RootView: View {
       RecordInspector(id: id) { _ in
         if store.path.last == .reviewRecord(id) { store.path.removeLast() }
       }
-      .navigationTitle("历史记录")
+      .navigationTitle("")
       .toolbar { BackButton() }
     case .runtime: RuntimePage().toolbar { BackButton() }
     }

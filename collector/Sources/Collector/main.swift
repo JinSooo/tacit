@@ -618,15 +618,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     updateIcon()
     let f = DateFormatter(); f.dateFormat = "HH:mm"
     let state: String
-    if missingAX { state = "缺少辅助功能权限" }
-    else if let p = pausedUntil, paused { state = "已暂停，到 \(f.string(from: p))" }
+    if missingAX { state = "需要辅助功能权限" }
+    else if let p = pausedUntil, paused { state = "已暂停到 \(f.string(from: p))" }
     else { state = "正在记录" }
     menu.addItem(disabled(state))
     let pending = hub.pendingCount
-    if let e = hub.lastError { menu.addItem(disabled("\(e)，\(pending) 条等着发送")) }
-    else if pending > 0 { menu.addItem(disabled("\(pending) 条等着发送")) }
+    if let e = hub.lastError { menu.addItem(disabled("\(e)，\(pending) 条记录等待保存")) }
+    else if pending > 0 { menu.addItem(disabled("\(pending) 条记录等待保存")) }
     let dropped = hub.queue.dropped + hub.outboxStatus.dropped
-    if dropped > 0 { menu.addItem(disabled("等太久丢掉了 \(dropped) 条")) }
+    if dropped > 0 { menu.addItem(disabled("已丢弃 \(dropped) 条最旧的待保存记录")) }
     menu.addItem(.separator())
 
     if paused { menu.addItem(item("继续记录", #selector(resume))) }
@@ -662,14 +662,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if s.enabled { for line in MicrophoneChoices.statusLines(Array(audio.status().dropFirst())) { menu.addItem(disabled("    " + line)) } }
       }
     }
-    let sub = NSMenu()
-    if !plugins.available { sub.addItem(disabled("找不到 bun 或安装目录")) }
-    for s in statuses where s.kind == .plugin { sourceItems(s, into: sub) }
-    sub.addItem(.separator())
-    let runAll = item("全部运行一次", #selector(runPlugins)); runAll.isEnabled = plugins.available
-    sub.addItem(runAll)
-    let pi = NSMenuItem(title: "插件", action: nil, keyEquivalent: ""); pi.submenu = sub
-    menu.addItem(pi)
+    // AI 会话、浏览器和其他数据源放在一起，不另立“插件”子菜单；用户不需要知道哪个是插件。
+    if !plugins.available { menu.addItem(disabled("安装不完整，请重新安装 Tacit")) }
+    for s in statuses where s.kind == .plugin { sourceItems(s, into: menu) }
+    let runAll = item("同步 AI 会话和浏览器", #selector(runPlugins)); runAll.isEnabled = plugins.available
+    menu.addItem(runAll)
     menu.addItem(.separator())
     menu.addItem(item("退出", #selector(quit)))
   }

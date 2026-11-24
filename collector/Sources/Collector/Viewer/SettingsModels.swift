@@ -22,6 +22,8 @@ struct ModelSettingsView: View {
   @State private var removingKey: String?
   @State private var health: DistillHealth?
   @State private var healthError: String?
+  /// 三档用同一个模型时合成一组显示；用户点“按任务分别设置”后才展开三档。
+  @State private var splitTiers = false
 
   enum TestState: Equatable { case running, ok(Double?), failed(String) }
 
@@ -37,13 +39,16 @@ struct ModelSettingsView: View {
     SettingsForm {
       Section("整理状态") {
         if let health {
+          // 正常时只写最近一次整理的时间，不写“正常”。
           switch health.state {
-          case .working: SettingsRow("后台整理", value: "正常")
+          case .working: EmptyView()
           case .waiting: SettingsRow("后台整理", value: "等待首次完成")
           case .failing(let reason):
             SettingsMessage(text: store.isRemoteBackend ? "整理遇到问题，请检查远端模型设置。" : reason)
           }
-          if let time = health.lastOkAt { SettingsRow("最近完成", value: String(time.prefix(16)).replacingOccurrences(of: "T", with: " ")) }
+          if let time = health.lastOkAt {
+            SettingsRow("最近整理", value: ViewerTime.parse(time).map(Fmt.dateTime) ?? time)
+          }
         }
         if let healthError { SettingsMessage(text: healthError) }
         if !store.isRemoteBackend {
@@ -59,7 +64,11 @@ struct ModelSettingsView: View {
         if let e = info.configError {
           SettingsMessage(text: store.isRemoteBackend ? "请填写远端后台使用的 API 模型。" : "模型配置文件有问题，整理会失败，保存一次就能修好：\(e)")
         }
-        ForEach(Self.tiers, id: \.self) { tier in tierSection(tier, info: info) }.disabled(saving)
+        if sharesOneModel {
+          tierSection(Self.tiers[0], info: info, together: true).disabled(saving)
+        } else {
+          ForEach(Self.tiers, id: \.self) { tier in tierSection(tier, info: info) }.disabled(saving)
+        }
         timelineSection
         keysSection(info)
         if draft != saved || timelineDraft != timelineSaved {
@@ -127,12 +136,15 @@ struct ModelSettingsView: View {
           Text("自定义").tag(true)
         }.disabled(saving)
         if draft.limitText.wrappedValue != nil {
-          SettingsRow("万 token") {
-            TextField("万 token", text: Binding(
-              get: { draft.limitText.wrappedValue ?? "" },
-              set: { draft.limitText.wrappedValue = $0 }
-            )).labelsHidden().multilineTextAlignment(.trailing)
-              .monospacedDigit().frame(width: 120).disabled(saving)
+          SettingsRow("每天最多") {
+            HStack(spacing: 6) {
+              TextField("每天最多", text: Binding(
+                get: { draft.limitText.wrappedValue ?? "" },
+                set: { draft.limitText.wrappedValue = $0 }
+              )).labelsHidden().multilineTextAlignment(.trailing)
+                .monospacedDigit().frame(width: 120).disabled(saving)
+              Text("万 token").foregroundStyle(Palette.muted)
+            }
           }
         }
         Text("达到后当天暂停整理，明天 0 点恢复，草稿照常出现").foregroundStyle(Palette.muted)
@@ -150,10 +162,18 @@ struct ModelSettingsView: View {
 
   // MARK: 每一档
 
-  @ViewBuilder func tierSection(_ tier: String, info: ModelSettingsInfo) -> some View {
+  /// 已保存的三档完全一样、用户也没要求分开时，只显示一组，改动同时写进三档。
+  private var sharesOneModel: Bool {
+    guard !splitTiers, let first = saved[Self.tiers[0]] else { return false }
+    return Self.tiers.allSatisfy { saved[$0] == first }
+  }
+
+  @ViewBuilder func tierSection(_ tier: String, info: ModelSettingsInfo, together: Bool = false) -> some View {
     let remote = store.isRemoteBackend
     let config = Binding(get: { draft[tier] ?? ModelTierConfig(provider: remote ? "" : "codex-cli", model: "") },
-                         set: { draft[tier] = $0 })
+                         set: { value in
+                           if together { for t in Self.tiers { draft[t] = value } } else { draft[tier] = value }
+                         })
     let c = config.wrappedValue
     let provider = info.providers.first { $0.id == c.provider }
     let local = Self.isLoopback(c.baseUrl)
@@ -209,7 +229,7 @@ struct ModelSettingsView: View {
           Text("中").tag("medium")
           Text("高").tag("high")
         }
-        Text("思考强度取决于服务和模型是否支持；不确定时选“跟随模型”。关闭可能更快，也可能降低整理质量。").foregroundStyle(Palette.muted)
+        Text("不确定时选“跟随模型”。").foregroundStyle(Palette.muted)
       }
       switch tests[tier] {
       case .ok(let ms): Text(ms.map { String(format: "连接正常，用时 %.1f 秒", $0 / 1000) } ?? "连接正常").foregroundStyle(Palette.muted)
@@ -218,9 +238,15 @@ struct ModelSettingsView: View {
       case nil: EmptyView()
       }
     } header: {
-      Text(info.tierInfo[tier]?.label ?? tier)
+      Text(together ? "整理模型" : info.tierInfo[tier]?.label ?? tier)
     } footer: {
-      if let d = info.tierInfo[tier]?.description { Note(d) }
+      if together {
+        HStack(alignment: .firstTextBaseline) {
+          Note("实时整理、每小时汇总和每日时间线都用它。")
+          Spacer()
+          Button("按任务分别设置") { splitTiers = true }.buttonStyle(.accentLink)
+        }
+      } else if let d = info.tierInfo[tier]?.description { Note(d) }
     }
     .task(id: c.baseUrl) { if localOptions, c.provider == "openai-compatible", let url = c.baseUrl { await loadLocalModels(url) } }
     .onChange(of: c) { _, _ in tests[tier] = nil }
@@ -244,7 +270,7 @@ struct ModelSettingsView: View {
             case false?: Text("未设置").foregroundStyle(Palette.muted)
             case nil: Text(remote ? "无法读取密钥状态" : "读不到钥匙串").foregroundStyle(Palette.attention)
             }
-            Button("设置…") { editingKey = p.id }
+            Button((info.keys[p.id] ?? nil) == true ? "更换…" : "设置…") { editingKey = p.id }
             if (info.keys[p.id] ?? nil) == true { Button("删除…", role: .destructive) { removingKey = p.id } }
           }
         }

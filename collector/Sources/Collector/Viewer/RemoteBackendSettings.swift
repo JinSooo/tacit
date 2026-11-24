@@ -78,7 +78,8 @@ struct RemoteBackendSettingsSection: View {
       // 第 5 步就是已连接的常态：首行“已连接到…”已经说明，不再单独占一行。
       SettingsRow(step.title) {
         if step.rawValue <= 3 {
-          Text("第 \(step.rawValue) 步，共 5 步")
+          // 第 4、5 步是自动导入和连好后的常态，要用户动手的只有前 3 步。
+          Text("第 \(step.rawValue) 步，共 3 步")
             .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
         }
       }
@@ -189,11 +190,11 @@ struct RemoteBackendSettingsSection: View {
       Text("正在统计历史记录…").foregroundStyle(Palette.muted)
     }
     if let progress = model.progress {
-      countRow("已存在", progress.alreadyPresent)
-      countRow("已跳过", progress.skipped)
-      countRow("需要处理", progress.needsAttention, attention: model.pendingAttention != nil)
+      countRow("已存在", progress.alreadyPresent, hidesZero: true)
+      countRow("已跳过", progress.skipped, hidesZero: true)
+      countRow("需要处理", progress.needsAttention, attention: model.pendingAttention != nil, hidesZero: true)
     }
-    countRow("新记录等待保存", queue)
+    countRow("新记录等待保存", queue, hidesZero: true)
     if let notice = model.importNotice { SettingsMessage(text: notice, warning: false) }
     actions {
       Button("详细状态") { model.showDetails = true }
@@ -210,8 +211,7 @@ struct RemoteBackendSettingsSection: View {
   }
 
   @ViewBuilder private var remoteRows: some View {
-    countRow("等待保存", queue)
-    countRow("本次已保存", sent)
+    countRow("等待保存", queue, hidesZero: true)
     if let pending = model.pendingAttention {
       countRow("需要处理", pending, attention: true)
     }
@@ -414,11 +414,15 @@ struct RemoteBackendConfirmation: View {
   }
 }
 
-private func countRow(_ title: String, _ count: Int?, attention: Bool = false) -> some View {
+/// 数量为 0 的辅助统计不占一行（hidesZero）；还没统计出来时仍显示“尚未统计”。
+@ViewBuilder
+private func countRow(_ title: String, _ count: Int?, attention: Bool = false, hidesZero: Bool = false) -> some View {
+  if !(hidesZero && count == 0) {
   SettingsRow {
     Text(count.map { "\($0.formatted()) 条" } ?? "尚未统计")
       .monospacedDigit().foregroundStyle(attention ? Palette.attention : Palette.muted)
   } label: {
     Text(title).foregroundStyle(attention ? Palette.attention : Palette.ink)
+  }
   }
 }
