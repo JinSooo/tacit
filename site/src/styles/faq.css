@@ -32,8 +32,22 @@
   display: none;
 }
 
+.faq-list summary {
+  transition: color var(--t-quick) var(--ease);
+}
+
 .faq-list summary:hover {
   color: var(--accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .faq-list details[open] > :not(summary) {
+    animation: faq-open var(--t-standard) var(--ease) both;
+  }
+}
+
+@keyframes faq-open {
+  from { opacity: 0; }
 }
 
 .faq-list summary::after {
@@ -46,6 +60,7 @@
   border-bottom: 1px solid currentColor;
   transform: rotate(45deg);
   color: var(--muted);
+  transition: transform var(--t-standard) var(--ease), color var(--t-quick) var(--ease);
 }
 
 .faq-list details[open] summary::after {

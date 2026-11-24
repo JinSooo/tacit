@@ -146,6 +146,7 @@
   border-right: 1px solid currentColor;
   border-bottom: 1px solid currentColor;
   transform: translateY(-1px) rotate(45deg);
+  transition: transform var(--t-standard) var(--ease);
 }
 
 .ai-source[open] summary::after {

@@ -55,7 +55,11 @@
   --reading-width: 680px;
   --section-gap: clamp(96px, 14vw, 176px);
 
+  /* 动效三档，和 Mac、Android 同一套节奏：悬停与小换 / 展开与切换 / 滚动进场 */
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --t-quick: 160ms;
+  --t-standard: 240ms;
+  --t-reveal: 480ms;
   --nav-h: 64px;
 }
 
@@ -171,7 +175,7 @@ code, kbd, pre { font-family: var(--mono); font-size: 0.92em; }
   height: 48px; padding: 0 22px;
   border-radius: 999px;
   font-size: var(--fs-body); font-weight: 600; white-space: nowrap;
-  transition: background-color 0.2s var(--ease), color 0.2s var(--ease), border-color 0.2s var(--ease);
+  transition: background-color var(--t-quick) var(--ease), color var(--t-quick) var(--ease), border-color var(--t-quick) var(--ease);
 }
 .btn-primary { background: var(--ink); color: var(--paper); }
 .btn-primary:hover { background: var(--accent); color: var(--on-accent); }
@@ -187,20 +191,21 @@ code, kbd, pre { font-family: var(--mono); font-size: 0.92em; }
   height: var(--nav-h);
   background: var(--paper);
   border-bottom: 1px solid transparent;
-  transition: border-color 0.2s var(--ease);
+  transition: border-color var(--t-quick) var(--ease);
 }
 .nav[data-scrolled] { border-bottom-color: var(--line); }
 .nav-inner { height: 100%; display: flex; align-items: center; gap: 32px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font-family: Georgia, var(--serif); font-size: 22px; font-weight: 400; }
 .brand img { width: 28px; height: 28px; }
 .nav-links { display: flex; gap: 28px; margin-left: auto; font-size: 15px; color: var(--muted); }
+.nav-links a { transition: color var(--t-quick) var(--ease); }
 .nav-links a:hover { color: var(--ink); }
 .nav-actions { display: flex; align-items: center; gap: 12px; }
 .theme-toggle {
   height: 36px; padding: 0 12px; border-radius: 999px;
   font-size: var(--fs-caption); color: var(--muted);
   box-shadow: inset 0 0 0 1px var(--line);
-  transition: color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  transition: color var(--t-quick) var(--ease), box-shadow var(--t-quick) var(--ease);
 }
 .theme-toggle:hover { color: var(--ink); box-shadow: inset 0 0 0 1px var(--faint); }
 .nav .btn { height: 38px; padding: 0 16px; font-size: 15px; }
@@ -215,12 +220,15 @@ code, kbd, pre { font-family: var(--mono); font-size: 0.92em; }
 .footer .brand { font-size: 18px; }
 .footer .brand img { width: 22px; height: 22px; }
 .footer-links { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-left: auto; }
+.footer-links a { transition: color var(--t-quick) var(--ease); }
 .footer-links a:hover { color: var(--ink); }
 
 /* ---------- 出现动画：只在进入视口时淡入一次 ---------- */
-[data-reveal] { opacity: 0; transform: translateY(16px); transition: opacity 0.7s var(--ease), transform 0.7s var(--ease); }
+[data-reveal] { opacity: 0; transform: translateY(10px); transition: opacity var(--t-reveal) var(--ease), transform var(--t-reveal) var(--ease); }
 [data-reveal].is-in { opacity: 1; transform: none; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   [data-reveal] { opacity: 1; transform: none; transition: none; }
+  /* 减少动态效果：去掉位移和旋转，只留颜色的快速过渡 */
+  *, *::before, *::after { transition-property: color, background-color, border-color, box-shadow, opacity !important; }
 }

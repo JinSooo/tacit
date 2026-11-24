@@ -98,7 +98,7 @@
   background: var(--fill);
   color: var(--muted);
   font-size: var(--fs-caption);
-  transition: background-color 0.2s var(--ease), color 0.2s var(--ease);
+  transition: background-color var(--t-quick) var(--ease), color var(--t-quick) var(--ease);
 }
 
 .more-search-chips button:hover {

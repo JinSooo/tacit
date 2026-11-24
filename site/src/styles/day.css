@@ -55,6 +55,7 @@
 }
 
 .day-switch button {
+  transition: background-color var(--t-quick) var(--ease), color var(--t-quick) var(--ease);
   min-height: 32px;
   padding-inline: 10px;
   border-radius: 4px;
@@ -123,6 +124,10 @@
   display: none;
 }
 
+.day-segment summary {
+  transition: background-color var(--t-quick) var(--ease);
+}
+
 .day-segment summary:hover {
   background: var(--fill);
 }
@@ -147,12 +152,27 @@
   border-right: 1.5px solid var(--muted);
   border-bottom: 1.5px solid var(--muted);
   transform: rotate(45deg);
+  transition: transform var(--t-standard) var(--ease);
   content: "";
 }
 
 .day-segment[open] summary::after {
-  top: 20px;
-  transform: rotate(225deg);
+  transform: translateY(4px) rotate(225deg);
+}
+
+/* 简约 / 详细切换：新出现的那一档轻淡入 */
+@media (prefers-reduced-motion: no-preference) {
+  #day-simple:not([hidden]),
+  #day-detailed:not([hidden]) {
+    animation: day-view-in var(--t-standard) var(--ease) both;
+  }
+  .day-segment[open] > :not(summary) {
+    animation: day-view-in var(--t-standard) var(--ease) both;
+  }
+}
+
+@keyframes day-view-in {
+  from { opacity: 0; }
 }
 
 .day-segment time {
