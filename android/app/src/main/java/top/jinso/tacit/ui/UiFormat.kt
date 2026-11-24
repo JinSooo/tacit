@@ -3,6 +3,7 @@ package top.jinso.tacit.ui
 import top.jinso.tacit.core.HistoryRecord
 import top.jinso.tacit.core.readableTranscript
 import top.jinso.tacit.sources.Sources
+import top.jinso.tacit.data.MAX_AUDIO_RETENTION_DAYS
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -82,3 +83,7 @@ internal fun telltaleSentence(records: List<top.jinso.tacit.core.HistoryRecord>)
 }
 
 internal fun retentionLabel(days: Int): String = if (days == 0) "不自动清除" else "$days 天"
+
+
+internal fun localRetentionDays(entered: String, keepForever: Boolean): Int? =
+    if (keepForever) 0 else entered.toIntOrNull()?.takeIf { it in 1..MAX_AUDIO_RETENTION_DAYS }

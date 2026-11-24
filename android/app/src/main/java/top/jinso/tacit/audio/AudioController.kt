@@ -59,6 +59,9 @@ class AudioController(context: Context) {
     /** Bumps whenever recordings, voices or status change; pages re-read on it instead of polling. */
     val changes: StateFlow<Long> get() = runtime.changes
     fun state() = AudioState(runtime.recording, runtime.models.current() != null, runtime.message)
+    internal fun storageUsage(): CompletableFuture<AudioStorageUsage> = runtime.read {
+        synchronized(runtime.lock) { runtime.queries.storageUsage() }
+    }
     fun listClips(): CompletableFuture<List<AudioClip>> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.listClips() }
     }

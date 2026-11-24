@@ -5,6 +5,7 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Pause
@@ -12,7 +13,9 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.lifecycle.Lifecycle
@@ -25,6 +28,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.*
+import top.jinso.tacit.data.DEFAULT_AUDIO_RETENTION_DAYS
+import top.jinso.tacit.data.MAX_AUDIO_RETENTION_DAYS
 import top.jinso.tacit.ui.components.*
 import java.util.concurrent.CompletableFuture
 
@@ -254,9 +259,13 @@ internal fun rememberSampleToggle(audio: AudioController, notify: (String) -> Un
             finally { busy = false }
         }
     }
-    var count by remember { mutableIntStateOf(0) }
+    var storage by remember { mutableStateOf<AudioStorageUsage?>(null) }
     var clear by remember { mutableStateOf(false) }
-    var days by remember { mutableStateOf(app.prefs.retentionDays.toString()) }
+    var savedDays by remember { mutableIntStateOf(app.prefs.retentionDays) }
+    var keepForever by rememberSaveable { mutableStateOf(savedDays == 0) }
+    var days by rememberSaveable {
+        mutableStateOf((savedDays.takeIf { it > 0 } ?: DEFAULT_AUDIO_RETENTION_DAYS).toString())
+    }
     var macDays by remember { mutableStateOf<Int?>(null) }
     val owner = LocalActivity.current as? LifecycleOwner
     LaunchedEffect(audio, busy, owner) {
@@ -265,43 +274,61 @@ internal fun rememberSampleToggle(audio: AudioController, notify: (String) -> Un
         owner?.lifecycle?.repeatOnLifecycle(Lifecycle.State.RESUMED) { audio.changes.collect {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    vault.syncConnection()?.optJSONObject("audio")?.getInt("retention_days") to audio.listClips().get().size
+                    vault.syncConnection()?.optJSONObject("audio")?.getInt("retention_days") to audio.storageUsage().get()
                 }.getOrNull()
-            }?.let { (retention, clips) -> macDays = retention; count = clips }
+            }?.let { (retention, usage) -> macDays = retention; storage = usage }
         } }
     }
     GroupCard {
-        SettingsRow("本机录音 $count 段")
-        GroupDivider()
+        storage?.let {
+            SettingsRow("本机录音 ${it.clips} 段")
+            GroupDivider()
+        }
         val syncedDays = macDays
         if (syncedDays != null) {
             SettingsRow(if (syncedDays == 0) "按 Mac 设置，不自动清除" else "按 Mac 设置保留 $syncedDays 天")
-        } else FlowRow(
-            Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            itemVerticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                days, { days = it.filter(Char::isDigit).take(2) },
-                Modifier.widthIn(max = 140.dp), label = { Text("保留天数") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            )
-            TonalButton("保存", {
-                val value = days.toIntOrNull()
-                if (value != null && value in 1..90) {
-                    app.prefs.retentionDays = value
+        } else Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .toggleable(value = keepForever, enabled = !busy, role = Role.Checkbox) { keepForever = it },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Checkbox(checked = keepForever, onCheckedChange = null, enabled = !busy)
+                Text("不自动清除")
+            }
+            val entered = localRetentionDays(days, keepForever)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (!keepForever) OutlinedTextField(
+                    days, { days = it.filter(Char::isDigit).take(3) },
+                    Modifier.widthIn(max = 180.dp), label = { Text("保留天数") }, singleLine = true,
+                    enabled = !busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = days.isNotEmpty() && entered == null,
+                    supportingText = if (days.isNotEmpty() && entered == null) {
+                        { Text("请输入 1 至 $MAX_AUDIO_RETENTION_DAYS 天") }
+                    } else null,
+                )
+                val change = entered?.takeIf { it != savedDays }
+                if (change != null) TonalButton("保存", {
+                    app.prefs.retentionDays = change
+                    savedDays = app.prefs.retentionDays
                     work({ audio.prune() }, "已更新保留期")
-                } else notify("请输入 1 至 90 天")
-            }, enabled = !busy)
+                }, enabled = !busy)
+            }
         }
         if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     }
-    TextAction("清理录音和声纹", { clear = true }, enabled = !busy, color = tacitColors.attention)
+    if (storage?.canClear == true) {
+        TextAction("清理录音和声纹", { clear = true }, enabled = !busy, color = tacitColors.attention)
+    }
     if (clear) AlertDialog(
         onDismissRequest = { clear = false },
         title = { Text("清理本机录音和声纹？") },
-        text = { Text("全部录音和声音标记将永久删除。已生成的文字记录保留，可在历史记录中单独删除。") },
+        text = { Text("全部录音和声音标记将永久删除。已生成的文字记录保留，可在时间线中单独删除。") },
         confirmButton = { TextAction("清理", {
             clear = false
             work({ audio.clearAudio() }, "录音和声纹已清理")
