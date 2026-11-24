@@ -8,6 +8,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -79,9 +81,14 @@ internal fun SettingsPage(
     BackHandler { if (selected != null) back() else onClose() }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageBar(title, onBack = { if (selected != null) back() else onClose() })
-        key(selected) {
+        val reduceMotion = LocalReduceMotion.current
+        // The bar stays put and only its title changes; the page below moves in or back by depth.
+        AnimatedContent(selected, transitionSpec = {
+            pageTransform(settingsDepth(initialState), settingsDepth(targetState), reduceMotion)
+        }, label = "settings") { selected ->
             Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+                Modifier.fillMaxSize().background(tacitColors.paper)
+                    .verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 when (selected) {
@@ -110,6 +117,9 @@ internal fun SettingsPage(
         }
     }
 }
+
+/** The settings home, its pages, and the microphone page reached from 后台运行. */
+private fun settingsDepth(route: String?) = when (route) { null -> 0; Sources.AUDIO -> 2; else -> 1 }
 
 @Composable
 private fun SettingsHome(

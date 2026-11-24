@@ -38,39 +38,44 @@ internal fun ConversationDetail(
     var expanded by rememberSaveable(ordered.first().id) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         PageBar("", onBack)
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp)) {
-            val current = parts
-            if (current == null) {
-                ProgressLine()
-                return@Column
-            }
-            if (current.isEmpty()) {
-                Caption("这场对话的记录已移除。")
-                return@Column
-            }
-            val start = current.first().first.start
-            val end = current.maxOf { (record, _) -> record.end ?: record.start }
-            val private = current.any { (record, _) -> record.sensitivity == "private" }
-            DetailInfo(Sources.AUDIO, start, end, private)
-            // Like the Mac: what the conversation was about first, then the cleaned-up transcript.
-            val summary = remember(current, changes) {
-                val ids = current.map { it.first.id }.toSet()
-                vault.summaries().firstOrNull { m -> m.recordIds.any(ids::contains) }
-            }
-            DetailTitle(summary?.title ?: conversationTitle(private))
-            if (summary != null) {
-                ReadingBody(summary.summary)
-                summary.points.forEach { Text("· $it", Modifier.padding(top = 6.dp), color = tacitColors.muted) }
-                Spacer(Modifier.height(20.dp))
-            }
-            val body = current.joinToString("\n\n") { it.second }.trim()
-            if (body.isBlank()) Caption("这场对话没有可显示的完整转写。")
-            else ReadingBody(body, transcript = true)
-            Spacer(Modifier.height(12.dp))
-            DetailLink("原始片段 ${current.size} 段", expanded) { expanded = !expanded }
-            if (expanded) current.forEach { (record, _) ->
-                EvidenceRow(date(record.start, "HH:mm:ss"), firstSentence(record.body).ifBlank { record.title },
-                    record.sensitivity == "private", onClick = { onSelect(record) })
+        // Loading → the conversation as a cross-fade; the loading line itself only shows after a noticeable wait.
+        LoadCrossfade(parts == null) { loading ->
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp)) {
+                val current = parts.takeUnless { loading }
+                if (current == null) {
+                    ProgressLine()
+                    return@Column
+                }
+                if (current.isEmpty()) {
+                    Caption("这场对话的记录已移除。")
+                    return@Column
+                }
+                val start = current.first().first.start
+                val end = current.maxOf { (record, _) -> record.end ?: record.start }
+                val private = current.any { (record, _) -> record.sensitivity == "private" }
+                DetailInfo(Sources.AUDIO, start, end, private)
+                // Like the Mac: what the conversation was about first, then the cleaned-up transcript.
+                val summary = remember(current, changes) {
+                    val ids = current.map { it.first.id }.toSet()
+                    vault.summaries().firstOrNull { m -> m.recordIds.any(ids::contains) }
+                }
+                DetailTitle(summary?.title ?: conversationTitle(private))
+                if (summary != null) {
+                    ReadingBody(summary.summary)
+                    summary.points.forEach { Text("· $it", Modifier.padding(top = 6.dp), color = tacitColors.muted) }
+                    Spacer(Modifier.height(20.dp))
+                }
+                val body = current.joinToString("\n\n") { it.second }.trim()
+                if (body.isBlank()) Caption("这场对话没有可显示的完整转写。")
+                else ReadingBody(body, transcript = true)
+                Spacer(Modifier.height(12.dp))
+                DetailLink("原始片段 ${current.size} 段", expanded) { expanded = !expanded }
+                Reveal(expanded) {
+                    current.forEach { (record, _) ->
+                        EvidenceRow(date(record.start, "HH:mm:ss"), firstSentence(record.body).ifBlank { record.title },
+                            record.sensitivity == "private", onClick = { onSelect(record) })
+                    }
+                }
             }
         }
     }

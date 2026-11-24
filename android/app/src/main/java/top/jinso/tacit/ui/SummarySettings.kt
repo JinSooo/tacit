@@ -90,13 +90,17 @@ internal fun summaryRowValue(saved: JSONObject?): Pair<String?, Boolean> = when 
                 TonalButton("测试连接", { act { withContext(Dispatchers.IO) { SummaryClient(current()).test() }; "可以连上" } },
                     enabled = !busy && base.isNotBlank() && model.isNotBlank())
                 val changed = base != saved?.optString("base").orEmpty() || model != saved?.optString("model").orEmpty() || key.isNotBlank()
-                if (changed) TonalButton("保存", { act { withContext(Dispatchers.IO) { store(enabled) }.also { if (it == null) notify("已保存") } } },
-                    enabled = !busy)
+                FadeVisibility(changed) {
+                    TonalButton("保存", { act { withContext(Dispatchers.IO) { store(enabled) }.also { if (it == null) notify("已保存") } } },
+                        enabled = !busy)
+                }
             }
         }
     }
-    (message ?: saved?.optString("error")?.takeIf { enabled && it.isNotEmpty() })?.let {
-        Caption(it, color = if (it == "可以连上") tacitColors.muted else tacitColors.attention)
+    val result = message ?: saved?.optString("error")?.takeIf { enabled && it.isNotEmpty() }
+    val shownResult = rememberLatest(result)
+    Reveal(result != null) {
+        shownResult?.let { Caption(it, color = if (it == "可以连上") tacitColors.muted else tacitColors.attention) }
     }
     if (busy) ProgressLine()
 }
