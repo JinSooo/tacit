@@ -168,7 +168,7 @@ struct TimelineSegmentRecords: View {
   var isDraft = false
 
   @Environment(ViewerStore.self) private var store
-  @State private var records = Loader<[HistoryRecord]>()
+  @State private var records = Loader<[HistoryRecord]>(animated: true)
   @State private var showsBackgroundRecords = false
   @State private var correcting = false
   @State private var confirmsDeletion = false
@@ -213,8 +213,6 @@ struct TimelineSegmentRecords: View {
       }
     }
     .font(.system(size: TextSize.caption))
-    .animation(Motion.standard, value: records.value?.map(\.id))
-    .animation(Motion.standard, value: deleteError)
     .task(id: item.recordIds) { await load() }
     .sheet(isPresented: $correcting) { SegmentCorrectionSheet(day: day, item: item) }
     .confirmationDialog("删除这段记录？", isPresented: $confirmsDeletion, titleVisibility: .visible, presenting: deletionMembers) { members in
@@ -268,7 +266,8 @@ struct TimelineSegmentRecords: View {
       try await store.api.deleteSegment(day: day, id: item.id, recordIds: recordIds)
       store.revision += 1
     } catch {
-      deleteError = error.localizedDescription
+      let message = error.localizedDescription
+      Motion.animate { deleteError = message }
     }
   }
 }

@@ -102,7 +102,6 @@ struct TimelinePendingLine: View {
         }
       }
     }
-    .animation(Motion.standard, value: store.pending.map(\.id))
   }
 }
 

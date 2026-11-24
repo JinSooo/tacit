@@ -109,6 +109,12 @@ private struct ReviewDayContent: View {
         .id(day)
       }
     }
+    // 页首的提示行进出时，下面的时间线一起顺滑让位，不整块跳（挂在整页上，下面的列表也在同一次动画里）。
+    .animation(Motion.standard, value: securityEvents.events.first?.id)
+    .animation(Motion.standard, value: securityEvents.error)
+    .animation(Motion.standard, value: showsSetup && setup != nil)
+    .animation(Motion.standard, value: store.pending.isEmpty)
+    .animation(Motion.standard, value: startupMessage)
     .onChange(of: selectedDay) { old, new in dayEdge = new < old ? .leading : .trailing }
     .task(id: LoadKey(day: selectedDay, refresh: refresh, revision: store.revision, density: density)) {
       repeat {
@@ -205,12 +211,6 @@ private struct ReviewDayContent: View {
         if !store.pending.isEmpty { TimelinePendingLine().transition(.notice) }
       }
     }
-    // 页首的提示行进出时，下面的时间线顺滑让位，不整块跳。
-    .animation(Motion.standard, value: securityEvents.events.first?.id)
-    .animation(Motion.standard, value: securityEvents.error)
-    .animation(Motion.standard, value: showsSetup && setup != nil)
-    .animation(Motion.standard, value: store.pending.isEmpty)
-    .animation(Motion.standard, value: startupMessage)
   }
 
   private var dateLine: some View {
@@ -390,7 +390,8 @@ private struct ReviewDayContent: View {
     let revision = store.revision
     let switching = target != day
     if switching { markStaleLater() }
-    defer { if switching { clearStale() } }
+    // 被下一次换天取消时不收尾，压淡交给接手的那次读取处理。
+    defer { if switching, !Task.isCancelled { clearStale() } }
     async let readiness: Void = loadSetup()
     var nextDiary: DayDiary?
     var diaryError: String?
