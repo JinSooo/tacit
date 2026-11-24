@@ -40,6 +40,11 @@ struct RelaySettingsSection: View {
               Text(connection).foregroundStyle(settings.connected ? Palette.muted : Palette.attention)
             }
           }
+          if let usage = RelaySettingsText.usage(settings) {
+            SettingsRow("后台今天的请求") {
+              Text(usage.text).monospacedDigit().foregroundStyle(usage.limited ? Palette.attention : Palette.muted)
+            }
+          }
           if let pending = RelaySettingsText.pending(settings) {
             Text(pending).monospacedDigit().foregroundStyle(Palette.muted)
           }

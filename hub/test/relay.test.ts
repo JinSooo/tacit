@@ -835,3 +835,64 @@ test("历史导入经真实信箱在同一事务留下上行收据，换 nonce �
     expect(hub.db.get(records[0]!.id)).toBeNull();
   } finally { await hub.dispose(); await relay.stop(); }
 }, 15_000);
+
+// 2026-11-24 回归：信箱回 429（今天的请求次数用完）后，后台原来每 5 秒重试一次，额度一直恢复不了。
+test("信箱限流后整个空间暂停，暂停期间不再发请求，到期后恢复并补发", async () => {
+  const relay = relayFixture(), hub = await hubFixture();
+  const realFetch = globalThis.fetch;
+  const hits: string[] = [];
+  let limited = false;
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.startsWith(relay.url) && limited) {
+      hits.push(`${init?.method ?? "GET"} ${url}`);
+      return new Response("{}", { status: 429 });
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+  try {
+    await configure(hub, relay.url);
+    const { pairing, phone: viewer } = await hub.invite(true);
+    const inviteBox = pairing.relay!;
+    const pairId = await submit(inviteBox, viewer, "pair", { ...await viewer.pairingBody(pairing), platform: "mac" }, hub.time());
+    const paired = await reply<{ device_id: string; relay: RelayConfig }>(viewer, inviteBox, pairId);
+    viewer.device = paired.body.device_id;
+    const config = paired.body.relay;
+    const baseline = (await viewer.send<ProjectionPage>("projection.pull", { cursor: 0 })).body;
+    expect((await viewer.send("projection.ack", { cursor: baseline.cursor, epoch: baseline.epoch })).status).toBe(200);
+
+    limited = true;
+    // 删除是紧急变更，后台会马上尝试向手机推撤回通知。
+    const doomed = fixture({ source: "manual.note", title: "要撤回的苗床", body: "撤回" });
+    hub.db.ingest([doomed]);
+    expect(hub.db.delete(doomed.id)).toBe(true);
+    await eventually(() => hits.length > 0 || undefined);
+    // 第一次 429 之后，至少两轮维护（每轮 5 秒）都不再碰信箱。
+    await Bun.sleep(11_000);
+    expect(hits).toHaveLength(1);
+
+    limited = false;
+    hub.advance(61_000);
+    const pushed = await eventually(async () => {
+      for (const message of await list(config)) {
+        const response = await remote(config, config.down, "GET", message.id);
+        if (response.status !== 200) continue;
+        const value = await viewer.openPayload<Record<string, unknown>>(await response.json() as ResponseEnvelope, message.id);
+        if (value.kind === "projection.invalidate") return value;
+      }
+    }, 8_000);
+    expect(pushed.items).toContainEqual({ kind: "record_gone", id: doomed.id });
+
+    // 状态里记着今天这台后台发了多少请求、按用途分、什么时候被限流；暂停期间被拦下的不算。
+    type Usage = { day: string; requests: number; by_kind: Record<string, number>; limited_at: string | null; requests_before_limit: number | null };
+    const usage = await eventually(async () => {
+      const value = (await (await hub.admin(path)).json() as { usage: Usage | null }).usage;
+      return value && value.by_kind.push! >= 2 ? value : undefined;
+    });
+    expect(usage.day).toBe(new Date(Date.parse(hub.time())).toISOString().slice(0, 10));
+    expect(usage.limited_at).not.toBeNull();
+    expect(usage.requests_before_limit).toBeGreaterThan(0);
+    expect(usage.requests).toBe(Object.values(usage.by_kind).reduce((sum, n) => sum + n, 0));
+    expect(usage.requests).toBeGreaterThan(usage.requests_before_limit!);
+  } finally { globalThis.fetch = realFetch; await hub.dispose(); relay.stop(true); }
+}, 30_000);

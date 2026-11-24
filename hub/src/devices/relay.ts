@@ -26,7 +26,7 @@ type Message = { id: string; size: number };
 
 class RelayHTTPError extends Error {
   readonly code: string;
-  constructor(readonly status: number) {
+  constructor(readonly status: number, readonly retryAfterMs?: number) {
     super("信箱请求失败");
     this.code = `HTTP_${status}`;
   }
@@ -44,6 +44,19 @@ function relayURL(value: unknown) {
   return url.href.replace(/\/+$/, "");
 }
 
+/** 这台后台对信箱的请求用途：收信轮询、清点下行、取信、确认删除、回复、撤回、投影推送、监听连接、空间管理。 */
+export type RelayUsageKind = "poll" | "inventory" | "receive" | "ack" | "reply" | "withdraw" | "push" | "watch" | "space";
+export interface RelayUsage {
+  space: string;
+  day: string;
+  requests: number;
+  by_kind: Partial<Record<RelayUsageKind, number>>;
+  /** 今天第一次被信箱限流的时刻，以及那之前这台后台已发的请求数；其余用量来自其他设备。 */
+  limited_at: string | null;
+  requests_before_limit: number | null;
+}
+const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
 export class RelayService {
   private readonly sql: HubDB["db"];
   private readonly shutdown = new AbortController();
@@ -56,6 +69,12 @@ export class RelayService {
   private readonly lastPoll = new Map<string, number>();
   private readonly lastInventory = new Map<string, number>();
   private readonly hints = new Map<string, Set<string>>();
+  /** 信箱回 429（请求次数用完）后，这个空间暂停到 until，期间不发任何请求。 */
+  private readonly backoff = new Map<string, { until: number; delay: number }>();
+  /** 当前空间今天（按信箱的 UTC 计数日）由这台后台发出的请求次数，按用途分；每轮维护后存一次。 */
+  private usage?: RelayUsage;
+  private usageDirty = false;
+  private purpose?: RelayUsageKind;
   private maintenance?: Promise<void>;
 
   constructor(private readonly hub: HubDB, private readonly keys: RelayKeyStorage, private readonly clock: () => number,
@@ -122,8 +141,11 @@ export class RelayService {
       devices: this.boxes(s.space).filter(b => b.state === "active" && b.device)
         .map(b => ({ device: b.device!, pending: b.pending })),
     });
+    const usage = current ? this.loadUsage(current.space) : null;
     return {
       mode: current ? "custom" as const : "off" as const,
+      usage: usage && { day: usage.day, requests: usage.requests, by_kind: { ...usage.by_kind },
+        limited_at: usage.limited_at, requests_before_limit: usage.requests_before_limit },
       ...(current ? describe(current) : {
         url: null, connected: false, last_fetch_at: null, used_bytes: null, unprocessable: 0, devices: [],
       }),
@@ -173,7 +195,8 @@ export class RelayService {
     });
     if (!response.ok) {
       void response.body?.cancel().catch(() => {});
-      throw new RelayHTTPError(response.status);
+      const seconds = Number(response.headers.get("retry-after"));
+      throw new RelayHTTPError(response.status, Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined);
     }
     return response;
   }
@@ -199,14 +222,73 @@ export class RelayService {
     } };
   }
 
+  private pausedUntil(space: string) {
+    const until = this.backoff.get(space)?.until ?? 0;
+    return until > this.clock() ? until : 0;
+  }
+
+  private loadUsage(space: string): RelayUsage {
+    const day = utcDay(this.clock());
+    if (this.usage?.day === day && this.usage.space === space) return this.usage;
+    let saved: RelayUsage | undefined;
+    try {
+      const row = this.sql.prepare<[], { v: string }>("SELECT v FROM distill_state WHERE k='relay_usage'").get();
+      saved = row ? JSON.parse(row.v) as RelayUsage : undefined;
+    } catch { saved = undefined; }
+    this.usage = saved?.day === day && saved.space === space && typeof saved.requests === "number" ? saved
+      : { space, day, requests: 0, by_kind: {}, limited_at: null, requests_before_limit: null };
+    return this.usage;
+  }
+
+  private countRequest(space: string, kind: RelayUsageKind) {
+    const usage = this.loadUsage(space);
+    usage.requests++;
+    usage.by_kind[kind] = (usage.by_kind[kind] ?? 0) + 1;
+    this.usageDirty = true;
+  }
+
+  private saveUsage() {
+    if (!this.usageDirty || !this.usage) return;
+    this.sql.prepare("INSERT INTO distill_state(k,v) VALUES ('relay_usage',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v")
+      .run(JSON.stringify(this.usage));
+    this.usageDirty = false;
+  }
+
+  /** 由路径推出这次请求做什么；投影推送期间按推送计。 */
+  private requestKind(space: Space, method: string, path: string): RelayUsageKind {
+    if (this.purpose) return this.purpose;
+    const box = /^\/boxes\/([^/?]+)\/messages(\/[^/?]+)?/.exec(path);
+    if (!box) return "space";
+    const up = this.sql.prepare("SELECT 1 FROM relay_mailboxes WHERE space=? AND up=?").get(space.space, box[1]!) !== null;
+    if (!box[2]) return up ? "poll" : "inventory";
+    if (up) return method === "DELETE" ? "ack" : "receive";
+    return method === "PUT" ? "reply" : "withdraw";
+  }
+
   private async spaceRequest(space: Space, token: string, method: string, path: string, body?: unknown) {
+    // 暂停期间不碰网络：被限流后每轮重试只会继续耗请求次数（2026-11-24 发现每 5 秒一次、每分钟约 26 条 429）。
+    if (this.pausedUntil(space.space)) throw new RelayHTTPError(429);
+    if (space.state === "current") this.countRequest(space.space, this.requestKind(space, method, path));
     try {
       const timeout = /\/messages\/[^/?]+$/.test(path) ? messageTimeoutMs : tickMs;
       const response = await this.request(`${space.url}/v1/spaces/${space.space}${path}`, method, token, body, timeout);
       this.connected.set(space.space, true);
+      this.backoff.delete(space.space);
       return response;
     } catch (error) {
       this.connected.set(space.space, error instanceof RelayHTTPError && ![401, 403].includes(error.status));
+      if (error instanceof RelayHTTPError && error.status === 429) {
+        const usage = space.state === "current" ? this.loadUsage(space.space) : undefined;
+        if (usage && usage.limited_at === null) {
+          usage.limited_at = new Date(this.clock()).toISOString();
+          usage.requests_before_limit = usage.requests - 1;
+          this.usageDirty = true;
+        }
+        // 从 1 分钟起翻倍，最多 1 小时；信箱给了 Retry-After 时按它等，最多 6 小时。
+        const delay = Math.min(Math.max(60_000, (this.backoff.get(space.space)?.delay ?? 30_000) * 2), 60 * 60_000);
+        const wait = Math.max(delay, Math.min(error.retryAfterMs ?? 0, 6 * 60 * 60_000));
+        this.backoff.set(space.space, { until: this.clock() + wait, delay });
+      }
       throw error;
     }
   }
@@ -378,6 +460,7 @@ export class RelayService {
     if (this.watches.has(space.space)) return;
     const url = new URL(`${space.url}/v1/spaces/${space.space}/watch`);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    if (space.state === "current") this.countRequest(space.space, "watch");
     const socket = new RelayWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
     this.watches.set(space.space, socket);
     socket.onopen = () => {
@@ -431,7 +514,7 @@ export class RelayService {
         this.full = false;
         this.projectionPending = false;
         this.hints.clear();
-        await this.round(all, hints);
+        try { await this.round(all, hints); } finally { this.saveUsage(); }
       }).catch(error => {
         if (!this.shutdown.signal.aborted) logFailure("relay.poll", error);
       }).finally(() => {
@@ -455,6 +538,7 @@ export class RelayService {
     for (const space of spaces) {
       if (this.shutdown.signal.aborted) return;
       const id = space.space;
+      if (this.pausedUntil(id)) continue;
       const notify = hints.get(id);
       const due = now - (this.lastPoll.get(id) ?? -Infinity) >= pollMs;
       const inventory = now - (this.lastInventory.get(id) ?? -Infinity) >= inventoryMs;
@@ -469,7 +553,10 @@ export class RelayService {
           continue;
         }
         const token = this.token(space);
-        if (haveProjection) await this.pushProjections(space, token);
+        if (haveProjection) {
+          this.purpose = "push";
+          try { await this.pushProjections(space, token); } finally { this.purpose = undefined; }
+        }
         const watched = this.watches.get(id)?.readyState === WebSocket.OPEN;
         if (due || full) this.openWatch(space, token);
         const scan = full || notify?.has("") || due && !watched || inventory;

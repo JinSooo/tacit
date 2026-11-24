@@ -13,6 +13,15 @@ public struct RelaySettings: Decodable, Sendable {
     public let retireAt: String
   }
 
+  /// 这台后台今天（信箱按 UTC 计日）对信箱发出的请求；信箱的每日上限由所有设备共用。
+  public struct Usage: Decodable, Sendable {
+    public let day: String
+    public let requests: Int
+    public let byKind: [String: Int]
+    public let limitedAt: String?
+    public let requestsBeforeLimit: Int?
+  }
+
   public let mode: Mode
   public let url: String?
   public let connected: Bool
@@ -21,6 +30,7 @@ public struct RelaySettings: Decodable, Sendable {
   public let unprocessable: Int
   public let devices: [Device]
   public let retiring: [Retiring]
+  public let usage: Usage?
 }
 
 public enum RelaySettingsText {
@@ -50,6 +60,13 @@ public enum RelaySettingsText {
     guard settings.mode == .custom else { return nil }
     let count = settings.devices.compactMap(\.pending).filter { $0 > 0 }.reduce(0, +)
     return count > 0 ? "还有 \(count.formatted()) 条等着取" : nil
+  }
+
+  /// 今天的请求次数；被信箱限流后说明已到上限。
+  public static func usage(_ settings: RelaySettings) -> (text: String, limited: Bool)? {
+    guard settings.mode == .custom, let usage = settings.usage else { return nil }
+    let count = "\(usage.requests.formatted()) 次"
+    return usage.limitedAt == nil ? (count, false) : ("\(count)，已到信箱今天的上限", true)
   }
 
   public static func retirement(_ settings: RelaySettings, calendar: Calendar = .current) -> String? {

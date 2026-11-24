@@ -98,3 +98,25 @@ private var testCalendar: Calendar {
   calendar.timeZone = TimeZone(secondsFromGMT: 9 * 3600)!
   return calendar
 }
+
+// 2026-11-24：后台显示自己今天对信箱的请求次数，被限流后说明已到上限；旧版后台不带这一项时不显示。
+@Test func presentsTodaysRelayUsageAndLimit() throws {
+  let base = """
+    "mode":"custom","url":"https://relay.example","connected":true,"last_fetch_at":null,
+    "used_bytes":0,"unprocessable":0,"devices":[],"retiring":[]
+    """
+  let normal = try decodeRelay("""
+    {\(base),"usage":{"day":"2026-11-24","requests":12345,"by_kind":{"poll":12000,"push":345},
+     "limited_at":null,"requests_before_limit":null}}
+    """)
+  #expect(normal.usage?.byKind["poll"] == 12000)
+  #expect(RelaySettingsText.usage(normal)?.text == "12,345 次")
+  #expect(RelaySettingsText.usage(normal)?.limited == false)
+  let limited = try decodeRelay("""
+    {\(base),"usage":{"day":"2026-11-24","requests":9000,"by_kind":{"poll":9000},
+     "limited_at":"2026-11-24T11:02:00.000Z","requests_before_limit":8999}}
+    """)
+  #expect(RelaySettingsText.usage(limited)?.text == "9,000 次，已到信箱今天的上限")
+  #expect(RelaySettingsText.usage(limited)?.limited == true)
+  #expect(RelaySettingsText.usage(try decodeRelay("{\(base)}")) == nil)
+}
