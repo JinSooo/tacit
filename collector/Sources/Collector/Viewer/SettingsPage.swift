@@ -424,6 +424,7 @@ struct MaintenanceSettingsView: View {
 
   var body: some View {
     let c = store.capture
+    let localPrefix = store.isRemoteBackend ? "这台 Mac 的" : ""
     SettingsForm {
       Section {
         SettingsRow("运行记录") {
@@ -432,46 +433,49 @@ struct MaintenanceSettingsView: View {
         DiagnosticSettingsRow()
       }
       if !c.pluginsAvailable {
-        SettingsMessage(text: "安装不完整，AI 会话和浏览器等数据源暂时不能运行。重新安装 Tacit 就能修好。")
+        Section {
+          SettingsMessage(text: "安装不完整，AI 会话和浏览器等数据源暂时不能运行。重新安装 Tacit 就能修好。")
+        }
       }
       operation(.syncAll, verb: "同步", job: c.jobs[.syncAll], extra: latest("round")?.statusText,
                 what: "把还没保存的记录送到后台服务，让开着的数据源读一次新内容，再整理一轮。",
-                sources: "所有开着的数据源", dedupe: "已有的不会重复", distill: "随后整理一轮") {
+                detail: "读取所有开着的数据源，已有的不会重复，随后整理一轮。") {
         store.perform(.maintenance(.syncAll))
       }
       operation(.reimportRecent, verb: "导入", job: c.jobs[.reimportRecent],
                 what: "从 7 天前重新读一遍 AI 会话和浏览器，补上漏掉的记录。",
-                sources: "AI 会话、浏览器", dedupe: "已有的不会重复", distill: "按平常的节奏整理") {
+                detail: "读取 AI 会话、浏览器，已有的不会重复，按平常的节奏整理。") {
         store.perform(.maintenance(.reimportRecent))
       }
       operation(.importAll, verb: "导入", job: c.jobs[.importAll],
-                what: "从能读到的最早记录开始导入 AI 会话和浏览器，可能要几分钟。导入后能搜到，AI 工具也能查到。",
-                sources: "AI 会话、浏览器", dedupe: "已有的不会重复", distill: "不自动整理，需要时用下面的“整理启用前的历史”") {
+                what: "导入能读到的全部 AI 会话和浏览器历史，可能要几分钟，导入后能搜到、AI 工具也能查到。",
+                detail: "已有的不会重复，不自动整理，需要时用下面的“整理启用前的历史”。") {
         store.perform(.maintenance(.importAll))
       }
       Section {
+        SettingsRow(MaintenanceTask.backfill.title) {
+          Button("整理") { Task { await requestBackfill() } }
+            .disabled(!store.canManageBackend || latest("backfill").map { !$0.finished } == true)
+        }
         SettingsRow("日期范围") {
           HStack {
             DatePicker("从", selection: $backfillFrom, in: ...backfillTo, displayedComponents: .date).labelsHidden()
             Text("至").foregroundStyle(Palette.muted)
             DatePicker("至", selection: $backfillTo, in: backfillFrom...Date(), displayedComponents: .date).labelsHidden()
-            Button("整理") { Task { await requestBackfill() } }
-              .disabled(!store.canManageBackend || latest("backfill").map { !$0.finished } == true)
           }
+          .disabled(!store.canManageBackend)
         }
         if store.canManageBackend {
           if let r = latest("backfill") { SettingsMessage(text: r.statusText, warning: r.status == "failed") }
           if let requestError { SettingsMessage(text: requestError) }
         } else {
-          SettingsMessage(text: RemoteBackendSettingsModel.managementNotice, warning: false)
+          SettingsMessage(text: "整理远端后台的历史记录需要直连。", warning: false)
         }
-        facts(what: "把所选日期里、开始整理之前就有的记录交给 AI，整理出事项、项目和每日时间线。", sources: "已有的记录，不重新采集",
-              dedupe: "已经整理过的记录不会重复整理", distill: "会调用 AI 模型，同一段日期可以再整理一次")
-      } header: {
-        Text(MaintenanceTask.backfill.title)
+        facts(what: "把所选日期里还没整理的历史交给 AI，整理出事项、项目和每日时间线。",
+              detail: "读已有记录，不重新采集；整理过的不重复；会调用 AI 模型。")
       }
       Section {
-        SettingsRow("密钥备份") {
+        SettingsRow("\(localPrefix)密钥备份") {
           // 同其他复制按钮：复制后按钮写“已复制”，1.5 秒后复原（docs/ui.md）。
           Button(keys == .running ? "正在读取…" : keys == .copied ? "已复制" : "复制") {
             Task {
@@ -481,11 +485,11 @@ struct MaintenanceSettingsView: View {
           }.disabled(keys == .running)
         }
         if case .failed(let message) = keys { SettingsMessage(text: message) }
-        SettingsRow("记录与音频的数据目录") {
+        SettingsRow("\(localPrefix)记录与音频的数据目录") {
           Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([Config.load().dataDir]) }
         }
       } header: { Text("数据与备份") } footer: {
-        Note("只复制密钥，不含历史记录和录音。换电脑时，密钥和数据目录都要带上，缺一个都打不开。")
+        Note("只含密钥，不含记录和录音；换电脑时要和数据目录一起带走才能打开。")
       }
     }
     .task(id: store.canManageBackend) {
@@ -503,7 +507,7 @@ struct MaintenanceSettingsView: View {
   }
 
   func operation(_ task: MaintenanceTask, verb: String, job: CaptureSnapshot.Job?, extra: String? = nil,
-                 what: String, sources: String, dedupe: String, distill: String, action: @escaping () -> Void) -> some View {
+                 what: String, detail: String, action: @escaping () -> Void) -> some View {
     Section {
       SettingsRow {
         Button(job?.running == true ? "进行中…" : verb, action: action).disabled(job?.running == true)
@@ -512,17 +516,16 @@ struct MaintenanceSettingsView: View {
         if let text = job?.text, !text.isEmpty { Text(text) }
         if let extra { Text("整理：\(extra)") }
       }
-      facts(what: what, sources: sources, dedupe: dedupe, distill: distill)
+      facts(what: what, detail: detail)
     }
   }
 
   /// AGENTS.md：每个维护操作写明做什么、读哪些来源、是否去重、是否整理。
   /// 一句做什么，下面一行写读哪些来源、是否去重、是否整理；四项都直接看得到，不用再点开。
-  func facts(what: String, sources: String, dedupe: String, distill: String) -> some View {
+  func facts(what: String, detail: String) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(what)
-      let gap = sources.first.map { $0.isASCII ? " " : "" } ?? ""
-      Text("读取\(gap)\(sources)，\(dedupe)，\(distill)。").font(.system(size: TextSize.caption))
+      Text(detail).font(.system(size: TextSize.caption))
     }
     .foregroundStyle(Palette.muted)
     .multilineTextAlignment(.leading)
@@ -567,7 +570,7 @@ enum KeyBackup {
       return (p.terminationStatus, String(decoding: data, as: UTF8.self))
     }.value
     guard result.status == 0, !result.out.isEmpty else {
-      return .failed("钥匙串里有密钥没读到，备份不完整，所以没有复制。可以复制上面的诊断信息排查。")
+      return .failed("有密钥没读到，备份不完整，所以没有复制；可以复制上面的诊断信息排查。")
     }
     let pb = NSPasteboard.general
     pb.declareTypes([.string, .init("org.nspasteboard.ConcealedType"), .init("org.nspasteboard.TransientType")], owner: nil)

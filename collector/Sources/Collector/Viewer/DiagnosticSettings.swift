@@ -16,10 +16,9 @@ struct DiagnosticSettingsRow: View {
 
   var body: some View {
     SettingsRow {
-      Button("预览…") { showing = true }
-        .accessibilityLabel("预览诊断信息")
+      Button("预览并复制…") { showing = true }
     } label: {
-      Text("复制诊断信息")
+      Text("诊断信息")
       Text("包含版本、运行状态和日志事件，不包含记录内容。")
         .font(.system(size: TextSize.caption))
         .foregroundStyle(Palette.muted)
