@@ -54,9 +54,13 @@ internal fun SettingsPage(
             Sources.AUDIO -> activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
             else -> app.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
         }
-        val requested = if (pendingPermission == Sources.AUDIO) Manifest.permission.RECORD_AUDIO else Manifest.permission.POST_NOTIFICATIONS
+        val requested = when {
+            pendingPermission == Sources.AUDIO -> Manifest.permission.RECORD_AUDIO
+            Build.VERSION.SDK_INT >= 33 -> Manifest.permission.POST_NOTIFICATIONS
+            else -> null
+        }
         // 被永久拒绝后系统不再弹框，直接打开系统设置让人手动开，免得“允许”变成点了没反应的按钮。
-        if (!granted && !activity.shouldShowRequestPermissionRationale(requested)) {
+        if (!granted && (requested == null || !activity.shouldShowRequestPermissionRationale(requested))) {
             openSystemPage(activity, if (pendingPermission == Sources.AUDIO) SystemPage.APP else SystemPage.NOTIFICATIONS, notify)
         } else notify(if (granted) "权限已更新" else "未授权，可打开应用信息检查")
         pendingPermission = null
