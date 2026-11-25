@@ -11,7 +11,7 @@ if (preview && motion.matches) {
     window.removeEventListener("pagehide", finish);
   };
 
-  const timer = setTimeout(finish, 720);
+  const timer = setTimeout(finish, 820);
   motion.addEventListener("change", finish, { once: true });
   window.addEventListener("pagehide", finish, { once: true });
 }

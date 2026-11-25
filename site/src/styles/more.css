@@ -213,6 +213,31 @@
   height: auto;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .more-search-results[data-updated] .more-search-day li:not([hidden]),
+  .more-search-results[data-updated] .more-search-empty:not([hidden]) {
+    animation: more-result-in 200ms var(--ease) both;
+  }
+
+  .has-js .more-feature-meeting .more-transcript > div {
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 360ms var(--ease), transform 360ms var(--ease);
+  }
+  .has-js .more-feature-meeting.is-in .more-transcript > div {
+    opacity: 1;
+    transform: none;
+  }
+  .has-js .more-feature-meeting.is-in .more-transcript > div:nth-child(1) { transition-delay: 140ms; }
+  .has-js .more-feature-meeting.is-in .more-transcript > div:nth-child(2) { transition-delay: 220ms; }
+  .has-js .more-feature-meeting.is-in .more-transcript > div:nth-child(3) { transition-delay: 300ms; }
+
+  @keyframes more-result-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
 @media (max-width: 760px) {
   .more-feature,
   .more-feature-meeting {

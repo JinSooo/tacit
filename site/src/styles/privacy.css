@@ -42,6 +42,24 @@
   font-size: inherit;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .has-js .privacy-list > div {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 420ms var(--ease), transform 420ms var(--ease);
+  }
+  .has-js .privacy-list.is-in > div {
+    opacity: 1;
+    transform: none;
+  }
+  .has-js .privacy-list.is-in > div:nth-child(1) { transition-delay: 0ms; }
+  .has-js .privacy-list.is-in > div:nth-child(2) { transition-delay: 55ms; }
+  .has-js .privacy-list.is-in > div:nth-child(3) { transition-delay: 110ms; }
+  .has-js .privacy-list.is-in > div:nth-child(4) { transition-delay: 165ms; }
+  .has-js .privacy-list.is-in > div:nth-child(5) { transition-delay: 220ms; }
+  .has-js .privacy-list.is-in > div:nth-child(6) { transition-delay: 275ms; }
+}
+
 @media (max-width: 680px) {
   .privacy-list {
     grid-template-columns: minmax(0, 1fr);

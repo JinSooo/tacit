@@ -140,7 +140,12 @@
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
+  transition: box-shadow var(--t-quick) var(--ease);
   content: "";
+}
+
+.day-segment[open] summary::before {
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .day-segment summary::after {
@@ -163,19 +168,57 @@
   transform: translateY(4px) rotate(225deg);
 }
 
-/* 简约 / 详细切换：新出现的那一档轻淡入 */
+/* 简约 / 详细切换与展开动画 */
 @media (prefers-reduced-motion: no-preference) {
   #day-simple:not([hidden]),
   #day-detailed:not([hidden]) {
     animation: day-view-in var(--t-standard) var(--ease) both;
   }
   .day-segment[open] > :not(summary) {
-    animation: day-view-in var(--t-standard) var(--ease) both;
+    animation: day-record-in var(--t-standard) var(--ease) both;
   }
+  #day-detailed:not([hidden]) .day-chart-track::before {
+    transform-origin: left center;
+    animation: day-bar-grow 360ms var(--ease) both;
+  }
+  #day-detailed:not([hidden]) .day-chart-lanes li:nth-child(2) .day-chart-track::before { animation-delay: 45ms; }
+  #day-detailed:not([hidden]) .day-chart-lanes li:nth-child(3) .day-chart-track::before { animation-delay: 90ms; }
+  #day-detailed:not([hidden]) .day-chart-lanes li:nth-child(4) .day-chart-track::before { animation-delay: 135ms; }
+  #day-detailed:not([hidden]) .day-chart-lanes li:nth-child(5) .day-chart-track::before { animation-delay: 180ms; }
+  #day-detailed:not([hidden]) .day-hour-list li {
+    animation: day-record-in var(--t-standard) var(--ease) both;
+  }
+  #day-detailed:not([hidden]) .day-hour-list li:nth-child(2) { animation-delay: 40ms; }
+  #day-detailed:not([hidden]) .day-hour-list li:nth-child(3) { animation-delay: 80ms; }
+  #day-detailed:not([hidden]) .day-hour-list li:nth-child(4) { animation-delay: 120ms; }
+  #day-detailed:not([hidden]) .day-hour-list li:nth-child(5) { animation-delay: 160ms; }
+
+  .has-js .day-project .day-project-items > li {
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 380ms var(--ease), transform 380ms var(--ease);
+  }
+  .has-js .day-project.is-in .day-project-items > li {
+    opacity: 1;
+    transform: none;
+  }
+  .has-js .day-project.is-in .day-project-items > li:nth-child(1) { transition-delay: 140ms; }
+  .has-js .day-project.is-in .day-project-items > li:nth-child(2) { transition-delay: 210ms; }
+  .has-js .day-project.is-in .day-project-items > li:nth-child(3) { transition-delay: 280ms; }
 }
 
 @keyframes day-view-in {
   from { opacity: 0; }
+}
+
+@keyframes day-record-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes day-bar-grow {
+  from { opacity: 0.2; transform: scaleX(0); }
+  to { opacity: 1; transform: scaleX(1); }
 }
 
 .day-segment time {

@@ -157,6 +157,50 @@
   margin-block-start: 0;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .has-js .how-flow .how-inputs li,
+  .has-js .how-flow .how-core,
+  .has-js .how-flow .how-outputs li {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 420ms var(--ease), transform 420ms var(--ease);
+  }
+  .has-js .how-flow .how-connector {
+    opacity: 0;
+    transition: opacity 460ms var(--ease);
+  }
+  .has-js .how-flow .how-core :is(.how-mark-now, .how-mark-mid, .how-mark-old) {
+    transform-origin: 18px center;
+    transform: scaleX(0);
+    transition: transform 340ms var(--ease);
+  }
+
+  .has-js .how-flow.is-in .how-inputs li,
+  .has-js .how-flow.is-in .how-core,
+  .has-js .how-flow.is-in .how-outputs li {
+    opacity: 1;
+    transform: none;
+  }
+  .has-js .how-flow.is-in .how-connector {
+    opacity: 1;
+  }
+  .has-js .how-flow.is-in .how-core :is(.how-mark-now, .how-mark-mid, .how-mark-old) {
+    transform: scaleX(1);
+  }
+
+  .has-js .how-flow.is-in .how-inputs li:nth-child(1) { transition-delay: 0ms; }
+  .has-js .how-flow.is-in .how-inputs li:nth-child(2) { transition-delay: 75ms; }
+  .has-js .how-flow.is-in .how-inputs li:nth-child(3) { transition-delay: 150ms; }
+  .has-js .how-flow.is-in .how-connector:first-of-type { transition-delay: 180ms; }
+  .has-js .how-flow.is-in .how-core { transition-delay: 240ms; }
+  .has-js .how-flow.is-in .how-core .how-mark-now { transition-delay: 340ms; }
+  .has-js .how-flow.is-in .how-core .how-mark-mid { transition-delay: 400ms; }
+  .has-js .how-flow.is-in .how-core .how-mark-old { transition-delay: 460ms; }
+  .has-js .how-flow.is-in .how-connector:last-of-type { transition-delay: 360ms; }
+  .has-js .how-flow.is-in .how-outputs li:nth-child(1) { transition-delay: 420ms; }
+  .has-js .how-flow.is-in .how-outputs li:nth-child(2) { transition-delay: 495ms; }
+}
+
 @media (max-width: 920px) {
   .how-flow {
     grid-template-columns: minmax(0, 1fr);

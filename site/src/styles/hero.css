@@ -131,8 +131,21 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--faint);
   content: "";
+}
+
+.hero-timeline li.hero-newest::before {
+  top: 6px;
+  left: calc(var(--hero-axis-x) - 5px);
+  width: 11px;
+  height: 11px;
+  background: var(--raised);
+  border: 2px solid var(--accent);
+}
+
+.hero-timeline li:nth-child(2)::before {
+  background: var(--reading);
 }
 
 .hero-timeline time {
@@ -196,14 +209,45 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .hero-intro .display {
+    animation: hero-enter 440ms var(--ease) both;
+  }
+
+  .hero-intro .hero-lead {
+    animation: hero-enter 440ms var(--ease) 70ms both;
+  }
+
+  .hero-intro .hero-actions,
+  .hero-intro > .caption {
+    animation: hero-enter 440ms var(--ease) 130ms both;
+  }
+
+  .hero-window {
+    animation: hero-enter 500ms var(--ease) 100ms both;
+  }
+
+  .hero-timeline li.hero-newest::before {
+    animation: hero-pulse 3.2s ease-in-out 720ms infinite;
+  }
+
   .hero-window[data-writing] .hero-newest {
-    animation: hero-write-row 380ms var(--ease) both;
+    animation: hero-write-row 380ms var(--ease) 180ms both;
   }
 
   .hero-window[data-writing] .hero-writing-line {
-    animation: hero-write-line 360ms var(--ease) 220ms both;
+    animation: hero-write-line 360ms var(--ease) 360ms both;
     transform-origin: left;
   }
+}
+
+@keyframes hero-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes hero-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(59 116 104 / 0); }
+  50% { box-shadow: 0 0 0 4px var(--accent-soft); }
 }
 
 @keyframes hero-write-row {

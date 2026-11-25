@@ -1,8 +1,27 @@
-// 公共脚本：导航滚动分隔线、主题切换、进入视口淡入。区块脚本各自独立，不依赖这里。
+// 公共脚本：导航滚动分隔线与章节高亮、主题切换、进入视口淡入。区块脚本各自独立，不依赖这里。
 const nav = document.getElementById("nav");
-const onScroll = () => nav.toggleAttribute("data-scrolled", window.scrollY > 8);
-onScroll();
-window.addEventListener("scroll", onScroll, { passive: true });
+const navLinks = [...document.querySelectorAll(".nav-links a[href^='#']")];
+const linkById = new Map(navLinks.map((link) => [link.getAttribute("href").slice(1), link]));
+const allSections = [...document.querySelectorAll("main > section[id]")];
+
+function updateNav() {
+  nav.toggleAttribute("data-scrolled", window.scrollY > 8);
+  if (!allSections.length) return;
+  const probe = window.scrollY + nav.offsetHeight + window.innerHeight * 0.28;
+  let activeId = null;
+  for (const section of allSections) {
+    if (section.offsetTop <= probe) activeId = section.id;
+  }
+  const activeLink = activeId ? linkById.get(activeId) ?? null : null;
+  for (const link of navLinks) {
+    if (link === activeLink) link.setAttribute("aria-current", "location");
+    else link.removeAttribute("aria-current");
+  }
+}
+
+updateNav();
+window.addEventListener("scroll", updateNav, { passive: true });
+window.addEventListener("resize", updateNav, { passive: true });
 
 const toggle = document.getElementById("theme-toggle");
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
@@ -53,7 +72,7 @@ if (toggle) {
 }
 
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const targets = document.querySelectorAll("[data-reveal]");
+const targets = document.querySelectorAll("[data-reveal], [data-reveal-group]");
 if (reduced || !("IntersectionObserver" in window)) {
   targets.forEach((el) => el.classList.add("is-in"));
 } else {
@@ -65,7 +84,7 @@ if (reduced || !("IntersectionObserver" in window)) {
         io.unobserve(e.target);
       }
     },
-    { rootMargin: "0px 0px -10% 0px" },
+    { rootMargin: "0px 0px -8% 0px", threshold: 0.05 },
   );
   targets.forEach((el) => io.observe(el));
 }

@@ -5,7 +5,9 @@ if (form) {
   const chipsWrap = form.querySelector(".more-search-chips");
   const chips = chipsWrap ? [...chipsWrap.querySelectorAll("button[data-chip]")] : [];
   const group = document.querySelector(".more-search-day");
+  const resultsWrap = document.querySelector(".more-search-results");
   const empty = document.querySelector(".more-search-empty");
+  let initialized = false;
   const records = Array.from(group.querySelectorAll("li"), (row) => ({
     row,
     fields: Array.from(row.querySelectorAll("[data-search-text]"), (element) => ({
@@ -56,6 +58,12 @@ if (form) {
     group.hidden = count === 0;
     empty.hidden = count > 0;
     syncChips();
+    if (initialized && resultsWrap) {
+      resultsWrap.removeAttribute("data-updated");
+      void resultsWrap.offsetWidth;
+      resultsWrap.setAttribute("data-updated", "");
+    }
+    initialized = true;
   }
 
   form.addEventListener("submit", (event) => event.preventDefault());
