@@ -299,6 +299,15 @@ test("Claude 出错原因从 stdout 的 result 取出", async () => {
 });
 
 
+// 2026-11-25：朋友的 Mac 没装 Claude Code 时，默认模型只报“命令行调用失败”，准备清单说不出缺什么。
+test("CLI 命令不存在时归为 cli_missing", async () => {
+  const dir = await directory();
+  const spawn: Spawn = (_command, args, options) => nodeSpawn(join(dir, "missing-claude"), args, options);
+  const llm = createLLM({ dataDir: dir, recordUsage: () => {}, spawn });
+  const r = await llm.complete(request);
+  expect(r.ok ? "" : r.error).toBe("cli_missing");
+});
+
 test("task 在成功和失败用量中保留，未提供时为 NULL", async () => {
   const success = await fixture();
   await success.llm.complete({ ...request, task: "thread_brief" });

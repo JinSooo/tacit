@@ -105,7 +105,7 @@ struct MenuBarPanel: View {
       case .paused:
         Button("继续记录") { store.perform(.resume) }.controlSize(.small)
       case .noPermission:
-        Button("去授权…") { store.perform(.requestAX) }.controlSize(.small)
+        Button("授权…") { store.perform(.requestAX) }.controlSize(.small)
       }
     }
     .animation(Motion.standard, value: c.state)

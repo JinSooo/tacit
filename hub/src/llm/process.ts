@@ -17,7 +17,7 @@ export function run(ctx: BackendContext, command: string, args: string[]): Promi
     // 不继承额外的终端输入通道；认证仍由 CLI 自己处理。
     let child: ReturnType<Spawn>;
     try { child = ctx.spawn(command, args, { cwd: ctx.cwd, stdio: "pipe", detached: process.platform !== "win32", env: cliEnv() }); }
-    catch { reject(new ModelError("cli_failed")); return; }
+    catch (error) { reject(new ModelError(spawnFailure(error))); return; }
     function stop() {
       try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); }
       catch { child.kill("SIGKILL"); }
@@ -35,7 +35,7 @@ export function run(ctx: BackendContext, command: string, args: string[]): Promi
       if (stdout.length > 8 * 1024 * 1024) { failure = new ModelError("schema_mismatch"); stop(); }
     });
     child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(0, 500); });
-    child.on("error", () => fail(new ModelError("cli_failed")));
+    child.on("error", error => fail(new ModelError(spawnFailure(error))));
     child.stdin.on("error", () => { /* 提前退出时由 close 统一报告。 */ });
     child.on("close", code => {
       if (settled) return;
@@ -63,6 +63,11 @@ export function run(ctx: BackendContext, command: string, args: string[]): Promi
     });
     child.stdin.end(input(ctx));
   });
+}
+
+/** 命令不在 PATH 里（没装 Claude Code / Codex）单独归类，界面才能直接说“没找到”，而不是笼统的“调用失败”。 */
+export function spawnFailure(error: unknown): "cli_missing" | "cli_failed" {
+  return (error as NodeJS.ErrnoException | null)?.code === "ENOENT" ? "cli_missing" : "cli_failed";
 }
 
 export function observeRequest(ctx: BackendContext, transport: "api" | "cli", payload: unknown) {

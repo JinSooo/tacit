@@ -21,9 +21,10 @@ OUT="$REPO/dist"; DMG="$OUT/Tacit-$VERSION.dmg"
 mkdir -p "$OUT"; rm -f "$DMG" "$DMG.sha256"
 STAGE="$(mktemp -d)"; MNT="$(mktemp -d)"
 trap 'hdiutil detach -quiet "$MNT" 2>/dev/null || true; rm -rf "$STAGE" "$MNT"' EXIT
-ditto collector/build/Tacit.app "$STAGE/Tacit.app"
-ln -s /Applications "$STAGE/Applications"
-hdiutil create -quiet -volname "Tacit $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDZO "$DMG"
+# 小窗口里左 Tacit、右“应用程序”、中间箭头，打开就知道该往哪拖（2026-11-25 虚拟机实测：原来是一扇大空白窗口）。
+swift scripts/dmg-background.swift "$STAGE" >/dev/null
+uvx --from dmgbuild==2.0.0 dmgbuild -s scripts/dmg-settings.py -D app=collector/build/Tacit.app \
+  -D background="$STAGE/background.png" "Tacit $VERSION" "$DMG" >/dev/null
 
 # 从安装包里取出的应用必须签名完整、自带的运行时能跑。
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MNT" "$DMG"

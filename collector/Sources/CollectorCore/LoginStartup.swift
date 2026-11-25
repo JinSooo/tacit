@@ -78,6 +78,34 @@ public struct LoginStartup {
     }
   }
 
+  /// 用户手动打开时，让 launchd 也起一份待命的采集端：这份崩溃时它立刻接手（见 main.swift 的单实例锁）。
+  /// 安装包首次打开只写好登录启动定义、要到下次登录才由 launchd 接管，期间崩溃就没人拉起（2026-11-25 虚拟机实测）。
+  /// 只在开着登录启动时做；关了登录启动就只管本次使用。
+  public func ensureCollectorStandby(launchctl override: (([String]) -> (Int32, String))? = nil) {
+    let definition = file("collector", enabled: true)
+    guard fm.fileExists(atPath: definition.path) else { return }
+    let launchctl = override ?? self.launchctlOutput
+    let target = "gui/\(getuid())/dev.record-anything.collector"
+    let (status, description) = launchctl(["print", target])
+    if status != 0 {
+      _ = launchctl(["bootstrap", "gui/\(getuid())", definition.path])
+    } else if !description.contains("state = running") {
+      _ = launchctl(["kickstart", target])
+    }
+  }
+
+  private func launchctlOutput(_ args: [String]) -> (Int32, String) {
+    let p = Process(), out = Pipe()
+    p.executableURL = URL(fileURLWithPath: "/bin/launchctl"); p.arguments = args
+    p.standardOutput = out; p.standardError = FileHandle.nullDevice
+    do {
+      try p.run()
+      let data = out.fileHandleForReading.readDataToEndOfFile()
+      p.waitUntilExit()
+      return (p.terminationStatus, String(decoding: data, as: UTF8.self))
+    } catch { return (-1, "") }
+  }
+
   private func launchctl(_ args: [String]) -> Int32 {
     let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/launchctl"); p.arguments = args
     p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice

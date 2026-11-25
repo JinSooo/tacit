@@ -164,14 +164,32 @@ public enum DiagnosticSummary {
     if !entries.isEmpty { lines += ["", "日志文件"] + entries }
   }
 
+  /// 同一事件（除时间外字段都相同）合成一行并计次，免得一种错误每几秒刷一次就把别的事件挤出最近 30 条。
   private static func recentEvents(in logs: URL) -> [String] {
-    let events = eventLogs.flatMap { name in
-      tail(of: logs.appendingPathComponent(name)).compactMap(event)
+    var groups: [String: (at: Date, line: Fields, times: Int, order: Int)] = [:]
+    var order = 0
+    for name in eventLogs {
+      for raw in tail(of: logs.appendingPathComponent(name)) {
+        guard let (at, fields, key) = event(raw) else { continue }
+        order += 1
+        if var group = groups[key] {
+          group.times += 1
+          if at >= group.at { group.at = at; group.line = fields; group.order = order }
+          groups[key] = group
+        } else {
+          groups[key] = (at, fields, 1, order)
+        }
+      }
     }
-    return events.enumerated().sorted { lhs, rhs in
-      if lhs.element.at != rhs.element.at { return lhs.element.at < rhs.element.at }
-      return lhs.offset < rhs.offset
-    }.suffix(30).map { $0.element.line }
+    return groups.values.sorted { lhs, rhs in
+      if lhs.at != rhs.at { return lhs.at < rhs.at }
+      return lhs.order < rhs.order
+    }.suffix(30).compactMap { group in
+      var line = group.line
+      if group.times > 1 { line["times"] = group.times }
+      guard let data = try? JSONSerialization.data(withJSONObject: line, options: [.sortedKeys, .withoutEscapingSlashes]) else { return nil }
+      return String(decoding: data, as: UTF8.self)
+    }
   }
 
   private static func tail(of file: URL) -> [Data] {
@@ -186,38 +204,40 @@ public enum DiagnosticSummary {
       try handle.seek(toOffset: size > count ? size - count - 1 : 0)
       let data = try handle.read(upToCount: Int(count) + 1) ?? Data()
       let lines = data.split(separator: 0x0A, omittingEmptySubsequences: false)
-      return Array((size > count ? lines.dropFirst() : lines[...]).suffix(200))
+      return Array((size > count ? lines.dropFirst() : lines[...]).suffix(2000))
     } catch {
       return []
     }
   }
 
-  private static func event(_ line: Data) -> (at: Date, line: String)? {
-    guard let fields = object(line), let code = diagnosticLabel(fields["code"]) else { return nil }
+  /// 后台日志写 `location` + `code`，整理日志写 `step` + `category`，采集端写 `component` + `code`，统一成 component + code。
+  private static func event(_ line: Data) -> (at: Date, fields: Fields, key: String)? {
+    guard let fields = object(line),
+          let code = diagnosticLabel(fields["code"]) ?? diagnosticLabel(fields["category"]) else { return nil }
     var safe: Fields = ["code": code]
     let at = timestamp(fields["at"])
-    safe["at"] = at
-    safe["component"] = diagnosticLabel(fields["component"])
-    for (key, value) in fields where !["at", "component", "code"].contains(key) {
+    safe["component"] = diagnosticLabel(fields["component"]) ?? diagnosticLabel(fields["location"]) ?? diagnosticLabel(fields["step"])
+    safe["name"] = diagnosticLabel(fields["name"])
+    for (key, value) in fields where !["at", "component", "location", "step", "code", "category", "name", "times"].contains(key) {
       // 不复制自由文本、嵌套字段或凭据等敏感指标，即使值是数字。
       guard value is NSNumber, let key = diagnosticLabel(key),
             key.range(of: #"(?i)token|secret|key|password|authorization|credential|body|title|path|query|project|search"#,
                       options: .regularExpression) == nil else { continue }
       safe[key] = value
     }
-    guard let data = try? JSONSerialization.data(withJSONObject: safe, options: [.sortedKeys, .withoutEscapingSlashes]) else { return nil }
-    return (at.flatMap(ViewerTime.parse) ?? .distantPast, String(decoding: data, as: UTF8.self))
+    guard let identity = try? JSONSerialization.data(withJSONObject: safe, options: [.sortedKeys]) else { return nil }
+    safe["at"] = at
+    return (at.flatMap(ViewerTime.parse) ?? .distantPast, safe, String(decoding: identity, as: UTF8.self))
   }
 
   private static func modelError(_ value: Any?) -> String {
     let labels = [
       "timeout": "超时", "network": "网络不可用", "rate_limited": "请求太频繁", "quota": "额度用完",
       "auth": "密钥无效", "bad_request": "请求被拒绝", "server_error": "服务出错",
-      "invalid_json": "返回不是 JSON", "schema_mismatch": "返回格式不对",
-      "cli_failed": "命令行调用失败", "usage_record_failed": "用量记录失败", "unknown": "未知错误",
+      "invalid_json": "返回不是 JSON", "schema_mismatch": "返回格式不对", "cli_missing": "没找到命令行工具",
+      "cli_failed": "命令行调用失败", "usage_record_failed": "用量记录失败", "config_error": "模型配置无效", "unknown": "未知错误",
     ]
-    guard let raw = value as? String,
-          raw.range(of: #"\A[a-z_]+(?::[1-5][0-9]{2})?\z"#, options: .regularExpression) != nil,
+    guard let raw = value as? String, ModelErrorText.isCode(raw),
           let category = raw.split(separator: ":").first, let label = labels[String(category)] else { return "未知错误" }
     return "\(label)（\(raw)）"
   }

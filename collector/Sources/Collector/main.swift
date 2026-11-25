@@ -340,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   @MainActor private func finishLaunchingAfterRecovery() {
-    AppSetup.start(config: config, startup: loginStartup, writeGate: switchWriteGate)
+    AppSetup.start(config: config, startup: loginStartup, writeGate: switchWriteGate, standby: launchSource != .launchd)
     viewer.store.remoteBackend?.refreshContext()
     if let failure = remoteSwitch.lastFailure { viewer.store.remoteBackend?.error = failure }
     MainActor.assumeIsolated {
@@ -399,9 +399,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
     }
     readyForTimelineURL = true
+    MainActor.assumeIsolated { viewer.store.update.start() }
     if let day = pendingTimelineDay {
       pendingTimelineDay = nil
       MainActor.assumeIsolated { viewer.show(.timelineDay(day)) }
+    } else if LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate()) {
+      // 用户自己打开（首次安装、升级、退出后再开）就把主窗口拿出来：只有菜单栏图标时，新用户看不到准备清单，
+      // 刘海屏上图标还可能被挤掉，像是什么都没发生。登录自启和开机“重新打开窗口”恢复都不弹窗。
+      MainActor.assumeIsolated { viewer.show() }
     }
     ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.updateAudio() }
     ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.tick() }
@@ -483,6 +488,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func applicationWillTerminate(_ n: Notification) {
     guard !terminating else { return }
     terminating = true
+    CleanQuitMarker.mark(in: config.dataDir)
     MainActor.assumeIsolated {
       widgetPublisher?.stop()
       deviceDiscovery.update(nil)
@@ -839,6 +845,9 @@ func cpuSeconds() -> Double {
   return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6
 }
 
+/// 进程启动时刻：刚启动的一分钟里后台可能还在准备，查看窗口连不上时先等（HubAPI.startupGrace）。
+let appLaunchedAt = Date()
+
 if CommandLine.arguments.contains("--probe-front") { runProbe(); exit(0) }
 if let i = CommandLine.arguments.firstIndex(of: "--render-icon"), i + 1 < CommandLine.arguments.count {
   do { try AppIconArt.writeIconset(to: URL(fileURLWithPath: CommandLine.arguments[i + 1])); exit(0) }
@@ -854,14 +863,21 @@ do { try DiagnosticLog.redirectIfNeeded(to: logFile) }
 catch { DiagnosticLog.shared.record(.collectorLogOpenFailed) }
 DiagnosticLog.installUncaughtExceptionHandler()
 
-// 已经有一个采集端在跑时，请它打开窗口，自己退出。launchd 拉起的实例不弹窗。
-let instanceLock = InstanceLock.acquire(path: config.dataDir.appendingPathComponent("collector.lock").path)
+// 已经有一个采集端在跑时：用户打开的请它拿出窗口、自己退出（登录后 90 秒内是系统恢复，不弹窗）；
+// launchd 拉起的留下待命，正在跑的那份崩溃时接手，正常退出时跟着退出（退出码 0，launchd 不再拉起）。
+let lockPath = config.dataDir.appendingPathComponent("collector.lock").path
+var instanceLock = InstanceLock.acquire(path: lockPath)
 if case .held = instanceLock {
-  if !launchedByAgent {
-    DistributedNotificationCenter.default().postNotificationName(.init(AppDelegate.showWindowNotification), object: nil, deliverImmediately: true)
+  guard launchedByAgent else {
+    if LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate()) {
+      DistributedNotificationCenter.default().postNotificationName(.init(AppDelegate.showWindowNotification), object: nil, deliverImmediately: true)
+    }
+    exit(0)
   }
-  exit(0)
+  guard let lock = InstanceLock.wait(path: lockPath), !CleanQuitMarker.isMarked(in: config.dataDir) else { exit(0) }
+  instanceLock = .acquired(lock)
 }
+CleanQuitMarker.clear(in: config.dataDir)
 DiagnosticLog.shared.record(.started(DiagnosticBuild(), launchSource))
 
 Phosphor.register()

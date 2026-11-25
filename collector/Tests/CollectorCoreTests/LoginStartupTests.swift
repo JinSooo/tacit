@@ -43,3 +43,42 @@ import Testing
   #expect(AppPlacement.of(bundlePath: "/Users/someone/src/tacit/collector/build/Tacit.app", home: home) == .elsewhere)
   #expect(AppPlacement.of(bundlePath: "/Applications/Utilities/Tacit.app", home: home) == .elsewhere)
 }
+
+/// 2026-11-25 虚拟机实测：安装包首次打开后采集端崩溃，要到下次登录才有 launchd 拉起。
+@Test func collectorStandbyIsLoadedOrStartedOnlyWhenLoginStartIsOn() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let startup = LoginStartup(home: root, dataDir: root.appendingPathComponent("data"))
+  var calls: [[String]] = []
+  var printResult: (Int32, String) = (113, "")
+  let fake: ([String]) -> (Int32, String) = { args in
+    calls.append(args)
+    return args.first == "print" ? printResult : (0, "")
+  }
+  startup.ensureCollectorStandby(launchctl: fake)
+  #expect(calls.isEmpty)
+
+  try FileManager.default.createDirectory(at: startup.agents, withIntermediateDirectories: true)
+  try Data("definition".utf8).write(to: startup.file("collector", enabled: true))
+  startup.ensureCollectorStandby(launchctl: fake)
+  #expect(calls.last?.first == "bootstrap")
+
+  calls = []; printResult = (0, "state = not running")
+  startup.ensureCollectorStandby(launchctl: fake)
+  #expect(calls.last?.first == "kickstart")
+
+  calls = []; printResult = (0, "state = running")
+  startup.ensureCollectorStandby(launchctl: fake)
+  #expect(calls.map(\.first) == ["print"])
+}
+
+@Test func cleanQuitMarkerRoundTrips() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+  defer { try? FileManager.default.removeItem(at: root) }
+  #expect(!CleanQuitMarker.isMarked(in: root))
+  CleanQuitMarker.mark(in: root)
+  #expect(CleanQuitMarker.isMarked(in: root))
+  CleanQuitMarker.clear(in: root)
+  #expect(!CleanQuitMarker.isMarked(in: root))
+}

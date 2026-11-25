@@ -137,3 +137,23 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
     #expect(events.last?.contains(#""index":35}"#) == true)
   }
 }
+
+/// 2026-11-25：hub.log 里一种信箱错误每 5 秒一条，最近 30 条全被它占满；整理日志的错误没有 `code`，一直进不了诊断信息。
+@Test func diagnosticSummaryFoldsRepeatedEventsAndKeepsDistillErrors() throws {
+  try withDiagnosticDirectory { directory in
+    let logs = directory.appendingPathComponent("logs")
+    var hub = [#"{"at":"2026-11-19T13:00:00+09:00","location":"setup.agents","name":"Error","code":"EACCES"}"#]
+    for second in 0..<50 {
+      hub.append(#"{"at":"2026-11-19T14:00:\#(String(format: "%02d", second))+09:00","location":"relay.space","name":"TypeError","code":"ECONNRESET"}"#)
+    }
+    try Data(hub.joined(separator: "\n").utf8).write(to: logs.appendingPathComponent("hub.log"))
+    try Data(#"{"at":"2026-11-19T13:30:00+09:00","step":"day","category":"schema_mismatch","count":1}"#.utf8)
+      .write(to: logs.appendingPathComponent("distill.log"))
+    let events = summary(in: directory).split(separator: "\n").filter { $0.hasPrefix("{") }
+    #expect(events.count == 3)
+    #expect(events.contains { $0.contains(#""component":"setup.agents""#) && $0.contains(#""code":"EACCES""#) })
+    #expect(events.contains { $0.contains(#""component":"day""#) && $0.contains(#""code":"schema_mismatch""#) })
+    #expect(events.last?.contains(#""times":50"#) == true)
+    #expect(events.last?.contains("2026-11-19T14:00:49+09:00") == true)
+  }
+}
