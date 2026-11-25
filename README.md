@@ -196,7 +196,7 @@ Tacit 目前处于**开发预览**阶段，以下几项仍在完善或尚未覆�
 - 第三方插件安装和本地模型独立入口当前暂时收起。
 - 文件类系统权限（如 Safari 历史）与首次打开的系统放行流程，尚需在更多开启 SIP 的全新 Mac 环境中进一步覆盖验证。
 - Android 客户端（含 HPKE 加密配对、局域网与中转信箱同步、可选单场 AI 总结与查看时间线）安装包 `Tacit-<版本>.apk` 在 Releases 里单独发布，只支持 arm64 手机。
-- 后台服务也可单独部署到 Linux 服务器或 Docker 主机（见 [docs/server-deployment.md](docs/server-deployment.md)），这是可选形态；Mac 上连接远端后台的图形向导尚未完成，目前需配合命令行配对。
+- 后台服务也可单独部署到 Linux 服务器或装了 Docker 的 Windows 电脑（见 [docs/server-deployment.md](docs/server-deployment.md)），这是可选形态：在服务器上用一行命令生成管理邀请链接，再到 Mac 设置的“后台与连接”里点“连接远端后台”粘贴即可切换。
 
 ## 更新与卸载
 

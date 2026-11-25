@@ -336,6 +336,13 @@ test.skipIf(bindDenied)("CLI pair 管理邀请 5 分钟有效，显式地址排�
     expect(failed.stderr).toContain("--address 必须是 http 或 https origin");
     expect(failed.stdout).toBe("");
   }
+  // 不填 --address 时邀请里只有本机（容器）网卡地址，要提醒补上
+  const bare = spawnSync(process.execPath, [cli, "pair", "--role", "collect"], { env, encoding: "utf8" });
+  expect(bare.status).toBe(0);
+  expect(bare.stderr).toContain("请加 --address");
+  const withAddress = spawnSync(process.execPath, [cli, "pair", "--role", "collect", "--address", "http://192.0.2.10:47824"], { env, encoding: "utf8" });
+  expect(withAddress.status).toBe(0);
+  expect(withAddress.stderr).not.toContain("请加 --address");
   // 在另一个进程里执行 CLI pair --role admin
   const before = Date.now();
   const pairRes = spawnSync(process.execPath, [cli, "pair", "--role", "admin", "--address", "https://server.example.test:48619/"], { env, encoding: "utf8" });

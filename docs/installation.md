@@ -59,6 +59,7 @@ Mac：
 1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）、`site/src/latest.json`；`scripts/release-version.test.ts` 检查这几处一致。若改动了官网源码 `site/src/`，顺手运行 `bun site/build.ts` 同步 `site/dist/`。提交并打 `mac-v<版本号>` tag。
 2. 在已配置代码签名证书、装了 [uv](https://docs.astral.sh/uv/) 的 Mac 上运行 `scripts/release-dmg.sh`（安装盘窗口布局由 `uvx` 临时拉取固定版本的 dmgbuild 写入）。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
 3. 推送 tag，建 Release 并上传这两个文件：`gh release create mac-v<版本号> dist/Tacit-<版本号>.dmg dist/Tacit-<版本号>.dmg.sha256 --prerelease --title "Tacit v<版本号> - Mac" --notes-file <说明>`。
+   推送 `mac-v<版本号>` tag 会触发 `.github/workflows/hub-image.yml`，把同一份后台代码的服务端镜像推到 `ghcr.io/jinsooo/tacit-hub:<版本号>` 和 `:latest`；在 Actions 里确认它跑通。
 4. Release 上传完成后部署官网（步骤见 `site/README.md`）。第 1 步要同时把 `site/src/latest.json` 改成新版本号和这次 Release 的页面地址；已安装的 Tacit 每天读一次 `https://tacit.jinso.top/latest.json`，比自己新就在时间线顶部提示“可以更新了”。请求不带 Cookie 和本机信息，失败时不提示。先部署官网再传安装包，用户会点到还没有安装包的页面。
 
 Android：

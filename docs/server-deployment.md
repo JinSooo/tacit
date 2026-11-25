@@ -1,6 +1,6 @@
 # Tacit 中枢服务端独立部署指南
 
-本文档说明如何把 Tacit 中枢（Hub）单独部署在自己的 Linux 服务器或 Docker 主机上（24 小时在线），再由 Mac、Android 等设备经加密协议连接。
+本文档说明如何把 Tacit 中枢（Hub）单独部署在自己的 Linux 服务器或装了 Docker 的电脑上（24 小时在线），再由 Mac、Android 等设备经加密协议连接。Windows 电脑见[第 7 节](#7-windows-电脑docker-desktop)。
 
 独立部署模式下（`RA_HUB_MODE=server`，非 macOS 系统默认启用）：
 
@@ -33,19 +33,29 @@ chmod 0700 /srv/tacit-data
 
 ---
 
-## 2. 构建镜像并启动容器
+## 2. 获取镜像并启动容器
 
-在仓库根目录构建镜像：
+每个 Mac 版本发布时，同一份后台代码的镜像也会推到 GitHub Container Registry（`linux/amd64`、`linux/arm64`），版本号和 Mac 版一致：
+
+```bash
+docker pull ghcr.io/jinsooo/tacit-hub:<版本号>
+docker tag ghcr.io/jinsooo/tacit-hub:<版本号> tacit-hub:local
+```
+
+也可以在仓库根目录自己构建：
 
 ```bash
 docker build -f hub/Dockerfile -t tacit-hub:local .
 ```
+
+服务器和 Mac 上的 Tacit 最好用同一个版本；两边靠设备协议兼容，版本不同时以 Release 说明为准。
 
 ### 方式一：`docker run`
 
 ```bash
 docker run -d \
   --name tacit-hub \
+  --hostname tacit-hub \
   --restart unless-stopped \
   -e TZ=Asia/Shanghai \
   -p 47824:47824 \
@@ -53,6 +63,8 @@ docker run -d \
   -v /etc/tacit/master.key:/run/secrets/tacit_master_key:ro \
   tacit-hub:local
 ```
+
+`--hostname` 是设备上显示的后台名字，不设就是一串容器编号。
 
 单容器入口为 `bun hub/src/cli.ts run`，会同时托管 `serve`（网络服务）与 `distill`（后台整理）两个子进程，转发 `SIGTERM`/`SIGINT` 并在异常退出时按退避自动重启。
 
@@ -62,6 +74,7 @@ docker run -d \
 services:
   tacit-hub:
     image: tacit-hub:local
+    hostname: tacit-hub
     build:
       context: .
       dockerfile: hub/Dockerfile
@@ -106,18 +119,20 @@ secrets:
 
 ## 4. 配对首台管理设备（`admin`）
 
-在正在运行的容器里执行 `pair --role admin`：
+在正在运行的容器里执行 `pair --role admin`，`--address` 填设备能访问到的服务器地址和端口（内网 IP、Tailscale IP 或反向代理后的 https 地址）：
 
 ```bash
-docker exec -it tacit-hub bun hub/src/cli.ts pair --role admin
+docker exec -it tacit-hub bun hub/src/cli.ts pair --role admin --address http://192.168.1.20:47824
 ```
 
-命令会输出一条一次性的 `tacit://pair?d=...` 配对链接（`admin` 邀请 **5 分钟**内有效；`collect` 和 `view` 邀请 10 分钟内有效）。将链接交给你的 Mac 客户端完成配对即可成为管理员设备。
+不加 `--address` 时，邀请里只有容器自己看到的地址（如 `172.17.0.3`），设备连不上。
+
+命令会输出一条一次性的 `tacit://pair?d=...` 配对链接（`admin` 邀请 **5 分钟**内有效；`collect` 和 `view` 邀请 10 分钟内有效）。在 Mac 的 Tacit 设置 › 后台与连接 › 连接远端后台里粘贴这条链接，按向导完成切换，这台 Mac 即成为管理设备。
 
 如果希望配对时同时开通或附带中转信箱，可加 `--relay` 参数：
 
 ```bash
-docker exec -it tacit-hub bun hub/src/cli.ts pair --role admin --relay https://relay.example.com
+docker exec -it tacit-hub bun hub/src/cli.ts pair --role admin --address http://192.168.1.20:47824 --relay https://relay.example.com
 ```
 
 其他常用的本机设备运维命令（直接操作数据库）：
@@ -167,3 +182,43 @@ docker exec -it tacit-hub bun hub/src/cli.ts devices remove <device_id> [--force
 6. **配置 API 模型与 API Key**：
    - 服务端不自动回退到 CLI 模型；确保 `/data/models.json` 已配置 `anthropic` 或 `openai-compatible`，并设置对应的模型 API Key 后，后台整理会自动恢复。
 7. **验证数据完整后，停用旧 Mac 上的本机中枢自启**。
+
+---
+
+## 7. Windows 电脑（Docker Desktop）
+
+Windows 10/11 可以用 Docker Desktop（WSL 2 后端）运行同一个镜像。和 Linux 有三处不同，下面的命令都在 PowerShell 里执行：
+
+- **根密钥和数据都放进 Docker 卷，不要挂 Windows 目录。** 从 Windows 目录挂进容器的文件在容器里一律显示为 root 所有、权限 `0777`，中枢会以“根密钥权限过宽”拒绝启动；SQLite 放在 Windows 目录上也慢且不可靠。
+- **要有人登录着这台电脑。** Docker Desktop 只在用户登录后运行；在 Docker Desktop 设置里勾选“登录 Windows 时启动 Docker Desktop”，容器用 `--restart unless-stopped` 会随它自动起来。用 SSH 远程启动的 Docker Desktop 在 SSH 断开后会停，也拉不了镜像（读不到 Windows 凭据），不要这样当常驻服务。
+- 局域网里的设备连不上时，检查 Windows 防火墙是否放行了 47824 端口。
+
+1. 安装 Docker Desktop，确认 `docker info` 能输出版本，并按第 2 节拉取或构建镜像 `tacit-hub:local`。
+2. 在 Docker 卷里生成根密钥，再启动容器：
+
+   ```powershell
+   docker volume create tacit-key
+   docker volume create tacit-data
+   docker run --rm -u 0 -v tacit-key:/key --entrypoint sh tacit-hub:local -c 'umask 077; head -c 32 /dev/urandom | od -An -tx1 -v | tr -d " \n" > /key/master.key; chown bun:bun /key/master.key; chmod 400 /key/master.key'
+   docker run -d --name tacit-hub --hostname tacit-hub --restart unless-stopped `
+     -e TZ=Asia/Shanghai `
+     -e RA_MASTER_KEY_FILE=/run/secrets/tacit/master.key `
+     -p 47824:47824 `
+     -v tacit-data:/data `
+     -v tacit-key:/run/secrets/tacit:ro `
+     tacit-hub:local
+   ```
+
+3. 把根密钥抄进密码管理器（它只在 `tacit-key` 卷里，删卷或重装 Docker 就没了）：
+
+   ```powershell
+   docker run --rm -v tacit-key:/key:ro --entrypoint cat tacit-hub:local /key/master.key
+   ```
+
+4. 用这台电脑的局域网或 Tailscale 地址生成管理邀请，到 Mac 上粘贴（同第 4 节）：
+
+   ```powershell
+   docker exec tacit-hub bun hub/src/cli.ts pair --role admin --address http://192.168.1.20:47824
+   ```
+
+5. 连上后在 Mac 设置的“AI 模型”里配置 API 模型和 Key，写入的是这台服务器。

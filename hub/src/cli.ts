@@ -4,7 +4,7 @@ import { closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, rm
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { applyTimezone, dataDirOf, timezoneStatus } from "./hub-json.ts";
+import { applyTimezone, dataDirOf, hubModeOf, timezoneStatus } from "./hub-json.ts";
 import { httpOrigin } from "./devices/http-origin.ts";
 import type { HubDB as Database } from "./db.ts";
 
@@ -180,6 +180,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const invite = await devices.createPairing({ role, relayUrl, address, openListener: false });
       console.log(invite.uri);
       process.stderr.write(`已创建 ${invite.role} 配对邀请，有效期至 ${invite.expires_at}（仅可使用一次）\n`);
+      // 容器里只看得到自己的网卡（如 172.17.0.x），设备按这个地址连不上。
+      if (address === undefined && hubModeOf() === "server") {
+        process.stderr.write("邀请里只有本机网卡地址；在容器里运行时，请加 --address http://<设备能访问的服务器地址>:<端口> 重新生成\n");
+      }
     } catch (error) {
       if (!(error instanceof WireError) && !(error instanceof InputError)) throw error;
       console.error(error.message);
