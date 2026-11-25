@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/JinSooo/tacit/releases/latest"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-Tacit.dmg-3b7468?style=flat-square" alt="下载"></a>
+  <a href="https://github.com/JinSooo/tacit/releases"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-Tacit.dmg-3b7468?style=flat-square" alt="下载"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-211f1d?style=flat-square&logo=apple" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Apple_%E8%8A%AF%E7%89%87-arm64-211f1d?style=flat-square" alt="Apple 芯片">
   <img src="https://img.shields.io/badge/%E7%8A%B6%E6%80%81-%E5%BC%80%E5%8F%91%E9%A2%84%E8%A7%88-9d2933?style=flat-square" alt="开发预览">
@@ -74,7 +74,7 @@ Claude Code、Codex 新开会话时，自动带入当前项目正在推进的事
 
 需要 Apple 芯片的 Mac，系统 macOS 14 或更新。
 
-1. 从 [Releases](https://github.com/JinSooo/tacit/releases/latest) 下载 `Tacit-<版本号>.dmg`，打开后把 Tacit 拖进“应用程序”。
+1. 从 [Releases](https://github.com/JinSooo/tacit/releases) 里最新的“Tacit v<版本号> - Mac”下载 `Tacit-<版本号>.dmg`，打开后把 Tacit 拖进“应用程序”。
 2. 从“应用程序”打开 Tacit。安装包没有经过 Apple 公证，第一次打开会被系统拦下：点“完成”，打开 **系统设置 › 隐私与安全性**，在页面下方的 Tacit 旁边点 **仍要打开**，输入密码。如果没有这个按钮，在终端运行 `xattr -dr com.apple.quarantine /Applications/Tacit.app` 后再打开。
 3. 菜单栏出现 Tacit 图标后，后台服务会自动准备好，不需要用命令行。
 

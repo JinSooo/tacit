@@ -64,7 +64,7 @@ Android：
 
 1. 改 `android/app/build.gradle.kts` 的 `versionName`，`versionCode` 加 1。提交并打 `android-v<版本号>` tag。
 2. 运行 `scripts/release-apk.sh`，前提条件同上，输出 `dist/Tacit-<版本号>.apk` 和 `.sha256`，并核对安装包只用 Tacit 正式钥匙签名。Android 只打 arm64-v8a。
-3. 推送 tag，建 Release 并上传这两个文件：`gh release create android-v<版本号> dist/Tacit-<版本号>.apk dist/Tacit-<版本号>.apk.sha256 --prerelease --latest=false --title "Tacit v<版本号> - Android" --notes-file <说明>`。`--latest=false` 让 `releases/latest` 始终指向 Mac 版，README 和官网的下载链接靠它。
+3. 推送 tag，建 Release 并上传这两个文件：`gh release create android-v<版本号> dist/Tacit-<版本号>.apk dist/Tacit-<版本号>.apk.sha256 --prerelease --latest=false --title "Tacit v<版本号> - Android" --notes-file <说明>`。`--latest=false` 免得 Android 版被标成最新。注意 GitHub 的 `releases/latest` 不认预发布版，两端都是预发布时这个地址是 404，所以 README 和官网的下载链接指向 `releases` 列表页。
 
 Release 标题只用 `Tacit v<版本号> - Mac` 和 `Tacit v<版本号> - Android` 两种，“开发预览”由 GitHub 的 Pre-release 标记表达，不写进标题。
 

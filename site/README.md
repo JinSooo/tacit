@@ -59,7 +59,7 @@ CLOUDFLARE_ACCOUNT_ID=<账号 ID> CLOUDFLARE_API_TOKEN=<从钥匙串读取> \
 - 不在标题上方加小标签（eyebrow），版式自己说明层级。能用布局说清楚的不写说明。
 - 界面用词按 `docs/ui.md` 第 1 节：事项、整理、自动带入、AI 工具、时间线、段、依据。不出现中枢、提炼、线程、注入、档位、OCR。
 - 如实：它是开发预览；只支持 Apple 芯片、macOS 14 及以上；用云端模型整理时相关文字会发给你配置的模型服务；不收集遥测。不承诺没做到的东西（Android、多设备同步、Windows 都还没有）。
-- 下载链接：`https://github.com/JinSooo/tacit/releases/latest`。
+- 下载链接：`https://github.com/JinSooo/tacit/releases`（预发布期间 `releases/latest` 是 404）。
 
 ## 虚构的一天（全站示例数据共用）
 
