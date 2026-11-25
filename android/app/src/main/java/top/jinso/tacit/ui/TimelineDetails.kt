@@ -95,7 +95,8 @@ internal fun TimelineDetails(
     onOpenLocal: (List<HistoryRecord>) -> Unit,
 ) {
     val owner = LocalActivity.current as? LifecycleOwner
-    var local by remember(item.recordIds, invalidation) { mutableStateOf<List<AudioConversationRow>?>(null) }
+    // Survives sync invalidation so the page reloads in place instead of flashing through loading.
+    var local by remember(item.id) { mutableStateOf<List<AudioConversationRow>?>(null) }
     LaunchedEffect(item.recordIds, invalidation) {
         local = try {
             withContext(Dispatchers.IO) {
@@ -112,7 +113,10 @@ internal fun TimelineDetails(
         }
     }
     val remoteIds = local?.let { rows -> item.recordIds - rows.flatMap { row -> row.records.map { it.id } }.toSet() }
-    var originals by remember(remoteIds, invalidation) { mutableStateOf<List<TimelineOriginal>?>(null) }
+    // The previous result stays on screen while a sync change is refetched; rows are keyed by record ID,
+    // so a retracted original leaves and the rest move up. A failed refetch clears it, like the Mac.
+    var fetched by remember(item.id) { mutableStateOf<List<TimelineOriginal>?>(null) }
+    val originals = fetched?.let { list -> remoteIds?.let { ids -> list.filter { it.id in ids } } }
     var offline by remember(remoteIds, invalidation) { mutableStateOf(false) }
     val retries = remember(remoteIds, invalidation) { Channel<Unit>(Channel.CONFLATED) }
     LaunchedEffect(owner, remoteIds, invalidation) {
@@ -132,11 +136,12 @@ internal fun TimelineDetails(
                 while (true) {
                     offline = false
                     try {
-                        originals = app.sync.timelineOriginals(remoteIds)
+                        fetched = app.sync.timelineOriginals(remoteIds)
                         break
                     } catch (error: CancellationException) {
                         throw error
                     } catch (_: Exception) {
+                        fetched = null
                         offline = true
                         retries.receive()
                     }
@@ -145,7 +150,8 @@ internal fun TimelineDetails(
                 awaitCancellation()
             } finally {
                 connectivity.unregisterNetworkCallback(callback)
-                originals = null
+                // Leaving the screen drops the result; a restart for a sync change keeps it until the refetch lands.
+                if (owner?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) != true) fetched = null
                 offline = false
             }
         }
@@ -179,8 +185,8 @@ internal fun TimelineDetails(
                 }
                 originals == null -> item(key = "loading") { ProgressLine(Modifier.itemMotion(this).fillMaxWidth()) }
                 originals.isNullOrEmpty() -> item(key = "none") { Caption("没有可读取的原文", Modifier.itemMotion(this)) }
-                else -> originals.orEmpty().forEachIndexed { index, record ->
-                    item(key = "original-$index") {
+                else -> originals.orEmpty().forEach { record ->
+                    item(key = "original-${record.id}") {
                         Column(Modifier.itemMotion(this)) {
                         Row(verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -25,6 +25,8 @@ class TimelineSyncTest {
         }
         assertEquals(start, rows.single().start)
         assertEquals("展览将在周六开幕", rows.single().body)
+        // The detail list keys rows by record ID, so a retracted original doesn't shift its neighbours' identity.
+        assertEquals("example", rows.single().id)
     }
 
     @Test fun staleFooterNeedsFailedRefreshAndClearsAfterEmptySuccessfulPull() = runBlocking {
