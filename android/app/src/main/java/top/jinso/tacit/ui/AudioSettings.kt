@@ -146,6 +146,7 @@ private fun SpeakerSettings(
     var refresh by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var expanded by rememberSaveable { mutableStateOf(false) }
+    var mineExpanded by rememberSaveable { mutableStateOf(false) }
     var naming by rememberSaveable { mutableStateOf<String?>(null) }
     var speakerName by rememberSaveable { mutableStateOf("") }
     var namingTitle by rememberSaveable { mutableStateOf("") }
@@ -207,26 +208,46 @@ private fun SpeakerSettings(
         loadFailed -> GroupCard { SettingsRow("暂时无法读取声音列表") }
         current == null -> ProgressLine()
         else -> GroupCard {
-            val visible = current.filterNot { it.ignored }
-                .sortedWith(compareByDescending<AudioSpeaker> { it.isMe }.thenByDescending { it.name != null })
+            val (mine, others) = orderedSpeakers(current)
+            val visible = mine + others
             val ignored = current.filter { it.ignored }
             if (current.isEmpty()) SettingsRow("暂时没有可显示的声音")
-            var unnamed = 0
-            visible.forEachIndexed { index, speaker ->
-                if (index > 0) GroupDivider()
-                val label = if (speaker.isMe) "我" else speaker.name ?: "声音 ${++unnamed}"
-                SettingsRow(label) {
+            @Composable fun mineRow(speaker: AudioSpeaker, title: String, status: String) =
+                SettingsRow(title, status = status) {
                     Row {
                         SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
-                        if (speaker.isMe) TextAction("这不是我", { unmark(speaker.id) }, enabled = !busy)
-                        else {
-                            val action = if (speaker.name == null) "起称呼" else "改称呼"
-                            TextAction(action, {
-                                speakerName = speaker.name.orEmpty()
-                                namingTitle = action
-                                naming = speaker.id
-                            }, enabled = !busy)
+                        TextAction("这不是我", { unmark(speaker.id) }, enabled = !busy)
+                    }
+                }
+            // 好几个声音都被认成“我”时合成一行，点开逐个核对；每个都标上最近出现和说了多久。
+            if (mine.size == 1) mineRow(mine[0], "我", speakerStatus(mine[0]))
+            else if (mine.isNotEmpty()) {
+                SettingsRow("我", status = totalSpeechLabel(mine.sumOf { it.seconds }),
+                    value = "${countLabel(mine.size)} 个声音", expanded = mineExpanded,
+                    onClick = { mineExpanded = !mineExpanded })
+                Reveal(mineExpanded) {
+                    Column {
+                        mine.forEach { speaker ->
+                            GroupDivider()
+                            mineRow(speaker, speaker.lastSeen?.let(::lastHeardLabel) ?: "更早的录音",
+                                totalSpeechLabel(speaker.seconds))
                         }
+                    }
+                }
+            }
+            var unnamed = 0
+            others.forEachIndexed { index, speaker ->
+                if (index > 0 || mine.isNotEmpty()) GroupDivider()
+                val label = speaker.name ?: "声音 ${++unnamed}"
+                SettingsRow(label, status = speakerStatus(speaker)) {
+                    Row {
+                        SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
+                        val action = if (speaker.name == null) "起称呼" else "改称呼"
+                        TextAction(action, {
+                            speakerName = speaker.name.orEmpty()
+                            namingTitle = action
+                            naming = speaker.id
+                        }, enabled = !busy)
                     }
                 }
             }
@@ -237,7 +258,7 @@ private fun SpeakerSettings(
                 Reveal(expanded) {
                     ignored.forEachIndexed { index, speaker ->
                         GroupDivider()
-                        SettingsRow(speaker.name ?: "声音 ${index + 1}") {
+                        SettingsRow(speaker.name ?: "声音 ${index + 1}", status = speakerStatus(speaker)) {
                             Row {
                                 SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
                                 TextAction("恢复", { work({ audio.setIgnored(speaker.id, false) }, "已恢复这个声音") }, enabled = !busy)

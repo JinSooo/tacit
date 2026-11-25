@@ -30,6 +30,7 @@ internal class AudioQueries(private val store: EncryptedAudioStore, private val 
         store.prune(retentionDays())
         ledger.prepare()
         val mac = macVoiceprint()
+        val ends = ledger.listConversations().associate { it.id to it.end }
         return store.speakers().filter {
             val me = isMeSpeaker(it, mac)
             (includeIgnored || !it.optBoolean("ignored")) && (me || it.optString("name").isNotEmpty() ||
@@ -37,6 +38,7 @@ internal class AudioQueries(private val store: EncryptedAudioStore, private val 
                 AudioPolicy.candidate(it.getJSONArray("conversations").length(), it.getDouble("seconds")))
         }.map { s -> AudioSpeaker(s.getString("id"), isMeSpeaker(s, mac), s.optBoolean("ignored"),
             s.getInt("segments"), s.getDouble("seconds"), sampleAvailable(s.getString("id")),
-            s.optString("name").takeIf(String::isNotEmpty), s.getJSONArray("conversations").length()) }
+            s.optString("name").takeIf(String::isNotEmpty), s.getJSONArray("conversations").length(),
+            s.getJSONArray("conversations").let { ids -> (0 until ids.length()).mapNotNull { ends[ids.getString(it)] }.maxOrNull() }) }
     }
 }

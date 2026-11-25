@@ -78,6 +78,39 @@ internal fun readingText(text: String, source: String): String {
     return result.joinToString("\n")
 }
 
+/**
+ * 声音列表分成“我”和其他人，避免一串分不清的同名行。“我”按最近出现排，方便核对新近认错的；
+ * 其他人有称呼的在前，再按说话总时长排，常说话的人先被起称呼。
+ */
+internal fun orderedSpeakers(speakers: List<top.jinso.tacit.audio.AudioSpeaker>):
+    Pair<List<top.jinso.tacit.audio.AudioSpeaker>, List<top.jinso.tacit.audio.AudioSpeaker>> {
+    val visible = speakers.filterNot { it.ignored }
+    return visible.filter { it.isMe }.sortedWith(compareByDescending<top.jinso.tacit.audio.AudioSpeaker> {
+        it.lastSeen ?: Long.MIN_VALUE }.thenByDescending { it.seconds }) to
+        visible.filterNot { it.isMe }.sortedWith(compareByDescending<top.jinso.tacit.audio.AudioSpeaker> {
+            it.name != null }.thenByDescending { it.seconds })
+}
+
+/** 最近一次出现的时刻：今天、昨天写到几点，更早写日期。 */
+internal fun lastHeardLabel(time: Long, now: Long = System.currentTimeMillis()): String {
+    val zone = java.time.ZoneId.systemDefault()
+    val day = Instant.ofEpochMilli(time).atZone(zone).toLocalDate()
+    val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+    return when (day) {
+        today -> "今天 " + date(time, "HH:mm")
+        today.minusDays(1) -> "昨天 " + date(time, "HH:mm")
+        else -> date(time, if (day.year == today.year) "M 月 d 日" else "yyyy 年 M 月 d 日")
+    }
+}
+
+internal fun speakerStatus(speaker: top.jinso.tacit.audio.AudioSpeaker, now: Long = System.currentTimeMillis()): String =
+    listOfNotNull(speaker.lastHeardOrNull(now), totalSpeechLabel(speaker.seconds)).joinToString(" · ")
+
+internal fun totalSpeechLabel(seconds: Double): String =
+    if (seconds < 60) "不到 1 分钟" else "共 " + durationLabel((seconds * 1000).toLong())
+
+private fun top.jinso.tacit.audio.AudioSpeaker.lastHeardOrNull(now: Long) = lastSeen?.let { lastHeardLabel(it, now) }
+
 internal fun durationLabel(millis: Long): String {
     val minutes = millis / 60_000
     return when {

@@ -12,7 +12,7 @@ data class AudioClip(val id: String, val start: Long, val durationMs: Long, val 
     val conversationId: String? = null)
 data class AudioSpeaker(val id: String, val isMe: Boolean, val ignored: Boolean,
     val segments: Int, val seconds: Double, val sampleAvailable: Boolean,
-    val name: String? = null, val conversations: Int = 0)
+    val name: String? = null, val conversations: Int = 0, val lastSeen: Long? = null)
 data class AudioConversation(val id: String, val start: Long, val end: Long,
     val clipIds: List<String>, val recordIds: List<String>)
 

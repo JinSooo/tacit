@@ -29,4 +29,21 @@ class UiFormatTest {
             detailTimeLabel(start, time("2026-11-26T00:00:25"), true))
         assertEquals("1,234", countLabel(1234))
     }
+
+    // 用户反馈：语音转写页连着十行“我”、一串“声音 N”，分不清哪个是哪个。
+    @Test fun speakersGroupMeAndShowWhenAndHowLong() {
+        fun voice(id: String, me: Boolean, seconds: Double, last: Long?, name: String? = null, ignored: Boolean = false) =
+            top.jinso.tacit.audio.AudioSpeaker(id, me, ignored, 1, seconds, true, name, 1, last)
+        val day = LocalDateTime.parse("2026-11-25T10:00:00").atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val (mine, others) = orderedSpeakers(listOf(
+            voice("a", true, 30.0, day - 86_400_000), voice("b", true, 90.0, day),
+            voice("c", false, 600.0, null), voice("d", false, 20.0, day),
+            voice("e", false, 5.0, day - 1, name = "小林"), voice("f", false, 40.0, day, ignored = true),
+        ))
+        assertEquals(listOf("b", "a"), mine.map { it.id })
+        assertEquals(listOf("e", "c", "d"), others.map { it.id })
+        assertEquals("今天 10:00 · 共 1 分钟", speakerStatus(mine[0], now = day + 3_600_000))
+        assertEquals("昨天 10:00 · 不到 1 分钟", speakerStatus(mine[1], now = day + 3_600_000))
+        assertEquals("共 10 分钟", speakerStatus(others[1], now = day))
+    }
 }
