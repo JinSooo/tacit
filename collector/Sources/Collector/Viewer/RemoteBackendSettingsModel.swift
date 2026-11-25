@@ -211,7 +211,7 @@ import struct CollectorCore.DistillHealth
   var canRetryIssue: Bool { canKeepIssue && channel != nil }
   var canDelete: Bool { !busy && !recovering && backup?.canDelete == true }
   var canManageBackend: Bool { !isRemote || (channel == .direct && !frozen && !recovering) }
-  static let managementNotice = "管理远端后台和使用 AI 工具需要直连。"
+  static let managementNotice = "改远端后台的模型设置需要直连。"
   var directNotice: String? {
     if !canManageBackend { return Self.managementNotice }
     if channel == .direct && context.agentNeedsDirect { return "AI 工具尚未获得直连地址。" }

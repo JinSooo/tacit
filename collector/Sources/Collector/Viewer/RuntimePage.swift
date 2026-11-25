@@ -88,7 +88,7 @@ private struct ModelCallRow: View {
       }.buttonStyle(.plain).accessibilityLabel("\(call.title)，\(call.status)").accessibilityValue(expanded ? "已展开" : "已收起")
       if expanded {
         VStack(alignment:.leading,spacing:12) {
-          Text("输入 \(call.inputTokens.map(String.init) ?? "未知") / 输出 \(call.outputTokens.map(String.init) ?? "未知") token")
+          Text("输入 \(call.inputTokens.map(Fmt.count) ?? "未知") / 输出 \(call.outputTokens.map(Fmt.count) ?? "未知") token")
             .font(.system(size:TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
           Text("返回：\(call.providerState == "returned" ? "已返回" : call.providerState == "sending" ? "等待中" : "失败或未发送")　校验：\(call.validationState == "passed" ? "通过" : call.validationState == "failed" ? "未通过" : "未记录")")
             .font(.system(size:TextSize.body)).foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
@@ -122,7 +122,7 @@ struct RuntimeSnapshotView: View {
           if snapshot.redactions > 0 { Text("已隐藏 \(snapshot.redactions) 处可能的密钥。").foregroundStyle(Palette.muted) }
           DisclosureGroup(snapshot.kind == "context" ? "当时自动带入的内容" : "发送内容", isExpanded:$inputOpen) { code(snapshot.inputText) }
           if snapshot.kind != "context" {
-            DisclosureGroup(snapshot.responseTruncated.value ? "返回内容（仅保留前 128000 字符）" : "返回内容",isExpanded:$outputOpen) {
+            DisclosureGroup(snapshot.responseTruncated.value ? "返回内容（仅保留前 \(Fmt.count(128_000)) 字符）" : "返回内容",isExpanded:$outputOpen) {
               if let response = snapshot.response { code(response) } else { Text("尚无可展示的返回内容。").foregroundStyle(Palette.muted) }
             }
           }

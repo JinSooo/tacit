@@ -53,13 +53,13 @@ struct SettingsPage: View {
           if store.canManageBackend {
             ModelSettingsView().id(store.remoteBackend?.context.binding.route)
           } else {
-            directConnectionRequired
+            directConnectionRequired(RemoteBackendSettingsModel.managementNotice)
           }
         case .agents:
           if store.canManageBackend {
             AgentSettingsView().id(store.remoteBackend?.context.binding.route)
           } else {
-            directConnectionRequired
+            directConnectionRequired("连接 AI 工具需要直连远端后台。")
           }
         case .hub: HubSettingsView { group = .models }
         case .privacy: PrivacySettingsView()
@@ -79,10 +79,14 @@ struct SettingsPage: View {
     }
   }
 
-  private var directConnectionRequired: some View {
+  private func directConnectionRequired(_ message: String) -> some View {
     SettingsForm {
-      SettingsMessage(text: RemoteBackendSettingsModel.managementNotice, warning: false)
+      Section {
+        SettingsMessage(text: message, warning: false)
+        Button("前往后台与连接") { group = .hub }
+      }
     }
+    .tint(Palette.accent)
   }
 }
 
