@@ -26,7 +26,8 @@ enum AppSetup {
     return false
   }
 
-  static func start(config: Config, startup: LoginStartup, writeGate: RemoteSwitchWriteGate? = nil) {
+  /// `standby`：用户手动打开的这份要在准备完成后让 launchd 起一份待命实例；launchd 拉起的自己就是那份。
+  static func start(config: Config, startup: LoginStartup, writeGate: RemoteSwitchWriteGate? = nil, standby: Bool = false) {
     let bundle = Bundle.main.bundlePath
     switch AppPlacement.of(bundlePath: bundle, home: FileManager.default.homeDirectoryForCurrentUser.path) {
     case .installed where Bundled.current != nil:
@@ -35,6 +36,7 @@ enum AppSetup {
         defer { writeGate?.end() }
         guard shouldRunBundledSetup(in: config.dataDir) else { return }
         run(config: config, app: bundle)
+        if standby { startup.ensureCollectorStandby() }
       }
     default:
       DispatchQueue.global(qos: .utility).async {
@@ -68,8 +70,14 @@ enum AppSetup {
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
     let alert = NSAlert()
-    alert.messageText = "请先把 Tacit 拖到“应用程序”文件夹"
-    alert.informativeText = "从“应用程序”文件夹打开后，Tacit 才能在后台持续记录，并在登录时自动启动。"
+    if Bundle.main.bundlePath.contains("/AppTranslocation/") {
+      // 已经在“应用程序”里，但不是用访达拖进去的（例如命令行复制），macOS 会挪到临时位置运行（2026-11-25 虚拟机实测）。
+      alert.messageText = "macOS 正把 Tacit 放在临时位置运行"
+      alert.informativeText = "在访达里把 Tacit 从“应用程序”拖到桌面，再拖回“应用程序”，然后重新打开。"
+    } else {
+      alert.messageText = "请先把 Tacit 拖到“应用程序”文件夹"
+      alert.informativeText = "从“应用程序”文件夹打开后，Tacit 才能在后台持续记录，并在登录时自动启动。"
+    }
     alert.addButton(withTitle: "打开“应用程序”文件夹")
     alert.addButton(withTitle: "退出")
     if alert.runModal() == .alertFirstButtonReturn {

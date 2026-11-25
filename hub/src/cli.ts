@@ -393,6 +393,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       } finally { db.close(); }
       return;
     }
+    // 常驻整理进程的错误行（如 {"step":"day","category":…}）也带上时间，诊断信息才能按时间挑出来。
+    if (!flags.includes("--once")) (await import("./log-stamp.ts")).stampConsole();
     const store = new DistillStore(db);
     const llm = createLLM({ dataDir: config.dataDir, mode: config.mode, journal: new RuntimeLog(db), recordUsage: row => store.writeUsage({ ...row, input_tokens: row.input_tokens ?? undefined, output_tokens: row.output_tokens ?? undefined, error: row.error ?? undefined }) });
     try { await runDistill({ db, llm, once: flags.includes("--once"), backfill: flags.includes("--backfill"), range, dataDir: config.dataDir, mode: config.mode }); }

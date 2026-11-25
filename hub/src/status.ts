@@ -42,7 +42,7 @@ function addUsage(sum: UsageTotals, row: UsageTotals) {
   sum.output_tokens_incomplete ||= row.output_tokens_incomplete;
 }
 
-const errorCode = /^(timeout|network|rate_limited|quota|auth|bad_request|server_error|invalid_json|schema_mismatch|cli_failed|usage_record_failed|config_error|unknown)(?::[1-5][0-9]{2})?$/;
+const errorCode = /^(timeout|network|rate_limited|quota|auth|bad_request|server_error|invalid_json|schema_mismatch|cli_missing|cli_failed|usage_record_failed|config_error|unknown)(?::[1-5][0-9]{2})?$/;
 function statusError(value: string | null): string | null {
   if (value === null) return null;
   const code = errorCode.exec(value)?.[0];

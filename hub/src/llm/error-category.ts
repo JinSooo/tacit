@@ -1,7 +1,7 @@
 export const MODEL_ERROR_LABELS = {
   timeout: "超时", network: "网络不可用", rate_limited: "请求太频繁", quota: "额度用完",
   auth: "密钥无效", bad_request: "请求被拒绝", server_error: "服务出错", invalid_json: "返回不是 JSON",
-  schema_mismatch: "返回格式不对", cli_failed: "命令行调用失败", usage_record_failed: "用量记录失败",
+  schema_mismatch: "返回格式不对", cli_missing: "没找到命令行工具", cli_failed: "命令行调用失败", usage_record_failed: "用量记录失败",
   config_error: "模型配置无效", unknown: "未知错误",
 } as const;
 

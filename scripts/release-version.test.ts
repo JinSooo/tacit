@@ -12,3 +12,11 @@ test("Mac 安装包、后台服务和 MCP 的版本号一致", () => {
   expect(/<key>CFBundleShortVersionString<\/key><string>([^<]+)<\/string>/.exec(read("collector/build.sh"))?.[1]).toBe(version);
   expect(/serverInfo: \{ name: "tacit", version: "([^"]+)" \}/.exec(read("hub/src/agent-cli/mcp.ts"))?.[1]).toBe(version);
 });
+
+// 官网的 latest.json 决定已装用户会不会看到“可以更新了”，跟着版本号一起改，部署官网放在 Release 上传之后。
+test("官网 latest.json 指向当前 Mac 版本的 Release", () => {
+  const version = JSON.parse(read("package.json")).version as string;
+  const mac = JSON.parse(read("site/src/latest.json")).mac as { version: string; url: string };
+  expect(mac.version).toBe(version);
+  expect(mac.url).toMatch(new RegExp(`^https://github\\.com/JinSooo/tacit/releases/tag/(?:mac-)?v${version.replaceAll(".", "\\.")}$`));
+});

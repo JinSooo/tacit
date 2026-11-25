@@ -36,6 +36,8 @@ export function build() {
   rmSync(dist, { recursive: true, force: true });
   mkdirSync(dist, { recursive: true });
   cpSync(join(src, "assets"), join(dist, "assets"), { recursive: true });
+  // Mac 应用每天读一次，判断有没有新版本（collector UpdateManifest）。
+  cpSync(join(src, "latest.json"), join(dist, "latest.json"));
   const html = inline(expand(join(src, "index.html")));
   const missing = html.match(/<!--\s*include:[^>]*-->|type="module"|sources\.svg#/);
   if (missing) throw new Error(`未处理的引用：${missing[0]}`);

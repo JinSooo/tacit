@@ -214,6 +214,9 @@ private struct ReviewDayContent: View {
           if let error = securityEvents.error { SettingsMessage(text: error).transition(.notice) }
         }
         if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools).transition(.notice) }
+        if let update = store.update.available {
+          TimelineUpdateLine(notice: store.update, update: update).id(update.version).transition(.notice)
+        }
         if !store.pending.isEmpty { TimelinePendingLine().transition(.notice) }
       }
     }
@@ -342,7 +345,10 @@ private struct ReviewDayContent: View {
 
   private var footer: some View {
     HStack(alignment: .firstTextBaseline, spacing: 16) {
-      if hasSegments, let at = cutoff {
+      if hasSegments, cutoff != nil, items.isEmpty, drafts.isEmpty {
+        // 一段都还没有时截止时间没有意义：新装好时显示“内容截至 00:00”像是出了错（2026-11-25 虚拟机实测）。
+        if failed { Text("最近一次整理失败").foregroundStyle(Palette.attention) }
+      } else if hasSegments, let at = cutoff {
         // 有草稿时截止时间只代表润色到哪，草稿本身已经更新到最新。
         Text("\(drafts.isEmpty ? "内容截至" : "已整理到") \(ReviewTime.clock(at, on: day))\(failed ? "，最近一次整理失败" : "")")
           .foregroundStyle(failed ? Palette.attention : Palette.muted)

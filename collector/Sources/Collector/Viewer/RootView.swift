@@ -214,7 +214,7 @@ struct CaptureFooter: View {
         .buttonStyle(.plain).foregroundStyle(Palette.accent)
         .help("继续记录").accessibilityLabel("继续记录")
     case .noPermission:
-      Button("去授权…") { store.perform(.requestAX) }.buttonStyle(.accentLink)
+      Button("授权…") { store.perform(.requestAX) }.buttonStyle(.accentLink).fixedSize()
     }
   }
 
@@ -225,14 +225,19 @@ struct CaptureFooter: View {
     case .paused: return Palette.faint
     }
   }
+  /// 侧栏窄，“需要辅助功能权限”加上授权按钮放不下一行，会截断或从词中间折开（2026-11-25 虚拟机实测），
+  /// 所以缺权限时标题只写“需要授权”，缺的是哪项放到下面一行。
   var title: String {
-    store.capture.statusTitle
+    let c = store.capture
+    if c.state == .noPermission && c.sources.contains(where: \.enabled) { return "需要授权" }
+    return c.statusTitle
   }
 
   var subtitle: String? {
     let c = store.capture
     if c.hubError != nil { return "连不上后台服务" }
     if c.queue > 0 { return "\(Fmt.count(c.queue)) 条记录等待保存" }
+    if c.state == .noPermission && c.sources.contains(where: \.enabled) { return "辅助功能权限" }
     guard c.state == .recording else { return nil }
     let n = c.sources.filter(\.enabled).count
     return n == 0 ? "所有数据源都已关闭" : "\(n) 个数据源"

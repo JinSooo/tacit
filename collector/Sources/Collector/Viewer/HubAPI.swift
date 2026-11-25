@@ -93,7 +93,12 @@ final class HubAPI: @unchecked Sendable {
     r.httpMethod = method
     if let timeout { r.timeoutInterval = timeout }
     if authenticated {
-      guard let token = tokenProvider() else { throw HubError(message: "找不到后台服务的访问令牌，后台服务可能还没启动过", status: 0) }
+      var token = tokenProvider()
+      while token == nil, Self.inStartupGrace() {
+        try await Task.sleep(for: .seconds(1))
+        token = tokenProvider()
+      }
+      guard let token else { throw HubError(message: "找不到后台服务的访问令牌，后台服务可能还没启动过", status: 0) }
       r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
     if let body { r.httpBody = body; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
@@ -102,9 +107,10 @@ final class HubAPI: @unchecked Sendable {
     for wait in busyRetryDelays.map(Optional.some) + [nil] {
       try checkBinding()
       let response: URLResponse
-      do { (data, response) = try await session.data(for: r) }
+      do { (data, response) = try await dataWaitingForStartup(r) }
       catch let e as URLError where e.code == .cancelled { throw CancellationError() }
-      catch { throw HubError(message: "连不上后台服务：\(error.localizedDescription)", status: 0) }
+      catch let e as URLError { throw HubError(message: e.code == .timedOut ? "后台服务没有响应" : "连不上后台服务", status: 0) }
+      catch { throw HubError(message: "连不上后台服务", status: 0) }
       try checkBinding()
       status = (response as? HTTPURLResponse)?.statusCode ?? 0
       guard status == 503, let wait else { break }
@@ -457,6 +463,19 @@ struct GeneralSettingsInfo: Decodable, Equatable {
 struct ModelTestResult: Decodable { let ok: Bool; let ms: Double?; let error: String? }
 
 extension HubAPI {
+  /// 首次安装要先建库、起后台服务，主窗口却马上就打开了；这段时间连不上就安静地等，不先报“连不上”（2026-11-25 虚拟机实测）。
+  static let startupGrace: TimeInterval = 60
+  static func inStartupGrace(now: Date = Date()) -> Bool { now.timeIntervalSince(appLaunchedAt) < startupGrace }
+
+  func dataWaitingForStartup(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    while true {
+      do { return try await session.data(for: request) }
+      catch let e as URLError where [.cannotConnectToHost, .networkConnectionLost].contains(e.code) && Self.inStartupGrace() {
+        try await Task.sleep(for: .seconds(1))
+      }
+    }
+  }
+
   func call<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, _ json: Any?, timeout: TimeInterval? = nil, device: DeviceOperation? = nil) async throws -> T {
     let body = try json.map { try JSONSerialization.data(withJSONObject: $0) }
     return try decode(type, from: await request(path, method: method, body: body, timeout: timeout, device: device))

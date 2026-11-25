@@ -59,6 +59,7 @@ const errorNames: Record<string, string> = {
   quota: "模型服务的额度用完了，充值或额度恢复后会自动继续。",
   bad_request: "模型服务拒绝了请求，请检查模型名、地址和思考强度。",
   config_error: "模型设置有问题，请检查后重新保存。",
+  cli_missing: "这台 Mac 上没找到 Claude Code 或 Codex。装好并登录，或改填 API。",
   cli_failed: "命令行工具调用失败，请确认已安装并登录。",
   network: "连不上模型服务，请检查网络和地址。",
   rate_limited: "请求太频繁，模型服务暂时限流，稍后会自动重试。",
@@ -82,7 +83,7 @@ export const cooldownNames: Record<string, string> = { rate_limited: "请求太�
  */
 export function errorNeedsAttention(error: NonNullable<HubStatus["distill"]["last_error"]>, lastOk: string | null, now: number): boolean {
   if (error.recovered) return false;
-  if (["auth", "quota", "bad_request", "config_error", "cli_failed"].includes(errorCategory(error.error))) return true;
+  if (["auth", "quota", "bad_request", "config_error", "cli_missing", "cli_failed"].includes(errorCategory(error.error))) return true;
   const ok = Date.parse(error.tier_last_ok_at ?? lastOk ?? "");
   return !Number.isFinite(ok) || now - ok >= 3_600_000;
 }
