@@ -81,7 +81,7 @@ final class AudioCoordinator {
   func allowManualStart() {
     queue.async { [self] in
       do { try startGuard.allowManualRetry(); failure = nil; lastStart = .distantPast; lastMicStart = .distantPast }
-      catch { failure = "无法解除录音启动保护：\(error)" }
+      catch { failure = "无法解除录音启动保护，请重启 Tacit 再试。" }
       publish()
     }
   }
@@ -127,7 +127,7 @@ final class AudioCoordinator {
           try storage.recoverInterrupted()
           adopt(route, storage: storage)
           initialized = true
-        } catch { failure = "音频存储不可用：\(error)"; publish(); return }
+        } catch { failure = "音频存储不可用，请检查磁盘空间后重启 Tacit。"; publish(); return }
       }
       if startGuard.blocked {
         self.enabled = false; stop()
@@ -248,7 +248,7 @@ final class AudioCoordinator {
     let model = config.dataDir.appendingPathComponent("models/silero_vad.onnx").path
     guard models.ready else {
       // 第一次开启录音才下载；下载完让下一轮状态检查立即开始录音，失败则 60 秒后随下一次启动重试。
-      failure = "正在下载语音模型（约 270MB），完成后自动开始录音"
+      failure = "正在下载语音模型（约 270 MB），完成后自动开始录音。"
       models.start { [weak self] ok in
         guard let self else { return }
         self.queue.async {
@@ -270,7 +270,7 @@ final class AudioCoordinator {
         try tap.start()
         failure = nil
       }
-    } catch { failure = "录音启动失败：\(error)"; stop() }
+    } catch { failure = "录音启动失败，请检查麦克风权限和输入设备。"; stop() }
     publish()
   }
   /// 每路分别标记代次，设备切换后丢弃旧麦克风排队中的帧，不影响系统声音。
@@ -285,8 +285,8 @@ final class AudioCoordinator {
         guard self.enabled, self.isCurrent(track, session: session) else { return }
         do { try self.pipelines[track]?.accept(samples, rate: rate, host: host) }
         catch {
-          if track == .mic { self.micFailure = "麦克风处理失败：\(error)"; self.stopMicrophone() }
-          else { self.failure = "音频处理失败：\(error)"; self.stop() }
+          if track == .mic { self.micFailure = "麦克风处理失败，已停止录音。"; self.stopMicrophone() }
+          else { self.failure = "音频处理失败，已停止录音。"; self.stop() }
           self.publish()
         }
       }
@@ -310,7 +310,7 @@ final class AudioCoordinator {
       if enabled && tapStop != nil { rebuildMicrophone() }
       else {
         do { try deviceObserver.observe(systemDefault: micSetting == "system") }
-        catch { micFailure = "监听麦克风设备失败：\(error)" }
+        catch { micFailure = "无法监听麦克风设备的变化。" }
       }
       publish()
     }
@@ -324,7 +324,7 @@ final class AudioCoordinator {
       inputDevices = devices; defaultInput = defaultDevice
       if enabled && tapStop != nil { rebuildMicrophone() }
       publish()
-    } catch { micFailure = "读取麦克风设备失败：\(error)"; publish() }
+    } catch { micFailure = "读不到麦克风设备列表。"; publish() }
   }
   private func stopMicrophone() {
     micGeneration = UUID(); mic?.stop(); mic = nil
@@ -359,7 +359,7 @@ final class AudioCoordinator {
         if let notice = selection.notice { micStatus += " · \(notice)" }
       }
     } catch {
-      stopMicrophone(); micFailure = "麦克风启动失败：\(error)"
+      stopMicrophone(); micFailure = "麦克风启动失败，请检查麦克风权限和输入设备。"
     }
     publish()
   }
@@ -413,7 +413,7 @@ final class AudioCoordinator {
   }
 
   private func tryOperation(_ operation: () throws -> Void) {
-    do { try operation() } catch { failure = "音频存储操作失败：\(error)" }
+    do { try operation() } catch { failure = "音频存储操作失败。" }
   }
   private func shouldRunWorker(_ now: Date) -> Bool {
     guard !shuttingDown, writeGate?.isPaused != true, !maintenance.isRunning, worker == nil, now.timeIntervalSince(workerFailureAt) >= 60, FileManager.default.isExecutableFile(atPath: workerURL.path) else { return false }
@@ -435,7 +435,7 @@ final class AudioCoordinator {
   private var closedScan = PendingWorkScan()
   private var pendingScan = PendingWorkScan()
   private var workerCrashedAt = Date.distantPast
-  private static let workerLaunchFailure = "转写进程启动失败"
+  private static let workerLaunchFailure = "转写程序启动失败"
   private var workerURL: URL { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ra-audio-worker") }
   private func request(path: String, route: HubBinding.Route, body: [String: Any]? = nil, completion: @escaping (Data?) -> Void) {
     guard route.remote == nil, (try? config.hubRoute()) == route, let token = config.token else { completion(nil); return }
@@ -544,7 +544,7 @@ final class AudioCoordinator {
           } catch { self.maintenanceFailure = "音频同步清理失败"; self.lastSync = .distantPast }
         })
         if !started { self.lastSync = .distantPast }
-      } catch { self.failure = "音频同步清理失败：\(error)" }
+      } catch { self.failure = "音频同步清理失败。" }
     }
   }
   private func launchWorker(deviceID: String? = nil, on route: HubBinding.Route) {
@@ -609,7 +609,7 @@ final class AudioCoordinator {
     } catch {
       writeGate?.end()
       DiagnosticLog.shared.record(.audioWorkerLaunchFailed)
-      failure = "\(Self.workerLaunchFailure)：\(error.localizedDescription)"
+      failure = "\(Self.workerLaunchFailure)，请重新安装 Tacit。"
       workerFailureAt = Date()
     }
   }
@@ -655,7 +655,8 @@ final class AudioCoordinator {
     let all = inventory.filter { $0.id != current?.id } + (current.map { [$0] } ?? [])
     let today = all.filter { AudioPolicy.date($0.t_start).map { Calendar.current.isDateInToday($0) } ?? false }.count
     let pending = all.filter { [.closed, .waiting_me, .failed].contains($0.status) }.count
-    var lines = [pending > 0 ? "今天 \(today) 段对话，待转写 \(pending) 段" : "今天 \(today) 段对话"]
+    // 0 段时不写计数（第一行留空，后面按位置读）。
+    var lines = [pending > 0 ? "今天 \(today) 段对话，待转写 \(pending) 段" : today > 0 ? "今天 \(today) 段对话" : ""]
     lines.append(micStatus)
     if let micFailure { lines.append(micFailure) }
     if health.warning { lines.append("麦克风可能没有权限") }

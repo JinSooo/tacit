@@ -98,8 +98,8 @@ struct RemoteBackendSettingsSection: View {
   }
 
   @ViewBuilder private var invitationRows: some View {
-    SettingsRow("配对链接") {
-      SecureField("配对链接", text: $model.invitationText, prompt: Text("粘贴配对链接"))
+    SettingsRow("邀请链接") {
+      SecureField("邀请链接", text: $model.invitationText, prompt: Text("粘贴邀请链接"))
         .labelsHidden().textFieldStyle(.roundedBorder)
         .onSubmit { Task { await model.checkConnection() } }
         .disabled(model.busy)

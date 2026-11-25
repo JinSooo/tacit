@@ -25,6 +25,7 @@ struct DeviceSettingsSection: View {
   @State private var connectedDevice: String?
   @State private var copied = false
   @State private var deviceToRemove: DeviceSettings.Device?
+  @State private var demotion: (device: DeviceSettings.Device, role: DeviceSettings.Role)?
   @State private var step = DeviceInvitationChoices.Step.type
   @State private var expandedDevice: String?
 
@@ -40,9 +41,9 @@ struct DeviceSettingsSection: View {
                               expanded: expandedDevice == device.id) {
               expandedDevice = expandedDevice == device.id ? nil : device.id
             } changeRole: { role in
-              Task { await mutate(failure: "无法修改设备权限，请重试。") {
-                try await store.api.updateDeviceRole(device.id, role: role.rawValue)
-              } }
+              // 远程不能升回管理：取消管理权限前先确认，其他改动直接生效。
+              if device.role == .admin && role != .admin { demotion = (device, role) }
+              else { changeRole(device, role) }
             } remove: {
               deviceToRemove = device
             }
@@ -69,6 +70,17 @@ struct DeviceSettingsSection: View {
       closeSheet()
       await reload()
     }
+    .alert(demotion.map { "取消“\($0.device.name)”的管理权限？" } ?? "", isPresented: Binding(
+      get: { demotion != nil },
+      set: { if !$0 { demotion = nil } }
+    )) {
+      Button("取消", role: .cancel) {}
+      Button("改为\(demotion?.role.title ?? "")", role: .destructive) {
+        if let demotion { changeRole(demotion.device, demotion.role) }
+      }
+    } message: {
+      Text("改完不能在这里改回管理，要用新的管理邀请重新配对。")
+    }
     .alert("移除这台设备？", isPresented: Binding(
       get: { deviceToRemove != nil },
       set: { if !$0 { deviceToRemove = nil } }
@@ -78,7 +90,7 @@ struct DeviceSettingsSection: View {
         Task { await mutate(failure: "无法移除设备，请重试。") { try await store.api.removeDevice(device.id) } }
       }
     } message: { _ in
-      Text("已保存的记录会保留，这台设备需要重新配对才能再连接。")
+      Text("已保存的记录会保留，这台设备要重新配对才能再连接。")
     }
     .sheet(isPresented: $sheetOpen, onDismiss: closeSheet) {
       if let activeSession {
@@ -275,6 +287,12 @@ struct DeviceSettingsSection: View {
         sheetError = (error as? HubError)?.actionMessage ?? "无法取消邀请，请重试。"
       }
     }
+  }
+
+  private func changeRole(_ device: DeviceSettings.Device, _ role: DeviceSettings.Role) {
+    Task { await mutate(failure: "无法修改设备权限，请重试。") {
+      try await store.api.updateDeviceRole(device.id, role: role.rawValue)
+    } }
   }
 
   private func mutate(failure: String, operation: () async throws -> Void) async {

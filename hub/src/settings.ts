@@ -109,7 +109,7 @@ export function createSettings(deps: SettingsDeps) {
         catch (error) {
           return fail(409, (error as NodeJS.ErrnoException)?.code === "EADDRINUSE" ? `端口 ${port} 已被占用，请换一个` : `无法在 127.0.0.1 上使用端口 ${port}`);
         }
-        try { writeHubPort(deps.dataDir, port); } catch { return fail(500, "无法写入 hub.json"); }
+        try { writeHubPort(deps.dataDir, port); } catch { return fail(500, "保存端口设置失败，请重试。"); }
         // 响应发出后再退出；不在这里直接退出，免得网页收不到结果。
         if (deps.restart && !ctx.deferRestart) setTimeout(deps.restart, 300);
         return Response.json({ port, restarting: Boolean(deps.restart) });

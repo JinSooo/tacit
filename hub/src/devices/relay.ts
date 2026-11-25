@@ -84,7 +84,7 @@ export class RelayService {
 
   run<T>(job: () => T | Promise<T>): Promise<T> {
     const next = this.serial.then(() => {
-      if (this.shutdown.signal.aborted) throw new WireError(503, "中枢正在关闭");
+      if (this.shutdown.signal.aborted) throw new WireError(503, "后台服务正在关闭");
       return job();
     });
     this.serial = next.catch(() => {});

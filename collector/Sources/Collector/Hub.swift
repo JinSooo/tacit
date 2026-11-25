@@ -236,16 +236,16 @@ final class HubClient: @unchecked Sendable {
       } catch DeviceClientError.hubBusy, DeviceClientError.operationError(_, 503, _), DeviceClientError.plaintextError(503, _) {
         finish(on: route, error: nil, done: nil, status: 503)
       } catch DeviceClientError.operationError(_, let status, _), DeviceClientError.plaintextError(let status, _) {
-        finish(on: route, error: "hub 返回 \(status)", done: nil)
+        finish(on: route, error: "后台服务拒绝了记录（\(status)）", done: nil)
       } catch RemoteDeviceAccess.Failure.frozen, DeviceClientError.deviceRemoved, DeviceClientError.invalidKey, DeviceClientError.keyStoreError, LocalDeviceLink.Failure.keyUnavailable {
         let backend = route.remote == nil ? "本机后台" : "远端后台"
         finish(on: route, error: "\(backend)连接凭据不可用，待发送记录已保留。", done: nil)
       } catch CollectorUpload.Failure.noToken {
-        finish(on: route, error: "找不到 hub 的 token，hub 是否启动过？", done: nil)
+        finish(on: route, error: "找不到后台服务的访问凭证，请重启 Tacit", done: nil)
       } catch CollectorUpload.Failure.batchTooLarge, DeviceClientError.envelopeTooLarge {
         finish(on: route, error: "待发送记录超过上传大小限制。", done: nil)
       } catch {
-        finish(on: route, error: "无法向 hub 发送记录，待发送记录已保留。", done: nil)
+        finish(on: route, error: "连不上后台服务", done: nil)
       }
     }
   }
@@ -290,7 +290,7 @@ final class HubClient: @unchecked Sendable {
         }
         if let status = delivery.rejectedStatus {
           if let nonce = delivery.nonce { try await session.releaseRejectedCapture(nonce: nonce, status: status) }
-          finish(on: route, error: "hub 返回 \(status)", done: nil)
+          finish(on: route, error: "后台服务拒绝了记录（\(status)）", done: nil)
           return
         }
         guard let receipt = DeliveryReceipt.decode(delivery.body, batchCount: delivery.ids.count) else {
@@ -303,7 +303,7 @@ final class HubClient: @unchecked Sendable {
       } catch RemoteDeviceSession.Failure.awaitingReceipt, is RemoteSwitchWriteGate.Paused {
         finish(on: route, error: nil, done: nil)
       } catch DeviceClientError.operationError(_, let status, _), DeviceClientError.plaintextError(let status, _) {
-        finish(on: route, error: "hub 返回 \(status)", done: nil)
+        finish(on: route, error: "后台服务拒绝了记录（\(status)）", done: nil)
       } catch {
         finish(on: route, error: "远端后台暂不可用，待发送记录已保留。", done: nil)
       }

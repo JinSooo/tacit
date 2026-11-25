@@ -155,11 +155,11 @@ struct ModelSettingsView: View {
 
   // MARK: 每一档
 
-  /// 已保存的三档完全一样、用户也没要求分开时，只显示一组，改动同时写进三档。
+  /// 三档草稿完全一样、用户也没要求分开时，只显示一组，改动同时写进三档。
+  /// 只看草稿：分档的未保存改动不会被折起来藏住，合成一组后的改动由“撤销修改”兜底。
   private var sharesOneModel: Bool {
-    // 草稿也要三档相同：有没保存的分档改动时不能折起来藏住它。
-    guard !splitTiers, let first = saved[Self.tiers[0]], let editing = draft[Self.tiers[0]] else { return false }
-    return Self.tiers.allSatisfy { saved[$0] == first && draft[$0] == editing }
+    guard !splitTiers, let editing = draft[Self.tiers[0]] else { return false }
+    return Self.tiers.allSatisfy { draft[$0] == editing }
   }
 
   @ViewBuilder func tierSection(_ tier: String, info: ModelSettingsInfo, together: Bool = false) -> some View {
@@ -231,6 +231,16 @@ struct ModelSettingsView: View {
           Note("实时整理、每小时汇总和每日时间线都用它。")
           Spacer()
           Button("按任务分别设置") { splitTiers = true }.buttonStyle(.accentLink)
+        }
+      } else if tier == Self.tiers[0] {
+        HStack(alignment: .firstTextBaseline) {
+          if let d = info.tierInfo[tier]?.description { Note(d) }
+          Spacer()
+          // 分开后能合回去：三档都改成这一组，没保存前可以撤销。
+          Button("三档都用这一组") {
+            for t in Self.tiers { draft[t] = c }
+            splitTiers = false
+          }.buttonStyle(.accentLink).fixedSize()
         }
       } else if let d = info.tierInfo[tier]?.description { Note(d) }
     }

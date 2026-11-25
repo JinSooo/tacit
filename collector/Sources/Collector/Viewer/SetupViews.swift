@@ -44,7 +44,7 @@ struct AgentSettingsView: View {
           ForEach(tools) { t in
             SettingsRow(t.label) {
               HStack(spacing: 8) {
-                Text(status(t)).foregroundStyle(t.partial ? Palette.attention : Palette.muted)
+                if let text = status(t) { Text(text).foregroundStyle(t.partial ? Palette.attention : Palette.muted) }
                 if t.installed || t.connected || t.partial {
                   Button(busy == t.id ? (t.connected ? "正在断开…" : "正在连接…") : (t.connected ? "断开" : "连接")) {
                     Task { await set(t, !t.connected) }
@@ -59,18 +59,19 @@ struct AgentSettingsView: View {
         }
         if let note { SettingsMessage(text: note, warning: false) }
         if let error { SettingsMessage(text: error) }
-      } header: { Text("已连接的工具") } footer: {
-        Note("连接后，AI 可以查询你的历史记录，每次读取都记在“运行记录”里。Claude Code、Codex 还会自动带入当前项目进展。")
+      } footer: {
+        Note("连接后，新会话会带入当前项目进展，AI 也能查你的历史记录；每次读取都记在运行记录里。")
       }
       GeneralPreferencesSection(context: true)
     }
     .task { await load() }
   }
 
-  func status(_ t: AgentToolState) -> String {
+  /// 连接与否由右边的“连接 / 断开”说明，这里只写按钮说明不了的。
+  func status(_ t: AgentToolState) -> String? {
     if !t.installed { return "这台 Mac 上没有安装" }
-    if t.partial { return "没连好，重新连接一次" }
-    return t.connected ? "已连接" : "未连接"
+    if t.partial { return "连接不完整，请重新连接。" }
+    return nil
   }
 
   func load() async {

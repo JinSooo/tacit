@@ -211,7 +211,7 @@ export class DeviceService {
     clearTimeout(this.retry);
     clearInterval(this.projectionTimer);
     clearInterval(this.devicePoll);
-    for (const socket of this.subscribers) socket.close(1001, "中枢正在关闭");
+    for (const socket of this.subscribers) socket.close(1001, "后台服务正在关闭");
     const listener = this.listener;
     this.listener = undefined;
     await Promise.all([listener?.stop(force), this.relay.stop()]);
@@ -317,7 +317,7 @@ export class DeviceService {
       auditSecurity(this.sql, "pair.create", { actor: options.actor?.device, ok: success, code, now: this.clock() });
     return await this.withRelayLock(options.actor, async () => {
       const identity = await this.ensureIdentity();
-      if (this.stopped) throw new WireError(503, "中枢正在关闭");
+      if (this.stopped) throw new WireError(503, "后台服务正在关闭");
       if (openListener) {
         try { this.listen(); }
         catch { audit(false, "listen_failed"); throw new WireError(409, "局域网端口无法监听"); }
@@ -397,7 +397,7 @@ export class DeviceService {
       if (!agentKey || (bootstrap && !macKey) || agentKey.equals(macKey ?? Buffer.alloc(0)) ||
           !input || Object.keys(input).length !== (bootstrap ? 2 : 1)) throw new InputError("需要不同的 X25519 公钥");
       return await this.relay.run(async () => {
-        if (this.stopped) return json(fail(503, "中枢正在关闭"));
+        if (this.stopped) return json(fail(503, "后台服务正在关闭"));
         const identity = await this.ensureIdentity();
         try {
           for (const key of macKey ? [agentKey, macKey] : [agentKey]) {

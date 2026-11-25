@@ -86,7 +86,8 @@ struct SourceDetail: View {
       }
       if s.enabled {
         Section {
-          if let name = s.permissionName {
+          // 用不到这项权限（例如没装 Safari 历史）时不显示，免得写成“已授权”。
+          if let name = s.permissionName, s.permission != .notNeeded {
             SettingsRow(name + "权限") {
               HStack(spacing: 8) {
                 Text(permissionText(s.permission)).foregroundStyle(s.permission.satisfied ? Palette.muted : Palette.attention)
@@ -116,8 +117,7 @@ struct SourceDetail: View {
   func permissionText(_ p: SourcePermission) -> String {
     switch p {
     case .granted, .notNeeded: return "已授权"
-    case .notDetermined: return "未授权"
-    case .denied: return "没有打开"
+    case .notDetermined, .denied: return "未授权"
     }
   }
 }
@@ -145,7 +145,13 @@ private struct AudioSourceSettings: View {
         Divider()
         ForEach(c.microphones.filter { $0.group != .mode }, id: \.self) { Text($0.title).tag($0.value).selectionDisabled(!$0.selectable) }
       }
-      ForEach(MicrophoneChoices.statusLines(Array(c.audio.dropFirst())), id: \.self) { Text($0).foregroundStyle(Palette.muted) }
+      // 第一行是麦克风，之后是问题；录音没开时不写“麦克风未录音”。
+      let enabled = c.sources.first { $0.id == "audio" }?.enabled == true
+      let lines = MicrophoneChoices.statusLines(Array(c.audio.dropFirst()))
+      ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+        if index > 0 { SettingsMessage(text: line, warning: !line.hasPrefix("正在")) }
+        else if enabled { Text(line).foregroundStyle(Palette.muted) }
+      }
     }
     Section {
       SettingsRow("原始音频保留") {
@@ -166,16 +172,26 @@ private struct AudioSourceSettings: View {
         }
       }
       if let savedDays, (keepForever ? 0 : days) != savedDays {
-        Button(saving ? "正在保存…" : "保存") { Task { await save() } }
-          .disabled(saving || (!keepForever && !(1...365).contains(days)))
-      }
-      SettingsRow("原始音频") {
-        Button("全部删除…") { confirmPurge = true }
+        HStack {
+          Spacer()
+          Button("撤销修改") { keepForever = savedDays == 0; days = savedDays == 0 ? 7 : savedDays }.disabled(saving)
+          Button(saving ? "正在保存…" : "保存") { Task { await save() } }
+            .keyboardShortcut(.defaultAction)
+            .disabled(saving || (!keepForever && !(1...365).contains(days)))
+        }
       }
       if let status { SettingsMessage(text: status, warning: false) }
       if let error { SettingsMessage(text: error) }
-    } header: { Text("音频保留与清理") } footer: {
-      Note("只影响原始音频，转写文字一直保留。不自动清除时会持续占用磁盘，仍可手动删除。")
+    } header: { Text("音频保留") } footer: {
+      Note("只清原始音频，转好的文字一直保留。")
+    }
+    Section {
+      HStack {
+        Spacer()
+        // 会丢东西的操作单独放在最下面，只染胭脂色。
+        Button("删除全部原始音频…", role: .destructive) { confirmPurge = true }
+          .buttonStyle(.borderless).foregroundStyle(Palette.attention)
+      }
     }
     .task { await load() }
     .confirmationDialog("删除全部原始音频？", isPresented: $confirmPurge) {
@@ -195,11 +211,11 @@ private struct AudioSourceSettings: View {
     saving = true
     defer { saving = false }
     let value = keepForever ? 0 : days
-    do { try await store.api.setRetentionDays(value); savedDays = value; status = "已保存"; error = nil }
+    do { try await store.api.setRetentionDays(value); savedDays = value; status = nil; error = nil }
     catch { self.error = error.localizedDescription }
   }
   func purge() async {
-    do { try await store.api.purgeAudio(); status = "Mac 下次同步时删除"; error = nil }
+    do { try await store.api.purgeAudio(); status = "已安排删除，各设备下次同步时清掉原始音频。"; error = nil }
     catch { self.error = error.localizedDescription }
   }
 }

@@ -418,7 +418,7 @@ private final class FixtureKeys: @unchecked Sendable {
   try await waitFor("request-level 403 was reported") {
     // Old versions immediately cleared the displayed error by starting the
     // next POST, so the rejection counter is also an observable completion.
-    if collector.lastError == "hub 返回 403" || collector.rejected > priorRejected { return true }
+    if collector.lastError == "后台服务拒绝了记录（403）" || collector.rejected > priorRejected { return true }
     collector.flush()
     return false
   }

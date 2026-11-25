@@ -29,8 +29,9 @@ final class PluginSource: DataSource {
   var running: Bool { scheduler.isRunning(descriptor.id) }
   var detail: (text: String, ok: Bool) {
     if !scheduler.available { return ("安装不完整，请重新安装 Tacit", false) }
-    if running { return ("运行中…", true) }
-    guard let o = scheduler.outcome(descriptor.id) else { return ("还没运行过", true) }
+    // 运行中、没运行过由“上次运行”那一行说，这里不重复。
+    if running { return ("", true) }
+    guard let o = scheduler.outcome(descriptor.id) else { return ("", true) }
     return (o.text, o.ok)
   }
 }

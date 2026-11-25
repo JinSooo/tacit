@@ -224,9 +224,9 @@ public enum DiagnosticSummary {
 
   private static func deliveryError(_ raw: String) -> String {
     // 旧采集端只保存错误原文。用固定前缀归类，不拼回剩余文本。
-    if raw.hasPrefix("找不到 hub 的 token") { return "未找到访问令牌" }
-    if raw.hasPrefix("hub 连不上") { return "连不上后台服务" }
-    if raw.hasPrefix("hub 返回 ") { return "后台服务拒绝请求" }
+    if raw.hasPrefix("找不到 hub 的 token") || raw.hasPrefix("找不到后台服务的访问凭证") { return "未找到访问令牌" }
+    if raw.hasPrefix("hub 连不上") || raw.hasPrefix("无法向 hub 发送") || raw.hasPrefix("连不上后台服务") { return "连不上后台服务" }
+    if raw.hasPrefix("hub 返回 ") || raw.hasPrefix("后台服务拒绝了记录") { return "后台服务拒绝请求" }
     if raw.hasPrefix("后台未确认完整接收") { return "接收确认不完整" }
     if raw.hasPrefix("待发送记录无法安全保存") || raw.hasPrefix("有待发送记录无法安全保存") {
       return "待发送记录保存失败"

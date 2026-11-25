@@ -106,6 +106,7 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
     let status = directory.appendingPathComponent("collector-status.json")
     for (error, category) in [
       ("hub 连不上。", "连不上后台服务"),
+      ("后台服务拒绝了记录（403）", "后台服务拒绝请求"),
       ("待发送记录无法安全保存，请检查磁盘空间和数据目录；暂时只在内存中重试。", "待发送记录保存失败"),
       ("有待发送记录无法安全保存或恢复。", "待发送记录保存失败"),
     ] {

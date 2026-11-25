@@ -447,7 +447,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s.onEnable = { [weak self] user in if user { self?.audio.allowManualStart() } }
       s.onApply = { [weak self] _ in self?.updateAudio() }
       s.describe = { [weak self] in
-        let line = self?.audio.status().first ?? ""
+        // 第一行是今天的计数，第二行是麦克风，之后是问题：有问题时先说问题，让列表也标红。
+        let lines = self?.audio.status() ?? []
+        if let problem = lines.dropFirst(2).first(where: { !$0.hasPrefix("正在") }) { return (problem, false) }
+        let line = lines.dropFirst(2).first ?? lines.first ?? ""
         return (line, !["失败", "崩溃", "不可用", "缺少", "跟不上"].contains { line.contains($0) })
       }
     })
@@ -734,7 +737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   /// 立即同步全部、重新导入最近 7 天、导入全部历史。整理启用前的历史由窗口直接向 hub 提交请求。
   func runMaintenance(_ task: MaintenanceTask) {
     guard task != .backfill, jobs[task]?.running != true else { return }
-    guard plugins.available else { jobs[task] = .init(running: false, text: "找不到 bun 或安装目录，插件不能运行"); return }
+    guard plugins.available else { jobs[task] = .init(running: false, text: "安装不完整，请重新安装 Tacit。"); return }
     let names = plugins.plugins.filter(enabled)
     jobs[task] = .init(running: true, text: task == .syncAll ? "正在同步…" : "正在导入…")
     if task == .syncAll { hub.flush() }
@@ -747,7 +750,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var text = summary
         // 同步全部之后请常驻的提炼进程立即跑一轮；采集端不自己启动提炼。
         if task == .syncAll {
-          do { try await api.requestDistill(kind: "round"); text += "，正在整理" }
+          // 整理进度由下一行的整理请求状态表达，这里不写“正在整理”，免得完成后还挂着。
+          do { try await api.requestDistill(kind: "round") }
           catch { text += "，整理没能开始：\(error.localizedDescription)" }
         }
         let f = DateFormatter(); f.dateFormat = "HH:mm"

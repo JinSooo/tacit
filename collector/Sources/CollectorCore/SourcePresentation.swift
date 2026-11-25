@@ -1,11 +1,13 @@
 import Foundation
 
 public enum SourceCategory: String, CaseIterable, Codable, Sendable {
-  case activity, communication, development, extensions
+  // 按来源角色分两组（2026-11-25）：对话是整理的主体，电脑上的活动只当时间骨架。
+  // development 不再有来源归入，保留是为了旧数据能解码；空组不显示。
+  case communication, activity, development, extensions
   public var title: String {
     switch self {
-    case .activity: return "日常活动"
-    case .communication: return "沟通与会议"
+    case .communication: return "对话"
+    case .activity: return "电脑上的活动"
     case .development: return "开发活动"
     case .extensions: return "扩展数据源"
     }
@@ -13,8 +15,7 @@ public enum SourceCategory: String, CaseIterable, Codable, Sendable {
   public static func forID(_ id: String) -> SourceCategory {
     switch id {
     case "screen", "ocr", "browser": return .activity
-    case "audio", "wechat": return .communication
-    case "agent-sessions": return .development
+    case "audio", "wechat", "agent-sessions": return .communication
     default: return .extensions
     }
   }

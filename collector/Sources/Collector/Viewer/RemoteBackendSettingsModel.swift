@@ -156,7 +156,7 @@ import struct CollectorCore.DistillHealth
         invitation = parsed
         try validateInvitation(parsed)
       } catch {
-        self.error = Self.message(for: error, fallback: "请粘贴有效的配对链接。")
+        self.error = Self.message(for: error, fallback: "请粘贴有效的邀请链接。")
       }
     }
   }
@@ -194,7 +194,7 @@ import struct CollectorCore.DistillHealth
   }
   var canConfirmTarget: Bool { !busy && (!repairing || (replacement != nil && !replacementExpired)) }
   var replacementNotice: String? {
-    replacementExpired ? "配对链接已过期，请返回并粘贴新链接。" : nil
+    replacementExpired ? "邀请链接已过期，请返回并粘贴新链接。" : nil
   }
   var canChangePause: Bool { !busy && !recovering && progress?.isComplete == false }
   var canReturn: Bool { !busy && !recovering && !frozen && backup != nil }
@@ -630,10 +630,10 @@ import struct CollectorCore.DistillHealth
   }
 
   static func message(for error: Error, fallback: String) -> String {
-    if invitationUnavailable(error) { return "配对链接已过期或已使用，请粘贴新链接。" }
+    if invitationUnavailable(error) { return "邀请链接已过期或已使用，请粘贴新链接。" }
     switch error {
     case RemotePairing.Failure.differentHub:
-      return "请粘贴当前后台签发的配对链接，连接其他后台前需先切回这台 Mac。"
+      return "请粘贴当前后台签发的邀请链接，连接其他后台前需先切回这台 Mac。"
     case RemoteSwitch.Failure.reconciliationIncomplete:
       return "远端的删除和私密变更尚未核对完成，当前仍使用远端后台。"
     case RemoteSwitch.Failure.commandTimedOut:

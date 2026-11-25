@@ -201,6 +201,8 @@ struct GeneralPreferencesSection: View {
           Text("从最后活动的次日起，只计有记录的日期。归档后仍可搜索和查看。")
             .foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
         }
+        // 已经是默认值、又没改动时，这一行什么都没有，不占位。
+        if !p.isDefault(context: context) || p.changed(context: context) {
         HStack {
           // 已经是默认值时“恢复默认”没有用处，不出现。
           if !p.isDefault(context: context) {
@@ -211,6 +213,7 @@ struct GeneralPreferencesSection: View {
             Button("撤销修改") { p.revert(context: context) }.disabled(p.busy)
             Button(p.busy ? "正在保存…" : "保存") { Task { await p.save(api: store.api, context: context) } }.disabled(p.busy)
           }
+        }
         }
       } else if p.error == nil { ProgressView() }
       if let error = p.error {
@@ -356,7 +359,7 @@ struct HubSettingsView: View {
           return
         }
       }
-      error = "30 秒内没连上端口 \(p)。日志在数据目录的 logs/hub.log。"
+      error = "30 秒内没连上端口 \(p)，可以在维护里复制诊断信息排查。"
     } catch { self.error = error.localizedDescription }
   }
 }
@@ -375,19 +378,24 @@ struct PrivacySettingsView: View {
           SettingsRow("已暂停到 \(ViewerFormat.clock(until))") { Button("继续记录") { store.perform(.resume) } }
         default:
           SettingsRow(c.statusTitle) {
-            HStack {
-              Button("暂停 1 小时") { store.perform(.pauseHour) }
-              Button("暂停到明天") { store.perform(.pauseTomorrow) }
+            // 数据源全关时本来就没在记录，暂停按钮没有用处。
+            if c.sources.contains(where: \.enabled) {
+              HStack {
+                Button("暂停 1 小时") { store.perform(.pauseHour) }
+                Button("暂停到明天") { store.perform(.pauseTomorrow) }
+              }
             }
           }
         }
       }
       Section {
-        SettingsRow("密码和密钥", value: "存之前换成 [已脱敏]，原文不写进磁盘")
+        SettingsRow("密码和密钥", value: "保存前换成 [已脱敏]，原文不写进磁盘")
         SettingsRow("标为私密的内容", value: "不交给 AI 整理，也不自动带入")
-        Text("已连接的 AI 工具主动查询时仍可读取私密记录；每次查询都留在“运行记录”中。").foregroundStyle(Palette.muted)
+        SettingsRow("删除的记录", value: "在线的设备马上清掉，离线的下次连上时清掉")
       } header: {
-        Text("写入时")
+        Text("处理规则")
+      } footer: {
+        Note("已连接的 AI 工具主动查询时仍能读到私密记录，每次查询都记在运行记录里。")
       }
     }
   }

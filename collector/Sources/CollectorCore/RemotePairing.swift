@@ -10,14 +10,14 @@ public actor RemotePairing {
 
     public var errorDescription: String? {
       switch self {
-      case .adminInvitationRequired: "请使用有管理权限的配对链接"
+      case .adminInvitationRequired: "请使用有管理权限的邀请链接"
       case .remoteUnavailable: "找不到远端后台"
       case .preparationExists: "已有远端连接凭据，请先处理现有连接"
       case .invalidReceipt: "远端后台返回的配对确认无效"
       case .remoteCleanupRequired: "请联系服务器管理员清理本次配对"
-      case .differentHub: "请使用当前远端后台签发的管理配对链接。更换后台前请先切回这台 Mac。"
-      case .notFrozen: "当前远端连接未冻结，请使用原连接恢复验证。"
-      case .retainedIdentityInvalid: "请粘贴远端后台新签发的管理配对链接。"
+      case .differentHub: "请使用当前远端后台签发的管理邀请链接。更换后台前请先切回这台 Mac。"
+      case .notFrozen: "当前远端连接还在使用中，请先用原连接完成恢复。"
+      case .retainedIdentityInvalid: "请粘贴远端后台新签发的管理邀请链接。"
       case .recoveryRequired: "重新配对尚未收尾，已保留恢复进度。"
       }
     }

@@ -166,11 +166,11 @@ public struct DevicePairingInvitation: Equatable, Sendable {
           rawQuery.hasPrefix("d="),
           rawQuery.count <= 16_384,
           !rawQuery.contains("&") else {
-      throw DeviceClientError.invalidInvitation("配对链接格式无效")
+      throw DeviceClientError.invalidInvitation("邀请链接格式无效")
     }
     let payloadToken = String(rawQuery.dropFirst(2))
     guard let jsonData = DeviceProtocol.base64URLDecode(payloadToken) else {
-      throw DeviceClientError.invalidInvitation("配对链接载荷 base64url 无效")
+      throw DeviceClientError.invalidInvitation("邀请链接格式无效")
     }
     let wire: WireInvitation
     do {
@@ -371,7 +371,7 @@ public struct DirectDeviceTransport: DeviceTransport, Sendable {
     maxResponseBytes: Int = DeviceProtocol.maxResponseBytes
   ) throws {
     guard let normalized = DevicePairingInvitation.normalizeOrigin(origin.absoluteString) else {
-      throw DeviceClientError.invalidRequest("中枢直连地址无效")
+      throw DeviceClientError.invalidRequest("后台直连地址无效")
     }
     self.origin = normalized
     self.session = session ?? Self.sharedEphemeralSession
