@@ -15,6 +15,9 @@ import java.util.concurrent.TimeUnit
 class AudioReadDeviceTest {
     @Test fun pageReadsDoNotWaitForAProcessingDrain() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        // Load the index once first: on a phone with weeks of recordings the first decrypt alone takes seconds,
+        // which is not what this test is about.
+        AudioController(context).listClips().get(30, TimeUnit.SECONDS)
         val busy = CountDownLatch(1)
         val started = CountDownLatch(1)
         // Stand-in for a long drain: holds the processing thread but not the store lock, like real inference.

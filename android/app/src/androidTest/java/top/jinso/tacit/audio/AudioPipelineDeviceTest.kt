@@ -31,6 +31,8 @@ class AudioPipelineDeviceTest {
         }
         override fun transcribe(samples: FloatArray): String { calls++; return "本地文本 ghp_12345678901234567890" }
     }
+    // A conversation only counts the user as present after 20 s of "me" (AudioPolicy.ME_PRESENT_SECONDS).
+    private val ME_PRESENT = AudioPolicy.ME_PRESENT_SECONDS.toInt() + 1
     private fun add(store: EncryptedAudioStore, time: Long, me: Boolean = false, seconds: Int = 1) =
         store.add(ShortArray(SAMPLE_RATE * seconds) { if (me) 2 else 1 }, time)
     private fun meId(store: EncryptedAudioStore) = store.speakers().first {
@@ -80,9 +82,9 @@ class AudioPipelineDeviceTest {
 
     @Test fun laterMeBackfillsEarlierClipOnlyInSameConversationWithStableNames() = isolated { store, context ->
         val t = System.currentTimeMillis() - 2_000_000
-        val first = add(store, t); val second = add(store, t + 30_000, me = true)
-        add(store, t + 700_002)
-        val speech = FakeSpeech(); val ledger = AudioLedger(store)
+        val first = add(store, t, seconds = ME_PRESENT); val second = add(store, t + 30_000, me = true, seconds = ME_PRESENT)
+        add(store, t + 700_002, seconds = ME_PRESENT)
+        val speech = FakeSpeech(ME_PRESENT); val ledger = AudioLedger(store)
         val publications = mutableListOf<AudioPublication>()
         fun run() = AudioProcessor(store, Any(), speech).drain({ true }) { publications += it; "record:${it.clipId}" }
         run(); assertEquals(0, speech.calls)
@@ -101,7 +103,7 @@ class AudioPipelineDeviceTest {
         val restored = EncryptedAudioStore(context)
         assertEquals(ledger.render("record:$first", "missing"), AudioLedger(restored).render("record:$first", "missing"))
         assertFalse(File(context.noBackupFilesDir, "audio/index.enc").readBytes().toString(Charsets.UTF_8).contains("本地文本"))
-        run(); assertEquals(2, speech.calls) // no retranscription on rename/retry
+        run(); assertEquals(2 * ME_PRESENT, speech.calls) // one call per spoken second; no retranscription on rename/retry
     }
 
     @Test fun candidateCountsConversationsNotVadSpansOrClips() = isolated { store, _ ->
@@ -135,9 +137,9 @@ class AudioPipelineDeviceTest {
 
     @Test fun expiredMeCannotAuthorizeRetainedNeighborsButPublishedTextSurvivesPruneAndClear() = isolated { store, context ->
         val t = System.currentTimeMillis() - 7 * 86_400_000L
-        val old = add(store, t - 1000, me = true)
-        val kept = add(store, t + 30_000)
-        val speech = FakeSpeech(); val ledger = AudioLedger(store)
+        val old = add(store, t - 1000, me = true, seconds = ME_PRESENT)
+        val kept = add(store, t + 30_000, seconds = ME_PRESENT)
+        val speech = FakeSpeech(ME_PRESENT); val ledger = AudioLedger(store)
         AudioProcessor(store, Any(), speech).drain({ true }) { error("Unmarked") }
         ledger.markMe(meId(store))
         store.prune(7)
@@ -145,7 +147,7 @@ class AudioPipelineDeviceTest {
         AudioProcessor(store, Any(), speech).drain({ true }) { error("Expired voice cannot authorize") }
         assertEquals(0, speech.calls)
         // Publish a new microphone recording with me present, then age it past retention.
-        val meeting = add(store, System.currentTimeMillis(), me = true)
+        val meeting = add(store, System.currentTimeMillis(), me = true, seconds = ME_PRESENT)
         AudioProcessor(store, Any(), speech).drain({ true }) { "record:${it.clipId}" }
         val record = "record:$meeting"
         val group = ledger.listConversations().single { record in it.recordIds }.id
@@ -162,16 +164,16 @@ class AudioPipelineDeviceTest {
     }
 
     @Test fun preparedEncryptedTextRecoversWithoutAsrAndDeletionDoesNotBackfill() = isolated { store, context ->
-        val id = add(store, System.currentTimeMillis(), me = true)
+        val id = add(store, System.currentTimeMillis(), me = true, seconds = ME_PRESENT)
         seedMe(store)
-        val speech = FakeSpeech()
+        val speech = FakeSpeech(ME_PRESENT)
         try {
             AudioProcessor(store, Any(), speech).drain({ true }) { error("Simulated crash before commit") }
             fail("Expected crash")
         } catch (_: IllegalStateException) { }
         val restored = EncryptedAudioStore(context)
         AudioProcessor(restored, Any(), speech).drain({ true }) { "record" }
-        assertEquals(1, speech.calls)
+        assertEquals(ME_PRESENT, speech.calls)
         assertTrue(AudioLedger(restored).render("record", "missing").contains("本地文本"))
         restored.deleteRecord("record")
         assertFalse(restored.exists(id))
