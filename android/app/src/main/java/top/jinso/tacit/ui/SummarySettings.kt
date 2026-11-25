@@ -11,7 +11,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -21,14 +23,21 @@ import top.jinso.tacit.summary.SummaryClient
 import top.jinso.tacit.summary.SummaryFailure
 import top.jinso.tacit.summary.SummaryModel
 import top.jinso.tacit.summary.SummaryWorker
+import top.jinso.tacit.summary.clearSummaryFailure
+import top.jinso.tacit.summary.summaryModelConfig
 import top.jinso.tacit.summary.summaryModelJson
+import top.jinso.tacit.summary.summaryProblem
 import top.jinso.tacit.ui.components.*
 
-/** Settings row value: the model the user picked, or what needs their hand. */
-internal fun summaryRowValue(saved: JSONObject?): Pair<String?, Boolean> = when {
-    saved?.optBoolean("enabled") != true -> null to false
-    saved.optString("error").isNotEmpty() -> saved.optString("error") to true
-    else -> saved.optString("model") to false
+@Composable
+internal fun visibleSummaryProblem(saved: JSONObject?): String? {
+    val problem = saved?.takeIf { it.optBoolean("enabled") }?.summaryProblem() ?: return null
+    var now by remember(problem) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(problem) {
+        delay((problem.showAt - System.currentTimeMillis()).coerceAtLeast(0L))
+        now = System.currentTimeMillis()
+    }
+    return problem.messageAt(now)
 }
 
 /** "AI 总结": the phone writes conversation summaries itself with a model service the user fills in. Off by default. */
@@ -37,71 +46,159 @@ internal fun summaryRowValue(saved: JSONObject?): Pair<String?, Boolean> = when 
     var saved by remember { mutableStateOf<JSONObject?>(null) }
     var loaded by remember { mutableStateOf(false) }
     LaunchedEffect(app) {
-        app.vault.changes.collectLatest { saved = withContext(Dispatchers.IO) { app.vault.summaryModel() }; loaded = true }
-    }
-    if (!loaded) { ProgressLine(); return }
-    var base by rememberSaveable { mutableStateOf(saved?.optString("base").orEmpty()) }
-    var model by rememberSaveable { mutableStateOf(saved?.optString("model").orEmpty()) }
-    // The key is never shown again; an empty field keeps the one already saved.
-    var key by rememberSaveable { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
-    val enabled = saved?.optBoolean("enabled") == true
-    val hasKey = saved?.optString("key").orEmpty().isNotEmpty()
-    fun current() = SummaryModel(base, model, key.ifBlank { saved?.optString("key").orEmpty() })
-    fun act(block: suspend () -> String?) {
-        if (busy) return
-        busy = true; message = null
-        scope.launch {
-            try { message = block() }
-            catch (e: SummaryFailure) { message = e.reason }
-            finally { busy = false }
+        app.vault.changes.collectLatest {
+            saved = withContext(Dispatchers.IO) { app.vault.summaryModel() }
+            loaded = true
         }
     }
-    fun store(on: Boolean): String? {
-        val m = current()
-        if (on && (m.base.isBlank() || m.model.isBlank())) return "先填服务地址和模型名"
-        if (m.base.isNotBlank()) SummaryClient.endpointOf(m.base)
-        app.vault.saveSummaryModel(summaryModelJson(on, m))
-        SummaryWorker.apply(app, on)
+    if (!loaded) { ProgressLine(); return }
+    val savedModel = saved?.summaryModelConfig()
+    var base by rememberSaveable { mutableStateOf(savedModel?.base.orEmpty()) }
+    var model by rememberSaveable { mutableStateOf(savedModel?.model.orEmpty()) }
+    var key by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
+    var testPassed by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var confirmDeleteKey by rememberSaveable { mutableStateOf(false) }
+    val enabled = saved?.optBoolean("enabled") == true
+    val hasKey = !savedModel?.key.isNullOrEmpty()
+
+    fun current() = SummaryModel(base.trim(), model.trim(), key.trim().ifBlank { savedModel?.key.orEmpty() })
+
+    fun act(test: Boolean = false, block: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        testing = test
+        testPassed = false
+        message = null
+        scope.launch {
+            try {
+                block()
+                testPassed = test
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SummaryFailure) {
+                message = e.reason
+            } catch (_: Exception) {
+                message = if (test) "测试连接失败，请重试。" else "保存失败，请重试。"
+            } finally {
+                busy = false
+                testing = false
+            }
+        }
+    }
+
+    suspend fun store(on: Boolean) {
+        val draft = current()
+        if (on && (draft.base.isBlank() || draft.model.isBlank())) {
+            message = "请先填写服务地址和模型名"
+            return
+        }
+        if (draft.base.isNotBlank()) SummaryClient.endpointOf(draft.base)
+        withContext(Dispatchers.IO) {
+            val vault = app.vault
+            synchronized(vault) {
+                val previous = vault.summaryModel()
+                val state = previous?.takeIf { it.summaryModelConfig() == draft }?.put("enabled", on)
+                    ?: summaryModelJson(on, draft)
+                vault.saveSummaryModel(state)
+            }
+            SummaryWorker.apply(app, on)
+        }
+        base = draft.base
+        model = draft.model
         key = ""
-        return null
     }
 
     GroupCard {
-        SettingsRow("AI 总结", onClick = { act { withContext(Dispatchers.IO) { store(!enabled) } } }, trailing = {
+        SettingsRow("AI 总结", onClick = {
+            act {
+                if (enabled) {
+                    withContext(Dispatchers.IO) {
+                        val vault = app.vault
+                        synchronized(vault) {
+                            vault.summaryModel()?.let { vault.saveSummaryModel(it.put("enabled", false)) }
+                        }
+                        SummaryWorker.apply(app, false)
+                    }
+                } else store(true)
+            }
+        }, trailing = {
             Switch(enabled, null, Modifier.semantics { contentDescription = if (enabled) "AI 总结已开启" else "AI 总结已关闭" },
+                enabled = !busy,
                 colors = SwitchDefaults.colors(checkedTrackColor = tacitColors.accent, checkedThumbColor = tacitColors.paper))
         })
     }
-    Caption("开启后，对话的转写文字会发给这里填的服务来写总结，私密的不发；也可以填本机或家里网络中的模型服务。")
+    Caption("开启后，非私密对话的转写文字会发给此服务写总结，也可填本机或局域网服务。")
     GroupCard {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(base, { base = it.take(512) }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true,
                 label = { Text("服务地址") }, placeholder = { Text("https://api.example.com/v1") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
             OutlinedTextField(model, { model = it.take(200) }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true,
-                label = { Text("模型名") })
+                label = { Text("模型") }, placeholder = { Text("模型名") })
             OutlinedTextField(key, { key = it.take(512) }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true,
-                label = { Text("API Key") },
-                placeholder = if (hasKey) { { Text("已设置，留空保持不变") } } else null,
+                label = { Text(if (hasKey) "API key（已设置）" else "API key") },
+                placeholder = if (hasKey) { { Text("留空保持不变") } } else null,
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TonalButton("测试连接", { act { withContext(Dispatchers.IO) { SummaryClient(current()).test() }; "连接正常" } },
-                    enabled = !busy && base.isNotBlank() && model.isNotBlank())
-                val changed = base != saved?.optString("base").orEmpty() || model != saved?.optString("model").orEmpty() || key.isNotBlank()
+                TonalButton(if (testing) "正在测试…" else "测试连接", {
+                    act(test = true) {
+                        val draft = current()
+                        withContext(Dispatchers.IO) {
+                            SummaryClient(draft).test()
+                            app.vault.clearSummaryFailure(draft)
+                        }
+                    }
+                }, enabled = !busy && base.isNotBlank() && model.isNotBlank())
+                val changed = base != savedModel?.base.orEmpty() || model != savedModel?.model.orEmpty() || key.isNotBlank()
                 FadeVisibility(changed) {
-                    TonalButton("保存", { act { withContext(Dispatchers.IO) { store(enabled) }.also { if (it == null) notify("已保存") } } },
-                    enabled = !busy)
+                    TonalButton("保存", {
+                        act {
+                            store(enabled)
+                            if (message == null) notify("已保存")
+                        }
+                    }, enabled = !busy)
+                }
             }
         }
     }
-    }
-    val result = message ?: saved?.optString("error")?.takeIf { enabled && it.isNotEmpty() }
-    val shownResult = rememberLatest(result)
+    val backgroundProblem = visibleSummaryProblem(saved)
+    val result = message ?: if (testPassed) "连接正常。" else backgroundProblem
+    val shownResult = rememberLatest(result?.let { it to (message != null || !testPassed) })
     Reveal(result != null) {
-        shownResult?.let { Caption(it, color = if (it == "连接正常") tacitColors.muted else tacitColors.attention) }
+        shownResult?.let { (text, problem) -> Caption(text, color = if (problem) tacitColors.attention else tacitColors.muted) }
     }
     if (busy) ProgressLine()
+    if (hasKey) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+            TextAction("删除 API key", { confirmDeleteKey = true }, enabled = !busy, color = tacitColors.attention)
+        }
+        if (confirmDeleteKey) AlertDialog(
+            onDismissRequest = { confirmDeleteKey = false },
+            title = { Text("删除 API key？") },
+            text = { Text("如果服务需要 API key，重新填写前将无法写总结。") },
+            confirmButton = {
+                TextAction("删除", {
+                    confirmDeleteKey = false
+                    act {
+                        withContext(Dispatchers.IO) {
+                            val vault = app.vault
+                            synchronized(vault) {
+                                vault.summaryModel()?.let { state ->
+                                    state.remove("key")
+                                    state.clearSummaryFailure()
+                                    vault.saveSummaryModel(state)
+                                }
+                            }
+                        }
+                        key = ""
+                    }
+                }, color = tacitColors.attention)
+            },
+            dismissButton = { TextAction("取消", { confirmDeleteKey = false }) },
+        )
+    }
 }

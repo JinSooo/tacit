@@ -202,6 +202,23 @@ internal fun uploadReceipt(json: JSONObject, count: Int): Map<Int, String> {
     }
 }
 
+/** Show one recognizable reason per record, even if its receipt listed several validation errors. */
+internal fun rejectedRecordCategories(reasons: Map<String, Int>): Map<String, Int> = buildMap {
+    for ((reason, count) in reasons) {
+        val label = reason.split('；').firstNotNullOfOrNull { part ->
+            val field = part.substringBefore(' ')
+            when {
+                field in setOf("/body", "/title") && "must NOT have more than" in part -> "单条内容过长"
+                field == "/t_start" || field == "/t_end" -> "时间格式异常"
+                field == "/source" -> "来源不支持"
+                field == "/device" -> "设备身份不匹配"
+                else -> null
+            }
+        } ?: "其他格式问题"
+        put(label, (get(label) ?: 0) + count)
+    }
+}.toList().sortedByDescending { it.second }.toMap()
+
 internal sealed interface Change {
     data class Delete(val id: String, val source: String?, val ref: String?) : Change
     data class Correction(val record: JSONObject) : Change

@@ -54,10 +54,9 @@ internal fun SettingsPage(
             Sources.AUDIO -> activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
             else -> app.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
         }
-        notify(if (granted) "权限已更新" else "尚未允许权限，可打开应用信息检查")
+        notify(if (granted) "权限已更新" else "未授权，可打开应用信息检查")
         pendingPermission = null
     }
-    fun appInfo() = openSystemPage(activity, SystemPage.APP, notify)
     fun requestMicrophone() {
         pendingPermission = Sources.AUDIO
         permission.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
@@ -101,14 +100,17 @@ internal fun SettingsPage(
                     Sources.AUDIO -> {
                         val granted = health?.microphoneGranted
                         GroupCard {
-                            SettingsRow(
-                                "麦克风权限", when (granted) { true -> "已允许"; false -> "尚未允许"; null -> "正在检查" },
-                                problem = granted == false, leading = { StatusMark(checkMark(granted)) },
-                            ) {
-                                if (granted == false) TonalButton("允许", ::requestMicrophone)
-                                else TonalButton("检查", ::appInfo)
+                            if (granted == null) {
+                                ProgressLine()
+                            } else {
+                                SettingsRow(
+                                    "麦克风权限", status = if (granted) null else "未授权",
+                                    problem = !granted, leading = { StatusMark(checkMark(granted)) },
+                                ) {
+                                    if (!granted) TonalButton("允许", ::requestMicrophone)
+                                }
+                                GroupDivider()
                             }
-                            GroupDivider()
                             SettingsRow("系统麦克风开关", onClick = { openSystemPage(activity, SystemPage.PRIVACY, notify) })
                         }
                     }
@@ -159,8 +161,10 @@ private fun SettingsHome(
         val summary by produceState<JSONObject?>(null, app) {
             app.vault.changes.collect { value = withContext(Dispatchers.IO) { app.vault.summaryModel() } }
         }
-        val (summaryValue, summaryProblem) = summaryRowValue(summary)
-        SettingsRow("AI 总结", value = summaryValue, problem = summaryProblem, onClick = { open(SettingsRoutes.SUMMARY) })
+        val summaryProblem = visibleSummaryProblem(summary)
+        val summaryValue = summary?.takeIf { it.optBoolean("enabled") }?.optString("model")?.takeIf(String::isNotBlank)
+        SettingsRow("AI 总结", status = summaryProblem, value = summaryValue.takeIf { summaryProblem == null },
+            problem = summaryProblem != null, onClick = { open(SettingsRoutes.SUMMARY) })
         GroupDivider()
         SettingsRow("录音保留", value = retentionLabel(macDays ?: app.prefs.retentionDays),
             onClick = { open(SettingsRoutes.RETENTION) })

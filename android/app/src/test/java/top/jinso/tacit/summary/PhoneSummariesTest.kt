@@ -1,11 +1,14 @@
 package top.jinso.tacit.summary
 
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import top.jinso.tacit.core.HistoryRecord
+import java.io.IOException
+import java.net.SocketTimeoutException
 
 class PhoneSummariesTest {
     private val minute = 60_000L
@@ -56,8 +59,64 @@ class PhoneSummariesTest {
         assertThrows(SummaryFailure::class.java) { SummaryClient.endpointOf("ftp://example.com") }
     }
 
-    @Test fun keyErrorsNameTheCause() {
-        val client = SummaryClient(SummaryModel("https://api.example.com/v1", "m", "k")) { _, _, _ -> 401 to "{}" }
-        assertEquals("API Key 不对", assertThrows(SummaryFailure::class.java) { client.test() }.reason)
+    @Test fun serviceFailuresUseTheMacWordingWithoutStatusCodes() {
+        val expectations = mapOf(
+            401 to "API key 没设置或无效；用账号登录的，请确认已登录。",
+            403 to "API key 没设置或无效；用账号登录的，请确认已登录。",
+            402 to "模型服务的额度用完了，充值或额度恢复后会自动继续。",
+            404 to "模型服务拒绝了请求，请检查模型名和地址。",
+            408 to "模型服务一直没有回应，请检查网络或稍后再试。",
+            422 to "模型服务拒绝了请求，请检查模型名和地址。",
+            429 to "请求太频繁，模型服务暂时限流，稍后会自动重试。",
+            503 to "模型服务暂时出错，稍后会自动重试。",
+            200 to "模型返回的内容不合格式，可以换个模型试试。",
+        )
+        for ((status, expected) in expectations) {
+            val client = SummaryClient(SummaryModel("https://api.example.com/v1", "m", "k")) { _, _, _ -> status to "{}" }
+            assertEquals(expected, assertThrows(SummaryFailure::class.java) { client.test() }.reason)
+        }
+        val quota = SummaryClient(SummaryModel("https://api.example.com/v1", "m", "k")) { _, _, _ ->
+            429 to """{"error":{"code":"insufficient_quota"}}"""
+        }
+        assertEquals(SummaryError.QUOTA, assertThrows(SummaryFailure::class.java) { quota.test() }.error)
+    }
+
+    @Test fun networkAndTimeoutAreDistinct() {
+        for ((exception, expected) in listOf(
+            IOException() to "连不上模型服务，请检查网络和地址。",
+            SocketTimeoutException() to "模型服务一直没有回应，请检查网络或稍后再试。",
+        )) {
+            val client = SummaryClient(SummaryModel("https://api.example.com/v1", "m", "")) { _, _, _ -> throw exception }
+            assertEquals(expected, assertThrows(SummaryFailure::class.java) { client.test() }.reason)
+        }
+    }
+
+    @Test fun retryableFailuresSurfaceOnlyAfterAnHourEvenWhenTheCauseChanges() {
+        val start = 100 * minute
+        val state = JSONObject().put("error", "服务拒绝了请求（400）")
+        assertNull(state.summaryProblem())
+        state.recordSummaryFailure(SummaryFailure(SummaryError.NETWORK), start)
+        assertNull(state.summaryProblem()?.messageAt(start))
+        state.recordSummaryFailure(SummaryFailure(SummaryError.SERVER), start + 45 * minute)
+        val problem = requireNotNull(state.summaryProblem())
+        assertNull(problem.messageAt(start + 60 * minute - 1))
+        assertEquals(SummaryError.SERVER.reason, problem.messageAt(start + 60 * minute))
+    }
+
+    @Test fun actionableFailuresSurfaceImmediatelyAndRecoveryResetsTheFailureClock() {
+        val start = 100 * minute
+        val state = JSONObject()
+        for (error in listOf(SummaryError.AUTH, SummaryError.QUOTA, SummaryError.CONFIG, SummaryError.REJECTED)) {
+            state.recordSummaryFailure(SummaryFailure(error), start)
+            assertEquals(error.reason, state.summaryProblem()?.messageAt(start))
+        }
+        state.recordSummaryFailure(SummaryFailure(SummaryError.RATE_LIMIT, 30 * minute), start + minute)
+        assertEquals(start + 31 * minute, state.optLong("pausedUntil"))
+        assertTrue(state.clearSummaryFailure())
+        assertNull(state.summaryProblem())
+        assertEquals(0L, state.optLong("pausedUntil"))
+        state.recordSummaryFailure(SummaryFailure(SummaryError.FORMAT), start + 70 * minute)
+        assertNull(state.summaryProblem()?.messageAt(start + 129 * minute))
+        assertEquals(SummaryError.FORMAT.reason, state.summaryProblem()?.messageAt(start + 130 * minute))
     }
 }

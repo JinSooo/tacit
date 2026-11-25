@@ -11,6 +11,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -19,6 +21,7 @@ import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.AudioController
 import top.jinso.tacit.core.readableTranscript
 import top.jinso.tacit.data.ConversationSummary
+import top.jinso.tacit.data.Vault
 import top.jinso.tacit.sources.Sources
 import java.util.concurrent.TimeUnit.MINUTES
 
@@ -26,28 +29,42 @@ import java.util.concurrent.TimeUnit.MINUTES
 internal class PhoneSummarizer(private val app: TacitApp) {
     private val vault get() = app.vault
 
-    fun model(): SummaryModel? = vault.summaryModel()?.takeIf { it.optBoolean("enabled") }?.let {
-        SummaryModel(it.optString("base"), it.optString("model"), it.optString("key"))
-    }
-
     suspend fun run(now: Long = System.currentTimeMillis()): Int = lock.withLock {
-        val model = model() ?: return@withLock 0
-        val state = vault.summaryModel() ?: return@withLock 0
-        if (state.optLong("pausedUntil") > now) return@withLock 0
-        val client = try { SummaryClient(model) } catch (e: SummaryFailure) { fail(e); return@withLock 0 }
-        val audio = AudioController(app)
-        var written = 0
-        for (g in todo(now, audio)) {
-            val (group, turns) = g
-            val summary = try { client.summarize(group.start, group.end, summaryTranscript(turns)) }
-                catch (e: SummaryFailure) { fail(e, now); break }
-            // The user may have deleted part of it while the model was writing; then the next round starts over.
-            val current = groups(now).firstOrNull { it.id == group.id }
-            if (current?.recordIds != group.recordIds) continue
-            vault.saveOwnSummary(ConversationSummary(group.id, group.recordIds, group.start, group.end, summary.title, summary.summary, summary.points))
-            written++
+        val state = vault.summaryModel()?.takeIf { it.optBoolean("enabled") } ?: return@withLock 0
+        val model = state.summaryModelConfig()
+        val pending = todo(now, AudioController(app))
+        if (pending.isEmpty()) {
+            vault.clearSummaryFailure(model, requireEnabled = true)
+            return@withLock 0
         }
-        if (written > 0) vault.summaryModel()?.let { vault.saveSummaryModel(it.apply { remove("error"); remove("pausedUntil") }) }
+        if (state.optLong("pausedUntil") > now) return@withLock 0
+        val client = try {
+            SummaryClient(model)
+        } catch (e: SummaryFailure) {
+            fail(model, e)
+            return@withLock 0
+        }
+        var written = 0
+        for ((group, turns) in pending) {
+            currentCoroutineContext().ensureActive()
+            if (!vault.usesSummaryModel(model)) break
+            val summary = try {
+                client.summarize(group.start, group.end, summaryTranscript(turns))
+            } catch (e: SummaryFailure) {
+                fail(model, e)
+                break
+            }
+            currentCoroutineContext().ensureActive()
+            synchronized(vault) {
+                if (!vault.usesSummaryModel(model)) return@synchronized
+                vault.clearSummaryFailure(model, requireEnabled = true)
+                // A deletion can change the group while the model is writing.
+                val current = groups(now).firstOrNull { it.id == group.id }
+                if (current?.recordIds != group.recordIds || current.private) return@synchronized
+                vault.saveOwnSummary(ConversationSummary(group.id, group.recordIds, group.start, group.end, summary.title, summary.summary, summary.points))
+                written++
+            }
+        }
         written
     }
 
@@ -75,11 +92,14 @@ internal class PhoneSummarizer(private val app: TacitApp) {
         }.take(SummaryRules.PER_ROUND).toList()
     }
 
-    private fun fail(e: SummaryFailure, now: Long = System.currentTimeMillis()) {
-        val state = vault.summaryModel() ?: return
-        state.put("error", e.reason)
-        if (e.retryAfterMs > 0) state.put("pausedUntil", now + e.retryAfterMs)
-        vault.saveSummaryModel(state)
+    private suspend fun fail(model: SummaryModel, failure: SummaryFailure) {
+        currentCoroutineContext().ensureActive()
+        synchronized(vault) {
+            val state = vault.summaryModel()?.takeIf { it.usesSummaryModel(model) } ?: return
+            val now = System.currentTimeMillis()
+            state.recordSummaryFailure(failure, now)
+            vault.saveSummaryModel(state)
+        }
     }
 
     companion object { private val lock = Mutex() }
@@ -111,3 +131,48 @@ internal class SummaryWorker(context: Context, params: WorkerParameters) : Corou
 
 internal fun summaryModelJson(enabled: Boolean, model: SummaryModel): JSONObject =
     JSONObject().put("enabled", enabled).put("base", model.base.trim()).put("model", model.model.trim()).put("key", model.key.trim())
+
+
+internal fun JSONObject.summaryModelConfig(): SummaryModel =
+    SummaryModel(optString("base"), optString("model"), optString("key"))
+
+private fun JSONObject.usesSummaryModel(model: SummaryModel): Boolean =
+    optBoolean("enabled") && summaryModelConfig() == model
+
+private fun Vault.usesSummaryModel(model: SummaryModel): Boolean =
+    summaryModel()?.usesSummaryModel(model) == true
+
+internal data class SummaryProblem(val error: SummaryError, val firstFailureAt: Long) {
+    val showAt: Long get() = if (error.needsUser) firstFailureAt else firstFailureAt + 60 * 60_000L
+    fun messageAt(now: Long): String? = error.reason.takeIf { now >= showAt }
+}
+
+internal fun JSONObject.summaryProblem(): SummaryProblem? {
+    val kind = optString("errorCategory")
+    val firstFailureAt = optLong("firstFailureAt")
+    return SummaryError.entries.firstOrNull { it.name == kind }
+        ?.takeIf { has("firstFailureAt") }
+        ?.let { SummaryProblem(it, firstFailureAt) }
+}
+
+internal fun JSONObject.recordSummaryFailure(failure: SummaryFailure, now: Long) {
+    val firstFailureAt = summaryProblem()?.firstFailureAt ?: now
+    remove("error") // Upgrades may still have a legacy message containing an HTTP status.
+    put("errorCategory", failure.error.name)
+    put("firstFailureAt", firstFailureAt)
+    if (failure.retryAfterMs > 0) put("pausedUntil", now + failure.retryAfterMs)
+}
+
+internal fun JSONObject.clearSummaryFailure(): Boolean {
+    val keys = listOf("error", "errorCategory", "firstFailureAt", "pausedUntil")
+    val changed = keys.any(::has)
+    keys.forEach(::remove)
+    return changed
+}
+
+internal fun Vault.clearSummaryFailure(model: SummaryModel, requireEnabled: Boolean = false) = synchronized(this) {
+    val state = summaryModel() ?: return@synchronized
+    if (state.summaryModelConfig() == model && (!requireEnabled || state.optBoolean("enabled")) &&
+        state.clearSummaryFailure()
+    ) saveSummaryModel(state)
+}
