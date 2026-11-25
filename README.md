@@ -231,7 +231,7 @@ bun x tsc --noEmit
 bun x vite build --config web/vite.config.ts
 
 # 需要先准备安装脚本下载的本机音频库
-python3 scripts/guarded-run.py --memory-mb 3072 --seconds 240 -- collector/swift.sh test -j 2
+python3 scripts/guarded-run.py --memory-mb 8192 --seconds 900 -- collector/swift.sh test -j 2
 ./scripts/export-icons.sh --check
 ```
 
