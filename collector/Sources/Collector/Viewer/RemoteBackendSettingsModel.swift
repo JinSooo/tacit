@@ -227,14 +227,16 @@ import struct CollectorCore.DistillHealth
       if unconfirmedChannel != nil { return "远端后台没有回应" }
       return statusChecked ? "连接不可用" : "正在检查连接…"
     }
-    return context.link?.hubName.map { "已连接到\($0)" } ?? "已连接到远端后台"
+    let name = context.link?.hubName ?? "远端后台"
+    let gap = name.first.map { $0.isASCII ? " " : "" } ?? ""
+    return "已连接到\(gap)\(name)"
   }
   var importNotice: String? {
     guard let progress, !progress.isComplete || progress.hasPendingReceipt else { return nil }
     if progress.isPaused { return "历史同步已暂停。" }
     if frozen { return "恢复连接后继续同步历史。" }
     if (statusChecked && channel == nil) || progress.errorCategory == "connection_or_storage_unavailable" {
-      return "等连接恢复后继续"
+      return "等连接恢复后继续。"
     }
     if progress.errorCategory != nil { return "历史同步遇到问题，可在详细状态中查看。" }
     return nil
@@ -683,6 +685,7 @@ struct RemoteBackendStatus: Decodable {
 
   var timezoneNotice: String? {
     guard let timezone, timezone.warning != nil else { return nil }
-    return "远端后台的时区是\(timezone.current)，请管理员核对时间线使用的时区。"
+    let gap = timezone.current.first.map { $0.isASCII ? " " : "" } ?? ""
+    return "远端后台的时区是\(gap)\(timezone.current)，请管理员核对时间线使用的时区。"
   }
 }

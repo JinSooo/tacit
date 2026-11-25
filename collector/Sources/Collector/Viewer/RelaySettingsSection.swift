@@ -37,16 +37,19 @@ struct RelaySettingsSection: View {
           }
           if let connection = RelaySettingsText.connection(settings) {
             SettingsRow("状态") {
-              Text(connection).foregroundStyle(settings.connected ? Palette.muted : Palette.attention)
+              Text(connection).foregroundStyle(Palette.attention)
             }
           }
+          if let lastFetch = RelaySettingsText.lastFetch(settings) {
+            SettingsRow("上次取信", value: lastFetch)
+          }
           if let usage = RelaySettingsText.usage(settings) {
-            SettingsRow("后台今天的请求") {
+            SettingsRow("今天的信箱请求") {
               Text(usage.text).monospacedDigit().foregroundStyle(usage.limited ? Palette.attention : Palette.muted)
             }
           }
           if let pending = RelaySettingsText.pending(settings) {
-            Text(pending).monospacedDigit().foregroundStyle(Palette.muted)
+            SettingsRow("待取", value: pending)
           }
         }
         if let retirement = RelaySettingsText.retirement(settings) {
@@ -69,7 +72,7 @@ struct RelaySettingsSection: View {
       Button("取消", role: .cancel) {}
       Button("关闭信箱", role: .destructive) { Task { await perform(.disable) } }
     } message: {
-      Text("旧信箱将在 7 天后删除，外出的手机要等回到家里网络才能再同步。")
+      Text("关闭后，不在同一个局域网的设备无法同步，旧信箱里的内容 7 天后清掉。")
     }
     .task(id: store.remoteBackend?.context.binding.route) {
       // 开通码属于旧后台，换后台时清掉；递增版本让旧请求的结果不再写回。
@@ -101,6 +104,12 @@ struct RelaySettingsSection: View {
       }
       HStack(spacing: 8) {
         Spacer()
+        if settings?.mode == .custom, let saved = settings?.url, address != saved {
+          Button("撤销修改") {
+            draftAddress = nil
+            code = ""
+          }
+        }
         Button(action == .test ? "正在测试…" : "测试连接") { Task { await perform(.test) } }
         // 没改地址、没填开通码时没有可保存的，不显示“保存”。
         if settings?.mode != .custom || address != (settings?.url ?? "") || !code.isEmpty || action == .save {

@@ -38,7 +38,9 @@ struct RemoteBackendSettingsSection<LocalRows: View>: View {
         wizard(step)
       } else {
         ForEach(model.context.retained, id: \.hub_id) { link in
-          Button("重新连接\(link.hubName ?? "远端后台")") { Task { await model.reconnect(link) } }
+          let name = link.hubName ?? "远端后台"
+          let gap = name.first.map { $0.isASCII ? " " : "" } ?? ""
+          Button("重新连接\(gap)\(name)") { Task { await model.reconnect(link) } }
             .disabled(model.busy)
         }
         if model.isRemote { Button("连接远端后台") { model.start() }.disabled(model.busy) }
@@ -52,7 +54,7 @@ struct RemoteBackendSettingsSection<LocalRows: View>: View {
     } header: { Text("后台服务") } footer: {
       if !model.isRemote { Note(localBackendPortNote) }
     }
-    if model.isRemote, let backup = model.backup {
+    if model.isRemote, let backup = model.backup, backup.recovery != .emptyLocalBackend {
       Section("本机备份") { backupRows(backup) }
     }
   }
@@ -236,22 +238,20 @@ struct RemoteBackendSettingsSection<LocalRows: View>: View {
   }
 
   @ViewBuilder private func backupRows(_ backup: HistoryBackupInfo) -> some View {
-    if backup.recovery == .emptyLocalBackend {
-      Text("本机备份已删除").foregroundStyle(Palette.muted)
-    } else {
-      SettingsRow("备份日期", value: Fmt.dateTime(backup.frozenAt))
-      SettingsRow("占用", value: ByteCountFormatter.string(fromByteCount: backup.bytes, countStyle: .file))
-      countRow("私密记录", backup.privateCount)
-      countRow("未上传记录", backup.unuploadedCount)
-      SettingsRow("上次核对", value: backup.lastReconciledAt.map(Fmt.dateTime) ?? "尚未核对")
+    SettingsRow("备份日期", value: Fmt.dateTime(backup.frozenAt))
+    SettingsRow("占用空间", value: ByteCountFormatter.string(fromByteCount: backup.bytes, countStyle: .file))
+    countRow("私密记录", backup.privateCount)
+    countRow("未上传记录", backup.unuploadedCount)
+    SettingsRow("上次核对", value: backup.lastReconciledAt.map(Fmt.dateTime) ?? "尚未核对")
+    actions {
       Button {
         model.confirmDelete = true
       } label: {
         Text("删除本机备份…").foregroundStyle(model.canDelete ? Palette.attention : Palette.muted)
       }
       .buttonStyle(.borderless).disabled(!model.canDelete)
-      if let block = model.backupBlock { Note(block) }
     }
+    if let block = model.backupBlock { Note(block) }
   }
 
   private func pathRow(_ label: String, _ value: String) -> some View {
@@ -315,7 +315,7 @@ struct RemoteBackendDetails: View {
         if let progress = model.progress {
           Section("历史同步") {
             countRow("已确认", progress.confirmed)
-            countRow("需要处理", progress.needsAttention, attention: model.pendingAttention != nil)
+            countRow("需要处理", progress.needsAttention, attention: model.pendingAttention != nil, hidesZero: true)
             if let notice = model.importNotice { SettingsMessage(text: notice, warning: false) }
             if let category = progress.errorCategory { SettingsMessage(text: Self.issueText(category)) }
             if let error = model.issueError { SettingsMessage(text: error) }
@@ -337,7 +337,7 @@ struct RemoteBackendDetails: View {
                 } label: {
                   VStack(alignment: .leading, spacing: 2) {
                     Text(Self.issueText(issue.category))
-                    Text(issue.id).font(.mono(TextSize.caption)).foregroundStyle(Palette.muted).textSelection(.enabled)
+                    Text("记录编号：\(issue.id)").font(.mono(TextSize.caption)).foregroundStyle(Palette.muted).textSelection(.enabled)
                   }
                 }
               }
@@ -389,7 +389,7 @@ struct RemoteBackendConfirmation: View {
         Text("已保存到远端的记录和整理结果会留在远端。")
         Text(preview.explanation).foregroundStyle(Palette.muted)
         countRow("可转回本机的待发记录", preview.pending)
-        buttons("切回这台 Mac")
+        buttons("切回这台 Mac", busyTitle: preview.empty ? "正在切回…" : "正在核对…")
       case .deleteBackup:
         heading("删除本机备份？")
         Text("备份里仅存在于这台 Mac 的记录会永久删除。")
@@ -407,17 +407,17 @@ struct RemoteBackendConfirmation: View {
     Text(title).font(.system(size: TextSize.title, weight: .semibold)).accessibilityAddTraits(.isHeader)
   }
 
-  private func buttons(_ title: String, destructive: Bool = false) -> some View {
+  private func buttons(_ title: String, busyTitle: String = "正在删除…", destructive: Bool = false) -> some View {
     HStack(spacing: 8) {
       Spacer()
       Button("取消", action: cancel).keyboardShortcut(.cancelAction)
       if destructive {
         Button(action: confirm) {
-          Text(busy ? "正在删除…" : title).foregroundStyle(busy ? Palette.muted : Palette.attention)
+          Text(busy ? busyTitle : title).foregroundStyle(busy ? Palette.muted : Palette.attention)
         }
           .buttonStyle(.borderless)
       } else {
-        Button(busy ? "正在核对…" : title, action: confirm).buttonStyle(.accent).keyboardShortcut(.defaultAction)
+        Button(busy ? busyTitle : title, action: confirm).buttonStyle(.accent).keyboardShortcut(.defaultAction)
       }
     }.disabled(busy)
   }

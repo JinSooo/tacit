@@ -58,15 +58,18 @@ public enum RelaySettingsText {
       let day = calendar.isDate(until, inSameDayAs: now) ? "" : "明天 "
       return "信箱暂时限流，\(day)\(ViewerFormat.clock(until, calendar: calendar)) 再试。"
     }
-    guard settings.connected else { return "连不上信箱，请检查地址和网络。" }
-    guard let date = settings.lastFetchAt.flatMap(ViewerTime.parse) else { return "已连接" }
-    return "已连接，上次取信 \(monthDay(date, calendar: calendar)) \(ViewerFormat.clock(date, calendar: calendar))"
+    return settings.connected ? nil : "连不上信箱，请检查地址和网络。"
+  }
+
+  public static func lastFetch(_ settings: RelaySettings, calendar: Calendar = .current) -> String? {
+    guard settings.mode == .custom, let date = settings.lastFetchAt.flatMap(ViewerTime.parse) else { return nil }
+    return "\(monthDay(date, calendar: calendar)) \(ViewerFormat.clock(date, calendar: calendar))"
   }
 
   public static func pending(_ settings: RelaySettings) -> String? {
     guard settings.mode == .custom else { return nil }
     let count = settings.devices.compactMap(\.pending).filter { $0 > 0 }.reduce(0, +)
-    return count > 0 ? "还有 \(count.formatted()) 条等着取" : nil
+    return count > 0 ? "\(count.formatted()) 条" : nil
   }
 
   /// 今天的请求次数；被信箱限流后说明已到上限。
@@ -96,6 +99,6 @@ public enum RelaySettingsText {
 
   private static func monthDay(_ date: Date, calendar: Calendar) -> String {
     let parts = calendar.dateComponents([.month, .day], from: date)
-    return "\(parts.month!)月\(parts.day!)日"
+    return "\(parts.month!) 月 \(parts.day!) 日"
   }
 }

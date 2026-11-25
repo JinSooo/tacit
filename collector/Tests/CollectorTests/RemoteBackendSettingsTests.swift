@@ -223,7 +223,7 @@ import Testing
   #expect(model.step == .choose)
   #expect(!model.canCheck)
   model.invitationText = try fixture.invite(role: "view")
-  #expect(model.error == "请使用有管理权限的邀请链接")
+  #expect(model.error == "请使用有管理权限的邀请链接。")
   #expect(!model.canCheck)
   model.invitationText = try fixture.invite(expires: -30)
   #expect(model.error == "邀请链接已过期或已使用，请粘贴新链接。")
@@ -236,7 +236,7 @@ import Testing
   model.invitationText = try fixture.invite(expires: 241)
   fixture.prepareError = RemotePairing.Failure.remoteUnavailable
   await model.checkConnection()
-  #expect(model.error == "找不到远端后台")
+  #expect(model.error == "找不到远端后台。")
   #expect(model.offerManualAddress)
   model.manualAddress = "some words"
   #expect(!model.canCheck)
@@ -440,7 +440,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   model.updateImport(fixture.progress(), backup: fixture.backup())
   fixture.selectedChannel = nil
   await model.refreshStatus()
-  #expect(model.importNotice == "等连接恢复后继续")
+  #expect(model.importNotice == "等连接恢复后继续。")
   #expect(model.backupBlock == "历史同步完成后才能删除备份。")
   await model.deleteBackup()
   #expect(!fixture.deleted)
@@ -798,7 +798,7 @@ func finalReviewWizardCancelsReplacementFromEitherPage(interrupted: Bool) async 
   #expect(!model.canRetryIssue && !model.canKeepIssue)
   fixture.channelState = .unconfirmed(.relay)
   await model.refreshStatus()
-  #expect(model.importNotice == "等连接恢复后继续")
+  #expect(model.importNotice == "等连接恢复后继续。")
   model.updateImport(fixture.progress(complete: true), backup: fixture.backup(allowed: true))
   #expect(model.importNotice == nil)
   #expect(model.canKeepIssue && !model.canRetryIssue)
@@ -810,7 +810,7 @@ func finalReviewWizardCancelsReplacementFromEitherPage(interrupted: Bool) async 
   }
   fixture.retryError = RemotePairing.Failure.remoteUnavailable
   await model.retryIssue(id)
-  #expect(model.issueError == "找不到远端后台")
+  #expect(model.issueError == "找不到远端后台。")
   #expect(model.issueAction == nil && model.error == nil)
 }
 

@@ -34,9 +34,10 @@ func rejectsInvalidRelayAddresses(_ address: String) {
                   {"url":"https://older.relay.example","retire_at":"2026-11-28T16:00:00.000Z"}]
     }
     """)
-  #expect(RelaySettingsText.connection(settings, calendar: testCalendar) == "已连接，上次取信 11月23日 17:15")
-  #expect(RelaySettingsText.pending(settings) == "还有 5 条等着取")
-  #expect(RelaySettingsText.retirement(settings, calendar: testCalendar) == "旧信箱保留到 11月30日")
+  #expect(RelaySettingsText.connection(settings, calendar: testCalendar) == nil)
+  #expect(RelaySettingsText.lastFetch(settings, calendar: testCalendar) == "11 月 23 日 17:15")
+  #expect(RelaySettingsText.pending(settings) == "5 条")
+  #expect(RelaySettingsText.retirement(settings, calendar: testCalendar) == "旧信箱保留到 11 月 30 日")
 }
 
 @Test func presentsDisconnectedRelayWithoutEmptyDetails() throws {
@@ -59,7 +60,19 @@ func rejectsInvalidRelayAddresses(_ address: String) {
       "used_bytes":null,"unprocessable":0,"devices":[],"retiring":[]
     }
     """)
-  #expect(RelaySettingsText.connection(settings) == "已连接")
+  #expect(RelaySettingsText.connection(settings) == nil)
+  #expect(RelaySettingsText.lastFetch(settings) == nil)
+}
+
+@Test func presentsRelayLastFetchAsLocalDateAndTime() throws {
+  let settings = try decodeRelay("""
+    {
+      "mode":"custom","url":"https://relay.example","connected":false,
+      "last_fetch_at":"2026-11-25T05:30:00.000Z",
+      "used_bytes":null,"unprocessable":0,"devices":[],"retiring":[]
+    }
+    """)
+  #expect(RelaySettingsText.lastFetch(settings, calendar: testCalendar) == "11 月 25 日 14:30")
 }
 
 @Test func presentsOnlyRetirementAfterDisablingRelay() throws {
@@ -72,7 +85,7 @@ func rejectsInvalidRelayAddresses(_ address: String) {
     """)
   #expect(RelaySettingsText.connection(settings) == nil)
   #expect(RelaySettingsText.pending(settings) == nil)
-  #expect(RelaySettingsText.retirement(settings, calendar: testCalendar) == "旧信箱保留到 11月30日")
+  #expect(RelaySettingsText.retirement(settings, calendar: testCalendar) == "旧信箱保留到 11 月 30 日")
 }
 
 @Test(arguments: [
