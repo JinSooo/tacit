@@ -54,6 +54,9 @@
 
 1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）、`android/app/build.gradle.kts` 的 `versionName`（`versionCode` 加 1）；`scripts/release-version.test.ts` 检查这几处一致。若改动了官网源码 `site/src/`，顺手运行 `bun site/build.ts` 同步 `site/dist/`。提交并打 `v<版本号>` tag。
 2. 在这台有签名证书的 Mac 上运行 `scripts/release-dmg.sh`。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
-3. 推送 tag，用 `gh release create` 建 Release 并上传这两个文件。
+3. 运行 `scripts/release-apk.sh`，前提条件同上，输出 `dist/Tacit-<版本号>.apk` 和 `.sha256`，并核对安装包只用 Tacit 正式钥匙签名。Android 只打 arm64-v8a。
+4. 推送 tag，用 `gh release create` 建 Release 并上传这四个文件。
 
 签名证书 “Record Anything Dev” 在 `~/Library/Keychains/ra-dev.keychain-db`，钥匙串密码在 `~/Library/Keychains/ra-dev.pass`。用户授予的系统权限绑定在这张证书上：换了证书，已安装的用户升级后要重新授予辅助功能、录屏、麦克风等权限。两个文件要一起备份；发布脚本在证书缺失时直接失败，不会新建。
+
+Android 正式签名钥匙在 `~/.config/tacit/android-release.p12`（别名 `tacit`），密码存在登录钥匙串里（服务名 `tacit-android-release`，账户 `tacit`），可以用 `security find-generic-password -a tacit -s tacit-android-release -w` 读出。手机只接受用同一把钥匙签名的升级包；钥匙丢了，所有已安装的手机都得卸载重装，手机上没同步的录音和设置也会跟着丢。钥匙文件和密码要一起备份。有这把钥匙时，调试构建也用它签名，这样开发时装的包能直接覆盖手机上的正式版；没有钥匙的机器，调试构建退回 Android 默认调试钥匙，`scripts/release-apk.sh` 会直接失败。2026-11-25 之前的手机包用这台 Mac 的调试钥匙签名，当天已经用 APK v3 签名轮换把开发手机迁到正式钥匙，覆盖安装时数据保留。

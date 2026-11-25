@@ -1,4 +1,10 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android"); id("org.jetbrains.kotlin.plugin.compose") }
+// Every installed copy only accepts updates signed with this key; losing it means every user uninstalls and loses phone data.
+// The password lives in the login keychain (see docs/installation.md). Debug builds use it too so dev installs update the phone in place.
+val releaseKeystore = file("${System.getProperty("user.home")}/.config/tacit/android-release.p12")
+val releasePassword: String? = if (releaseKeystore.isFile) providers.exec {
+    commandLine("/usr/bin/security", "find-generic-password", "-a", "tacit", "-s", "tacit-android-release", "-w")
+}.standardOutput.asText.get().trim() else null
 android {
     namespace = "top.jinso.tacit"
     compileSdk = 35
@@ -10,6 +16,15 @@ android {
         versionName = "0.6.4"
         ndk { abiFilters += "arm64-v8a" }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    signingConfigs {
+        if (releasePassword != null) create("release") {
+            storeFile = releaseKeystore; storePassword = releasePassword; keyAlias = "tacit"; keyPassword = releasePassword
+        }
+    }
+    buildTypes {
+        getByName("release") { signingConfig = signingConfigs.findByName("release") }
+        getByName("debug") { signingConfigs.findByName("release")?.let { signingConfig = it } }
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
