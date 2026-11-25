@@ -99,7 +99,8 @@ struct DeviceSettingsSection: View {
           .interactiveDismissDisabled()
       } else {
         DeviceInvitationChoices(step: step, busy: busy, error: sheetError) {
-          step = .role
+          // Mac 上还没有能接收“查看”邀请的入口，另一台 Mac 只发管理邀请；配好后可在列表里改为查看。
+          step = .confirmAdmin
         } confirmAdmin: {
           step = .confirmAdmin
         } invite: { role, platform in
@@ -107,7 +108,7 @@ struct DeviceSettingsSection: View {
         } cancel: {
           closeSheet()
         } back: {
-          step = step == .confirmAdmin ? .role : .type
+          step = .type
           sheetError = nil
         }
         .interactiveDismissDisabled(busy)
@@ -407,7 +408,7 @@ struct DeviceSettingsRow: View {
 }
 
 struct DeviceInvitationChoices: View {
-  enum Step { case type, role, confirmAdmin }
+  enum Step { case type, confirmAdmin }
 
   let step: Step
   let busy: Bool
@@ -421,11 +422,8 @@ struct DeviceInvitationChoices: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text(title).font(.system(size: TextSize.title, weight: .semibold))
-      if step == .role {
-        Text("查看：能看时间线和记录；管理：还能改设置、删除记录。")
-          .fixedSize(horizontal: false, vertical: true)
-      } else if step == .confirmAdmin {
-        Text("这台设备将能删除记录和修改设置，邀请 5 分钟内有效。")
+      if step == .confirmAdmin {
+        Text("另一台 Mac 会得到管理权限，能删除记录和修改设置；邀请 5 分钟内有效，配好后可以改为查看。")
           .fixedSize(horizontal: false, vertical: true)
       }
       if let error { SettingsMessage(text: error) }
@@ -437,9 +435,6 @@ struct DeviceInvitationChoices: View {
         case .type:
           Button("手机") { invite(.view, "android") }
           Button("另一台 Mac", action: selectMac)
-        case .role:
-          Button("查看") { invite(.view, "mac") }
-          Button("管理", action: confirmAdmin)
         case .confirmAdmin:
           Button("生成邀请") { invite(.admin, "mac") }
             .buttonStyle(.accent).keyboardShortcut(.defaultAction)
@@ -462,7 +457,6 @@ struct DeviceInvitationChoices: View {
   private var title: String {
     switch step {
     case .type: "添加设备"
-    case .role: "选择权限"
     case .confirmAdmin: "授予管理权限？"
     }
   }

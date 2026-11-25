@@ -136,7 +136,6 @@ private func fixture() -> DeviceSettings {
     try render("device-list", settingsList(expanded: false))
     try render("device-actions", settingsList(expanded: true))
     try render("add-device", invitation(.type))
-    try render("choose-role", invitation(.role))
     try render("confirm-admin", invitation(.confirmAdmin))
     try render("security-event", TimelineSecurityEventLine(
       event: .init(id: "fixture-event", action: .modelKeyChange), acknowledge: {}

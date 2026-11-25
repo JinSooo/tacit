@@ -483,6 +483,7 @@ struct MaintenanceSettingsView: View {
           // 同其他复制按钮：复制后按钮写“已复制”，1.5 秒后复原（docs/ui.md）。
           Button(keys == .running ? "正在读取…" : keys == .copied ? "已复制" : "复制") {
             Task {
+              keys = .running
               keys = await KeyBackup.copy()
               if keys == .copied { try? await Task.sleep(for: .seconds(1.5)); if keys == .copied { keys = .idle } }
             }
