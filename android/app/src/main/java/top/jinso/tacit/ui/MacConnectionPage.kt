@@ -99,19 +99,19 @@ import top.jinso.tacit.ui.components.*
                 status = if (current.lastSync == 0L) "尚未同步" else date(current.lastSync, "M 月 d 日 HH:mm") + " 同步")
             if (current.pending > 0) {
                 GroupDivider()
-                SettingsRow("待发送", value = "${current.pending} 条")
+                SettingsRow("待发送", value = "${countLabel(current.pending)} 条")
             }
             val rejected = current.rejected.values.sum()
             if (rejected > 0) {
                 GroupDivider()
-                SettingsRow("未能接收", value = "$rejected 条", problem = true,
+                SettingsRow("未能接收", value = "${countLabel(rejected)} 条", problem = true,
                     expanded = expanded, onClick = { expanded = !expanded })
                 val reasons = remember(current.rejected) { rejectedRecordCategories(current.rejected.filterKeys(String::isNotEmpty)) }
                 val shownReasons = rememberLatest(reasons.takeIf { it.isNotEmpty() })
                 Reveal(expanded) {
                     shownReasons.orEmpty().forEach { (reason, count) ->
                         GroupDivider()
-                        SettingsRow(reason, value = "$count 条")
+                        SettingsRow(reason, value = "${countLabel(count)} 条")
                     }
                 }
             }
