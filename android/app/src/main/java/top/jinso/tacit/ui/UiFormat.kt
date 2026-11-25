@@ -39,6 +39,34 @@ internal fun sourceName(source: String): String = when (source) {
     else -> source
 }
 
+// Same lanes the Mac folds when a segment opens: screen, browser and app usage are only the time skeleton.
+private val backdropSources = setOf("mac.screen", "mac.app", "mac.browser", Sources.USAGE)
+
+/** Conversations come first and the skeleton folds into one line; a segment of only skeleton lists it plainly. */
+internal fun <T> splitBackdrop(items: List<T>, hasOtherMain: Boolean, source: (T) -> String): Pair<List<T>, List<T>> {
+    val (backdrop, main) = items.partition { source(it) in backdropSources }
+    return if (main.isEmpty() && !hasOtherMain) backdrop to emptyList() else main to backdrop
+}
+
+/** Screen-read fragments (12 characters or fewer) join with " · " for display; stored text is unchanged. */
+internal fun readingText(text: String, source: String): String {
+    if (source != "mac.screen" && source != "mac.browser") return text
+    val result = mutableListOf<String>()
+    val fragments = mutableListOf<String>()
+    fun flush() {
+        if (fragments.isEmpty()) return
+        result += fragments.joinToString(" · ")
+        fragments.clear()
+    }
+    for (line in text.split(Regex("\\r?\\n"))) {
+        val fragment = line.trim()
+        if (fragment.isNotEmpty() && fragment.codePointCount(0, fragment.length) <= 12) fragments += fragment
+        else { flush(); result += line }
+    }
+    flush()
+    return result.joinToString("\n")
+}
+
 internal fun durationLabel(millis: Long): String {
     val minutes = millis / 60_000
     return when {

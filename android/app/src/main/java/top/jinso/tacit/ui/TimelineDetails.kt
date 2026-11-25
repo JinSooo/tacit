@@ -156,6 +156,7 @@ internal fun TimelineDetails(
             }
         }
     }
+    var showsBackdrop by remember(item.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         PageBar("原始记录", onBack)
         LazyColumn(contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp),
@@ -185,20 +186,33 @@ internal fun TimelineDetails(
                 }
                 originals == null -> item(key = "loading") { ProgressLine(Modifier.itemMotion(this).fillMaxWidth()) }
                 originals.isNullOrEmpty() -> item(key = "none") { Caption("没有可读取的原文", Modifier.itemMotion(this)) }
-                else -> originals.orEmpty().forEach { record ->
-                    item(key = "original-${record.id}") {
-                        Column(Modifier.itemMotion(this)) {
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            SourceIcon(record.source)
-                            Caption(date(record.start.toEpochMilli(), "HH:mm"))
-                            Caption(record.title.ifBlank { sourceName(record.source) })
+                else -> {
+                    val (main, backdrop) = splitBackdrop(originals, local.orEmpty().isNotEmpty()) { it.source }
+                    main.forEach { record -> item(key = "original-${record.id}") { OriginalRecord(record, Modifier.itemMotion(this)) } }
+                    if (backdrop.isNotEmpty()) {
+                        item(key = "backdrop") {
+                            Box(Modifier.itemMotion(this)) {
+                                DetailLink("另有 ${backdrop.size} 条屏幕和网页记录", showsBackdrop) { showsBackdrop = !showsBackdrop }
+                            }
                         }
-                        ReadingBody(record.body)
+                        if (showsBackdrop) backdrop.forEach { record ->
+                            item(key = "original-${record.id}") { OriginalRecord(record, Modifier.itemMotion(this)) }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun OriginalRecord(record: TimelineOriginal, modifier: Modifier) {
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            SourceIcon(record.source)
+            Caption(date(record.start.toEpochMilli(), "HH:mm"))
+            Caption(record.title.ifBlank { sourceName(record.source) })
+        }
+        ReadingBody(readingText(record.body, record.source))
     }
 }
