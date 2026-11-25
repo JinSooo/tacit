@@ -34,3 +34,8 @@ __pycache__/
 
 # 发布用安装包（scripts/release-dmg.sh、scripts/release-apk.sh）
 /dist/
+
+# 本地私有归档与内部工作目录（不推送）
+/.local-archive/
+/.codex-tasks/
+/.claude/

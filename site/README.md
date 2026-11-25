@@ -14,18 +14,9 @@ open site/dist/index.html   # 不起服务也能直接打开看
 
 ## 部署
 
-线上地址 https://tacit.jinso.top ，是 Cloudflare Pages 项目 `tacit`（`tacit-c51.pages.dev`），直接上传，没有 Git 连接。`jinso.top` 的 DNS 在 Cloudflare，API 令牌存放在本机钥匙串。
+线上地址：https://tacit.jinso.top 。运行 `bun site/build.ts` 后，将 `site/dist/` 上传到任意静态托管服务（如 Cloudflare Pages、GitHub Pages 或自建 Nginx）即可。
 
-更新时先 `bun site/build.ts`，把 `site/dist` 复制到仓库外的临时目录，再在那个目录里运行：
-
-```sh
-CLOUDFLARE_ACCOUNT_ID=<账号 ID> CLOUDFLARE_API_TOKEN=<从钥匙串读取> \
-  npx wrangler@4 pages deploy dist --project-name tacit --branch main --commit-dirty=true
-```
-
-不要在仓库根目录运行 wrangler：它会自动生成 `wrangler.jsonc`、`vite.config.ts`，改写 `package.json` 和 `bun.lock`，并试图把仓库当成 Worker 构建。项目已存在，不需要也不要再加 `--force`。
-
-仓库是私有的。公开以前，下载按钮显示为不可点的“Mac 版即将开放”（`.btn-soon`），页面上不放 GitHub、版本记录和许可证链接。公开时把 `sections/hero.html`、`sections/download.html` 里的按钮换回 `https://github.com/JinSooo/tacit/releases/latest` 的 `btn-primary` 链接，恢复 `index.html` 页脚的三个链接和“下载”一节末尾的 GitHub 链接。
+> 若使用 `wrangler pages deploy` 手动部署，建议先把 `site/dist` 复制到仓库外的临时目录再执行，避免 wrangler 在仓库根目录自动生成配置文件。
 
 ## 区块
 
@@ -58,7 +49,7 @@ CLOUDFLARE_ACCOUNT_ID=<账号 ID> CLOUDFLARE_API_TOKEN=<从钥匙串读取> \
 - 中文，短句，具体。说清它做什么、怎么做，不用“革命性”“智能”“赋能”“无缝”这类词，不用感叹号。
 - 不在标题上方加小标签（eyebrow），版式自己说明层级。能用布局说清楚的不写说明。
 - 界面用词按 `docs/ui.md` 第 1 节：事项、整理、自动带入、AI 工具、时间线、段、依据。不出现中枢、提炼、线程、注入、档位、OCR。
-- 如实：它是开发预览；只支持 Apple 芯片、macOS 14 及以上；用云端模型整理时相关文字会发给你配置的模型服务；不收集遥测。不承诺没做到的东西（Android、多设备同步、Windows 都还没有）。
+- 如实：它是开发预览；Mac 端只支持 Apple 芯片、macOS 14 及以上；用云端模型整理时相关文字会发给你配置的模型服务；不收集遥测。不承诺尚未支持的能力（如 Intel Mac、Windows、iOS 端尚未提供）。
 - 下载链接：`https://github.com/JinSooo/tacit/releases`（预发布期间 `releases/latest` 是 404）。
 
 ## 虚构的一天（全站示例数据共用）

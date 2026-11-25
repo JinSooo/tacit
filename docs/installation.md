@@ -21,7 +21,7 @@
 
 每次从“应用程序”打开，应用都在后台运行一次 `bun runtime/hub/src/cli.ts setup --app <应用路径>`，输出写到 `logs/setup.log`（`hub/src/setup.ts`）：
 
-- 应用路径或构建号与 `app-setup.json` 记录的不同（首次打开、升级）时完整准备：创建数据目录，在钥匙串里创建或读取数据库密钥并试开数据库，更新 `collector.json`，把已连接的 Claude Code、Codex 迁到新路径，清掉已删除的 Git、终端、文件、剪贴板、日历来源留下的开关。
+- 应用路径或构建号与 `app-setup.json` 记录的不同（首次打开、升级）时完整准备：创建数据目录，在钥匙串里创建或读取数据库密钥并试开数据库，更新 `collector.json`，并将已连接的 Claude Code、Codex 迁到新路径。
 - 写三个 LaunchAgent：`dev.record-anything.hub`、`dev.record-anything.distill` 和 `dev.record-anything.collector`。内容有变化或刚完整准备过时，重启后台服务和整理，等后台健康检查通过；没有变化时什么都不做。
 - 后台服务和整理的 PATH 先取用户登录 shell 的 PATH，再补常见位置，用来找到本机已登录的 `codex`、`claude`。优先用稳定的同名入口，CLI 升级只改链接目标时不用重新准备。后来才装 CLI 的，重新打开 Tacit 即可。
 - 关闭登录启动时，启动项保存在数据目录的 `launch-agents/`，升级沿用这个选择。
@@ -36,7 +36,7 @@
 
 ## 从源码安装
 
-`./install.sh` 准备推理库（`scripts/fetch-audio-lib.sh`）、构建网页、构建并签名应用、装进“应用程序”，然后运行同一个 `setup`，并额外启动菜单栏应用。从旧名称 Record Anything 升级时先校验签名，并在数据目录的 `install-rollback` 保存原应用包、启动项和采集端配置。
+`./install.sh` 准备推理库（`scripts/fetch-audio-lib.sh`）、构建网页、构建并签名应用、装进“应用程序”，然后运行同一个 `setup`，并额外启动菜单栏应用。升级前会校验签名并在数据目录的 `install-rollback` 暂存原应用包、启动项和采集端配置。
 
 升级时暂存已有的 Tacit 应用包。切换或后台准备失败时恢复原应用和启动项，并尝试重新加载原先运行的任务。
 
@@ -48,26 +48,24 @@
 
 主程序把中号和大号小组件所需的当天概述、活动时段和最近几段（大号展示四至五段）写到 `~/Library/Application Support/record-anything/widget/today.json`。该目录只给小组件沙盒授予只读访问。跨天后小组件切到新的一天，主程序在零点或重新运行时移除旧文件。卸载时即使保留历史记录也会清理该目录。
 
-自签名扩展已在关闭 SIP 的 macOS 27.2.1 上通过桌面渲染验证。在开启 SIP 的机器上，首次打开后用虚构记录生成当天整理，再从图库添加小组件。确认首次添加和随后的刷新都不弹出“访问其他 App 的数据”授权，显示的内容与当天时间线一致，并核对点击跳转和跨天清理。
+在开启 SIP 的全新机器上验证小组件时，建议首次打开后生成当天整理再从图库添加小组件，确认首次添加与后续刷新均不弹出“访问其他 App 的数据”授权，显示的内容与当天时间线一致，并核对点击跳转和跨天清理。
 
 ## 发布安装包
 
-Mac 和 Android 各自发版、版本号各自递增，哪端有改动就只发哪端。Mac 安装包里带着后台服务（含服务端 Docker 形态），两者算一端。两端靠设备协议（`docs/contracts.md` 第 6 节的 `v`）兼容，应用版本号不必对齐；协议有不兼容的改动时，在 Release 说明里写明需要的对端最低版本。v0.6.3 及以前的 tag 是 `v<版本号>`、只含 Mac 安装包，tag 不改名。
+Mac 和 Android 各自发版、版本号各自递增，哪端有改动就只发哪端。Mac 安装包里带着后台服务（含服务端 Docker 形态），两者算一端。两端靠设备协议（`docs/contracts.md` 第 6 节的 `v`）兼容，应用版本号不必对齐；协议有不兼容的改动时，在 Release 说明里写明需要的对端最低版本。
 
 Mac：
 
 1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）；`scripts/release-version.test.ts` 检查这几处一致。若改动了官网源码 `site/src/`，顺手运行 `bun site/build.ts` 同步 `site/dist/`。提交并打 `mac-v<版本号>` tag。
-2. 在这台有签名证书的 Mac 上运行 `scripts/release-dmg.sh`。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
+2. 在已配置代码签名证书的 Mac 上运行 `scripts/release-dmg.sh`。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
 3. 推送 tag，建 Release 并上传这两个文件：`gh release create mac-v<版本号> dist/Tacit-<版本号>.dmg dist/Tacit-<版本号>.dmg.sha256 --prerelease --title "Tacit v<版本号> - Mac" --notes-file <说明>`。
 
 Android：
 
 1. 改 `android/app/build.gradle.kts` 的 `versionName`，`versionCode` 加 1。提交并打 `android-v<版本号>` tag。
-2. 运行 `scripts/release-apk.sh`，前提条件同上，输出 `dist/Tacit-<版本号>.apk` 和 `.sha256`，并核对安装包只用 Tacit 正式钥匙签名。Android 只打 arm64-v8a。
+2. 在已配置 Android 正式签名钥匙的环境下运行 `scripts/release-apk.sh`，前提条件同上，输出 `dist/Tacit-<版本号>.apk` 和 `.sha256`，只打 arm64-v8a。
 3. 推送 tag，建 Release 并上传这两个文件：`gh release create android-v<版本号> dist/Tacit-<版本号>.apk dist/Tacit-<版本号>.apk.sha256 --prerelease --latest=false --title "Tacit v<版本号> - Android" --notes-file <说明>`。`--latest=false` 免得 Android 版被标成最新。注意 GitHub 的 `releases/latest` 不认预发布版，两端都是预发布时这个地址是 404，所以 README 和官网的下载链接指向 `releases` 列表页。
 
 Release 标题只用 `Tacit v<版本号> - Mac` 和 `Tacit v<版本号> - Android` 两种，“开发预览”由 GitHub 的 Pre-release 标记表达，不写进标题。
 
-签名证书 “Record Anything Dev” 在 `~/Library/Keychains/ra-dev.keychain-db`，钥匙串密码在 `~/Library/Keychains/ra-dev.pass`。用户授予的系统权限绑定在这张证书上：换了证书，已安装的用户升级后要重新授予辅助功能、录屏、麦克风等权限。两个文件要一起备份；发布脚本在证书缺失时直接失败，不会新建。
-
-Android 正式签名钥匙在 `~/.config/tacit/android-release.p12`（别名 `tacit`），密码存在登录钥匙串里（服务名 `tacit-android-release`，账户 `tacit`），可以用 `security find-generic-password -a tacit -s tacit-android-release -w` 读出。手机只接受用同一把钥匙签名的升级包；钥匙丢了，所有已安装的手机都得卸载重装，手机上没同步的录音和设置也会跟着丢。钥匙文件和密码要一起备份。有这把钥匙时，调试构建也用它签名，这样开发时装的包能直接覆盖手机上的正式版；没有钥匙的机器，调试构建退回 Android 默认调试钥匙，`scripts/release-apk.sh` 会直接失败。2026-11-25 之前的手机包用这台 Mac 的调试钥匙签名，当天已经用 APK v3 签名轮换把开发手机迁到正式钥匙，覆盖安装时数据保留。
+> 签名一致性说明：macOS 用户授予的辅助功能、录屏、麦克风等系统权限绑定在固定的自签名代码签名证书上；Android 覆盖升级同样依赖同一把正式签名钥匙。证书和签名钥匙需妥善离线备份，缺失时发布脚本会直接失败而不会自动新建。未配置正式 Android 钥匙的机器，调试构建会自动退回 Android 默认调试钥匙。

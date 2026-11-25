@@ -26,4 +26,4 @@
 
 ## 闪退
 
-打开 macOS 的**控制台**，在侧栏选择“崩溃报告”，按发生时间找 Tacit 进程的 `.ips` 文件。反馈时写明闪退前的操作。需要提供崩溃报告时，先检查其中的个人路径和其他私人信息。 [Apple 的崩溃报告说明](https://support.apple.com/en-gu/guide/console/cnsl664be99a/mac)
+打开 macOS 的**控制台**，在侧栏选择“崩溃报告”，按发生时间找 Tacit 进程的 `.ips` 文件。反馈时写明闪退前的操作。需要提供崩溃报告时，先检查其中的个人路径和其他私人信息。 [Apple 的崩溃报告说明](https://support.apple.com/zh-cn/guide/console/cnsl664be99a/mac)

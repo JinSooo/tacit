@@ -15,7 +15,7 @@
 
 CPU 按单核计算，分母为有效采样间隔中 `mach_absolute_time` 的增量（不含睡眠）；CPU 计数也按 `mach_timebase_info` 换算，不能直接当纳秒。
 
-`collector_acceptance` 按《设计》第 11 节报告采集端自身 CPU。每条样本从 IOKit 读取 `IOHIDSystem.HIDIdleTime`，以秒写入 `hid_idle_s`，不可读时为 `null`。两次采样之间能判定全程空闲满 300 秒才归入「没人用」`idle`，全程未满 300 秒才归入「有人用」`active`。按区间的进程自身 CPU 增量求和，再除以各组覆盖的醒着时间 `awake_s`，分别与严格小于单核 0.5% 和 3% 比较。可能跨过分界、有休眠或时钟不一致迹象（墙上时间与醒着时间增量差超过 1 秒）、空闲读数缺失的区间计入 `unclassified_awake_s`。进程或采样器重启、计数倒退、读取失败和超过 20 秒的采样间隔计入 `missing_awake_s`。旧样本仍可生成报告，两个键鼠状态均显示「数据不足」。锁屏字段和原锁屏指标保留供排查。
+`collector_acceptance` 按 [设计文档](../docs/design.md) 第 11 节报告采集端自身 CPU。每条样本从 IOKit 读取 `IOHIDSystem.HIDIdleTime`，以秒写入 `hid_idle_s`，不可读时为 `null`。两次采样之间能判定全程空闲满 300 秒才归入「没人用」`idle`，全程未满 300 秒才归入「有人用」`active`。按区间的进程自身 CPU 增量求和，再除以各组覆盖的醒着时间 `awake_s`，分别与严格小于单核 0.5% 和 3% 比较。可能跨过分界、有休眠或时钟不一致迹象（墙上时间与醒着时间增量差超过 1 秒）、空闲读数缺失的区间计入 `unclassified_awake_s`。进程或采样器重启、计数倒退、读取失败和超过 20 秒的采样间隔计入 `missing_awake_s`。旧样本仍可生成报告，两个键鼠状态均显示「数据不足」。锁屏字段和原锁屏指标保留供排查。
 
 `collector_acceptance.memory` 取可读的采集端物理内存占用（footprint，1 MB = 1024² 字节）。从低到高排序，第 `ceil(样本数 × 0.95)` 项是 p95，低于 300 MB 达标。峰值取最大一次采样，只单列观察。状态只比较有数据的覆盖范围。
 
@@ -23,7 +23,7 @@ CPU 按单核计算，分母为有效采样间隔中 `mach_absolute_time` 的增
 
 `audio_worker` 按可执行文件名识别 `ra-audio-worker`，报告采样到的 footprint 峰值和同一进程连续快照间累计的 CPU 秒。进程起止和短命 worker 可能漏计，CPU 秒是下限。旧样本只能单列全部后代的 CPU 秒和单进程采样峰值，里面也包括插件。采集端状态只记录待转写与失败数、上次启动等信息，Hub 的对话起止时间和声纹时长无法对应 worker 实际消耗的输入音频（包括重试、补跑和未产出文字的片段）。每小时音频 CPU 秒因此显示「数据不足」。
 
-`hub`、`distill`、`sampler` 分开报告。只跟踪三个指定 LaunchAgent 的进程树，其他 Codex 会话不纳入。`coreaudiod` 单列全系统进程计数，可读时以全系统计，权限不足时 CPU 为 `null`，本应用引起的部分显示「数据不足」。采样器以当前用户权限运行。
+`hub`、`distill`、`sampler` 分开报告。只跟踪三个指定 LaunchAgent 的进程树，其他本机进程不纳入。`coreaudiod` 单列全系统进程计数，可读时以全系统计，权限不足时 CPU 为 `null`，本应用引起的部分显示「数据不足」。采样器以当前用户权限运行。
 
 模型文件保存当日以及前一日本地日期的累计用量，按 task/tier/provider/model 分组；每天第一次查询会补全前一天临近午夜的调用。缺失 token 另计 missing_input/missing_output，不解释成零用量。报告中的 `models.at` 是快照时刻，订阅通道的 token 不能直接当实际账单。
 

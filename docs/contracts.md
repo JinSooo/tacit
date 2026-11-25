@@ -26,18 +26,18 @@
 | `manual.note`、`manual.correction` | 网页手动补写 / 修正 |
 | `manual.agent` | 用户让 Agent 代存的内容（MCP `history_append`，见 4.6）；`context.app` 是写入的 Agent，内容变化时的修正仍用 `manual.correction` |
 
-### 1.1 微信消息记录（2026-11-10）
+### 1.1 微信消息记录
 
-读窗口（`mac.wechat`，`capture.method = "ocr"`）和以后的第三方插件（例如解密本地库，`capture.method = "db"`，source 用插件自己的名字）都按这个形状产出，按会话归到同一个片段（中枢按 `context.chat` 切片）：
+读窗口（`mac.wechat`，`capture.method = "ocr"`）和其他聊天导入插件（source 用插件自己的名字）都按这个形状产出，按会话归到同一个片段（中枢按 `context.chat` 切片）：
 
 - `kind = "event"`；`t_start` 是消息时间。读窗口只能看到界面上的时间分隔（"15:33""昨天 15:33""11/03 09:57"），能换算的用它，换算不了的用看到的时间。
 - `context.app = "com.tencent.xinWeChat"`，`context.chat` = 会话名（群名去掉"（人数）"）。
-- 读窗口时会话名去掉首尾空白、中文之间及中文与字母数字之间的空白，英文词间保留单个空格；纯符号、导航箭头开头的标题及以常见文件扩展名结尾的预览窗口不产出消息，不回退取别的标题；单字名（如「図」）保留。旧记录不改写，聊天名比较键去掉所有空白，显示取组内最新记录的原名。
+- 读窗口时会话名去掉首尾空白、中文之间及中文与字母数字之间的空白，英文词间保留单个空格；纯符号、导航箭头开头的标题及以常见文件扩展名结尾的预览窗口不产出消息，不回退取别的标题；单字名（如「茶」）保留。旧记录不改写，聊天名比较键去掉所有空白，显示取组内最新记录的原名。
 - `context.extra`：`sender`（昵称；自己发的是"我"）、`from_me`（0/1）、`group`（0/1）、`shown_time`（读窗口时界面上的时间分隔原文）。
 - `title = "微信 · 会话名 · 发送人"`，`body` = 消息文字；图片、语音只有占位时不记。
 - `source_ref`：读窗口用 `fp:` + sha256(会话、发送人或"我"、内容、时间分隔) 前 12 字节的十六进制。来回切换会话、上下滚动看到的同一条消息是同一个 `source_ref`，中枢去重。第一个时间分隔之上的消息不记，等能看到它的时间分隔时再记。
-- "微信对话"开着时，屏幕记录（`mac.screen`）只留微信的使用时段，不带微信窗口的文字；任何时候都不读微信输入框（草稿）。（2026-11-12：之前每打几个字就多存一行草稿）
-- 读窗口和插件的同一条消息暂不跨来源去重（时间精度不同），以后按会话、发送人、内容、时间就近匹配，以数据库那份为代表（design.md 3.2）。
+- "微信对话"开着时，屏幕记录（`mac.screen`）只留微信的使用时段，不带微信窗口的文字；任何时候都不读微信输入框（草稿）。
+- 读窗口和导入插件的同一条消息暂不跨来源去重（时间精度不同），后续按会话、发送人、内容、时间就近匹配。
 
 ## 2. 插件协议
 
@@ -231,8 +231,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 - Mac `collector-status.json` 新增 `hubBusy`（启动以来收到的 503 响应次数）和 `queuePeak`（启动以来内存队列实际保留条数的峰值，不超过容量），初值均为 0，重启归零。
 - 状态接口 `GET /v1/status` 的 `llm_today` 保留 `total`、`by_tier`，新增 `by_task`：每项含 `task`、`calls`、`ok`、`failed`、`input_tokens`、`output_tokens`、`ms`。旧调用及未传任务名的调用归入 `task: null`；未知 token 用量仍为 null，统计日期与原档位统计一致。
 - `llm_today.used_tokens` 是今天已知的整理输入和输出 token 合计，`llm_today.token_limit` 是上限，`null` 表示不限。达到上限时，`distill.cooldown` 为 `{ kind: "budget", until }`，到期时间为本地次日 0 点。调高到已用量之上或取消上限后立即解除用量冷却，提供商冷却继续按原到期时间判断。
-- 配置 `<数据目录>/models.json`：`{ "tiers": { "minute": { "provider": "claude-cli", "model": "haiku" }, … } }`。provider 有 `claude-cli`、`codex-cli`、`anthropic`、`openai-compatible`（`base_url`）。API key 存在钥匙串（service `record-anything`，account `provider:<名字>`），不写进文件。
-- 当前配置（2026-11-18 起）：三档都用 `openai-compatible`，`base_url` 为 `https://api.minimax.cn/v1`，模型 `MiniMax-M3.1-Flash`，`reasoning_effort` 为 `low`（MiniMax 默认最高档且不能关，填 `none` 会 400）。此前三档用 `codex-cli`（2026-11-08 起）。没有 `models.json` 时代码里的默认仍是 `claude-cli`（haiku / sonnet）。
+- 配置 `<数据目录>/models.json`：`{ "tiers": { "minute": { "provider": "claude-cli", "model": "haiku" }, … } }`。provider 有 `claude-cli`、`codex-cli`、`anthropic`、`openai-compatible`（`base_url`）。API key 存在钥匙串（service `record-anything`，account `provider:<名字>`）或服务端 `secrets.enc`，不写进明文配置文件。未配置 `models.json` 时，Mac 端代码默认使用 `claude-cli`（haiku / sonnet），独立服务端模式不回退 CLI。
 - **CLI 后端必须做到**：
   - 不保存会话：`claude -p --no-session-persistence`、`codex exec --ephemeral`；
   - 在 `<数据目录>/distill-work` 里运行（agent-sessions 插件会排除这个目录，双重保险）；
@@ -240,9 +239,8 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
   - 不给任何工具：只读沙箱，不能写文件、不能联网取数；
   - 提示词走 stdin，不出现在进程参数里；
   - 用 JSON Schema 约束输出；
-  - 同一时刻只跑一个调用，单次超时 180 秒；当天整理放宽到 300 秒（上限）。
-  - `codex exec` 默认带编程 Agent 的整套说明和工具，固定开销约 1.1 万输入 token（2026-11-12 实测）。适配器用 `model_instructions_file` 换成一句说明，关掉权限、环境、协作模式说明和技能检索，并用 `codex debug models` 拿本机模型目录、去掉 `tool_mode` / `multi_agent_version` 后经 `model_catalog_json` 传回（这两项强制打开代码执行和多 Agent 工具，配置项关不掉）。读不到目录时不覆盖、照常调用。实测固定开销降到约 1800 token。
-  - codex 默认先走 WebSocket，连不上时要超时重连 5 次（约 110 秒）才退回 HTTPS。`codex login status` 显示用 ChatGPT 登录时，适配器加一个只走 HTTPS 的 provider（`model_providers.ra-https`，`base_url = https://chatgpt.com/backend-api/codex`、`requires_openai_auth = true`、`supports_websockets = false`），认证仍由 codex 自己完成。其他登录方式不改。（2026-11-12 用户确认）
+  - 同一时刻只跑一个调用，单次超时 180 秒；当天整理放宽到 300 秒（上限）；
+  - 认证与传输由本机已登录 CLI 自行管理，适配器关闭工具和多余系统说明以降低固定提示开销。
 - **HTTP 后端（`anthropic`、`openai-compatible`）**：
   - `base_url` 末尾带接口路径（`/chat/completions`、`/messages`）时去掉再拼。
   - OpenAI 兼容格式把 schema 同时写进系统提示；服务拒收 `response_format` 返回 400 时去掉它重发，同一地址在本进程内之后不再带。正文开头的 `<think>…</think>` 解析前去掉。
@@ -281,7 +279,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 
 本地今天的 `GET /v1/days/:date` 额外返回顶层 `drafts` 数组（可为空）。尚无整理结果时仍返回 `{ date, detail: null, drafts }`，草稿从当天开始取材。已有结果时按今天的切段核对已处理段的成员、重叠记录和活动边界。新段和有变化的段作为草稿显示，有变化的旧段沿用原 ID。迟到记录即使早于 `detail.cutoff`，也会参与核对。没有成员元数据的旧结果仍用截断时间裁取跨界记录。`omitted_record_ids` 记录不成草稿或模型省略、且未出现在其他段的记录。删除或修正时立即撤下受影响的文字和概述，保留其他段。
 
-草稿按开始时间正序返回，沿用现有的切段和 ID 锚点规则，不调用模型。每项有 `id`、`t_start`、`t_end`、`active_seconds`、`sources`、`apps: [{ source, app }]`、`title`、`excerpt`、`record_ids`、`project_id`，有明确事项时附 `thread_id`。标题取聊天对象、会话标题、“一场对话”或应用名；摘录优先取用户原话，其次取对方原话，脱敏后至多 60 字。草稿排除私密内容、评测与发布检查、自动续跑、压缩摘要，以及只有时间骨架或短同意、催促的段。普通时间骨架可作为展开的原文成员；同一条跨界原始记录仍可通过完整原文 ID 打开。历史日期和 Agent 视图省略 `drafts`。
+草稿按开始时间正序返回，沿用现有的切段和 ID 锚点规则，不调用模型。每项有 `id`、`t_start`、`t_end`、`active_seconds`、`sources`、`apps: [{ source, app }]`、`title`、`excerpt`、`record_ids`、`project_id`，有明确事项时附 `thread_id`。标题取聊天对象、会话标题、“一场对话”或应用名；摘录优先在用户原话中跳过不足 5 字的语气词取最长一句，没有再用对方原话（AI 会话按输入顺序取），脱敏后至多 60 字。草稿排除私密内容、评测与发布检查、自动续跑、压缩摘要，以及只有时间骨架或短同意、催促的段。普通时间骨架可作为展开的原文成员；同一条跨界原始记录仍可通过完整原文 ID 打开。历史日期和 Agent 视图省略 `drafts`。
 
 增量整理按草稿的切段结果取材，每次最多送 50 段，保留 `continues`、项目名和段内依据编号等字段。校验省略时沿用全天规则。每个段成功处理后记下成员快照，代码不会再次送出成员和边界未变的段。内部 `days.detail.polished_segments` 保存处理过的段（含省略段）的稳定 ID、当前锚点、边界、成员和依赖记录；待重润色的段附 `pending`。内部 `overview_input` 保存概述输入摘要，`overview_checked_ms` 记录检查时刻。这些内部字段不由接口返回，跨天收尾用全天结果替换它们。
 
@@ -394,7 +392,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 | `sense-voice/model.int8.onnx` | `asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2` 内 | `c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51` |
 | `sense-voice/tokens.txt` | 同上 | `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc` |
 
-Android 另有一个可选的音乐识别模型（ced-tiny，AudioSet 527 类），只在已检出人声的片段上判断是不是歌，缺了它录音照常、只是不挡别处放的歌。新下载时随语音模型一起取，早先装好的由后台任务补下；同样逐个校验 sha256。来源是 `audio-tagging-models/sherpa-onnx-ced-tiny-audio-tagging-2024-04-19.tar.bz2`（28531989 字节，sha256 `84baf315b57d61aa69480c4fee878dab54cbc7be3e877db334e65d8b087e23c3`），只解出下面两个文件；不用 Hugging Face，因为国内网络连不上：
+Android 另有一个可选的音乐识别模型（ced-tiny，AudioSet 527 类），只在已检出人声的片段上判断是不是歌，缺了它录音照常、只是不挡别处放的歌。新下载时随语音模型一起取，早先装好的由后台任务补下；同样逐个校验 sha256。来源是 `audio-tagging-models/sherpa-onnx-ced-tiny-audio-tagging-2024-04-19.tar.bz2`（28531989 字节，sha256 `84baf315b57d61aa69480c4fee878dab54cbc7be3e877db334e65d8b087e23c3`），只解出下面两个文件：
 
 | 文件 | sha256 |
 |---|---|
@@ -413,7 +411,7 @@ Android 另有一个可选的音乐识别模型（ced-tiny，AudioSet 527 类）
   sys-0001.enc …
 ```
 
-- 密钥：钥匙串 service `record-anything`、account `audio-key-hex`，32 字节的十六进制，首次使用时生成。只通过 `/usr/bin/security` 读写（和 hub 的 `db-key` 一样），10 秒超时；写入经 `security -i` 从标准输入传命令，密钥不出现在进程参数里，以读回为准（`CollectorCore/SecurityCLI.swift`，查看缓存的 `viewer-cache-key` 同样）；旧版 account `audio-key`（SecItem 存的二进制）在第一次读取时迁移过来并删除。
+- 密钥：钥匙串 service `record-anything`、account `audio-key-hex`，32 字节的十六进制，首次使用时生成。只通过 `/usr/bin/security` 读写（和 hub 的 `db-key` 一样），10 秒超时；写入经 `security -i` 从标准输入传命令，密钥不出现在进程参数里，以读回为准（`CollectorCore/SecurityCLI.swift`，查看缓存的 `viewer-cache-key` 同样）；旧版 account `audio-key`（SecItem 存的二进制）在第一次读取时迁移过来并删除。安全边界：由于采用 `/usr/bin/security` 避免自签名重装反复弹窗，同用户下其他本机进程也可调用该工具读取这些条目，这不构成本机同用户恶意程序的权限隔离。
 - `meta.json`：`{ id, t_start, t_end（未结束为 null）, segments: [{ file, track: "mic"|"sys", t_start, t_end, dbfs }], meeting_apps: [bundle id], status, updated_at }`。
   - `status`：`open`（还在录）→ `closed`（等转写进程）→ `waiting_me`（还没有"我"的声纹，只留本机）/ `skipped`（判定没有"我"，不留记录）/ `done`（已写 History）/ `failed`（附 `error`，下次重试，最多 3 次）。
   - `meeting_apps`：对话期间**正在用麦克风**的会议软件（腾讯会议、飞书、Zoom、Teams、FaceTime、微信；用 Core Audio 进程对象的 `kAudioProcessPropertyIsRunningInput` 判断，只开着不算），用于"有会就保留"例外。（2026-11-09 真机验证：微信通话、腾讯会议都能识别）日历例外（2026-11-09 补上）已随日历来源在 2026-11-22 撤下，旧元数据里的 `com.apple.iCal` 仍按会议处理。转写进程的判断逻辑不变。
@@ -497,7 +495,7 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 ### 2026-11-13 维护契约补充
 
 - 候选活动 `frames.status=candidate`，过期后 `candidate_expired`；模型明确忽略仍为 `ignored`，不改变候选成熟、过期、日记规则。旧库尚在候选列表中的帧按列表恢复状态；早已过期且被旧实现丢失分类依据的 `ignored` 不猜测、不重分类。
-- Mac 与中枢的同路声纹归并共用 `schema/fixtures/speaker-consolidation.json` 测试向量（6 秒长说话人门槛、0.5 长段合并、0.3 短段附着）；中枢仍额外保护已确认人物和跨对话的 0.55 阈值。Android 需在其仓库接入同一组向量后才能宣称三端一致。
+- Mac、中枢与 Android 的同路声纹归并共用 `schema/fixtures/speaker-consolidation.json` 测试向量（6 秒长说话人门槛、0.5 长段合并、0.3 短段附着）；中枢仍额外保护已确认人物和跨对话的 0.55 阈值。
 - 音频目录扫描和保留期清理由独立串行队列执行，合并重复扫描请求；转写启动与维护互斥，维护结果回到音频状态队列，较旧的扫描不能覆盖刚结束的对话。状态发布只读内存快照。音频片段编码及加密写盘仍顺序执行并受现有背压保护。
 - 日志每 30 秒检查：活动文件达到 5 MiB 时保留最近 5 MiB 到 `.1`，旧 `.1` 变 `.2`；超过两份移除。采用 copy-truncate 以保持 launchd 的打开句柄，轮转瞬间少量并发日志可能丢失；不用于审计持久化。单次突发可短暂超过上限，旧大文件也只读取上限长度到内存。文件权限 0600，拒绝链接。
 
@@ -516,7 +514,7 @@ audio_settings(k TEXT PRIMARY KEY, v TEXT)  -- retention_days、purge_before、m
 - 正文写入前脱敏，保留 7 天，启动、每 30 分钟及读取/写入时清理过期正文。输入保存完整构造请求、schema 和短 ID 对照；输出先完整脱敏，再截取前 128000 UTF-16 代码单元并标明截断。CLI 只记录交给命令的输入和可见返回，不承诺内部完整网络请求。
 - 删除任一原始记录时，同事务清空所有现存模型/自动带入快照正文；内容修订号在发送前、结果保存和业务采用前检查，迟到响应不得写回已删除正文。修正不清除已有快照，但使旧请求结果失效。快照存储失败阻止本次模型整理，普通采集与查询继续。
 - 自动带入保存当次实际返回文本，普通 AI 查询只留元数据与当前内容链接。正文存储失败的自动带入仍可返回，审计明确标记正文不可用。默认预算仍为 800 估算 token，条目带摘要截至时间和待整理提示。
-- 更新运行目录不会自动重载已有 MCP 进程；要获取新版 `get.cursor` 工具定义及响应编码，需要客户端重新连接 MCP。新启动的进程直接使用安装包内的固定运行目录。
+- 新启动的 MCP 进程直接使用安装包内的固定运行目录。
 
 ## 6. 设备配对与同步（v3，2026-11-19）
 
@@ -600,7 +598,7 @@ Mac 中枢和 Android 之间唯一的通道。采集权限下只传手机自己�
 - 手机上删的记录先进本地删除队列，经 `delete` 发出、成功后出队；本地墓碑阻止同一条再次上传。
 - 触发：有新记录后 30 秒、打开应用、网络恢复，以及 WorkManager 每 15 分钟一次（要求有网络）。连不上就指数退避，最长 1 小时；手机可以攒几天数据。
 - `android.audio` 的 `body` 按话轮顺序存放，每句一行 `[HH:MM:SS] 标签：文字`。钟点取该句在录音中的起点，使用手机本地时区在片段起点的偏移，该偏移也写入 `t_start`。标签以发布时为准，本人写「我」，已起名的写名字，其余写「对方 N」。中枢按 `t_start` 的日期和偏移还原每句话的时间，跨午夜的钟点算到次日。旧格式「对方 N：文字」仍用录音片段起点引用。中枢按同一设备的录音间隔成场、写总结。
-- `android.notification` 和 `android.usage` 只有 0.4.1 及以前的手机会产出，0.4.2 起手机只录音。旧的 `android.notification` 只可搜索，不进时间线和整理，不再和 Mac 微信比对去重；下面两条是旧版的约定。
+- `android.notification` 和 `android.usage` 仅保留对历史记录的兼容读取，不再新增；旧的 `android.notification` 只可搜索，不进时间线和整理。
 - `android.notification` 的 `title` 是会话名，`body` 是「发送人：正文」或仅正文。中枢把它当作收到的聊天。整理时在前后各两分钟内按会话、发送人和正文比对 Mac 微信，手机预览可为足够长的正文前缀；命中时使用 Mac 记录，手机原文仍可搜索。通知有应用包名时仅微信参与比对，否则用其余条件判断。
 - `android.usage` 只提供应用名和使用时段。
 
@@ -613,7 +611,7 @@ Mac 中枢和 Android 之间唯一的通道。采集权限下只传手机自己�
 - 信箱服务只有一套代码，放在仓库 `relay/`，有两种部署：
   - Cloudflare：Workers + SQLite 存储的 Durable Objects，免费档可用，一键部署。
   - Docker：Bun + SQLite 单进程，放在用户自己的服务器或 NAS 上。
-- 公共信箱是项目自己部署的 Cloudflare 实例。仓库公开前只给用户自己用，Mac 设置里没有默认地址，要手动填；公开后新装的 Mac 默认填公共信箱。
+- 公共信箱或自部署实例均运行同一套代码；用户可在设置中选择自定义地址或关闭。
 - 自定义地址使用 HTTPS。`localhost` 和 `127.0.0.1` 也可使用 HTTP。
 
 #### 6.8.2 空间、信箱和令牌
@@ -675,7 +673,7 @@ Mac 中枢和 Android 之间唯一的通道。采集权限下只传手机自己�
 
 #### 6.8.7 配置、换信箱、配对和移除
 
-- Mac 设置「中枢与连接」里的信箱一项有三种选择：公共信箱（仓库公开后才出现）、自定义地址（自部署时填地址，有开通码就一起填）、关闭。可以测试连接；旁边一句说明：“信箱只经手加密内容，能看到传输的时间和大小。”空间令牌存钥匙串，界面不回显。
+- Mac 设置「后台服务 › 中转信箱」可选择公共信箱（如可用）、自定义地址（自部署时填地址，有开通码一并填写）或关闭。可以测试连接；旁边说明：“信箱只经手加密内容，能看到传输的时间和大小。”空间令牌存钥匙串，界面不回显。
 - 本机管理接口使用管理令牌。`GET /v1/settings/relay` 返回信箱概况和退役中的空间。`PUT /v1/settings/relay` 接受 `{ mode: "off" | "custom", url?, code? }`，确认自定义地址的 `hello` 后再开通空间。`POST /v1/settings/relay/test` 接受 `{ url }`，只验证 `hello`。管理接口不返回任何信箱令牌。
 - 新 `op` `relay`（直连和信箱都可用）：body `{}` → `{ relay: { url, space, up, down, token } | null }`。设备每次直连成功后调用一次，配置变了就替换本地保存的配置。设备令牌和私钥一样用 Keystore 加密保存。
 - **换信箱不用重新配对**：中枢在新信箱开通空间、为每台设备建信箱和令牌，再往每台设备旧的 `down` 里放一条加密的 `relay.moved` 消息（加密方式同 6.2 的回复，明文 `{ "kind": "relay.moved", "relay": {…} }`），设备读到就换成新配置。旧空间保留 7 天再删，期间中枢两边都取信。选“关闭”时同样通知，消息里的 `relay` 为 `null`。如果通知投递失败，中枢在退役期内重试。空间到期停止取信，信箱暂时离线时连上后补删，再移除钥匙串条目。
@@ -837,30 +835,12 @@ CREATE TABLE project_context_cache (
 - 打开 App、前台每 30 秒及现有的 15 分钟定期同步检查时间线。直连优先，经信箱处理 `projection.delta`、`projection.invalidate`、`projection.hint` 和 `projection.reset`，遇到缺口从已保存游标拉取。同步只保存 `day` 实体，冷启动使用 `window_days=30`。游标和最近 30 天的实体原子写入同一个 Android Keystore AES-GCM 加密快照，落盘后确认。删除、原文失效与重置先应用到缓存，采集权限、设备请求 401、解除配对或信箱凭证被拒时清空。
 - 时间线按天显示概述、已整理段落和当天草稿，手机本地录音的原文 ID 都被时间线覆盖时折叠为中枢段。点开中枢段按需调用 `records.get`，不传 `include_private`，原文只存在当前详情页内存，离页或失效时清除。经信箱的投影和原文读取回复不进入手机持久同步日志。
 
-#### 6.9.7 模块变更、影响、迁移、风险与推荐做法
+#### 6.9.7 实现说明与边界
 
-- **要改的模块和公共接口**：
-  - 中枢：`hub/src/db.ts`（`user_version` 迁移新增 `projection_changes`、`project_context_cache` 及 `devices` 游标列；`deleteMany`/`ingest` 写变更钩子）、`hub/src/distill/store.ts` & `hub/src/distill/run.ts`（写入 `days`/`threads`/`projects`/`now` 与纠错时调用投影变更写入器）、`hub/src/agent.ts`（复用 `projectContext` 写 `project_context_cache`）、新增 `hub/src/devices/projection.ts`（下推序列化、私密过滤、体积切分）、`hub/src/devices/service.ts`（新增 `projection.*`、`records.*`、`history.segments`、`conversations.detail`、`timeline.*` 及 `/v1/device/events`）、`hub/src/devices/relay.ts`（`down` 主动推送与单条覆盖背压）。
-  - Mac 端：`collector/Sources/CollectorCore/ProjectionCache.swift`（系统 SQLite + 逐行 AES-GCM 缓存与清理）、`collector/Sources/CollectorCore/ProjectionSync.swift`（拉取/确认循环、`/v1/device/events` 订阅与轮询退避、信箱 `down` 处理及按需原文内存 LRU）、`collector/Sources/Collector/Viewer/ViewerDataSource.swift`（`ViewerDataSource` 抽象、HTTP 实现、缓存/设备协议实现与自适应路由器），已接入 `ViewerStore.swift`、`ReviewPage.swift`、`ProjectPage.swift`、`ThreadStoryPage.swift`、`DistillViews.swift`、`MenuBarPanel.swift`、`HistoryPage.swift`、`TimelineSegmentRow.swift`、`RecordInspector.swift`、`TimelineSearchPage.swift`、`ViewerWindow.swift`、`WidgetSnapshotPublisher.swift` 与 `main.swift`。
-  - **实现与草案偏差说明**：
-    1. 6.9.6 缓存加密从 SQLCipher 改为系统 `SQLite3` + 每行 `AES.GCM`（AAD 绑定 `kind` + `entity_id`），`kind` 与 `entity_id` 明文存储以支持按天清理和索引，密钥仍存钥匙串 `record-anything` / `viewer-cache-key`。
-    2. 中枢按需读接口中仅 `records.get` 与 `records.list` 已支持管理设备的 `include_private: true`，`history.segments`、`conversations.detail`、`timeline.locate` 目前仍硬编码过滤私密记录。为保证本机 `admin` 在详细档、私密录音详情与搜索定位中不丢失私密内容，Mac 查看端在缓存模式下：`history.segments` 暂退回 HTTP，`conversations.detail` 与 `timeline.locate` 在设备 op 返回 404 时退回 HTTP；待中枢补齐 `include_private` 后再切回设备协议。
-    3. 下推 `day` 实体不含 `detail.timeline`（章节）。Mac 端在解码本地 `day` 缓存时按 `detail.items` 自动合成章节供详细档时间轴使用；“未入时间线”逐条标记按下推的 `omitted_record_ids` 显示。
-    4. 开放区间或覆盖当前时刻的 `records.list` 查询（如菜单栏面板最近记录与当天详细档）绕过 10 分钟内存 LRU 缓存，避免新采集记录滞后展示；单条原文（`records.get`）与历史日期列表照常使用内存 LRU，锁屏与关窗时调用 `clearMemory()` 清空。
-    5. 事项 `level=evidence` 层与超过 30 天已从本地缓存清理的归档事项详情按需退回 HTTP。
-- **对现有用户的影响**：单机用户界面和交互无变化；打开时间线、项目页和菜单栏面板的响应更快（本地缓存直出），中枢忙于写库（503）时查看窗口不再白屏报错；原有 `history.db` 在首次升级时自动无损迁移并自动备份。
-- **迁移步骤**：
-  1. 中枢已合入表结构、变更写入钩子与 `projection.*` 设备接口（保留现有 `/v1/*` 管理读接口不变）。
-  2. 中枢与 Mac 端均已补齐私密过滤、删除即刻失效、信箱 640 KiB 拆包及真实中枢等价性测试。
-  3. Mac 查看窗口与桌面小组件读路径已接入 `ProjectionCache` + 设备按需读接口。查看窗口的写接口、待确认和设置页的通道及各自的回退规则见 6.10.4。
-- **主要风险**：
-  - 私密记录漏过过滤链进入下推（缓解：在 `projection.ts` 出口做统一白名单过滤 + 针对混合私密事项/修正转私密的专项单测）。
-  - 中枢高频写草稿导致信箱请求暴涨或撑爆空间（缓解：30 秒合并节流 + `down` 单条替换 + 离线 24h 转轻量 `hint`）。
-  - 删除后离线查看端在重连前仍显示旧摘要（缓解：重连时优先处理 `invalidate`；在隐私文档写明这一物理边界）。
-- **推荐做法与理由**：
-  - **变更索引**：推荐**全局合并表 `projection_changes`（只存键不存正文）+ 每设备游标**，而不为每台设备复制一行正文队列。理由：避免正文多份拷贝违反真删原则，离线多日也不堆积历史中间态。
-  - **`project_context` 生成位置**：推荐**中枢预计算并下推**，而非端侧自己按预算拼装。理由：项目页“正在推进的事”与新会话带入必须严格一致，中枢单一来源避免 Swift 与 TS 两套分词/预算实现漂移。
-  - **信箱下行触发**：推荐第 2 步先用**客户端轮询 `down` + 单条覆盖推送**，暂不改 `relay/` 服务端加设备级 `watch`。理由：复用已验证的 v0.4.2 信箱服务、降低联动变更面，请求量在 20000/天限额的 6% 以内；实测有延迟痛点后再补设备级 `watch`。
+- 缓存加密采用系统 `SQLite3` + 每行 `AES.GCM`（AAD 绑定 `kind` + `entity_id`），`kind` 与 `entity_id` 明文存储以支持按天清理和索引，密钥存钥匙串 `record-anything` / `viewer-cache-key`。
+- 下推 `day` 实体不含旧字段 `detail.timeline`（章节）；Mac 查看端在解码本地 `day` 缓存时按 `detail.items` 自动合成章节供详细档时间轴使用，“未入时间线”逐条标记按下推的 `omitted_record_ids` 显示。
+- 开放区间或覆盖当前时刻的 `records.list` 查询绕过 10 分钟内存 LRU 缓存，避免新采集记录滞后展示；单条原文（`records.get`）与历史日期列表照常使用内存 LRU，锁屏与关窗时清空。
+- 事项 `level=evidence` 层与超过 30 天已从本地缓存清理的归档事项详情按需走中枢读取；删除发生时处于离线状态的查看端在重连前仍会暂时显示旧缓存，重连后优先应用失效通知。
 
 ---
 
@@ -1029,7 +1009,7 @@ CREATE TABLE project_context_cache (
 #### 6.11.2 权限授予与变更流程
 
 - 本机管理接口 `POST /v1/settings/devices/pairing` 接收 `{ role: "collect" | "view" | "admin" }`，缺省为 `collect`。兼容一版旧入参，未传 `role` 时 `viewer: true` 等同于 `role: "view"`，显式 `role` 优先。邀请 JSON 与成功配对回复都带 `role`。采集与查看邀请 10 分钟有效，管理邀请 5 分钟有效。中枢只采用邀请锁定的角色，忽略配对请求自报权限。Android 使用管理邀请返回 403。管理设备也可用 `devices.pairing.create` 签发邀请。Mac 设置里添加手机申请查看权限（2026-11-24 起，此前为采集），添加另一台 Mac 可选择查看或管理，生成管理邀请前需二次确认。
-- `devices.role.update { id, role }` 和 `devices.remove { id }` 仅允许管理设备调用。管理设备可以降权，或把 Mac 从 `collect` 升为 `view`。直接授予 `admin` 仅能通过本机的 `PUT /v1/settings/devices/:id/role` 或 CLI 完成。首次管理配对可由本机管理接口签发，独立部署用的 `tacit-hub pair --role admin` 待实现。
+- `devices.role.update { id, role }` 和 `devices.remove { id }` 仅允许管理设备调用。管理设备可以降权，或把 Mac 从 `collect` 升为 `view`。直接授予 `admin` 仅能通过本机的 `PUT /v1/settings/devices/:id/role` 或 CLI 完成。独立部署时使用 `bun hub/src/cli.ts pair --role admin` 签发首台管理邀请。
 - 降为 `collect` 时，同事务清除该设备的投影视窗、游标和待投递回执，持久排入仅该设备可取的重置。已有订阅收到紧急提示后断开；随后直连 `projection.pull` 只返回 `{ kind: "projection.reset", reset: true, changes: [], cursor: 0, more: false, epoch, server_time }`，无须确认。经信箱先撤掉旧推送及原文回执，再投递加密 `projection.reset`。此角色不能读取原文或确认投影。新的 `collect` 设备没有待清缓存，拉取照常返回 403。
 - 设备 op 和本机 HTTP 都拒绝移除或降级最后一台 `admin`，返回 409「不能移除最后一台管理设备」。本机 CLI 直接操作数据库，提供 `devices list`、`devices set-role <device_id> <role> [--force]`、`devices remove <device_id> [--force]`。仅本机 CLI 的 `--force` 可绕过最后一台保护。6.1 的中枢密钥更换仍会撤销旧身份。
 
@@ -1080,29 +1060,13 @@ CREATE TABLE project_context_cache (
 3. **测试与上线前验收门槛**（对应 `docs/design.md` 2.1）：
    - 涉及远程删除、权限分级与 `sealed-file` 密钥的代码上线前，必须在真实跨进程/跨主机（或容器）测试环境看到完整实测结果：验证 403 越权拦截、删除后已下推缓存与小组件清除、限流 429 触发、最后一台 `admin` 保护、以及拔掉根密钥后拒绝建新库。
 
-#### 6.11.5 模块变更、影响、迁移、风险与推荐做法
+#### 6.11.5 独立部署注意事项
 
-- **要改的模块和公共接口**：
-  - 中枢（**已实施**）：`hub/src/secrets/`（`SecretStore`、`keychain.ts`、`sealed-file.ts`），`hub/src/config.ts`、`hub/src/hub-json.ts`（`RA_HUB_MODE`、`RA_LAN_PORT`、`timezone`）、`hub/src/keys.ts`（`exportKeysForBackend`、`importDbKey`）、`hub/src/llm/keychain.ts` 接入 `SecretStore`；`hub/src/devices/store.ts` & `service.ts`（`role` 字段、权限矩阵、删除限流、`security_audit`、`devices.role.update`、持久化邀请 `createPairing`、`status.get`、`alwaysListen`）；`hub/src/settings.ts`、`hub/src/llm/config.ts`、`hub/src/llm/index.ts`、`hub/src/distill/run.ts`、`hub/src/status.ts`（`server` 模式禁用 CLI 提供方、缺失 `models.json` 返回 `config_error` 并暂停整理、时区告警）；`hub/src/supervisor.ts` & `hub/src/cli.ts`（`run`、`serve --local-status-port`、`pair --role [--relay]`、`keys import-db-key`、`devices list/set-role/remove`）；`hub/Dockerfile`、`.dockerignore` 与 `docs/server-deployment.md`。
-  - Mac 端（**部分实施**）：`collector/Sources/Collector/Viewer/DeviceSettings.swift` 提供设备管理与分权限邀请，`ReviewPage.swift` 显示安全事件提示。连接远端中枢入口、原生远端状态页和 `AppSetup.swift` 的“仅连远端中枢”模式待实施。
-- **对现有用户的影响**：
-  - 留在单机 Mac 的用户完全不受影响：继续用钥匙串、`Tacit.app` 自动拉起本机中枢、零配置升级；原有已配对的 Android 手机自动迁移为 `role = "collect"`。
-  - 想把中枢迁到独立服务器或另一台常开 Mac 的用户，可以导出迁移现有加密库，并把原 Mac 切为远端 `admin` 客户端。
-- **迁移步骤**：
-  1. （已完成）落地 `devices.role`、权限检查和变更、远程删除限额、`security_audit` 和本机设备 CLI。旧 Android 迁为 `collect`，旧查看设备迁为 `view`，首台 `admin` 由本机显式授予。既有密钥后端选择不变。
-  2. （已完成）落地 `SecretStore` 抽象与 `sealed-file` 后端、服务端模式与只走 API 模型开关、时区校验与告警、CLI 引导命令（`run`、`pair --role`、`keys import-db-key`）、`hub/Dockerfile` 与 `docs/server-deployment.md`，并在 Linux 容器环境跑通端到端验收。与原草案的差异：`pair` 仅输出 `tacit://pair?d=...` 链接，不新增终端二维码依赖；补齐 `keys import-db-key` 与 `status.get` 供无头迁移与状态查验。
-  3. （待实施）Mac 设置页开放“连接已有中枢 / 迁出中枢”向导（配合 `docs/server-deployment.md` 的搬迁步骤与远端状态页）。
-- **主要风险**：
-  - 用户把 `RA_MASTER_KEY_FILE` 误放进数据目录一起同步/备份，导致加密库与密钥同处泄露（缓解：启动时校验路径不在 `RA_DATA_DIR` 下，否则拒绝启动）。
-  - 独立部署后丢失最后一台 `admin` 设备或根密钥（缓解：文档与引导页强调备份根密钥；保留服务器 CLI `tacit-hub pair --role admin` 补救管理员设备）。
-  - 公网直连暴露中枢 IP / 访问时序元数据（缓解：文档默认推荐 Tailscale 或经 6.8 中转信箱，不强制开放公网端口）。
-- **推荐做法与理由**：
-  - **权限模型**：推荐**三级角色（`collect` / `view` / `admin`）+ 独立 `agent` 受限身份**，而不把十几个细粒度开关暴露给用户。理由：心智模型与 `design.md` 2.1 一致，又能严格隔离 AI 工具不可删数据、不可改设置。
-  - **非 Mac 密钥存放**：推荐**根密钥只读外挂文件 + 数据目录内加密 `secrets.enc`**，而非全塞环境变量或明文文件。理由：既满足运行期远程修改 API Key、自动轮换信箱令牌的需求，又守住“备份数据目录不会顺带泄露密钥”的底线。
-  - **高危提权**：推荐**禁止远程单步把普通设备升为 `admin`**（只允许本机 CLI 或新发 5 分钟 `admin` 邀请）。理由：单步提权是远程管理最常见的高危攻击面，个人自用场景换新 Mac 频率极低，多一步确认代价几乎为零。
-  - **容器形态**：推荐 **`tacit-hub run` 单容器同时托管 `serve` 与 `distill`**，而非拆两个容器。理由：两者共享同一加密 SQLite 文件与写锁，单容器部署最简单，也避免多容器卷挂载和锁目录不一致问题。
+- 单机 Mac 用户继续使用钥匙串与本机自动启动中枢；独立部署到 Linux/Docker 服务器时，按 [docs/server-deployment.md](server-deployment.md) 准备数据目录之外的只读根密钥文件（`RA_MASTER_KEY_FILE`），并与数据目录分开备份。
+- 中枢启动时校验根密钥路径不得位于 `RA_DATA_DIR` 内；丢失全部 `admin` 设备时可在服务器本机通过 `bun hub/src/cli.ts pair --role admin` 重新签发管理邀请。
+- 公网环境建议前置 Tailscale / WireGuard / HTTPS 反向代理或使用中转信箱，避免直接暴露设备端口的访问时序元数据。
 
-### 6.12 Mac 连接远端后台与经信箱上传（2026-11-24 用户确认，实施中）
+### 6.12 Mac 连接远端后台与经信箱上传
 
 Mac 可在「设置 › 后台服务」粘贴服务器签发的配对链接。切换后，新记录发往远端，本机既有记录按下述范围做一次可续传的导入，同时保留切换前的本机加密库以便切回。远端 Mac 可经 6.8 的信箱上传，同机模式继续走本机快路。本节接在 6.9–6.11 后；`server-deployment.md` 第 6 节的整库搬迁仍适合需要保留既有整理结果的场景。
 
@@ -1116,67 +1080,38 @@ Mac 可在「设置 › 后台服务」粘贴服务器签发的配对链接。�
 | 4. 同步历史 | 显示「已确认 X / Y 条」、其中「已存在」「已跳过」「需要处理」的数量，另显示新记录等待保存数。「暂停同步」「继续同步」只控制历史导入。断网显示「等连接恢复后继续」，关窗、退出或重启后从上次确认处继续。 |
 | 5. 使用远端 | 「后台服务」显示「已连接到〈服务名称〉」和当前通道，使用原生「详细状态」。可处理失败项、配 API 模型或点「切回这台 Mac」。记录同步和整理分别显示进度；模型没配好时显示「记录已保存。设置模型后开始整理」。仅信箱可用时，提示「AI 工具需要直接连到远端后台」，并说明需要直连的操作。 |
 
-`tacit://pair` 沿用 6.4/6.8。Swift 复用邀请解析及 HPKE，检查版本、期限、地址、公钥和 `hub_id` 的绑定，校验回执中的 `hub_id`、`mac-…` 和实际角色。须通过认证回执才把候选连接标为可用；`hello` 只用于探测。禁止跨 origin 重定向。公网入口推荐 HTTPS；私网允许显式填 HTTP，应用层仍走 HPKE。当前 CLI 仅把服务器网卡 IPv4 和设备端口放进 `addrs`（`hub/src/cli.ts:152–178`、`hub/src/devices/service.ts:116,333–339`）。建议给 `pair` 加可选 `--address <origin>`，校验后置于候选首位，供容器端口映射、反代或私网域名使用。链接、一次性码和临时令牌不写日志；必要的待恢复密文或凭据只在加密存储中留至邀请到期。建议配对消费后按原邀请、请求公钥和有效期保留短期结果，直连丢回执时允许原请求者读回原设备 ID，避免跨通道重试烧掉一次性邀请或留下重复设备。
+`tacit://pair` 沿用 6.4/6.8。Swift 复用邀请解析及 HPKE，检查版本、期限、地址、公钥和 `hub_id` 的绑定，校验回执中的 `hub_id`、`mac-…` 和实际角色。须通过认证回执才把候选连接标为可用；`hello` 只用于探测。禁止跨 origin 重定向。公网入口推荐 HTTPS；私网允许显式填 HTTP，应用层仍走 HPKE。`pair` 支持可选 `--address <origin>` 供容器端口映射、反代或私网域名使用。链接、一次性码和临时令牌不写日志；必要的待恢复密文或凭据只在加密存储中留至邀请到期。配对消费后按原邀请、请求公钥和有效期保留短期结果，直连丢回执时允许原请求者读回原设备 ID，避免跨通道重试烧掉一次性邀请或留下重复设备。
 
 #### 6.12.2 切换边界：服务、连接和密钥
 
 - **一个切换提交点**：持久化本机配置和切换阶段，先准备远端凭据及配对回执；切换时暂停旧目标的写入入口，等待可确认的在途请求、持久化其余待发和插件进度、检查旧库快照，然后原子发布带版本的活动绑定。启动时由该绑定恢复，未到提交点继续本机，已提交则继续远端和导入。请求、出队、界面刷新都带绑定代次，旧请求迟到的回执只结算自己的目标，不能改新目标队列或缓存。录音、采集、插件采集状态和本地权限沿用原设置；交接期间继续收集到加密队列，不双写两个库。配对完成但还未提交时可取消；提交后走切回流程。
-- **本机服务**：停止 `dev.record-anything.distill`，再停止 `dev.record-anything.hub`，等退出并确认旧库可安全关闭；冻结原加密库，检查 WAL/checkpoint 或使用一致性快照机制。发现库仍有外部写入或快照校验失败时，停在本机连接并恢复原任务。保存两个任务的定义、登录启动和整理启用状态，远端模式从登录启动目录撤出这两个定义并 `bootout`，保留采集任务。停掉本机 Bonjour 广播；远端模式禁止把服务器地址发布成这台 Mac 的地址。现有 `AppSetup`、`setup.ts`、`LoginStartup.startServices` 和安装升级入口都必须识别活动绑定，升级或重登时不会恢复本机后台，也不初始化/升级封存库。只打开窗口无需重启采集进程；若 launchd 交接失败，保留检查点并显示检查结果。
+- **本机服务**：停止 `dev.record-anything.distill`，再停止 `dev.record-anything.hub`，等退出并确认旧库可安全关闭；冻结原加密库，检查 WAL/checkpoint 或使用一致性快照机制。发现库仍有外部写入或快照校验失败时，停在本机连接并恢复原任务。保存两个任务的定义、登录启动和整理启用状态，远端模式从登录启动目录撤出这两个定义并 `bootout`，保留采集任务。停掉本机 Bonjour 广播；远端模式禁止把服务器地址发布成这台 Mac 的地址。安装升级与登录启动入口识别活动绑定，升级或重登时不会恢复本机后台，也不初始化或升级封存库。
 - **连接文件**：保留原本机 `collector-link.json` 和 `agent-link.json` 的连接定义以及凭据引用，分别准备远端版本。两份文件通过同一活动绑定选择，避免读到一半切换；公开元数据含 `mode`、`hub_id`、`hub_pk`、`device_id` 和地址，文件不含令牌。旧格式继续视为本机；远端凭据缺失、被移除、钥匙串锁住或服务离线时保留待发并提示，禁止用本机 HTTP 或本机管理令牌回退。远端改地址以同一公钥重新验证，身份变更必须重新配对。
-- **钥匙串**：现有本机 `db-key`、`device-key`、Mac 与 Agent 私钥、模型密钥留给本机模式。每个远端绑定使用独立 Mac 和 Agent 私钥，按后台及身份命名空间存钥匙串；信箱令牌同样存钥匙串，参考 `relay-device-<device_id>`。切换和换信箱只持久化引用，暂存旧令牌供收最后的回执。音频原件、音频密钥和本机转写模型留在设备；换后台不重置采集权限。已有本机声纹、说话人和补转写请求缺少跨后台移交契约。建议先检查远端 `audio.sync` 的识别准备状态，缺声纹时明确提示需在远端完成「确认我的声音」；现有保留期内音频仍保留。交接时封闭旧录音场次，给后续场次和在途音频命令绑定目标；远端的试听、补转写或清理命令只处理它有权关联的本机素材，不能拿另一后台的全局清理时间清掉旧库的素材。空白服务器能否完成首段录音、试听、认声和补转写闭环，以及切换中的场次是否重复，均待实测。
-- **查看窗口**：停旧 `ProjectionSync` 和事件订阅，清除 `viewer-cache.db`、内存原文/页面状态与小组件快照，再按新身份拉取。暂无数据时显示「正在同步时间线…」，信箱可用时走 6.9 的下推；离线只显示该后台已经确认的缓存。详细档、录音详情、记录定位和事项依据目前存在本机 HTTP 回退，远端要补到设备协议或明确显示暂不可读。私密原文仍只允许管理设备直连且仅留内存（当前 `service.ts:895–901` 拒绝经信箱读取私密）。
-- **Claude Code / Codex**：沿用现有 MCP 和 SessionStart 启动配置。建议新增仅由当前已验证的管理 Mac 调用的 `agent.enroll { agent_pk }`，按父 Mac 和公钥幂等创建一个 `local_only=0, role=agent` 身份，禁止通过普通邀请取得或获得管理权限；父设备移除或降权时撤销此身份并审计。允许管理 Mac 经已绑定的信箱做登记，Agent 自己仍只直连。CLI 每次调用按活动绑定取独立私钥及可达地址，同机才按 `hub.json` 改写 loopback。SessionStart 沿用 800 ms 在线预算及 7 天缓存，仅同一远端命名空间内回退；首次在线以前不带入旧本机内容。MCP 直连失败提示，追加不脱机重试到另一后台。切换时清除旧带入正文，未报审计仍归旧身份；Claude Desktop 的旧 HTTP 接入随本机服务停止而不可用。远端只可操作本机 AI 工具配置，现有本机设置 HTTP 入口需要改为 Mac 本地运行时操作。
-- **远端模型和状态**：设置读写调用远端 `settings.models.*`、`settings.keys.*` 和 `status.get`。只显示 Anthropic、OpenAI 兼容 API，模型地址按服务器能否访问判断，`localhost` 指服务器。API Key 由用户输入，经加密操作写入服务器的 sealed-file；保留本机原配置和密钥，不复制 CLI 凭据。没有 API 模型不拦记录同步，远端先存记录、按设置恢复整理。显示服务端时区告警，本机网页和端口编辑只在同机模式提供。
-
-- **身份被撤销后重新配对**（2026-11-24 Claude 决定）：远端绑定因设备被移除或凭据失效而冻结时，「后台服务」提供「重新配对」，只接受同一 `hub_id` 签发的 5 分钟管理邀请（换到别的后台须先切回）。新配对生成新的 Mac 私钥和设备 ID，替换 `remote-<hub_id>/` 下的连接文件与钥匙串条目，并重新 `agent.enroll`；绑定 generation 加 1、仍为 remote+committed。旧代次队列中的记录（含已提交、结果未知的）全部转入新代次重发，中枢按记录 ID 去重；旧身份的信箱 journal 无法再收回执，计为“结局未知”后清掉。历史导入以新身份开新会话，已导入的批次重放记为已存在。本机备份不受影响。
+- **钥匙串**：现有本机 `db-key`、`device-key`、Mac 与 Agent 私钥、模型密钥留给本机模式。每个远端绑定使用独立 Mac 和 Agent 私钥，按后台及身份命名空间存钥匙串；信箱令牌同样存钥匙串，参考 `relay-device-<device_id>`。音频原件、音频密钥和本机转写模型留在设备；换后台不重置采集权限。本版不跨后台搬运声纹、试听样本和未处理的旧录音状态，远端缺声纹时明确引导「确认我的声音」，保留本机音频及原保留期；远端的试听、补转写或清理命令只处理它有权关联的本机素材。
+- **查看窗口**：停旧 `ProjectionSync` 和事件订阅，清除 `viewer-cache.db`、内存原文/页面状态与小组件快照，再按新身份拉取。暂无数据时显示「正在同步时间线…」，信箱可用时走 6.9 的下推；离线只显示该后台已经确认的缓存。私密原文仍只允许管理设备直连且仅留内存，经信箱禁止读取私密。
+- **Claude Code / Codex**：沿用现有 MCP 和 SessionStart 启动配置。由当前已验证的管理 Mac 调用 `agent.enroll { agent_pk }`，按父 Mac 和公钥幂等创建一个 `local_only=0, role=agent` 身份，禁止通过普通邀请取得或获得管理权限；父设备移除或降权时撤销此身份并审计。允许管理 Mac 经已绑定的信箱做登记，Agent 自己仍只直连。SessionStart 沿用 800 ms 在线预算及 7 天缓存，仅同一远端命名空间内回退；首次在线以前不带入旧本机内容。
+- **远端模型和状态**：设置读写调用远端 `settings.models.*`、`settings.keys.*` 和 `status.get`。只显示 Anthropic、OpenAI 兼容 API，模型地址按服务器能否访问判断，`localhost` 指服务器。API Key 经加密操作写入服务器的 `sealed-file`；保留本机原配置和密钥，不复制 CLI 凭据。显示服务端时区告警，本机网页和端口编辑只在同机模式提供。
+- **身份被撤销后重新配对**：远端绑定因设备被移除或凭据失效而冻结时，「后台服务」提供「重新配对」，只接受同一 `hub_id` 签发的 5 分钟管理邀请（换到别的后台须先切回）。新配对生成新的 Mac 私钥和设备 ID，替换 `remote-<hub_id>/` 下的连接文件与钥匙串条目，并重新 `agent.enroll`；绑定 generation 加 1、仍为 remote+committed。旧代次队列中的记录（含已提交、结果未知的）全部转入新代次重发，中枢按记录 ID 去重；旧身份的信箱 journal 无法再收回执，计为“结局未知”后清掉。历史导入以新身份开新会话，已导入的批次重放记为已存在。本机备份不受影响。
 
 #### 6.12.3 已有记录的导入、备份和切回
 
-1. **范围**：推荐导入旧库中这台 Mac 及其本机 AI 工具的原始记录、补写和关联修正。保留原 ID、`source_ref`、`t_start` 和原始 `device`，包括历史 `device="mac"`，新记录继续使用远端分配的 `mac-…`。其它设备的历史、录音文件、声纹、旧整理产物、项目手工确认、设备/API 凭据留在备份；需要连同它们整体搬迁时按部署文档处理。私密原文及任何已因修正变为私密的整条记录链只留本机，且导入不带媒体文件或本机路径型附件。对不存在、私密或已删除目标的修正不单独导入。此规则约束这次历史搬运；日后采集的私密记录沿用既有产品政策，私密内容仍不下推或自动带入。
-2. **接口**：建议复用 `HubDB.ingest` 的校验、密钥过滤、索引和修正失效，在本机运行时增加冻结库的只读分页导出（经受控子进程读 SQLCipher，不额外导出明文文件或数据库密钥）。远端增加管理 Mac 专用的 `history.import.begin/batch/status/finish` 设备 op。导入会话绑定发起 Mac、目的 `hub_id`、来源快照标识和允许导入的来源/历史身份；只接受显式导入授权期内的批次，服务端复验范围、私密、源身份及修正依据。源库负责完整检查修正链，远端只能校验收到的范围和记录，因此导入由管理 Mac 发起并单独审计。历史身份用导入来源映射校验，禁止借导入冒充目标后台已配对的设备，也不为历史身份签发凭据。回执和审计仅记 ID、计数及错误类别。普通 `ingest` 保留原鉴权。现有 `ingest` 会覆盖设备身份检查并把真删墓碑计作重复，不能直接用它区分以下结果（`hub/src/devices/service.ts:913–915`、`hub/src/db.ts:234–294`）。
-3. **去重和续传**：固定截止快照，用稳定键分页，先原记录后修正。每批最多 200 条，经信箱另受 6.12.4 限制。收据以导入会话 + 批编号 + 内容指纹持久化，与写入同事务；相同批重放返回同一回执，批编号重用但内容变化返回 409。逐项区分新增、同记录已存在、已删除（ID 或来源键命中墓碑）、冲突和拒收；绝不复活、覆盖或静默合并不同内容。来源键相同而 ID 不同但确认等价时，保留远端 ID 并记录导入会话内的 ID 映射，修正只引用对应的已确认目标。源墓碑不主动删除远端记录；如已整库导过或发现源端删除/变私密但远端已有副本，列为待处理且不自动暴露正文。客户端验证覆盖整批且对上 ID 后持久化进度，断电、回执丢失或重启可继续。暂停或放弃只停止剩余导入，已提交批次留在远端。不可恢复的拒绝、冲突和超大小条目留在备份，可修正后对未确认项重新导入。
-4. **整理**：新采集优先发，历史从冻结库分页读取，不把整库塞进新记录待发送队列。导入已确认的日期由远端登记待整理范围，收尾后按远端时区幂等排队；需要覆盖启用时刻之前和已经过去的日期，不能只调用现有 `backfillRange`（`hub/src/distill/run.ts:1021–1042` 按启用时刻截断）。遵守每日模型用量上限；导入写库完成后可以继续使用，旧日期的整理随后补齐。
-5. **本机备份**：推荐把已关闭的原加密库作为唯一备份，默认保留到用户主动删除；「本机备份」显示日期、占用、私密/未上传的份数和删除后可恢复的范围。删除二次确认；导入仍在进行、还有待决回执或正在切回时禁止删除。清理原库的相关边车及其既有副本，保持音频独立保留期；不触及远端库，也不随便移除仍被本机文件使用的密钥。备份隔离于查看、AI 查询和常规自动整理。远端针对导入记录的真删/转私密要为备份保留可对照的变更水位及导入 ID 映射，在线收到后按本机真删或私密失效路径补做，不能因旧 `device` 不等于当前设备而漏掉。变更只含 ID 和撤下类型，落地后才确认；离线或水位过期时可按已确认的导入 ID 分页全量对照，区分仍在、已删、私密及无法核实。离线无法即时更新，界面显示上次核对时间。
-6. **切回**：「切回这台 Mac」先暂停远端新发送、导入和写操作，赶在停用前结清在途回执，按上一步的水位核对删除与私密失效。若远端不可达或核对不完整，默认保留当前绑定并可继续排队，等核对后再打开旧库；不要用旧库显示可能已经被真删的记录。核对成功后启动本机后台并验证身份及可写性，再原子切换查看、采集和 AI 工具，按原选择启动本机整理，清除远端缓存。已被远端确认的新记录、远端新增的手机记录和整理结果留在远端；不会自动拉回。仍在队列中且确认从未提交的本机新记录，展示数量并在这次切回确认后转给本机；已投递但结果未知的继续归原目标，不能推给本机。新记录的修正如果目标只在服务器，保留归远端待确认。保留远端配对以便再连，切回不删除远端数据。旧备份已删除时，界面须在确认前说明只能建立空的本机后台；服务器数据仍需连回才看得到。重新连同一远端时重新核对活动绑定、队列和来源快照，源库已重新启用并接收写入后不能拿旧检查点代表新范围。不直接套用旧数据库快照覆盖任一正在用的库。
+1. **范围**：导入旧库中这台 Mac 及其本机 AI 工具的非私密原始记录、补写和关联修正。保留原 ID、`source_ref`、`t_start` 和原始 `device`（包括历史 `device="mac"`），新记录使用远端分配的 `mac-…`。其它设备的历史、录音文件、声纹、旧整理产物、项目手工确认、设备/API 凭据和私密记录链留在备份；需要整套搬迁时按 `docs/server-deployment.md` 处理。导入不带媒体文件或本机路径型附件，对不存在、私密或已删除目标的修正不单独导入。
+2. **接口**：在本机运行时对冻结库只读分页导出（不导出明文文件或数据库密钥），远端提供管理 Mac 专用的 `history.import.begin/batch/status/finish` 设备 op。导入会话绑定发起 Mac、目的 `hub_id`、来源快照标识和允许导入的来源/历史身份；服务端复验范围、私密、源身份及修正依据，禁止借导入冒充目标后台已配对的设备。回执和审计仅记 ID、计数及错误类别。
+3. **去重和续传**：固定截止快照，用稳定键分页，先原记录后修正。每批最多 200 条，经信箱另受 6.12.4 限制。收据以导入会话 + 批编号 + 内容指纹持久化，与写入同事务；相同批重放返回同一回执，批编号重用但内容变化返回 409。逐项区分新增、同记录已存在、已删除、冲突和拒收，绝不复活、覆盖或静默合并不同内容。
+4. **整理**：新采集优先发，历史从冻结库分页读取，不挤占实时待发送队列。导入已确认的日期由远端按远端时区登记待整理范围，遵守每日模型用量上限。
+5. **本机备份**：已关闭的原加密库作为备份默认保留到用户手动删除；导入仍在进行、还有待决回执或正在切回时禁止删除。备份隔离于查看、AI 查询和常规自动整理。远端针对导入记录的真删或转私密保留可对照变更水位及导入 ID 映射，在线收到后同步到本机备份（真删走本机真删，转私密追加私密修正）。
+6. **切回**：「切回这台 Mac」先暂停远端新发送、导入和写操作，结清在途回执，并在线核对远端的删除与私密变更；若远端不可达或核对不完整，保留当前绑定，核对后再打开旧库。核对成功后启动本机后台并原子切回查看、采集和 AI 工具，清除远端缓存。已被远端确认的记录和整理结果留在远端，仍在队列中且确认从未提交的本机新记录转给本机。保留远端登记以便一键重新连接；若远端已移除这台 Mac、密钥失效或已非管理设备，则用同一后台的新管理邀请重新配对。
 
 #### 6.12.4 远端 Mac 经信箱上传
 
-- **入口**：把直连/信箱选择放在 Tacit.app 共用设备会话，采集、插件、音频和查看端取同一个活动绑定及选路结果。直连成功后调用 `relay` 刷新配置，网络恢复时优先探测直连；仅远端绑定且所有直连候选均不可用时，新的后台同步请求才投信箱。直连已经回了鉴权、权限、校验错误，或已发出而结果不明的设置/删除，不能为了重试改投另一条通道。直连临时失败时，同一后台的 `ingest` 可保留原记录 ID、按安全重试规则改走信箱；把有未决信箱投递的记录排除出直连批次，先收其回执。无可用通道时本地排队。信箱 401/403 只停用该信箱，等认证直连刷新配置或重新配对；设备明确被撤销则冻结整个绑定、清掉查看缓存。6.10.5 的 AI 工具保持直连。
-- **发送与回执**：复用 Swift 的 `DeviceClient`、`HTTPRelayMailboxClient`、`ProjectionEndpointSelector`、HPKE 下行解封，参照 Android `RelaySync.kt` 的 journal。每批进入上传前先持久化目标后台/设备、空间与信箱、nonce、操作、记录 ID 顺序、创建时间及原封包。PUT 响应丢失时按同编号、同密文续投；PUT 成功状态是「已投递」，并不确认入库。服务端按 6.8.5 处理并投回执。下行验证 HPKE 和 nonce、按 op 解码、以 `DeliveryReceipt` 核对完整批次后，才持久化结果、确认本机队列并删信；拒收按现有队列语义计数，历史拒收留备份。回执、出队和删信的多步恢复须可重复执行。24 小时无确认或中枢回可重试 5xx 时，对仍有效且可安全重试的操作使用新 nonce，记录 ID 保持不变；无法确定已生效的非幂等操作先查状态。
-- **唯一的下行消费者**：共享信箱泵先识别当前/退役信箱的请求回执，再分流 `projection.*` 和 `relay.moved`；配对临时信箱只处理自己的配对回执。换信箱先安全保存新配置并用新信箱发新请求，退役期间继续收旧回执。早到、重到、未知消息按绑定及编号处理，应用成功后才删。当前 `ProjectionSync.pollRelayDown` 会删除无法解成投影通知的消息，`RelayDeviceTransport.send` 在上层认证前删除回执（`ProjectionSync.swift:548–569,949–994`），两处不能直接并用。轮询沿用 6.9 前台 30 秒、后台 5 分钟，可由新投递和网络恢复唤醒；持久等待的请求不逐条高频轮询，`sync`、`audio.sync` 和同游标的拉取至多一条未完成请求。429/507、网络波动按 6.8 退避，合并状态上报给新采集让出额度。
-- **分批和 1 GiB**：`OutboxStore` 的 1 GiB 是本机实时采集加密待发容量，独立于信箱的 100 MiB 空间和单条默认 1 MiB，也不计入冻结库。投递未确认的正文仍计入本机待发容量；本地 journal 只存引用及等候 PUT 确认的少量密文，连同相关加密暂存合计纳入本机容量或在其内预留，避免第二份无界队列。历史导入按页读取，进入信箱的批数和字节数均有限，新采集优先；插件和录音入口复用同一受限通道，完整批次回执前不提交插件检查点或清理转写缓冲。当前满额时 `trim` 会丢最旧项，必须沿用计数和明确提示；已投递项被淘汰时记下发送结局尚未知，不能因续投重新生成已淘汰正文。直连沿用现有最多 200 条、Mac 批次明文 4 MiB 并校验信封上限；信箱目标明文不超过 640 KiB，实测封包还须小于 `hello` 的实际 `message_bytes` 和设备信封上限，随配置变化缩批。单条过大时保留原 ID 和正文，隔离等待直连，继续处理后面的合法记录；不拆改一条记录或让队首挡住整个队列。音频样本、管理读取等不能安全缩小的请求显示需直连，具体大小和挂起恢复待实测。
+- **入口**：直连与信箱选路放在 Tacit.app 共用设备会话。直连成功后调用 `relay` 刷新配置，网络恢复优先探测直连；仅远端绑定且所有直连候选均不可用时，后台同步请求才投信箱。6.10.5 的 AI 工具保持直连。
+- **发送与回执**：每批进入上传前持久化目标后台/设备、空间与信箱、nonce、操作、记录 ID 顺序、创建时间及原封包。PUT 成功状态为「已投递」，并不确认入库；下行验证 HPKE 和 nonce、以 `DeliveryReceipt` 核对完整批次后再确认本机队列并删信。24 小时无确认或收到可重试 5xx 时，对可安全重试的操作使用新 nonce 重发。
+- **唯一的下行消费者**：共享信箱泵先识别当前和退役信箱的请求回执，再分流 `projection.*` 和 `relay.moved`；配对临时信箱只处理配对回执。轮询沿用 6.9 前台 30 秒、后台 5 分钟，遇 429/507 按 6.8 退避。
+- **分批与容量**：本机实时采集待发上限 1 GiB 独立于信箱 100 MiB 空间限额。直连每批最多 200 条、明文 4 MiB；经信箱每批明文不超过 640 KiB 且封包小于 `hello` 返回的 `message_bytes`。单条过大时保留原 ID 隔离等待直连，不阻塞后续队列。
 
-#### 6.12.5 变更、实施顺序及验收
+#### 6.12.5 端口变更行为边界
 
-| 模块 | 要改的范围和接口 |
-|---|---|
-| Mac 设置及生命周期 | `SettingsPage.swift`、`DeviceSettings.swift` 和 `RelaySettingsSection.swift` 接入向导、角色/通道、导入和备份状态；`AppSetup.swift`、`LoginStartup.swift`、`hub/src/setup.ts` 及安装/升级的服务编排识别活动绑定，支持停止及恢复本机后台和整理。 |
-| Mac 统一连接与队列 | `LocalDeviceLink.swift`/两份 link 文件增加远端模式与统一发布边界；`HostDeviceSession.swift`、`DeviceClient.swift`、`ProjectionSync.swift` 补共享选路、密钥和信箱泵；`CollectorUpload.swift`、`Hub.swift`、`OutboxStore.swift`、`AudioCoordinator.swift` 接活动绑定、持久回执与跨通道恢复。 |
-| 查看与 AI 工具 | `ViewerDataSource.swift`、`HubAPI.swift`、小组件更新和 `main.swift` 增加按绑定隔离和远端无 HTTP 回退；`hub/src/agent-cli/` 按目标读取身份和缓存，`agents-install.ts` 及 Mac AI 工具设置在本机管理配置。 |
-| 后台与数据 | `hub/src/cli.ts`、`devices/service.ts`、`devices/store.ts`、权限表和配对回复增加邀请可达地址、角色校验、丢回执恢复及 `agent.enroll`；`devices/client.ts` 与 Swift 客户端共用互通契约。补 `history.import.*`、源快照只读分页、批次回执、备份删除/私密变更对照接口及整理日期排程，涉及 `db.ts`、后台任务与显式数据库迁移。沿用 `devices/relay.ts` 的信箱请求及回复机制，新增操作若走信箱，要接入其 nonce/回执事务和响应体积检查；信箱服务 `relay/` 无需新端点。 |
-| 已安装用户 | 没发起向导时继续本机路径；旧 link、设备、库和登录启动设置可读。同一远端绑定升级后可续传，不静默重连本机。若要降到不识别远端绑定的旧版本，应先在支持远端的版本完成切回及核对。文档需补配对地址、回切边界及混合模式升级说明。 |
+`port`（本机 HTTP 与本机设备快路）和 `lan_port`（手机与远端设备）为独立端口：
 
-- **实施顺序**：先验证邀请地址、角色、远端 Agent 身份和服务器状态 → 接通 Mac 活动绑定与本机服务停启、清缓存及直连候选 → 做快照、记录导入、备份对账和切回 → 接共享信箱泵及采集/插件/音频通道 → 连同向导交付。每步保留旧本机模式验收；历史和活动队列共用传输时先锁住目的身份，再接收回执。
-- **风险和取舍**：一个活动绑定可以避免采集与查看不同库；单独的历史导入保持日常采集权限收敛和真删约束；冻结源库加批次回执能在断电后重跑而不重复制数据；共享消费者避免查看端误删上传回执；查看/私密缓存按目标清空，避免换库后继续看到旧库内容。服务器无直连时 AI 工具无法在线；模型未配、信箱配额不足、声纹未就绪和手机未重配属于不同状态，界面分开给出。
-- **待实测**：在独立 Mac 测试数据目录加容器/另一台机器跑直连和只经信箱的完整向导，使用虚构记录。覆盖容器端口映射及 HTTPS 代理、邀请过期及消费后断网、角色越权和撤销、Keychain 不可用、启动/升级/重登不恢复本机任务、保留期及已授权的备份删除、两端各类重复/墓碑/私密修正、批次与对账断电续传、迟到回执和直连恢复、换信箱、429/507、单条超限、缓存/小组件/Agent 不串库、首段录音/试听/声纹、切回前后手机行为，以及本节末的端口路径。删除、权限和数据迁移需留下跨进程/跨主机实际结果，真数据前另获授权。实现时跑相关 Bun、Swift、HPKE 互通以及现有 Android 验证覆盖；本草案的端口判断来自静态代码。
-
-#### 6.12.6 已确认的取舍（2026-11-24 用户按推荐确认）
-
-1. **旧库范围**：推荐导入这台 Mac 和本机 AI 工具留下的非私密原始记录、补写及可关联修正。手机历史、旧整理结果、手工项目设置和私密历史留在备份；需要整套搬走时走现有整库搬迁。
-2. **备份保留**：推荐默认保留到手动删除，提示里面可能有唯一一份的私密记录和未上传内容；源备份在远端删除/私密变更后对账，删除功能待测试数据验收。
-3. **切回策略**：推荐先在线核对备份，暂停时可继续本机加密排队；把确认从未提交的当前 Mac 待发记录转给本机。已经存到远端的数据留在远端。若要求断网时也能切回，需单独决定是否接受先开空库，以及之后如何安全恢复备份。
-4. **邀请与 AI 工具**：推荐向导只接受 5 分钟管理邀请，服务器可签发带可达地址的链接；AI 工具使用自动签发的独立身份并保持直连。仅信箱的模式允许采集和查看，接受首次在线前没有自动带入。
-5. **录音连续性**：推荐本版不搬声纹、试听样本和未处理的旧录音状态。在远端明确引导缺失的认声步骤，保留本机音频及原保留期；认声/补转写的真实闭环作为切换验收项。
-
-#### 6.12.7 当前代码核查：后台改端口后谁会跟上
-
-`port`（本机 HTTP 与本机设备快路）和 `lan_port`（手机与远端设备）是两个独立端口。Mac 设置里的「保存并重启」只写 `hub.json.port`，探测端口后让后台退出重启；`RA_PORT` 锁定时拒绝修改。设备监听另外读取 `RA_LAN_PORT` 或 `lan_port`，端口重启期间短暂中断但地址通常不变（`hub/src/settings.ts:91–111`、`hub/src/cli.ts:104–108`、`hub/src/hub-json.ts:41–69`、`hub/src/server.ts:285–316`）。
-
-| 使用方 | 改本机 `port` | 改设备 `lan_port` 或外部端口 |
-|---|---|---|
-| Mac 采集端 | 默认会在下一次请求重读 `hub.json`；`HostDeviceSession` 发现 origin 变化会重建客户端，待发保留并重试。显式 `--port` 或 `collector.json.port` 固定旧值时会断；服务端单独用 `RA_PORT` 覆盖而采集没有对应固定值，端口也可能不一致。参见 `collector/Sources/Collector/Hub.swift:5–39,119–177`、`collector/Sources/CollectorCore/HostDeviceSession.swift:56–73`、`collector/Sources/Collector/CollectorUpload.swift:76–99`。 | 同机快路不使用设备监听。当前 Mac 宿主未连远端，远端改址行为不能现测。 |
-| Mac 查看窗口/小组件 | HTTP 请求和新设备会话跟 `config.hubURL`；设置页等新端口并刷新。下一次需要访问数据源时按新 origin 重建会话；已经运行的 `ProjectionSync` 本身持旧传输和 WebSocket，不能保证只靠后台定时轮询或小组件就立即切换。固定端口例外与采集端相同。参见 `collector/Sources/Collector/main.swift:16–41`、`collector/Sources/Collector/Viewer/SettingsPage.swift:281–297`、`collector/Sources/Collector/Viewer/ViewerDataSource.swift:472–501,511–549,616–630`。网页已开的标签仍是打开时的 URL。 | 同机窗口不需要跟。独立 Mac 向导需处理新地址，固定反代域名和外部端口可以隔离服务器内部换端口。 |
-| Claude Code / Codex 的 MCP、SessionStart | 有本机 Agent link 时，CLI 每次调用读 link 和当前端口；对 `127.0.0.1` 且 `RA_PORT` 或 `hub.json` 有显式有效配置时覆盖旧 `address`。旧令牌路径也每次读端口。环境覆盖、不同数据目录或删掉配置回到 default 时可能沿用错误地址；在途请求不会迁移。参见 `hub/src/agent-cli/identity.ts:97–114`、`hub/src/agent-cli/client.ts:14–25,49–79,92–107`。 | 同机 AI 工具无影响。非 loopback 的 Agent `address` 目前是固定值，服务器对外主机/端口跟着变时会断；需更新已认证地址，SessionStart 可用同一身份下的已有离线缓存。当前没有自动给远端 Agent 签发和发现新地址的完整路径。 |
-| 已配对 Android | 不使用本机 `port`，设备端口重启后不变，后续同步照旧。 | 同一 Mac 后台、同一 `hub_id`、同一可用组播网段时，Mac 会按设备列表刷新 Bonjour 广播，手机旧地址失败后按身份发现新端口，经 `hello` 校验并记为最后成功地址。后台广告刷新、手机下一轮及退避会有延迟。跨网/独立服务器无可用 Bonjour、手填 URL 仍指旧端口时，直连会断，手动换到同身份的新地址或沿用已有信箱；换后台身份须重新配对。参见 `collector/Sources/Collector/DeviceDiscovery.swift:19–25,50–78`、`collector/Sources/Collector/main.swift:533–534`、`android/app/src/main/java/top/jinso/tacit/sync/MacDiscovery.kt:20–25,52–70`、`SyncCoordinator.kt:89–96,124–155`。 |
-
-`collector-link.json.addrs` 目前仍是本机 link 格式校验所必需的单一 loopback origin，记下登记时的端口，修改端口不会回写。采集和查看端运行时均用动态 origin，没使用这个旧地址路由。因此登记后 `addrs` 过时本身不会挡住默认本机连接（`collector/Sources/CollectorCore/LocalDeviceLink.swift:15–44`、`HostDeviceSession.swift:56–73`、`collector/Sources/Collector/Viewer/HubAPI.swift:467–470`）。远端模式才让远端 `addrs` 参与选路；同机保留 `hub.json` 为端口来源。后台无人操作时的查看会话/小组件切换时间、Bonjour 与真机重连时间、固定端口配置均待实测。
+- **修改本机 `port`**：Mac 设置「保存并重启」写入 `hub.json.port` 后重启后台（`RA_PORT` 锁定时不可改）。默认未固定 `--port` / `collector.json.port` 时，Mac 采集端、查看窗口新会话与本机 Claude Code / Codex CLI 会随 `hub.json` 切到新端口；已配对 Android 不受本机 `port` 影响。
+- **修改设备 `lan_port` 或外部端口**：同网段同 `hub_id` 下 Mac 刷新 Bonjour 广播，已配对 Android 探测失败后按 `hub_id` 发现新端口并经 `hello` 校验；跨网段或独立服务器手填地址变更时需更新为同身份的新地址或改走中转信箱。
