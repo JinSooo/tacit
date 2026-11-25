@@ -28,6 +28,16 @@ import { dayMs, type RelayConfig, type RelayRequest } from "./relay-store.ts";
 import { httpOrigin } from "./http-origin.ts";
 import { pairReceiptKey, pairRequestHash, prunePairReceipts, recoverPairReceipt, savePairReceipt } from "./pair-receipt.ts";
 
+/** Everything another process (the device CLI) can change that the running service must react to. */
+export function deviceState(sql: HubDB["db"]) {
+  return JSON.stringify([
+    sql.prepare("SELECT id,role,role_revision,local_only,projection_reset FROM devices ORDER BY id").all(),
+    sql.prepare<[string], { v: string }>("SELECT v FROM distill_state WHERE k=?").get(inviteKey)?.v ?? null,
+    sql.prepare("SELECT space,url,state,retire_at FROM relay_spaces ORDER BY space").all(),
+    sql.prepare("SELECT space,up,device,state,expires_at FROM relay_mailboxes ORDER BY space,up").all(),
+  ]);
+}
+
 const invitationMs = 10 * 60_000;
 const idPattern = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const identityKey = "device_hub_id";
@@ -143,14 +153,20 @@ export class DeviceService {
     else this.reconcile();
     this.relay.start();
     this.reconcileProjectionEvents();
-    // The local device CLI writes through another connection.
+    // The local device CLI writes through another connection. data_version also moves on every
+    // record the collector or distill worker writes, so only react when device state itself changed:
+    // each reaction is a full relay round (2026-11-25: ~24 mailbox polls a minute, the daily quota).
     let version = this.sql.pragma("data_version", { simple: true });
+    let state = deviceState(this.sql);
     this.devicePoll = setInterval(() => {
       try {
         prunePairReceipts(this.sql, this.clock());
         const next = this.sql.pragma("data_version", { simple: true });
         if (next === version) return;
         version = next;
+        const nextState = deviceState(this.sql);
+        if (nextState === state) return;
+        state = nextState;
         this.devicePermissionsChanged();
       } catch (error) { if (!isDatabaseBusy(error)) logFailure("devices.reconcile", error); }
     }, 1_000);

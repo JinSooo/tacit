@@ -10,6 +10,7 @@ import { localDateString } from "../src/distill/requests.ts";
 import { projectionHead, pruneProjection, resetProjection, relayProjectionBytes } from "../src/devices/projection-store.ts";
 import type { ProjectionPage } from "../src/devices/projection.ts";
 import { dayMs, type RelayConfig } from "../src/devices/relay-store.ts";
+import { updateDeviceRole } from "../src/devices/store.ts";
 import { startServer } from "../src/server.ts";
 import { suite } from "../src/devices/envelope.ts";
 import { decodePairing, DeviceClient, type ResponseEnvelope } from "../src/devices/client.ts";
@@ -899,3 +900,33 @@ test("信箱限流后整个空间暂停，暂停期间不再发请求，到期�
     expect(usage.requests).toBeGreaterThan(usage.requests_before_limit!);
   } finally { globalThis.fetch = realFetch; await hub.dispose(); relay.stop(true); }
 }, 30_000);
+
+test("别的进程不停写库时不去信箱查信，只有命令行改了设备才查（2026-11-25 每分钟查 24 次耗光额度）", async () => {
+  const hub = await hubFixture(), relay = relayFixture({ createCode: "fixture-code" });
+  const other = new HubDB(hub.file, hub.config.dbKey);
+  type Usage = { requests: number; by_kind: Record<string, number> };
+  const usage = async () => (await (await hub.admin(path)).json() as { usage: Usage | null }).usage;
+  try {
+    const phone = await hub.pair();
+    await configure(hub, relay.url, "fixture-code");
+    // 配对和换信箱是后台自己做的，已经各跑过一轮；第一次看到别的进程写入时还会补对一次设备状态。
+    other.db.prepare("INSERT OR REPLACE INTO distill_state(k,v) VALUES ('fixture_write','warm')").run();
+    let settled = await usage();
+    for (let quiet = 0; quiet < 3;) {
+      await Bun.sleep(500);
+      const next = await usage();
+      quiet = next?.requests === settled?.requests ? quiet + 1 : 0;
+      settled = next;
+    }
+    // 采集端和整理进程每秒都在写记录，库的写入版本号一直在变。
+    for (let i = 0; i < 30; i++) {
+      other.db.prepare("INSERT OR REPLACE INTO distill_state(k,v) VALUES ('fixture_write',?)").run(String(i));
+      await Bun.sleep(100);
+    }
+    await Bun.sleep(1_200);
+    expect((await usage())?.by_kind).toEqual(settled!.by_kind);
+
+    updateDeviceRole(other.db, phone.device, "view");
+    await eventually(async () => ((await usage())?.requests ?? 0) > settled!.requests || undefined);
+  } finally { other.close(); await hub.dispose(); relay.stop(true); }
+}, 20_000);
