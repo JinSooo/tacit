@@ -53,7 +53,7 @@ struct SettingsPage: View {
           if store.canManageBackend {
             ModelSettingsView().id(store.remoteBackend?.context.binding.route)
           } else {
-            directConnectionRequired(RemoteBackendSettingsModel.managementNotice)
+            directConnectionRequired(RemoteBackendSettingsModel.modelsNotice)
           }
         case .agents:
           if store.canManageBackend {
@@ -311,7 +311,7 @@ struct HubSettingsView: View {
         TextField("端口", text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
           .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
         if edited, let info {
-          Button("撤销") {
+          Button("撤销修改") {
             port = String(info.port)
             message = nil
             error = nil
@@ -325,7 +325,7 @@ struct HubSettingsView: View {
       }
     }
     if edited && validPort == nil {
-      SettingsMessage(text: "端口要是 1024–65535 之间的整数。")
+      SettingsMessage(text: "端口必须是 1024–65535 之间的整数。")
     }
     SettingsRow("详细状态") {
       Button("在浏览器中打开") {
@@ -372,6 +372,7 @@ struct HubSettingsView: View {
           return
         }
       }
+      message = nil
       error = "30 秒内没连上后台服务，可以在维护里复制诊断信息排查。"
     } catch { self.error = error.localizedDescription }
   }

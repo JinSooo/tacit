@@ -14,12 +14,15 @@ struct RemoteBackendSettingsSection<LocalRows: View>: View {
         connectionRow
       } else {
         SettingsRow("当前后台") {
-          Text("这台 Mac").foregroundStyle(Palette.muted)
-          if model.step == nil && !model.context.returning && !model.recovering && !model.frozen {
-            Button("连接远端后台") { model.start() }.disabled(model.busy)
+          HStack(spacing: 8) {
+            Text("这台 Mac").foregroundStyle(Palette.muted)
+            if model.step == nil && !model.context.returning && !model.recovering && !model.frozen {
+              Button("连接远端后台") { model.start() }.disabled(model.busy)
+            }
           }
         }
-        localRows()
+        // 连接向导打开时先收起地址、端口这些本机行，让向导紧跟在“当前后台”后面。
+        if model.step == nil { localRows() }
       }
       if model.context.returning {
         SettingsMessage(text: "上次切回尚未完成。")
@@ -337,7 +340,10 @@ struct RemoteBackendDetails: View {
                 } label: {
                   VStack(alignment: .leading, spacing: 2) {
                     Text(Self.issueText(issue.category))
-                    Text("记录编号：\(issue.id)").font(.mono(TextSize.caption)).foregroundStyle(Palette.muted).textSelection(.enabled)
+                    HStack(spacing: 0) {
+                      Text("记录编号：").font(.system(size: TextSize.caption))
+                      Text(issue.id).font(.mono(TextSize.caption)).textSelection(.enabled)
+                    }.foregroundStyle(Palette.muted)
                   }
                 }
               }

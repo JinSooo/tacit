@@ -140,28 +140,27 @@ public enum PluginImport {
     let head: String
     if !ok {
       let labels = [
-        "sandbox": "当前系统无法隔离此数据源，未执行。",
-        "permission": "无权读取来源。",
-        "missing_file": "来源文件或程序不存在。",
-        "network": "连接失败。",
-        "interrupted": "已中断。",
-        "storage": "记录保存失败。",
-        "protocol": "读取结果有问题。",
-        "rejected": "部分记录格式不对，没有保存。",
-        "cleanup": "清理临时数据失败。",
+        "sandbox": "当前系统无法隔离此数据源，未执行",
+        "permission": "无权读取来源",
+        "missing_file": "来源文件或程序不存在",
+        "network": "连接失败",
+        "interrupted": "已中断",
+        "storage": "记录保存失败",
+        "protocol": "读取结果有问题",
+        "rejected": "部分记录格式不对，没有保存",
+        "cleanup": "清理临时数据失败",
       ]
-      head = failure.flatMap { labels[$0] } ?? "读取失败。"
+      head = failure.flatMap { labels[$0] } ?? "读取失败"
     }
     else if let accepted { head = accepted == 0 ? "没有新记录" : "新增 \(accepted.formatted()) 条" }
     else { head = "完成" }
     let s = Int(elapsed)
     let took = s >= 60 ? (s % 60 == 0 ? "\(s / 60) 分钟" : "\(s / 60) 分 \(s % 60) 秒") : s >= 1 ? "\(s) 秒" : nil
-    let base = took.map { "\(head)\(ok ? "，" : "")用时 \($0)" } ?? head
+    let base = took.map { "\(head)，用时 \($0)" } ?? head
     // 告警由 runner 按计数生成，不含正文；最多显示两条。
     let notes = warnings.prefix(2).filter { !$0.isEmpty && $0.count <= 80 }
     guard !notes.isEmpty else { return base }
-    let separator = base.hasSuffix("。") ? "" : "；"
-    return base + separator + notes.joined(separator: "；")
+    return base + "；" + notes.joined(separator: "；")
   }
 }
 

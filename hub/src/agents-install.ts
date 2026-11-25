@@ -12,7 +12,15 @@ export const AGENT_TOOLS = ["claude-code", "codex", "claude-desktop"] as const;
 export const SERVER = "tacit", LEGACY_SERVER = "record-anything";
 export type AgentTool = typeof AGENT_TOOLS[number];
 
-export class AgentCommandError extends Error {}
+/** 失败只带固定类别给日志和诊断（code），界面另给大白话，不显示原文。 */
+export class AgentCommandError extends Error {
+  override name = "AgentCommandError";
+  constructor(message: string, readonly code: "agent_spawn_failed" | "agent_mcp_get_failed" | "agent_mcp_update_failed") { super(message); }
+}
+export class AgentConfigError extends Error {
+  override name = "AgentConfigError";
+  constructor(message: string, readonly code: "agent_config_invalid_json" | "agent_config_invalid_schema" | "agent_config_conflict") { super(message); }
+}
 
 type Json = Record<string, any>;
 export interface InstallEnvironment {
@@ -57,11 +65,11 @@ function ownsDesktopEntry(value: unknown): value is Json {
 function desktopFile(home: string, install: boolean, cli: string, bun: string) {
   const file = desktopConfig(home), existed = existsSync(file), before = existed ? readFileSync(file, "utf8") : "";
   let data: Json;
-  try { data = existed ? JSON.parse(before) : {}; } catch { throw new Error(`${file} 不是合法 JSON，未写入配置`); }
-  if (!object(data) || data.mcpServers !== undefined && !object(data.mcpServers)) throw new Error(`${file} 的 mcpServers 结构无效，未写入配置`);
+  try { data = existed ? JSON.parse(before) : {}; } catch { throw new AgentConfigError(`${file} 不是合法 JSON，未写入配置`, "agent_config_invalid_json"); }
+  if (!object(data) || data.mcpServers !== undefined && !object(data.mcpServers)) throw new AgentConfigError(`${file} 的 mcpServers 结构无效，未写入配置`, "agent_config_invalid_schema");
   const current = data.mcpServers?.[SERVER];
   if (Object.hasOwn(data.mcpServers ?? {}, SERVER) && !ownsDesktopEntry(current)) {
-    throw new Error(`Claude Desktop 中的 ${SERVER} 名称已被其他配置占用，请先在 Claude Desktop 中检查该配置`);
+    throw new AgentConfigError(`Claude Desktop 中的 ${SERVER} 名称已被其他配置占用，请先在 Claude Desktop 中检查该配置`, "agent_config_conflict");
   }
   const legacy = ownsDesktopEntry(data.mcpServers?.[LEGACY_SERVER]);
   if (!install && current === undefined && !legacy) return { file, existed, before, after: before };
@@ -88,8 +96,8 @@ function diff(file: string, before: string, after: string, existed: boolean) {
 function hookFile(file: string, install: boolean, cli: string, bun: string, tool: AgentTool) {
   const existed = existsSync(file), before = existed ? readFileSync(file, "utf8") : "";
   let data: Json;
-  try { data = existed ? JSON.parse(before) : {}; } catch { throw new Error("配置文件不是合法 JSON，未写入配置。"); }
-  if (!object(data) || data.hooks !== undefined && !object(data.hooks) || data.hooks?.SessionStart !== undefined && !Array.isArray(data.hooks.SessionStart)) throw new Error("配置文件结构无效，未写入配置。");
+  try { data = existed ? JSON.parse(before) : {}; } catch { throw new AgentConfigError("配置文件不是合法 JSON，未写入配置。", "agent_config_invalid_json"); }
+  if (!object(data) || data.hooks !== undefined && !object(data.hooks) || data.hooks?.SessionStart !== undefined && !Array.isArray(data.hooks.SessionStart)) throw new AgentConfigError("配置文件结构无效，未写入配置。", "agent_config_invalid_schema");
   // 按 shell 规则拆开再比，加没加引号都认得（2026-11-19：升级迁移写的全引号命令曾被当成没连接）。
   const ours = (hook: any) => {
     if (!object(hook) || typeof hook.command !== "string") return false;
@@ -256,17 +264,17 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
       if (yes) {
         const execute = (args: string[]) => {
           try { return run(command, args, home); }
-          catch { throw new AgentCommandError("无法启动 AI 工具。"); }
+          catch { throw new AgentCommandError("无法启动 AI 工具。", "agent_spawn_failed"); }
         };
         const registered = (name: string) => {
           const result = execute(get(name));
-          if (result.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(result.stderr + result.stdout)) throw new AgentCommandError("查询失败，未继续连接。");
+          if (result.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(result.stderr + result.stdout)) throw new AgentCommandError(`查询失败，未继续${action === "install" ? "连接" : "断开"}。`, "agent_mcp_get_failed");
           return result.status === 0;
         };
         const current = registered(SERVER), legacy = registered(LEGACY_SERVER);
         if (tool === "codex" && approvalPlan?.existed) backupConnection(codexFile);
         for (const args of [...(legacy ? [remove(LEGACY_SERVER)] : []), ...(current ? [remove(SERVER)] : []), ...(action === "install" ? [add] : [])]) {
-          if (execute(args).status !== 0) throw new AgentCommandError("无法更新 AI 工具的连接。");
+          if (execute(args).status !== 0) throw new AgentCommandError("无法更新 AI 工具的连接。", "agent_mcp_update_failed");
         }
         if (tool === "codex") {
           // 依次读取并保存：第二步必须基于第一步写入后的文件。

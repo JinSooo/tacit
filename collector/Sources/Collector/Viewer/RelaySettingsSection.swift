@@ -41,7 +41,7 @@ struct RelaySettingsSection: View {
             }
           }
           if let lastFetch = RelaySettingsText.lastFetch(settings) {
-            SettingsRow("上次取信", value: lastFetch)
+            SettingsRow("上次取信") { Text(lastFetch).monospacedDigit().foregroundStyle(Palette.muted) }
           }
           if let usage = RelaySettingsText.usage(settings) {
             SettingsRow("今天的信箱请求") {
@@ -49,7 +49,7 @@ struct RelaySettingsSection: View {
             }
           }
           if let pending = RelaySettingsText.pending(settings) {
-            SettingsRow("待取", value: pending)
+            SettingsRow("待取") { Text(pending).monospacedDigit().foregroundStyle(Palette.muted) }
           }
         }
         if let retirement = RelaySettingsText.retirement(settings) {
@@ -68,6 +68,7 @@ struct RelaySettingsSection: View {
       actionError = nil
       testPassed = false
     }
+    .onChange(of: code) { actionError = nil }
     .alert("关闭中转信箱？", isPresented: $confirmDisable) {
       Button("取消", role: .cancel) {}
       Button("关闭信箱", role: .destructive) { Task { await perform(.disable) } }
@@ -104,10 +105,12 @@ struct RelaySettingsSection: View {
       }
       HStack(spacing: 8) {
         Spacer()
-        if settings?.mode == .custom, let saved = settings?.url, address != saved {
+        if settings?.mode == .custom, let saved = settings?.url, address != saved || !code.isEmpty {
           Button("撤销修改") {
             draftAddress = nil
             code = ""
+            actionError = nil
+            testPassed = false
           }
         }
         Button(action == .test ? "正在测试…" : "测试连接") { Task { await perform(.test) } }

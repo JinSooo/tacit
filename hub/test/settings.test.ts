@@ -396,14 +396,21 @@ test("AI 工具设置的连接与断开错误只返回对应的用户提示", as
     },
   } });
   expect(await call(h, "PUT", path, { connected: true })).toEqual({
-    status: 500, body: { error: "没能写入 Codex 的配置文件，请检查它是否损坏后重试。" },
+    status: 500, body: { error: "没能更新 Codex 的配置文件，请检查它是否损坏后重试。" },
   });
 
   writeFileSync(file, "{}");
+  // 2026-11-25：失败提示固定后日志里什么都没有；现在只记固定类别，不记路径和原文。
+  const logs: string[] = [], original = console.error;
+  console.error = (line: unknown) => { logs.push(String(line)); };
+  try {
   for (const [command, connected] of [["get", true], ["add", true], ["remove", false]] as const) {
     failingCommand = command;
     expect(await call(h, "PUT", path, { connected })).toEqual({
-      status: 500, body: { error: "没能完成 Codex 的连接，请确认它能正常启动后重试。" },
+      status: 500, body: { error: `没能${connected ? "连接" : "断开"} Codex，请确认它能正常启动后重试。` },
     });
   }
+  } finally { console.error = original; }
+  expect(logs.some(line => line.includes('"location":"settings.agents"') && line.includes('"code":"agent_mcp_get_failed"'))).toBe(true);
+  expect(logs.join("\n")).not.toContain(file);
 });

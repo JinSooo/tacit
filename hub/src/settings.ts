@@ -1,3 +1,4 @@
+import { logFailure } from "./diagnostics.ts";
 import { acknowledgeSecurityEvent, auditSecurity, pendingSecurityEvents, securityAudit, securityEventID } from "./security-audit.ts";
 // 设置接口：/v1/settings/{hub,models,keys/:provider,models/test,general,agents}。契约见 docs/contracts.md 第 3.1 节。
 // API key 只进钥匙串：不进响应、错误信息、日志和文件。
@@ -217,9 +218,12 @@ export function createSettings(deps: SettingsDeps) {
       if (body.connected && !tool.installed) return fail(409, `这台 Mac 上没找到 ${tool.label}，装好并登录后再连接。`);
       try { const result = connectAgent(id, body.connected, deps.agents); return Response.json({ tools: result.states, note: result.note }); }
       catch (error) {
+        // 日志和诊断只记固定类别（AgentCommandError / AgentConfigError 的 code），不记原文和路径。
+        logFailure("settings.agents", error);
+        const verb = body.connected ? "连接" : "断开";
         return fail(500, error instanceof AgentCommandError
-          ? `没能完成 ${tool.label} 的连接，请确认它能正常启动后重试。`
-          : `没能写入 ${tool.label} 的配置文件，请检查它是否损坏后重试。`);
+          ? `没能${verb} ${tool.label}，请确认它能正常启动后重试。`
+          : `没能更新 ${tool.label} 的配置文件，请检查它是否损坏后重试。`);
       }
     }
 

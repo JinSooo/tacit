@@ -328,7 +328,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   fixture.useRemote()
   model.refreshContext()
   #expect(!store.canManageBackend)
-  #expect(model.directNotice == RemoteBackendSettingsModel.managementNotice)
+  #expect(model.directNotice == "管理远端后台和使用 AI 工具需要直连。")
 
   for channel: RemoteBackendSettingsModel.Channel? in [nil, .relay, .direct] {
     fixture.selectedChannel = channel
@@ -450,7 +450,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   #expect(model.step == .remote)
   #expect(!model.canChangePause)
   #expect(model.onlineTitle == "已连接到山雀工作室")
-  #expect(model.directNotice == RemoteBackendSettingsModel.managementNotice)
+  #expect(model.directNotice == "管理远端后台和使用 AI 工具需要直连。")
   #expect(model.status?.modelSetupNotice != nil)
   #expect(model.status?.timezoneNotice?.contains("UTC") == true)
   #expect(try fixture.status(unconfigured: false).modelProgress == "已整理 7 / 12 天")

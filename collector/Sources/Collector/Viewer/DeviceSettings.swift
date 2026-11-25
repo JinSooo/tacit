@@ -101,8 +101,7 @@ struct DeviceSettingsSection: View {
         DeviceInvitationChoices(step: step, busy: busy, error: sheetError) {
           // Mac 上还没有能接收“查看”邀请的入口，另一台 Mac 只发管理邀请；配好后可在列表里改为查看。
           step = .confirmAdmin
-        } confirmAdmin: {
-          step = .confirmAdmin
+          sheetError = nil
         } invite: { role, platform in
           Task { await createInvitation(role, platform: platform) }
         } cancel: {
@@ -414,7 +413,6 @@ struct DeviceInvitationChoices: View {
   let busy: Bool
   let error: String?
   let selectMac: () -> Void
-  let confirmAdmin: () -> Void
   let invite: (DeviceSettings.Role, String) -> Void
   let cancel: () -> Void
   let back: () -> Void
@@ -448,7 +446,7 @@ struct DeviceInvitationChoices: View {
   }
 
   static func countdown(_ remaining: Int) -> String {
-    let (minutes, seconds) = remaining.quotientAndRemainder(dividingBy: 60)
+    let (minutes, seconds) = max(0, remaining).quotientAndRemainder(dividingBy: 60)
     if minutes == 0 { return "剩余 \(seconds) 秒" }
     if seconds == 0 { return "剩余 \(minutes) 分钟" }
     return "剩余 \(minutes) 分 \(seconds) 秒"
