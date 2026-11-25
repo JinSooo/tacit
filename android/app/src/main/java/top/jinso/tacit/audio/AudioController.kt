@@ -25,39 +25,52 @@ import kotlinx.coroutines.flow.update
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** All futures run off main. Observe completion on the UI dispatcher. Never call Future.get on UI. */
-class AudioController(context: Context) {
-    private val runtime = AudioRuntime.get(context)
+class AudioController internal constructor(
+    runtimeProvider: Lazy<AudioRuntime>,
+    private val deleteHistoryAudio: (String) -> CompletableFuture<Unit> = { runtimeProvider.value.deleteHistoryAudio(it) },
+) {
+    constructor(context: Context) : this(lazy { AudioRuntime.get(context) })
+
+    private val runtime by runtimeProvider
     fun start(activity: Activity) {
         check(!activity.isFinishing && !activity.isDestroyed &&
             ((activity as? LifecycleOwner)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED)
                 ?: activity.hasWindowFocus())) { "请从可见页面启动录音" }
         check(activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) { "请先允许麦克风权限" }
-        check(runtime.allowed()) { "请先启用录音并取消暂停" }
+        check(runtime.allowed()) { "录音未开启" }
         // Never runtime.lock on main: the worker holds it for seconds while it decrypts every file at first load.
         synchronized(runtime.control) {
             if (runtime.requested) return
             check(!runtime.recording) { "录音正在停止，请稍后重试" }
-            runtime.requested = true; runtime.generation++
+            runtime.requested = true
+            runtime.generation++
+            runtime.message = ""
+            runtime.processingProblem = null
             try {
                 activity.startForegroundService(Intent(activity, AudioRecorderService::class.java)
                     .putExtra("generation", runtime.generation))
-            } catch (e: Exception) { runtime.requested = false; runtime.report("无法启动录音，请保持页面可见后重试"); throw e }
+            } catch (e: Exception) { runtime.requested = false; runtime.report("暂时无法开启录音，请稍后重试"); throw e }
         }
     }
     fun stop(discardPending: Boolean = false) {
         synchronized(runtime.control) {
             if (!discardPending) runtime.app.prefs.audioCaptureWanted = false
             runtime.requested = false
-            if(discardPending) runtime.generation++
+            if (discardPending) runtime.generation++
+            runtime.message = ""
+            runtime.processingProblem = null
         }
         runtime.context.stopService(Intent(runtime.context, AudioRecorderService::class.java))
-        runtime.report("录音已停止")
+        runtime.changed()
     }
     /** Bumps whenever recordings, voices or status change; pages re-read on it instead of polling. */
     val changes: StateFlow<Long> get() = runtime.changes
     fun state(): AudioState {
         val recording = runtime.recording
-        return AudioState(recording, modelsReady(), recordingStatus(recording, runtime.silenced, runtime.playingOut, runtime.message))
+        return AudioState(recording, modelsReady(), recordingStatus(
+            recording, runtime.silenced, runtime.playingOut,
+            if (recording) runtime.processingProblem.orEmpty() else runtime.message,
+        ))
     }
     internal fun modelsReady() = runtime.models.current() != null
     internal fun storageUsage(): CompletableFuture<AudioStorageUsage> = runtime.read {
@@ -104,7 +117,7 @@ class AudioController(context: Context) {
     fun modelPreparation() = runtime.modelPreparation
     fun downloadModels(): CompletableFuture<Unit> = runtime.downloadModels()
     fun supportsNpu() = QnnCatalog.supported()
-    fun accelerationState() = runtime.accelerationStatus
+    fun accelerationUsingFallback() = runtime.accelerationFallback
     fun accelerationReady() = runtime.qnnModels.current() != null
     fun downloadAcceleration(): CompletableFuture<Unit> = runtime.downloadAcceleration()
     fun cancelModelDownload() = runtime.cancelModelDownload()
@@ -116,14 +129,10 @@ class AudioController(context: Context) {
     /** Removes recordings and voiceprints; already saved History is managed by Vault/UI separately. */
     fun clearAudio(): CompletableFuture<Unit> {
         stop(discardPending = true); stopPlayback()
-        return runtime.submit { synchronized(runtime.lock) { runtime.store.clear() }; runtime.report("录音和声纹已清理") }
+        return runtime.change { synchronized(runtime.lock) { runtime.store.clear() } }
     }
     /** Call before/with Vault deletion. Purges entire containing clip so backfill cannot recreate it. */
-    fun deleteRecordAudio(recordId: String): CompletableFuture<Unit> {
-        stop()
-        stopPlayback()
-        return runtime.change { synchronized(runtime.lock) { runtime.store.deleteRecord(recordId) } }
-    }
+    fun deleteRecordAudio(recordId: String): CompletableFuture<Unit> = deleteHistoryAudio(recordId)
     internal val playingSpeaker get() = runtime.playback.speaker
     fun playSample(id: String): CompletableFuture<Unit> {
         val request = runtime.playback.toggle(id) ?: return CompletableFuture.completedFuture(Unit)
@@ -174,9 +183,14 @@ internal class AudioRuntime private constructor(val context: Context) {
         changed()
     }
 
+    fun deleteHistoryAudio(recordId: String): CompletableFuture<Unit> {
+        playback.stop()
+        return change { synchronized(lock) { store.deleteRecord(recordId) } }
+    }
+
     val models = SpeechModels(context)
     val qnnModels = QnnModels(context)
-    @Volatile var accelerationStatus = "使用 CPU"; private set
+    @Volatile var accelerationFallback = false; private set
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "tacit-local-audio") }
     // Page reads only take [lock] briefly; they must not queue behind a long transcription drain on [worker].
     private val reader = Executors.newSingleThreadExecutor { r -> Thread(r, "tacit-audio-read") }
@@ -228,7 +242,7 @@ internal class AudioRuntime private constructor(val context: Context) {
         }, modelWorker).whenComplete { _, error -> modelFinished(error) }
     }
     fun downloadAcceleration(): CompletableFuture<Unit> {
-        check(QnnCatalog.supported()) { "此加速模型仅适用于骁龙 8 Gen 3（SM8650）" }
+        check(QnnCatalog.supported()) { "当前设备不支持本机加速" }
         val cancellation = beginModelPreparation(SpeechPreparationPhase.DOWNLOADING)
         synchronized(modelLock) { modelPreparation = modelPreparation.copy(totalBytes = QnnCatalog.archive.bytes) }
         return CompletableFuture.supplyAsync({
@@ -240,9 +254,8 @@ internal class AudioRuntime private constructor(val context: Context) {
                 updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, "等待当前录音处理完成")
                 prepareModel {
                     cancellation.check()
-                    updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, "正在本机验证 NPU 加速")
+                    updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, "正在验证本机加速")
                     replaceSpeechEngine(::closeEngine, ::schedule) { qnnModels.activate(stage, cancellation) }
-                    accelerationStatus = "NPU 模型验证通过，等待处理录音"
                 }.get()
             } catch (error: Throwable) {
                 if (qnnModels.current() != stage) stage.deleteRecursively()
@@ -262,6 +275,7 @@ internal class AudioRuntime private constructor(val context: Context) {
     // Model operations have their own result in Speech Settings. Leave the recording message alone.
     private fun prepareModel(block: () -> Unit): CompletableFuture<Unit> = CompletableFuture.supplyAsync({
         block()
+        reportProcessingProblem(generation, null)
         changed()
     }, worker)
 
@@ -276,20 +290,19 @@ internal class AudioRuntime private constructor(val context: Context) {
     @Volatile var generation = 0L
     private val policyRevisions = java.util.concurrent.atomic.AtomicLong()
     private val policyRevision get() = policyRevisions.get()
-    @Volatile var message = "录音未启动"
+    @Volatile var message = ""
+    @Volatile var processingProblem: String? = null
     private var engine: AcceleratedSpeechEngine? = null
     val playback = SamplePlayback()
     fun allowed() = app.prefs.enabled(AUDIO_SOURCE)
     fun invalidatePolicy() { policyRevisions.incrementAndGet() }
     fun report(text: String) { message = text; changed() }
-    fun <T> submit(block: () -> T): CompletableFuture<T> = CompletableFuture.supplyAsync({
-        try { block() } catch (e: Throwable) { report("本地音频处理失败，请检查模型、空间和权限后重试"); throw e }
-    }, worker)
+    fun <T> submit(block: () -> T): CompletableFuture<T> = CompletableFuture.supplyAsync(block, worker)
     /** Read-only queries that hold [lock] themselves; they run beside the processing [worker]. */
     fun <T> read(block: () -> T): CompletableFuture<T> = CompletableFuture.supplyAsync(block, reader)
     /** For work that changes recordings or voices: signals pages even when the work fails halfway. */
     fun <T> change(block: () -> T): CompletableFuture<T> = submit { try { block() } finally { changed() } }
-    fun closeEngine() { engine?.close(); engine = null; accelerationStatus = "使用 CPU" }
+    fun closeEngine() { engine?.close(); engine = null; accelerationFallback = false }
     /**
      * Called on the microphone thread. Encryption and disk writes happen on the worker so a slow write
      * can never stall AudioRecord and drop audio; the caller may reuse [pcm] as soon as this returns.
@@ -304,14 +317,32 @@ internal class AudioRuntime private constructor(val context: Context) {
             } finally { copy.fill(0) }
             changed()
             schedule()
+        }.whenComplete { _, error ->
+            if (error != null) reportProcessingProblem(token, "录音未能保存，请检查存储空间后重试")
         }
     }
+
+    private fun reportProcessingProblem(token: Long, problem: String?) {
+        synchronized(control) {
+            if (generation != token || !requested || processingProblem == problem) return
+            processingProblem = problem
+        }
+        changed()
+    }
+
     fun schedule() {
         if (!queued.compareAndSet(false, true)) return
         submit {
             val policyAtStart = policyRevision
+            val token = generation
             var completed = false
-            try { drain(); completed = true } finally {
+            try {
+                drain()
+                completed = true
+            } catch (error: Throwable) {
+                reportProcessingProblem(token, "本地音频处理失败，请检查模型和存储空间后重试")
+                throw error
+            } finally {
                 queued.set(false)
                 // A new segment or Mac voiceprint can arrive while processing the current snapshot.
                 if (completed && allowed() && models.current() != null && synchronized(lock) {
@@ -329,18 +360,17 @@ internal class AudioRuntime private constructor(val context: Context) {
             policyRevision to macVoiceprint()
         }
         if (!allowed()) return
-        val dir = models.current() ?: run { report("录音已加密保存，等待准备本地模型"); return }
-        val speech = engine ?: AcceleratedSpeechEngine(LocalSpeechEngine(dir), context, qnnModels.current()) { accelerationStatus = it }.also { engine = it }
+        val dir = models.current() ?: return
+        val speech = engine ?: AcceleratedSpeechEngine(LocalSpeechEngine(dir), context, qnnModels.current()) { status ->
+            accelerationFallback = status == QNN_UNAVAILABLE || status == QNN_INTERRUPTED
+        }.also { engine = it }
         AudioProcessor(store, lock, speech, voiceprint).drain({ allowed() && token == generation && policy == policyRevision }) { p ->
             app.vault.ingest(Draft(source = AUDIO_SOURCE, title = "对话记录", body = p.body,
                 start = p.start, end = p.end,
                 sourceRef = "audio:${p.clipId}", method = "asr"), offset = p.offset)
         }
-        report(when {
-            voiceprint == null && synchronized(lock) { store.speakers().none { it.optBoolean("me") } } -> "仅本地识别人声，等待标记“我”"
-            recording -> "正在录音，本地转写中"
-            else -> "本地音频处理完成"
-        })
+        reportProcessingProblem(token, null)
+        changed()
     }
     fun sample(id: String): Triple<String, Int, Int>? {
         for (clip in store.clips().asReversed()) for (u in clip.getJSONArray("utterances").objects()) {

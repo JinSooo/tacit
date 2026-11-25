@@ -42,7 +42,7 @@ import java.util.concurrent.CompletableFuture
     var modelsReady by remember { mutableStateOf<Boolean?>(null) }
     var preparation by remember { mutableStateOf(audio.modelPreparation()) }
     var accelerationReady by remember { mutableStateOf(false) }
-    var accelerationStatus by remember { mutableStateOf(audio.accelerationState()) }
+    var accelerationFallback by remember { mutableStateOf(audio.accelerationUsingFallback()) }
     val models = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
         if (result.resultCode == Activity.RESULT_OK && uri != null) {
@@ -58,58 +58,54 @@ import java.util.concurrent.CompletableFuture
                 modelsReady = installed.first
                 accelerationReady = installed.second
                 preparation = audio.modelPreparation()
-                accelerationStatus = audio.accelerationState()
+                accelerationFallback = audio.accelerationUsingFallback()
                 delay(250)
             }
         }
     }
     GroupCard {
-        // Installed is the normal case; only a missing model gets words.
-        SettingsRow("语音模型", status = if (modelsReady == false) "未安装，约 280 MB，下载后在手机上转写" else null,
-            problem = modelsReady == false)
-        GroupDivider()
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (preparation.busy) {
-                if (preparation.phase == SpeechPreparationPhase.DOWNLOADING) {
-                    // Progress is polled every 250 ms; following it smoothly keeps the bar from stepping.
-                    val progress by animateFloatAsState(
-                        (preparation.receivedBytes.toFloat() / preparation.totalBytes.coerceAtLeast(1)).coerceIn(0f, 1f),
-                        Motion.polled(), label = "download",
-                    )
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Caption(String.format(java.util.Locale.ROOT, "%.1f / %.1f MB",
-                        preparation.receivedBytes / 1_000_000.0, preparation.totalBytes / 1_000_000.0))
-                } else LinearProgressIndicator(Modifier.fillMaxWidth())
-                if (preparation.phase != SpeechPreparationPhase.DOWNLOADING || preparation.cancelling) {
-                    Caption(preparation.message)
+        SettingsRow("语音模型", status = if (modelsReady == false) "未安装，约 280 MB" else null,
+            problem = modelsReady == false) {
+            if (modelsReady != null && !preparation.busy) {
+                val download = {
+                    runCatching { audio.downloadModels() }.onFailure { notify("模型正在准备，请稍后重试") }
+                    preparation = audio.modelPreparation()
                 }
-                if (preparation.phase != SpeechPreparationPhase.IMPORTING) {
+                if (modelsReady == true) TonalButton("重新下载", download)
+                else PrimaryButton("下载模型", download)
+            }
+        }
+        if (preparation.busy || preparation.message.isNotEmpty()) {
+            GroupDivider()
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (preparation.busy) {
+                    if (preparation.phase == SpeechPreparationPhase.DOWNLOADING) {
+                        // Progress is polled every 250 ms; following it smoothly keeps the bar from stepping.
+                        val progress by animateFloatAsState(
+                            (preparation.receivedBytes.toFloat() / preparation.totalBytes.coerceAtLeast(1)).coerceIn(0f, 1f),
+                            Motion.polled(), label = "download",
+                        )
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = tacitColors.accent,
+                            trackColor = tacitColors.fill,
+                        )
+                        Caption(String.format(java.util.Locale.ROOT, "%.1f / %.1f MB",
+                            preparation.receivedBytes / 1_000_000.0, preparation.totalBytes / 1_000_000.0))
+                    } else ProgressLine()
+                }
+                if (preparation.phase != SpeechPreparationPhase.DOWNLOADING || preparation.cancelling) {
+                    Caption(preparation.message, color = if (preparation.phase == SpeechPreparationPhase.ERROR)
+                        tacitColors.attention else tacitColors.muted)
+                }
+                if (preparation.busy && preparation.phase != SpeechPreparationPhase.IMPORTING) {
                     TextAction(
                         if (preparation.cancelling) "正在取消" else "取消下载",
                         { audio.cancelModelDownload(); preparation = audio.modelPreparation() },
                         enabled = preparation.canCancel,
                     )
                 }
-            } else {
-                if (preparation.message.isNotEmpty()) {
-                    Caption(preparation.message, color = if (preparation.phase == SpeechPreparationPhase.ERROR)
-                        tacitColors.attention else tacitColors.muted)
-                }
-                val download = {
-                    runCatching { audio.downloadModels() }.onFailure { notify("模型正在准备，请稍后重试") }
-                    preparation = audio.modelPreparation()
-                }
-                val enabled = modelsReady != null
-                val label = when {
-                    preparation.phase == SpeechPreparationPhase.ERROR -> "重试下载"
-                    modelsReady == true -> "重新下载"
-                    else -> "下载模型"
-                }
-                if (modelsReady == true) TonalButton(label, download, enabled = enabled)
-                else PrimaryButton(label, download, enabled)
             }
         }
         GroupDivider()
@@ -124,15 +120,20 @@ import java.util.concurrent.CompletableFuture
         )
         if (audio.supportsNpu()) {
             GroupDivider()
-            SettingsRow("本机加速", if (accelerationReady) accelerationStatus else "约 162 MB") {
+            val status = when {
+                !accelerationReady -> "约 162 MB"
+                accelerationFallback -> "本机加速暂时不可用，将改用普通转写"
+                else -> null
+            }
+            SettingsRow("本机加速", status, problem = accelerationReady && accelerationFallback) {
                 if (!accelerationReady) TonalButton("准备", {
-                    runCatching { audio.downloadAcceleration() }.onFailure { notify(it.message ?: "暂时无法准备加速模型") }
+                    runCatching { audio.downloadAcceleration() }.onFailure { notify("暂时无法准备本机加速，请稍后重试") }
                     preparation = audio.modelPreparation()
                 }, enabled = modelsReady == true && canImport)
             }
         }
     }
-    Caption("来自 sherpa-onnx 官方发布，下载后校验。")
+    Caption("语音模型从官方发布页下载并校验，转写在手机本地完成。")
     SpeakerSettings(audio, resumed, notify, offerUndo)
 }
 
@@ -141,16 +142,24 @@ private fun SpeakerSettings(
     audio: AudioController, resumed: Int, notify: (String) -> Unit, offerUndo: (String, suspend () -> Unit) -> Unit,
 ) {
     var speakers by remember { mutableStateOf<List<AudioSpeaker>?>(null) }
+    var loadFailed by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var expanded by rememberSaveable { mutableStateOf(false) }
     var naming by rememberSaveable { mutableStateOf<String?>(null) }
     var speakerName by rememberSaveable { mutableStateOf("") }
+    var namingTitle by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(audio, resumed, refresh) {
-        val result = withContext(Dispatchers.IO) { runCatching { audio.listSpeakers(includeIgnored = true).get() } }
-        result.onSuccess { speakers = it }.onFailure { notify("暂时无法读取声音标记") }
+        loadFailed = false
+        try {
+            speakers = withContext(Dispatchers.IO) { audio.listSpeakers(includeIgnored = true).get() }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            loadFailed = true
+        }
     }
     val playingSpeaker by audio.playingSpeaker.collectAsState()
     val toggleSample = rememberSampleToggle(audio, notify)
@@ -163,7 +172,7 @@ private fun SpeakerSettings(
                 if (update) refresh++
                 success?.let(notify)
             } catch (_: Exception) {
-                notify("操作未完成，请检查状态后重试")
+                notify("操作未完成，请稍后重试")
             } finally {
                 busy = false
             }
@@ -178,66 +187,72 @@ private fun SpeakerSettings(
             try {
                 val undo = withContext(Dispatchers.IO) { audio.unmarkMe(id).get() }
                 refresh++
-                offerUndo("已取消本人标记") {
+                offerUndo("已取消“我”的标记") {
                     withContext(Dispatchers.IO) { audio.undoUnmarkMe(undo).get() }
                     refresh++
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
-                notify("操作未完成，请检查状态后重试")
+                notify("操作未完成，请稍后重试")
             } finally {
                 busy = false
             }
         }
     }
 
-    SectionLabel("你的声音")
-    GroupCard {
-        val current = speakers
-        if (current == null) {
-            SettingsRow("声音标记", "暂时没有可显示的声音")
-        } else {
-            val named = current.filter { !it.ignored && (it.isMe || !it.name.isNullOrBlank()) }
+    SectionLabel("声音")
+    val current = speakers
+    when {
+        loadFailed -> GroupCard { SettingsRow("暂时无法读取声音列表") }
+        current == null -> ProgressLine()
+        else -> GroupCard {
+            val visible = current.filterNot { it.ignored }
+                .sortedWith(compareByDescending<AudioSpeaker> { it.isMe }.thenByDescending { it.name != null })
             val ignored = current.filter { it.ignored }
-            if (named.isEmpty()) SettingsRow("尚未确认你的声音", "录到清晰的说话声后，可以在首页确认。")
-            named.forEachIndexed { index, speaker ->
+            if (current.isEmpty()) SettingsRow("暂时没有可显示的声音")
+            var unnamed = 0
+            visible.forEachIndexed { index, speaker ->
                 if (index > 0) GroupDivider()
-                SettingsRow(if (speaker.isMe) "我" else speaker.name.orEmpty()) {
+                val label = if (speaker.isMe) "我" else speaker.name ?: "声音 ${++unnamed}"
+                SettingsRow(label) {
                     Row {
                         SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
                         if (speaker.isMe) TextAction("这不是我", { unmark(speaker.id) }, enabled = !busy)
-                        else TextAction("改称呼", {
-                            speakerName = speaker.name.orEmpty()
-                            naming = speaker.id
-                        }, enabled = !busy)
+                        else {
+                            val action = if (speaker.name == null) "起称呼" else "改称呼"
+                            TextAction(action, {
+                                speakerName = speaker.name.orEmpty()
+                                namingTitle = action
+                                naming = speaker.id
+                            }, enabled = !busy)
+                        }
                     }
                 }
             }
-            // No ignored voices is the normal case, not a row.
             if (ignored.isNotEmpty()) {
-                GroupDivider()
-                SettingsRow("已忽略的声音", value = "${ignored.size} 个",
+                if (visible.isNotEmpty()) GroupDivider()
+                SettingsRow("已忽略的声音", value = "${countLabel(ignored.size)} 个",
                     expanded = expanded, onClick = { expanded = !expanded })
                 Reveal(expanded) {
                     ignored.forEachIndexed { index, speaker ->
-                    GroupDivider()
-                    SettingsRow(speaker.name ?: "声音 ${index + 1}") {
-                        Row {
-                            SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
-                            TextAction("恢复", { work({ audio.setIgnored(speaker.id, false) }, "已恢复这个声音") }, enabled = !busy)
+                        GroupDivider()
+                        SettingsRow(speaker.name ?: "声音 ${index + 1}") {
+                            Row {
+                                SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
+                                TextAction("恢复", { work({ audio.setIgnored(speaker.id, false) }, "已恢复这个声音") }, enabled = !busy)
+                            }
                         }
                     }
                 }
             }
         }
     }
-    }
 
     val target = naming
     if (target != null) AlertDialog(
         onDismissRequest = { naming = null },
-        title = { Text("改称呼") },
+        title = { Text(namingTitle) },
         text = { OutlinedTextField(speakerName, { speakerName = it.take(80) }, label = { Text("如何称呼") }, singleLine = true) },
         confirmButton = { TextAction("保存", {
             val label = speakerName
@@ -278,7 +293,7 @@ internal fun rememberSampleToggle(audio: AudioController, notify: (String) -> Un
         scope.launch {
             busy = true
             try { withContext(Dispatchers.IO) { task().get() }; notify(success) }
-            catch (_: Exception) { notify("操作未完成，请检查状态后重试") }
+            catch (_: Exception) { notify("操作未完成，请稍后重试") }
             finally { busy = false }
         }
     }
@@ -303,13 +318,13 @@ internal fun rememberSampleToggle(audio: AudioController, notify: (String) -> Un
         } }
     }
     GroupCard {
-        storage?.let {
-            SettingsRow("本机录音 ${it.clips} 段")
+        storage?.takeIf { it.clips > 0 }?.let {
+            SettingsRow("本机录音", value = "${countLabel(it.clips)} 段")
             GroupDivider()
         }
         val syncedDays = macDays
         if (syncedDays != null) {
-            SettingsRow(if (syncedDays == 0) "按 Mac 设置，不自动清除" else "按 Mac 设置保留 $syncedDays 天")
+            SettingsRow("保留期限", status = "跟随 Mac 设置", value = retentionLabel(syncedDays))
         } else Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 Modifier.fillMaxWidth().heightIn(min = 48.dp)
@@ -317,7 +332,10 @@ internal fun rememberSampleToggle(audio: AudioController, notify: (String) -> Un
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Checkbox(checked = keepForever, onCheckedChange = null, enabled = !busy)
+                Checkbox(
+                    checked = keepForever, onCheckedChange = null, enabled = !busy,
+                    colors = CheckboxDefaults.colors(checkedColor = tacitColors.accent, checkmarkColor = tacitColors.onAccent),
+                )
                 Text("不自动清除")
             }
             val entered = localRetentionDays(days, keepForever)
@@ -343,18 +361,21 @@ internal fun rememberSampleToggle(audio: AudioController, notify: (String) -> Un
                 }, enabled = !busy)
             }
         }
-        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (busy) ProgressLine()
     }
+    Caption("只清原始音频，转好的文字一直保留。")
     if (storage?.canClear == true) {
-        TextAction("清理录音和声纹", { clear = true }, enabled = !busy, color = tacitColors.attention)
+        Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.End) {
+            TextAction("删除全部本机音频", { clear = true }, enabled = !busy, color = tacitColors.attention)
+        }
     }
     if (clear) AlertDialog(
         onDismissRequest = { clear = false },
-        title = { Text("清理本机录音和声纹？") },
-        text = { Text("全部录音和声音标记将永久删除。已生成的文字记录保留，可在时间线中单独删除。") },
-        confirmButton = { TextAction("清理", {
+        title = { Text("删除全部本机音频？") },
+        text = { Text("本机原始音频和声音记录将永久删除，尚未转写的录音会丢失，已转好的文字保留。") },
+        confirmButton = { TextAction("删除", {
             clear = false
-            work({ audio.clearAudio() }, "录音和声纹已清理")
+            work({ audio.clearAudio() }, "已删除全部本机音频")
         }, color = tacitColors.attention) },
         dismissButton = { TextAction("取消", { clear = false }) },
     )

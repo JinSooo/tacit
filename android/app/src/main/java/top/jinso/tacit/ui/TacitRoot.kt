@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -61,7 +60,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
-                snackbar.showSnackbar("暂时无法撤销，请检查声音标记")
+                snackbar.showSnackbar("暂时无法撤销，请稍后重试")
             }
         }
     }
@@ -89,12 +88,6 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
             val store = vault
-            val recovery: @Composable () -> Unit = {
-                if (health != null) CollectionRecoveryNotice(
-                    health, { settings(Sources.AUDIO) }, { settingsOpen = false }, ::notify,
-                    onAudioPage = !settingsOpen,
-                )
-            }
             // Only the page's kind and id decide the transition: a background sync that refreshes the record or
             // timeline data must never make the same page slide in again.
             val page = when {
@@ -121,24 +114,23 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                 ActiveScope(active) { Box(Modifier.fillMaxSize().background(tacitColors.paper)) {
                     when {
                         page.kind == PageKind.LOCKED -> EmptyState("记录库暂时无法打开", "密钥或数据库不可用，原文件已保留，请勿卸载应用或清除数据。")
-                        page.kind == PageKind.LOADING || store == null -> DelayedAppearance(Modifier.fillMaxSize()) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                        }
+                        page.kind == PageKind.LOADING || store == null -> ProgressLine()
                         page.kind == PageKind.RECORD -> if (shownDetail != null) RecordDetail(
                             shownDetail, store, app, onBack = ::back, notify = ::notify,
                     onSelect = { reading.detail = it },
                     onDelete = { record ->
                         scope.launch {
                             try {
-                                withContext(Dispatchers.IO) {
+                                val deletedCount = withContext(Dispatchers.IO) {
                                     if (record.source == Sources.AUDIO) AudioController(app).deleteRecordAudio(record.id).get()
                                     val deleted = setOf(record.id) + store.corrections(record.id).map { it.id }
                                     store.delete(record.id)
                                     app.sync.withdrawTimelineRecords(deleted)
+                                    deleted.size
                                 }
                                 reading.conversation = reading.conversation.filterNot { it.id == record.id }
                                 reading.detail = null
-                                notify("已删除记录及关联修正")
+                                notify(if (deletedCount > 1) "已删除记录和关联修正" else "已删除")
                             } catch (_: Exception) { notify("删除未完成，请重试") }
                         }
                     },
@@ -149,19 +141,11 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                         page.kind == PageKind.TIMELINE -> if (shownItem != null) {
                             TimelineDetails(app, shownItem, timeline.invalidation, ::back) { reading.conversation = it }
                         }
-                        page.kind == PageKind.HOME -> {
-                    // A healthy connection is the default, and a failed sync away from home just waits for the Mac;
-                    // the recording page only names a connection that needs the user.
-                    val macProblem = mac?.status?.let {
-                        when {
-                            it.removed -> "已在 Mac 上移除，需重新连接"
-                            it.name == null || it.relayDisabled -> "未连接 Mac"
-                            else -> null
-                        }
-                    }
-                    AudioPage(app, resumed, ::notify, ::settings, { reading.conversation = it }, timeline,
-                        day, { dayEpoch = it.toEpochDay() }, { selectedItem = it.id }, macProblem, recovery)
-                }
+                        page.kind == PageKind.HOME -> AudioPage(
+                            app, resumed, ::notify, ::settings, { reading.conversation = it }, timeline,
+                            day, { dayEpoch = it.toEpochDay() }, { selectedItem = it.id },
+                            macRemoved = mac?.status?.removed == true, health = health,
+                        )
                 else -> SettingsPage(
                     app, resumed, ::notify, ::offerUndo, hubRoute, { hubRoute = it }, { settingsOpen = false; hubRoute = null },
                     health, mac?.status, mac?.retentionDays, { healthRefresh++ },

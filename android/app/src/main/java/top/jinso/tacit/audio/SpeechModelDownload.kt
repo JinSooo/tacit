@@ -3,7 +3,6 @@ package top.jinso.tacit.audio
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.File
-import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -78,6 +77,9 @@ internal fun installTaggingWith(dir: File, files: List<SpeechModelResource>, dow
     } finally { work.deleteRecursively() }
 }
 
+/** Only model errors with deliberately authored copy are shown verbatim. */
+internal class SpeechModelProblem(message: String) : IllegalArgumentException(message)
+
 enum class SpeechPreparationPhase { IDLE, DOWNLOADING, VALIDATING, IMPORTING, READY, CANCELLED, ERROR }
 data class SpeechPreparationState(
     val phase: SpeechPreparationPhase = SpeechPreparationPhase.IDLE,
@@ -98,15 +100,13 @@ data class SpeechPreparationState(
             else -> SpeechPreparationPhase.ERROR
         }
         val message = when (cause) {
-            null -> "本地语音模型已就绪"
+            null -> ""
             is CancellationException -> "已取消，未更换现有模型"
             is java.net.SocketTimeoutException -> "下载超时，请检查网络后重试"
             is java.net.UnknownHostException, is java.net.ConnectException -> "无法连接模型站点，请检查网络后重试，也可手动导入"
             is SecurityException -> "无法联网下载，请检查应用网络权限，也可手动导入"
-            is IllegalArgumentException, is IllegalStateException, is java.io.IOException ->
-                cause.message?.takeIf { it.any { char -> char in '\u4e00'..'\u9fff' } }
-                    ?: "模型准备失败，请检查网络、存储空间和模型文件后重试"
-            else -> "模型加载失败，现有模型保持可用，请重试或手动导入"
+            is SpeechModelProblem -> requireNotNull(cause.message)
+            else -> "模型准备失败，请检查网络、存储空间和模型文件后重试"
         }
         return copy(phase = phase, message = message, cancelling = false)
     }
@@ -139,9 +139,9 @@ internal class SpeechModelDownload(
 ) {
     fun prepare(root: File, cancellation: ModelDownloadCancellation, progress: (Long, String) -> Unit): File {
         cancellation.check()
-        require(root.usableSpace >= resources.sumOf { it.bytes } + 32L * 1024 * 1024) { "空间不足，请至少腾出 314 MB 后重试" }
+        if (root.usableSpace < resources.sumOf { it.bytes } + 32L * 1024 * 1024) throw SpeechModelProblem("存储空间不足，请腾出空间后重试")
         val stage = File(root, UUID.randomUUID().toString())
-        check(stage.mkdirs()) { "无法创建模型目录，请检查存储空间" }
+        if (!stage.mkdirs()) throw SpeechModelProblem("无法保存模型，请检查存储空间")
         try {
             var received = 0L
             for (resource in resources) {
@@ -164,7 +164,7 @@ internal class SpeechModelDownload(
         progress: (Long) -> Unit) {
         var url = URL(resource.url)
         repeat(6) {
-            require(url.protocol == "https" && url.userInfo == null) { "模型下载地址必须使用 HTTPS" }
+            if (url.protocol != "https" || url.userInfo != null) throw SpeechModelProblem("下载遇到网络问题，请稍后重试")
             cancellation.check()
             val connection = openConnection(url)
             try {
@@ -177,12 +177,13 @@ internal class SpeechModelDownload(
                 cancellation.attach(connection)
                 val status = connection.responseCode
                 if (status in listOf(301, 302, 303, 307, 308)) {
-                    val location = connection.getHeaderField("Location") ?: throw IOException("模型下载重定向无效")
-                    url = URL(url, location)
+                    val location = connection.getHeaderField("Location") ?: throw SpeechModelProblem("下载遇到网络问题，请稍后重试")
+                    url = try { URL(url, location) }
+                    catch (_: java.net.MalformedURLException) { throw SpeechModelProblem("下载遇到网络问题，请稍后重试") }
                 } else {
-                    if (status != 200) throw IOException("模型下载失败（HTTP $status），请稍后重试")
+                    if (status != 200) throw SpeechModelProblem("模型下载失败，请稍后重试")
                     val length = connection.contentLengthLong
-                    require(length < 0 || length == resource.bytes) { "模型大小与固定版本不符，请重试" }
+                    if (length >= 0 && length != resource.bytes) throw SpeechModelProblem("模型文件大小不符，请重新下载")
                     connection.inputStream.use { copyVerified(it, target, resource, cancellation, progress) }
                     return
                 }
@@ -192,7 +193,7 @@ internal class SpeechModelDownload(
                 runCatching { cancellation.attach(null) }
             }
         }
-        throw IOException("模型下载重定向过多，请稍后重试")
+        throw SpeechModelProblem("下载遇到网络问题，请稍后重试")
     }
 
     companion object {
@@ -208,14 +209,14 @@ internal class SpeechModelDownload(
                     if (n < 0) break
                     cancellation.check()
                     total += n
-                    require(total <= resource.bytes) { "模型大小与固定版本不符，请重试" }
+                    if (total > resource.bytes) throw SpeechModelProblem("模型文件大小不符，请重新下载")
                     digest.update(buffer, 0, n)
                     output.write(buffer, 0, n)
                     progress(total)
                 }
-                require(total == resource.bytes) { "模型下载不完整，请重试" }
+                if (total != resource.bytes) throw SpeechModelProblem("模型下载不完整，请重试")
                 val hash = digest.digest().joinToString("") { "%02x".format(it) }
-                require(hash == resource.sha256) { "模型 SHA-256 校验失败，请重新下载" }
+                if (hash != resource.sha256) throw SpeechModelProblem("模型文件校验未通过，请重新下载")
                 cancellation.check()
                 output.fd.sync()
             }

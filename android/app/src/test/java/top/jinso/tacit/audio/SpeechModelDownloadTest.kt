@@ -93,7 +93,8 @@ class SpeechModelDownloadTest {
         return failure!!
     }
     @Test fun rejectsHashMismatchAndRemovesPartialStage() {
-        assertTrue(failsCleanly(resource().copy(sha256 = "0".repeat(64))) { Connection(it,bytes) }.message!!.contains("SHA-256"))
+        val error = failsCleanly(resource().copy(sha256 = "0".repeat(64))) { Connection(it, bytes) }
+        assertEquals("模型文件校验未通过，请重新下载", SpeechPreparationState().finished(error).message)
     }
     @Test fun rejectsTruncatedUnknownLengthResponse() {
         assertTrue(failsCleanly { Connection(it,bytes.copyOf(3),length = -1) }.message!!.contains("不完整"))
@@ -107,7 +108,8 @@ class SpeechModelDownloadTest {
         }) }
     }
     @Test fun rejectsHttpErrorsWithoutTryingToLoadTheirBody() {
-        assertTrue(failsCleanly { Connection(it,bytes,status = 503) }.message!!.contains("HTTP 503"))
+        val error = failsCleanly { Connection(it, bytes, status = 503) }
+        assertEquals("模型下载失败，请稍后重试", SpeechPreparationState().finished(error).message)
     }
     @Test fun permitsHttpsRedirectButRejectsDowngrade() {
         var requests = 0

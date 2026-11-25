@@ -54,7 +54,7 @@ internal class QnnClient(context: Context, private val models: File) : AutoClose
         val wait = CountDownLatch(1); result = null; pending = wait
         try {
             requireNotNull(remote).send(Message.obtain(null,kind).apply { this.data = data;replyTo = replies })
-            if (!wait.await(180,TimeUnit.SECONDS) || dead) { failed();throw IOException("加速执行中断，已保留 CPU 模型") }
+            if (!wait.await(180,TimeUnit.SECONDS) || dead) { failed();throw IOException("加速执行中断，将改用普通转写") }
             val value = result ?: throw IOException("加速服务没有返回结果")
             value.getString("error")?.let { throw IOException(it) }
             return value
@@ -66,6 +66,10 @@ internal class QnnClient(context: Context, private val models: File) : AutoClose
         callbackThread.quitSafely()
     }
 }
+
+// These diagnostic events also let device tests distinguish real acceleration from fallback.
+internal const val QNN_UNAVAILABLE = "加速不可用，使用 CPU"
+internal const val QNN_INTERRUPTED = "加速中断，使用 CPU"
 
 internal class AcceleratedSpeechEngine(private val cpu: LocalSpeechEngine, private val context: Context,
     private val models: File?, private val changed: (String) -> Unit) : SpeechEngine, AutoCloseable {
@@ -81,10 +85,10 @@ internal class AcceleratedSpeechEngine(private val cpu: LocalSpeechEngine, priva
         try {
             candidate.validate()
         } catch (error: Exception) {
-            disableQnn(candidate, "validate", error, "加速不可用，使用 CPU")
+            disableQnn(candidate, "validate", error, QNN_UNAVAILABLE)
             return null
         } catch (error: LinkageError) {
-            disableQnn(candidate, "validate", error, "加速不可用，使用 CPU")
+            disableQnn(candidate, "validate", error, QNN_UNAVAILABLE)
             return null
         }
         qnn = candidate
@@ -96,7 +100,7 @@ internal class AcceleratedSpeechEngine(private val cpu: LocalSpeechEngine, priva
         val active = qnnForTranscription() ?: return cpu.transcribe(samples)
         return try { QnnPolicy.transcribe(samples) { active.transcribe(it) } }
         catch (error: Exception) {
-            disableQnn(active, "decode", error, "加速中断，使用 CPU")
+            disableQnn(active, "decode", error, QNN_INTERRUPTED)
             cpu.transcribe(samples)
         }
     }

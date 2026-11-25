@@ -40,9 +40,13 @@ import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.*
 import top.jinso.tacit.core.HistoryRecord
 import top.jinso.tacit.data.ConversationSummary
+import top.jinso.tacit.sources.Sources
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import top.jinso.tacit.ui.components.*
+import top.jinso.tacit.ui.onboarding.CollectionHealth
+import top.jinso.tacit.ui.onboarding.SystemPage
+import top.jinso.tacit.ui.onboarding.openSystemPage
 import top.jinso.tacit.sync.TimelineSnapshot
 import top.jinso.tacit.sync.TimelineItem
 import java.time.Instant
@@ -63,8 +67,8 @@ import java.util.concurrent.CompletableFuture
     day: LocalDate,
     onDay: (LocalDate) -> Unit,
     onTimelineItem: (TimelineItem) -> Unit,
-    macProblem: String?,
-    recovery: @Composable () -> Unit,
+    macRemoved: Boolean,
+    health: CollectionHealth?,
 ) {
     val activity=LocalActivity.current ?: return
     val audio=remember{AudioController(app)};val scope=rememberCoroutineScope()
@@ -84,7 +88,7 @@ import java.util.concurrent.CompletableFuture
                 after()
                 notify(success)
             } catch (_: Exception) {
-                notify("操作未完成，请检查状态后重试")
+                notify("操作未完成，请稍后重试")
             } finally {
                 busy = false
             }
@@ -176,18 +180,22 @@ import java.util.concurrent.CompletableFuture
                     fontWeight = FontWeight.Normal, color = tacitColors.ink)
             }
         }
-        val notice = recordingNotice(state, app.prefs.audioCaptureWanted, macProblem)
+        val notice = recordingNotice(
+            state, app.prefs.audioCaptureWanted,
+            activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+            health?.recordingNotificationsBlocked == true, macRemoved,
+        )
         if (notice != null) item(key = "notice") {
                     Box(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) {
                 val route = notice.route
                 when {
                     notice.start -> NoticeAction(notice.text, "开启", !busy, startRecording)
                     route != null -> NoticeRow(notice.text) { onOpenSettings(route) }
+                    notice.openNotifications -> NoticeRow(notice.text) { openSystemPage(activity, SystemPage.NOTIFICATIONS, notify) }
                     else -> NoticeText(notice.text)
                 }
             }
         }
-                item(key = "recovery") { Box(Modifier.itemMotion(this).padding(end = 12.dp)) { recovery() } }
         if (candidate != null) item(key = "voice-${candidate.id}") {
                     Column(Modifier.itemMotion(this).padding(top = 12.dp, end = 12.dp)) {
                 VoiceConfirmation(
@@ -227,7 +235,7 @@ import java.util.concurrent.CompletableFuture
                     is TimelineEntry.Local -> summary == null
                     is TimelineEntry.Projected -> entry.item.draft
                 }
-                        val axis = Modifier.itemMotion(this).then(if (dayTimeline == null) Modifier else Modifier.timelineAxis(index == 0, index == entries.lastIndex, draft))
+                        val axis = Modifier.itemMotion(this).timelineAxis(index == 0, index == entries.lastIndex, draft)
                 when (entry) {
                     // 和其他来源的段混排时才标手机录音图标；只有本机录音时不用强调。
                     is TimelineEntry.Local -> RecordedConversation(entry.scene, summary, onConversation, axis,
@@ -240,12 +248,12 @@ import java.util.concurrent.CompletableFuture
         }
         val untranscribed = scenes.count { it.records.isEmpty() }
         if (untranscribed > 0) item(key = "untranscribed-$day") {
-            val other = if (scenes.any { it.records.isNotEmpty() }) "另有 " else ""
+            val other = if (entries.isNotEmpty()) "另有 " else ""
                     Row(Modifier.itemMotion(this).padding(vertical = 12.dp)) {
                 Box(Modifier.width(56.dp).padding(top = 9.dp)) {
                     Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
                 }
-                Caption("$other$untranscribed 段没认出你的声音，未转写")
+                Caption("$other${countLabel(untranscribed)} 段没认出你的声音，未转写")
             }
         }
         timeline.staleTime(day)?.let { synced ->
@@ -269,7 +277,7 @@ internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, not
             app.prefs.setEnabled(AUDIO_SOURCE, true)
             audio.start(activity)
         } catch (_: Exception) {
-            notify("无法开启录音，请先允许麦克风")
+            notify("暂时无法开启录音，请稍后重试")
         }
         after()
     }
@@ -289,21 +297,31 @@ internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, not
     }
 }
 
-internal data class RecordingNotice(val text: String, val route: String?, val start: Boolean = false)
-
-/** Routine recorder messages restate that recording works; anything else is worth one line. */
-private val ROUTINE_MESSAGES = setOf(
-    "正在录音，音频已加密保存", "正在录音，本地转写中", "本地音频处理完成", "本地语音模型已就绪",
-    "录音未启动", "录音已停止", "录音和声纹已清理",
+internal data class RecordingNotice(
+    val text: String,
+    val route: String? = null,
+    val start: Boolean = false,
+    val openNotifications: Boolean = false,
 )
 
-internal fun recordingNotice(state: AudioState, wanted: Boolean, macProblem: String?): RecordingNotice? = when {
-    !state.recording && !wanted -> RecordingNotice("录音没有开启", null, start = true)
-    // Wanted but not running is either the start in flight (say nothing) or a failed start (say why, offer retry).
-    !state.recording && state.message !in ROUTINE_MESSAGES -> RecordingNotice(state.message, null, start = true)
-    !state.modelsReady -> RecordingNotice("语音模型未准备，录音暂时不能转写", SettingsRoutes.SPEECH)
-    state.message !in ROUTINE_MESSAGES -> RecordingNotice(state.message, null)
-    macProblem != null -> RecordingNotice(macProblem, SettingsRoutes.MAC)
+internal fun recordingNotice(
+    state: AudioState,
+    wanted: Boolean,
+    microphoneGranted: Boolean,
+    notificationsBlocked: Boolean,
+    macRemoved: Boolean,
+): RecordingNotice? = when {
+    !microphoneGranted && (wanted || state.recording) ->
+        RecordingNotice("麦克风未授权", Sources.AUDIO)
+    !state.recording && !wanted && state.message.isEmpty() ->
+        RecordingNotice("录音没有开启", start = true)
+    !state.recording && state.message.isNotEmpty() ->
+        RecordingNotice(state.message, start = true)
+    !state.modelsReady ->
+        RecordingNotice("语音模型未准备，录音暂时不能转写", SettingsRoutes.SPEECH)
+    state.message.isNotEmpty() -> RecordingNotice(state.message)
+    notificationsBlocked -> RecordingNotice("录音通知未开启", openNotifications = true)
+    macRemoved -> RecordingNotice("已在 Mac 上移除，请在 Mac 的 Tacit 里重新添加这台手机", SettingsRoutes.MAC)
     else -> null
 }
 

@@ -43,12 +43,12 @@ internal class QnnModels(private val context: Context) {
         File(root, name).takeIf { dir -> QnnCatalog.files.all { File(dir, it.path).length() == it.bytes } }
     }.getOrNull()
     fun download(cancel: ModelDownloadCancellation, progress: (Long, String) -> Unit): File {
-        check(QnnCatalog.supported()) { "此加速模型仅适用于骁龙 8 Gen 3（SM8650）" }
+        check(QnnCatalog.supported()) { "当前设备不支持本机加速" }
         // Model preparation is serialized by AudioRuntime.modelLock; retain the active and incoming dirs.
         val active = current()
         root.listFiles()?.filter { it.isDirectory && it != active && Regex("[a-f0-9-]{36}").matches(it.name) }
             ?.forEach { check(it.deleteRecursively()) { "无法清理上次未完成的加速模型" } }
-        require(root.usableSpace >= 480_000_000) { "请至少腾出 480 MB 后重试" }
+        if (root.usableSpace < 480_000_000) throw SpeechModelProblem("存储空间不足，请至少腾出 480 MB 后重试")
         val stage = SpeechModelDownload(listOf(QnnCatalog.archive)).prepare(root, cancel, progress)
         try {
             QnnCatalog.extract(File(stage, QnnCatalog.archive.path), stage, cancel)

@@ -6,87 +6,34 @@ import org.junit.Test
 class CollectionHealthTest {
     private val ready = CollectionHealth(
         microphoneGranted = true, audioEnabled = true, audioCaptureWanted = true,
-        audioRunning = true, audioStarting = false, audioSilenced = false,
-        notificationsEnabled = true,
-        audioChannel = ChannelAccess.ALLOWED,
+        audioRunning = true, audioStarting = false,
+        notificationsEnabled = true, audioChannel = ChannelAccess.ALLOWED,
         batteryExempt = true, backgroundRestricted = false, powerSave = false,
     )
 
-    @Test fun `stopped audio never asks for microphone recording or its notification`() {
-        val stopped = ready.copy(audioCaptureWanted = false,
-            audioRunning = false, microphoneGranted = false, notificationsEnabled = false,
-            audioChannel = ChannelAccess.BLOCKED)
-        assertTrue(recoveryIssues(stopped).isEmpty())
-        assertTrue(recoveryIssues(stopped.copy(microphoneGranted = true)).isEmpty())
-        assertFalse(stopped.microphoneCaptureExpected)
+    @Test fun stoppedRecordingDoesNotCountBackgroundProblems() {
+        val problems = ready.copy(
+            microphoneGranted = false, notificationsEnabled = false, audioChannel = ChannelAccess.BLOCKED,
+            batteryExempt = false, backgroundRestricted = true, powerSave = true,
+        )
+        assertEquals(6, backgroundProblemCount(problems))
+        // The preference changes before the service has finished stopping.
+        assertEquals(0, backgroundProblemCount(problems.copy(audioCaptureWanted = false)))
+        assertEquals(0, backgroundProblemCount(problems.copy(audioEnabled = false)))
+        assertEquals(0, backgroundProblemCount(ready))
     }
 
-    @Test fun `wanted capture survives cold start but deliberately stopped capture stays quiet`() {
-        val restarted = ready.copy(audioRunning = false)
-        assertEquals(RecoveryAction.AUDIO, recoveryIssues(restarted).single().action)
-        assertTrue(recoveryIssues(restarted.copy(audioCaptureWanted = false)).isEmpty())
-        assertEquals(RecoveryAction.MICROPHONE, recoveryIssues(restarted.copy(microphoneGranted = false)).single().action)
-    }
-
-    @Test fun `observed starting or running capture is still shown before the saved intent refreshes`() {
+    @Test fun observedStartingOrRunningCaptureCountsBeforeSavedIntentRefreshes() {
         val running = ready.copy(audioCaptureWanted = false)
         assertTrue(running.microphoneCaptureExpected)
         val starting = running.copy(audioRunning = false, audioStarting = true)
         assertTrue(starting.microphoneCaptureExpected)
-        assertTrue(recoveryIssues(starting).isEmpty())
+        assertFalse(starting.copy(audioStarting = false).microphoneCaptureExpected)
     }
 
-    @Test fun `stopped capture remains quiet even if the audio runtime cannot be opened`() {
-        val stopped = ready.copy(audioCaptureWanted = false, audioRunning = null)
-        assertTrue(recoveryIssues(stopped).isEmpty())
-        assertEquals(RecoveryAction.AUDIO, recoveryIssues(stopped.copy(audioCaptureWanted = true)).single().action)
+    @Test fun notificationDenialOrBlockedChannelIsEnoughForOneNotice() {
+        assertTrue(ready.copy(notificationsEnabled = false).recordingNotificationsBlocked)
+        assertTrue(ready.copy(audioChannel = ChannelAccess.BLOCKED).recordingNotificationsBlocked)
+        assertFalse(ready.copy(audioChannel = ChannelAccess.NOT_CREATED, notificationsEnabled = null).recordingNotificationsBlocked)
     }
-
-    @Test fun `audio stopped or cold process says opening Tacit resumes it`() {
-        val issue = recoveryIssues(ready.copy(audioRunning = false)).single()
-        assertEquals(RecoveryAction.AUDIO, issue.action)
-        assertTrue(issue.detail.contains("打开 Tacit"))
-        assertFalse(issue.title.contains("系统停止")) // We do not know why it stopped.
-    }
-
-    @Test fun `revoked microphone wins over stopped recording`() {
-        val issue = recoveryIssues(ready.copy(microphoneGranted = false, audioRunning = false)).single()
-        assertEquals(RecoveryAction.MICROPHONE, issue.action)
-    }
-
-    @Test fun `silenced audio asks to check access instead of restarting service`() {
-        val issue = recoveryIssues(ready.copy(audioSilenced = true)).single()
-        assertEquals(RecoveryAction.AUDIO, issue.action)
-        assertTrue(issue.detail.contains("等待系统恢复"))
-    }
-
-    @Test fun `starting recording is not reported as interrupted`() {
-        assertTrue(recoveryIssues(ready.copy(audioRunning = false, audioStarting = true)).isEmpty())
-    }
-
-    @Test fun `runtime read failure is not reported as stopped or healthy`() {
-        val issue = recoveryIssues(ready.copy(audioRunning = null)).single()
-        assertEquals("暂时无法检查录音", issue.title)
-    }
-
-    @Test fun `notification denial is not proof that a foreground service stopped`() {
-        val issues = recoveryIssues(ready.copy(notificationsEnabled = false))
-        assertEquals(RecoveryAction.NOTIFICATIONS, issues.single().action)
-        assertTrue(issues.single().detail.contains("可能仍在运行"))
-    }
-
-    @Test fun `blocked channel matters even with app notifications allowed`() {
-        assertEquals(RecoveryAction.NOTIFICATIONS,
-            recoveryIssues(ready.copy(audioChannel = ChannelAccess.BLOCKED)).single().action)
-    }
-
-    @Test fun `uncreated or unreadable channels are not invented permission failures`() {
-        assertTrue(recoveryIssues(ready.copy(audioChannel = ChannelAccess.NOT_CREATED,
-            notificationsEnabled = null)).isEmpty())
-    }
-
-    @Test fun `disabled recording channel does not prompt for notifications`() {
-        assertTrue(recoveryIssues(ready.copy(audioEnabled = false, audioChannel = ChannelAccess.BLOCKED)).isEmpty())
-    }
-
 }

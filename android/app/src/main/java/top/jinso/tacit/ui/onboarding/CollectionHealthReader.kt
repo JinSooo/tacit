@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.PowerManager
+import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.LocalActivity
 import androidx.compose.runtime.*
@@ -38,12 +39,12 @@ internal fun readCollectionHealth(app: TacitApp): CollectionHealth {
         audioCaptureWanted = app.prefs.audioCaptureWanted,
         audioRunning = if (audioEnabled) runtime?.recording else false,
         audioStarting = runtime?.let { it.requested && !it.recording } == true,
-        audioSilenced = runtime?.silenced == true,
         notificationsEnabled = runCatching { notifications.areNotificationsEnabled() }.getOrNull(),
         audioChannel = channel("tacit.audio"),
         batteryExempt = runCatching { power.isIgnoringBatteryOptimizations(app.packageName) }.getOrNull(),
         backgroundRestricted = runCatching { app.getSystemService(ActivityManager::class.java).isBackgroundRestricted }.getOrNull(),
         powerSave = runCatching { power.isPowerSaveMode }.getOrNull(),
+        notificationPermissionMissing = Build.VERSION.SDK_INT >= 33 && !has(Manifest.permission.POST_NOTIFICATIONS),
     )
 }
 

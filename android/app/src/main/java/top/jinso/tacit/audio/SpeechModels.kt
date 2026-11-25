@@ -25,7 +25,7 @@ internal class SpeechModels(private val context: Context) {
     }.getOrNull()
     /** Stage all four resources, load real native sessions, then atomically switch one pointer. */
     fun import(tree: Uri): File {
-        require(DocumentsContract.isTreeUri(tree)) { "请选择模型文件夹" }
+        if (!DocumentsContract.isTreeUri(tree)) throw SpeechModelProblem("请选择模型文件夹")
         val stage = File(root, UUID.randomUUID().toString()).apply { mkdirs() }
         try {
             for (path in required) {
@@ -39,7 +39,7 @@ internal class SpeechModels(private val context: Context) {
                             require(found == null) { "模型目录有重名文件" }; found = cursor.getString(0)
                         }
                     }
-                    id = requireNotNull(found) { "缺少模型文件：$path" }
+                    id = found ?: throw SpeechModelProblem("文件夹缺少语音模型文件，请重新选择")
                 }
                 val uri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
                 val out = File(stage, path).apply { parentFile!!.mkdirs() }

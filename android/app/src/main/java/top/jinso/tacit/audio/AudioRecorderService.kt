@@ -39,7 +39,7 @@ class AudioRecorderService : Service() {
             val stop = PendingIntent.getService(this, 701, Intent(this, AudioRecorderService::class.java).setAction("stop"),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val notification = Notification.Builder(this, "tacit.audio").setContentTitle("Tacit 正在录音")
-                .setContentText("录音仅加密保存在本机").setSmallIcon(top.jinso.tacit.R.drawable.ic_stat_tacit)
+                .setContentText("原始音频仅加密保存在本机").setSmallIcon(top.jinso.tacit.R.drawable.ic_stat_tacit)
                 .setOngoing(true).setCategory(Notification.CATEGORY_SERVICE)
                 .addAction(Notification.Action.Builder(null, "停止", stop).build()).build()
             if (Build.VERSION.SDK_INT >= 30) startForeground(701, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
@@ -47,7 +47,7 @@ class AudioRecorderService : Service() {
             running = true
             thread = Thread({ capture(token) }, "tacit-microphone").also { it.start() }
         } catch (e: Exception) {
-            runtime.requested = false; runtime.report("录音启动失败，请检查麦克风权限"); stopSelf()
+            runtime.requested = false; runtime.report("暂时无法开启录音，请稍后重试"); stopSelf()
         }
         return START_NOT_STICKY
     }
@@ -92,11 +92,9 @@ class AudioRecorderService : Service() {
                 // A stop/pause may race the native start. Only a still-wanted, successful start persists intent.
                 if (!running || !runtime.requested || token != runtime.generation || !runtime.allowed()) return
                 runtime.app.prefs.audioCaptureWanted = true
-                // Set the text before the flag: a page that sees "recording" must never show the startup text.
-                runtime.message = "正在录音，音频已加密保存"
+                runtime.message = ""
                 runtime.recording = true
             }
-            runtime.report("正在录音，音频已加密保存")
             runtime.schedule()
             var lastRevision = silence.revision
             // The registered callback reports silencing as it happens. Polling the configuration is a
@@ -114,7 +112,7 @@ class AudioRecorderService : Service() {
                         audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type })
                     if (playing != runtime.playingOut) {
                         runtime.playingOut = playing
-                        runtime.report(if (playing) "手机正在外放声音，暂不录音" else "正在录音，音频已加密保存")
+                        runtime.changed()
                     }
                 }
                 val n = input.read(block, 0, minOf(block.size, segment.size - used), AudioRecord.READ_BLOCKING)
@@ -123,7 +121,7 @@ class AudioRecorderService : Service() {
                     block.fill(0); segment.fill(0); used = 0; needsTimestamp = true
                     if (runtime.silenced != silence.silenced) {
                         runtime.silenced = silence.silenced
-                        runtime.report(if (silence.silenced) "麦克风正由其他应用使用，等待系统恢复" else "正在录音，音频已加密保存")
+                        runtime.changed()
                     }
                     lastRevision = silence.revision
                     continue
@@ -147,17 +145,23 @@ class AudioRecorderService : Service() {
             }
             // Explicit stop retains the last segment; pause/revocation discards it.
         } catch (e: Exception) {
-            if (running) runtime.report("录音中断，请检查权限、麦克风占用或存储空间")
+            if (running && runtime.requested) {
+                runtime.report(if (runtime.recording) "录音中断，请检查麦克风和存储空间后重试"
+                    else "暂时无法开启录音，请稍后重试")
+            }
         } finally {
             if (!silence.silenced && used >= SAMPLE_RATE / 2) {
                 val tail=segment.copyOf(used)
                 try { runtime.captured(tail,start,token,final=true) } catch (_: Exception) { runtime.report("最后一段录音未能保存") } finally { tail.fill(0) }
             }
-            // Same order on the way out: never "not recording" above a recording-time status.
-            if (runtime.message.startsWith("正在录音") || runtime.message.startsWith("手机正在外放") ||
-                runtime.message.startsWith("麦克风正由")) runtime.message = "录音已停止"
-            running = false; runtime.recording = false; runtime.silenced = false; runtime.playingOut = false
-            if (token == runtime.generation) runtime.requested = false
+            synchronized(runtime.control) {
+                running = false
+                runtime.silenced = false
+                runtime.playingOut = false
+                runtime.processingProblem = null
+                if (token == runtime.generation) runtime.requested = false
+                runtime.recording = false
+            }
             segment.fill(0); block.fill(0)
             if (Build.VERSION.SDK_INT >= 29) callback?.let { cb -> runCatching { input?.unregisterAudioRecordingCallback(cb) } }
             runCatching { input?.stop() }; input?.release(); recorder = null
