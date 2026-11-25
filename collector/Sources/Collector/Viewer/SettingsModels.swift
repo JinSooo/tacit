@@ -141,7 +141,7 @@ struct ModelSettingsView: View {
     } header: {
       Text("时间线整理")
     } footer: {
-      let details = store.isRemoteBackend ? nil : store.api.statusPageURL()
+      let details = store.isRemoteBackend ? nil : store.api.statusPageURL(section: "usage")
       if timelineSettings?.modelUsage.line != nil || details != nil {
         HStack(alignment: .firstTextBaseline) {
           if let line = timelineSettings?.modelUsage.line { Note(line).monospacedDigit() } else { Spacer() }

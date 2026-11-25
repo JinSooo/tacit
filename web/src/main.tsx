@@ -27,6 +27,8 @@ function forgetToken() {
 }
 // 当前页写在 #/now 这类片段里；旧写法 #token=…（可带 &status）读完立刻换成页面片段，token 不留在地址栏。
 const startPage = initialPage(location.hash, location.search);
+// Mac 的“查看详细用量”带 &usage，读完地址栏就换掉，先记下来。
+const startFocus = new URLSearchParams(location.hash.replace(/^#/, "")).has("usage") ? "usage" as const : undefined;
 function readToken(page: Page): string {
   const supplied = parseHash(location.hash).token;
   if (location.hash && location.hash !== pageHash(page)) history.replaceState(null, "", location.pathname + location.search + pageHash(page));
@@ -306,8 +308,8 @@ function StatusApp() {
     forgetToken();
     setToken("");
   }), [token]);
-  if (!token) return <div className="token-prompt"><strong>请从 Tacit 打开状态页</strong><p className="muted">在 Mac 客户端的“设置 → 后台服务”中打开。</p></div>;
-  return <main><header><div className="heading-row"><h1>Tacit</h1></div></header><StatusView api={api} /></main>;
+  if (!token) return <div className="token-prompt"><strong>请从 Tacit 打开状态页</strong><p className="muted">在 Tacit 的“设置 → 后台与连接”里点“在浏览器中打开”。</p></div>;
+  return <main><header><div className="heading-row"><h1>Tacit 详细状态</h1></div></header><StatusView api={api} focus={startFocus} /></main>;
 }
 
 createRoot(document.getElementById("root")!).render(<StatusApp />);

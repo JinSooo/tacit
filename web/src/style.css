@@ -308,10 +308,10 @@ dialog h2 { font-size: var(--text-title); font-weight: 600; margin: 0 0 16px; }
   .stack-table thead { display: none; }
   .stack-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
   .stack-table tr:last-child { border-bottom: 0; }
-  .stack-table td { display: block; padding: 0; border: 0; text-align: left; width: auto !important; }
+  .data-table.stack-table td { display: block; padding: 0; border: 0; text-align: left; white-space: normal; width: auto !important; }
   .stack-table td[data-label]::before { content: attr(data-label) " "; color: var(--muted); font-weight: 400; }
   .stack-table td.full { grid-column: 1 / -1; }
-  .stack-table td.end { text-align: right; }
+  .data-table.stack-table td.end { text-align: right; }
   .stack-table .audit-detail-cell { margin: 8px -12px -8px; }
 }
 @media (max-width: 440px) { .time-fields { grid-template-columns: 1fr; gap: 0; } dialog { padding: 16px; } .stats { grid-template-columns: 1fr 1fr; } }

@@ -40,9 +40,9 @@ export function relativeTime(value: number | string | null, now = Date.now()): s
   if (!Number.isFinite(time)) return "时间未知";
   const minutes = Math.floor(Math.max(0, now - time) / 60000);
   if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes}分钟前`;
-  if (minutes < 1440) return `${Math.floor(minutes / 60)}小时前`;
-  return `${Math.floor(minutes / 1440)}天前`;
+  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`;
+  return `${Math.floor(minutes / 1440)} 天前`;
 }
 export function pendingSummary(payload: Pending["payload"]): string[] {
   const keys = payload.keys;

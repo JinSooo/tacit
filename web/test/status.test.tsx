@@ -26,17 +26,17 @@ function emptyStatus(): HubStatus {
 }
 const render = (status: HubStatus) => renderToStaticMarkup(<StatusContent status={status} />);
 
-test("后台拥堵出现后才显示重试次数；样本队列为空只说没有待上传", () => {
+test("后台拥堵出现后才显示重试次数；没有待上传样本时不占行", () => {
   const status = emptyStatus();
   const empty = render(status);
-  expect(empty).not.toContain("后台服务忙，自动重试");
-  expect(empty).toContain("没有待上传的试听样本");
+  expect(empty).not.toContain("忙时自动重试");
+  expect(empty).not.toContain("试听样本");
   expect(empty).not.toContain("都已上传");
   const last_at = "2026-11-12T02:00:00Z";
   status.hub.busy = { ...status.hub.busy, total: 12, last_at };
   status.audio.sample_requests_open = 2;
   const active = render(status);
-  expect(active).toContain("后台服务忙，自动重试");
+  expect(active).toContain("忙时自动重试");
   expect(active).toContain("启动以来 12 次");
   expect(active).toContain(`dateTime="${last_at}"`);
   expect(active).toContain("2 个在等设备上传");
@@ -48,24 +48,32 @@ test("后台拥堵出现后才显示重试次数；样本队列为空只说没�
 
 test("本机转写区分关闭和状态缺失，并注明队列积压、丢弃和更新时间", () => {
   const status = emptyStatus();
-  expect(render(status)).toContain("<dt>转写队列（本机）</dt><dd>没有本机采集端状态</dd>");
+  expect(render(status)).toContain("<dt>本机转写队列</dt><dd>暂时读不到本机状态</dd>");
   status.audio.transcription_disabled = true;
-  expect(render(status)).toContain("<dt>转写队列（本机）</dt><dd>录音未开启</dd>");
+  expect(render(status)).toContain("<dt>本机转写队列</dt><dd>录音没开</dd>");
 
   const update = { updated_at: "2026-11-12T02:00:00Z", stale: true };
   status.audio.transcription_disabled = false;
   status.audio.transcription = { pending: 4, failed: 1, ...update };
   status.collector = { outbox_bytes: 1024, outbox_dropped: 2, outbox_degraded: false, ...update };
   const stale = render(status);
-  expect(stale).toContain("<dt>转写队列（本机）</dt><dd>待转写 4 段，失败 1 段");
-  expect(stale.match(/采集端 3 分钟没更新/g)).toHaveLength(2);
+  expect(stale).toContain('<dt>本机转写队列</dt><dd>待转写 4 段<span class="error">，失败 1 段</span>');
+  expect(stale.match(/本机状态已 3 分钟没更新/g)).toHaveLength(2);
+  expect(stale).not.toContain("采集端");
   expect(stale).toContain('<span class="error">1.0 KB，本次运行已丢弃 2 条</span>');
 
   status.collector = { outbox_bytes: 0, outbox_dropped: 0, outbox_degraded: true, updated_at: generated_at, stale: false };
   expect(render(status)).toContain('<span class="error">0 B，待发送队列异常</span>');
+  // 2026-11-25：没有积压时不占行，0 值不显示。
+  status.collector = { outbox_bytes: 0, outbox_dropped: 0, outbox_degraded: false, updated_at: generated_at, stale: false };
+  status.audio.transcription = { pending: 0, failed: 0, updated_at: generated_at, stale: false };
+  const idle = render(status);
+  expect(idle).not.toContain("本机待发送记录");
+  expect(idle).toContain("没有待转写的录音");
+  expect(idle).not.toContain("失败 0");
 });
 
-test("整理区显示手动进度、中文错误类别、模型暂停及同类恢复", () => {
+test("整理区显示手动进度、大白话错误、整理暂停及恢复，不显示错误码", () => {
   const status = emptyStatus();
   const until = "2026-11-12T02:20:00Z";
   status.distill.cooldown = { until, kind: "rate_limited" };
@@ -77,20 +85,28 @@ test("整理区显示手动进度、中文错误类别、模型暂停及同类�
   const unrecovered = render(status);
   expect(unrecovered).toContain("进行中，已处理 1/5");
   expect(unrecovered).toContain("失败，已处理 1/3");
-  expect(unrecovered).toContain("未知错误");
+  expect(unrecovered).toContain("原因不明，请检查模型设置。");
   expect(unrecovered).not.toContain("合成错误原文");
-  expect(unrecovered).toMatch(/模型暂停调用到 <time dateTime="[^"]+">\d\d:\d\d<\/time>（原因：请求太频繁）/);
-  expect(unrecovered).toContain("超时");
+  expect(unrecovered).toMatch(/因请求太频繁，整理暂停到 <time dateTime="[^"]+">\d\d:\d\d<\/time>/);
+  expect(unrecovered).toContain("模型服务一直没有回应");
+  expect(unrecovered).not.toContain("timeout");
   expect(unrecovered).not.toContain("已恢复");
+  // 会自动重试的错误：这一档 1 小时内成功过用灰字，要用户处理的立即标红（同 Mac）。
+  status.distill.last_error.tier_last_ok_at = "2026-11-12T02:00:00Z";
+  expect(render(status)).toContain('<dd class="muted">实时整理');
+  status.distill.last_error.error = "auth:401";
+  expect(render(status)).toContain('<dd class="error">实时整理');
+  expect(render(status)).not.toContain("auth");
+  status.distill.last_error.error = "timeout";
 
   status.distill.last_error.recovered = true;
   status.distill.requests.recent[1]!.error = "server_error:503";
   status.distill.cooldown = null;
   const recovered = render(status);
-  expect(recovered).toContain("同类调用之后已恢复");
-  expect(recovered).toContain("服务出错");
+  expect(recovered).toContain("之后已恢复");
+  expect(recovered).toContain("模型服务暂时出错");
   expect(recovered).not.toContain("server_error:503");
-  expect(recovered).not.toContain("模型暂停调用到");
+  expect(recovered).not.toContain("整理暂停到");
 });
 
 test("模型用量只标注缺失 token 的格，区分部分已知和全未知", () => {
@@ -101,19 +117,40 @@ test("模型用量只标注缺失 token 的格，区分部分已知和全未知"
     { ...usage, tier: "hour", models: ["example"], calls: 1, failed: 0, input_tokens: null, output_tokens: null, output_tokens_incomplete: true },
   ] };
   const html = render(status);
-  expect(html).toContain('data-label="输入">30<span class="muted">（部分未知）</span></td>');
-  expect(html).toContain('data-label="输出">12</td>');
-  expect(html).toContain('data-label="输入">未知</td>');
-  expect(html).toContain('data-label="输出">12<span class="muted">（部分未知）</span></td>');
+  expect(html).toContain('data-label="输入 token">30<span class="muted">，部分未知</span></td>');
+  expect(html).toContain('data-label="输出 token">12</td>');
+  expect(html).toContain('data-label="输入 token">未知</td>');
+  expect(html).toContain('data-label="输出 token">12<span class="muted">，部分未知</span></td>');
+  expect(html).toContain("失败 1 次");
 });
 
 test("模型用量显示今天已用与上限，用量冷却说明次日零点恢复", () => {
   const status = emptyStatus();
-  expect(render(status)).toContain("今天已用 0 token / 上限 不限");
-  status.llm_today.used_tokens = 10_500;
+  expect(render(status)).toContain("今天还没有调用模型");
+  expect(render(status)).not.toContain("今天已用");
   status.llm_today.token_limit = 10_000;
+  expect(render(status)).toContain("今天还没有调用模型，每天上限 10,000 token");
+  status.llm_today.used_tokens = 10_500;
+  status.llm_today.by_tier = [{ ...total, calls: 1, ok: 1, tier: "minute", models: ["example"] }];
   status.distill.cooldown = { kind: "budget", until: "2026-11-13T00:00:00+09:00" };
   const html = render(status);
-  expect(html).toContain("今天已用 10,500 token / 上限 10,000 token");
+  expect(html).toContain("今天已用 10,500 token，上限 10,000 token");
   expect(html).toContain("已达到今天的用量上限，明天 0 点恢复");
+});
+
+// 2026-11-25：各设备表直接显示 mac-xxxx 这类编号，手机来源显示 android.audio。
+test("设备和来源显示名字，不显示内部编号", () => {
+  const status = emptyStatus();
+  status.records.by_source = [{ source: "android.audio", count: 3, last_received: generated_at }];
+  status.records.by_device = [{ device: "android-abcd2345", count: 3, last_received: generated_at }, { device: "mac", count: 1, last_received: generated_at },
+    { device: "android-zzzz9999", count: 2, last_received: generated_at }];
+  status.devices = [{ id: "android-abcd2345", name: "虚构的手机", platform: "android" }];
+  const html = render(status);
+  expect(html).toContain("手机录音");
+  expect(html).toContain("虚构的手机");
+  expect(html).toContain("这台 Mac");
+  expect(html).toContain("已移除的手机");
+  expect(html).not.toContain("android-abcd2345");
+  expect(html).not.toContain("android-zzzz9999");
+  expect(html).not.toContain("android.audio");
 });

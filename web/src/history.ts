@@ -78,6 +78,7 @@ export const sourceNames: Record<string, string> = {
   "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板", "mac.file": "文件", "mac.calendar": "日历", "mac.wechat": "微信",
   "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
   "manual.note": "补写", "manual.correction": "修正", "manual.agent": "AI 补写",
+  "android.audio": "手机录音", "android.notification": "手机聊天", "android.usage": "手机应用", "claude_desktop.session": "Claude Desktop",
 };
 /**
  * 列表、时间轴、依据和读取记录里显示的记录标题，规则和 Mac 端 RecordTitles 一致：

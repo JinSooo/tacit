@@ -47,11 +47,11 @@ test("facts 按语义分组，推测独立，排除失效与已替代条目且�
 });
 test("相对时间处理零值、边界、未来和缺失时间", () => {
   const now = Date.parse("2026-11-08T12:00:00Z");
-  for (const [delta, label] of [[0, "刚刚"], [59999, "刚刚"], [60000, "1分钟前"], [3599999, "59分钟前"], [3600000, "1小时前"], [86400000, "1天前"], [-60000, "刚刚"]] as const) expect(relativeTime(now - delta, now)).toBe(label);
-  expect(relativeTime("2026-11-08T19:00:00+08:00", now)).toBe("1小时前");
+  for (const [delta, label] of [[0, "刚刚"], [59999, "刚刚"], [60000, "1 分钟前"], [3599999, "59 分钟前"], [3600000, "1 小时前"], [86400000, "1 天前"], [-60000, "刚刚"]] as const) expect(relativeTime(now - delta, now)).toBe(label);
+  expect(relativeTime("2026-11-08T19:00:00+08:00", now)).toBe("1 小时前");
   expect(relativeTime(null, now)).toBe("暂无活动");
   expect(relativeTime("bad", now)).toBe("时间未知");
-  expect(relativeTime(0, 60000)).toBe("1分钟前");
+  expect(relativeTime(0, 60000)).toBe("1 分钟前");
 });
 test("待确认依据包含分类 keys 和样例线程标题，不泄露未要求的正文", () => {
   expect(pendingSummary({ keys: { repos: ["/synthetic/project"], hosts: ["example.invalid"], chats: ["合成讨论"] }, threads: [{ id: "t", title: "缓存写入", brief: "此正文不作为依据" }] })).toEqual(["仓库：/synthetic/project", "网站：example.invalid", "会话：合成讨论", "事项：缓存写入"]);

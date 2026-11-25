@@ -141,10 +141,11 @@ final class HubAPI: @unchecked Sendable {
   }
 
   /// 中枢网页的状态页地址，和 `bun hub/src/cli.ts open` 一样把 token 放在 hash 里（不会发给服务器）。
-  func statusPageURL() -> URL? {
+  /// section 为 "usage" 时，状态页读完后跳到“今天的模型用量”。
+  func statusPageURL(section: String? = nil) -> URL? {
     guard let route = try? hubRoute(), route.remote == nil, let token = tokenProvider(), !token.isEmpty,
           let encoded = token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return nil }
-    return URL(string: "\(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/#token=\(encoded)&status")
+    return URL(string: "\(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/#token=\(encoded)&status\(section.map { "&\($0)" } ?? "")")
   }
 
   private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
