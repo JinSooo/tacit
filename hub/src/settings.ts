@@ -12,7 +12,7 @@ import { readModelUsage } from "./model-usage.ts";
 import { redactString } from "./redact.ts";
 import { RuntimeLog, appliedCall } from "./runtime-log.ts";
 import { isLoopback, localModels } from "./llm/local.ts";
-import { agentStatus, connectAgent, type AgentTool, type InstallEnvironment } from "./agents-install.ts";
+import { AgentCommandError, agentStatus, connectAgent, type AgentTool, type InstallEnvironment } from "./agents-install.ts";
 
 export interface SettingsDeps {
   dataDir: string;
@@ -214,11 +214,12 @@ export function createSettings(deps: SettingsDeps) {
       const body = object(await ctx.readJSON());
       if (Object.keys(body).some(k => k !== "connected") || typeof body.connected !== "boolean") throw new InputError("只接受 connected（true 或 false）");
       const tool = agentStatus(deps.agents).find(t => t.id === id)!;
-      if (body.connected && !tool.installed) return fail(409, `这台 Mac 上没找到 ${tool.label}，装好并登录后再连接`);
+      if (body.connected && !tool.installed) return fail(409, `这台 Mac 上没找到 ${tool.label}，装好并登录后再连接。`);
       try { const result = connectAgent(id, body.connected, deps.agents); return Response.json({ tools: result.states, note: result.note }); }
       catch (error) {
-        // 配置文件损坏、命令执行失败：原样给出原因（不含密钥，路径是用户自己的）。
-        return fail(500, `${body.connected ? "连接" : "断开"} ${tool.label} 没有成功：${error instanceof Error ? redactString(error.message).text : "未知原因"}`);
+        return fail(500, error instanceof AgentCommandError
+          ? `没能完成 ${tool.label} 的连接，请确认它能正常启动后重试。`
+          : `没能写入 ${tool.label} 的配置文件，请检查它是否损坏后重试。`);
       }
     }
 

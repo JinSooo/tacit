@@ -11,6 +11,9 @@ export const AGENT_TOOLS = ["claude-code", "codex", "claude-desktop"] as const;
 /** 在 Claude Code、Codex 里登记的服务名。旧版用 record-anything，连接、断开和升级时一并清理或迁移。 */
 export const SERVER = "tacit", LEGACY_SERVER = "record-anything";
 export type AgentTool = typeof AGENT_TOOLS[number];
+
+export class AgentCommandError extends Error {}
+
 type Json = Record<string, any>;
 export interface InstallEnvironment {
   home?: string; repo?: string; bun?: string;
@@ -85,8 +88,8 @@ function diff(file: string, before: string, after: string, existed: boolean) {
 function hookFile(file: string, install: boolean, cli: string, bun: string, tool: AgentTool) {
   const existed = existsSync(file), before = existed ? readFileSync(file, "utf8") : "";
   let data: Json;
-  try { data = existed ? JSON.parse(before) : {}; } catch { throw new Error(`${file} 不是合法 JSON，未写入配置`); }
-  if (!object(data) || data.hooks !== undefined && !object(data.hooks) || data.hooks?.SessionStart !== undefined && !Array.isArray(data.hooks.SessionStart)) throw new Error(`${file} 的 hooks 结构无效，未写入配置`);
+  try { data = existed ? JSON.parse(before) : {}; } catch { throw new Error("配置文件不是合法 JSON，未写入配置。"); }
+  if (!object(data) || data.hooks !== undefined && !object(data.hooks) || data.hooks?.SessionStart !== undefined && !Array.isArray(data.hooks.SessionStart)) throw new Error("配置文件结构无效，未写入配置。");
   // 按 shell 规则拆开再比，加没加引号都认得（2026-11-19：升级迁移写的全引号命令曾被当成没连接）。
   const ours = (hook: any) => {
     if (!object(hook) || typeof hook.command !== "string") return false;
@@ -222,7 +225,7 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
   const run = env.run ?? ((command, args, home) => spawnSync(command, args, { encoding: "utf8", env: home === resolve(homedir()) ? process.env : { ...process.env, HOME: home, CODEX_HOME: resolve(home, ".codex"), CLAUDE_CONFIG_DIR: resolve(home, ".claude") }, timeout: 30000 }));
   const tools: AgentTool[] = selected ? [selected] : ["claude-code", "codex"];
   if (!selected && action === "uninstall" && existsSync(desktopConfig(home))) tools.push("claude-desktop");
-  if (action === "install" && tools.includes("claude-desktop") && !desktopInstalled(home, env)) throw new Error("这台 Mac 上没找到 Claude Desktop，安装后再连接");
+  if (action === "install" && tools.includes("claude-desktop") && !desktopInstalled(home, env)) throw new Error("这台 Mac 上没找到 Claude Desktop，安装后再连接。");
   // 全部解析成功后才可能写入，防止第二份 JSON 无效时已改第一份。
   const desktopPlan = tools.includes("claude-desktop") ? desktopFile(home, action === "install", cli, bun) : undefined;
   const cliTools = tools.filter(tool => tool !== "claude-desktop");
@@ -251,15 +254,19 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
       if (action === "install") print(`$ ${[command, ...add].map(quote).join(" ")}`);
       if (tool === "codex" && !yes && approvalPlan && approvalPlan.before !== approvalPlan.after) print(approvalDiff(approvalPlan));
       if (yes) {
+        const execute = (args: string[]) => {
+          try { return run(command, args, home); }
+          catch { throw new AgentCommandError("无法启动 AI 工具。"); }
+        };
         const registered = (name: string) => {
-          const result = run(command, get(name), home);
-          if (result.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(result.stderr + result.stdout)) throw new Error(`${tool} MCP 查询失败，未继续注册`);
+          const result = execute(get(name));
+          if (result.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(result.stderr + result.stdout)) throw new AgentCommandError("查询失败，未继续连接。");
           return result.status === 0;
         };
         const current = registered(SERVER), legacy = registered(LEGACY_SERVER);
         if (tool === "codex" && approvalPlan?.existed) backupConnection(codexFile);
         for (const args of [...(legacy ? [remove(LEGACY_SERVER)] : []), ...(current ? [remove(SERVER)] : []), ...(action === "install" ? [add] : [])]) {
-          if (run(command, args, home).status !== 0) throw new Error(`${tool} MCP ${args[1]} 失败，请检查该工具配置后重试`);
+          if (execute(args).status !== 0) throw new AgentCommandError("无法更新 AI 工具的连接。");
         }
         if (tool === "codex") {
           // 依次读取并保存：第二步必须基于第一步写入后的文件。

@@ -371,10 +371,39 @@ test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；�
   expect(readFileSync(join(home, ".claude/settings.json"), "utf8")).toContain("hook session-start --tool claude-code");
 
   const missing = await call(h, "PUT", "/v1/settings/agents/codex", { connected: true });
-  expect(missing.status).toBe(409);
+  expect(missing).toEqual({ status: 409, body: { error: "这台 Mac 上没找到 Codex，装好并登录后再连接。" } });
   expect(existsSync(join(home, ".codex"))).toBe(false);
 
   const disconnected = await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: false });
   expect(disconnected.body.tools[0]).toMatchObject({ connected: false, partial: false });
   expect((await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: "yes" })).status).toBe(400);
+});
+
+
+test("AI 工具设置的连接与断开错误只返回对应的用户提示", async () => {
+  const home = join(ctx.dir, "home");
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  const file = join(home, ".codex/hooks.json");
+  writeFileSync(file, '{"hooks": []}');
+  const path = "/v1/settings/agents/codex";
+  let failingCommand = "";
+  const h = handler({ agents: {
+    home, which: () => "/fake/codex",
+    run: (_command, args) => {
+      if (args[1] === failingCommand) return { status: 1, stdout: "", stderr: "合成命令错误 /fake/config" };
+      const registered = failingCommand === "remove" && args.at(-1) === "tacit";
+      return registered ? { status: 0, stdout: "", stderr: "" } : { status: 1, stdout: "", stderr: "No server found" };
+    },
+  } });
+  expect(await call(h, "PUT", path, { connected: true })).toEqual({
+    status: 500, body: { error: "没能写入 Codex 的配置文件，请检查它是否损坏后重试。" },
+  });
+
+  writeFileSync(file, "{}");
+  for (const [command, connected] of [["get", true], ["add", true], ["remove", false]] as const) {
+    failingCommand = command;
+    expect(await call(h, "PUT", path, { connected })).toEqual({
+      status: 500, body: { error: "没能完成 Codex 的连接，请确认它能正常启动后重试。" },
+    });
+  }
 });
