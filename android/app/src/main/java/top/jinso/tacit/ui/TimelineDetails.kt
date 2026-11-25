@@ -192,7 +192,7 @@ internal fun TimelineDetails(
                     if (backdrop.isNotEmpty()) {
                         item(key = "backdrop") {
                             Box(Modifier.itemMotion(this)) {
-                                DetailLink("另有 ${backdrop.size} 条屏幕和网页记录", showsBackdrop) { showsBackdrop = !showsBackdrop }
+                                DetailLink("另有 ${countLabel(backdrop.size)} 条屏幕和网页记录", showsBackdrop) { showsBackdrop = !showsBackdrop }
                             }
                         }
                         if (showsBackdrop) backdrop.forEach { record ->

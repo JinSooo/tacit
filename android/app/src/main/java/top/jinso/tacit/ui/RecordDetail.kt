@@ -81,20 +81,20 @@ internal fun RecordDetail(
             if (body.isNotBlank()) ReadingBody(body, isAudio)
             else Caption("这一段没有可显示的完整内容。")
             Spacer(Modifier.height(12.dp))
-            latest?.let { DetailLink("查看这条修正") { onSelect(it) } }
+            corrected.singleOrNull()?.let { DetailLink("查看这条修正") { onSelect(it) } }
             if (body != record.body) {
                 DetailLink(if (raw) "收起原文" else if (isAudio) "查看转写原文" else "查看原文", expanded = raw) { raw = !raw }
                 Reveal(raw) { ReadingBody(record.body) }
             }
             original?.let { DetailLink("查看原记录") { onSelect(it) } }
-            if (corrected.isNotEmpty()) {
+            if (corrected.size > 1) {
                 GroupDivider()
                 SectionLabel("后续修正", Modifier.padding(top = 12.dp))
                 corrected.asReversed().forEach { change ->
                     DetailLink(date(change.start, "M 月 d 日 HH:mm") + " 的修正") { onSelect(change) }
                 }
             }
-            if (record.redactions > 0) Caption("已隐去 ${record.redactions} 处密钥", Modifier.padding(top = 12.dp))
+            if (record.redactions > 0) Caption("已隐去 ${countLabel(record.redactions)} 处密钥", Modifier.padding(top = 12.dp))
         }
         GroupDivider()
         Row(
@@ -107,7 +107,10 @@ internal fun RecordDetail(
     if (deleting) AlertDialog(
         onDismissRequest = { deleting = false },
         title = { Text("删除这条记录？") },
-        text = { Text("这条记录和关联修正会永久删除，无法恢复。") },
+        text = {
+            Text(if (corrected.isEmpty()) "删除后无法恢复。"
+                else "这条记录和它的 ${countLabel(corrected.size)} 条修正会一并删除，无法恢复。")
+        },
         confirmButton = { TextAction("删除", { deleting = false; onDelete(record) }, color = tacitColors.attention) },
         dismissButton = { TextAction("取消", { deleting = false }) },
     )
@@ -124,8 +127,7 @@ internal fun EmptyState(title: String, message: String) {
 
 @Composable
 internal fun DetailInfo(source: String, start: Long, end: Long?, private: Boolean, includeYear: Boolean = false) {
-    val startLabel = date(start, if (includeYear) "yyyy 年 M 月 d 日 HH:mm" else "M 月 d 日 HH:mm")
-    val label = if (end == null) startLabel else "$startLabel–${date(end, "HH:mm")} · ${durationLabel(end - start)}"
+    val label = detailTimeLabel(start, end, includeYear)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         SourceIcon(source, 20.dp)
         Caption("${sourceName(source)} · $label", Modifier.weight(1f, fill = false))

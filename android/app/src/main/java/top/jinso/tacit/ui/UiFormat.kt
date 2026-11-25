@@ -4,6 +4,7 @@ import top.jinso.tacit.core.HistoryRecord
 import top.jinso.tacit.core.readableTranscript
 import top.jinso.tacit.sources.Sources
 import top.jinso.tacit.data.MAX_AUDIO_RETENTION_DAYS
+import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -12,31 +13,41 @@ import java.util.Locale
 internal fun date(time: Long, pattern: String): String = Instant.ofEpochMilli(time)
     .atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern(pattern, Locale.SIMPLIFIED_CHINESE))
 
+internal fun countLabel(n: Int): String = NumberFormat.getIntegerInstance(Locale.US).format(n)
+
+internal fun detailTimeLabel(start: Long, end: Long?, includeYear: Boolean): String {
+    val full = "yyyy 年 M 月 d 日 HH:mm"
+    val startLabel = date(start, if (includeYear) full else "M 月 d 日 HH:mm")
+    if (end == null) return startLabel
+    val endLabel = when {
+        date(start, full) == date(end, full) -> ""
+        date(start, "yyyy-MM-dd") != date(end, "yyyy-MM-dd") ->
+            "–" + date(end, if (includeYear || date(start, "yyyy") != date(end, "yyyy")) full else "M 月 d 日 HH:mm")
+        else -> "–" + date(end, "HH:mm")
+    }
+    return "$startLabel$endLabel · ${durationLabel(end - start)}"
+}
+
 internal fun sourceName(source: String): String = when (source) {
-    Sources.NOTE -> "补写"
-    Sources.CORRECTION -> "修正"
-    Sources.AUDIO -> "录音"
-    "mac.audio" -> "录音"
-    "claude_code.session" -> "Claude Code"
-    "codex.session" -> "Codex"
-    "mac.wechat" -> "微信"
-    "mac.browser" -> "浏览器"
+    "mac.audio" -> "对话"
     "mac.screen" -> "屏幕"
     "mac.app" -> "应用"
-    // Historical labels for records still visible after an upgrade.
-    Sources.NOTIFICATION -> "聊天通知"
-    Sources.USAGE -> "应用使用"
-    "system.pause" -> "采集状态"
-    "android.share" -> "分享"
-    "android.screen" -> "屏幕文字"
-    "android.sms" -> "短信"
-    "android.calls" -> "通话"
-    "android.calendar" -> "日历"
-    "android.media" -> "照片与截图"
-    "android.files" -> "文件"
-    "android.location" -> "位置"
-    "android.recording_folder" -> "录音目录"
-    else -> source
+    "mac.clipboard" -> "剪贴板"
+    "mac.file" -> "文件"
+    "mac.calendar" -> "日历"
+    "mac.wechat" -> "微信"
+    "mac.shell" -> "终端"
+    "mac.git" -> "Git"
+    "mac.browser" -> "浏览器"
+    "claude_code.session" -> "Claude Code"
+    "codex.session" -> "Codex"
+    Sources.AUDIO -> "手机录音"
+    Sources.NOTIFICATION -> "手机聊天"
+    Sources.USAGE -> "手机应用"
+    Sources.NOTE -> "补写"
+    Sources.CORRECTION -> "修正"
+    "manual.agent" -> "AI 补写"
+    else -> "其他"
 }
 
 // Same lanes the Mac folds when a segment opens: screen, browser and app usage are only the time skeleton.

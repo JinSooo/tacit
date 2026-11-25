@@ -21,6 +21,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import top.jinso.tacit.ui.DelayedAppearance
 import top.jinso.tacit.ui.ExpandChevron
@@ -80,7 +81,9 @@ internal fun SettingsRow(
             status?.let { Caption(it, color = if (problem) tacitColors.attention else tacitColors.muted) }
         }
         if (value != null) {
-            Caption(value, Modifier.widthIn(max = 108.dp), if (problem) tacitColors.attention else tacitColors.muted)
+            Text(value, Modifier.widthIn(max = 108.dp), style = MaterialTheme.typography.bodySmall,
+                color = if (problem) tacitColors.attention else tacitColors.muted,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (trailing != null) trailing()
         else if (onClick != null) {

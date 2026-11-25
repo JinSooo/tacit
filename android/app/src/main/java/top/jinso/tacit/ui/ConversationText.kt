@@ -86,7 +86,7 @@ internal fun ConversationDetail(
                 if (body.isBlank()) Caption("这场对话没有可显示的完整转写。")
                 else ReadingBody(body, transcript = true)
                 Spacer(Modifier.height(12.dp))
-                DetailLink("原始片段 ${current.size} 段", expanded) { expanded = !expanded }
+                DetailLink("原始片段 ${countLabel(current.size)} 段", expanded) { expanded = !expanded }
                 Reveal(expanded) {
                     current.forEach { (record, _) ->
                         EvidenceRow(date(record.start, "HH:mm:ss"), firstSentence(record.body).ifBlank { record.title },
