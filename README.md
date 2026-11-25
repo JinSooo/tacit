@@ -6,13 +6,13 @@
 </p>
 
 <p align="center">
-  <b>把每天在 Mac 上做的事整理成一条时间线，给你回看，也让 AI 不用重讲背景直接接着用。</b>
+  <b>把每天在 Mac 和 Android 上做的事整理成一条时间线，给你回看，也让 AI 不用重讲背景直接接着用。</b>
 </p>
 
 <p align="center">
-  <a href="https://github.com/JinSooo/tacit/releases"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-Tacit.dmg-3b7468?style=flat-square" alt="下载"></a>
-  <img src="https://img.shields.io/badge/macOS-14%2B-211f1d?style=flat-square&logo=apple" alt="macOS 14+">
-  <img src="https://img.shields.io/badge/Apple_%E8%8A%AF%E7%89%87-arm64-211f1d?style=flat-square" alt="Apple 芯片">
+  <a href="https://github.com/JinSooo/tacit/releases"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-Tacit-3b7468?style=flat-square" alt="下载"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B_(arm64)-211f1d?style=flat-square&logo=apple" alt="macOS 14+ arm64">
+  <img src="https://img.shields.io/badge/Android-9%2B_(arm64)-211f1d?style=flat-square&logo=android" alt="Android 9+ arm64">
   <img src="https://img.shields.io/badge/%E7%8A%B6%E6%80%81-%E5%BC%80%E5%8F%91%E9%A2%84%E8%A7%88-9d2933?style=flat-square" alt="开发预览">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-211f1d?style=flat-square" alt="MIT"></a>
 </p>
@@ -29,7 +29,7 @@
 
 ---
 
-每开一个新的 AI 会话，都要把背景重新讲一遍：这个项目做到哪了、上次定了什么、还卡在哪。Tacit 在后台记下你和 AI 的对话、微信聊天和录音，在本机整理成每天发生的事和你做的决定，再让 Claude Code、Codex 直接来读。你自己也能在时间线上回看一天，每条结论都能点回原文。
+每开一个新的 AI 会话，都要把背景重新讲一遍：这个项目做到哪了、上次定了什么、还卡在哪。Tacit 在后台记下你和 AI 的对话、微信聊天和录音，在本机整理成每天发生的事和你做的决定，再让 Claude Code、Codex 直接来读。离开电脑时，Android 端同样可以在本地录音转写，端到端加密同步到 Mac 并在手机上回看时间线，每条结论都能点回原文。
 
 <p align="center">
   <picture>
@@ -55,10 +55,13 @@ Claude Code、Codex 新开会话时，自动带入当前项目正在推进的事
 屏幕和浏览器上的文字都能搜到，可以按日期、来源或设备筛选，搜到的结果直接展开原文。
 
 **🎙️ 会议与聊天**
-录音在本机转写，按场整理出总结和去掉口头禅的原文，只分“我”和“对方”。微信对话默认关闭，开启后按聊天拆成消息。
+录音在 Mac 和 Android 本机转写，按场整理出总结和去掉口头禅的原文，只分“我”和“对方”。微信对话默认关闭，开启后按聊天拆成消息。
+
+**📱 Android 随身记录与查看**
+离开电脑时的当面交谈与会议由 Android 端在本地加密录音转写，支持局域网或中转信箱端到端加密同步到 Mac；配对后可在手机上直接回看全天时间线，也可以独立使用并可选开启手机端单场 AI 总结。
 
 **🪟 桌面小组件**
-中号和大号两种，抬眼就能看到今天做了哪些事。
+Mac 提供中号和大号两种小组件，抬眼就能看到今天做了哪些事。
 
 ## 工作方式
 
@@ -71,6 +74,8 @@ Claude Code、Codex 新开会话时，自动带入当前项目正在推进的事
 截图只在内存里给识字用，从不保存。数据库加密存在本机。
 
 ## 开始使用
+
+### Mac 端
 
 需要 Apple 芯片的 Mac，系统 macOS 14 或更新。
 
@@ -88,6 +93,15 @@ Claude Code、Codex 新开会话时，自动带入当前项目正在推进的事
 遇到启动、记录或转写问题时，见[常见问题](docs/troubleshooting.md)。
 
 想加桌面小组件：在桌面空白处右键，选“编辑小组件”，搜索 Tacit。
+
+### Android 端
+
+需要 arm64 手机，系统 Android 9 或更新。
+
+1. 从 [Releases](https://github.com/JinSooo/tacit/releases) 里最新的“Tacit v<版本号> - Android”下载 `Tacit-<版本号>.apk` 并安装。
+2. 首次打开点“开启”授权麦克风并开始录音；在 **设置 › 语音转写** 下载本机语音模型，并试听确认一次“这是我”。
+3. **配合 Mac 使用**：在 Mac 的 **设置 › 设备** 生成配对二维码，在手机 **设置 › 连接 Mac** 扫码配对，即可加密同步录音并在手机上查看全天时间线（离家时也可经中转信箱同步）。
+4. **单独使用**：不连接 Mac 时，录音和转写保存在手机加密库中，也可在 **设置 › AI 总结** 可选配置 OpenAI 兼容接口为单场对话生成总结。更多说明见 [android/README.md](android/README.md)。
 
 > [!NOTE]
 > 整理每 15 分钟跑一轮，调用模型会消耗你的 API 额度或账号用量。你可以在 **设置 › AI 模型** 调整润色与概述频率，并设置每日 token 用量上限；达到上限后当天自动暂停整理调用，草稿段照常出现。
@@ -116,7 +130,7 @@ AI 以读取为主，每次读取都留审计记录。往历史里补写内容�
 > [!IMPORTANT]
 > 数据保存在本机，不等于永远不离开本机。用云端模型整理时，相关文字会发给你配置的模型服务；AI 工具查询到的内容也会进入它的会话。Tacit 不收集遥测，也不提供云端托管。
 
-- **加密存储**：数据库、原始音频和待发送记录都加密保存，密钥在 macOS 钥匙串里。密钥丢了，内容就无法恢复，记得做密钥备份。
+- **加密存储**：数据库、原始音频和待发送记录都加密保存在本机，Mac 密钥在 macOS 钥匙串里，Android 密钥由 Android Keystore 保护。密钥丢了，内容就无法恢复，记得做密钥备份。
 - **不存截图**：截图只在内存里用来识字。原始音频默认保留 7 天，可以改天数；转写出的文字、事项和时间线不受这个期限影响。
 - **录音**：只在本机转写。没有你声音的对话不转写，开会时例外。持续录音与会议转写请自行遵守当地法律法规并提前告知对话方。
 - **私密内容**：标成 `private` 的记录不参加整理，也不会自动带入新会话；AI 主动查询时仍然能读到。
@@ -129,7 +143,7 @@ AI 以读取为主，每次读取都留审计记录。往历史里补写内容�
 - 浏览器隐私窗口靠标题识别，部分浏览器或语言可能漏判，处理私密内容前请先暂停记录。
 - 目前不能自定义排除哪些应用。
 - 后台管理、网页和 MCP 只监听本机；配对手机等设备后，才会单独开放加密的局域网设备端口。
-- 配对的设备分采集、查看、管理三级权限，在 设置 › 设备 里调整和移除；手机只能是采集。AI 工具用单独的受限身份，只能查询和追加，不能删除或改设置。其他设备远程删除别处的记录有上限，删得多要回到这台 Mac 上操作。
+- 配对的设备分采集、查看、管理三级权限，在 设置 › 设备 里调整和移除；手机可在采集和查看权限间切换，默认查看（不能成为管理）。AI 工具用单独的受限身份，只能查询和追加，不能删除或改设置。其他设备远程删除别处的记录有上限，删得多要回到这台 Mac 上操作。
 - 可以在 设置 › 后台服务 › 中转信箱 填一个自己部署的信箱（`relay/`，支持 Cloudflare Workers 或 Docker），手机不在同一网络、或 Mac 合盖时也能把加密记录送过来。信箱只经手端到端加密内容，看得到传输的时间和大小，看不到明文。
 - 第三方数据源安装入口当前暂时收起；其设计上只能读取你确认过的范围，不能联网、写文件或启动子进程，系统隔离不可用时拒绝运行。
 - 数据在 `~/Library/Application Support/record-anything/`，不会进源码仓库。提交 Issue 时，请不要附上历史正文、密钥、音频或别人的隐私内容。
@@ -185,7 +199,7 @@ Tacit 目前处于**开发预览**阶段，以下几项仍在完善或尚未覆�
 
 ## 更新与卸载
 
-**更新**：下载新版本的 dmg，先从菜单栏右键菜单退出 Tacit，再把新版本拖进“应用程序”替换。数据、设置、系统权限和 AI 工具连接都会保留。
+**更新**：Mac 端下载新版本的 dmg，先从菜单栏右键菜单退出 Tacit，再把新版本拖进“应用程序”替换；Android 端下载新版 apk 直接覆盖安装。两端的数据、设置、系统权限、配对和 AI 工具连接都会保留。
 
 **卸载**：在终端运行下面这行，它会问你要不要一并删除数据。
 
@@ -199,7 +213,7 @@ sh /Applications/Tacit.app/Contents/Resources/uninstall.sh
 | --- | --- |
 | `collector/` | Swift / SwiftUI 菜单栏应用、采集、录音、本地转写和桌面小组件 |
 | `hub/` | Bun 后台服务、加密数据库、整理任务和 AI 接口（MCP） |
-| `android/` | Kotlin Android 录音客户端（本机转写、HPKE 加密同步到 Mac） |
+| `android/` | Kotlin Android 客户端（本机录音转写、可选单场 AI 总结、HPKE 加密同步与时间线查看） |
 | `web/` | 网页状态页 |
 | `site/` | 官网 [tacit.jinso.top](https://tacit.jinso.top)，零依赖静态页，部署见 `site/README.md` |
 | `packages/`、`plugins/`、`schema/` | 共享记录类型、内置数据源与跨端测试样例 |

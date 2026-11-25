@@ -82,6 +82,25 @@
   margin-top: 0;
 }
 
+.download-android {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.download-android .title {
+  margin-bottom: 10px;
+}
+
+.download-android p {
+  color: var(--reading);
+}
+
+.download-android code {
+  font-size: var(--fs-caption);
+  overflow-wrap: anywhere;
+}
+
 .download-status {
   margin-top: clamp(40px, 6vw, 72px);
   padding-top: 20px;
