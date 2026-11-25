@@ -154,8 +154,8 @@ private final class Probe {
   let r = try HubJSON.decoder().decode(R.self, from: Data(json.utf8)).requests
   #expect(r[0].statusText == "2026-10-11 至 2026-11-09：正在准备，已完成 3 天，共 10 天")
   #expect(!r[0].finished)
-  #expect(r[1].statusText == "排队中，等后台整理进程处理")
-  #expect(r[2].statusText.hasSuffix("没有成功：整理进程中断了") && r[2].finished)
+  #expect(r[1].statusText == "排队中，等待后台整理")
+  #expect(r[2].statusText.hasSuffix("没有成功，整理进程中断了") && r[2].finished)
   #expect(r[3].statusText.hasSuffix("完成，这段日期里没有要整理的记录"))
 }
 

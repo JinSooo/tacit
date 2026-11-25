@@ -21,7 +21,7 @@ struct ModelSettingsView: View {
   @State private var editingKey: String?
   @State private var removingKey: String?
   @State private var health: DistillHealth?
-  @State private var healthError: String?
+  @State private var healthUnavailable = false
   /// 三档用同一个模型时合成一组显示；用户点“按任务分别设置”后才展开三档。
   @State private var splitTiers = false
 
@@ -37,34 +37,9 @@ struct ModelSettingsView: View {
 
   var body: some View {
     SettingsForm {
-      if showsStatus {
-      Section("整理状态") {
-        if let health {
-          // 正常时只写最近一次整理的时间，不写“正常”。
-          switch health.state {
-          case .working: EmptyView()
-          case .waiting: SettingsRow("后台整理", value: "等待首次完成")
-          case .failing(let reason):
-            SettingsMessage(text: store.isRemoteBackend ? "整理遇到问题，请检查远端模型设置。" : reason)
-          }
-          if let time = health.lastOkAt {
-            SettingsRow("最近整理", value: ViewerTime.parse(time).map(Fmt.dateTime) ?? time)
-          }
-        }
-        if let healthError { SettingsMessage(text: healthError) }
-        if !store.isRemoteBackend {
-          HStack {
-            Spacer()
-            Button("查看用量与详细状态…") {
-              if let url = store.api.statusPageURL() { NSWorkspace.shared.open(url) }
-            }
-          }
-        }
-      }
-      }
       if let info {
-        if let e = info.configError {
-          SettingsMessage(text: store.isRemoteBackend ? "请填写远端后台使用的 API 模型。" : "模型配置文件有问题，整理会失败，保存一次就能修好：\(e)")
+        if info.configError != nil {
+          SettingsMessage(text: store.isRemoteBackend ? "请填写远端后台使用的 API 模型。" : "模型设置有问题，整理会失败，检查后保存一次就能修好。")
         }
         if sharesOneModel {
           tierSection(Self.tiers[0], info: info, together: true).disabled(saving)
@@ -72,7 +47,7 @@ struct ModelSettingsView: View {
           ForEach(Self.tiers, id: \.self) { tier in tierSection(tier, info: info) }.disabled(saving)
         }
         timelineSection
-        keysSection(info)
+        otherKeysSection(info)
         if draft != saved || timelineDraft != timelineSaved {
           HStack {
             Spacer()
@@ -100,7 +75,13 @@ struct ModelSettingsView: View {
     .confirmationDialog("删除 API key？", isPresented: Binding(get: { removingKey != nil }, set: { if !$0 { removingKey = nil } })) {
       if let provider = removingKey { Button("删除", role: .destructive) { Task { await removeKey(provider); removingKey = nil } } }
       Button("取消", role: .cancel) { removingKey = nil }
-    } message: { Text("使用这个提供商的模型将无法连接，直到重新填写 key。") }
+    } message: {
+      if let provider = removingKey, !draft.values.contains(where: { $0.provider == provider && !Self.isLoopback($0.baseUrl) }) {
+        Text("现在没有模型在用它。")
+      } else {
+        Text("用这个提供商的模型会连不上，直到重新设置 API key。")
+      }
+    }
   }
 
   struct KeyTarget: Identifiable { let id: String }
@@ -125,7 +106,7 @@ struct ModelSettingsView: View {
           Text("每小时").tag(GeneralSettingsInfo.PolishTiming.hourly)
           Text("只在晚上").tag(GeneralSettingsInfo.PolishTiming.nightly)
         }.disabled(saving)
-        Text("越晚整理用量越少，草稿始终实时出现").foregroundStyle(Palette.muted)
+        Text("越晚整理用量越少，草稿始终实时出现。").foregroundStyle(Palette.muted)
         Picker("当天概述", selection: draft.overview) {
           Text("每小时").tag(GeneralSettingsInfo.OverviewTiming.hourly)
           Text("每 3 小时").tag(GeneralSettingsInfo.OverviewTiming.everyThreeHours)
@@ -144,13 +125,14 @@ struct ModelSettingsView: View {
               TextField("每天最多", text: Binding(
                 get: { draft.limitText.wrappedValue ?? "" },
                 set: { draft.limitText.wrappedValue = $0 }
-              )).labelsHidden().multilineTextAlignment(.trailing)
+              ), prompt: Text("例如 50")).labelsHidden().multilineTextAlignment(.trailing)
                 .monospacedDigit().frame(width: 120).disabled(saving)
               Text("万 token").foregroundStyle(Palette.muted)
             }
           }
+          Text("达到后当天暂停整理，明天 0 点恢复，草稿照常出现。").foregroundStyle(Palette.muted)
         }
-        Text("达到后当天暂停整理，明天 0 点恢复，草稿照常出现").foregroundStyle(Palette.muted)
+        if let timelineError { SettingsMessage(text: timelineError) }
       } else if let timelineError {
         SettingsMessage(text: timelineError)
       } else {
@@ -159,19 +141,19 @@ struct ModelSettingsView: View {
     } header: {
       Text("时间线整理")
     } footer: {
-      if let line = timelineSettings?.modelUsage.line { Note(line).monospacedDigit() }
+      let details = store.isRemoteBackend ? nil : store.api.statusPageURL()
+      if timelineSettings?.modelUsage.line != nil || details != nil {
+        HStack(alignment: .firstTextBaseline) {
+          if let line = timelineSettings?.modelUsage.line { Note(line).monospacedDigit() } else { Spacer() }
+          if let details {
+            Button("查看详细用量") { NSWorkspace.shared.open(details) }.buttonStyle(.accentLink).fixedSize()
+          }
+        }
+      }
     }
   }
 
   // MARK: 每一档
-
-  /// 远端后台没有状态页入口；正常又没有完成时间时这一组没有内容，不留空卡片。
-  private var showsStatus: Bool {
-    if healthError != nil || !store.isRemoteBackend { return true }
-    guard let health else { return false }
-    if case .working = health.state { return health.lastOkAt != nil }
-    return true
-  }
 
   /// 已保存的三档完全一样、用户也没要求分开时，只显示一组，改动同时写进三档。
   private var sharesOneModel: Bool {
@@ -206,17 +188,18 @@ struct ModelSettingsView: View {
             Menu("本机模型") { ForEach(models, id: \.self) { m in Button(m) { config.wrappedValue.model = m } } }
               .fixedSize()
           }
-          Button(tests[tier] == .running ? "正在测试…" : "测试连接") { Task { await test(tier) } }
-            .disabled(testingConnection || c.provider.isEmpty || c.model.isEmpty)
         }
       }
       if provider?.baseUrl == true {
-        SettingsRow("地址") {
-          TextField("地址", text: Binding(get: { c.baseUrl ?? "" }, set: { config.wrappedValue.baseUrl = $0.isEmpty ? nil : $0 }),
-                    prompt: Text(c.provider == "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).labelsHidden()
-        }
-        if let url = c.baseUrl, !url.isEmpty, !local {
-          SettingsMessage(text: "整理时，记录会发到这个地址。", warning: false)
+        SettingsRow("地址", alignment: .firstTextBaseline) {
+          VStack(alignment: .leading, spacing: 4) {
+            TextField("地址", text: Binding(get: { c.baseUrl ?? "" }, set: { config.wrappedValue.baseUrl = $0.isEmpty ? nil : $0 }),
+                      prompt: Text(c.provider == "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).labelsHidden()
+            if let note = addressNote(c.baseUrl, local: local, remote: remote) {
+              Text(note).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
         }
         if localOptions, c.provider == "openai-compatible", let url = c.baseUrl {
           HStack {
@@ -227,12 +210,9 @@ struct ModelSettingsView: View {
             Button("刷新模型") { Task { await loadLocalModels(url) } }.disabled(localModelLoading.contains(url))
           }
         }
-        if remote {
-          Text("模型地址须能从远端后台访问，localhost 指远端后台所在的机器。").foregroundStyle(Palette.muted)
-        } else if local {
-          Text("本机地址也可能转发到云端，实际运行位置由模型服务决定。").foregroundStyle(Palette.muted)
-        }
       }
+      // key 跟着用它的模型放：同一个提供商共用一个 key，分开设置时每一档都显示同一个。
+      if let provider, provider.needsKey, !local { keyRow(provider, info: info) }
       if c.provider == "openai-compatible" {
         Picker("思考强度", selection: Binding(get: { c.reasoningEffort ?? "" }, set: { config.wrappedValue.reasoningEffort = $0.isEmpty ? nil : $0 })) {
           Text("跟随模型").tag("")
@@ -241,14 +221,8 @@ struct ModelSettingsView: View {
           Text("中").tag("medium")
           Text("高").tag("high")
         }
-        Text("不确定时选“跟随模型”。").foregroundStyle(Palette.muted)
       }
-      switch tests[tier] {
-      case .ok(let ms): Text(ms.map { String(format: "连接正常，用时 %.1f 秒", $0 / 1000) } ?? "连接正常").foregroundStyle(Palette.muted)
-      case .failed(let e): SettingsMessage(text: e)
-      case .running: Text("正在连接，最长等 1 分钟…").foregroundStyle(Palette.muted)
-      case nil: EmptyView()
-      }
+      statusRow(tier, config: c, first: together || tier == Self.tiers[0])
     } header: {
       Text(together ? "整理模型" : info.tierInfo[tier]?.label ?? tier)
     } footer: {
@@ -264,34 +238,77 @@ struct ModelSettingsView: View {
     .onChange(of: c) { _, _ in tests[tier] = nil }
   }
 
+  private func addressNote(_ url: String?, local: Bool, remote: Bool) -> String? {
+    if remote { return "须能从远端后台访问；填本机地址时，指的是远端后台那台机器。" }
+    if local { return "本机地址也可能转发到云端，实际运行位置由模型服务决定。" }
+    if let url, !url.isEmpty { return "整理时，记录会发到这个地址。" }
+    return nil
+  }
+
+  /// 卡片最后一行：最近整理时间（或出的问题）和测试连接。整理状态是整体的，只放在第一组；问题放在出问题的那一档。
+  @ViewBuilder private func statusRow(_ tier: String, config c: ModelTierConfig, first: Bool) -> some View {
+    let state = health?.state
+    let failingHere: String? = {
+      guard case .failing(let reason)? = state else { return nil }
+      if sharesOneModel { return reason }
+      let target = health?.failingTier.flatMap { Self.tiers.contains($0) ? $0 : nil } ?? Self.tiers[0]
+      return target == tier ? reason : nil
+    }()
+    let button = Button(tests[tier] == .running ? "正在测试…" : "测试连接") { Task { await test(tier) } }
+      .disabled(testingConnection || c.provider.isEmpty || c.model.isEmpty)
+    if let failingHere {
+      SettingsMessage(text: failingHere)
+    }
+    if first, healthUnavailable {
+      SettingsRow("最近整理") { HStack(spacing: 12) { Text("暂时读不到").foregroundStyle(Palette.attention); button } }
+    } else if first, let time = health?.lastOkAt.flatMap(ViewerTime.parse) {
+      SettingsRow("最近整理") { HStack(spacing: 12) { Text(Fmt.dateTime(time)).foregroundStyle(Palette.muted); button } }
+    } else if first, state == .waiting {
+      SettingsRow("最近整理") { HStack(spacing: 12) { Text("等待首次完成").foregroundStyle(Palette.muted); button } }
+    } else {
+      HStack { Spacer(); button }
+    }
+    switch tests[tier] {
+    case .ok(let ms): Text(ms.map { String(format: "连接正常，用时 %.1f 秒。", $0 / 1000) } ?? "连接正常。").foregroundStyle(Palette.muted)
+    case .failed(let e): SettingsMessage(text: e)
+    case .running: Text("正在连接，最长等 1 分钟…").foregroundStyle(Palette.muted)
+    case nil: EmptyView()
+    }
+  }
+
   // MARK: API key
 
-  @ViewBuilder func keysSection(_ info: ModelSettingsInfo) -> some View {
-    let usedProviders = Set(draft.values.filter { !Self.isLoopback($0.baseUrl) }.map(\.provider))
+  @ViewBuilder private func keyRow(_ p: ModelSettingsInfo.ProviderInfo, info: ModelSettingsInfo) -> some View {
     let remote = store.isRemoteBackend
-    let keyProviders = info.availableProviders(remote: remote).filter {
-      $0.needsKey && (remote || usedProviders.contains($0.id) || (info.keys[$0.id] ?? nil) == true)
+    SettingsRow("API key") {
+      HStack(spacing: 8) {
+        switch info.keys[p.id] ?? nil {
+        case true?: Text("已设置").foregroundStyle(Palette.muted)
+        case false?: Text("未设置").foregroundStyle(Palette.attention)
+        case nil: Text(remote ? "读不到 API key 状态" : "读不到钥匙串").foregroundStyle(Palette.attention)
+        }
+        Button((info.keys[p.id] ?? nil) == true ? "更换…" : "设置…") { editingKey = p.id }
+        if (info.keys[p.id] ?? nil) == true { Button("删除…", role: .destructive) { removingKey = p.id } }
+      }
     }
-    if !keyProviders.isEmpty {
-    Section {
-      ForEach(keyProviders, id: \.id) { p in
-        SettingsRow(p.label) {
-          HStack(spacing: 8) {
-            switch info.keys[p.id] ?? nil {
-            case true?: Text("已设置").foregroundStyle(Palette.muted)
-            case false?: Text("未设置").foregroundStyle(Palette.muted)
-            case nil: Text(remote ? "无法读取密钥状态" : "读不到钥匙串").foregroundStyle(Palette.attention)
+  }
+
+  /// 存了 key、但现在没有哪一档在用的提供商，单独列出来方便删除；平时没有这一组。
+  @ViewBuilder func otherKeysSection(_ info: ModelSettingsInfo) -> some View {
+    let used = Set(draft.values.filter { !Self.isLoopback($0.baseUrl) }.map(\.provider))
+    let others = info.availableProviders(remote: store.isRemoteBackend).filter {
+      $0.needsKey && !used.contains($0.id) && (info.keys[$0.id] ?? nil) == true
+    }
+    if !others.isEmpty {
+      Section("其他已保存的 API key") {
+        ForEach(others, id: \.id) { p in
+          SettingsRow(p.label) {
+            HStack(spacing: 8) {
+              Button("删除…", role: .destructive) { removingKey = p.id }
             }
-            Button((info.keys[p.id] ?? nil) == true ? "更换…" : "设置…") { editingKey = p.id }
-            if (info.keys[p.id] ?? nil) == true { Button("删除…", role: .destructive) { removingKey = p.id } }
           }
         }
       }
-    } header: {
-      Text("API key")
-    } footer: {
-      Note(remote ? "密钥加密保存在远端后台，设置后不再显示。" : "key 存在这台 Mac 的钥匙串里，设置后不再显示。同一个提供商共用一个 key。")
-    }
     }
   }
 
@@ -362,8 +379,8 @@ struct ModelSettingsView: View {
   }
 
   func loadHealth() async {
-    do { health = try await store.api.distillHealth(); healthError = nil }
-    catch is CancellationError {} catch { healthError = error.localizedDescription }
+    do { health = try await store.api.distillHealth(); healthUnavailable = false }
+    catch is CancellationError {} catch { healthUnavailable = true }
   }
 
   private func applyTimeline(_ settings: GeneralSettingsInfo) {
@@ -381,7 +398,7 @@ struct ModelSettingsView: View {
       let settings = try await store.api.generalSettings()
       guard timelineSaved == previous, !saving || previous == nil else { return }
       if timelineDraft == timelineSaved { applyTimeline(settings) }
-      else { timelineSettings = settings }
+      else { timelineSettings = settings; timelineError = nil }
     }
     catch is CancellationError {} catch { timelineError = error.localizedDescription }
   }
@@ -405,7 +422,7 @@ struct ModelSettingsView: View {
         if let text = timelineDraft.limitText {
           guard let range = timelineSettings?.ranges["daily_token_limit"], range.count == 2, range[0] <= range[1],
                 let tokens = DailyTokenLimit.tokens(from: text, range: range[0]...range[1]) else {
-            error = "请输入有效的用量上限，最多四位小数。"
+            error = "用量上限请填大于 0 的数字，最多四位小数。"
             return
           }
           values["daily_token_limit"] = tokens
@@ -440,7 +457,7 @@ struct ModelSettingsView: View {
     do {
       let r = try await store.api.testModel(tier: tier, config: c)
       guard draft[tier] == c else { return }
-      tests[tier] = r.ok ? .ok(r.ms) : .failed(r.error ?? "连接失败")
+      tests[tier] = r.ok ? .ok(r.ms) : .failed(r.error.map(ModelErrorText.plain) ?? "连接失败。")
     } catch { if draft[tier] == c { tests[tier] = .failed(error.localizedDescription) } }
   }
 
@@ -466,7 +483,7 @@ private struct KeyEntrySheet: View {
     VStack(alignment: .leading, spacing: 12) {
       Text("设置 \(label) 的 API key").font(.system(size: TextSize.body, weight: .semibold))
       SecureField("API key", text: $key).frame(width: 360)
-      Text(store.isRemoteBackend ? "密钥加密保存在远端后台，设置后不再显示。" : "存在这台 Mac 的钥匙串里，设置后不再显示。")
+      Text(store.isRemoteBackend ? "API key 加密保存在远端后台，设置后不再显示；同一个提供商共用一个。" : "存在这台 Mac 的钥匙串里，设置后不再显示；同一个提供商共用一个。")
         .foregroundStyle(Palette.muted)
       if let error { SettingsMessage(text: error) }
       HStack {

@@ -4,6 +4,7 @@ import { DistillRequests, localDayStart } from "../src/distill/requests.ts";
 import { dayStep, distillRound, distillTick, type LLM, type LoopState } from "../src/distill/run.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { readTimelineSettings, updateGeneral } from "../src/general-settings.ts";
+import { fitSummary, MAX_DAY_SUMMARY_CHARS, summaryLength, summaryProblem } from "../src/distill/prompts.ts";
 import type { LLMRequest } from "../src/llm/types.ts";
 import { fixture, setup } from "./helpers.ts";
 
@@ -17,7 +18,7 @@ type Material = { key: string; evidence: { key: string; text: string; secondary?
 const data = (req: LLMRequest) => JSON.parse(req.prompt.split("<data>\n")[1]!.split("\n</data>")[0]!);
 const materials = (req: LLMRequest): Material[] => data(req).activities;
 let ctx: ReturnType<typeof setup>, store: DistillStore, calls: LLMRequest[];
-let failOverview: boolean, beforePolish: (() => void) | undefined;
+let failOverview: boolean, overviewText: string, beforePolish: (() => void) | undefined;
 const llm: LLM = { async complete<T>(req: LLMRequest) {
   calls.push(req);
   let output: unknown;
@@ -36,7 +37,7 @@ const llm: LLM = { async complete<T>(req: LLMRequest) {
     };
   } else if (req.task === "day_brief") {
     if (failOverview) return { ok: false, error: "schema_mismatch", ms: 1 };
-    output = { summary: "小禾确认了苗床安排。春苗已经分好。" };
+    output = { summary: overviewText };
   } else if (req.task === "assign") {
     output = { items: [] };
   } else return { ok: false, error: "schema_mismatch", ms: 1 };
@@ -48,6 +49,7 @@ beforeEach(() => {
   store = new DistillStore(ctx.db);
   calls = [];
   failOverview = false;
+  overviewText = "小禾确认了苗床安排。春苗已经分好。";
   beforePolish = undefined;
 });
 afterEach(() => ctx.cleanup());
@@ -231,6 +233,32 @@ test("概述只读已润色正时长段，不随快轮重写，失败也保留�
   expect(overviewCalls()[2]!.system).toContain("同一件事以最晚的段为准");
   await round(675, true);
   expect(overviewCalls()).toHaveLength(3);
+});
+
+// 2026-11-25：概述按码点数 160 字，英文项目名一个就占 27 字，写了 164–208 码点的概述 9 次被丢 6 次，设置页一直挂着 schema_mismatch。
+test("概述字数按中文习惯数，英文词和版本号各算 1 字；超长时保留放得下的整句", async () => {
+  const project = "garden-planner-from-scratch";
+  expect(summaryLength(`${project} 发布 v0.6.4。`)).toBe(5);
+  const fits = `${project}：完成苗床排布、浇水计划和育苗日志三项整理，v1.2.3 已发给小禾核对。`.repeat(4);
+  expect(Array.from(fits).length).toBeGreaterThan(MAX_DAY_SUMMARY_CHARS);
+  expect(summaryLength(fits)).toBeLessThanOrEqual(MAX_DAY_SUMMARY_CHARS);
+  expect(summaryProblem(fits)).toBeNull();
+  const long = "苗床东侧完成换土并补种了春季豆苗和三排生菜，西侧搭好豆架，北侧育苗盘已经移到棚里晒太阳。".repeat(4);
+  expect(summaryProblem(long)).toBe(`summary 约 ${summaryLength(long)} 字，超过 ${MAX_DAY_SUMMARY_CHARS} 字上限，需要删掉至少 ${summaryLength(long) - MAX_DAY_SUMMARY_CHARS} 字`);
+  expect(summaryLength(fitSummary(long)!)).toBeLessThanOrEqual(MAX_DAY_SUMMARY_CHARS);
+  expect(fitSummary("没有句号".repeat(60))).toBeNull();
+  // 截断同时守住 4 句；序号里的点和引号里的句号不另算一句。
+  expect(fitSummary("一。二。三。四。五。")).toBe("一。二。三。四。");
+  expect(summaryProblem("今天推进三件事：1. 完成苗床。2. 补种豆苗。")).toBeNull();
+  expect(fitSummary(`小禾说“苗床排好了。”${"西侧补种了豆苗。".repeat(30)}`)?.startsWith("小禾说“苗床排好了。”")).toBe(true);
+  expect(summaryProblem(`一句${"很长".repeat(90)}。`)).toContain("；summary 现在是 1 句");
+
+  const done = chat(480, "东区苗床", "给小禾看了苗床原始排布。");
+  save(done);
+  overviewText = long;
+  await round(540, true);
+  expect(overviewCalls()[0]!.recheck?.({ summary: long })).toContain("超过");
+  expect(view(540).detail.summary).toBe(fitSummary(long));
 });
 
 test.each(["after_segment", "hourly", "nightly"])("润色时机 %s 遵守快轮、整点和跨天收尾", async mode => {

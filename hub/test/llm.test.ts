@@ -340,6 +340,28 @@ test("HTTP 后端输出不合 schema 时带上不合格位置重试一次，用�
   expect(rows[0]).toMatchObject({ ok: 1, input_tokens: 20, output_tokens: 6 });
 });
 
+// 2026-11-25：当天概述超字数时只说“超长”，模型不知道删多少，重试后照样超，概述三分之二被丢弃。
+test("通过 schema 后 recheck 报问题时带上原因重试一次，重试不合 schema 时用第一次的", async () => {
+  const dir = await directory(); await configure(dir, "openai-compatible", { base_url: "https://recheck.synthetic.invalid/v1" });
+  const schema = { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false };
+  const recheck = (value: unknown) => (value as { text: string }).text.length > 4 ? "text 约 9 字，需要删掉至少 5 字" : null;
+  // 第二次合格就用第二次；不合 schema、截断出错、仍不合 recheck 都留用第一次，两次用量都记上。
+  for (const [second, expected] of [['{"text":"合成"}', "合成"], ['{"wrong":1}', "超过四个字的合成"], ["{", "超过四个字的合成"], ['{"text":"仍然超过四个字"}', "超过四个字的合成"]] as const) {
+    const prompts: string[] = [], rows: UsageRow[] = [];
+    globalThis.fetch = (async (_url: any, options: any) => {
+      prompts.push(JSON.parse(options.body).messages.at(-1).content);
+      const content = prompts.length === 1 ? '{"text":"超过四个字的合成"}' : second;
+      return Response.json({ choices: [{ finish_reason: "stop", message: { content } }], usage: { prompt_tokens: 4, completion_tokens: 2 } });
+    }) as typeof fetch;
+    const llm = createLLM({ dataDir: dir, readKey: () => "synthetic-key", recordUsage: row => { rows.push(row); } });
+    const result = await llm.complete<{ text: string }>({ ...request, schema, recheck });
+    expect(result.ok && result.data.text).toBe(expected);
+    expect(rows[0]).toMatchObject({ ok: 1, input_tokens: 8, output_tokens: 4 });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("上一次输出：text 约 9 字，需要删掉至少 5 字。");
+  }
+});
+
 // 2026-11-18：设置页填了完整接口地址导致 404；MiniMax 不读 response_format，M3 把 <think> 写进正文。
 test("OpenAI 兼容：地址末尾的接口路径去掉，正文开头的 <think> 去掉", async () => {
   const dir = await directory(); await configure(dir, "openai-compatible", { base_url: "https://synthetic.invalid/v1/chat/completions/" });

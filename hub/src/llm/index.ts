@@ -78,14 +78,29 @@ export function createLLM(options: { dataDir: string; recordUsage: (row: UsageRo
       };
       data = await call(ctx);
       // HTTP 接口（如经 Anthropic 兼容接口接入的 MiniMax）不强制 maxLength 等约束，偶尔超长就整次作废。
-      // 把不合格的位置（只有路径和规则，不含内容）告诉模型重试一次；两次的用量合计。CLI 后端自己强制 schema，不重试。
-      if (!validate(data) && http) {
-        const problems = [...new Set((validate.errors ?? []).map(e => `${e.instancePath || "/"} ${e.message ?? "不符合"}`))].slice(0, 8).join("；");
-        const first = { ...metrics };
-        data = await call({ ...ctx, req: { ...req, prompt: `${req.prompt}\n\n上一次输出不符合 JSON schema：${problems}。修正这些问题后重新完整输出。` } });
-        const sum = (a: number | null, b: number | null) => a === null && b === null ? null : (a ?? 0) + (b ?? 0);
-        metrics.inputTokens = sum(first.inputTokens, metrics.inputTokens); metrics.outputTokens = sum(first.outputTokens, metrics.outputTokens);
-        metrics.outputChars += first.outputChars;
+      // 把不合格的位置（只有路径和规则，不含内容）告诉模型重试一次；两次的用量合计。CLI 后端自己强制 schema，不为 schema 重试。
+      // 通过 schema 但 recheck 报问题（如概述字数）时任何后端都重试一次；重试不合格、出错或时间不够时用第一次的。
+      const valid = validate(data);
+      const problem = !valid
+        ? http ? `不符合 JSON schema：${[...new Set((validate.errors ?? []).map(e => `${e.instancePath || "/"} ${e.message ?? "不符合"}`))].slice(0, 8).join("；")}` : null
+        : req.recheck?.(data) ?? null;
+      // 两次共用 timeoutMs，免得一次调用占住串行队列两倍时间。
+      const remainingMs = timeoutMs - (performance.now() - start);
+      if (problem && (!valid || remainingMs >= 15_000)) {
+        const first = { ...metrics }, firstData = data;
+        // 后端只在拿到用量时写 metrics；清零后再合计，第二次缺用量时不会把第一次的记两遍。
+        Object.assign(metrics, { outputChars: 0, inputTokens: null, outputTokens: null });
+        try {
+          data = await call({ ...ctx, timeoutMs: Math.max(1_000, remainingMs), req: { ...req, prompt: `${req.prompt}\n\n上一次输出：${problem}。修正这些问题后重新完整输出。` } });
+          if (valid && (!validate(data) || req.recheck?.(data, firstData))) data = firstData;
+        } catch (error) {
+          if (!valid) throw error;
+          data = firstData;
+        } finally {
+          const sum = (a: number | null, b: number | null) => a === null && b === null ? null : (a ?? 0) + (b ?? 0);
+          metrics.inputTokens = sum(first.inputTokens, metrics.inputTokens); metrics.outputTokens = sum(first.outputTokens, metrics.outputTokens);
+          metrics.outputChars += first.outputChars;
+        }
       }
       if (!validate(data)) throw new ModelError("schema_mismatch");
       validated = true;

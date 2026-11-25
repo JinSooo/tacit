@@ -92,7 +92,7 @@ private struct ModelCallRow: View {
             .font(.system(size:TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
           Text("返回：\(call.providerState == "returned" ? "已返回" : call.providerState == "sending" ? "等待中" : "失败或未发送")　校验：\(call.validationState == "passed" ? "通过" : call.validationState == "failed" ? "未通过" : "未记录")")
             .font(.system(size:TextSize.body)).foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
-          if let error = call.error { Text(error).foregroundStyle(Palette.attention).textSelection(.enabled) }
+          if let error = call.error { Text(ModelErrorText.plain(error)).foregroundStyle(Palette.attention).textSelection(.enabled) }
           if let missing = CallSnapshot.missing(call.contentState), call.contentState == "not_recorded" {
             Text(missing).foregroundStyle(Palette.muted)
           } else { RuntimeSnapshotView(id:call.id) }

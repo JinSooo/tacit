@@ -1035,7 +1035,7 @@ CREATE TABLE project_context_cache (
 - **只走 API 的模型（2026-11-23 已实现）**：
   - `RA_HUB_MODE=server`（及全部非 macOS 平台）下禁用 `claude-cli` 与 `codex-cli`：
     - `GET /v1/settings/models` 仅返回 `anthropic` 与 `openai-compatible`；
-    - `PUT /v1/settings/models` 与 `POST /v1/settings/models/test` 拒绝 CLI 提供方（返回 `400`「服务端中枢仅支持 API 模型」）；
+    - `PUT /v1/settings/models` 与 `POST /v1/settings/models/test` 拒绝 CLI 提供方（返回 `400`「远端后台只支持 API 模型」）；
     - 无 `models.json` 时不再回退到 `claude-cli`：`GET /v1/settings/models` 返回 `tiers: null` 与非空 `config_error`；`createLLM` 与 `distill` 按同一规则返回 `config_error` 并暂停模型整理（切片草稿照常运行），状态接口在 `distill.config_error` 与 `distill.paused_reason` 中写明原因，配好 API 模型后自动恢复。
     - 本地/局域网模型（如服务器上同机跑 Ollama）仍可通过 `openai-compatible` 接入；`POST /v1/settings/models/local` 仍限制为中枢本机 loopback 地址以防 SSRF。
 - **部署、CLI 引导与时区（2026-11-23 已实现）**：

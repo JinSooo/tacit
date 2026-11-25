@@ -4,7 +4,7 @@ import { acknowledgeSecurityEvent, auditSecurity, pendingSecurityEvents, securit
 import { createServer } from "node:net";
 import { InputError, type HubDB } from "./db.ts";
 import { hubModeOf, resolvePort, writeHubPort, PORT_MIN, PORT_MAX, type HubMode } from "./hub-json.ts";
-import { DEFAULT_TIERS, KEY_PROVIDERS, PROVIDERS, TIERS, isCliProvider, loadConfig, saveConfig, validateTier, validateTiers, type KeyProvider } from "./llm/config.ts";
+import { friendlyConfigError, DEFAULT_TIERS, KEY_PROVIDERS, PROVIDERS, TIERS, isCliProvider, loadConfig, saveConfig, validateTier, validateTiers, type KeyProvider } from "./llm/config.ts";
 import { KEY_PATTERN, systemKeychain, type Keychain } from "./llm/keychain.ts";
 import { createLLM, type ModelConfig, type ReadKey, type Spawn, type Tier } from "./llm/index.ts";
 import { GENERAL_DEFAULTS, GENERAL_RANGES, readGeneral, updateGeneral } from "./general-settings.ts";
@@ -38,9 +38,9 @@ export const PROVIDER_INFO = [
 
 /** 按 distill/run.ts 里各档的实际调用写。 */
 export const TIER_INFO: Record<Tier, { label: string; description: string }> = {
-  minute: { label: "实时整理", description: "每 15 分钟一次，把新的动作归到对应的事项和项目里。用得最频繁，适合选快一些的模型。" },
-  hour: { label: "每小时汇总", description: "每小时一次，把事项的新进展写进详细记录，并汇总每个项目。" },
-  day: { label: "每日时间线", description: "今天的时间线每小时更新一次，打开时间线时按需补一次；以前的日子有新内容时重写。整理启用前的历史也用它。" },
+  minute: { label: "实时整理", description: "每 15 分钟把新记录归到事项和项目里，调用最多，适合选快一些的模型。" },
+  hour: { label: "每小时汇总", description: "每小时把事项的新进展写进详细记录，并汇总每个项目。" },
+  day: { label: "每日时间线", description: "写时间线和当天概述，整理启用前的历史也用它。" },
 };
 
 const TEST_SCHEMA = { type: "object", properties: { ok: { type: "boolean", enum: [true] } }, required: ["ok"], additionalProperties: false };
@@ -60,6 +60,10 @@ function object(value: unknown): Record<string, unknown> {
 /** 校验函数抛的是普通 Error（加载 models.json 时也用），接口里转成 400。 */
 function asInput<T>(fn: () => T): T {
   try { return fn(); } catch (error) { throw new InputError(error instanceof Error ? error.message : "参数无效"); }
+}
+/** 模型设置的校验错误换成用户能看懂的说法。 */
+function asConfigInput<T>(fn: () => T): T {
+  try { return fn(); } catch (error) { throw new InputError(friendlyConfigError(error)); }
 }
 const fail = (status: number, error: string) => Response.json({ error }, { status });
 
@@ -118,9 +122,9 @@ export function createSettings(deps: SettingsDeps) {
         const body = object(await ctx.readJSON());
         if (Object.keys(body).some(k => k !== "tiers")) throw new InputError("只接受 tiers");
         // 先校验（和读取 models.json 同一套规则），通过了才写文件。
-        const tiers = asInput(() => validateTiers(body.tiers, "tiers", { mode }));
+        const tiers = asConfigInput(() => validateTiers(body.tiers, "tiers", { mode }));
         try { await saveConfig(deps.dataDir, tiers, { mode }); }
-        catch { return fail(500, "无法写入 models.json"); }
+        catch { return fail(500, "保存模型设置失败，请重试。"); }
         return Response.json(await models());
       }
     }
@@ -128,7 +132,7 @@ export function createSettings(deps: SettingsDeps) {
     if (pathname === "/v1/settings/models/local" && method === "POST") {
       const body = object(await ctx.readJSON());
       if (Object.keys(body).some(k => k !== "base_url") || typeof body.base_url !== "string") throw new InputError("只接受 base_url");
-      const config = asInput(() => validateTier({ provider: "openai-compatible", model: "list", base_url: body.base_url }, "config", { mode }));
+      const config = asConfigInput(() => validateTier({ provider: "openai-compatible", model: "list", base_url: body.base_url }, "config", { mode }));
       if (!isLoopback(config.base_url)) throw new InputError("模型列表只接受本机 HTTP(S) 地址");
       try { return Response.json({ models: await localModels(config.base_url!) }); }
       catch (error) { return fail(503, error instanceof Error ? error.message : "读取本机模型列表失败"); }
@@ -140,10 +144,10 @@ export function createSettings(deps: SettingsDeps) {
       if (!TIERS.includes(body.tier as Tier)) throw new InputError("tier 必须是 minute、hour 或 day");
       const tier = body.tier as Tier;
       let config: ModelConfig;
-      if (body.config !== undefined) config = asInput(() => validateTier(body.config, "config", { mode }));
+      if (body.config !== undefined) config = asConfigInput(() => validateTier(body.config, "config", { mode }));
       else {
         try { config = (await loadConfig(deps.dataDir, { mode }))[tier]; }
-        catch (error) { throw new InputError(error instanceof Error ? error.message : "models.json 无效"); }
+        catch (error) { throw new InputError(friendlyConfigError(error)); }
       }
       if (testing) return fail(409, "上一次测试还没结束");
       testing = true;
@@ -184,7 +188,7 @@ export function createSettings(deps: SettingsDeps) {
         try { deleted = await keychain.remove(provider); }
         catch {
           auditSecurity(ctx.db.db, "key.delete", { ...audit, ok: false, code: "secret_error" });
-          return fail(500, "删除钥匙串条目失败");
+          return fail(500, "删除 API key 失败，请重试。");
         }
         auditSecurity(ctx.db.db, "key.delete", { ...audit, code: deleted ? "deleted" : "absent" });
         return Response.json({ provider, deleted });
@@ -192,11 +196,11 @@ export function createSettings(deps: SettingsDeps) {
       const body = object(await ctx.readJSON());
       if (Object.keys(body).some(k => k !== "key")) throw new InputError("只接受 key");
       const value = typeof body.key === "string" ? body.key.trim() : "";
-      if (!KEY_PATTERN.test(value)) throw new InputError("API key 必须是 8–1024 个可见 ASCII 字符，不能含空格、双引号或反斜杠");
+      if (!KEY_PATTERN.test(value)) throw new InputError("API key 格式不对：应为 8–1024 个英文字母、数字或符号，不能有空格、双引号或反斜杠。");
       try { await keychain.set(provider, value); }
       catch {
         auditSecurity(ctx.db.db, "key.set", { ...audit, ok: false, code: "secret_error" });
-        return fail(500, "写入钥匙串失败");
+        return fail(500, "保存 API key 失败，请重试。");
       }
       auditSecurity(ctx.db.db, "key.set", audit);
       return Response.json({ provider, set: true });

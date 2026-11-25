@@ -278,12 +278,12 @@ private struct RemoteBackendModelStatusRows: View {
       switch status?.distill.state {
       case .working: EmptyView()
       case .waiting: SettingsRow("整理", value: "等待首次完成")
-      case .failing: SettingsMessage(text: "整理遇到问题，请检查模型设置。")
+      case .failing(let reason): SettingsMessage(text: reason)
       case nil: SettingsRow("整理", value: "暂时无法读取")
       }
     }
     if let time = status?.distill.lastOkAt.flatMap(ViewerTime.parse) {
-      SettingsRow("最近完成整理", value: Fmt.dateTime(time))
+      SettingsRow("最近整理", value: Fmt.dateTime(time))
     }
     if let warning = status?.timezoneNotice { SettingsMessage(text: warning) }
   }

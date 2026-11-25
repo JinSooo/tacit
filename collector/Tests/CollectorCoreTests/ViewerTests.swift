@@ -151,6 +151,26 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(busy.isResponding(at: now) && busy.nextRound(after: now) == nil)
 }
 
+// 2026-11-25：设置页把 schema_mismatch 原样显示；当天概述偶尔超长失败，别的整理照常成功，红字却一直挂着。
+@Test func distillHealthShowsPlainProblemsAndHidesSelfHealingOnes() throws {
+  let now = try #require(ViewerTime.parse("2026-11-25T14:40:00+08:00"))
+  func health(_ error: String, lastOk: String) throws -> DistillHealth {
+    try decode(DistillHealth.self, #"{"last_ok_at":"\#(lastOk)","last_error":{"at":"2026-11-25T14:33:18+08:00","tier":"day","error":"\#(error)","recovered":false}}"#)
+  }
+  #expect(try health("schema_mismatch", lastOk: "2026-11-25T14:33:08+08:00").state(at: now) == .working)
+  let stuck = try health("schema_mismatch", lastOk: "2026-11-25T12:00:00+08:00")
+  guard case .failing(let reason) = stuck.state(at: now) else { Issue.record("应提示"); return }
+  #expect(!reason.contains("schema") && reason.contains("换个模型"))
+  #expect(try health("auth:401", lastOk: "2026-11-25T14:33:08+08:00").state(at: now) == .failing("整理没能完成：API key 没设置或无效；用账号登录的，请确认已登录。"))
+  // 测试连接、维护和运行记录用同一套说法；不是错误码的中文原因原样显示。
+  #expect(ModelErrorText.plain("rate_limited:429") == "请求太频繁，模型服务暂时限流，稍后会自动重试。")
+  #expect(ModelErrorText.plain("整理进程中断了") == "整理进程中断了")
+  #expect(try health("auth:401", lastOk: "2026-11-25T14:33:08+08:00").failingTier == "day")
+  // 三档分开时按出错那一档自己的最近成功判断。
+  let dayStuck = try decode(DistillHealth.self, #"{"last_ok_at":"2026-11-25T14:33:08+08:00","last_error":{"tier":"day","error":"timeout","recovered":false,"tier_last_ok_at":"2026-11-25T10:00:00+08:00"}}"#)
+  #expect(dayStuck.state(at: now) != .working)
+}
+
 @Test func reviewDisplaysStaleAndFailedStatesWithoutAPlaceholderSummary() throws {
   let pending = try decode(NowState.self, #"{"brief":"有新活动待整理。","updated_at":null}"#)
   #expect(pending.activitySummary == nil)

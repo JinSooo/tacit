@@ -19,8 +19,8 @@ test("每日概述提示词和输出 schema 约定四条带上下文的主线，
   expect(valid(output(null))).toBe(true);
   expect(valid(output({ activities: [], text }))).toBe(false);
   expect(valid(output({ activities: ["a1", "a2", "a3", "a4", "a5"], text }))).toBe(false);
-  expect(valid(output({ activities: ["a1"], text: "字".repeat(160) }))).toBe(true);
-  expect(valid(output({ activities: ["a1"], text: "字".repeat(161) }))).toBe(false);
+  expect(valid(output({ activities: ["a1"], text: "字".repeat(480) }))).toBe(true);
+  expect(valid(output({ activities: ["a1"], text: "字".repeat(481) }))).toBe(false); // 160 字按 summaryLength 数，schema 只挡离谱的超长
   expect(valid(legacy)).toBe(false);
   const normalized = normalizeDayOutput(legacy);
   expect(normalized).toEqual(output({ activities: ["a1"], text }));

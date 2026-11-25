@@ -2,16 +2,36 @@ import Foundation
 
 /// Mac 回顾和准备清单共用的后台整理状态。
 public struct DistillHealth: Decodable, Equatable, Sendable {
-  private struct LastError: Decodable, Equatable, Sendable { let error: String; let recovered: Bool }
+  private struct LastError: Decodable, Equatable, Sendable {
+    let error: String; let tier: String?; let recovered: Bool
+    /// 出错那一档自己的最近成功；旧后台不给时用全局的 lastOkAt。
+    let tierLastOkAt: String?
+  }
   public let lastOkAt: String?
   private let lastError: LastError?
   private let lastRoundAt: String?
   private let heartbeatAt: String?
 
+  /// failing 带的是给用户看的一句话，不含错误码。
   public enum State: Equatable { case working, waiting, failing(String) }
-  public var state: State {
-    if let error = lastError, !error.recovered { return .failing(error.error) }
+  public var state: State { state(at: Date()) }
+
+  public func state(at now: Date) -> State {
+    if let error = lastError, !error.recovered,
+       let message = Self.problem(error.error, lastOk: (error.tierLastOkAt ?? lastOkAt).flatMap(ViewerTime.parse), now: now) { return .failing(message) }
     return lastOkAt == nil ? .waiting : .working
+  }
+
+  /// 出问题的那一档（minute / hour / day），旧后台不给时为 nil。
+  public var failingTier: String? {
+    guard case .failing = state else { return nil }
+    return lastError?.tier
+  }
+
+  /// 用户能处理的错误马上说；格式不对、超时这类下一轮会自己重试的，整理连续 1 小时都没成功才说（2026-11-25）。
+  static func problem(_ code: String, lastOk: Date?, now: Date) -> String? {
+    if !ModelErrorText.needsUser(code), let lastOk, now.timeIntervalSince(lastOk) < 3600 { return nil }
+    return "整理没能完成：" + ModelErrorText.plain(code)
   }
 
   public func isResponding(at now: Date) -> Bool {
@@ -100,5 +120,38 @@ extension JSONValue {
     guard let data = try? JSONSerialization.data(withJSONObject: value(self), options: [.prettyPrinted,.sortedKeys,.fragmentsAllowed]),
           let text = String(data:data,encoding:.utf8) else { return "" }
     return text
+  }
+}
+
+/// 后台模型错误码（如 `auth:401`、`schema_mismatch`）给用户看的一句话。界面不显示错误码，诊断信息里才保留原码。
+public enum ModelErrorText {
+  static func category(_ code: String) -> String { code.split(separator: ":").first.map(String.init) ?? code }
+
+  /// 要用户动手才能好的错误；其余的下一轮会自己重试。
+  public static func needsUser(_ code: String) -> Bool {
+    ["auth", "quota", "bad_request", "config_error", "cli_failed"].contains(category(code))
+  }
+
+  public static func isCode(_ text: String) -> Bool {
+    text.range(of: #"\A[a-z_]+(?::[1-5][0-9]{2})?\z"#, options: .regularExpression) != nil
+  }
+
+  /// 不是错误码的文字（例如后台给的中文原因）原样返回。
+  public static func plain(_ code: String) -> String {
+    guard isCode(code) else { return code }
+    switch category(code) {
+    case "auth": return "API key 没设置或无效；用账号登录的，请确认已登录。"
+    case "quota": return "模型服务的额度用完了，充值或额度恢复后会自动继续。"
+    case "bad_request": return "模型服务拒绝了请求，请检查模型名、地址和思考强度。"
+    case "config_error": return "模型设置有问题，请检查后重新保存。"
+    case "cli_failed": return "命令行工具调用失败，请确认已安装并登录。"
+    case "network": return "连不上模型服务，请检查网络和地址。"
+    case "rate_limited": return "请求太频繁，模型服务暂时限流，稍后会自动重试。"
+    case "timeout": return "模型服务一直没有回应，请检查网络或稍后再试。"
+    case "server_error": return "模型服务暂时出错，稍后会自动重试。"
+    case "schema_mismatch", "invalid_json": return "模型返回的内容不合格式，可以换个模型试试。"
+    case "usage_record_failed": return "整理记录没能保存，请检查磁盘空间。"
+    default: return "原因不明，请检查模型设置。"
+    }
   }
 }

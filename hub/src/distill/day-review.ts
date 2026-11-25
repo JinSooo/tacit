@@ -8,7 +8,7 @@ import { dayDisplayName, readDayEvidence, sampleDayEvidence, type DayReference, 
 import { AUDIO_SOURCES, SKELETON_SOURCES, audioDeviceGroup, sourceList } from "../record-sources.ts";
 import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
-import { MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
+import { fitSummary, MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
 
 const MINUTE = 60_000;
 const MISC_SECONDS = 5 * 60;
@@ -694,12 +694,8 @@ const singleLine = (text: string, limit: number) => {
 
 function summaryLine(text: string): string {
   const line = redactString(text).text.replace(/\s*[\r\n\u2028\u2029]+\s*/gu, " ").trim();
-  const characters = Array.from(line);
-  if (characters.length <= MAX_DAY_SUMMARY_CHARS) return line;
-  const prefix = characters.slice(0, MAX_DAY_SUMMARY_CHARS);
-  const lastSentence = prefix.findLastIndex((char, index) =>
-    /[。！？!?]/u.test(char) || char === "." && /\s/u.test(characters[index + 1] ?? ""));
-  return prefix.slice(0, lastSentence === -1 ? prefix.length : lastSentence + 1).join("").trimEnd();
+  // 一句都放不下时按码点截，码点数不超过上限时按字数也一定不超。
+  return fitSummary(line) ?? Array.from(line).slice(0, MAX_DAY_SUMMARY_CHARS).join("").trimEnd();
 }
 
 function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | undefined) {

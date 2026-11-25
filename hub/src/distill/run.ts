@@ -952,11 +952,19 @@ async function overviewStep(d: Deps, store: DistillStore, date: string, now: num
   const result = changed && activities.length ? await complete<{ summary: string | null }>(d, {
     tier: "day", task: "day_brief", system: P.DAY_OVERVIEW_SYSTEM, timeoutMs: 300_000,
     prompt, schema: P.DAY_OVERVIEW_SCHEMA,
+    recheck: (value, first) => {
+      const s = (value as { summary: string | null }).summary;
+      // 第一次写了内容、重试却返回空，按没改好处理，留用第一次的。
+      if (s === null) return (first as { summary?: string | null } | undefined)?.summary ? "summary 不能为空" : null;
+      return P.summaryProblem(s);
+    },
   }) : null;
   if (result?.ok === false) return { calls: 1, ok: false, error: classifyModelError(result.error) };
-  const summary = result?.data.summary === null || !result ? null : redactString(result.data.summary).text.trim();
-  const sentences = summary?.match(/[。！？!?]+|\.(?=\s|$)/gu)?.length ?? 0;
-  if (result && summary !== null && (sentences < 2 || sentences > 4 || Array.from(summary).length > P.MAX_DAY_SUMMARY_CHARS)) {
+  // 重试后仍超长时保留放得下的整句，句数仍要 2–4 句。
+  const raw = result?.data.summary === null || !result ? null : redactString(result.data.summary).text.trim();
+  const summary = raw === null ? null : P.fitSummary(raw);
+  const sentences = summary === null ? 0 : P.summarySentences(summary);
+  if (result && raw !== null && (summary === null || sentences < 2 || sentences > 4)) {
     discardedCall(d.db, result.call_id);
     return { calls: 1, ok: false, error: "schema_mismatch" };
   }

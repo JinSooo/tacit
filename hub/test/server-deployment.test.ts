@@ -169,7 +169,7 @@ test("server 模式禁用 CLI 提供方，无 models.json 时返回 config_error
   expect(initial.body.config_error).toContain("models.json");
   await expect(loadModelConfig(ctx.dir, { mode: "server" })).rejects.toThrow("models.json");
 
-  // 2. PUT 和 test 拒绝 claude-cli / codex-cli，文案严格为“服务端中枢仅支持 API 模型”。
+  // 2. PUT 和 test 拒绝 claude-cli / codex-cli，文案严格为“远端后台只支持 API 模型”。
   const apiTier = { provider: "anthropic", model: "claude-sonnet-4-5" };
   for (const cliProvider of ["claude-cli", "codex-cli"]) {
     const putRes = await call("PUT", "/v1/settings/models", {

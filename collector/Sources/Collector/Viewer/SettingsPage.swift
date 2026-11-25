@@ -104,8 +104,10 @@ struct SettingsForm<Content: View>: View {
 struct SettingsRow<Label: View, Content: View>: View {
   let label: Label
   let content: Content
-  init(_ title: String, @ViewBuilder content: () -> Content) where Label == SwiftUI.Text {
-    label = Text(title); self.content = content()
+  var alignment: VerticalAlignment = .center
+  /// 右侧内容带一行小字说明时用 .firstTextBaseline，让标签对齐输入框而不是整块的中线。
+  init(_ title: String, alignment: VerticalAlignment = .center, @ViewBuilder content: () -> Content) where Label == SwiftUI.Text {
+    label = Text(title); self.content = content(); self.alignment = alignment
   }
   init(@ViewBuilder content: () -> Content, @ViewBuilder label: () -> Label) {
     self.label = label(); self.content = content()
@@ -114,7 +116,7 @@ struct SettingsRow<Label: View, Content: View>: View {
     label = Text(title); content = Text(value).foregroundColor(Palette.muted)
   }
   var body: some View {
-    HStack(alignment: .center, spacing: 16) {
+    HStack(alignment: alignment, spacing: 16) {
       VStack(alignment: .leading, spacing: 4) { label }
       Spacer(minLength: 12)
       content

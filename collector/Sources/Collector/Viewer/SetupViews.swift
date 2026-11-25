@@ -145,7 +145,7 @@ struct SetupChecklist: View {
   func modelDetail(_ s: DistillHealth.State) -> String? {
     switch s {
     case .waiting: return "第一次整理会在 15 分钟内完成。"
-    case .failing: return "最近一次整理没有成功，多半是模型连不上。"
+    case .failing(let reason): return reason
     case .working: return nil
     }
   }

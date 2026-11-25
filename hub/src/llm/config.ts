@@ -13,7 +13,7 @@ export const PROVIDERS: Provider[] = ["claude-cli", "codex-cli", "anthropic", "o
 export const KEY_PROVIDERS = ["anthropic", "openai-compatible"] as const satisfies readonly Provider[];
 export type KeyProvider = typeof KEY_PROVIDERS[number];
 export const DEFAULT_TIERS: Record<Tier, ModelConfig> = { minute: { provider: "claude-cli", model: "haiku" }, hour: { provider: "claude-cli", model: "sonnet" }, day: { provider: "claude-cli", model: "sonnet" } };
-export const SERVER_CLI_ERROR = "服务端中枢仅支持 API 模型";
+export const SERVER_CLI_ERROR = "远端后台只支持 API 模型";
 export const SERVER_NO_MODELS_ERROR = "服务端中枢尚未配置 API 模型，请先在设置中配置 models.json 和对应 API key";
 
 export class ModelConfigError extends Error {
@@ -39,6 +39,19 @@ export interface ModelModeOptions {
 
 function resolveMode(opts?: ModelModeOptions): HubMode {
   return opts?.mode ?? hubModeOf(opts?.env);
+}
+
+/** 设置页保存、测试时给用户看的说法：去掉 models.json、tiers.minute.base_url 这类字段路径（2026-11-25）。 */
+export function friendlyConfigError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message === SERVER_CLI_ERROR) return message;
+  if (/\.model 必须是非空字符串/.test(message)) return "请填写模型名。";
+  if (/\.model 不能超过/.test(message)) return "模型名太长，或含有特殊字符。";
+  if (/\.base_url 只适用于/.test(message)) return "这个提供商不用填地址。";
+  if (/\.base_url /.test(message)) return "地址要是完整的 http 或 https 链接，不能带用户名、密码或问号后的参数。";
+  if (/\.reasoning_effort/.test(message)) return "思考强度只适用于 OpenAI 兼容 API。";
+  if (/\.provider 不支持/.test(message)) return "不支持这个提供商。";
+  return "模型设置有问题，请检查后重新保存。";
 }
 
 /** 校验一档配置；prefix 是错误信息里的位置前缀，例如 "models.json：tiers.minute"。 */

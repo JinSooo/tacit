@@ -129,15 +129,16 @@ test("models：GET 给默认值、说明和 key 状态；PUT 严格校验后原�
   expect(saved.status).toBe(200); expect(saved.body.tiers).toEqual(good);
   expect(JSON.parse(readFileSync(join(ctx.dir, "models.json"), "utf8"))).toEqual({ tiers: good });
   const before = readFileSync(join(ctx.dir, "models.json"), "utf8");
+  // 2026-11-25：设置页把 tiers.minute.base_url 这类字段路径原样显示，改成用户能看懂的一句话。
   for (const [body, error] of [
-    [{ tiers: { minute: good.minute, hour: good.hour } }, "tiers.day"],
-    [{ tiers: { ...good, week: good.day } }, "未知档位"],
-    [{ tiers: { ...good, minute: tier("unknown") } }, "provider"],
-    [{ tiers: { ...good, minute: tier("anthropic", " ") } }, "model"],
-    [{ tiers: { ...good, minute: tier("anthropic", "m", { api_key: SECRET }) } }, "未知字段"],
-    [{ tiers: { ...good, minute: tier("codex-cli", "m", { base_url: "https://x.invalid" }) } }, "只适用于 HTTP"],
-    [{ tiers: { ...good, minute: tier("anthropic", "m", { base_url: "https://user:pw@x.invalid" }) } }, "base_url"],
-    [{ tiers: { ...good, minute: tier("anthropic", "m", { base_url: "ftp://x.invalid" }) } }, "base_url"],
+    [{ tiers: { minute: good.minute, hour: good.hour } }, "模型设置有问题，请检查后重新保存。"],
+    [{ tiers: { ...good, week: good.day } }, "模型设置有问题，请检查后重新保存。"],
+    [{ tiers: { ...good, minute: tier("unknown") } }, "不支持这个提供商。"],
+    [{ tiers: { ...good, minute: tier("anthropic", " ") } }, "请填写模型名。"],
+    [{ tiers: { ...good, minute: tier("anthropic", "m", { api_key: SECRET }) } }, "模型设置有问题，请检查后重新保存。"],
+    [{ tiers: { ...good, minute: tier("codex-cli", "m", { base_url: "https://x.invalid" }) } }, "这个提供商不用填地址。"],
+    [{ tiers: { ...good, minute: tier("anthropic", "m", { base_url: "https://user:pw@x.invalid" }) } }, "地址要是完整的 http 或 https 链接"],
+    [{ tiers: { ...good, minute: tier("anthropic", "m", { base_url: "ftp://x.invalid" }) } }, "地址要是完整的 http 或 https 链接"],
     [{ tiers: good, extra: 1 }, "只接受 tiers"],
     [[], "对象"],
   ] as const) {
@@ -171,8 +172,8 @@ test("keys：PUT/DELETE 只接受两种 provider，key 从不出现在响应、�
 
   // 钥匙串失败：500 + 固定文字，不带 key 和底层错误。
   const failing = handler({ keychain: { has: async () => { throw new Error(SECRET); }, set: async () => { throw new Error(SECRET); }, remove: async () => { throw new Error(SECRET); } } });
-  expect(await call(failing, "PUT", "/v1/settings/keys/anthropic", { key: SECRET })).toEqual({ status: 500, body: { error: "写入钥匙串失败" } });
-  expect(await call(failing, "DELETE", "/v1/settings/keys/anthropic")).toEqual({ status: 500, body: { error: "删除钥匙串条目失败" } });
+  expect(await call(failing, "PUT", "/v1/settings/keys/anthropic", { key: SECRET })).toEqual({ status: 500, body: { error: "保存 API key 失败，请重试。" } });
+  expect(await call(failing, "DELETE", "/v1/settings/keys/anthropic")).toEqual({ status: 500, body: { error: "删除 API key 失败，请重试。" } });
   expect((await call(failing, "GET", "/v1/settings/models")).body.keys).toEqual({ anthropic: null, "openai-compatible": null });
   const audit = await call(h, "GET", "/v1/settings/security-audit");
   expect(audit.body.events).toEqual(expect.arrayContaining([
@@ -232,7 +233,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
 
   for (const body of [{}, { tier: "week" }, { tier: "minute", config: tier("unknown") }, { tier: "minute", extra: 1 }]) expect((await call(h, "POST", "/v1/settings/models/test", body)).status).toBe(400);
   writeFileSync(join(ctx.dir, "models.json"), "{");
-  expect((await call(h, "POST", "/v1/settings/models/test", { tier: "minute" })).body.error).toContain("不是合法 JSON");
+  expect((await call(h, "POST", "/v1/settings/models/test", { tier: "minute" })).body.error).toBe("模型设置有问题，请检查后重新保存。");
 });
 
 test("general：默认值、范围、只改给出的字段；注入上限和提炼生命周期现读", async () => {

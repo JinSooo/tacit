@@ -268,6 +268,44 @@ export interface ProjectOutput { goal: string; status: string; people: string[] 
 
 export const MAX_DAY_SUMMARY_CHARS = 160;
 const MAX_DAY_SUMMARY_ACTIVITIES = 4;
+/** schema 里只放宽松的硬上限，真正的字数按 summaryLength 数，超了由程序带原因重试或截到整句。 */
+const DAY_SUMMARY_HARD_LIMIT = MAX_DAY_SUMMARY_CHARS * 3;
+const LATIN_RUN = /[A-Za-z0-9]+(?:[._\-/+:][A-Za-z0-9]+)*/gu;
+// 句末标点连同紧跟的闭合引号、括号算一处；英文句点不算序号（“1. ”）和小数里的点。
+const SENTENCE_END = /(?:[。！？!?]+|(?<![\d.])\.(?=\s|$))[”’」』）)"']*/gu;
+const MAX_DAY_SUMMARY_SENTENCES = 4;
+
+/**
+ * 按中文“字数”习惯数概述长度：汉字和标点各算 1，一串连着的英文、数字（项目名、版本号）算 1，空白不算。
+ * 之前按码点数，`ai-engineering-from-scratch` 一个项目名就占 27 字，模型写的概述有一半因超长被整段丢弃（2026-11-25）。
+ */
+export function summaryLength(text: string): number {
+  return Array.from(text.replace(LATIN_RUN, "w").replace(/\s+/gu, "")).length;
+}
+
+export function summarySentences(text: string): number {
+  return text.match(SENTENCE_END)?.length ?? 0;
+}
+
+/** 超过字数或句数上限时保留开头放得下的整句；一句都放不下时返回 null。 */
+export function fitSummary(text: string, limit = MAX_DAY_SUMMARY_CHARS, maxSentences = MAX_DAY_SUMMARY_SENTENCES): string | null {
+  if (summaryLength(text) <= limit && summarySentences(text) <= maxSentences) return text;
+  let best: string | null = null, count = 0;
+  for (const match of text.matchAll(SENTENCE_END)) {
+    const head = text.slice(0, match.index + match[0].length).trimEnd();
+    if (summaryLength(head) > limit || ++count > maxSentences) break;
+    best = head;
+  }
+  return best;
+}
+
+/** 概述字数或句数不对时给模型的重试原因，只含数字，不含内容。 */
+export function summaryProblem(text: string): string | null {
+  const length = summaryLength(text), sentences = summarySentences(text), problems: string[] = [];
+  if (length > MAX_DAY_SUMMARY_CHARS) problems.push(`summary 约 ${length} 字，超过 ${MAX_DAY_SUMMARY_CHARS} 字上限，需要删掉至少 ${length - MAX_DAY_SUMMARY_CHARS} 字`);
+  if (sentences < 2 || sentences > MAX_DAY_SUMMARY_SENTENCES) problems.push(`summary 现在是 ${sentences} 句，要写成 2–${MAX_DAY_SUMMARY_SENTENCES} 句`);
+  return problems.length ? problems.join("；") : null;
+}
 
 const DAY_REVIEW_SYSTEM = `${DATA_RULES}
 
@@ -291,7 +329,7 @@ const DAY_REVIEW_SYSTEM = `${DATA_RULES}
 export const DAY_SYSTEM = `${DAY_REVIEW_SYSTEM}
 - items 尽量最多 30 段，结果较多时完整返回，由程序处理上限。
 - highlight 是当天概述。按用户在场时间和结果内容选最多 ${MAX_DAY_SUMMARY_ACTIVITIES} 条主线，可跨项目，也包括聊天和录音中的工作沟通与生活。只依据 summary_eligible=true 且有结果或明确判断的 items，activities 填入支撑概述的 1–${MAX_DAY_SUMMARY_ACTIVITIES} 个 activity 编号。
-- highlight.text 用 2–4 句、合计不超过 ${MAX_DAY_SUMMARY_CHARS} 字。第一句点明最主要的主线，有项目时用 activities 对应段的 project 原文写出项目名，无项目时直接写事情，例如“学习 MCP”。每条主线写清具体对象（功能、文档、地点或版本）及结果或停在哪。
+- highlight.text 用 2–4 句、合计不超过 ${MAX_DAY_SUMMARY_CHARS} 字（英文词、数字、版本号各算 1 字）。第一句点明最主要的主线，有项目时用 activities 对应段的 project 原文写出项目名，无项目时直接写事情，例如“学习 MCP”。每条主线写清具体对象（功能、文档、地点或版本）及结果或停在哪。
 - 涉及他人时，用相关记录中的称呼、evidence.speaker 或 evidence.chat（聊天名），只用于对应的消息或录音。不臆造真实姓名，不写“对方 1”这类编号。用“你”或省略主语，不写过程数字（测试条数、提交号、用量），不复述给 AI 的操作指令，不写建议或核实状态。没有可概括的内容返回 null。`;
 
 export const DAY_POLISH_SYSTEM = `${DAY_REVIEW_SYSTEM}
@@ -304,14 +342,14 @@ export function dayPolishPrompt(date: string, activities: unknown, recent: { tit
 export const DAY_OVERVIEW_SYSTEM = `${DATA_RULES}
 
 任务：只按给出的已润色活动段写当天概述。覆盖最多 4 条主线，可跨项目，包含当天有结果或明确判断的工作、沟通和生活。
-- summary 用 2–4 句，合计不超过 ${MAX_DAY_SUMMARY_CHARS} 字，有项目时第一句带上主线对应的项目名。
+- summary 用 2–4 句，合计不超过 ${MAX_DAY_SUMMARY_CHARS} 字（英文词、数字、版本号各算 1 字），有项目时第一句带上主线对应的项目名。
 - 活动段按开始时刻（start）先后排列。同一件事以最晚的段为准：后面的段已解决、完成或推进的，不再写成阻碍或待办。
 - 写清具体对象、相关的人（沿用文中称呼）和结果或停在哪。不虚构姓名或成果。不写建议、核实状态、过程数字、测量数值或错误码。
 - 没有可概括的内容时返回 null。输出用中文，专有名词保持原文。`;
 
 export const DAY_OVERVIEW_SCHEMA = {
   type: "object", additionalProperties: false, required: ["summary"],
-  properties: { summary: { type: ["string", "null"], maxLength: MAX_DAY_SUMMARY_CHARS } },
+  properties: { summary: { type: ["string", "null"], maxLength: DAY_SUMMARY_HARD_LIMIT } },
 } as const;
 
 export function dayOverviewPrompt(activities: { start: string; title: string; description: string; project: string | null }[]) {
@@ -336,7 +374,7 @@ export const DAY_SCHEMA = {
   properties: {
     highlight: { type: ["object", "null"], additionalProperties: false, required: ["activities", "text"],
       properties: { activities: { type: "array", minItems: 1, maxItems: MAX_DAY_SUMMARY_ACTIVITIES, items: { type: "string" } },
-        text: { type: "string", maxLength: MAX_DAY_SUMMARY_CHARS } } },
+        text: { type: "string", maxLength: DAY_SUMMARY_HARD_LIMIT } } },
     omissions: { type: "array", maxItems: MAX_REVIEW_CANDIDATES, items: {
       type: "object", additionalProperties: false, required: ["activity", "reason", "title", "description", "refs"],
       properties: { activity: { type: "string" }, reason: { enum: DAY_OMISSION_REASONS },
@@ -372,10 +410,9 @@ export function normalizeDayOutput(output: unknown): unknown {
   if (h && typeof h === "object") {
     const fixed: Record<string, unknown> = { ...h };
     if (Array.isArray(h.activities) && h.activities.length > MAX_DAY_SUMMARY_ACTIVITIES) fixed.activities = h.activities.slice(0, MAX_DAY_SUMMARY_ACTIVITIES);
-    if (typeof h.text === "string" && Array.from(h.text).length > MAX_DAY_SUMMARY_CHARS) {
-      const head = Array.from(h.text).slice(0, MAX_DAY_SUMMARY_CHARS).join("");
-      const end = Math.max(head.lastIndexOf("。"), head.lastIndexOf("！"), head.lastIndexOf("？"));
-      if (end > 0) fixed.text = head.slice(0, end + 1);
+    if (typeof h.text === "string") {
+      const fitted = fitSummary(h.text);
+      if (fitted) fixed.text = fitted;
     }
     result = { ...result, highlight: fixed };
   }

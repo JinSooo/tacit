@@ -235,6 +235,8 @@ export function hubStatus(hub: HubDB, options: {
     "SELECT 1 FROM llm_usage WHERE id>? AND ok=1 AND tier=? AND task=? LIMIT 1",
   ).get(lastError.id, lastError.tier, lastError.task));
   const lastOk = sql.prepare("SELECT at FROM llm_usage WHERE ok=1 ORDER BY id DESC LIMIT 1").get() as { at: string } | undefined;
+  // 出错那一档自己的最近成功：三档分开设置时，别的档成功不能盖住这一档一直失败（2026-11-25）。
+  const tierLastOk = lastError?.tier ? sql.prepare("SELECT at FROM llm_usage WHERE ok=1 AND tier=? ORDER BY id DESC LIMIT 1").get(lastError.tier) as { at: string } | undefined : undefined;
   const deletes = (sql.prepare("SELECT v FROM audio_settings WHERE k GLOB 'delete:*'").all() as { v: string }[])
     .reduce((n, r) => { try { const v = JSON.parse(r.v); return n + (Array.isArray(v) ? v.length : 0); } catch { return n; } }, 0);
   // 进度写入没有单独的时间戳，updated_at 是最近一次可观测的状态转换时间。
@@ -288,7 +290,7 @@ export function hubStatus(hub: HubDB, options: {
       },
       pending_open: counts("SELECT kind AS k,COUNT(*) AS n FROM pending WHERE resolved_at IS NULL GROUP BY kind"),
       requests,
-      last_error: lastError ? { at: lastError.at, tier: lastError.tier, error: statusError(lastError.error) ?? "unknown", recovered } : null,
+      last_error: lastError ? { at: lastError.at, tier: lastError.tier, error: statusError(lastError.error) ?? "unknown", recovered, tier_last_ok_at: tierLastOk?.at ?? null } : null,
       last_ok_at: lastOk?.at ?? null,
       cooldown: budgetCooldown(now, dailyLimit, todayTokens) ?? providerCooldown(state("llm_cooldown"), now),
       config_error: modelConfigError,
