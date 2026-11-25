@@ -19,7 +19,7 @@ class AudioQueriesDeviceTest {
         val context = object : ContextWrapper(base) { override fun getNoBackupFilesDir() = root.apply { mkdirs() } }
         try { run(context, EncryptedAudioStore(context)) } finally { root.deleteRecursively() }
     }
-    private fun queries(store: EncryptedAudioStore) = AudioQueries(store, AudioLedger(store), { 7 }, { true })
+    private fun queries(store: EncryptedAudioStore) = AudioQueries(store, AudioLedger(store), { 7 }, { store.speakers().map { it.getString("id") }.toSet() })
     private fun legacyFixture(store: EncryptedAudioStore) {
         repeat(2) { n ->
             val id = store.add(ShortArray(SAMPLE_RATE), System.currentTimeMillis() - 60000 + n * 30000)

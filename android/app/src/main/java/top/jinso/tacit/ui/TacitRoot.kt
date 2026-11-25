@@ -1,5 +1,7 @@
 package top.jinso.tacit.ui
 
+import kotlinx.coroutines.flow.merge
+
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedContent
@@ -172,7 +174,7 @@ private data class ConnectionSummary(val status: MacStatus, val retentionDays: I
 @Composable
 private fun rememberConnection(app: TacitApp, vault: Vault?, resumed: Int) =
     produceState<ConnectionSummary?>(null, vault, resumed) {
-        if (vault != null) vault.changes.collect {
+        if (vault != null) merge(vault.changes, vault.syncChanges).collect {
             try {
                 val status = app.sync.status(includeReasons = false)
                 val retention = withContext(Dispatchers.IO) {

@@ -85,6 +85,10 @@ class AudioController internal constructor(
     fun renderTranscript(recordId: String, fallbackBody: String): CompletableFuture<String> = runtime.read {
         synchronized(runtime.lock) { runtime.ledger.render(recordId, fallbackBody, runtime.macVoiceprint()) }
     }
+    /** One read for a whole conversation instead of one per record; see [AudioLedger.renderAll]. */
+    fun renderTranscripts(records: Map<String, String>): CompletableFuture<Map<String, String>> = runtime.read {
+        synchronized(runtime.lock) { runtime.ledger.renderAll(records, runtime.macVoiceprint()) }
+    }
     fun macVoiceKnown(): CompletableFuture<Boolean> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.macVoiceKnown() }
     }
@@ -156,7 +160,7 @@ internal class AudioRuntime private constructor(val context: Context) {
     val control = Any()
     val store = EncryptedAudioStore(context)
     val ledger = AudioLedger(store)
-    val queries = AudioQueries(store, ledger, ::retentionDays, { sample(it) != null }, ::macVoiceprint)
+    val queries = AudioQueries(store, ledger, ::retentionDays, ::sampledSpeakers, ::macVoiceprint)
 
     fun retentionDays(): Int = macPolicy()?.getInt("retention_days") ?: app.prefs.retentionDays
     private fun macPolicy() = app.vault.syncConnection()?.optJSONObject("audio")
@@ -371,6 +375,15 @@ internal class AudioRuntime private constructor(val context: Context) {
         }
         reportProcessingProblem(token, null)
         changed()
+    }
+    /** Voices that still have audio to play, in one pass instead of searching every clip once per voice. */
+    fun sampledSpeakers(): Set<String> {
+        val found = HashSet<String>()
+        for (clip in store.clips()) {
+            val voices = clip.getJSONArray("utterances").objects().map { it.getString("speaker") }
+            if (voices.any { it !in found } && store.exists(clip.getString("id"))) found += voices
+        }
+        return found
     }
     fun sample(id: String): Triple<String, Int, Int>? {
         for (clip in store.clips().asReversed()) for (u in clip.getJSONArray("utterances").objects()) {

@@ -22,6 +22,12 @@ import top.jinso.tacit.sync.MAX_ENVELOPE
 class Vault(context: Context, private val prefs: Preferences, private val onSendableChange: () -> Unit = {}) {
     private val db: SQLiteDatabase
     val changes = MutableStateFlow(0L)
+    /**
+     * Sync bookkeeping (cursors, last sync, relay journal) is saved several times per round. Only pages that show
+     * the connection listen to this; record pages listen to [changes], which a save bumps only when what they
+     * render can differ: a different Mac, removal, or the Mac's audio policy (voiceprint, retention).
+     */
+    val syncChanges = MutableStateFlow(0L)
     init {
         System.loadLibrary("sqlcipher")
         val file = File(context.noBackupFilesDir, "history.db")
@@ -278,8 +284,9 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
         }
 
     @Synchronized internal fun saveSyncConnection(data: JSONObject?) {
+        val before = syncConnection()
         transaction {
-            if (data == null || data.optString("device") != syncConnection()?.optString("device")) {
+            if (data == null || data.optString("device") != before?.optString("device")) {
                 db.delete("sync_deletes", null, null)
                 // A new Mac has none of the phone's summaries yet.
                 db.execSQL("UPDATE own_summaries SET sent=0")
@@ -287,7 +294,8 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
             if (data == null) { db.delete("sync_connection", null, null); db.delete("mac_summaries", null, null) }
             else db.execSQL("INSERT OR REPLACE INTO sync_connection VALUES(1,?)", arrayOf(data.toString()))
         }
-        changes.value++
+        syncChanges.value++
+        if (syncContentChanged(before, data)) changes.value++
     }
 
     private fun syncState(id: String): String? =
@@ -415,3 +423,9 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
 /** A conversation summary of this phone's records, written by the phone itself or by the Mac. */
 internal data class ConversationSummary(val id: String, val recordIds: List<String>, val start: Long, val end: Long,
     val title: String, val summary: String, val points: List<String>)
+
+/** Whether a sync-connection save changes anything record pages show; see [Vault.syncChanges]. */
+internal fun syncContentChanged(before: JSONObject?, after: JSONObject?): Boolean =
+    (before == null) != (after == null) || before?.optString("device") != after?.optString("device") ||
+        before?.optBoolean("removed") != after?.optBoolean("removed") ||
+        before?.optJSONObject("audio")?.toString() != after?.optJSONObject("audio")?.toString()

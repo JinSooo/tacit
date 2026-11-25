@@ -25,6 +25,7 @@ import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
@@ -47,7 +48,7 @@ import top.jinso.tacit.ui.components.*
     LaunchedEffect(app, expanded) {
         try {
             val vault = withContext(Dispatchers.IO) { app.vault }
-            vault.changes.collectLatest { status = app.sync.status(expanded) }
+            merge(vault.changes, vault.syncChanges).collectLatest { status = app.sync.status(expanded) }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {

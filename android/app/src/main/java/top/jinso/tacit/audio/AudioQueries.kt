@@ -6,7 +6,7 @@ internal data class AudioStorageUsage(val clips: Int, val hasVoiceprints: Boolea
 
 /** Query paths shared by AudioController and isolated storage tests; caller holds the runtime lock. */
 internal class AudioQueries(private val store: EncryptedAudioStore, private val ledger: AudioLedger,
-    private val retentionDays: () -> Int, private val sampleAvailable: (String) -> Boolean,
+    private val retentionDays: () -> Int, private val sampledSpeakers: () -> Set<String>,
     private val macVoiceprint: () -> top.jinso.tacit.sync.MacVoiceprint? = { null }) {
     /** The Mac already confirmed the user's voice, so the phone never asks "is this you?" again. */
     fun macVoiceKnown(): Boolean = macVoiceprint() != null
@@ -30,14 +30,14 @@ internal class AudioQueries(private val store: EncryptedAudioStore, private val 
         store.prune(retentionDays())
         ledger.prepare()
         val mac = macVoiceprint()
-        val ends = ledger.listConversations().associate { it.id to it.end }
-        return store.speakers().filter {
-            val me = isMeSpeaker(it, mac)
+        val ends = ledger.conversationEnds()
+        val sampled = sampledSpeakers()
+        return store.speakers().map { it to isMeSpeaker(it, mac) }.filter { (it, me) ->
             (includeIgnored || !it.optBoolean("ignored")) && (me || it.optString("name").isNotEmpty() ||
                 (includeIgnored && it.optBoolean("ignored")) ||
                 AudioPolicy.candidate(it.getJSONArray("conversations").length(), it.getDouble("seconds")))
-        }.map { s -> AudioSpeaker(s.getString("id"), isMeSpeaker(s, mac), s.optBoolean("ignored"),
-            s.getInt("segments"), s.getDouble("seconds"), sampleAvailable(s.getString("id")),
+        }.map { (s, me) -> AudioSpeaker(s.getString("id"), me, s.optBoolean("ignored"),
+            s.getInt("segments"), s.getDouble("seconds"), s.getString("id") in sampled,
             s.optString("name").takeIf(String::isNotEmpty), s.getJSONArray("conversations").length(),
             s.getJSONArray("conversations").let { ids -> (0 until ids.length()).mapNotNull { ends[ids.getString(it)] }.maxOrNull() }) }
     }

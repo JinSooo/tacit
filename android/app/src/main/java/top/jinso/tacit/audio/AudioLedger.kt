@@ -172,12 +172,13 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
     }
 
     /** One participant may hold several voices: it is "我" when any of them is, else the first name given to one. */
-    private fun participantName(conversation: JSONObject?, number: Int, speaker: String, mac: MacVoiceprint?): String {
+    private fun participantName(conversation: JSONObject?, number: Int, speaker: String, mac: MacVoiceprint?,
+        find: (String) -> JSONObject? = ::findSpeaker, isMe: (JSONObject) -> Boolean = { isMeSpeaker(it, mac) }): String {
         val labels = conversation?.optJSONObject("labels")
         val members = labels?.keys()?.asSequence()?.filter { labels.getInt(it) == number }?.toList().orEmpty()
-        val voices = (listOf(speaker) + (members - speaker)).mapNotNull(::findSpeaker)
-        if (voices.any { isMeSpeaker(it, mac) }) return "我"
-        return transcriptSpeakerLabel(voices.firstOrNull { it.optString("name").isNotEmpty() } ?: findSpeaker(speaker), mac) { number }
+        val voices = (listOf(speaker) + (members - speaker)).mapNotNull(find)
+        if (voices.any(isMe)) return "我"
+        return transcriptSpeakerLabel(voices.firstOrNull { it.optString("name").isNotEmpty() } ?: find(speaker), mac) { number }
     }
     fun label(clip: JSONObject, speaker: String): Int = participantLabel(
         conversations.objects().first { it.getString("id") == clip.getString("conversation") }, speaker)
@@ -274,15 +275,41 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
             .put("utterances", JSONArray(rows)))
     }
 
-    fun render(record: String, fallback: String, mac: MacVoiceprint? = null): String {
-        val row = store.transcripts().firstOrNull { it.getString("recordId") == record } ?: return fallback
-        val lines = row.getJSONArray("utterances").objects().mapNotNull { u ->
-            // Same rule as publishing: a line of only punctuation ("。") is recognition noise.
-            val text = u.optString("text"); if (text.none(Char::isLetterOrDigit)) return@mapNotNull null
-            val name = participantName(conversation(row.getString("conversationId")), u.getInt("label"), u.getString("speaker"), mac)
-            "$name：$text"
+    fun render(record: String, fallback: String, mac: MacVoiceprint? = null): String =
+        renderAll(mapOf(record to fallback), mac).getValue(record)
+
+    /**
+     * Renders many transcripts with one pass over the index: a long conversation has dozens of records, and looking
+     * each one's transcript, conversation and voices up from scratch (and re-deciding "is this me" from the stored
+     * vector every line) made opening it take seconds.
+     */
+    fun renderAll(records: Map<String, String>, mac: MacVoiceprint? = null): Map<String, String> {
+        val rows = store.transcripts().filter { it.getString("recordId") in records }.associateBy { it.getString("recordId") }
+        val conversationsById by lazy { conversations.objects().associateBy { it.getString("id") } }
+        val speakersById by lazy { store.speakers().associateBy { it.getString("id") } }
+        val me = HashMap<String, Boolean>()
+        val isMe = { voice: JSONObject -> me.getOrPut(voice.getString("id")) { isMeSpeaker(voice, mac) } }
+        return records.mapValues { (record, fallback) ->
+            val row = rows[record] ?: return@mapValues fallback
+            val conversation = conversationsById[row.getString("conversationId")]
+            val lines = row.getJSONArray("utterances").objects().mapNotNull { u ->
+                // Same rule as publishing: a line of only punctuation ("。") is recognition noise.
+                val text = u.optString("text"); if (text.none(Char::isLetterOrDigit)) return@mapNotNull null
+                val name = participantName(conversation, u.getInt("label"), u.getString("speaker"), mac,
+                    { speakersById[it] }, isMe)
+                "$name：$text"
+            }
+            lines.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: fallback
         }
-        return lines.takeIf { it.isNotEmpty() }?.joinToString("\n") ?: fallback
+    }
+
+    /** When each conversation was last heard, without building the full conversation list. */
+    fun conversationEnds(): Map<String, Long> {
+        val ends = HashMap<String, Long>()
+        fun note(id: String, end: Long) { if (id.isNotEmpty()) ends.merge(id, end, ::maxOf) }
+        store.transcripts().forEach { note(it.getString("conversationId"), it.getLong("end")) }
+        store.clips().forEach { note(it.optString("conversation"), end(it)) }
+        return ends
     }
 
     fun listConversations(): List<AudioConversation> {

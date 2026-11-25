@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.AudioController
@@ -35,12 +36,19 @@ internal fun ConversationDetail(
     val ordered = remember(records) { records.sortedBy { it.start } }
     val changes by vault.changes.collectAsState()
     val parts by produceState<List<ConversationPart>?>(null, ordered, changes) {
+        // Stops between records when a newer change restarts the load, so reloads never pile up behind each other.
         value = withContext(Dispatchers.IO) {
-            val audio = AudioController(app)
-            ordered.mapNotNull { previous ->
+            val current = ordered.mapNotNull { previous ->
+                ensureActive()
                 val record = vault.get(previous.id) ?: return@mapNotNull null
-                val latest = vault.corrections(record.id).maxWithOrNull(correctionOrder)
-                ConversationPart(record, latest?.body ?: readableTranscript(renderedTranscript(audio, record)),
+                record to vault.corrections(record.id).maxWithOrNull(correctionOrder)
+            }
+            ensureActive()
+            val audio = current.filter { (_, latest) -> latest == null }.associate { (record, _) -> record.id to record.body }
+            val rendered = if (audio.isEmpty()) emptyMap()
+                else runCatching { AudioController(app).renderTranscripts(audio).get() }.getOrDefault(audio)
+            current.map { (record, latest) ->
+                ConversationPart(record, latest?.body ?: readableTranscript(rendered[record.id] ?: record.body),
                     record.sensitivity == "private" || latest?.sensitivity == "private")
             }
         }
