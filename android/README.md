@@ -6,7 +6,7 @@ Tacit 在手机上只做一件事：录下有你声音的对话，在本机转�
 
 第一次打开时点“开启”授权并开始录音，之后打开 Tacit 就会自动接上；在设置第一行或通知栏可以关掉。首次使用时试听并确认“这是我”。语音模型在录音设置中下载或从已校验的本地模型目录导入。转写使用 SenseVoice CPU 模型，支持的骁龙 8 Gen 3 设备可选 QNN 加速并回退到 CPU。HyperOS 的自启动和电量管理入口见“设置 → 后台运行”。
 
-历史保存在 SQLCipher 数据库中，密钥由 Android Keystore 保护，写入前会脱敏。录音和声音文件用一把随机数据密钥加密，数据密钥由 Android Keystore 包裹、每次启动只解开一次；旧版逐个文件用 Keystore 加密的文件仍能读，小文件在首次加载时改写成新格式。未连接 Mac 时，记录保存在手机。安装包 `Tacit-<版本>.apk` 挂在 GitHub Release 上，只支持 arm64 手机（Android 9 或更新）。覆盖安装需沿用正式签名和 `top.jinso.tacit` 包名，见 [安装说明](../docs/installation.md#发布安装包)。旧版本采集的聊天通知和应用使用记录留在手机上，尚未同步的会继续同步到 Mac，在 Mac 上可以搜索。
+历史保存在 SQLCipher 数据库中，密钥由 Android Keystore 保护，写入前会脱敏。录音和声音文件用一把随机数据密钥加密，数据密钥由 Android Keystore 包裹、每次启动只解开一次；旧版逐个文件用 Keystore 加密的文件仍能读，小文件在首次加载时改写成新格式。未连接 Mac 时，记录保存在手机。安装包 `Tacit-<版本>.apk` 在 GitHub Releases 里单独发布（标题带“Android”），版本号和 Mac 各自独立，只支持 arm64 手机（Android 9 或更新）。覆盖安装需沿用正式签名和 `top.jinso.tacit` 包名，见 [安装说明](../docs/installation.md#发布安装包)。旧版本采集的聊天通知和应用使用记录留在手机上，尚未同步的会继续同步到 Mac，在 Mac 上可以搜索。
 
 ## 连接 Mac
 

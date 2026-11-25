@@ -162,7 +162,7 @@ Tacit 不保存截图，也不做画面回放。它关心的是“你做了什�
 <details>
 <summary><b>支持 Intel Mac、Windows 或手机吗？</b></summary>
 
-目前公开预览提供 Apple 芯片 Mac 版（macOS 14 或更新）。只做录音同步的 Android 客户端（见 [android/README.md](android/README.md)）在自用验收，Release 附有 arm64 安装包。
+目前公开预览提供 Apple 芯片 Mac 版（macOS 14 或更新）。只做录音同步的 Android 客户端（见 [android/README.md](android/README.md)）在自用验收，arm64 安装包在 Releases 里单独发布（标题带“Android”）。
 
 </details>
 
@@ -180,7 +180,7 @@ Tacit 是**开发预览**，已经在开发机上持续使用，以下几项还�
 - 全天资源占用和记录准确率还在验收；总结可能遗漏或理解错，重要结论请点回原文核对。
 - Git、终端命令、文件、剪贴板、日历这几个来源已删除，已有记录仍可搜索；第三方插件安装和本地模型的入口暂时收起。
 - 开发机关闭了 SIP，文件类权限还要在开启 SIP 的 Mac 上复核；首次打开的系统放行流程还没在全新 Mac 上实测。
-- Android 录音客户端（含 HPKE 加密配对、局域网同步和经中转信箱同步）处于自用真机验收阶段，安装包 `Tacit-<版本>.apk` 随 Release 附上，只支持 arm64 手机。
+- Android 录音客户端（含 HPKE 加密配对、局域网同步和经中转信箱同步）处于自用真机验收阶段，安装包 `Tacit-<版本>.apk` 在 Releases 里单独发布，只支持 arm64 手机。
 - 后台服务也可以单独放到服务器上运行（Docker，见 `docs/server-deployment.md`），这是可选形态；Mac 上连接远端后台的界面还没做，目前要用命令行。
 
 ## 更新与卸载

@@ -52,10 +52,21 @@
 
 ## 发布安装包
 
-1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）、`android/app/build.gradle.kts` 的 `versionName`（`versionCode` 加 1）；`scripts/release-version.test.ts` 检查这几处一致。若改动了官网源码 `site/src/`，顺手运行 `bun site/build.ts` 同步 `site/dist/`。提交并打 `v<版本号>` tag。
+Mac 和 Android 各自发版、版本号各自递增，哪端有改动就只发哪端。Mac 安装包里带着后台服务（含服务端 Docker 形态），两者算一端。两端靠设备协议（`docs/contracts.md` 第 6 节的 `v`）兼容，应用版本号不必对齐；协议有不兼容的改动时，在 Release 说明里写明需要的对端最低版本。v0.6.3 及以前的 tag 是 `v<版本号>`、只含 Mac 安装包，tag 不改名。
+
+Mac：
+
+1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）；`scripts/release-version.test.ts` 检查这几处一致。若改动了官网源码 `site/src/`，顺手运行 `bun site/build.ts` 同步 `site/dist/`。提交并打 `mac-v<版本号>` tag。
 2. 在这台有签名证书的 Mac 上运行 `scripts/release-dmg.sh`。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
-3. 运行 `scripts/release-apk.sh`，前提条件同上，输出 `dist/Tacit-<版本号>.apk` 和 `.sha256`，并核对安装包只用 Tacit 正式钥匙签名。Android 只打 arm64-v8a。
-4. 推送 tag，用 `gh release create` 建 Release 并上传这四个文件。
+3. 推送 tag，建 Release 并上传这两个文件：`gh release create mac-v<版本号> dist/Tacit-<版本号>.dmg dist/Tacit-<版本号>.dmg.sha256 --prerelease --title "Tacit v<版本号> - Mac" --notes-file <说明>`。
+
+Android：
+
+1. 改 `android/app/build.gradle.kts` 的 `versionName`，`versionCode` 加 1。提交并打 `android-v<版本号>` tag。
+2. 运行 `scripts/release-apk.sh`，前提条件同上，输出 `dist/Tacit-<版本号>.apk` 和 `.sha256`，并核对安装包只用 Tacit 正式钥匙签名。Android 只打 arm64-v8a。
+3. 推送 tag，建 Release 并上传这两个文件：`gh release create android-v<版本号> dist/Tacit-<版本号>.apk dist/Tacit-<版本号>.apk.sha256 --prerelease --latest=false --title "Tacit v<版本号> - Android" --notes-file <说明>`。`--latest=false` 让 `releases/latest` 始终指向 Mac 版，README 和官网的下载链接靠它。
+
+Release 标题只用 `Tacit v<版本号> - Mac` 和 `Tacit v<版本号> - Android` 两种，“开发预览”由 GitHub 的 Pre-release 标记表达，不写进标题。
 
 签名证书 “Record Anything Dev” 在 `~/Library/Keychains/ra-dev.keychain-db`，钥匙串密码在 `~/Library/Keychains/ra-dev.pass`。用户授予的系统权限绑定在这张证书上：换了证书，已安装的用户升级后要重新授予辅助功能、录屏、麦克风等权限。两个文件要一起备份；发布脚本在证书缺失时直接失败，不会新建。
 
