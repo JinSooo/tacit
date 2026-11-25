@@ -631,7 +631,7 @@ private enum ImportSnapshotFailure: Error { case retry }
 
   func renderSection(_ name: String, _ model: RemoteBackendSettingsModel, height: CGFloat = 360) throws {
     try render(name, SettingsForm {
-      RemoteBackendSettingsSection(model: model, queue: 27, sent: 184, openModels: {})
+      RemoteBackendSettingsSection(model: model, queue: 27, sent: 184, openModels: {}) { EmptyView() }
     }
     .frame(width: 640, height: height)
     .font(.system(size: TextSize.body))

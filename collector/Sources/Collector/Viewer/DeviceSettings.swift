@@ -81,7 +81,7 @@ struct DeviceSettingsSection: View {
     } message: { _ in
       Text("改完不能在这里改回管理，要用新的管理邀请重新配对。")
     }
-    .alert("移除这台设备？", isPresented: Binding(
+    .alert(deviceToRemove.map { "移除“\($0.name)”？" } ?? "", isPresented: Binding(
       get: { deviceToRemove != nil },
       set: { if !$0 { deviceToRemove = nil } }
     ), presenting: deviceToRemove) { device in
@@ -106,6 +106,9 @@ struct DeviceSettingsSection: View {
           Task { await createInvitation(role, platform: platform) }
         } cancel: {
           closeSheet()
+        } back: {
+          step = step == .confirmAdmin ? .role : .type
+          sheetError = nil
         }
         .interactiveDismissDisabled(busy)
       }
@@ -123,16 +126,19 @@ struct DeviceSettingsSection: View {
           let remaining = max(0, Int(ceil(session.expires.timeIntervalSince(timeline.date))))
           VStack(alignment: .leading, spacing: 12) {
             if remaining > 0 {
-              if let qr = session.qr {
+              if session.platform == "mac" {
+                Text("复制邀请链接，在另一台 Mac 的“设置 → 后台与连接 → 连接远端后台”里粘贴。")
+                  .fixedSize(horizontal: false, vertical: true)
+              } else if let qr = session.qr {
                 Image(decorative: qr, scale: 1)
                   .interpolation(.none)
                   .accessibilityHidden(true)
                   .frame(maxWidth: .infinity)
-                if session.platform == "android" { Text("用手机扫描二维码") }
+                Text("用手机扫描二维码")
               } else {
                 Text("二维码无法显示，请复制邀请链接。")
               }
-              Text("剩余 \(remaining / 60) 分 \(remaining % 60) 秒")
+              Text(DeviceInvitationChoices.countdown(remaining))
                 .monospacedDigit()
                 .foregroundStyle(Palette.muted)
               Text(verbatim: session.invitation.uri)
@@ -207,7 +213,7 @@ struct DeviceSettingsSection: View {
         throw HubError(message: "邀请有效期格式错误", status: 0)
       }
       let active = Session(invitation: invitation, expires: expires, role: role, platform: platform,
-                           previousDevices: Set(before.devices.map(\.id)), qr: invitation.qrCode())
+                           previousDevices: Set(before.devices.map(\.id)), qr: platform == "android" ? invitation.qrCode() : nil)
       copied = false
       session = active
       sheetOpen = true
@@ -364,9 +370,8 @@ struct DeviceSettingsRow: View {
           Button(action: toggle) {
             Image(systemName: "ellipsis").frame(width: 24, height: 20).contentShape(Rectangle())
           }
-          .buttonStyle(.plain).foregroundStyle(Palette.accent)
+          .buttonStyle(.plain).foregroundStyle(hovering || focused || expanded ? Palette.ink : Palette.faint)
           .focused($focused)
-          .opacity(hovering || focused || expanded ? 1 : 0.001)
           .accessibilityLabel("\(device.name)的操作")
           .accessibilityValue(expanded ? "已展开" : "已折叠")
         } else {
@@ -411,16 +416,21 @@ struct DeviceInvitationChoices: View {
   let confirmAdmin: () -> Void
   let invite: (DeviceSettings.Role, String) -> Void
   let cancel: () -> Void
+  let back: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text(title).font(.system(size: TextSize.title, weight: .semibold))
-      if step == .confirmAdmin {
+      if step == .role {
+        Text("查看：能看时间线和记录；管理：还能改设置、删除记录。")
+          .fixedSize(horizontal: false, vertical: true)
+      } else if step == .confirmAdmin {
         Text("这台设备将能删除记录和修改设置，邀请 5 分钟内有效。")
           .fixedSize(horizontal: false, vertical: true)
       }
       if let error { SettingsMessage(text: error) }
       HStack(spacing: 8) {
+        if step != .type { Button("返回", action: back) }
         Spacer()
         Button("取消", action: cancel).keyboardShortcut(.cancelAction)
         switch step {
@@ -440,6 +450,13 @@ struct DeviceInvitationChoices: View {
     .font(.system(size: TextSize.body))
     .padding(24).frame(width: 380)
     .tint(Palette.accent)
+  }
+
+  static func countdown(_ remaining: Int) -> String {
+    let (minutes, seconds) = remaining.quotientAndRemainder(dividingBy: 60)
+    if minutes == 0 { return "剩余 \(seconds) 秒" }
+    if seconds == 0 { return "剩余 \(minutes) 分钟" }
+    return "剩余 \(minutes) 分 \(seconds) 秒"
   }
 
   private var title: String {

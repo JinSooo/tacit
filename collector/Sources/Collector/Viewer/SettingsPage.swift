@@ -238,6 +238,8 @@ struct GeneralPreferencesSection: View {
 
 // MARK: 后台服务
 
+let localBackendPortNote = "端口只在冲突时改，保存后后台服务会自动重启，记录会接着保存。"
+
 struct HubSettingsView: View {
   let openModels: () -> Void
   @Environment(ViewerStore.self) private var store
@@ -253,18 +255,19 @@ struct HubSettingsView: View {
     let model = store.remoteBackend
     SettingsForm {
       if let model {
-        RemoteBackendSettingsSection(model: model, queue: c.queue, sent: c.sent, openModels: openModels)
-      }
-      if !store.isRemoteBackend {
-        localConnection(c)
+        RemoteBackendSettingsSection(model: model, queue: c.queue, sent: c.sent, openModels: openModels) {
+          localRows(c)
+        }
+      } else if !store.isRemoteBackend {
+        Section {
+          SettingsRow("当前后台", value: "这台 Mac")
+          localRows(c)
+        } header: { Text("后台服务") } footer: { Note(localBackendPortNote) }
       }
       if store.canManageBackend {
         // 分组表单要直接拿到 Section：不在外面套 .id，换后台时由各分组自己按路由重读（2026-11-24 套 .id 曾让分组错位、标题重复）。
         DeviceSettingsSection()
         RelaySettingsSection()
-      }
-      if !store.isRemoteBackend {
-        portSection
       }
     }
     .tint(Palette.accent)
@@ -293,45 +296,58 @@ struct HubSettingsView: View {
     }
   }
 
-  private func localConnection(_ c: CaptureSnapshot) -> some View {
-    Section {
-      SettingsRow("地址") { Text(store.api.base.absoluteString).font(.mono(TextSize.body)).textSelection(.enabled) }
-      // 连得上就不占一行，只有检查中或出问题时才说。
-      if let problem = store.sharedError ?? c.hubError {
-        SettingsRow("状态") { Text(problem).foregroundStyle(Palette.attention) }
-      } else if info == nil {
-        SettingsRow("状态", value: "正在检查…")
-      }
-      if c.queue > 0 { SettingsRow("等待保存", value: "\(Fmt.count(c.queue)) 条") }
-      SettingsRow("详细状态") {
-        Button("在浏览器中打开") {
-          if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务尚未准备好，请稍后重试。" }
-        }
-      }
-    } header: { Text("连接与保存") }
-  }
-
-  private var portSection: some View {
-    Section("连接设置") {
-      SettingsRow("端口") {
-        HStack(spacing: 8) {
-          TextField("端口", text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
-            .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
-          if let p = Int(port), p != info?.port, info?.locked == false {
-            Button(busy ? "正在重启…" : "保存并重启") { Task { await apply(p) } }.disabled(busy || !(1024...65535).contains(p))
-          }
-        }
-      }
-      if info?.locked == true { SettingsMessage(text: "端口由环境变量 RA_PORT 固定，这里不能改。", warning: false) }
-      if let message { SettingsMessage(text: message, warning: false) }
-      if let error { SettingsMessage(text: error) }
-      Text("仅在端口冲突时修改。保存后后台服务会重启，记录会自动接上。")
-        .foregroundStyle(Palette.muted)
+  @ViewBuilder private func localRows(_ c: CaptureSnapshot) -> some View {
+    SettingsRow("地址") {
+      Text(store.api.base.host ?? "").font(.mono(TextSize.body)).textSelection(.enabled)
     }
+    let edited = info.map { !$0.locked && port != String($0.port) } ?? false
+    let validPort = Int(port).flatMap { (1024...65535).contains($0) ? $0 : nil }
+    SettingsRow("端口") {
+      HStack(spacing: 8) {
+        TextField("端口", text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
+          .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
+        if edited, let info {
+          Button("撤销") {
+            port = String(info.port)
+            message = nil
+            error = nil
+          }
+          .disabled(busy)
+          Button(busy ? "正在重启…" : "保存并重启") {
+            if let validPort { Task { await apply(validPort) } }
+          }
+          .disabled(busy || validPort == nil || validPort == info.port)
+        }
+      }
+    }
+    if edited && validPort == nil {
+      SettingsMessage(text: "端口要是 1024–65535 之间的整数。")
+    }
+    SettingsRow("详细状态") {
+      Button("在浏览器中打开") {
+        if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务尚未准备好，请稍后重试。" }
+      }
+    }
+    if c.queue > 0 { SettingsRow("等待保存", value: "\(Fmt.count(c.queue)) 条") }
+    // 连得上就不占一行，只有检查中或出问题时才说。
+    if let problem = store.sharedError ?? c.hubError {
+      SettingsRow("状态") { Text(problem).foregroundStyle(Palette.attention) }
+    } else if info == nil {
+      SettingsRow("状态", value: "正在检查…")
+    }
+    if info?.locked == true { SettingsMessage(text: "端口由环境变量 RA_PORT 固定，这里不能改。", warning: false) }
+    if let message { SettingsMessage(text: message, warning: false) }
+    if let error { SettingsMessage(text: error) }
   }
 
   func load() async {
-    do { let h = try await store.api.hubSettings(); info = h; port = String(h.port); error = nil }
+    let previousPort = port
+    do {
+      let h = try await store.api.hubSettings()
+      info = h
+      if port == previousPort { port = String(h.port) }
+      error = nil
+    }
     catch is CancellationError {}
     catch { self.error = error.localizedDescription }
   }
@@ -343,16 +359,16 @@ struct HubSettingsView: View {
     do {
       let restarting = try await store.api.setHubPort(p)
       guard restarting else { await load(); return }
-      message = "正在用端口 \(p) 重启…"
+      message = "后台服务正在重启…"
       for _ in 0..<30 {
         try? await Task.sleep(for: .seconds(1))
         if let h = try? await store.api.hubSettings(), h.port == p {
-          info = h; port = String(p); message = "已切换到端口 \(p)。"
+          info = h; port = String(p); message = "端口已更新。"
           await store.refreshShared()
           return
         }
       }
-      error = "30 秒内没连上端口 \(p)，可以在维护里复制诊断信息排查。"
+      error = "30 秒内没连上后台服务，可以在维护里复制诊断信息排查。"
     } catch { self.error = error.localizedDescription }
   }
 }

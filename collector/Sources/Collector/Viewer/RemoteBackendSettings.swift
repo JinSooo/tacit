@@ -1,15 +1,26 @@
 import SwiftUI
 import enum CollectorCore.ViewerTime
 
-struct RemoteBackendSettingsSection: View {
+struct RemoteBackendSettingsSection<LocalRows: View>: View {
   @Bindable var model: RemoteBackendSettingsModel
   let queue: Int
   let sent: Int
   let openModels: () -> Void
+  @ViewBuilder var localRows: () -> LocalRows
 
   var body: some View {
-    Section("后台服务") {
-      connectionRow
+    Section {
+      if model.isRemote {
+        connectionRow
+      } else {
+        SettingsRow("当前后台") {
+          Text("这台 Mac").foregroundStyle(Palette.muted)
+          if model.step == nil && !model.context.returning && !model.recovering && !model.frozen {
+            Button("连接远端后台") { model.start() }.disabled(model.busy)
+          }
+        }
+        localRows()
+      }
       if model.context.returning {
         SettingsMessage(text: "上次切回尚未完成。")
         Button("取消切回") { Task { await model.cancelInterruptedReturn() } }.disabled(model.busy)
@@ -30,7 +41,7 @@ struct RemoteBackendSettingsSection: View {
           Button("重新连接\(link.hubName ?? "远端后台")") { Task { await model.reconnect(link) } }
             .disabled(model.busy)
         }
-        Button("连接远端后台") { model.start() }.disabled(model.busy)
+        if model.isRemote { Button("连接远端后台") { model.start() }.disabled(model.busy) }
         if model.busy { busyLine("正在检查连接…") }
       }
       if let notice = model.cleanupNotice {
@@ -38,6 +49,8 @@ struct RemoteBackendSettingsSection: View {
         Button("知道了") { Task { await model.dismissCleanup() } }.disabled(model.busy)
       }
       if let error = model.error { SettingsMessage(text: error) }
+    } header: { Text("后台服务") } footer: {
+      if !model.isRemote { Note(localBackendPortNote) }
     }
     if model.isRemote, let backup = model.backup {
       Section("本机备份") { backupRows(backup) }
@@ -45,16 +58,12 @@ struct RemoteBackendSettingsSection: View {
   }
 
   private var connectionRow: some View {
-    SettingsRow {
-      if model.isRemote {
-        if let channel = model.channel ?? model.unconfirmedChannel {
-          Text(channel.rawValue).foregroundStyle(Palette.muted)
-        } else if let name = model.context.link?.hubName {
-          Text(name).foregroundStyle(Palette.muted)
-        }
+    SettingsRow(model.onlineTitle) {
+      if let channel = model.channel ?? model.unconfirmedChannel {
+        Text(channel.rawValue).foregroundStyle(Palette.muted)
+      } else if let name = model.context.link?.hubName {
+        Text(name).foregroundStyle(Palette.muted)
       }
-    } label: {
-      Text(model.isRemote ? model.onlineTitle : "这台 Mac")
     }
   }
 

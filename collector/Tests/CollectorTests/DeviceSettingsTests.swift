@@ -129,16 +129,22 @@ private func fixture() -> DeviceSettings {
 
     func invitation(_ step: DeviceInvitationChoices.Step) -> some View {
       DeviceInvitationChoices(step: step, busy: false, error: nil, selectMac: {}, confirmAdmin: {},
-                              invite: { _, _ in }, cancel: {})
+                              invite: { _, _ in }, cancel: {}, back: {})
         .background(Palette.paperRaised)
     }
 
     try render("device-list", settingsList(expanded: false))
     try render("device-actions", settingsList(expanded: true))
     try render("add-device", invitation(.type))
+    try render("choose-role", invitation(.role))
     try render("confirm-admin", invitation(.confirmAdmin))
     try render("security-event", TimelineSecurityEventLine(
       event: .init(id: "fixture-event", action: .modelKeyChange), acknowledge: {}
     ).padding(20).frame(width: 620).background(Palette.paper))
   }
+}
+
+@Test(arguments: [(45, "剩余 45 秒"), (60, "剩余 1 分钟"), (300, "剩余 5 分钟"), (305, "剩余 5 分 5 秒")])
+func deviceInvitationCountdown(_ seconds: Int, _ expected: String) {
+  #expect(DeviceInvitationChoices.countdown(seconds) == expected)
 }
