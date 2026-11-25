@@ -3,8 +3,10 @@ package top.jinso.tacit.summary
 import org.json.JSONArray
 import org.json.JSONObject
 import top.jinso.tacit.core.HistoryRecord
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.InetAddress
+import java.net.SocketTimeoutException
 import java.net.URI
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -95,18 +97,35 @@ internal fun parseSummary(content: String): Pair<WrittenSummary?, String?> {
 /** What the user filled in on the "AI 总结" page. */
 internal data class SummaryModel(val base: String, val model: String, val key: String)
 
-internal class SummaryFailure(val reason: String, val retryAfterMs: Long = 0) : Exception(reason)
+// Matches the wording in CollectorCore/RuntimeModels.swift (the phone has no thinking setting).
+internal enum class SummaryError(val reason: String, val needsUser: Boolean = false) {
+    AUTH("API key 没设置或无效；用账号登录的，请确认已登录。", needsUser = true),
+    QUOTA("模型服务的额度用完了，充值或额度恢复后会自动继续。", needsUser = true),
+    REJECTED("模型服务拒绝了请求，请检查模型名和地址。", needsUser = true),
+    CONFIG("模型设置有问题，请检查后重新保存。", needsUser = true),
+    TIMEOUT("模型服务一直没有回应，请检查网络或稍后再试。"),
+    NETWORK("连不上模型服务，请检查网络和地址。"),
+    RATE_LIMIT("请求太频繁，模型服务暂时限流，稍后会自动重试。"),
+    SERVER("模型服务暂时出错，稍后会自动重试。"),
+    FORMAT("模型返回的内容不合格式，可以换个模型试试。"),
+}
+
+internal class SummaryFailure(val error: SummaryError, val retryAfterMs: Long = 0) : Exception(error.reason) {
+    val reason get() = error.reason
+}
 
 /** An OpenAI-compatible chat completions service: a cloud API, a relay, or a model server on this phone or the home network. */
 internal class SummaryClient(private val model: SummaryModel, private val http: (String, Map<String, String>, String) -> Pair<Int, String> = ::post) {
     val endpoint: String = endpointOf(model.base)
+
+    init { if (model.model.isBlank()) throw SummaryFailure(SummaryError.CONFIG) }
 
     fun summarize(start: Long, end: Long, transcript: String): WrittenSummary {
         val user = SummaryPrompt.user(start, end, transcript)
         var (written, why) = parseSummary(chat(SummaryPrompt.system, user))
         // One retry that says what was wrong, like the Mac; models that ignore response_format still follow this.
         if (written == null) written = parseSummary(chat(SummaryPrompt.system, "$user\n\n上一次的输出不符合要求：$why。只输出符合 schema 的 JSON 对象。")).first
-        return written ?: throw SummaryFailure("返回格式不对")
+        return written ?: throw SummaryFailure(SummaryError.FORMAT)
     }
 
     fun test() { chat("只回复 ok。", "ok") }
@@ -119,34 +138,51 @@ internal class SummaryClient(private val model: SummaryModel, private val http: 
             put("Content-Type", "application/json")
             if (model.key.isNotBlank()) put("Authorization", "Bearer ${model.key.trim()}")
         }
-        val (status, text) = try { http(endpoint, headers, body.toString()) } catch (_: java.io.IOException) { throw SummaryFailure("连不上服务") }
-        when {
-            status == 401 || status == 403 -> throw SummaryFailure("API Key 不对")
-            status == 404 -> throw SummaryFailure("服务地址或模型名不对")
-            status == 429 -> throw SummaryFailure("请求太频繁或额度用完", 30 * 60_000L)
-            status >= 500 -> throw SummaryFailure("服务暂时不可用")
-            status != 200 -> throw SummaryFailure("服务拒绝了请求（$status）")
+        val (status, text) = try {
+            http(endpoint, headers, body.toString())
+        } catch (_: SocketTimeoutException) {
+            throw SummaryFailure(SummaryError.TIMEOUT)
+        } catch (_: IOException) {
+            throw SummaryFailure(SummaryError.NETWORK)
         }
-        val json = try { JSONObject(text) } catch (_: Exception) { throw SummaryFailure("返回格式不对") }
+        when {
+            status == 401 || status == 403 -> throw SummaryFailure(SummaryError.AUTH)
+            status == 402 -> throw SummaryFailure(SummaryError.QUOTA)
+            status == 408 -> throw SummaryFailure(SummaryError.TIMEOUT)
+            status == 429 -> {
+                val error = runCatching { JSONObject(text).optJSONObject("error") }.getOrNull()
+                if (error?.optString("code") in quotaCodes || error?.optString("type") in quotaCodes) {
+                    throw SummaryFailure(SummaryError.QUOTA, 30 * 60_000L)
+                }
+                throw SummaryFailure(SummaryError.RATE_LIMIT, 30 * 60_000L)
+            }
+            status >= 500 -> throw SummaryFailure(SummaryError.SERVER)
+            status != 200 -> throw SummaryFailure(SummaryError.REJECTED)
+        }
+        val json = try { JSONObject(text) } catch (_: Exception) { throw SummaryFailure(SummaryError.FORMAT) }
         // MiniMax reports some errors with HTTP 200.
         val code = json.optJSONObject("base_resp")?.optInt("status_code", 0) ?: 0
-        if (json.has("error") || code != 0) throw SummaryFailure(if (code == 1004 || code == 2049) "API Key 不对" else "服务拒绝了请求")
-        val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: throw SummaryFailure("返回格式不对")
+        if (json.has("error") || code != 0) {
+            throw SummaryFailure(if (code == 1004 || code == 2049) SummaryError.AUTH else SummaryError.REJECTED)
+        }
+        val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: throw SummaryFailure(SummaryError.FORMAT)
         val content = choice.optJSONObject("message")?.opt("content") as? String
-        if (choice.optString("finish_reason") != "stop" || content == null) throw SummaryFailure("返回格式不对")
+        if (choice.optString("finish_reason") != "stop" || content == null) throw SummaryFailure(SummaryError.FORMAT)
         return content
     }
 
     companion object {
+        private val quotaCodes = setOf("insufficient_quota", "insufficient_balance", "quota_exceeded")
+
         /** People often paste the full …/chat/completions URL. Plain HTTP only for this phone or the home network. */
         fun endpointOf(base: String): String {
             val trimmed = base.trim().trimEnd('/').removeSuffix("/chat/completions")
-            val uri = try { URI(trimmed) } catch (_: Exception) { throw SummaryFailure("服务地址无效") }
-            val host = uri.host ?: throw SummaryFailure("服务地址无效")
+            val uri = try { URI(trimmed) } catch (_: Exception) { throw SummaryFailure(SummaryError.CONFIG) }
+            val host = uri.host ?: throw SummaryFailure(SummaryError.CONFIG)
             when (uri.scheme) {
                 "https" -> Unit
-                "http" -> if (!localHost(host)) throw SummaryFailure("公网服务地址要用 https")
-                else -> throw SummaryFailure("服务地址无效")
+                "http" -> if (!localHost(host)) throw SummaryFailure(SummaryError.CONFIG)
+                else -> throw SummaryFailure(SummaryError.CONFIG)
             }
             return "$trimmed/chat/completions"
         }
@@ -177,7 +213,7 @@ internal class SummaryClient(private val model: SummaryModel, private val http: 
                     val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(8192)
                     while (true) {
                         val n = input.read(buffer); if (n < 0) break
-                        if (out.size() + n > 1_048_576) throw java.io.IOException("reply too large")
+                        if (out.size() + n > 1_048_576) throw SummaryFailure(SummaryError.FORMAT)
                         out.write(buffer, 0, n)
                     }
                     out.toString(Charsets.UTF_8.name())

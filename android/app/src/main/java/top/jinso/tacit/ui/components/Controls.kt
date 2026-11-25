@@ -21,6 +21,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import top.jinso.tacit.ui.DelayedAppearance
 import top.jinso.tacit.ui.ExpandChevron
@@ -61,6 +62,7 @@ internal fun SettingsRow(
     onClick: (() -> Unit)? = null,
     expanded: Boolean? = null,
     leading: (@Composable () -> Unit)? = null,
+    singleLineValue: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     Row(
@@ -80,7 +82,11 @@ internal fun SettingsRow(
             status?.let { Caption(it, color = if (problem) tacitColors.attention else tacitColors.muted) }
         }
         if (value != null) {
-            Caption(value, Modifier.widthIn(max = 108.dp), if (problem) tacitColors.attention else tacitColors.muted)
+            val valueColor = if (problem) tacitColors.attention else tacitColors.muted
+            if (singleLineValue) {
+                Text(value, Modifier.widthIn(max = 108.dp), style = MaterialTheme.typography.bodySmall,
+                    color = valueColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            } else Caption(value, Modifier.widthIn(max = 108.dp), valueColor)
         }
         if (trailing != null) trailing()
         else if (onClick != null) {
