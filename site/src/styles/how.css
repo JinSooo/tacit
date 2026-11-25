@@ -87,11 +87,38 @@
   color: var(--reading);
 }
 
-.how-core svg {
+.how-core-mark {
+  margin-block-end: 2px;
+}
+
+.how-mark-rail {
   fill: none;
-  stroke-width: 2;
+  stroke: var(--faint);
+  stroke-width: 1.8;
   stroke-linecap: round;
-  margin-block-end: 4px;
+}
+
+.how-mark-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.how-mark-core,
+.how-mark-now {
+  fill: var(--accent);
+}
+
+.how-mark-dot,
+.how-mark-mid {
+  fill: var(--reading);
+  opacity: 0.78;
+}
+
+.how-mark-dot-faint,
+.how-mark-old {
+  fill: var(--faint);
+  opacity: 0.75;
 }
 
 .how-connector {

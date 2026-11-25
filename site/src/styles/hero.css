@@ -1,5 +1,14 @@
 .hero {
-  padding-top: clamp(32px, 6vw, 64px);
+  padding-block: clamp(40px, 6vw, 72px);
+}
+
+@media (min-width: 901px) and (min-height: 680px) {
+  .hero {
+    min-height: calc(100svh - var(--nav-h));
+    display: flex;
+    align-items: center;
+    padding-block: clamp(32px, 5vh, 64px);
+  }
 }
 
 .hero-layout {

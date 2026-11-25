@@ -2,8 +2,6 @@
   display: grid;
   grid-template-columns: minmax(0, 4fr) minmax(0, 7fr);
   gap: clamp(40px, 8vw, 112px);
-  padding-top: clamp(32px, 6vw, 72px);
-  border-top: 1px solid var(--line);
 }
 
 .download-layout .section-head {
