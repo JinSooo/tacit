@@ -61,8 +61,8 @@ class PhoneSummariesTest {
 
     @Test fun serviceFailuresUseTheMacWordingWithoutStatusCodes() {
         val expectations = mapOf(
-            401 to "API key 没设置或无效；用账号登录的，请确认已登录。",
-            403 to "API key 没设置或无效；用账号登录的，请确认已登录。",
+            401 to "API key 没设置或无效。",
+            403 to "API key 没设置或无效。",
             402 to "模型服务的额度用完了，充值或额度恢复后会自动继续。",
             404 to "模型服务拒绝了请求，请检查模型名和地址。",
             408 to "模型服务一直没有回应，请检查网络或稍后再试。",

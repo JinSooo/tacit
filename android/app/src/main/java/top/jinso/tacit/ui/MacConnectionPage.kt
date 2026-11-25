@@ -190,6 +190,24 @@ import top.jinso.tacit.ui.components.*
             dismissButton = { TextAction("取消", { confirmDisconnect = false }) },
         )
     }
+    // 被 Mac 移除后不想再连回去时，能清掉旧连接回到手机单独用，不然首页一直挂着提示。
+    if (current?.removed == true) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+            TextAction("删除旧连接", { confirmDisconnect = true }, enabled = !busy, color = tacitColors.attention)
+        }
+        if (confirmDisconnect) AlertDialog(
+            onDismissRequest = { confirmDisconnect = false },
+            title = { Text("删除旧连接？") },
+            text = { Text("会删除这台 Mac 的连接记录，本机录音会保留。") },
+            confirmButton = {
+                TextAction("删除", {
+                    confirmDisconnect = false
+                    action { app.sync.disconnect(); address = null; expanded = false }
+                }, enabled = !busy, color = tacitColors.attention)
+            },
+            dismissButton = { TextAction("取消", { confirmDisconnect = false }) },
+        )
+    }
 }
 
 @Composable

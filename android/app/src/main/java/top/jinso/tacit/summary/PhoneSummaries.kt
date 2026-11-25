@@ -99,7 +99,7 @@ internal data class SummaryModel(val base: String, val model: String, val key: S
 
 // Matches the wording in CollectorCore/RuntimeModels.swift (the phone has no thinking setting).
 internal enum class SummaryError(val reason: String, val needsUser: Boolean = false) {
-    AUTH("API key 没设置或无效；用账号登录的，请确认已登录。", needsUser = true),
+    AUTH("API key 没设置或无效。", needsUser = true),
     QUOTA("模型服务的额度用完了，充值或额度恢复后会自动继续。", needsUser = true),
     REJECTED("模型服务拒绝了请求，请检查模型名和地址。", needsUser = true),
     CONFIG("模型设置有问题，请检查后重新保存。", needsUser = true),

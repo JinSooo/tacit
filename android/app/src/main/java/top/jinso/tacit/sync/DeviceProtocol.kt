@@ -208,7 +208,7 @@ internal fun rejectedRecordCategories(reasons: Map<String, Int>): Map<String, In
         val label = reason.split('；').firstNotNullOfOrNull { part ->
             val field = part.substringBefore(' ')
             when {
-                field in setOf("/body", "/title") && "must NOT have more than" in part -> "单条内容过长"
+                part == "记录太大，无法发送" || field in setOf("/body", "/title") && "must NOT have more than" in part -> "单条内容过长"
                 field == "/t_start" || field == "/t_end" -> "时间格式异常"
                 field == "/source" -> "来源不支持"
                 field == "/device" -> "设备身份不匹配"

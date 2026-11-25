@@ -288,7 +288,7 @@ internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, not
             // The result arrives before the page is resumed, and capture may only start from a visible page:
             // starting here failed the first time ("无法开始录音") right after the permission dialogs.
             scope.launch { owner?.lifecycle?.withResumed { start() } ?: start() }
-        } else notify("麦克风未允许，录音没有开启")
+        } else notify("麦克风未授权，录音没有开启")
     }
     return {
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)

@@ -616,7 +616,7 @@ private const val RELAY_RATE_LIMITED = "中转信箱今日请求已达上限，�
 private const val RELAY_FULL = "中转信箱空间已满，等 Mac 取走后会自动继续"
 private const val RELAY_WAITING = "正在等待 Mac 响应，稍后会自动同步"
 
-internal fun isSyncWaiting(message: String, pairing: Boolean = false): Boolean = when (message) {
+internal fun isSyncWaiting(message: String, pairing: Boolean = false): Boolean = if (pairing) false else when (message) {
     SYNC_QUEUED, RELAY_RATE_LIMITED, RELAY_FULL, RELAY_WAITING -> true
     // Previously persisted messages, until the next sync refreshes them.
     "手机和 Mac 可能不在同一网络", "连不上 Mac，请检查 Mac 上的 Tacit 和网络" -> !pairing
@@ -627,6 +627,9 @@ internal fun syncError(error: Throwable, pairing: Boolean = false): String = whe
     error is InviteExpired || (error is DeviceStatus && error.operation == "pair" && error.status == 403) ->
         "邀请链接已过期或已使用，请在 Mac 上重新生成"
     error is EnvelopeTooLarge -> "这批同步内容太大，暂时无法同步"
+    // 配对是一次性动作，失败不会自动重试，不能说“会自动重试”。
+    pairing && error is RelayStatus && error.status == 429 -> "中转信箱今日请求已达上限，请稍后再试，或和 Mac 连到同一网络后重试"
+    pairing && error is RelayStatus && error.status == 507 -> "中转信箱空间已满，请稍后再试，或和 Mac 连到同一网络后重试"
     error is RelayStatus && error.status == 429 -> RELAY_RATE_LIMITED
     error is RelayStatus && error.status == 507 -> RELAY_FULL
     error is RelayWaiting -> RELAY_WAITING

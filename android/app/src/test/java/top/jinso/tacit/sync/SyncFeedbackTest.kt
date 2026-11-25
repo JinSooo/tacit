@@ -45,4 +45,13 @@ class SyncFeedbackTest {
         assertFalse(isSyncWaiting(connectError, pairing = true))
         assertEquals("这批同步内容太大，暂时无法同步", syncError(EnvelopeTooLarge()))
     }
+
+    // 2026-11-25 复审：本机因超限标为被拒的记录归到“其他”；配对时信箱限流被说成“会自动重试”。
+    @Test fun localOversizeIsTooLongAndPairingRelayFailuresNeedTheUser() {
+        assertEquals(mapOf("单条内容过长" to 2), rejectedRecordCategories(mapOf("记录太大，无法发送" to 2)))
+        val limited = syncError(RelayStatus(429), pairing = true)
+        assertFalse("自动" in limited)
+        assertFalse(isSyncWaiting(limited, pairing = true))
+        assertTrue(isSyncWaiting(syncError(RelayStatus(429)), pairing = false))
+    }
 }

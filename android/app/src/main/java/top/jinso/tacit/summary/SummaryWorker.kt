@@ -34,7 +34,8 @@ internal class PhoneSummarizer(private val app: TacitApp) {
         val model = state.summaryModelConfig()
         val pending = todo(now, AudioController(app))
         if (pending.isEmpty()) {
-            vault.clearSummaryFailure(model, requireEnabled = true)
+            // 没有要写的就只清会自动重试的错误；key 无效这类要用户处理的留着，免得删掉那场对话后错误也跟着没了。
+            vault.clearSummaryFailure(model, requireEnabled = true, onlyRetryable = true)
             return@withLock 0
         }
         if (state.optLong("pausedUntil") > now) return@withLock 0
@@ -170,8 +171,10 @@ internal fun JSONObject.clearSummaryFailure(): Boolean {
     return changed
 }
 
-internal fun Vault.clearSummaryFailure(model: SummaryModel, requireEnabled: Boolean = false) = synchronized(this) {
+internal fun Vault.clearSummaryFailure(model: SummaryModel, requireEnabled: Boolean = false, onlyRetryable: Boolean = false) = synchronized(this) {
     val state = summaryModel() ?: return@synchronized
+    val needsUser = runCatching { SummaryError.valueOf(state.optString("errorCategory")).needsUser }.getOrDefault(false)
+    if (onlyRetryable && needsUser) return@synchronized
     if (state.summaryModelConfig() == model && (!requireEnabled || state.optBoolean("enabled")) &&
         state.clearSummaryFailure()
     ) saveSummaryModel(state)

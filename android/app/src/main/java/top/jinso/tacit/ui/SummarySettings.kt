@@ -33,9 +33,13 @@ import top.jinso.tacit.ui.components.*
 internal fun visibleSummaryProblem(saved: JSONObject?): String? {
     val problem = saved?.takeIf { it.optBoolean("enabled") }?.summaryProblem() ?: return null
     var now by remember(problem) { mutableLongStateOf(System.currentTimeMillis()) }
+    // 休眠时 delay 会停表：每次最多等一分钟就按墙上时间重算，醒来后最晚一分钟内显示。
     LaunchedEffect(problem) {
-        delay((problem.showAt - System.currentTimeMillis()).coerceAtLeast(0L))
-        now = System.currentTimeMillis()
+        while (true) {
+            now = System.currentTimeMillis()
+            if (now >= problem.showAt) break
+            delay((problem.showAt - now).coerceAtMost(60_000L))
+        }
     }
     return problem.messageAt(now)
 }
@@ -92,7 +96,7 @@ internal fun visibleSummaryProblem(saved: JSONObject?): String? {
     suspend fun store(on: Boolean) {
         val draft = current()
         if (on && (draft.base.isBlank() || draft.model.isBlank())) {
-            message = "请先填写服务地址和模型名"
+            message = "请先填写服务地址和模型名。"
             return
         }
         if (draft.base.isNotBlank()) SummaryClient.endpointOf(draft.base)
@@ -118,7 +122,8 @@ internal fun visibleSummaryProblem(saved: JSONObject?): String? {
                     withContext(Dispatchers.IO) {
                         val vault = app.vault
                         synchronized(vault) {
-                            vault.summaryModel()?.let { vault.saveSummaryModel(it.put("enabled", false)) }
+                            // 关掉时连同失败计时和冷却一起清，再打开从零开始。
+                            vault.summaryModel()?.let { it.clearSummaryFailure(); vault.saveSummaryModel(it.put("enabled", false)) }
                         }
                         SummaryWorker.apply(app, false)
                     }

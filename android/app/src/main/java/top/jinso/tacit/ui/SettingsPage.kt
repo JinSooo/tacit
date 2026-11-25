@@ -54,7 +54,11 @@ internal fun SettingsPage(
             Sources.AUDIO -> activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
             else -> app.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
         }
-        notify(if (granted) "权限已更新" else "未授权，可打开应用信息检查")
+        val requested = if (pendingPermission == Sources.AUDIO) Manifest.permission.RECORD_AUDIO else Manifest.permission.POST_NOTIFICATIONS
+        // 被永久拒绝后系统不再弹框，直接打开系统设置让人手动开，免得“允许”变成点了没反应的按钮。
+        if (!granted && !activity.shouldShowRequestPermissionRationale(requested)) {
+            openSystemPage(activity, if (pendingPermission == Sources.AUDIO) SystemPage.APP else SystemPage.NOTIFICATIONS, notify)
+        } else notify(if (granted) "权限已更新" else "未授权，可打开应用信息检查")
         pendingPermission = null
     }
     fun requestMicrophone() {
@@ -152,7 +156,7 @@ private fun SettingsHome(
             mac.name == null -> "未连接"
             else -> mac.name
         }
-        SettingsRow("连接 Mac", value = macValue, problem = mac?.removed == true || (mac != null && mac.name == null),
+        SettingsRow("连接 Mac", value = macValue, problem = mac?.removed == true,
             onClick = { open(SettingsRoutes.MAC) })
         GroupDivider()
         SettingsRow("语音转写", value = if (ready == false) "未准备" else null, problem = ready == false,
