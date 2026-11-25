@@ -40,15 +40,15 @@ final class WeChatCollector {
           defer { running = false }
           let now = Date()
           guard size.width > 0, let view = WeChatLayout.parse(lines, width: size.width, height: size.height) else {
-            // 不是聊天界面、没有新消息时保留上一次的结果，不写 0 条。
-            DispatchQueue.main.async { self.last = now }
+            // 不是聊天界面、没有新消息时不写状态（不写 0 条，也不把旧结果配上这次的时间）。
+            DispatchQueue.main.async { self.last = now; self.lastSummary = "" }
             return
           }
           let fresh = records(view, now: now)
           if !fresh.isEmpty { send(fresh) }
           DispatchQueue.main.async {
             self.last = now
-            if !fresh.isEmpty { self.lastSummary = "“\(view.chat)”新增 \(fresh.count) 条" }
+            self.lastSummary = fresh.isEmpty ? "" : "“\(view.chat)”新增 \(fresh.count) 条"
           }
         }
       }

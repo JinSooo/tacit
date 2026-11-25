@@ -51,7 +51,7 @@ struct ModelSettingsView: View {
         if draft != saved || timelineDraft != timelineSaved {
           HStack {
             Spacer()
-            Button("撤销修改") { draft = saved; timelineDraft = timelineSaved }.disabled(saving)
+            Button("撤销修改") { draft = saved; timelineDraft = timelineSaved; splitTiers = !Self.same(saved) }.disabled(saving)
             Button(saving ? "正在保存…" : "保存") { Task { await save() } }.keyboardShortcut(.defaultAction).disabled(saving || !canSaveModels)
           }
         }
@@ -155,11 +155,15 @@ struct ModelSettingsView: View {
 
   // MARK: 每一档
 
-  /// 三档草稿完全一样、用户也没要求分开时，只显示一组，改动同时写进三档。
-  /// 只看草稿：分档的未保存改动不会被折起来藏住，合成一组后的改动由“撤销修改”兜底。
+  /// 没有分开时只显示一组，改动同时写进三档。是否分开由 splitTiers 决定：读到的三档不一样时自动分开，
+  /// 只有点“全部任务都用这一组”才合回去，免得打字时三档草稿碰巧一样就突然折起来。
   private var sharesOneModel: Bool {
     guard !splitTiers, let editing = draft[Self.tiers[0]] else { return false }
     return Self.tiers.allSatisfy { draft[$0] == editing }
+  }
+  private static func same(_ tiers: [String: ModelTierConfig]) -> Bool {
+    guard let first = tiers[Self.tiers[0]] else { return true }
+    return Self.tiers.allSatisfy { tiers[$0] == first }
   }
 
   @ViewBuilder func tierSection(_ tier: String, info: ModelSettingsInfo, together: Bool = false) -> some View {
@@ -236,9 +240,10 @@ struct ModelSettingsView: View {
         HStack(alignment: .firstTextBaseline) {
           if let d = info.tierInfo[tier]?.description { Note(d) }
           Spacer()
-          // 分开后能合回去：三档都改成这一组，没保存前可以撤销。
-          Button("三档都用这一组") {
+          // 分开后能合回去：三个任务都改成这一组，没保存前可以撤销。
+          Button("全部任务都用这一组") {
             for t in Self.tiers { draft[t] = c }
+            tests = tests[Self.tiers[0]].map { [Self.tiers[0]: $0] } ?? [:]
             splitTiers = false
           }.buttonStyle(.accentLink).fixedSize()
         }
@@ -380,7 +385,7 @@ struct ModelSettingsView: View {
       let i = try await store.api.modelSettings()
       info = i
       // 只在没有未保存改动时刷新草稿，免得设置 key 后把正在改的内容冲掉。
-      if draft == saved { draft = i.tiers }
+      if draft == saved { draft = i.tiers; if !Self.same(i.tiers) { splitTiers = true } }
       saved = i.tiers
       error = nil
     }

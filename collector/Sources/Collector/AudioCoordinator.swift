@@ -655,8 +655,8 @@ final class AudioCoordinator {
     let all = inventory.filter { $0.id != current?.id } + (current.map { [$0] } ?? [])
     let today = all.filter { AudioPolicy.date($0.t_start).map { Calendar.current.isDateInToday($0) } ?? false }.count
     let pending = all.filter { [.closed, .waiting_me, .failed].contains($0.status) }.count
-    // 0 段时不写计数（第一行留空，后面按位置读）。
-    var lines = [pending > 0 ? "今天 \(today) 段对话，待转写 \(pending) 段" : today > 0 ? "今天 \(today) 段对话" : ""]
+    // 只写不为 0 的计数；都为 0 时第一行留空（后面按位置读）。
+    var lines = [[today > 0 ? "今天 \(today) 段对话" : nil, pending > 0 ? "待转写 \(pending) 段" : nil].compactMap { $0 }.joined(separator: "，")]
     lines.append(micStatus)
     if let micFailure { lines.append(micFailure) }
     if health.warning { lines.append("麦克风可能没有权限") }

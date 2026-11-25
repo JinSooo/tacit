@@ -145,12 +145,12 @@ private struct AudioSourceSettings: View {
         Divider()
         ForEach(c.microphones.filter { $0.group != .mode }, id: \.self) { Text($0.title).tag($0.value).selectionDisabled(!$0.selectable) }
       }
-      // 第一行是麦克风，之后是问题；录音没开时不写“麦克风未录音”。
-      let enabled = c.sources.first { $0.id == "audio" }?.enabled == true
-      let lines = MicrophoneChoices.statusLines(Array(c.audio.dropFirst()))
-      ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-        if index > 0 { SettingsMessage(text: line, warning: !line.hasPrefix("正在")) }
-        else if enabled { Text(line).foregroundStyle(Palette.muted) }
+      // c.audio：第 0 行今天的计数，第 1 行麦克风，之后是问题。按原始位置拆开，麦克风行可能被 statusLines 去掉。
+      if let mic = c.audio.dropFirst().first.flatMap({ MicrophoneChoices.statusLines([$0]).first }) {
+        Text(mic).foregroundStyle(Palette.muted)
+      }
+      ForEach(Array(c.audio.dropFirst(2).enumerated()), id: \.offset) { _, line in
+        SettingsMessage(text: line, warning: !line.hasPrefix("正在"))
       }
     }
     Section {
@@ -180,7 +180,6 @@ private struct AudioSourceSettings: View {
             .disabled(saving || (!keepForever && !(1...365).contains(days)))
         }
       }
-      if let status { SettingsMessage(text: status, warning: false) }
       if let error { SettingsMessage(text: error) }
     } header: { Text("音频保留") } footer: {
       Note("只清原始音频，转好的文字一直保留。")
@@ -192,6 +191,7 @@ private struct AudioSourceSettings: View {
         Button("删除全部原始音频…", role: .destructive) { confirmPurge = true }
           .buttonStyle(.borderless).foregroundStyle(Palette.attention)
       }
+      if let status { SettingsMessage(text: status, warning: false) }
     }
     .task { await load() }
     .confirmationDialog("删除全部原始音频？", isPresented: $confirmPurge) {

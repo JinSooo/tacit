@@ -194,13 +194,8 @@ struct GeneralPreferencesSection: View {
     @Bindable var p = store.preferences
     Section {
       if let d = Binding($p.draft) {
-        if context {
-          row("自动带入的长度上限", value: d.injectTokens, key: "inject_tokens", unit: "token")
-        } else {
-          row("没有新活动多久后归档", value: d.archiveDays, key: "archive_days", unit: "使用天")
-          Text("从最后活动的次日起，只计有记录的日期。归档后仍可搜索和查看。")
-            .foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
-        }
+        // 自动归档天数由系统按默认值处理，不在设置页开放（2026-11-25）；context 只剩 true 一种。
+        row("自动带入的长度上限", value: d.injectTokens, key: "inject_tokens", unit: "token")
         // 已经是默认值、又没改动时，这一行什么都没有，不占位。
         if !p.isDefault(context: context) || p.changed(context: context) {
         HStack {
@@ -221,11 +216,9 @@ struct GeneralPreferencesSection: View {
         Button("重试") { Task { await p.load(api: store.api) } }
       }
       if let message = p.message { SettingsMessage(text: message, warning: false) }
-    } header: { Text(context ? "自动带入项目进展" : "事项整理") }
+    } header: { Text("自动带入项目进展") }
     footer: {
-      Note(context
-        ? "新会话按这个长度带入当前项目的进展，超出时先舍弃较旧的事项；更早、更细的内容 AI 会自己查。"
-        : "只算有记录的日子，最后活动当天不算。归档后不再自动带入，仍然搜得到。")
+      Note("新会话按这个长度带入当前项目的进展，超出时先舍弃较旧的事项；更早、更细的内容 AI 会自己查。")
     }
     .task { await p.load(api: store.api) }
   }
@@ -463,13 +456,15 @@ struct MaintenanceSettingsView: View {
       }
       Section {
         SettingsRow("密钥备份") {
-          Button(keys == .running ? "正在读取…" : "复制") { Task { keys = await KeyBackup.copy() } }.disabled(keys == .running)
+          // 同其他复制按钮：复制后按钮写“已复制”，1.5 秒后复原（docs/ui.md）。
+          Button(keys == .running ? "正在读取…" : keys == .copied ? "已复制" : "复制") {
+            Task {
+              keys = await KeyBackup.copy()
+              if keys == .copied { try? await Task.sleep(for: .seconds(1.5)); if keys == .copied { keys = .idle } }
+            }
+          }.disabled(keys == .running)
         }
-        switch keys {
-        case .copied: SettingsMessage(text: "已复制。粘贴到密码管理器里保存。", warning: false)
-        case .failed(let message): SettingsMessage(text: message)
-        default: EmptyView()
-        }
+        if case .failed(let message) = keys { SettingsMessage(text: message) }
         SettingsRow("记录与音频的数据目录") {
           Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([Config.load().dataDir]) }
         }
@@ -484,6 +479,10 @@ struct MaintenanceSettingsView: View {
         await loadRequests()
         await WindowVisibility.pause(.seconds(requests.contains { !$0.finished } ? 3 : 30))
       }
+    }
+    // 同步全部结束时会提交一次整理，马上读一次，免得下面的“整理”最多晚 30 秒才跟上。
+    .onChange(of: store.capture.jobs[.syncAll]?.running) { _, running in
+      if running == false { Task { await loadRequests() } }
     }
   }
 

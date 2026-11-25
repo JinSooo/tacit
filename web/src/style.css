@@ -67,7 +67,7 @@ textarea { width: 100%; resize: vertical; line-height: 1.5; }
 summary { cursor: pointer; padding: 4px 0; color: var(--muted); }
 
 /* 分区标题：页面里的每一块。 */
-.section-title { font-size: var(--text-title); font-weight: 600; margin: 32px 0 12px; }
+.section-title { font-size: var(--text-title); font-weight: 600; margin: 32px 0 12px; scroll-margin-top: 72px; }
 .section-note { color: var(--muted); margin: -8px 0 12px; }
 .group { background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius-group); }
 

@@ -25,7 +25,8 @@ struct DeviceSettingsSection: View {
   @State private var connectedDevice: String?
   @State private var copied = false
   @State private var deviceToRemove: DeviceSettings.Device?
-  @State private var demotion: (device: DeviceSettings.Device, role: DeviceSettings.Role)?
+  @State private var demotion: Demotion?
+  private struct Demotion { let device: DeviceSettings.Device; let role: DeviceSettings.Role }
   @State private var step = DeviceInvitationChoices.Step.type
   @State private var expandedDevice: String?
 
@@ -42,7 +43,7 @@ struct DeviceSettingsSection: View {
               expandedDevice = expandedDevice == device.id ? nil : device.id
             } changeRole: { role in
               // 远程不能升回管理：取消管理权限前先确认，其他改动直接生效。
-              if device.role == .admin && role != .admin { demotion = (device, role) }
+              if device.role == .admin && role != .admin { demotion = Demotion(device: device, role: role) }
               else { changeRole(device, role) }
             } remove: {
               deviceToRemove = device
@@ -65,20 +66,19 @@ struct DeviceSettingsSection: View {
     }
     // 换后台时整页根视图也会重建（resetForBindingChange）；这里再把本组状态清干净，免得旧后台的弹窗或配对留下来。
     .task(id: store.remoteBackend?.context.binding.route) {
-      settings = nil; error = nil; needsUpdate = false; expandedDevice = nil; deviceToRemove = nil
+      settings = nil; error = nil; needsUpdate = false; expandedDevice = nil; deviceToRemove = nil; demotion = nil
       copied = false; step = .type
       closeSheet()
       await reload()
     }
+    // 用 presenting：点按钮时 isPresented 先置 false 清掉 demotion，按钮里再读 @State 就是 nil。
     .alert(demotion.map { "取消“\($0.device.name)”的管理权限？" } ?? "", isPresented: Binding(
       get: { demotion != nil },
       set: { if !$0 { demotion = nil } }
-    )) {
+    ), presenting: demotion) { pending in
       Button("取消", role: .cancel) {}
-      Button("改为\(demotion?.role.title ?? "")", role: .destructive) {
-        if let demotion { changeRole(demotion.device, demotion.role) }
-      }
-    } message: {
+      Button("改为\(pending.role.title)", role: .destructive) { changeRole(pending.device, pending.role) }
+    } message: { _ in
       Text("改完不能在这里改回管理，要用新的管理邀请重新配对。")
     }
     .alert("移除这台设备？", isPresented: Binding(
