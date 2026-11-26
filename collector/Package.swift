@@ -3,6 +3,8 @@ import PackageDescription
 import Foundation
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
 let lib = root + "/vendor/sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib/lib"
+// 应用内更新（scripts/fetch-sparkle.sh 准备）。只有采集端链接它。
+let sparkle = root + "/vendor/Sparkle-2.10.1"
 
 // CollectorCore：不依赖系统权限的纯逻辑（记录、切分、策略），可单测。
 // Collector：菜单栏应用，负责辅助功能读取、OCR、剪贴板、插件调度和发送。
@@ -20,10 +22,11 @@ let package = Package(
     // 测试直接运行构建产物，不在 app 包内；只有测试使用本地 vendor 的 rpath。
     .testTarget(name: "AudioWorkerTests", dependencies: ["ra-audio-worker", "AudioStore", "CollectorCore"], swiftSettings: v5,
       linkerSettings: [.unsafeFlags(["-L", lib, "-Xlinker", "-rpath", "-Xlinker", lib])]),
-    .executableTarget(name: "Collector", dependencies: ["CollectorCore", "AudioStore", "CSherpa"], swiftSettings: v5,
-      linkerSettings: [.unsafeFlags(["-L", lib, "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
-    .testTarget(name: "CollectorTests", dependencies: ["Collector"], swiftSettings: v5,
-      linkerSettings: [.unsafeFlags(["-L", lib, "-Xlinker", "-rpath", "-Xlinker", lib])]),
+    .executableTarget(name: "Collector", dependencies: ["CollectorCore", "AudioStore", "CSherpa"],
+      swiftSettings: v5 + [.unsafeFlags(["-F", sparkle])],
+      linkerSettings: [.unsafeFlags(["-L", lib, "-F", sparkle, "-framework", "Sparkle", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
+    .testTarget(name: "CollectorTests", dependencies: ["Collector"], swiftSettings: v5 + [.unsafeFlags(["-F", sparkle])],
+      linkerSettings: [.unsafeFlags(["-L", lib, "-F", sparkle, "-Xlinker", "-rpath", "-Xlinker", lib, "-Xlinker", "-rpath", "-Xlinker", sparkle])]),
     .testTarget(name: "AudioStoreTests", dependencies: ["AudioStore"], swiftSettings: v5),
     .testTarget(name: "CollectorCoreTests", dependencies: ["CollectorCore"], swiftSettings: v5),
   ]

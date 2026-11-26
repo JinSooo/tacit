@@ -507,7 +507,7 @@ public extension L10n {
     public static var upToDate: String { L10n.text(zh: "已是最新", en: "Up to date") }
     public static var updateCheckFailed: String { L10n.text(zh: "暂时连不上", en: "Couldn’t connect") }
     public static func updateTo(_ version: String) -> String {
-      L10n.text(zh: "下载 \(version)", en: "Download \(version)")
+      L10n.text(zh: "更新到 \(version)", en: "Update to \(version)")
     }
 
     public static func recordCount(_ count: Int, chineseUsesSystemLocale: Bool = false, lang: AppLanguage = .current) -> String {

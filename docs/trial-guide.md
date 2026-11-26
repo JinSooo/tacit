@@ -26,7 +26,7 @@ When you close the main window, Tacit stays in the menu bar and keeps recording.
 - **Recording is on by default.** It downloads about 270 MB of speech models on first use. Tacit transcribes recordings that contain your voice and can transcribe others during meetings. Tell people before recording in-person conversations. You can turn it off under **Settings › Sources › Recording**.
 - **Summaries use your model allowance.** Calls through Claude Code count toward your Claude usage. An API provider bills API calls. Set a daily usage limit under **Settings › AI models**.
 - **Records are encrypted on your Mac.** Tacit sends the text needed for summaries to the model service you choose.
-- **Update available** appears at the top of the Timeline when a new version is ready. Quit Tacit from its menu bar icon's right-click menu, then replace the app in Applications with the one from the new DMG. Your records and permissions carry over.
+- **Update available** appears at the top of the Timeline when a new version is ready. Click Update and Tacit installs it and reopens. On 0.7.4 or earlier, quit Tacit from its menu bar icon's right-click menu, then replace the app in Applications with the one from the new DMG. Your records and permissions carry over.
 
 ## If something goes wrong
 

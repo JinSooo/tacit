@@ -232,7 +232,7 @@ public extension L10n {
   static var couldntLoadTheSample: String { text(zh: "取不到片段", en: "Couldn't load the sample") }
   static var couldntPlayTheSample: String { text(zh: "播放失败", en: "Couldn't play the sample") }
   static var skipThisVersion: String { text(zh: "跳过这个版本", en: "Skip this version") }
-  static var download: String { text(zh: "下载", en: "Download") }
+  static var installUpdate: String { text(zh: "更新", en: "Update") }
   static var auditExplanation: String { text(zh: "内容链接查看的是当前记录；自动带入可查看当时保存的正文。", en: "Record links show current content. Session context shows what was saved at the time.") }
   static var aiToolsHaventReadAnythingYet: String { text(zh: "AI 工具还没有读取过", en: "AI tools haven't read anything yet") }
   static var runLog: String { text(zh: "运行记录", en: "Run log") }

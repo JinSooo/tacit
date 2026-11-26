@@ -11,6 +11,9 @@ grep -q "CFBundleShortVersionString</key><string>$VERSION<" collector/build.sh |
 grep -q "version: \"$VERSION\"" hub/src/agent-cli/mcp.ts || { echo "MCP serverInfo 的版本号不是 $VERSION" >&2; exit 1; }
 security find-certificate -c "Record Anything Dev" "$HOME/Library/Keychains/ra-dev.keychain-db" >/dev/null 2>&1 \
   || { echo "缺少发布签名证书 Record Anything Dev（~/Library/Keychains/ra-dev.keychain-db）" >&2; exit 1; }
+# 应用内更新只接受用这把钥匙签过的安装包；丢了它，已装用户就收不到应用内更新。
+UPDATE_KEY="$HOME/.config/tacit/sparkle-ed25519.key"
+[ -f "$UPDATE_KEY" ] || { echo "缺少应用内更新签名钥匙 $UPDATE_KEY（备份在“Tacit 签名钥匙备份”）" >&2; exit 1; }
 
 bun install --frozen-lockfile
 bun x vite build --config web/vite.config.ts --logLevel warn
@@ -18,7 +21,7 @@ scripts/fetch-audio-lib.sh
 collector/build.sh >/dev/null
 
 OUT="$REPO/dist"; DMG="$OUT/Tacit-$VERSION.dmg"
-mkdir -p "$OUT"; rm -f "$DMG" "$DMG.sha256"
+mkdir -p "$OUT"; rm -f "$DMG" "$DMG.sha256" "$DMG.sparkle"
 STAGE="$(mktemp -d)"; MNT="$(mktemp -d)"
 trap 'hdiutil detach -quiet "$MNT" 2>/dev/null || true; rm -rf "$STAGE" "$MNT"' EXIT
 # 小窗口里左 Tacit、右“应用程序”、中间箭头，打开就知道该往哪拖（2026-11-25 虚拟机实测：原来是一扇大空白窗口）。
@@ -32,7 +35,16 @@ codesign --verify --deep --strict "$MNT/Tacit.app"
 [ -x "$MNT/Tacit.app/Contents/PlugIns/TacitWidget.appex/Contents/MacOS/TacitWidget" ]
 "$MNT/Tacit.app/Contents/Helpers/Tacit" --version >/dev/null
 [ -f "$MNT/Tacit.app/Contents/Resources/runtime/hub/src/cli.ts" ] && [ -f "$MNT/Tacit.app/Contents/Resources/uninstall.sh" ]
+# 应用内更新：框架在，应用里的公钥和本机的签名钥匙是一对。
+[ -x "$MNT/Tacit.app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" ]
+[ "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$MNT/Tacit.app/Contents/Info.plist")" = "$(bun scripts/sparkle-public-key.ts "$UPDATE_KEY")" ] \
+  || { echo "应用里的 SUPublicEDKey 和 $UPDATE_KEY 不是一对" >&2; exit 1; }
 hdiutil detach -quiet "$MNT"
 
 (cd "$OUT" && shasum -a 256 "Tacit-$VERSION.dmg" > "Tacit-$VERSION.dmg.sha256")
+# Sparkle 签名留给 scripts/publish-mac-update.ts 写进官网的 appcast；先用应用里的公钥验一遍。
+collector/vendor/Sparkle-2.10.1/bin/sign_update --ed-key-file "$UPDATE_KEY" "$DMG" > "$DMG.sparkle"
+SIG="$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' "$DMG.sparkle")"
+collector/vendor/Sparkle-2.10.1/bin/sign_update --verify --ed-key-file "$UPDATE_KEY" "$DMG" "$SIG" >/dev/null \
+  || { echo "安装包的更新签名校验不通过" >&2; exit 1; }
 printf '%s\n%s\n' "$DMG" "$(cat "$DMG.sha256")"

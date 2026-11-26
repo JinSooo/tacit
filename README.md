@@ -221,7 +221,7 @@ AI tools have read and append access. You can correct a mistake in a Project or 
 
 ## Update or uninstall
 
-**Update.** The Mac Timeline shows Update available when there's a new version. Download the new DMG, quit Tacit from the menu bar's right-click menu, and replace the app in Applications. On Android, install the new APK over the existing app. Upgrades retain data, settings, permissions, paired devices, and AI tool connections.
+**Update.** The Mac Timeline shows Update available when there's a new version. From 0.7.5 on, click Update and Tacit downloads, verifies, and installs it, then reopens itself. On 0.7.4 or earlier, download the new DMG once, quit Tacit from the menu bar's right-click menu, and replace the app in Applications. On Android, install the new APK over the existing app. Upgrades retain data, settings, permissions, paired devices, and AI tool connections.
 
 **Uninstall.** Run the following command in Terminal. It asks whether to delete your data as well.
 

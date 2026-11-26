@@ -1,4 +1,4 @@
-<!-- source: docs/installation.md @ dbacf5c433311d125c195fb39a442ac2b793ef6f -->
+<!-- source: docs/installation.md @ 54ee0472af1fea14084206aaef738028661064c3 -->
 
 [English](../installation.md) | 简体中文
 
@@ -62,19 +62,20 @@ Mac 和 Android 各自发版、版本号各自递增，哪端有改动就只发�
 
 | 平台 | 版本与链接来源 |
 | --- | --- |
-| Mac | `site/src/latest.json` 提供 `mac.version` 和 Release 页面地址 `mac.url`。 |
-| Android | 按 `android/app/build.gradle.kts` 的 `versionName` 生成 Android Release tag 和链接。`site/src/latest.json` 的 `android` 条目只给手机检查更新用，要和 `versionName` 一致。 |
+| Mac | `site/src/latest.json` 提供 `mac.version` 和 Release 页面地址 `mac.url`，下载按钮直接指向这个 Release 上的 `Tacit-<版本号>.dmg`。`site/src/appcast.json` 生成应用内更新读的 `appcast.xml`，版本号必须相同。 |
+| Android | 按 `android/app/build.gradle.kts` 的 `versionName` 生成 Android Release tag 和直接下载 `Tacit-<版本号>.apk` 的链接。`site/src/latest.json` 的 `android` 条目只给手机检查更新用，要和 `versionName` 一致。 |
 | Docker | 按 `package.json` 的 `version` 生成后台服务镜像 tag 和带版本的拉取命令。 |
 
 `hero.html` 和 `download.html` 的下载信息由构建自动填入。
 
 Mac：
 
-1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）、`site/src/latest.json`；`scripts/release-version.test.ts` 检查这几处一致。同时把 `mac.url` 改为新 tag 对应的 Release 页面地址，再构建官网。提交并打 `mac-v<版本号>` tag。
-2. 在已配置代码签名证书、装了 [uv](https://docs.astral.sh/uv/) 的 Mac 上运行 `scripts/release-dmg.sh`（安装盘窗口布局由 `uvx` 临时拉取固定版本的 dmgbuild 写入）。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
+1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）；`scripts/release-version.test.ts` 检查这几处一致。`site/src/latest.json` 的 `mac` 条目这一步不动，第 4 步再改。提交并打 `mac-v<版本号>` tag。
+2. 在已配置代码签名证书、应用内更新钥匙 `~/.config/tacit/sparkle-ed25519.key`、装了 [uv](https://docs.astral.sh/uv/) 的 Mac 上运行 `scripts/release-dmg.sh`（安装盘窗口布局由 `uvx` 临时拉取固定版本的 dmgbuild 写入）。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg`、`.sha256` 和 Sparkle 签名 `.sparkle`，并从挂载的安装包里校验签名、自带运行时和更新钥匙。
 3. 推送 tag，建 Release 并上传这两个文件：`gh release create mac-v<版本号> dist/Tacit-<版本号>.dmg dist/Tacit-<版本号>.dmg.sha256 --prerelease --title "Tacit v<版本号> - Mac" --notes-file <说明>`。
    推送 `mac-v<版本号>` tag 会触发 `.github/workflows/hub-image.yml`，把同一份后台代码的服务端镜像推到 `ghcr.io/jinsooo/tacit-hub:<版本号>` 和 `:latest`；在 Actions 里确认它跑通。
-4. Release 上传完成后部署官网（步骤见[官网说明](../../site/README.zh-CN.md)）。已安装的 Tacit 每天读一次 `https://tacit.jinso.top/latest.json`，比自己新就在时间线顶部提示“可以更新了”；设置“通用”的版本行也能手动检查。请求不带 Cookie 和本机信息，失败时不提示。先部署官网再传安装包，用户会点到还没有安装包的页面。
+4. 安装包上传到 Release 后运行 `bun scripts/publish-mac-update.ts`：它确认安装包已经能下载，再把 `site/src/latest.json` 的 `mac` 条目和 `site/src/appcast.json` 改成新版本。提交后构建并部署官网（步骤见[官网说明](../../site/README.zh-CN.md)）。
+   已安装的 Tacit 每天读一次 `https://tacit.jinso.top/latest.json`，比自己新就在时间线顶部提示“可以更新了”；设置“通用”的版本行也能手动检查。请求不带 Cookie 和本机信息，失败时不提示。点“更新”交给 [Sparkle](https://sparkle-project.org)：它读 `appcast.xml`，下载安装包，用应用里的公钥核对签名，替换应用并重新打开。0.7.4 及更早的版本没有 Sparkle，仍然打开下载。
 
 Android：
 

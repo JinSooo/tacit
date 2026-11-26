@@ -2,6 +2,7 @@
 # 构建并签名采集端：collector/build/Tacit.app
 set -e
 cd "$(dirname "$0")"
+../scripts/fetch-sparkle.sh
 ./swift.sh build -c release
 BIN="$(./swift.sh build -c release --show-bin-path)"
 APP="build/Tacit.app"
@@ -30,6 +31,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleURLName</key><string>dev.record-anything.collector.timeline</string>
     <key>CFBundleURLSchemes</key><array><string>tacit</string></array>
   </dict></array>
+  <key>SUFeedURL</key><string>https://tacit.jinso.top/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>X2wKFKmRNwkcbKwSQhlgR+uqVHBnpNiiX6pgo0DbQLE=</string>
+  <key>SUEnableAutomaticChecks</key><false/>
+  <key>SUShowReleaseNotes</key><false/>
   <key>NSBonjourServices</key><array><string>_tacit._tcp</string></array>
   <key>NSLocalNetworkUsageDescription</key><string>Tacit lets your phone find this Mac on the local network. 让手机在局域网内找到这台 Mac。</string>
   <key>NSMicrophoneUsageDescription</key><string>Tacit records voices from the microphone to create conversation records and encrypts the audio on this Mac. 录制麦克风中的人声，在本机加密保存并整理对话记录。</string>
@@ -67,6 +72,10 @@ xcrun --sdk macosx swiftc -target arm64-apple-macosx14.0 -O -application-extensi
 mkdir -p "$APP/Contents/Frameworks"
 LIB="vendor/sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib/lib"
 for lib in "$LIB"/*.dylib; do cp -L "$lib" "$APP/Contents/Frameworks/"; done
+# 应用内更新。Tacit 不在沙盒里，用不到 Sparkle 的两个 XPC 服务，删掉免得多签两个程序。
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+ditto vendor/Sparkle-2.10.1/Sparkle.framework "$SPARKLE"
+rm -rf "$SPARKLE/Versions/B/XPCServices" "$SPARKLE/XPCServices"
 # 应用图标由采集端自己画（AppIconArt），这里导出成 icns。
 mkdir -p "$APP/Contents/Resources"
 # 查看窗口和菜单栏的图标字体（Phosphor，MIT），启动时注册到进程。
@@ -119,6 +128,10 @@ KC="$HOME/Library/Keychains/ra-dev.keychain-db"
 for lib in "$APP/Contents/Frameworks/"*.dylib; do
   codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime "$lib"
 done
+# Sparkle 从里往外签：更新时它会核对新应用和旧应用是同一张证书签的。
+for part in "$SPARKLE/Versions/B/Autoupdate" "$SPARKLE/Versions/B/Updater.app" "$SPARKLE"; do
+  codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime "$part"
+done
 codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements build/bun.entitlements "$RUNTIME_BIN"
 if [ -f "$APP/Contents/MacOS/ra-audio-worker" ]; then
   codesign --force --keychain "$KC" -s "Record Anything Dev" -o runtime --entitlements build/audio.entitlements "$APP/Contents/MacOS/ra-audio-worker"
@@ -140,7 +153,8 @@ codesign -dvv "$RUNTIME_BIN" 2>&1 | grep -q '^Authority=Record Anything Dev$' \
 [ "$("$RUNTIME_BIN" -e 'let s = 0; for (let i = 0; i < 1e6; i++) s += i; console.log(s)')" = "499999500000" ] \
   || { echo "重签后的运行时无法运行" >&2; exit 1; }
 # Bundled localizations change AppKit punctuation spacing and other applications' display names.
-LOCALIZATIONS="$(find "$APP" -iname '*.lproj' -print)"
+# Sparkle 框架自带的翻译只用于它自己的更新窗口，不影响应用本身的语言和标点排版。
+LOCALIZATIONS="$(find "$APP" -path "$SPARKLE" -prune -o -iname '*.lproj' -print)"
 [ -z "$LOCALIZATIONS" ] || { printf 'Unexpected bundle localizations:\n%s\n' "$LOCALIZATIONS" >&2; exit 1; }
 for plist in "$APP/Contents/Info.plist" "$WIDGET/Contents/Info.plist"; do
   if /usr/libexec/PlistBuddy -c 'Print :CFBundleLocalizations' "$plist" >/dev/null 2>&1 ||

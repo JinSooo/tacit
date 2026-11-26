@@ -1,10 +1,11 @@
 import AppKit
+import Sparkle
 import SwiftUI
 import struct CollectorCore.UpdateManifest
 import enum CollectorCore.L10n
 
-/// 每天看一次官网的 latest.json，有新的 Mac 版就在时间线顶部提一行。
-/// 请求不带 Cookie、不带本机信息，失败就安静地等下一次。
+/// 每天看一次官网的 latest.json，有新的 Mac 版就在时间线顶部提一行；点“更新”交给 Sparkle 在应用内下载、校验、替换并重开。
+/// 请求不带 Cookie、不带本机信息，失败就安静地等下一次。Sparkle 自己不定时检查（Info.plist 关了），不会自己弹窗。
 @MainActor @Observable final class UpdateNotice {
   private static let skippedKey = "update.skippedVersion"
   private static let checkedKey = "update.checkedAt"
@@ -15,6 +16,13 @@ import enum CollectorCore.L10n
   private(set) var manual: ManualCheck?
   enum ManualCheck: Equatable { case checking, upToDate, failed }
   @ObservationIgnored private var timer: Timer?
+  /// 第一次点“更新”才启动；没有公钥的开发构建没有它，退回打开下载页。
+  @ObservationIgnored private let updaterDelegate = UpdaterDelegate()
+  @ObservationIgnored private lazy var updater: SPUStandardUpdaterController? = {
+    guard Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") != nil,
+          Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil else { return nil }
+    return SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: updaterDelegate, userDriverDelegate: nil)
+  }()
 
   func start() {
     guard timer == nil, currentVersion != nil else { return }
@@ -31,7 +39,13 @@ import enum CollectorCore.L10n
     Motion.animate { self.available = nil }
   }
 
-  func download() {
+  func install() {
+    if let updater, updater.updater.canCheckForUpdates {
+      // 菜单栏应用默认不在前台，先激活，Sparkle 的窗口才不会落在别的窗口后面。
+      NSApp.activate(ignoringOtherApps: true)
+      updater.checkForUpdates(nil)
+      return
+    }
     guard let page = (available ?? latest)?.page else { return }
     NSWorkspace.shared.open(page)
   }
@@ -90,6 +104,28 @@ import enum CollectorCore.L10n
   }
 }
 
+/// Sparkle 默认拿 CFBundleVersion 比新旧，而 Tacit 的 CFBundleVersion 是提交号（后台准备靠它认出换了构建）。
+/// appcast 里的 sparkle:version 写短版本号，这里把本机的提交号换成短版本号再比。
+final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
+  let comparator: ShortVersionComparator
+  init(comparator: ShortVersionComparator = ShortVersionComparator()) { self.comparator = comparator }
+  func versionComparator(for updater: SPUUpdater) -> (any SUVersionComparison)? { comparator }
+}
+
+final class ShortVersionComparator: NSObject, SUVersionComparison {
+  private let build: String?
+  private let short: String?
+  init(build: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+       short: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) {
+    self.build = build
+    self.short = short
+  }
+  func compareVersion(_ versionA: String, toVersion versionB: String) -> ComparisonResult {
+    let map = { (version: String) in version == self.build ? (self.short ?? version) : version }
+    return SUStandardVersionComparator.default.compareVersion(map(versionA), toVersion: map(versionB))
+  }
+}
+
 struct TimelineUpdateLine: View {
   let notice: UpdateNotice
   let update: UpdateManifest
@@ -100,7 +136,7 @@ struct TimelineUpdateLine: View {
       Text(L10n.updateAvailable(update.version))
       Spacer(minLength: 8)
       Button(L10n.skipThisVersion) { notice.skip() }.buttonStyle(.accentLink).foregroundStyle(Palette.muted).fixedSize()
-      Button(L10n.download) { notice.download() }.buttonStyle(.accentLink).fixedSize()
+      Button(L10n.installUpdate) { notice.install() }.buttonStyle(.accentLink).fixedSize()
     }
     .font(.system(size: TextSize.body))
     .foregroundStyle(Palette.accent)
@@ -124,7 +160,7 @@ struct SettingsVersionRow: View {
 
   @ViewBuilder private var trailing: some View {
     if let latest = notice.latest {
-      Button(L10n.Settings.updateTo(latest.version)) { notice.download() }.buttonStyle(.accentLink).fixedSize()
+      Button(L10n.Settings.updateTo(latest.version)) { notice.install() }.buttonStyle(.accentLink).fixedSize()
     } else {
       switch notice.manual {
       case .checking: ProgressView().controlSize(.small)

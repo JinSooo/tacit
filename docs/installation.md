@@ -60,16 +60,16 @@ Update the relevant version source and run `bun site/build.ts` for each release.
 
 | Platform | Source |
 | --- | --- |
-| Mac | `site/src/latest.json` supplies `mac.version` and the `mac.url` release page. |
-| Android | `versionName` in `android/app/build.gradle.kts` determines the Android release tag and link. The `android` entry in `site/src/latest.json` feeds the phone's update check and must match `versionName`. |
+| Mac | `site/src/latest.json` supplies `mac.version` and the `mac.url` release page. Download buttons link straight to `Tacit-<version>.dmg` on that release. `site/src/appcast.json` supplies the in-app update feed `appcast.xml` and must name the same version. |
+| Android | `versionName` in `android/app/build.gradle.kts` determines the Android release tag and the direct `Tacit-<version>.apk` download link. The `android` entry in `site/src/latest.json` feeds the phone's update check and must match `versionName`. |
 | Docker | `version` in `package.json` determines the Background service image tag and versioned pull command. |
 
 The build fills the download templates in `hero.html` and `download.html` automatically.
 
 ### Mac
 
-1. Update the version in `package.json`, `CFBundleShortVersionString` in `collector/build.sh`, `serverInfo` in `hub/src/agent-cli/mcp.ts` and its test, and `site/src/latest.json`. The consistency test is `scripts/release-version.test.ts`. Set `mac.url` to the new release tag page and rebuild the site. Commit and tag `mac-v<version>`.
-2. On a Mac with the signing certificate configured and [uv](https://docs.astral.sh/uv/) installed, run `scripts/release-dmg.sh`. It requires a clean working tree and the tag on the current commit. It uses `uvx` to run a pinned version of dmgbuild for the disk image layout. It writes `dist/Tacit-<version>.dmg` and its `.sha256` file and verifies the signature and bundled runtime from the mounted image.
+1. Update the version in `package.json`, `CFBundleShortVersionString` in `collector/build.sh`, and `serverInfo` in `hub/src/agent-cli/mcp.ts` and its test. The consistency test is `scripts/release-version.test.ts`. Leave the `mac` entry in `site/src/latest.json` alone; step 4 changes it. Commit and tag `mac-v<version>`.
+2. On a Mac with the signing certificate, the in-app update key `~/.config/tacit/sparkle-ed25519.key`, and [uv](https://docs.astral.sh/uv/) installed, run `scripts/release-dmg.sh`. It requires a clean working tree and the tag on the current commit. It uses `uvx` to run a pinned version of dmgbuild for the disk image layout. It writes `dist/Tacit-<version>.dmg`, its `.sha256` file, and the Sparkle signature `.sparkle`. It verifies the code signature, bundled runtime, and update key from the mounted image.
 3. Push the tag and upload both files to the release.
 
    ```sh
@@ -77,7 +77,8 @@ The build fills the download templates in `hero.html` and `download.html` automa
    ```
 
    Pushing `mac-v<version>` triggers `.github/workflows/hub-image.yml` to publish the image to `ghcr.io/jinsooo/tacit-hub:<version>` and `:latest`. Check the workflow result in Actions.
-4. Deploy the website once the installer is available. See the [site README](../site/README.md). Tacit checks `https://tacit.jinso.top/latest.json` daily and shows Update available on the Timeline if the published version is newer. The version row in Settings › General also checks on demand. The request includes no cookies or device details. Failed checks stay quiet.
+4. Once the installer is on the release, run `bun scripts/publish-mac-update.ts`. It confirms the installer is downloadable and sets the `mac` entry in `site/src/latest.json` and `site/src/appcast.json` to the new version. Commit, then build and deploy the website. See the [site README](../site/README.md).
+   Tacit checks `https://tacit.jinso.top/latest.json` daily and shows Update available on the Timeline if the published version is newer. The version row in Settings › General also checks on demand. The request includes no cookies or device details. Failed checks stay quiet. Update hands off to [Sparkle](https://sparkle-project.org), which reads `appcast.xml`, downloads the installer, checks it against the public key in the app, replaces the app, and relaunches it. Tacit 0.7.4 and earlier lack Sparkle and still open the download.
 
 ### Android
 
