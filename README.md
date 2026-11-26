@@ -103,6 +103,13 @@ Mac 提供中号和大号两种小组件，抬眼就能看到今天做了哪些�
 3. **配合 Mac 使用**：在 Mac 的 **设置 › 设备** 生成配对二维码，在手机 **设置 › 连接 Mac** 扫码配对，即可加密同步录音并在手机上查看全天时间线（离家时也可经中转信箱同步）。
 4. **单独使用**：不连接 Mac 时，录音和转写保存在手机加密库中，也可在 **设置 › AI 总结** 可选配置 OpenAI 兼容接口为单场对话生成总结。更多说明见 [android/README.md](android/README.md)。
 
+<details>
+<summary><b>进阶：独立部署后台服务（Docker，可选）</b></summary>
+
+后台默认随 Mac 应用在本机运行，不需要服务器。若希望在 Linux 服务器或装有 Docker 的 Windows 电脑上单独运行后台，可直接拉取随 Mac 版本同步发布的公开镜像 `ghcr.io/jinsooo/tacit-hub`（支持 `linux/amd64` 与 `linux/arm64`）。启动后在服务器上生成一次管理邀请链接，再到 Mac **设置 › 后台与连接 › 连接远端后台** 粘贴即可切换。完整步骤见 [docs/server-deployment.md](docs/server-deployment.md)。
+
+</details>
+
 > [!NOTE]
 > 整理每 15 分钟跑一轮，调用模型会消耗你的 API 额度或账号用量。你可以在 **设置 › AI 模型** 调整润色与概述频率，并设置每日 token 用量上限；达到上限后当天自动暂停整理调用，草稿段照常出现。
 
@@ -177,7 +184,7 @@ Tacit 不保存截图，也不做画面回放。它关心的是“你做了什�
 <details>
 <summary><b>支持 Intel Mac、Windows 或手机吗？</b></summary>
 
-目前提供 Apple 芯片 Mac 版（macOS 14 或更新），以及 arm64 Android 客户端（本机录音转写、可选手机端 AI 总结、与 Mac 加密同步及查看时间线，见 [android/README.md](android/README.md)），arm64 安装包在 Releases 里单独发布（标题带“Android”）。Intel Mac、Windows 和 iOS 暂不支持。
+目前提供 Apple 芯片 Mac 版（macOS 14 或更新），以及 arm64 Android 客户端（本机录音转写、可选手机端 AI 总结、与 Mac 加密同步及查看时间线，见 [android/README.md](android/README.md)），arm64 安装包在 Releases 里单独发布（标题带“Android”）。Windows 客户端计划支持（敬请期待），目前可先通过 Docker 在 Windows 上独立部署后台服务；Intel Mac 暂不支持，iOS 仍在调研中。
 
 </details>
 
@@ -196,7 +203,7 @@ Tacit 目前处于**开发预览**阶段，以下几项仍在完善或尚未覆�
 - 第三方插件安装和本地模型独立入口当前暂时收起。
 - 文件类系统权限（如 Safari 历史）与首次打开的系统放行流程，尚需在更多开启 SIP 的全新 Mac 环境中进一步覆盖验证。
 - Android 客户端（含 HPKE 加密配对、局域网与中转信箱同步、可选单场 AI 总结与查看时间线）安装包 `Tacit-<版本>.apk` 在 Releases 里单独发布，只支持 arm64 手机。
-- 后台服务也可单独部署到 Linux 服务器或装了 Docker 的 Windows 电脑（见 [docs/server-deployment.md](docs/server-deployment.md)），这是可选形态：在服务器上用一行命令生成管理邀请链接，再到 Mac 设置的“后台与连接”里点“连接远端后台”粘贴即可切换。
+- 后台服务也可单独部署到 Linux 服务器或装了 Docker 的 Windows 电脑（公开镜像 `ghcr.io/jinsooo/tacit-hub`，步骤见 [docs/server-deployment.md](docs/server-deployment.md)），这是可选形态：在服务器上用一行命令生成管理邀请链接，再到 Mac 设置的“后台与连接”里点“连接远端后台”粘贴即可切换。
 
 ## 更新与卸载
 
@@ -215,6 +222,7 @@ sh /Applications/Tacit.app/Contents/Resources/uninstall.sh
 | `collector/` | Swift / SwiftUI 菜单栏应用、采集、录音、本地转写和桌面小组件 |
 | `hub/` | Bun 后台服务、加密数据库、整理任务和 AI 接口（MCP） |
 | `android/` | Kotlin Android 客户端（本机录音转写、可选单场 AI 总结、HPKE 加密同步与时间线查看） |
+| `relay/` | 中转信箱服务，只经手端到端加密密文，支持 Cloudflare Workers 或 Docker（部署见 `relay/README.md`） |
 | `web/` | 网页状态页 |
 | `site/` | 官网 [tacit.jinso.top](https://tacit.jinso.top)，零依赖静态页，部署见 `site/README.md` |
 | `packages/`、`plugins/`、`schema/` | 共享记录类型、内置数据源与跨端测试样例 |

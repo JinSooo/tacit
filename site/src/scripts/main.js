@@ -1,4 +1,23 @@
 // 公共脚本：导航滚动分隔线与章节高亮、主题切换、进入视口淡入。区块脚本各自独立，不依赖这里。
+// 根据访问设备调整下载按钮主次与顺序（保留双端入口，便于跨设备下载）
+if (document.documentElement.getAttribute("data-platform") === "android") {
+  for (const group of document.querySelectorAll("[data-platform-actions]")) {
+    const mac = group.querySelector('[data-platform-target="mac"]');
+    const android = group.querySelector('[data-platform-target="android"]');
+    if (mac && android) {
+      group.insertBefore(android, mac);
+      android.classList.replace("btn-quiet", "btn-primary");
+      mac.classList.replace("btn-primary", "btn-quiet");
+    }
+  }
+  const guide = document.querySelector(".download-guide");
+  const macGuide = guide?.querySelector(".download-mac");
+  const androidGuide = guide?.querySelector(".download-android");
+  if (guide && macGuide && androidGuide) {
+    guide.insertBefore(androidGuide, macGuide);
+  }
+}
+
 const nav = document.getElementById("nav");
 const navLinks = [...document.querySelectorAll(".nav-links a[href^='#']")];
 const linkById = new Map(navLinks.map((link) => [link.getAttribute("href").slice(1), link]));

@@ -24,6 +24,26 @@
   margin-top: 12px;
 }
 
+.platform-note {
+  display: none;
+  margin-block: 10px 6px;
+  color: var(--reading);
+}
+
+.hero-actions ~ .platform-note {
+  margin-top: 0;
+}
+
+html[data-platform="windows"] .platform-note[data-platform-note="windows"],
+html[data-platform="ios"] .platform-note[data-platform-note="ios"] {
+  display: block;
+}
+
+.download-guide {
+  display: flex;
+  flex-direction: column;
+}
+
 .download-guide .title {
   margin-bottom: 20px;
 }
@@ -88,23 +108,39 @@
   margin-top: 0;
 }
 
-.download-android {
+.download-android,
+.download-server {
   margin-top: 28px;
   padding-top: 24px;
   border-top: 1px solid var(--line);
 }
 
-.download-android .title {
+.download-android .title,
+.download-server .title {
   margin-bottom: 10px;
 }
 
-.download-android p {
+.download-android p,
+.download-server p {
   color: var(--reading);
 }
 
-.download-android code {
+.download-android code,
+.download-server code {
   font-size: var(--fs-caption);
   overflow-wrap: anywhere;
+}
+
+html[data-platform="android"] .download-guide .download-android {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+html[data-platform="android"] .download-guide .download-mac {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
 }
 
 .download-status {
@@ -124,12 +160,12 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .has-js .download-guide :is(.download-steps > li, .download-android) {
+  .has-js .download-guide :is(.download-steps > li, .download-android, .download-server) {
     opacity: 0;
     transform: translateY(8px);
     transition: opacity 400ms var(--ease), transform 400ms var(--ease);
   }
-  .has-js .download-guide.is-in :is(.download-steps > li, .download-android) {
+  .has-js .download-guide.is-in :is(.download-steps > li, .download-android, .download-server) {
     opacity: 1;
     transform: none;
   }
@@ -137,6 +173,7 @@
   .has-js .download-guide.is-in .download-steps > li:nth-child(2) { transition-delay: 75ms; }
   .has-js .download-guide.is-in .download-steps > li:nth-child(3) { transition-delay: 150ms; }
   .has-js .download-guide.is-in .download-android { transition-delay: 225ms; }
+  .has-js .download-guide.is-in .download-server { transition-delay: 300ms; }
 }
 
 @media (prefers-reduced-motion: reduce) {
