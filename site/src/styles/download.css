@@ -14,6 +14,12 @@
   text-wrap: wrap;
 }
 
+.download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .download-requirements {
   margin-top: 12px;
 }
