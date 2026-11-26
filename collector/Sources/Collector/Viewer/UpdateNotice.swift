@@ -46,6 +46,11 @@ import enum CollectorCore.L10n
     }
   }
 
+  /// 离开设置时清掉上次手动检查的结果，下次进来又能点“检查更新”；不然“已是最新”会一直留到应用重启。
+  func clearManualResult() {
+    if manual != .checking { manual = nil }
+  }
+
   var canCheck: Bool { currentVersion != nil }
 
   var currentVersion: String? {
@@ -114,6 +119,7 @@ struct SettingsVersionRow: View {
         if notice.canCheck { trailing }
       }
     }
+    .onDisappear { notice.clearManualResult() }
   }
 
   @ViewBuilder private var trailing: some View {

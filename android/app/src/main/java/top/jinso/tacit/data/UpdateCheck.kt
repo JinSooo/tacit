@@ -71,6 +71,11 @@ class UpdateCheck(context: Context, private val current: String) {
         mutable.update { it.copy(manual = if (!ok) Manual.FAILED else if (it.latest == null) Manual.UP_TO_DATE else null) }
     }
 
+    /** Leaving Settings drops the last manual result so the button is back next time; otherwise "Up to date" stuck until restart. */
+    fun clearManual() {
+        mutable.update { if (it.manual == Manual.CHECKING) it else it.copy(manual = null) }
+    }
+
     fun skip() {
         val version = mutable.value.latest?.version ?: return
         prefs.edit().putString(SKIPPED, version).apply()

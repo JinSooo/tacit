@@ -197,6 +197,7 @@ private fun VersionLine(app: TacitApp) {
     val scope = rememberCoroutineScope()
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
     val latest = update.latest
+    DisposableEffect(Unit) { onDispose { app.updates.clearManual() } }
     Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Caption("Tacit ${BuildConfig.VERSION_NAME}")
