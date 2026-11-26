@@ -1,8 +1,8 @@
-/* Tacit 官网公共层：设计令牌、排版、布局、按钮、导航和页脚。各区块样式放在自己的文件里，只引用这里的变量。 */
+/* Shared tokens, type, layout, controls, navigation and footer. */
 
 :root {
   color-scheme: light;
-  /* 颜色：一个强调色（铜绿），暖灰；胭脂只染文字和小图标 */
+  /* Patina accent, warm neutrals and red for text and small icons. */
   --accent: #3b7468;
   --accent-soft: rgb(59 116 104 / 0.1);
   --on-accent: #ffffff;
@@ -17,7 +17,7 @@
   --raised: #ffffff;
   --fill: rgb(28 27 26 / 0.05);
 
-  /* 深色带：与应用图标同一块暖炭灰，两种外观下都是深的 */
+  /* The terminal uses the app icon's warm charcoal in either theme. */
   --night: #211f1d;
   --night-raised: #2a2724;
   --night-line: #3a3632;
@@ -25,12 +25,12 @@
   --night-muted: #b7afa5;
   --night-accent: #93cbbd;
 
-  /* 字体：宋体只给叙述性标题；正文系统无衬线；等宽只给命令、路径、代码 */
+  /* Serif for narrative headings, sans for body text, monospace for code. */
   --serif: "Songti SC", "STSong", "Source Han Serif SC", "Noto Serif CJK SC", "Noto Serif SC", Georgia, serif;
   --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* 字号：全站只用这 6 级，一个区块最多用其中 4 级 */
+  /* Six type sizes, at most four per section. */
   --fs-caption: 13px;
   --fs-body: 16px;
   --fs-lead: 19px;
@@ -38,24 +38,28 @@
   --fs-heading: clamp(30px, 4.2vw, 44px);
   --fs-display: clamp(40px, 7vw, 80px);
 
-  /* 圆角：控件 6、分组 10、浮层 14、展示窗 20 */
+  /* Radii for controls, groups, overlays and demo windows. */
   --r-control: 6px;
   --r-group: 10px;
   --r-float: 14px;
   --r-stage: 20px;
 
-  /* 间距用 4 的倍数 */
+  /* Spacing uses multiples of four. */
   --gutter: clamp(16px, 4vw, 32px);
   --content: 1120px;
   --reading-width: 680px;
   --section-gap: clamp(96px, 14vw, 176px);
 
-  /* 动效三档，和 Mac、Android 同一套节奏：悬停与小换 / 展开与切换 / 滚动进场 */
+  /* Motion for hover, view changes and scroll reveals. */
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --t-quick: 160ms;
   --t-standard: 240ms;
   --t-reveal: 480ms;
   --nav-h: 64px;
+}
+
+html[lang="en"] {
+  --serif: ui-serif, "New York", Georgia, "Songti SC", serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -99,7 +103,7 @@
   --night-line: #2f2c29;
 }
 
-/* ---------- 基础 ---------- */
+/* ---------- Base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
 html {
   -webkit-text-size-adjust: 100%;
@@ -132,7 +136,7 @@ code, kbd, pre { font-family: var(--mono); font-size: 0.92em; }
   clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
 }
 
-/* ---------- 排版 ---------- */
+/* ---------- Typography ---------- */
 .display, .heading, .title {
   font-family: var(--serif);
   font-weight: 600;
@@ -147,7 +151,7 @@ code, kbd, pre { font-family: var(--mono); font-size: 0.92em; }
 .prose { color: var(--reading); text-wrap: pretty; }
 .prose p + p { margin-top: 1em; }
 
-/* ---------- 布局 ---------- */
+/* ---------- Layout ---------- */
 .wrap { width: min(100% - 2 * var(--gutter), var(--content)); margin-inline: auto; }
 .section {
   padding-block: clamp(64px, 8vw, 112px);
@@ -170,7 +174,7 @@ main > section:nth-of-type(even) {
   }
 }
 
-/* 深色带：给 AI 那一侧用，与应用图标同色 */
+/* Dark surface for the AI terminal. */
 .band-night {
   --ink: var(--night-ink);
   --reading: var(--night-muted);
@@ -184,7 +188,7 @@ main > section:nth-of-type(even) {
   color-scheme: dark;
 }
 
-/* ---------- 按钮 ---------- */
+/* ---------- Controls ---------- */
 .btn {
   display: inline-flex; align-items: center; gap: 10px;
   height: 48px; padding: 0 22px;
@@ -199,7 +203,7 @@ main > section:nth-of-type(even) {
 .btn svg { width: 18px; height: 18px; flex: none; }
 .link { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
 
-/* ---------- 导航 ---------- */
+/* ---------- Navigation ---------- */
 .nav {
   position: sticky; top: 0; z-index: 50;
   height: var(--nav-h);
@@ -233,6 +237,8 @@ main > section:nth-of-type(even) {
 .nav-links a[aria-current="location"] { color: var(--accent); }
 .nav-links a[aria-current="location"]::after { opacity: 1; transform: scaleX(1); }
 .nav-actions { display: flex; align-items: center; gap: 12px; }
+.nav-language { padding-block: 6px; font-size: var(--fs-caption); color: var(--muted); white-space: nowrap; }
+.nav-language:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; }
 .theme-toggle {
   height: 36px; padding: 0 12px; border-radius: 999px;
   font-size: var(--fs-caption); color: var(--muted);
@@ -241,12 +247,20 @@ main > section:nth-of-type(even) {
 }
 .theme-toggle:hover { color: var(--ink); box-shadow: inset 0 0 0 1px var(--faint); }
 .nav .btn { height: 38px; padding: 0 16px; font-size: 15px; }
+.language-notice { border-bottom: 1px solid var(--line); }
+.language-notice-inner { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.language-notice button { flex: none; width: 32px; height: 32px; font-size: var(--fs-body); }
+.language-notice button:hover { color: var(--ink); background: var(--fill); }
 @media (max-width: 760px) {
   .nav-links { display: none; }
   .nav-actions { margin-left: auto; }
 }
+@media (max-width: 375px) {
+  .nav-inner { gap: 12px; }
+  .nav-actions { gap: 8px; }
+}
 
-/* ---------- 页脚 ---------- */
+/* ---------- Footer ---------- */
 .footer { margin-top: 0; padding-block: 44px 52px; border-top: 1px solid var(--line); }
 .footer-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 32px; }
 .footer .brand { font-size: 18px; }
@@ -255,7 +269,7 @@ main > section:nth-of-type(even) {
 .footer-links a { transition: color var(--t-quick) var(--ease); }
 .footer-links a:hover { color: var(--ink); }
 
-/* ---------- 出现动画：只在进入视口时淡入一次（无 JS 时默认可见） ---------- */
+/* ---------- Scroll reveals, visible by default without JavaScript ---------- */
 .has-js [data-reveal] {
   opacity: 0;
   transform: translateY(10px);

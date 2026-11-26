@@ -1,0 +1,39 @@
+<section class="section" id="privacy" aria-labelledby="privacy-heading">
+  <div class="wrap">
+    <header class="section-head" data-reveal>
+      <h2 class="heading" id="privacy-heading">Your data lives on your devices</h2>
+      <div class="lead">
+        <p>If you choose a cloud model for summaries, Tacit sends the relevant text to your configured provider.</p>
+        <p>Records an AI tool retrieves enter that tool’s session.</p>
+      </div>
+      <p class="privacy-policy"><svg aria-hidden="true"><use href="assets/sources.svg#lock"/></svg>Tacit collects no telemetry. The optional relay mailbox handles encrypted sync messages.</p>
+    </header>
+
+    <dl class="privacy-list" data-reveal-group>
+      <div>
+        <dt>Encrypted storage</dt>
+        <dd>Tacit encrypts the database, original audio and queued records on your device. macOS Keychain or Android Keystore protects the keys. Sync is end-to-end encrypted. Tacit reads screenshots in memory and discards them.</dd>
+      </div>
+      <div>
+        <dt>Capture controls</dt>
+        <dd>Screen capture skips common password managers. WeChat capture is off by default and can be enabled on Mac. Pause recording from the menu bar or with a shortcut.</dd>
+      </div>
+      <div>
+        <dt>On-device transcription</dt>
+        <dd>Tacit transcribes audio on your device by default. It looks for your voice, with an exception for meetings on Mac. Tell people before recording.</dd>
+      </div>
+      <div>
+        <dt>Private records</dt>
+        <dd>Private records stay out of summaries by default and never appear in automatic session context. AI tools can still retrieve them through a direct query.</dd>
+      </div>
+      <div>
+        <dt>Key and token filtering</dt>
+        <dd>Tacit blocks known key and token formats before saving. Other formats may pass through.</dd>
+      </div>
+      <div>
+        <dt>Delete original records and old summaries</dt>
+        <dd>Deleting an original record removes it from the database and immediately hides old summaries that cite it.</dd>
+      </div>
+    </dl>
+  </div>
+</section>

@@ -1,5 +1,6 @@
 package top.jinso.tacit.audio
 
+import top.jinso.tacit.R
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -25,7 +26,7 @@ internal class SpeechModels(private val context: Context) {
     }.getOrNull()
     /** Stage all four resources, load real native sessions, then atomically switch one pointer. */
     fun import(tree: Uri): File {
-        if (!DocumentsContract.isTreeUri(tree)) throw SpeechModelProblem("请选择模型文件夹")
+        if (!DocumentsContract.isTreeUri(tree)) throw SpeechModelProblem(R.string.model_folder_required)
         val stage = File(root, UUID.randomUUID().toString()).apply { mkdirs() }
         try {
             for (path in required) {
@@ -39,7 +40,7 @@ internal class SpeechModels(private val context: Context) {
                             require(found == null) { "模型目录有重名文件" }; found = cursor.getString(0)
                         }
                     }
-                    id = found ?: throw SpeechModelProblem("文件夹缺少语音模型文件，请重新选择")
+                    id = found ?: throw SpeechModelProblem(R.string.model_folder_incomplete)
                 }
                 val uri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
                 val out = File(stage, path).apply { parentFile!!.mkdirs() }
@@ -85,7 +86,7 @@ internal class SpeechModels(private val context: Context) {
                 try {
                     stream.write(it.name.toByteArray())
                     pointer.finishWrite(stream)
-                    check(current() == it) { "模型切换未完成，请检查存储空间后重试" }
+                    if (current() != it) throw SpeechModelProblem(R.string.model_activation_failed)
                 }
                 catch (e: Throwable) { pointer.failWrite(stream); throw e }
                 // Never delete another in-flight staging directory. Cleanup cannot invalidate a commit.

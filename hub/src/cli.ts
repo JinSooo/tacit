@@ -1,3 +1,4 @@
+import { cliLanguage, cliText } from "./agent-cli/locale.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -19,12 +20,12 @@ export function cliErrorDetail(error: unknown): string {
 }
 
 const startupMessages = {
-  db_key_missing: "钥匙串里找不到数据库密钥，但已有记录库。请用之前导出的密钥备份恢复，不要重装。",
-  db_key_unreadable: "无法读取或保存钥匙串里的数据库密钥。请检查钥匙串是否解锁。",
-  db_open_failed: "无法打开记录库，或记录库完整性检查失败。请确认数据库密钥与记录库匹配。",
-  db_migration_failed: "记录库升级失败。请保留现有记录库和迁移备份。",
-  port_in_use: "后台服务的端口已被占用。请在设置里更换端口。",
-  unknown: "后台服务没能启动。请查看运行记录。",
+  db_key_missing: cliText("钥匙串里找不到数据库密钥，但已有记录库。请用之前导出的密钥备份恢复，不要重装。", "An existing database is missing its key. Restore the key from your backup."),
+  db_key_unreadable: cliText("无法读取或保存钥匙串里的数据库密钥。请检查钥匙串是否解锁。", "The database key could not be read or saved. Check that the Keychain is unlocked."),
+  db_open_failed: cliText("无法打开记录库，或记录库完整性检查失败。请确认数据库密钥与记录库匹配。", "The database could not be opened or failed its integrity check. Check that the key matches the database."),
+  db_migration_failed: cliText("记录库升级失败。请保留现有记录库和迁移备份。", "The database upgrade failed. Keep the current database and its migration backup."),
+  port_in_use: cliText("后台服务的端口已被占用。请在设置里更换端口。", "The background service port is in use. Choose a different port in Settings."),
+  unknown: cliText("后台服务没能启动。请查看运行记录。", "The background service could not start. Check the run log."),
 };
 type StartupCode = keyof typeof startupMessages;
 const errorCode = (error: unknown) => (error as { code?: unknown } | null)?.code;
@@ -63,11 +64,11 @@ function parseLocalStatusPort(args: string[]): number | undefined {
     const raw = args[1] ?? "";
     const port = Number(raw);
     if (!raw.trim() || !Number.isInteger(port) || port < 0 || port > 65535) {
-      throw new Error("--local-status-port 必须是 0–65535 的整数");
+      throw new Error(cliText("--local-status-port 必须是 0–65535 的整数", "--local-status-port must be an integer from 0 to 65535"));
     }
     return port;
   }
-  throw new Error("用法：serve [--local-status-port <port>] | run [--local-status-port <port>]");
+  throw new Error(cliText("用法：serve [--local-status-port <port>] | run [--local-status-port <port>]", "Usage: serve [--local-status-port <port>] | run [--local-status-port <port>]"));
 }
 
 async function serve(args: string[] = []): Promise<void> {
@@ -102,7 +103,7 @@ async function serve(args: string[] = []): Promise<void> {
       process.exit(0);
     };
     // 改端口后退出，launchd 的 KeepAlive 用 hub.json 里的新端口重新拉起。
-    const restart = () => { console.log("端口已改，中枢退出以便用新端口重启"); void stop(); };
+    const restart = () => { console.log(cliText("端口已改，中枢退出以便用新端口重启", "The port changed. The background service will restart on the new port.")); void stop(); };
     const server = startServer({
       db: database, token: config.token, agentToken: config.agentToken,
       port: config.port, lanPort: config.lanPort, mode: config.mode, localStatusPort,
@@ -111,9 +112,12 @@ async function serve(args: string[] = []): Promise<void> {
     try { rmSync(startupFile(config.dataDir), { force: true }); }
     catch { console.error(JSON.stringify({ code: "startup_marker_remove_failed" })); }
     if (config.mode === "server") {
-      console.log(`Hub 已启动（server 模式）：设备端口 0.0.0.0:${server.lanPort}${server.port !== null ? `，本地排障端口 http://127.0.0.1:${server.port}` : ""}`);
+      console.log(cliText(
+        `Hub 已启动（server 模式）：设备端口 0.0.0.0:${server.lanPort}${server.port !== null ? `，本地排障端口 http://127.0.0.1:${server.port}` : ""}`,
+        `Tacit device service listening on 0.0.0.0:${server.lanPort}${server.port !== null ? `, local diagnostics at http://127.0.0.1:${server.port}` : ""}`,
+      ));
     } else {
-      console.log(`Hub 已启动：http://127.0.0.1:${server.port}`);
+      console.log(cliText(`Hub 已启动：http://127.0.0.1:${server.port}`, `Tacit background service started at http://127.0.0.1:${server.port}`));
     }
     process.once("exit", cleanup);
     process.once("SIGINT", stop);
@@ -131,8 +135,11 @@ async function serve(args: string[] = []): Promise<void> {
   }
 }
 
+const usage = () => cliText("用法：bun hub/src/cli.ts run | serve [--local-status-port <port>] | pair --role <collect|view|admin> [--relay <url>] [--address <origin>] | devices list|set-role|remove | init | open [--print] | keys export|import-db-key | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url> | --transport stdio] [--device <id>] -- <插件命令...>", "Usage: bun hub/src/cli.ts run | serve [--local-status-port <port>] | pair --role <collect|view|admin> [--relay <url>] [--address <origin>] | devices list|set-role|remove | init | open [--print] | keys export|import-db-key | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url> | --transport stdio] [--device <id>] -- <plugin command...>");
+
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, name] = argv;
+  if (command === "--help" || command === "-h") { console.log(usage()); return; }
   if (command === "history-export") return (await import("./history-export.ts")).runHistoryExport(argv.slice(1));
   if (command === "history-reconcile") return (await import("./history-reconcile.ts")).historyReconcileCommand(argv.slice(1));
   if (command === "serve") return serve(argv.slice(1));
@@ -153,7 +160,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "pair") {
-    const usage = "用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>] [--address <origin>]";
+    const usage = cliText("用法：bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>] [--address <origin>]", "Usage: bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>] [--address <origin>]");
     const flags = new Map<string, string>();
     for (let i = 1; i < argv.length; i += 2) {
       const flag = argv[i]!, value = argv[i + 1];
@@ -165,7 +172,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     const role = flags.get("--role"), relayUrl = flags.get("--relay"), address = flags.get("--address");
     if (!role) throw new Error(usage);
     if (address !== undefined && !httpOrigin(address)) {
-      console.error("--address 必须是 http 或 https origin");
+      console.error(cliText("--address 必须是 http 或 https origin", "--address must be an HTTP or HTTPS origin"));
       process.exitCode = 1;
       return;
     }
@@ -179,14 +186,17 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     try {
       const invite = await devices.createPairing({ role, relayUrl, address, openListener: false });
       console.log(invite.uri);
-      process.stderr.write(`已创建 ${invite.role} 配对邀请，有效期至 ${invite.expires_at}（仅可使用一次）\n`);
+      process.stderr.write(cliText(
+        `已创建 ${invite.role} 配对邀请，有效期至 ${invite.expires_at}（仅可使用一次）\n`,
+        `Created a single-use ${invite.role} invite link. It expires at ${invite.expires_at}.\n`,
+      ));
       // 容器里只看得到自己的网卡（如 172.17.0.x），设备按这个地址连不上。
       if (address === undefined && hubModeOf() === "server") {
-        process.stderr.write("邀请里只有本机网卡地址；在容器里运行时，请加 --address http://<设备能访问的服务器地址>:<端口> 重新生成\n");
+        process.stderr.write(cliText("邀请里只有本机网卡地址；在容器里运行时，请加 --address http://<设备能访问的服务器地址>:<端口> 重新生成\n", "The invite contains only local network addresses. In a container, use --address http://<reachable-server-address>:<port> to generate a new invite.\n"));
       }
     } catch (error) {
       if (!(error instanceof WireError) && !(error instanceof InputError)) throw error;
-      console.error(error.message);
+      console.error(cliText(error.message, "Could not create the invite link. Check the role and relay settings."));
       process.exitCode = 1;
     } finally {
       await devices.stop(true);
@@ -203,12 +213,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (command === "agents") {
     const { runAgents } = await import("./agents-install.ts");
     try {
-      await runAgents(argv.slice(1), {}, async () => {
+      await runAgents(argv.slice(1), { lang: cliLanguage() }, async () => {
         const { ensureAgentIdentity } = await import("./agent-cli/identity.ts");
         await ensureAgentIdentity();
       });
     }
-    catch (error) { console.error(error instanceof Error ? error.message : "Agent 注册失败"); process.exitCode = 1; }
+    catch (error) { console.error(error instanceof Error ? error.message : cliText("Agent 注册失败", "AI tool registration failed")); process.exitCode = 1; }
     return;
   }
   if (command === "plugins") {
@@ -217,21 +227,21 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === "plugin-run") {
     const [{ PluginManager, pluginSource }, { runPlugin }, { dataDirOf }] = await Promise.all([import("./plugin-manager.ts"), import("./run-plugin.ts"), import("./hub-json.ts")]);
-    if (!name) throw new Error("插件运行参数无效");
+    if (!name) throw new Error(cliText("插件运行参数无效", "Invalid plugin arguments"));
     let hub: string | undefined, transport: "stdio" | undefined, device: string | undefined;
     let idx = 2;
     while (idx < argv.length) {
       const flag = argv[idx];
       if (flag === "--hub" || flag === "--transport" || flag === "--device") {
         const value = argv[idx + 1];
-        if (!value) throw new Error("插件运行参数无效");
-        if (flag === "--hub") { if (hub !== undefined) throw new Error("插件运行参数无效"); hub = value; }
-        else if (flag === "--transport") { if (transport !== undefined || value !== "stdio") throw new Error("插件运行参数无效"); transport = "stdio"; }
-        else { if (device !== undefined) throw new Error("插件运行参数无效"); device = value; }
+        if (!value) throw new Error(cliText("插件运行参数无效", "Invalid plugin arguments"));
+        if (flag === "--hub") { if (hub !== undefined) throw new Error(cliText("插件运行参数无效", "Invalid plugin arguments")); hub = value; }
+        else if (flag === "--transport") { if (transport !== undefined || value !== "stdio") throw new Error(cliText("插件运行参数无效", "Invalid plugin arguments")); transport = "stdio"; }
+        else { if (device !== undefined) throw new Error(cliText("插件运行参数无效", "Invalid plugin arguments")); device = value; }
         idx += 2;
       } else break;
     }
-    if (Boolean(hub) === Boolean(transport)) throw new Error("插件运行参数无效");
+    if (Boolean(hub) === Boolean(transport)) throw new Error(cliText("插件运行参数无效", "Invalid plugin arguments"));
     const dataDir = dataDirOf(), manager = new PluginManager(dataDir), plugin = manager.installed(name);
     const code = join(manager.path(name), "code");
     const summary = await runPlugin({ name, dataDir, hub, transport, device, allowedSource: pluginSource(name),
@@ -248,7 +258,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     const setRole = name === "set-role" && (argv.length === 4 || argv.length === 5 && forceFlag === "--force");
     const remove = name === "remove" && (argv.length === 3 || argv.length === 4 && roleOrForce === "--force");
     if (!list && !setRole && !remove) {
-      throw new Error("用法：devices list | devices set-role <device_id> <role> [--force] | devices remove <device_id> [--force]");
+      throw new Error(cliText("用法：devices list | devices set-role <device_id> <role> [--force] | devices remove <device_id> [--force]", "Usage: devices list | devices set-role <device_id> <role> [--force] | devices remove <device_id> [--force]"));
     }
     const [{ loadConfig }, { HubDB }, { deviceList, updateDeviceRole, removeDevice }, { WireError }] = await Promise.all([
       import("./config.ts"), import("./db.ts"), import("./devices/store.ts"), import("./devices/envelope.ts"),
@@ -261,7 +271,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       console.log(JSON.stringify(result));
     } catch (error) {
       if (!(error instanceof WireError)) throw error;
-      console.error(error.message);
+      console.error(cliText(error.message, "Could not update the device. Check the device ID and role."));
       process.exitCode = 1;
     } finally { db.close(); }
     return;
@@ -281,7 +291,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
   if (command === "audio") {
     // 一次性整理旧版采集端拆碎的说话人，见 AudioStore.consolidateAll。
-    if (name !== "consolidate" || argv.length !== 2) throw new Error("用法：bun hub/src/cli.ts audio consolidate");
+    if (name !== "consolidate" || argv.length !== 2) throw new Error(cliText("用法：bun hub/src/cli.ts audio consolidate", "Usage: bun hub/src/cli.ts audio consolidate"));
     const [{ loadConfig }, { HubDB }, { AudioStore }] = await Promise.all([import("./config.ts"), import("./db.ts"), import("./audio.ts")]);
     const config = loadConfig();
     const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
@@ -291,10 +301,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (command === "setup") {
     const app = argv[argv.indexOf("--app") + 1];
     const flags = argv.slice(1).filter((a, i, all) => a !== "--app" && all[i - 1] !== "--app");
-    if (!argv.includes("--app") || !app || flags.some(f => !["--install", "--no-distill"].includes(f))) throw new Error("用法：bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]");
+    if (!argv.includes("--app") || !app || flags.some(f => !["--install", "--no-distill"].includes(f))) throw new Error(cliText("用法：bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]", "Usage: bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]"));
     const { setup, SetupError } = await import("./setup.ts");
     try {
-      await setup({ app, install: flags.includes("--install"), distill: flags.includes("--no-distill") ? false : flags.includes("--install") ? true : undefined });
+      await setup({ app, lang: cliLanguage(), install: flags.includes("--install"), distill: flags.includes("--no-distill") ? false : flags.includes("--install") ? true : undefined });
     } catch (error) {
       if (!(error instanceof SetupError)) throw error;
       console.error(error.message);
@@ -303,7 +313,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "audio-models") {
-    if (argv.length !== 1) throw new Error("用法：bun hub/src/cli.ts audio-models");
+    if (argv.length !== 1) throw new Error(cliText("用法：bun hub/src/cli.ts audio-models", "Usage: bun hub/src/cli.ts audio-models"));
     const [{ ensureAudioModels }, { dataDirOf }] = await Promise.all([import("./audio-models.ts"), import("./hub-json.ts")]);
     await ensureAudioModels(join(dataDirOf(), "models"), { log: m => console.log(m) });
     return;
@@ -313,7 +323,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const { exportKeysForBackend } = await import("./keys.ts");
       const { text, missing } = exportKeysForBackend();
       console.log(text);
-      if (missing.length) { console.error(`没有导出：${missing.join("、")}密钥`); process.exitCode = 1; }
+      if (missing.length) { console.error(cliText(`没有导出：${missing.join("、")}密钥`, "Some keys could not be exported.")); process.exitCode = 1; }
       return;
     }
     if (name === "import-db-key" && argv.length === 2) {
@@ -321,12 +331,18 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const raw = await Bun.stdin.text();
       try {
         const result = importDbKey(raw);
-        const target = result.backend === "keychain" ? "钥匙串" : "secrets.enc";
-        console.log(result.status === "unchanged" ? `数据库密钥已在 ${target} 中且一致，无需修改。` : `已导入数据库密钥到 ${target}。`);
+        const target = result.backend === "keychain" ? cliText("钥匙串", "the Keychain") : "secrets.enc";
+        console.log(result.status === "unchanged"
+          ? cliText(`数据库密钥已在 ${target} 中且一致，无需修改。`, `The matching database key is already in ${target}.`)
+          : cliText(`已导入数据库密钥到 ${target}。`, `Imported the database key into ${target}.`));
       } catch (error) {
         const code = errorCode(error);
         if (code === "invalid_key" || code === "db_key_mismatch" || code === "db_key_exists") {
-          console.error((error as Error).message);
+          console.error(cliText((error as Error).message, {
+            invalid_key: "The database key must be 32–128 hexadecimal characters.",
+            db_key_mismatch: "The supplied key could not open the existing history.db. Import stopped.",
+            db_key_exists: "A different database key already exists. Import stopped to preserve your records.",
+          }[code]));
           process.exitCode = 1;
           return;
         }
@@ -334,7 +350,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       }
       return;
     }
-    throw new Error("用法：bun hub/src/cli.ts keys export | keys import-db-key");
+    throw new Error(cliText("用法：bun hub/src/cli.ts keys export | keys import-db-key", "Usage: bun hub/src/cli.ts keys export | keys import-db-key"));
   }
   const { loadConfig } = await import("./config.ts");
   const { HubDB } = await import("./db.ts");
@@ -356,14 +372,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     const { dataDirOf, resolvePort } = await import("./hub-json.ts");
     const dataDir = dataDirOf();
     const { port } = resolvePort(process.env, dataDir);
-    if (port < 1) throw new Error("RA_PORT 必须是 1–65535 的整数");
+    if (port < 1) throw new Error(cliText("RA_PORT 必须是 1–65535 的整数", "RA_PORT must be an integer from 1 to 65535"));
     const token = readFileSync(join(dataDir, "token"), "utf8").trim();
-    if (!token) throw new Error("本地 token 文件为空");
+    if (!token) throw new Error(cliText("本地 token 文件为空", "The local token file is empty"));
     const url = `http://127.0.0.1:${port}/#token=${encodeURIComponent(token)}`;
     if (argv.includes("--print")) console.log(url);
     else {
       const opened = spawnSync("open", [url]);
-      if (opened.status !== 0) throw new Error("无法打开浏览器");
+      if (opened.status !== 0) throw new Error(cliText("无法打开浏览器", "Unable to open the browser"));
     }
     return;
   }
@@ -374,14 +390,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const a = argv[i]!;
       if (a === "--from" || a === "--to") {
         const v = argv[++i];
-        if (!v || localDayStart(v) === null) throw new Error("--from/--to 必须是 YYYY-MM-DD");
+        if (!v || localDayStart(v) === null) throw new Error(cliText("--from/--to 必须是 YYYY-MM-DD", "--from and --to must use YYYY-MM-DD"));
         range ??= { from: "", to: "" };
         range[a === "--from" ? "from" : "to"] = v;
       } else if (["--once", "--backfill", "--slice-only"].includes(a)) flags.push(a);
-      else throw new Error("提炼参数无效");
+      else throw new Error(cliText("提炼参数无效", "Invalid summarization arguments"));
     }
     // --from/--to 只配合 --backfill：按范围重复整理，不看 backfill_done。
-    if (range && (!range.from || !range.to || range.from > range.to || !flags.includes("--backfill"))) throw new Error("--from/--to 需要同时给出、from 不晚于 to，并配合 --backfill");
+    if (range && (!range.from || !range.to || range.from > range.to || !flags.includes("--backfill"))) throw new Error(cliText("--from/--to 需要同时给出、from 不晚于 to，并配合 --backfill", "Use --from and --to together with --backfill, with --from on or before --to"));
     applyTimezone(process.env, dataDirOf());
     const config = loadConfig();
     const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
@@ -405,23 +421,23 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     finally { db.close(); }
     return;
   }
-  if (command !== "run-plugin") throw new Error("用法：bun hub/src/cli.ts run | serve [--local-status-port <port>] | pair --role <collect|view|admin> [--relay <url>] [--address <origin>] | devices list|set-role|remove | init | open [--print] | keys export|import-db-key | audio consolidate | distill [--once] [--backfill [--from YYYY-MM-DD --to YYYY-MM-DD]] [--slice-only] | run-plugin <name> [--hub <url> | --transport stdio] [--device <id>] -- <插件命令...>");
-  if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error("用法：run-plugin <name> -- <插件命令...>");
+  if (command !== "run-plugin") throw new Error(usage());
+  if (command === "run-plugin" && (!name || separator < 2 || !argv[separator + 1])) throw new Error(cliText("用法：run-plugin <name> -- <插件命令...>", "Usage: run-plugin <name> -- <plugin command...>"));
   let runPluginDevice: string | undefined;
   if (command === "run-plugin") {
     let hub: string | undefined, tokenFile: string | undefined, transport: "stdio" | undefined;
     for (let i = 2; i < separator; i += 2) {
       const flag = argv[i], value = argv[i + 1];
-      if (!value || i + 1 >= separator) throw new Error("参数缺少值");
+      if (!value || i + 1 >= separator) throw new Error(cliText("参数缺少值", "Missing argument value"));
       if (flag === "--hub") hub = value;
       else if (flag === "--token-file") tokenFile = value;
       else if (flag === "--transport") {
-        if (value !== "stdio") throw new Error("--transport 仅支持 stdio");
+        if (value !== "stdio") throw new Error(cliText("--transport 仅支持 stdio", "--transport only supports stdio"));
         transport = "stdio";
       } else if (flag === "--device") runPluginDevice = value;
-      else throw new Error("未知参数");
+      else throw new Error(cliText("未知参数", "Unknown argument"));
     }
-    if (transport && (hub || tokenFile)) throw new Error("--transport stdio 不能与 --hub 或 --token-file 同用");
+    if (transport && (hub || tokenFile)) throw new Error(cliText("--transport stdio 不能与 --hub 或 --token-file 同用", "--transport stdio cannot be combined with --hub or --token-file"));
     if (hub || transport) {
       const dataDir = process.env.RA_DATA_DIR ?? join(homedir(), "Library/Application Support/record-anything");
       const summary = await runPlugin({ hub, tokenFile, transport, device: runPluginDevice, dataDir, name: name!, command: argv.slice(separator + 1) });
@@ -429,7 +445,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       if (summary.exitCode !== 0 || summary.rejected || summary.protocolErrors || summary.releaseErrors) process.exitCode = 1;
       return;
     }
-    if (tokenFile) throw new Error("--token-file 需要 --hub");
+    if (tokenFile) throw new Error(cliText("--token-file 需要 --hub", "--token-file requires --hub"));
   }
   const config = loadConfig();
   const db = new HubDB(join(config.dataDir, "history.db"), config.dbKey);
@@ -447,7 +463,7 @@ if (import.meta.main) main().catch(error => {
   // 模型下载保留原有命令行输出。
   if (process.argv[2] === "audio-models") console.error(error instanceof Error ? error.message : String(error));
   else {
-    console.error("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。");
+    console.error(cliText("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。", "The Tacit command failed. Check the command, data directory, keys, and plugin status."));
     console.error(cliErrorDetail(error));
   }
   process.exitCode = 1;

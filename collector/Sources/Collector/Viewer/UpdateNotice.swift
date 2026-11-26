@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import struct CollectorCore.UpdateManifest
+import enum CollectorCore.L10n
 
 /// 每天看一次官网的 latest.json，有新的 Mac 版就在时间线顶部提一行。
 /// 请求不带 Cookie、不带本机信息，失败就安静地等下一次。
@@ -72,10 +73,10 @@ struct TimelineUpdateLine: View {
   var body: some View {
     HStack(spacing: 8) {
       PhIcon("arrow-clockwise", size: 14)
-      Text("Tacit \(update.version) 可以更新了")
+      Text(L10n.updateAvailable(update.version))
       Spacer(minLength: 8)
-      Button("跳过这个版本") { notice.skip() }.buttonStyle(.accentLink).foregroundStyle(Palette.muted).fixedSize()
-      Button("下载") { notice.download() }.buttonStyle(.accentLink).fixedSize()
+      Button(L10n.skipThisVersion) { notice.skip() }.buttonStyle(.accentLink).foregroundStyle(Palette.muted).fixedSize()
+      Button(L10n.download) { notice.download() }.buttonStyle(.accentLink).fixedSize()
     }
     .font(.system(size: TextSize.body))
     .foregroundStyle(Palette.accent)

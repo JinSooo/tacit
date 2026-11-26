@@ -1,6 +1,14 @@
 #!/bin/sh
 # 卸载 Tacit（源码目录或应用包 Contents/Resources 里都可运行）：停止并移除 hub、提炼与采集端的开机自启、采集端应用和系统权限。数据默认保留。
 set -eu
+case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
+  [zZ][hH]*) tacit_lang=zh ;;
+  *) tacit_lang=en ;;
+esac
+local_text() {
+  if [ "$tacit_lang" = zh ]; then printf '%s' "$1"; else printf '%s' "$2"; fi
+}
+local_line() { local_text "$1" "$2"; printf '\n'; }
 . "$(dirname "$0")/scripts/mac-app.sh"
 DATA="$HOME/Library/Application Support/record-anything"
 AGENTS="$HOME/Library/LaunchAgents"
@@ -33,9 +41,9 @@ for app in "/Applications/Tacit.app" "$HOME/Applications/Tacit.app" \
   fi
 done
 tccutil reset All dev.record-anything.collector >/dev/null 2>&1 || true
-echo "已移除自启、采集端应用和它的系统权限。"
+local_line "已移除自启、采集端应用和它的系统权限。" "Removed the app, its background jobs, and its system permissions."
 
-printf '同时删除全部数据（%s，含加密音频，和钥匙串里的数据库、音频密钥）？删除后不能恢复 [y/N] ' "$DATA"
+printf "$(local_text '同时删除全部数据（%s，含加密音频，和钥匙串里的数据库、音频密钥）？删除后不能恢复 [y/N] ' 'Permanently delete all data in %s, including encrypted audio, and the database and audio keys from the Keychain? [y/N] ')" "$DATA"
 read -r answer </dev/tty || answer=""
 case "$answer" in
   y|Y)
@@ -43,6 +51,7 @@ case "$answer" in
     security delete-generic-password -s record-anything -a db-key >/dev/null 2>&1 || true
     security delete-generic-password -s record-anything -a audio-key >/dev/null 2>&1 || true
     security delete-generic-password -s record-anything -a audio-key-hex >/dev/null 2>&1 || true
-    echo "数据和密钥已删除。" ;;
-  *) echo "数据保留在 ${DATA}（含语音模型 models/、加密音频 audio/），密钥保留在钥匙串（record-anything / db-key、audio-key-hex）。两者要一起保留，缺一个数据就打不开。" ;;
+    local_line "数据和密钥已删除。" "Data and keys were deleted." ;;
+  *) local_line "数据保留在 ${DATA}（含语音模型 models/、加密音频 audio/），密钥保留在钥匙串（record-anything / db-key、audio-key-hex）。两者要一起保留，缺一个数据就打不开。" \
+      "Data remains in ${DATA}, including speech models and encrypted audio. Keep the Keychain items record-anything / db-key and audio-key-hex to open your records." ;;
 esac

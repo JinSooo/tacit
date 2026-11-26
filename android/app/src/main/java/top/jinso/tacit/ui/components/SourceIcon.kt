@@ -26,7 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.jinso.tacit.R
 import top.jinso.tacit.sources.Sources
-import top.jinso.tacit.ui.sourceName
+import top.jinso.tacit.ui.uiFormat
 import top.jinso.tacit.ui.tacitColors
 import java.util.concurrent.ConcurrentHashMap
 
@@ -69,7 +69,7 @@ internal fun SourceIcon(source: String, size: Dp = 16.dp) {
     val app by produceState(pkg?.let(AppIcons::cached), pkg) {
         if (pkg != null) value = withContext(Dispatchers.IO) { AppIcons.load(context.applicationContext, pkg) }
     }
-    val name = sourceName(source)
+    val name = uiFormat().sourceName(source)
     val icon = app
     if (icon != null) {
         Image(icon, name, Modifier.size(size))

@@ -1,3 +1,4 @@
+import { updateGeneral } from "../src/general-settings.ts";
 import { expect, test } from "bun:test";
 import { fixture, setup } from "./helpers.ts";
 import { DistillStore } from "../src/distill/store.ts";
@@ -9,6 +10,7 @@ const at = Date.parse("2026-11-13T12:00:00Z");
 const detail = { goal: "固定目录安装", progress: "尚未安装", artifacts: { files: [], urls: [], commands: [], people: [] }, quotes: [] };
 function seed(origin: "user" | "llm" = "llm") {
   const ctx = setup(), store = new DistillStore(ctx.db);
+  updateGeneral(ctx.db, { language: "zh" });
   store.upsertProject({ id: "p", name: "合成项目", keys: { repos: [], hosts: [], chats: [] }, needs_regen: 1 });
   const old = fixture({ body: "固定目录安装尚未完成。" }), fresh = fixture({ t_start: new Date(at).toISOString(), body: "应用包内固定目录安装已经完成，重启后验证服务不再依赖源码。" });
   ctx.db.ingest([old, fresh]);

@@ -4,41 +4,21 @@ import CollectorCore
 /// 界面上的数字和时长写法（docs/ui.md 第 5 节）：带单位，千位加逗号，≥ 1 小时写"x 小时 y 分"，不足 1 分钟写"不到 1 分钟"。
 enum Fmt {
   static func duration(_ seconds: TimeInterval) -> String {
-    let s = Int(max(0, seconds))
-    if s < 60 { return "不到 1 分钟" }
-    let m = s / 60
-    if m < 60 { return "\(m) 分钟" }
-    return m % 60 == 0 ? "\(m / 60) 小时" : "\(m / 60) 小时 \(m % 60) 分"
+    if seconds < 60 { return L10n.text(zh: "不到 1 分钟", en: "Less than a minute") }
+    return ViewerFormat.duration(seconds)
   }
 
   /// 说话时长：声音样本常常只有几十秒，不足 1 分钟写到秒，例如"38 秒"。
   static func speech(_ seconds: TimeInterval) -> String {
     let s = Int(max(0, seconds.rounded()))
-    return s < 60 ? "\(max(1, s)) 秒" : duration(seconds)
+    return s < 60 ? ViewerFormat.duration(TimeInterval(max(1, s))) : duration(seconds)
   }
 
-  private static let grouped: NumberFormatter = {
-    let f = NumberFormatter()
-    f.numberStyle = .decimal
-    f.locale = Locale(identifier: "en_US_POSIX")
-    f.groupingSeparator = ","
-    f.usesGroupingSeparator = true
-    return f
-  }()
-  static func count(_ n: Int) -> String { grouped.string(from: NSNumber(value: n)) ?? String(n) }
+  static func count(_ n: Int) -> String { L10n.number(n) }
 
-  /// "6 分钟前更新"、"刚刚更新"。
-  static func updated(_ date: Date) -> String {
-    let r = ViewerFormat.relative(date)
-    return r == "刚刚" ? "刚刚更新" : "\(r)更新"
-  }
+  static func updated(_ date: Date) -> String { ViewerFormat.updated(date) }
 
-  /// "11 月 10 日"；不是今年的带上年份。
-  static func date(_ d: Date) -> String {
-    let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
-    let year = c.year != Calendar.current.component(.year, from: Date()) ? "\(c.year!) 年 " : ""
-    return "\(year)\(c.month!) 月 \(c.day!) 日"
-  }
+  static func date(_ d: Date) -> String { ViewerFormat.date(d) }
 
   /// "11 月 24 日 09:00"；不是今年的带上年份。
   static func dateTime(_ d: Date) -> String { "\(date(d)) \(ViewerFormat.clock(d))" }
@@ -60,12 +40,12 @@ enum SampleNote {
   static func line(at: String?, said: String?) -> String { CollectorCore.SampleNote.line(stamp: Fmt.stamp(at), said: said) }
 }
 
-/// 一场对话在列表里的标题：有总结时用总结里的标题，否则只写"对话"/"手机录音"（时长在行尾）。不再列"说话人 OK"这类编号。
+/// 一场对话在列表里的标题：有总结时用总结里的标题，否则只写L10n.text(zh: "对话", en: "Conversation")/"手机录音"（时长在行尾）。不再列"说话人 OK"这类编号。
 enum ConversationText {
   static func title(_ c: ConversationRef, source: String = "mac.audio") -> String {
-    let label = source == "android.audio" ? "手机录音" : "对话"
+    let label = SourceInfo.name(source == "android.audio" ? source : "mac.audio")
     guard let t = c.title?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { return label }
-    return "\(label)：\(t)"
+    return L10n.text(zh: "\(label)：\(t)", en: "\(label): \(t)")
   }
 }
 
@@ -82,15 +62,15 @@ enum ConversationText {
 }
 
 extension Lane {
-  /// 时间轴泳道名（CollectorCore 里的 Lane.title 仍写 "Agent"，界面统一叫"AI 工具"）。
+  /// 时间轴泳道名（CollectorCore 里的 Lane.title 仍写 "Agent"，界面统一叫L10n.text(zh: "AI 工具", en: "AI tools")）。
   var name: String {
     switch self {
-    case .screen: return "屏幕"
-    case .browser: return "浏览器"
-    case .agent: return "AI 工具"
-    case .terminal: return "终端"
-    case .voice: return "对话"
-    case .other: return "其他"
+    case .screen: return L10n.text(zh: "屏幕", en: "Screen")
+    case .browser: return L10n.text(zh: "浏览器", en: "Browser")
+    case .agent: return L10n.text(zh: "AI 工具", en: "AI tools")
+    case .terminal: return L10n.text(zh: "终端", en: "Terminal")
+    case .voice: return L10n.text(zh: "对话", en: "Conversation")
+    case .other: return L10n.text(zh: "其他", en: "Other")
     }
   }
 }

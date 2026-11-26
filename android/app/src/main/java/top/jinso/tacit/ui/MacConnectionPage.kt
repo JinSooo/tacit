@@ -1,5 +1,6 @@
 package top.jinso.tacit.ui
 
+import top.jinso.tacit.R
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.LocalActivity
@@ -30,12 +31,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.sync.MacStatus
-import top.jinso.tacit.sync.isSyncWaiting
 import top.jinso.tacit.sync.rejectedRecordCategories
 import top.jinso.tacit.sync.syncError
 import top.jinso.tacit.ui.components.*
 
 @Composable internal fun MacConnectionPage(app: TacitApp) {
+    val format = uiFormat()
+    val strings = uiStrings()
     val scope = rememberCoroutineScope()
     val activity = LocalActivity.current ?: return
     var status by remember { mutableStateOf<MacStatus?>(null) }
@@ -52,7 +54,7 @@ import top.jinso.tacit.ui.components.*
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            message = "无法读取连接状态，请检查本机记录库" to true
+            message = strings.text(R.string.connection_unavailable) to true
         }
     }
 
@@ -66,8 +68,8 @@ import top.jinso.tacit.ui.components.*
             try { block() }
             catch (error: CancellationException) { throw error }
             catch (error: Exception) {
-                val text = syncError(error, pairing)
-                message = text to !isSyncWaiting(text, pairing)
+                val problem = syncError(error, pairing)
+                message = strings.text(problem.label) to (pairing || !problem.waiting)
             } finally {
                 busy = false
                 connecting = false
@@ -84,11 +86,12 @@ import top.jinso.tacit.ui.components.*
         result.contents?.let(::pair)
     }
     fun scan() {
-        scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            .setPrompt("扫描 Mac 上的二维码").setBeepEnabled(false).setBarcodeImageEnabled(false))
+        scanner.launch(ScanOptions().setCaptureActivity(InviteScannerActivity::class.java)
+            .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            .setPrompt(strings.text(R.string.scan_mac_qr)).setBeepEnabled(false).setBarcodeImageEnabled(false))
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) scan() else message = "相机未授权，可以粘贴邀请链接" to true
+        if (granted) scan() else message = strings.text(R.string.camera_ungranted) to true
     }
 
     var manualOpen by remember { mutableStateOf(false) }
@@ -97,27 +100,27 @@ import top.jinso.tacit.ui.components.*
     if (current != null && connected) {
         GroupCard {
             SettingsRow(current.name.orEmpty(),
-                status = if (current.lastSync == 0L) "尚未同步" else date(current.lastSync, "M 月 d 日 HH:mm") + " 同步")
+                status = if (current.lastSync == 0L) strings.text(R.string.not_yet_synced) else strings.text(R.string.last_sync_at, format.dateAndClock(current.lastSync)))
             if (current.pending > 0) {
                 GroupDivider()
-                SettingsRow("待发送", value = "${countLabel(current.pending)} 条")
+                SettingsRow(strings.text(R.string.pending_upload), value = strings.quantity(R.plurals.record_count, current.pending, countLabel(current.pending)))
             }
             val rejected = current.rejected.values.sum()
             if (rejected > 0) {
                 GroupDivider()
-                SettingsRow("未能接收", value = "${countLabel(rejected)} 条", problem = true,
+                SettingsRow(strings.text(R.string.upload_rejected), value = strings.quantity(R.plurals.record_count, rejected, countLabel(rejected)), problem = true,
                     expanded = expanded, onClick = { expanded = !expanded })
                 val reasons = remember(current.rejected) { rejectedRecordCategories(current.rejected.filterKeys(String::isNotEmpty)) }
                 val shownReasons = rememberLatest(reasons.takeIf { it.isNotEmpty() })
                 Reveal(expanded) {
                     shownReasons.orEmpty().forEach { (reason, count) ->
                         GroupDivider()
-                        SettingsRow(reason, value = "${countLabel(count)} 条")
+                        SettingsRow(strings.text(reason), value = strings.quantity(R.plurals.record_count, count, countLabel(count)))
                     }
                 }
             }
             GroupDivider()
-            SettingsRow("Mac 地址", value = current.manual.ifBlank { "自动" }, expanded = manualOpen,
+            SettingsRow(strings.text(R.string.mac_address), value = current.manual.ifBlank { strings.text(R.string.automatic) }, expanded = manualOpen,
                 onClick = { manualOpen = !manualOpen })
             Reveal(manualOpen) {
                 Column(
@@ -126,32 +129,32 @@ import top.jinso.tacit.ui.components.*
                 ) {
                     MacAddressField(displayAddress, { address = it }, busy)
                     Reveal(displayAddress != current.manual) {
-                        TonalButton("保存地址", { action { app.sync.updateManual(displayAddress); address = null } }, enabled = !busy)
+                        TonalButton(strings.text(R.string.save_address), { action { app.sync.updateManual(displayAddress); address = null } }, enabled = !busy)
                     }
                 }
             }
         }
-        if (current.relayDisabled) Caption("中转信箱已停用，回到和 Mac 同一个网络后会自动同步。")
+        if (current.relayDisabled) Caption(strings.text(R.string.relay_disabled))
     } else if (current != null) {
         if (current.removed) {
-            Caption("已在 Mac 上移除，请在 Mac 的 Tacit 里重新添加这台手机。", color = tacitColors.attention)
+            Caption(strings.text(R.string.mac_removed), color = tacitColors.attention)
         } else {
-            Caption("在 Mac 的 Tacit 设置里添加设备，获取二维码或邀请链接。")
+            Caption(strings.text(R.string.connection_hint))
         }
         GroupCard {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                PrimaryButton("扫码连接", {
+                PrimaryButton(strings.text(R.string.connect_scan), {
                     if (activity.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scan()
                     else permission.launch(Manifest.permission.CAMERA)
                 }, enabled = !busy)
                 OutlinedTextField(invite, { invite = it.take(16_400) }, Modifier.fillMaxWidth(),
-                    enabled = !busy, label = { Text("邀请链接") }, placeholder = { Text("粘贴邀请链接") },
+                    enabled = !busy, label = { Text(strings.text(R.string.invite_link)) }, placeholder = { Text(strings.text(R.string.invite_paste)) },
                     singleLine = true, visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
-                TonalButton("连接", { pair(invite) }, enabled = invite.isNotBlank() && !busy)
+                TonalButton(strings.text(R.string.connect), { pair(invite) }, enabled = invite.isNotBlank() && !busy)
             }
             GroupDivider()
-            SettingsRow("Mac 地址", expanded = manualOpen, onClick = { manualOpen = !manualOpen })
+            SettingsRow(strings.text(R.string.mac_address), expanded = manualOpen, onClick = { manualOpen = !manualOpen })
             Reveal(manualOpen) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                     MacAddressField(displayAddress, { address = it }, busy)
@@ -160,7 +163,7 @@ import top.jinso.tacit.ui.components.*
         }
     }
 
-    val problem = message ?: current?.error?.let { it to !isSyncWaiting(it) }
+    val problem = message ?: current?.error?.let { strings.text(it.label) to !it.waiting }
     val shownProblem = rememberLatest(problem)
     Reveal(problem != null) {
         shownProblem?.let { (text, needsAttention) ->
@@ -169,51 +172,52 @@ import top.jinso.tacit.ui.components.*
     }
     if (busy || (current == null && message == null)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (connecting) Caption("正在连接 Mac…")
+            if (connecting) Caption(strings.text(R.string.connecting_mac))
             ProgressLine()
         }
     }
     var confirmDisconnect by rememberSaveable { mutableStateOf(false) }
     if (connected) {
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
-            TextAction("断开连接", { confirmDisconnect = true }, enabled = !busy, color = tacitColors.attention)
+            TextAction(strings.text(R.string.disconnect), { confirmDisconnect = true }, enabled = !busy, color = tacitColors.attention)
         }
         if (confirmDisconnect) AlertDialog(
             onDismissRequest = { confirmDisconnect = false },
-            title = { Text("断开连接？") },
-            text = { Text("本机录音会保留，已同步的 Mac 内容会从手机清除，重新连接需在 Mac 上重新生成邀请。") },
+            title = { Text(strings.text(R.string.disconnect_title)) },
+            text = { Text(strings.text(R.string.disconnect_message)) },
             confirmButton = {
-                TextAction("断开", {
+                TextAction(strings.text(R.string.disconnect_confirm), {
                     confirmDisconnect = false
                     action { app.sync.disconnect(); address = null; expanded = false }
                 }, enabled = !busy, color = tacitColors.attention)
             },
-            dismissButton = { TextAction("取消", { confirmDisconnect = false }) },
+            dismissButton = { TextAction(strings.text(R.string.cancel), { confirmDisconnect = false }) },
         )
     }
     // 被 Mac 移除后不想再连回去时，能清掉旧连接回到手机单独用，不然首页一直挂着提示。
     if (current?.removed == true) {
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
-            TextAction("删除旧连接", { confirmDisconnect = true }, enabled = !busy, color = tacitColors.attention)
+            TextAction(strings.text(R.string.delete_old_connection), { confirmDisconnect = true }, enabled = !busy, color = tacitColors.attention)
         }
         if (confirmDisconnect) AlertDialog(
             onDismissRequest = { confirmDisconnect = false },
-            title = { Text("删除旧连接？") },
-            text = { Text("会删除这台 Mac 的连接记录，本机录音会保留。") },
+            title = { Text(strings.text(R.string.delete_old_connection_title)) },
+            text = { Text(strings.text(R.string.delete_old_connection_message)) },
             confirmButton = {
-                TextAction("删除", {
+                TextAction(strings.text(R.string.delete), {
                     confirmDisconnect = false
                     action { app.sync.disconnect(); address = null; expanded = false }
                 }, enabled = !busy, color = tacitColors.attention)
             },
-            dismissButton = { TextAction("取消", { confirmDisconnect = false }) },
+            dismissButton = { TextAction(strings.text(R.string.cancel), { confirmDisconnect = false }) },
         )
     }
 }
 
 @Composable
 private fun MacAddressField(address: String, update: (String) -> Unit, busy: Boolean) {
+    val strings = uiStrings()
     OutlinedTextField(address, { update(it.take(512)) }, Modifier.fillMaxWidth(),
-        enabled = !busy, label = { Text("Mac 地址") }, placeholder = { Text("留空自动发现") }, singleLine = true,
+        enabled = !busy, label = { Text(strings.text(R.string.mac_address)) }, placeholder = { Text(strings.text(R.string.address_empty_hint)) }, singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
 }

@@ -1,3 +1,4 @@
+import { updateGeneral } from "../src/general-settings.ts";
 import { afterEach, expect, test, spyOn } from "bun:test";
 import { chmodSync, statSync } from "node:fs";
 import { HubDB } from "../src/db.ts";
@@ -8,7 +9,7 @@ import { fixture, setup } from "./helpers.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
-function context() { const ctx = setup(); cleanups.push(ctx.cleanup); return ctx; }
+function context() { const ctx = setup(); updateGeneral(ctx.db, { language: "zh" }); cleanups.push(ctx.cleanup); return ctx; }
 
 test("数据库创建和重新打开均限制为用户读写", () => {
   const ctx = context();

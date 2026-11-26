@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import enum CollectorCore.L10n
 
 struct TimelineSecurityEvent: Decodable, Identifiable {
   enum Action: String, Decodable {
@@ -13,9 +14,9 @@ struct TimelineSecurityEvent: Decodable, Identifiable {
 
   var message: String {
     switch action {
-    case .managementPairing: "有一台新的管理设备已连接"
-    case .roleChange: "另一台设备修改了设备权限"
-    case .modelKeyChange: "另一台设备修改了 AI 模型的密钥"
+    case .managementPairing: L10n.managingDeviceConnected
+    case .roleChange: L10n.devicePermissionsChanged
+    case .modelKeyChange: L10n.modelKeyChanged
     }
   }
 }
@@ -55,7 +56,7 @@ struct TimelineSecurityEvent: Decodable, Identifiable {
       // The audit retention window may have expired since the line was shown.
       events.removeAll { $0.id == event.id }
     } catch {
-      self.error = (error as? HubError)?.actionMessage ?? "暂时无法确认，请重试。"
+      self.error = (error as? HubError)?.actionMessage ?? L10n.acknowledgeFailed
     }
   }
 }
@@ -69,7 +70,7 @@ struct TimelineSecurityEventLine: View {
       Image(systemName: "checkmark.shield").frame(width: 14).accessibilityHidden(true)
       Text(event.message)
       Spacer(minLength: 8)
-      Button("知道了", action: acknowledge).buttonStyle(.accentLink).fixedSize()
+      Button(L10n.gotIt, action: acknowledge).buttonStyle(.accentLink).fixedSize()
     }
     .font(.system(size: TextSize.body))
     .foregroundStyle(Palette.accent)

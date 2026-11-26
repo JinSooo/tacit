@@ -59,15 +59,15 @@ public enum MicrophoneChoices {
   /// devices 为 nil 表示读不到输入设备。
   public static func list(devices: [MicrophoneDevice]?, setting: String) -> [MicrophoneChoice] {
     var choices = [
-      MicrophoneChoice(title: "自带麦克风（默认）", value: "builtin", selectable: true, group: .mode),
-      MicrophoneChoice(title: "跟随系统默认", value: "system", selectable: true, group: .mode),
+      MicrophoneChoice(title: L10n.text(zh: "自带麦克风（默认）", en: "Built-in microphone (default)"), value: "builtin", selectable: true, group: .mode),
+      MicrophoneChoice(title: L10n.text(zh: "跟随系统默认", en: "Use system default"), value: "system", selectable: true, group: .mode),
     ]
     guard let devices else {
-      return choices + [MicrophoneChoice(title: "无法读取输入设备", value: "", selectable: false, group: .notice)]
+      return choices + [MicrophoneChoice(title: L10n.text(zh: "无法读取输入设备", en: "Couldn't read input devices"), value: "", selectable: false, group: .notice)]
     }
     choices += devices.map { MicrophoneChoice(title: $0.name, value: $0.uid, selectable: true, group: .device) }
     if !choices.contains(where: { $0.value == setting }) {
-      choices.append(MicrophoneChoice(title: "所选设备已断开", value: setting, selectable: false, group: .notice))
+      choices.append(MicrophoneChoice(title: L10n.text(zh: "所选设备已断开", en: "Selected device disconnected"), value: setting, selectable: false, group: .notice))
     }
     return choices
   }

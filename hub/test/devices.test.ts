@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HubDB } from "../src/db.ts";
+import { updateGeneral } from "../src/general-settings.ts";
 import { conversationsIn, saveSummary, selfSummarizingDevices, storedSummary } from "../src/conversations.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { conversationStep } from "../src/distill/run.ts";
@@ -229,7 +230,10 @@ test("配对、上传逐条核对来源和归属，中枢删改、同步并确�
     expect(validateRecord(sync.body.changes[0]!.record).ok).toBe(true);
     expect(await other.send("sync", { cursor: 0 })).toMatchObject({ body: { changes: [], cursor: 0 } });
     expect(await phone.send("sync.ack", { cursor: sync.body.cursor })).toEqual({ status: 200, body: { ok: true } });
-    expect(await phone.send("sync", { cursor: 0 })).toMatchObject({ body: { changes: [] } });
+    for (const language of ["zh", "en"]) {
+      expect((await hub.admin("/v1/settings/general", "PUT", { language })).status).toBe(200);
+      expect(await phone.send("sync", { cursor: 0 })).toMatchObject({ status: 200, body: { changes: [], cursor: 0, more: false, language } });
+    }
 
     const status = await (await hub.admin("/v1/status")).json() as { devices: Record<string, unknown>[] };
     expect(status.devices.find(x => x.id === phone.device)).toMatchObject({
@@ -434,9 +438,20 @@ test("手机自己写的总结：组成一致才采用，开着时中枢不再�
     const g = conversationsIn(hub.db, day, day + 86_400_000, phone.device!)[0]!;
     expect(storedSummary(hub.db, g)).toEqual(summary);
     expect([...selfSummarizingDevices(hub.db)]).toEqual([phone.device!]);
-    expect((await put([{ id: a.id, record_ids: [a.id], title: "x".repeat(41), summary: "y", points: [] }])).status).toBe(400);
+    const longSummary = { title: "x".repeat(80), summary: "y".repeat(700), points: Array(5).fill("z".repeat(200)) };
+    const longItem = { id: a.id, record_ids: [b.id, a.id], ...longSummary };
+    expect((await put([longItem])).body).toEqual({ saved: [a.id], stale: [] });
+    expect(storedSummary(hub.db, g)).toEqual(longSummary);
+    for (const tooLong of [
+      { title: "x".repeat(81) }, { summary: "y".repeat(701) },
+      { points: Array(6).fill("z") }, { points: ["z".repeat(201)] },
+    ]) {
+      expect((await put([{ ...longItem, ...tooLong }])).status).toBe(400);
+    }
+    expect(storedSummary(hub.db, g)).toEqual(longSummary);
 
     // 开着“AI 总结”的手机，中枢只给别的设备写；关掉以后中枢接着写。
+    expect((await hub.admin("/v1/settings/general", "PUT", { language: "zh" })).status).toBe(200);
     const calls: string[] = [];
     const llm = { complete: async <T,>(req: { prompt: string }) => { calls.push(req.prompt); return { ok: true as const, ms: 1, call_id: "c", data: summary as T }; } };
     hub.db.db.prepare("DELETE FROM conversation_summaries").run();
@@ -811,6 +826,7 @@ test("SessionStart 800 ms 回退到按 remote 匹配的加密缓存，7 天过�
     for (const args of [["init", "-q"], ["remote", "add", "origin", "git@example.test:maple/ledger.git"]]) {
       expect(Bun.spawnSync(["git", "-C", checkout, ...args]).exitCode).toBe(0);
     }
+    updateGeneral(hub.db, { language: "zh" });
     const store = new DistillStore(hub.db), projectId = ulid(), threadId = ulid();
     store.upsertProject({ id: projectId, name: "枫叶账本", keys: {
       repos: [repoPath], remotes: ["example.test/maple/ledger"], hosts: [], chats: [],

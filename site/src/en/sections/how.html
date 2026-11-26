@@ -1,0 +1,83 @@
+<section class="section" id="how" aria-labelledby="how-title">
+  <div class="wrap">
+    <header class="section-head" data-reveal>
+      <h2 class="heading" id="how-title">How Tacit works</h2>
+      <p class="lead" id="how-intro">When summarizing, Tacit gives more weight to records that show what you intended.</p>
+    </header>
+
+    <figure aria-labelledby="how-title" aria-describedby="how-intro">
+      <div class="how-flow" data-reveal-group>
+        <ol class="how-inputs" role="list" aria-label="Sources, from most to least weight">
+          <li>
+            <svg aria-hidden="true" class="how-source-icon"><use href="assets/sources.svg#note"/></svg>
+            <div>
+              <h3>What you say and write</h3>
+              <p>AI sessions, messages you send, your words in recordings and notes you add.</p>
+            </div>
+          </li>
+          <li>
+            <svg aria-hidden="true" class="how-source-icon"><use href="assets/sources.svg#chat"/></svg>
+            <div>
+              <h3>What others tell you</h3>
+              <p>Incoming messages and other speakers in recordings. WeChat is an optional source on Mac.</p>
+            </div>
+          </li>
+          <li>
+            <svg aria-hidden="true" class="how-source-icon"><use href="assets/sources.svg#screen"/></svg>
+            <div>
+              <h3>What you look at</h3>
+              <p>App names, page titles and time spent help place activities. You can search screen and browser text. Summaries leave that text out.</p>
+            </div>
+          </li>
+        </ol>
+
+        <svg class="how-connector" aria-hidden="true" viewBox="0 0 96 240" preserveAspectRatio="none">
+          <path class="how-tier-1" d="M0 40H16C54 40 40 120 82 120H96"/>
+          <path class="how-tier-2" d="M0 120H82"/>
+          <path class="how-tier-3" d="M0 200H16C54 200 40 120 82 120"/>
+          <path class="how-arrow" d="m86 115 8 5-8 5"/>
+        </svg>
+
+        <div class="how-core">
+          <svg class="how-core-mark" aria-hidden="true" width="44" height="44" viewBox="0 0 44 44">
+            <path class="how-mark-rail" d="M10 4V9.4M10 18.6V40"/>
+            <circle class="how-mark-ring" cx="10" cy="14" r="4"/>
+            <circle class="how-mark-core" cx="10" cy="14" r="1.4"/>
+            <rect class="how-mark-now" x="18" y="10.8" width="22" height="6.4" rx="3.2"/>
+            <circle class="how-mark-dot" cx="10" cy="25" r="2.7"/>
+            <rect class="how-mark-mid" x="18" y="22.1" width="17" height="5.8" rx="2.9"/>
+            <circle class="how-mark-dot-faint" cx="10" cy="35" r="2.2"/>
+            <rect class="how-mark-old" x="18" y="32.4" width="11.5" height="5.2" rx="2.6"/>
+          </svg>
+          <h3>Summarize on your device</h3>
+          <ul>
+            <li>What happened</li>
+            <li>What you decided</li>
+            <li>Links to original records</li>
+          </ul>
+        </div>
+
+        <svg class="how-connector" aria-hidden="true" viewBox="0 0 96 240" preserveAspectRatio="none">
+          <path d="M0 120H12C52 120 42 60 82 60H96M12 120C52 120 42 180 82 180H96"/>
+          <path class="how-arrow" d="m86 55 8 5-8 5m0 110 8 5-8 5"/>
+        </svg>
+
+        <ul class="how-outputs" role="list" aria-label="Where summaries appear">
+          <li>
+            <h3>For you</h3>
+            <p>Review your day and expand an activity to read the original records.</p>
+          </li>
+          <li>
+            <h3>For AI tools</h3>
+            <p>Search records through MCP and bring current project progress into new sessions.</p>
+          </li>
+        </ul>
+      </div>
+
+      <figcaption class="how-caption prose" data-reveal style="--reveal-delay: 240ms">
+        <p>Tacit reads screen text in memory and discards the screenshots. The database is encrypted on your device.</p>
+        <p>A draft appears as soon as a record arrives. By default, the model summarizes the activity after <span class="num">30 min</span> without new records and updates the day overview every hour. You can change the timing in settings.</p>
+      </figcaption>
+    </figure>
+  </div>
+</section>

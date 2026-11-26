@@ -19,7 +19,7 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
                          timeZone: TimeZone(identifier: "Asia/Tokyo")!)
 }
 
-@Test func startupDiagnosticPrefersSpecificFailureAndIgnoresCorruption() throws {
+@Test(ChineseUITrait()) func startupDiagnosticPrefersSpecificFailureAndIgnoresCorruption() throws {
   try withDiagnosticDirectory { directory in
     let startup = directory.appendingPathComponent("hub-startup-error.json")
     let setup = directory.appendingPathComponent("setup-status.json")
@@ -36,7 +36,7 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
   }
 }
 
-@Test func diagnosticSummaryWorksOfflineWithoutSharingContentOrCredentials() throws {
+@Test(ChineseUITrait()) func diagnosticSummaryWorksOfflineWithoutSharingContentOrCredentials() throws {
   try withDiagnosticDirectory { directory in
     let token = "fake_access_token_0123456789"
     let privatePath = "/Users/example-person/ExampleProject"
@@ -76,7 +76,7 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
   }
 }
 
-@Test func diagnosticSummaryKeepsStatusCountsAndCategoriesOnly() throws {
+@Test(ChineseUITrait()) func diagnosticSummaryKeepsStatusCountsAndCategoriesOnly() throws {
   try withDiagnosticDirectory { directory in
     let status = Data("""
       {"hub":{"uptime_s":60},"database":{"bytes":4096,"file":"/Users/example-person/records.db"},
@@ -101,7 +101,7 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
   }
 }
 
-@Test func diagnosticSummaryAcceptsCollectorStatusWithoutOptionalCounters() throws {
+@Test(ChineseUITrait()) func diagnosticSummaryAcceptsCollectorStatusWithoutOptionalCounters() throws {
   try withDiagnosticDirectory { directory in
     let status = directory.appendingPathComponent("collector-status.json")
     for (error, category) in [

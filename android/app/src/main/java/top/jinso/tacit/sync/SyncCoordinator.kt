@@ -1,5 +1,8 @@
 package top.jinso.tacit.sync
 
+import top.jinso.tacit.i18n.AppLang
+import top.jinso.tacit.i18n.AppLocale
+import top.jinso.tacit.R
 import android.net.ConnectivityManager
 import android.os.Build
 import android.os.SystemClock
@@ -23,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 internal data class MacStatus(
     val name: String?, val manual: String, val removed: Boolean, val lastSync: Long,
-    val pending: Int, val rejected: Map<String, Int>, val error: String?, val relayDisabled: Boolean = false,
+    val pending: Int, val rejected: Map<String, Int>, val error: SyncError?, val relayDisabled: Boolean = false,
 )
 
 internal class SyncCoordinator(private val app: TacitApp) {
@@ -44,7 +47,9 @@ internal class SyncCoordinator(private val app: TacitApp) {
             data?.optBoolean("removed") == true, data?.optLong("lastSync") ?: 0L,
             if (data == null) 0 else vault.pendingCount(),
             if (data == null) emptyMap() else vault.rejectedReasons(includeReasons),
-            data?.optionalString("error"), data?.optBoolean("relayDisabled") == true)
+            data?.optionalString("error")?.let { stored ->
+                restoreSyncError(stored, AppLocale.strings(app, AppLang.ZH))
+            }, data?.optBoolean("relayDisabled") == true)
     }
 
     suspend fun pair(uri: String, address: String) = withContext(Dispatchers.IO) {
@@ -59,7 +64,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
             val secret = DeviceEnvelope.secret(keys)
             val wrapped = try { Keys(app).wrapDeviceKey(secret, public).base64url() } finally { secret.fill(0) }
             val customName = runCatching { Settings.Global.getString(app.contentResolver, Settings.Global.DEVICE_NAME) }.getOrNull()
-            val phoneName = pairingDeviceName(customName, Build.MODEL, Build.BRAND)
+            val phoneName = pairingDeviceName(customName, Build.MODEL, Build.BRAND, AppLocale.strings(app))
             pairWithAvailableTransport(invite, keys, phoneName, findMac = {
                 MacDiscovery(app).find(invite.hubId, last, invite.addresses, manual)
             }, rateLimit = relayBackoff) { paired, origin ->
@@ -68,6 +73,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
                     .put("public", public)
                     .put("addresses", JSONArray(invite.addresses)).put("last", origin).put("manual", manual)
                     .put("relay", paired.relay?.json()))
+                app.prefs.hubLanguage = null
             }
             SyncWorker.schedulePeriodic(app)
             timelineWorkerScheduled = true
@@ -89,6 +95,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
         mutex.withLock {
             timeline.clear()
             forgetAudioPolicy { vault.saveSyncConnection(null) }
+            app.prefs.hubLanguage = null
             SyncWorker.cancel(app)
             timelineWorkerScheduled = false
         }
@@ -222,7 +229,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
             }
             val failures = (data.optInt("failures") + 1).coerceAtMost(8)
             val delay = (30_000L shl (failures - 1)).coerceAtMost(MAX_RETRY)
-            data.put("error", if (data.optBoolean("relayDisabled")) null else syncError(error)).put("failures", failures).put("retryAt", System.currentTimeMillis() + delay)
+            data.put("error", if (data.optBoolean("relayDisabled")) null else syncError(error).name).put("failures", failures).put("retryAt", System.currentTimeMillis() + delay)
             vault.saveSyncConnection(data)
             SyncWorker.retry(app, delay)
         }
@@ -447,6 +454,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
             data.remove(key)
         }
         forgetAudioPolicy { vault.saveSyncConnection(data) }
+        app.prefs.hubLanguage = null
         SyncWorker.cancel(app)
     }
 
@@ -468,7 +476,7 @@ internal class SyncCoordinator(private val app: TacitApp) {
 
     private suspend fun pullFromMac(data: JSONObject, send: suspend (String, JSONObject) -> JSONObject) {
         val runtime by lazy { AudioRuntime.get(app) }
-        pullChanges({ op, body -> send(op, body) }) { page ->
+        pullChanges({ op, body -> send(op, body) }, onLanguage = { app.prefs.hubLanguage = it }) { page ->
             val audioDeletes = page.filterIsInstance<Change.Delete>().filter { it.source == "android.audio" }
             if (audioDeletes.isEmpty()) vault.applyChanges(page)
             else runtime.applyRecordChanges(page, audioDeletes)
@@ -611,36 +619,48 @@ internal fun directSyncRecovered(data: JSONObject, origin: String, save: (JSONOb
     save(data)
 }
 
-private const val SYNC_QUEUED = "暂时连不上 Mac，记录已排队等待同步"
-private const val RELAY_RATE_LIMITED = "中转信箱今日请求已达上限，稍后会自动重试"
-private const val RELAY_FULL = "中转信箱空间已满，等 Mac 取走后会自动继续"
-private const val RELAY_WAITING = "正在等待 Mac 响应，稍后会自动同步"
-
-internal fun isSyncWaiting(message: String, pairing: Boolean = false): Boolean = if (pairing) false else when (message) {
-    SYNC_QUEUED, RELAY_RATE_LIMITED, RELAY_FULL, RELAY_WAITING -> true
-    // Previously persisted messages, until the next sync refreshes them.
-    "手机和 Mac 可能不在同一网络", "连不上 Mac，请检查 Mac 上的 Tacit 和网络" -> !pairing
-    else -> false
+internal enum class SyncError(val label: Int, val waiting: Boolean = false) {
+    QUEUED(R.string.sync_queued, waiting = true),
+    RELAY_RATE_LIMITED(R.string.sync_relay_rate_limited, waiting = true),
+    RELAY_FULL(R.string.sync_relay_full, waiting = true),
+    RELAY_WAITING(R.string.sync_relay_waiting, waiting = true),
+    NETWORK_MISMATCH(R.string.sync_network_mismatch, waiting = true),
+    MAC_UNAVAILABLE(R.string.sync_mac_unavailable, waiting = true),
+    INVITE_EXPIRED(R.string.sync_invite_expired),
+    BATCH_TOO_LARGE(R.string.sync_batch_too_large),
+    PAIR_RATE_LIMITED(R.string.sync_pair_rate_limited),
+    PAIR_RELAY_FULL(R.string.sync_pair_relay_full),
+    INVALID_ADDRESS(R.string.sync_invalid_address),
+    MAC_BUSY(R.string.sync_mac_busy),
+    MAC_REJECTED(R.string.sync_mac_rejected),
+    INVITE_INVALID(R.string.sync_invite_invalid),
+    PAIR_FAILED(R.string.sync_pair_failed),
+    RETRY(R.string.sync_retry),
 }
 
-internal fun syncError(error: Throwable, pairing: Boolean = false): String = when {
+internal fun restoreSyncError(stored: String, chinese: top.jinso.tacit.i18n.UiStrings): SyncError =
+    SyncError.entries.firstOrNull { it.name == stored }
+        ?: SyncError.entries.firstOrNull { chinese.text(it.label) == stored }
+        ?: SyncError.RETRY
+
+internal fun syncError(error: Throwable, pairing: Boolean = false): SyncError = when {
     error is InviteExpired || (error is DeviceStatus && error.operation == "pair" && error.status == 403) ->
-        "邀请链接已过期或已使用，请在 Mac 上重新生成"
-    error is EnvelopeTooLarge -> "这批同步内容太大，暂时无法同步"
+        SyncError.INVITE_EXPIRED
+    error is EnvelopeTooLarge -> SyncError.BATCH_TOO_LARGE
     // 配对是一次性动作，失败不会自动重试，不能说“会自动重试”。
-    pairing && error is RelayStatus && error.status == 429 -> "中转信箱今日请求已达上限，请稍后再试，或和 Mac 连到同一网络后重试"
-    pairing && error is RelayStatus && error.status == 507 -> "中转信箱空间已满，请稍后再试，或和 Mac 连到同一网络后重试"
-    error is RelayStatus && error.status == 429 -> RELAY_RATE_LIMITED
-    error is RelayStatus && error.status == 507 -> RELAY_FULL
-    error is RelayWaiting -> RELAY_WAITING
-    error is InvalidMacAddress -> "请输入有效的 Mac 地址"
-    pairing && error is MacUnavailable && error.networkMismatch -> "手机和 Mac 可能不在同一网络"
+    pairing && error is RelayStatus && error.status == 429 -> SyncError.PAIR_RATE_LIMITED
+    pairing && error is RelayStatus && error.status == 507 -> SyncError.PAIR_RELAY_FULL
+    error is RelayStatus && error.status == 429 -> SyncError.RELAY_RATE_LIMITED
+    error is RelayStatus && error.status == 507 -> SyncError.RELAY_FULL
+    error is RelayWaiting -> SyncError.RELAY_WAITING
+    error is InvalidMacAddress -> SyncError.INVALID_ADDRESS
+    pairing && error is MacUnavailable && error.networkMismatch -> SyncError.NETWORK_MISMATCH
     error is MacUnavailable || (error is IOException && error !is DeviceStatus) ->
-        if (pairing) "连不上 Mac，请检查 Mac 上的 Tacit 和网络" else SYNC_QUEUED
-    error is DeviceStatus && error.status in setOf(500, 503) -> "Mac 暂时无法处理同步，请稍后重试"
-    error is DeviceStatus && error.status == 400 -> "Mac 未能完成请求，请检查两台设备的日期与时间"
+        if (pairing) SyncError.MAC_UNAVAILABLE else SyncError.QUEUED
+    error is DeviceStatus && error.status in setOf(500, 503) -> SyncError.MAC_BUSY
+    error is DeviceStatus && error.status == 400 -> SyncError.MAC_REJECTED
     pairing && (error is IllegalArgumentException || error is java.net.URISyntaxException || error is org.json.JSONException) ->
-        "邀请链接无效，请重新扫描或粘贴"
-    pairing -> "无法完成连接，请在 Mac 上重新生成邀请"
-    else -> "同步未完成，将重试"
+        SyncError.INVITE_INVALID
+    pairing -> SyncError.PAIR_FAILED
+    else -> SyncError.RETRY
 }

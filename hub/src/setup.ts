@@ -1,3 +1,5 @@
+import type { Lang } from "./i18n/language.ts";
+import { cliText } from "./agent-cli/locale.ts";
 import { readHubBinding } from "./hub-binding.ts";
 // 应用自己完成安装后的准备：数据目录与密钥、AI 工具连接路径、后台服务的启动配置。
 // 安装包首次打开、升级后打开，以及源码安装的 install.sh 都走这里；重复运行只改有变化的部分。
@@ -40,13 +42,13 @@ export function toolDirectory(name: string, candidates: string[]): string | null
 }
 
 /** 后台服务的 PATH：设置页“测试连接”和整理都要找到本机已登录的 codex、claude。 */
-export function servicePath(bun: string, home: string, search: string[], warn: (message: string) => void = () => {}): string {
+export function servicePath(bun: string, home: string, search: string[], warn: (message: string) => void = () => {}, lang: Lang = "zh"): string {
   const fallback = [".local/share/mise/shims", ".local/bin", ".bun/bin", ".npm-global/bin"].map(p => join(home, p)).concat(SYSTEM);
   const dirs: string[] = [];
   for (const name of ["codex", "claude"]) {
     const found = toolDirectory(name, [...search, ...fallback]);
     if (found) dirs.push(found);
-    else warn(`没找到 ${name}；装好并登录后重新打开 Tacit 即可使用。`);
+    else warn(cliText(`没找到 ${name}；装好并登录后重新打开 Tacit 即可使用。`, `Could not find ${name}. Install it, sign in, and reopen Tacit.`, lang));
   }
   return [...new Set([...dirs, dirname(bun), ...SYSTEM])].join(":");
 }
@@ -93,6 +95,7 @@ ${body.join("\n")}
 }
 
 export interface SetupOptions {
+  lang?: Lang;
   app: string;
   /** 源码安装：无论记录如何都完整初始化，并启动采集端。 */
   install?: boolean;
@@ -123,8 +126,10 @@ function readJSON(file: string): any {
 
 export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted: boolean }> {
   const home = o.home ?? homedir(), env = o.env ?? process.env, log = o.log ?? (m => console.log(m));
+  const lang = o.lang ?? "zh";
+  const t = (zh: string, en: string) => cliText(zh, en, lang);
   const runtime = join(o.app, "Contents/Resources/runtime"), bun = join(o.app, "Contents/Helpers/Tacit");
-  if (!existsSync(join(runtime, "hub/src/cli.ts")) || !executable(bun)) throw new SetupError("Tacit 安装包不完整");
+  if (!existsSync(join(runtime, "hub/src/cli.ts")) || !executable(bun)) throw new SetupError(t("Tacit 安装包不完整", "The Tacit installation is incomplete"));
   const data = dataDirOf(env);
   const { remote } = readHubBinding(data);
   const launchctl = o.launchctl ?? ((args: string[]) => spawnSync("/bin/launchctl", args, { stdio: "ignore" }).status ?? 1);
@@ -152,15 +157,18 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
       const config = loadConfig(env);
       // 打开失败的消息可能带出密钥，只报原因类别。
       try { new HubDB(join(config.dataDir, "history.db"), config.dbKey).close(); }
-      catch { throw new SetupError("无法打开加密数据库，请确认钥匙串里的数据库密钥与数据目录匹配"); }
+      catch { throw new SetupError(t("无法打开加密数据库，请确认钥匙串里的数据库密钥与数据目录匹配", "Could not open the encrypted database. Check that the key in the Keychain matches the data directory.")); }
     }))();
     // 采集端配置只更新运行目录和 bun，保留用户改过的其他项。
     const collector = join(data, "collector.json");
     writePrivate(collector, JSON.stringify({ ...(readJSON(collector) ?? {}), repo: runtime, bun }, null, 2) + "\n");
     const relocate = o.relocate ?? (await import("./relocate-install.ts")).relocateInstall;
     // 连接迁移失败不能挡住后台启动；用户可以在设置里重新连接。
-    try { log(`已更新 ${relocate(runtime, bun, home).length} 份 AI 工具连接配置。`); }
-    catch { log("AI 工具连接没有迁移，请在 设置 › AI 工具 里重新连接。"); }
+    try {
+      const count = relocate(runtime, bun, home).length;
+      log(t(`已更新 ${count} 份 AI 工具连接配置。`, `Updated ${count} AI tool ${count === 1 ? "connection" : "connections"}.`));
+    }
+    catch { log(t("AI 工具连接没有迁移，请在 设置 › AI 工具 里重新连接。", "AI tool connections could not be moved. Reconnect them in Settings → AI tools.")); }
     (o.dropRemovedSettings ?? (() => {
       for (const key of REMOVED_SETTINGS) spawnSync("/usr/bin/defaults", ["delete", "dev.record-anything.collector", key], { stdio: "ignore" });
     }))();
@@ -172,7 +180,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
   mkdirSync(agents, { recursive: true });
   // 终端里运行 install.sh 和从 Finder 打开应用得到同一个 PATH：都先看登录 shell 的 PATH。
   const search = [...(o.shellPath ?? loginShellPath)(), ...(env.PATH ?? "").split(":").filter(Boolean)];
-  const path = servicePath(bun, home, search, log);
+  const path = servicePath(bun, home, search, log, lang);
   const layout: ServiceLayout = { app: o.app, runtime, bun, data, path };
   const changed = new Set<Job>();
   for (const job of remote ? ["collector"] as const : JOBS) {
@@ -198,11 +206,11 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     for (let i = 0; i < 5; i++) {
       const status = launchctl(["bootstrap", domain, join(agents, `${label(job)}.plist`)]);
       if (status === 0) return;
-      log(`后台任务 ${label(job)} 加载返回 launchctl 退出码 ${status}（第 ${i + 1} 次）`);
+      log(t(`后台任务 ${label(job)} 加载返回 launchctl 退出码 ${status}（第 ${i + 1} 次）`, `launchctl exited with code ${status} while loading ${label(job)} (attempt ${i + 1})`));
       if (loaded(job)) return;
       await wait(1000);
     }
-    throw new SetupError(`后台任务 ${label(job)} 没能加载，请重新打开 Tacit`);
+    throw new SetupError(t(`后台任务 ${label(job)} 没能加载，请重新打开 Tacit`, `Could not load ${label(job)}. Reopen Tacit.`));
   };
   const restart = !remote && (full || changed.has("hub") || changed.has("distill"));
   if (restart) for (const job of ["distill", "hub"] as const) await unload(job);
@@ -216,7 +224,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
       }
       return false;
     });
-    if (!(await healthy(port))) throw new SetupError("后台服务没能启动，请查看 logs/hub.log");
+    if (!(await healthy(port))) throw new SetupError(t("后台服务没能启动，请查看 logs/hub.log", "The background service could not start. Check logs/hub.log."));
   }
   if (!remote && distill && (restart || !loaded("distill"))) await load("distill");
   // 先记下已完成，采集端启动后自己再跑一次时就不会重复初始化。

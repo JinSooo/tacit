@@ -24,6 +24,7 @@ import { groundedQuote } from "./quotes.ts";
 import { materialBody } from "./material.ts";
 import { evidenceTime } from "./evidence-time.ts";
 import { AUDIO_SOURCES, SKELETON_SOURCES, sourceList } from "../record-sources.ts";
+import { hasCjkLeakage, type Lang } from "../i18n/index.ts";
 import { readGeneral, readTimelineSettings } from "../general-settings.ts";
 import { nowSummary } from "../now-status.ts";
 import { composePolish, composeReview, incrementalReview, reviewPlan, reviewMaterial, type ReviewDetail } from "./day-review.ts";
@@ -34,14 +35,27 @@ export interface LLM { complete<T>(req: LLMRequest): Promise<LLMResult<T>> }
 export interface Deps { db: HubDB; llm: LLM; now?: () => number; log?: (line: string) => void; checkModelConfig?: () => string | null }
 
 /** 事务外等待模型时用户可能删除/修正内容：丢弃旧快照的响应，下一轮重试。 */
-async function complete<T>(d: Deps, req: LLMRequest): Promise<LLMResult<T>> {
+async function complete<T>(d: Deps, req: LLMRequest, languageProblem?: (value: T) => string | null): Promise<LLMResult<T>> {
   const revision = contentRevision(d.db);
-  const result = await d.llm.complete<T>({ ...req, prompt: redactString(req.prompt).text, system: redactString(req.system).text, contentRevision: revision });
+  const result = await d.llm.complete<T>({ ...req, prompt: redactString(req.prompt).text, system: redactString(req.system).text, contentRevision: revision,
+    ...(languageProblem ? { recheck: (value: unknown, first?: unknown) => languageProblem(value as T) ?? req.recheck?.(value, first) ?? null } : {}),
+  });
   if (revision !== contentRevision(d.db)) {
     discardedCall(d.db,result.call_id);
     return { ok: false, error: "unknown", discarded: true, ms: result.ms, call_id: result.call_id };
   }
+  // The provider may return the original response if the retry also fails.
+  if (result.ok && languageProblem?.(result.data)) {
+    discardedCall(d.db, result.call_id);
+    return { ok: false, error: "schema_mismatch", ms: result.ms, call_id: result.call_id };
+  }
   return result;
+}
+
+function englishDayProblem(output: P.DayOutput): string | null {
+  if (output.items.some(({ title, description }) => hasCjkLeakage(title) || hasCjkLeakage(description))
+    || (output.highlight && hasCjkLeakage(output.highlight.text))) return P.EN_LANGUAGE_REMINDER;
+  return null;
 }
 
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
@@ -301,6 +315,7 @@ function batches<T>(items: T[], size: (item: T) => number, budget: number, maxCo
 // ---------------- 2. 归线程（minute 档） ----------------
 
 export async function assignStep(d: Deps, store: DistillStore, now: number) {
+  const lang = readGeneral(d.db).language;
   const log = d.log ?? (() => {});
   let assigned = 0, created = 0, ignored = 0, calls = 0, failed = 0;
   const previous = store.getState<Candidate[]>("candidates") ?? [];
@@ -344,8 +359,8 @@ export async function assignStep(d: Deps, store: DistillStore, now: number) {
       ...candidates.map(c => ({ id: `cand:${c.id}`, title: c.title, brief: "", project: c.project_id ? names.get(c.project_id) ?? null : null, status: "candidate", last: clock(c.last_ms) })),
     ];
     calls++;
-    const request = assignRequest(batch.map(x => x.v), choices);
-    const r = await complete<P.AssignOutput>(d, { tier: "minute", task: "assign", system: P.ASSIGN_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
+    const request = assignRequest(batch.map(x => x.v), choices, lang);
+    const r = await complete<P.AssignOutput>(d, { tier: "minute", task: "assign", system: P.getPrompts(lang).ASSIGN_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
     if (!r.ok) { failed += batch.length; log(JSON.stringify({ step: "assign", ok: false, frames: batch.length, category: classifyModelError(r.error) })); continue; }
     const byFrame = new Map(request.decode(r.data).items.map(i => [i.frame_id, i]));
     const real = new Set(threads.map(t => t.id));
@@ -417,7 +432,8 @@ function threadFrames(store: DistillStore, threadId: string): Frame[] {
 }
 
 async function makeBrief(d: Deps, task: string, title: string, detail: unknown): Promise<{ text: string; call_id?: string } | null> {
-  const r = await complete<P.BriefOutput>(d, { tier: "minute", task, system: P.BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail), schema: P.BRIEF_SCHEMA });
+  const lang = readGeneral(d.db).language;
+  const r = await complete<P.BriefOutput>(d, { tier: "minute", task, system: P.getPrompts(lang).BRIEF_SYSTEM, prompt: P.briefPrompt(title, detail, lang), schema: P.briefSchema(lang) });
   return r.ok ? { text: r.data.brief.trim(), call_id: r.call_id } : null;
 }
 
@@ -456,6 +472,7 @@ export function conversationTranscript(turns: { at: string; speaker: string; tex
 
 /** 结束超过 10 分钟（不会再接上新的一段）、还没有总结或组成变了的对话，各写一段总结。私密的不发给模型；自己写总结的设备跳过。 */
 export async function conversationStep(d: Deps, now: number) {
+  const lang = readGeneral(d.db).language;
   const groups = conversationsIn(d.db, now - LIMITS.conversationDays * DAY, now);
   const namer = speakerNamer(d.db);
   // 自己写总结的设备由它写、跟着记录传上来（见 devices/service.ts 的 conversations.put），这里不重复花一次钱。
@@ -469,8 +486,9 @@ export async function conversationStep(d: Deps, now: number) {
   let calls = 0, done = 0;
   for (const { g, turns } of todo.slice(0, LIMITS.conversationsPerRound)) {
     calls++;
-    const r = await complete<P.ConversationOutput>(d, { tier: "minute", task: "conversation_summary", system: P.CONVERSATION_SYSTEM,
-      prompt: P.conversationPrompt({ start: clock(g.start_ms), end: clock(g.end_ms), app: g.app }, conversationTranscript(turns)), schema: P.CONVERSATION_SCHEMA });
+    const r = await complete<P.ConversationOutput>(d, { tier: "minute", task: "conversation_summary", system: P.getPrompts(lang).CONVERSATION_SYSTEM,
+      prompt: P.conversationPrompt({ start: clock(g.start_ms), end: clock(g.end_ms), app: g.app }, conversationTranscript(turns), lang), schema: P.conversationSchema(lang) },
+      lang === "en" ? ({ title, summary, points }) => [title, summary, ...points].some(text => hasCjkLeakage(text)) ? P.EN_LANGUAGE_REMINDER : null : undefined);
     if (!r.ok) continue;
     const out = { title: r.data.title.trim(), summary: r.data.summary.trim(), points: r.data.points.map(p => p.trim()).filter(Boolean).slice(0, 5) };
     if (!out.title || !out.summary) { discardedCall(d.db,r.call_id); continue; }
@@ -514,6 +532,7 @@ export function reclassifyAfterRuleChange(store: DistillStore): number {
 }
 
 export async function classifyStep(d: Deps, store: DistillStore) {
+  const lang = readGeneral(d.db).language;
   let calls = 0, updated = 0, failed = 0;
   reclassifyAfterRuleChange(store);
   nominateByName(store);
@@ -527,8 +546,8 @@ export async function classifyStep(d: Deps, store: DistillStore) {
     calls++;
     try {
       const t = store.thread(id)!;
-      const r = await complete<P.Classification>(d, { tier: "minute", task: "classify", system: P.CLASSIFY_SYSTEM,
-        prompt: P.classifyPrompt(t, projectHint(store, t)), schema: P.CLASSIFY_SCHEMA });
+      const r = await complete<P.Classification>(d, { tier: "minute", task: "classify", system: P.getPrompts(lang).CLASSIFY_SYSTEM,
+        prompt: P.classifyPrompt(t, projectHint(store, t), lang), schema: P.CLASSIFY_SCHEMA });
       if (!r.ok) { failed++; continue; }
       store.hub.db.transaction(() => { applyClassification(store,id,r.data); appliedCall(d.db,r.call_id); })();
       updated++;
@@ -546,6 +565,7 @@ export async function classifyStep(d: Deps, store: DistillStore) {
  */
 export type DigestSelect = "all" | "wanted";
 export async function digestStep(d: Deps, store: DistillStore, now: number, select: DigestSelect = "all") {
+  const lang = readGeneral(d.db).language;
   const log = d.log ?? (() => {});
   let updated = 0, failed = 0, facts = 0, calls = 0, dropped = 0, invalidInference = 0;
   const wanted = store.wantedDigests();
@@ -603,8 +623,8 @@ export async function digestStep(d: Deps, store: DistillStore, now: number, sele
       || JSON.stringify(mark?.fact_ids ?? currentFacts()) !== JSON.stringify(currentFacts()))) chunks.push([]);
     for (const chunk of chunks) {
       calls++;
-      const request = threadRequest({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!), recordId => store.hub.get(recordId));
-      const r = await complete<ThreadModelOutput>(d, { tier: "hour", task: "thread_digest", system: P.THREAD_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
+      const request = threadRequest({ title, detail }, factViews(store, "thread_id", id), chunk.map(x => x.v), projectHint(store, store.thread(id)!), recordId => store.hub.get(recordId), lang);
+      const r = await complete<ThreadModelOutput>(d, { tier: "hour", task: "thread_digest", system: P.getPrompts(lang).THREAD_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
       if (!r.ok) { log(JSON.stringify({ step: "digest", ok: false, category: classifyModelError(r.error) })); ok = false; break; }
       if (!unchanged()) { discardedCall(d.db,r.call_id); ok = false; break; }
       const known = new Set(chunk.flatMap(x => x.v.records.map(rec => rec.id)).filter(Boolean));
@@ -674,12 +694,13 @@ export async function digestStep(d: Deps, store: DistillStore, now: number, sele
  * 各起了两个标题，之后两条各自长大）。只并同一领域、不分属两个项目的；片段最多的那条留下。
  */
 export async function dedupStep(d: Deps, store: DistillStore, now: number) {
+  const lang = readGeneral(d.db).language;
   const rows = store.hub.db.prepare(`SELECT t.*,(SELECT count(*) FROM assignments a WHERE a.thread_id=t.id) AS frames FROM threads t
     WHERE brief IS NOT NULL AND (status IN ('active','paused') OR (status='done' AND last_ms>?)) ORDER BY last_ms DESC LIMIT ?`).all(now - LIMITS.assignDoneWindow, LIMITS.dedupThreads) as (Thread & { frames: number })[];
   if (rows.length < 2) return { calls: 0, merged: 0, failed: 0 };
   const names = new Map(store.projects().map(p => [p.id, p.name]));
   const views = rows.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: t.project_id ? names.get(t.project_id) ?? null : null, status: t.status, first: t.first_ms ? clock(t.first_ms) : "", last: t.last_ms ? clock(t.last_ms) : "" }));
-  const r = await complete<P.DedupOutput>(d, { tier: "hour", task: "dedupe", system: P.DEDUP_SYSTEM, prompt: P.dedupPrompt(views), schema: P.DEDUP_SCHEMA });
+  const r = await complete<P.DedupOutput>(d, { tier: "hour", task: "dedupe", system: P.getPrompts(lang).DEDUP_SYSTEM, prompt: P.dedupPrompt(views, lang), schema: P.DEDUP_SCHEMA });
   if (!r.ok) return { calls: 1, merged: 0, failed: 1 };
   const byId = new Map(rows.map(t => [t.id, t]));
   let merged = 0;
@@ -701,6 +722,7 @@ export async function dedupStep(d: Deps, store: DistillStore, now: number) {
 // ---------------- 4. 项目 ----------------
 
 export async function projectStep(d: Deps, store: DistillStore, now: number) {
+  const lang = readGeneral(d.db).language;
   let updated = 0, failed = 0, calls = 0;
   for (const { id } of store.projects()) {
     const revision = contentRevision(d.db), p = store.project(id);
@@ -725,8 +747,8 @@ export async function projectStep(d: Deps, store: DistillStore, now: number) {
       calls++;
       const views: P.ThreadView[] = described.map(t => ({ id: t.id, title: t.title, brief: t.brief ?? "", project: p.name, status: t.status, last: t.last_ms ? clock(t.last_ms) : "" }));
       const evidenceKey = `project_evidence_at:${id}`;
-      const request = projectRequest(store, p.id, p.name, views, store.getState<number>(evidenceKey) ?? now - 3 * DAY);
-      const r = await complete<ProjectModelOutput>(d, { tier: "hour", task: "project", system: P.PROJECT_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
+      const request = projectRequest(store, p.id, p.name, views, store.getState<number>(evidenceKey) ?? now - 3 * DAY, lang);
+      const r = await complete<ProjectModelOutput>(d, { tier: "hour", task: "project", system: P.getPrompts(lang).PROJECT_SYSTEM, prompt: request.prompt, schema: request.schema, refs: request.refs });
       if (!r.ok) { failed++; continue; }
       detail = { goal: r.data.goal, status: r.data.status, people: r.data.people };
       const applied = store.hub.db.transaction(() => {
@@ -813,7 +835,8 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
   next.setDate(next.getDate() + 1);
   const end = Math.min(next.getTime(), now + 1), cutoff = toLocalIso(Math.min(next.getTime(), now));
   const revision = contentRevision(d.db);
-  const { segments, omittedRecordIds, dependencyRecordIds } = reviewPlan(d.db, start, end), material = reviewMaterial(segments);
+  const lang = readGeneral(d.db).language;
+  const { segments, omittedRecordIds, dependencyRecordIds } = reviewPlan(d.db, start, end, undefined, lang), material = reviewMaterial(segments);
   const failed = (calls: number, discarded = false, error?: ModelErrorCode) => {
     store.hub.db.transaction(() => {
       store.upsertDay({ date, needs_regen: 1 });
@@ -821,13 +844,20 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
     })();
     return { calls, ok: false, ...(error ? { error } : {}) };
   };
-  const result = material.length ? await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.DAY_SYSTEM, timeoutMs: 300_000,
-    prompt: P.dayPrompt(date, material, cutoff), schema: P.DAY_SCHEMA, normalizeOutput: P.normalizeDayOutput }) : null;
+  const result = material.length ? await complete<P.DayOutput>(d, { tier: "day", task: "day", system: P.getPrompts(lang).DAY_SYSTEM, timeoutMs: 300_000,
+    prompt: P.dayPrompt(date, material, cutoff, lang), schema: P.daySchema(lang),
+    normalizeOutput: value => P.normalizeDayOutput(value, lang),
+    ...(lang === "en" ? { recheck: (value: unknown) => {
+      const text = (value as P.DayOutput).highlight?.text;
+      return text ? P.summaryProblem(text, lang) : null;
+    } } : {}),
+  },
+    lang === "en" ? englishDayProblem : undefined) : null;
   const calls = Number(!!result);
   if (result?.ok === false) return result.discarded ? failed(calls, true) : failed(calls, false, classifyModelError(result.error));
   const warnings: string[] = [];
   const detail = composeReview(segments, result?.data ?? { highlight: null, items: [] },
-    next.getTime(), cutoff, omittedRecordIds, dependencyRecordIds, activity => warnings.push(activity));
+    next.getTime(), cutoff, omittedRecordIds, dependencyRecordIds, activity => warnings.push(activity), lang);
   if (!detail) {
     discardedCall(d.db, result?.call_id);
     return failed(calls, false, "schema_mismatch");
@@ -854,6 +884,7 @@ export async function dayStep(d: Deps, store: DistillStore, date: string, now: n
 async function todayStep(d: Deps, store: DistillStore, now: number, timing: "fast" | "hourly" | "manual"): Promise<DayStepResult> {
   const date = localDate(now), start = startOfDay(now);
   const { polish, overview } = readTimelineSettings(d.db);
+  const lang = readGeneral(d.db).language;
   const previous = (store.day(date)?.detail ?? null) as ReviewDetail | null;
   const plan = incrementalReview(d.db, start, now, previous);
   if (!previous && !plan.pending.length && !plan.omittedIds([], []).length) return { calls: 0, ok: true };
@@ -867,12 +898,12 @@ async function todayStep(d: Deps, store: DistillStore, now: number, timing: "fas
   const recentItems = applyTimelineCorrections(plan.items.slice(-5), store.getState<TimelineCorrections>(timelineCorrectionKey(date)));
   const recent = recentItems.map(({ title, description }) => ({ title, description }));
   const result = segments.length ? await complete<P.DayOutput>(d, {
-    tier: "day", task: "day_polish", system: P.DAY_POLISH_SYSTEM, timeoutMs: 300_000,
-    prompt: P.dayPolishPrompt(date, reviewMaterial(segments), recent),
-    schema: P.DAY_SCHEMA, normalizeOutput: P.normalizeDayOutput,
-  }) : null;
+    tier: "day", task: "day_polish", system: P.getPrompts(lang).DAY_POLISH_SYSTEM, timeoutMs: 300_000,
+    prompt: P.dayPolishPrompt(date, reviewMaterial(segments), recent, lang),
+    schema: P.daySchema(lang), normalizeOutput: value => P.normalizeDayOutput(value, lang),
+  }, lang === "en" ? englishDayProblem : undefined) : null;
   const warnings: string[] = [];
-  const polished = result?.ok ? composePolish(segments, result.data, key => warnings.push(key)) : null;
+  const polished = result?.ok ? composePolish(segments, result.data, key => warnings.push(key), lang) : null;
   if (result) {
     calls++;
     if (!result.ok) error = classifyModelError(result.error);
@@ -928,7 +959,7 @@ async function todayStep(d: Deps, store: DistillStore, now: number, timing: "fas
   const overviewDue = overview !== "nightly" && timing !== "fast" &&
     (timing === "manual" || overview === "hourly" || now - (detail.overview_checked_ms ?? 0) >= 3 * HOUR);
   if (overviewDue) {
-    const headline = await overviewStep(d, store, date, now, detail, () => stillCurrent(detail));
+    const headline = await overviewStep(d, store, date, now, detail, () => stillCurrent(detail), lang);
     calls += headline.calls;
     error ??= headline.error;
   }
@@ -936,7 +967,7 @@ async function todayStep(d: Deps, store: DistillStore, now: number, timing: "fas
 }
 
 async function overviewStep(d: Deps, store: DistillStore, date: string, now: number,
-  detail: ReviewDetail, stillCurrent: () => boolean): Promise<DayStepResult> {
+  detail: ReviewDetail, stillCurrent: () => boolean, lang: Lang): Promise<DayStepResult> {
   const corrections = store.getState<TimelineCorrections>(timelineCorrectionKey(date));
   const projects = new Map<string, string | null>();
   // 带上开始时刻并按时间排：同一件事后来解决了，模型才能分清哪句是最新状态。
@@ -950,21 +981,21 @@ async function overviewStep(d: Deps, store: DistillStore, date: string, now: num
   const input = createHash("sha256").update(prompt).digest("hex");
   const changed = input !== detail.overview_input;
   const result = changed && activities.length ? await complete<{ summary: string | null }>(d, {
-    tier: "day", task: "day_brief", system: P.DAY_OVERVIEW_SYSTEM, timeoutMs: 300_000,
-    prompt, schema: P.DAY_OVERVIEW_SCHEMA,
+    tier: "day", task: "day_brief", system: P.getPrompts(lang).DAY_OVERVIEW_SYSTEM, timeoutMs: 300_000,
+    prompt, schema: P.dayOverviewSchema(lang),
     recheck: (value, first) => {
       const s = (value as { summary: string | null }).summary;
       // 第一次写了内容、重试却返回空，按没改好处理，留用第一次的。
-      if (s === null) return (first as { summary?: string | null } | undefined)?.summary ? "summary 不能为空" : null;
-      return P.summaryProblem(s);
+      if (s === null) return (first as { summary?: string | null } | undefined)?.summary ? (lang === "en" ? "Return a nonempty summary." : "summary 不能为空") : null;
+      return P.summaryProblem(s, lang);
     },
   }) : null;
   if (result?.ok === false) return { calls: 1, ok: false, error: classifyModelError(result.error) };
   // 重试后仍超长时保留放得下的整句，句数仍要 2–4 句。
   const raw = result?.data.summary === null || !result ? null : redactString(result.data.summary).text.trim();
-  const summary = raw === null ? null : P.fitSummary(raw);
-  const sentences = summary === null ? 0 : P.summarySentences(summary);
-  if (result && raw !== null && (summary === null || sentences < 2 || sentences > 4)) {
+  const summary = raw === null ? null : P.fitSummary(raw, lang);
+  const sentences = summary === null ? 0 : P.summarySentences(summary, lang);
+  if (result && raw !== null && (summary === null || sentences < 2 || sentences > 4 || (lang === "en" && hasCjkLeakage(raw)))) {
     discardedCall(d.db, result.call_id);
     return { calls: 1, ok: false, error: "schema_mismatch" };
   }

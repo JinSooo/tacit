@@ -53,7 +53,7 @@ private func read(_ id: String, tool: String = "claude-code", kind: String = "co
 }
 
 // 用户报告：数据源状态"成功 · 新增 0 · 0s"里的 0s 没有意义。
-@Test func pluginOutcomeOmitsSubSecondDurationAndUsesChineseUnits() {
+@Test(ChineseUITrait()) func pluginOutcomeOmitsSubSecondDurationAndUsesChineseUnits() {
   #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: 0, elapsed: 0.4) == "没有新记录")
   #expect(PluginImport.outcomeText(ok: true, exitStatus: 0, accepted: 3, elapsed: 2.7) == "新增 3 条，用时 2 秒")
   #expect(PluginImport.outcomeText(ok: false, exitStatus: 1, accepted: nil, elapsed: 125) == "读取失败，用时 2 分 5 秒")
@@ -64,7 +64,7 @@ private func read(_ id: String, tool: String = "claude-code", kind: String = "co
 
 private let builtin = MicrophoneDevice(uid: "builtin-uid", name: "MacBook Pro Microphone", isBuiltIn: true)
 
-@Test func microphoneChoicesMatchMenuOrder() {
+@Test(ChineseUITrait()) func microphoneChoicesMatchMenuOrder() {
   let choices = MicrophoneChoices.list(devices: [builtin], setting: "builtin")
   #expect(choices.map(\.title) == ["自带麦克风（默认）", "跟随系统默认", "MacBook Pro Microphone"])
   #expect(choices.map(\.value) == ["builtin", "system", "builtin-uid"])
@@ -120,7 +120,7 @@ private let builtin = MicrophoneDevice(uid: "builtin-uid", name: "MacBook Pro Mi
   #expect(PendingActionRows.arrange([], width: 308).size.height == 0)
 }
 
-@Test(arguments: [
+@Test(ChineseUITrait(), arguments: [
   ("process", "读取失败"),
   ("protocol", "读取结果有问题"),
   ("cleanup", "清理临时数据失败"),

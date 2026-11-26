@@ -30,16 +30,16 @@ struct ModelSettingsView: View {
   static let tiers = ["minute", "hour", "day"]
   private static let showsLocalModelOptions = false
   /// 本机模型服务走 OpenAI 兼容接口，不需要 key。
-  static let presets: [(id: String, label: String, url: String)] = [
-    ("ollama", "本机 Ollama", "http://127.0.0.1:11434/v1"),
-    ("lmstudio", "本机 LM Studio", "http://127.0.0.1:1234/v1"),
-  ]
+  static var presets: [(id: String, label: String, url: String)] { [
+    ("ollama", L10n.Settings.localOllama, "http://127.0.0.1:11434/v1"),
+    ("lmstudio", L10n.Settings.localLMStudio, "http://127.0.0.1:1234/v1"),
+  ] }
 
   var body: some View {
     SettingsForm {
       if let info {
         if info.configError != nil {
-          SettingsMessage(text: store.isRemoteBackend ? "请填写远端后台使用的 API 模型。" : "模型设置有问题，整理会失败，检查后保存一次就能修好。")
+          SettingsMessage(text: store.isRemoteBackend ? L10n.Settings.remoteModelRequired : L10n.Settings.invalidModelSettings)
         }
         if sharesOneModel {
           tierSection(Self.tiers[0], info: info, together: true).disabled(saving)
@@ -51,8 +51,8 @@ struct ModelSettingsView: View {
         if draft != saved || timelineDraft != timelineSaved {
           HStack {
             Spacer()
-            Button("撤销修改") { draft = saved; timelineDraft = timelineSaved; splitTiers = !Self.same(saved) }.disabled(saving)
-            Button(saving ? "正在保存…" : "保存") { Task { await save() } }.keyboardShortcut(.defaultAction).disabled(saving || !canSaveModels)
+            Button(L10n.Settings.revertChanges) { draft = saved; timelineDraft = timelineSaved; splitTiers = !Self.same(saved) }.disabled(saving)
+            Button(saving ? L10n.Settings.saving : L10n.Settings.save) { Task { await save() } }.keyboardShortcut(.defaultAction).disabled(saving || !canSaveModels)
           }
         }
       } else if error == nil {
@@ -72,14 +72,14 @@ struct ModelSettingsView: View {
     .sheet(item: Binding(get: { editingKey.map(KeyTarget.init) }, set: { editingKey = $0?.id })) { target in
       KeyEntrySheet(provider: target.id, label: label(target.id, info: info)) { await load() }
     }
-    .confirmationDialog("删除 API key？", isPresented: Binding(get: { removingKey != nil }, set: { if !$0 { removingKey = nil } })) {
-      if let provider = removingKey { Button("删除", role: .destructive) { Task { await removeKey(provider); removingKey = nil } } }
-      Button("取消", role: .cancel) { removingKey = nil }
+    .confirmationDialog(L10n.Settings.deleteAPIKeyQuestion, isPresented: Binding(get: { removingKey != nil }, set: { if !$0 { removingKey = nil } })) {
+      if let provider = removingKey { Button(L10n.Settings.delete, role: .destructive) { Task { await removeKey(provider); removingKey = nil } } }
+      Button(L10n.Settings.cancel, role: .cancel) { removingKey = nil }
     } message: {
       if let provider = removingKey, !draft.values.contains(where: { $0.provider == provider && !Self.isLoopback($0.baseUrl) }) {
-        Text("现在没有模型在用它。")
+        Text(L10n.Settings.unusedAPIKey)
       } else {
-        Text("用这个提供商的模型会连不上，直到重新设置 API key。")
+        Text(L10n.Settings.apiKeyDeletionNote)
       }
     }
   }
@@ -101,36 +101,36 @@ struct ModelSettingsView: View {
   @ViewBuilder private var timelineSection: some View {
     Section {
       if let draft = Binding($timelineDraft) {
-        Picker("整理时间线", selection: draft.polish) {
-          Text("每段结束后").tag(GeneralSettingsInfo.PolishTiming.afterSegment)
-          Text("每小时").tag(GeneralSettingsInfo.PolishTiming.hourly)
-          Text("只在晚上").tag(GeneralSettingsInfo.PolishTiming.nightly)
+        Picker(L10n.Settings.summarizeTimeline, selection: draft.polish) {
+          Text(L10n.Settings.afterActivity).tag(GeneralSettingsInfo.PolishTiming.afterSegment)
+          Text(L10n.Settings.hourly).tag(GeneralSettingsInfo.PolishTiming.hourly)
+          Text(L10n.Settings.nightly).tag(GeneralSettingsInfo.PolishTiming.nightly)
         }.disabled(saving)
-        Text("越晚整理用量越少，草稿始终实时出现。").foregroundStyle(Palette.muted)
-        Picker("当天概述", selection: draft.overview) {
-          Text("每小时").tag(GeneralSettingsInfo.OverviewTiming.hourly)
-          Text("每 3 小时").tag(GeneralSettingsInfo.OverviewTiming.everyThreeHours)
-          Text("只在晚上").tag(GeneralSettingsInfo.OverviewTiming.nightly)
+        Text(L10n.Settings.timelinePolishNote).foregroundStyle(Palette.muted)
+        Picker(L10n.Settings.dayOverview, selection: draft.overview) {
+          Text(L10n.Settings.hourly).tag(GeneralSettingsInfo.OverviewTiming.hourly)
+          Text(L10n.Settings.everyThreeHours).tag(GeneralSettingsInfo.OverviewTiming.everyThreeHours)
+          Text(L10n.Settings.nightly).tag(GeneralSettingsInfo.OverviewTiming.nightly)
         }.disabled(saving)
-        Picker("每天用量上限", selection: Binding(
+        Picker(L10n.Settings.dailyUsageLimit, selection: Binding(
           get: { draft.limitText.wrappedValue != nil },
           set: { draft.limitText.wrappedValue = $0 ? timelineSaved?.limitText ?? "" : nil }
         )) {
-          Text("不限").tag(false)
-          Text("自定义").tag(true)
+          Text(L10n.Settings.unlimited).tag(false)
+          Text(L10n.Settings.custom).tag(true)
         }.disabled(saving)
         if draft.limitText.wrappedValue != nil {
-          SettingsRow("每天最多") {
+          SettingsRow(L10n.Settings.dailyMaximum) {
             HStack(spacing: 6) {
-              TextField("每天最多", text: Binding(
+              TextField(L10n.Settings.dailyMaximum, text: Binding(
                 get: { draft.limitText.wrappedValue ?? "" },
                 set: { draft.limitText.wrappedValue = $0 }
-              ), prompt: Text("例如 50")).labelsHidden().multilineTextAlignment(.trailing)
+              ), prompt: Text(L10n.Settings.limitExample)).labelsHidden().multilineTextAlignment(.trailing)
                 .monospacedDigit().frame(width: 120).disabled(saving)
-              Text("万 token").foregroundStyle(Palette.muted)
+              Text(L10n.Settings.tenThousandTokens).foregroundStyle(Palette.muted)
             }
           }
-          Text("达到后当天暂停整理，明天 0 点恢复，草稿照常出现。").foregroundStyle(Palette.muted)
+          Text(L10n.Settings.dailyUsageLimitNote).foregroundStyle(Palette.muted)
         }
         if let timelineError { SettingsMessage(text: timelineError) }
       } else if let timelineError {
@@ -139,14 +139,15 @@ struct ModelSettingsView: View {
         ProgressView().frame(maxWidth: .infinity)
       }
     } header: {
-      Text("时间线整理")
+      Text(L10n.Settings.timelineSummarySettings)
     } footer: {
+      let usage = timelineSettings.flatMap { L10n.Settings.usageLine($0.modelUsage) }
       let details = store.isRemoteBackend ? nil : store.api.statusPageURL(section: "usage")
-      if timelineSettings?.modelUsage.line != nil || details != nil {
+      if usage != nil || details != nil {
         HStack(alignment: .firstTextBaseline) {
-          if let line = timelineSettings?.modelUsage.line { Note(line).monospacedDigit() } else { Spacer() }
+          if let line = usage { Note(line).monospacedDigit() } else { Spacer() }
           if let details {
-            Button("查看详细用量") { NSWorkspace.shared.open(details) }.buttonStyle(.accentLink).fixedSize()
+            Button(L10n.Settings.viewDetailedUsage) { NSWorkspace.shared.open(details) }.buttonStyle(.accentLink)
           }
         }
       }
@@ -177,27 +178,27 @@ struct ModelSettingsView: View {
     let local = Self.isLoopback(c.baseUrl)
     let localOptions = !remote && Self.showsLocalModelOptions && local
     Section {
-      Picker("提供商", selection: Binding(get: { choice(c) }, set: { apply($0, to: config, info: info) })) {
-        if remote && c.provider.isEmpty { Text("选择提供商").tag("") }
-        ForEach(info.availableProviders(remote: remote), id: \.id) { Text($0.label).tag($0.id) }
+      Picker(L10n.Settings.provider, selection: Binding(get: { choice(c) }, set: { apply($0, to: config, info: info) })) {
+        if remote && c.provider.isEmpty { Text(L10n.Settings.selectProvider).tag("") }
+        ForEach(info.availableProviders(remote: remote), id: \.id) { Text(L10n.Settings.providerName($0.id, fallback: $0.label)).tag($0.id) }
         if !remote && Self.showsLocalModelOptions {
           Divider()
           ForEach(Self.presets, id: \.id) { Text($0.label).tag($0.id) }
         }
       }
-      SettingsRow("模型") {
+      SettingsRow(L10n.Settings.model) {
         HStack(spacing: 6) {
-          TextField("模型", text: config.model, prompt: Text(placeholder(c.provider))).labelsHidden()
+          TextField(L10n.Settings.model, text: config.model, prompt: Text(placeholder(c.provider))).labelsHidden()
           if localOptions, let models = localModels[c.baseUrl ?? ""], !models.isEmpty {
-            Menu("本机模型") { ForEach(models, id: \.self) { m in Button(m) { config.wrappedValue.model = m } } }
+            Menu(L10n.Settings.localModels) { ForEach(models, id: \.self) { m in Button(m) { config.wrappedValue.model = m } } }
               .fixedSize()
           }
         }
       }
       if provider?.baseUrl == true {
-        SettingsRow("地址", alignment: .firstTextBaseline) {
+        SettingsRow(L10n.Settings.address, alignment: .firstTextBaseline) {
           VStack(alignment: .leading, spacing: 4) {
-            TextField("地址", text: Binding(get: { c.baseUrl ?? "" }, set: { config.wrappedValue.baseUrl = $0.isEmpty ? nil : $0 }),
+            TextField(L10n.Settings.address, text: Binding(get: { c.baseUrl ?? "" }, set: { config.wrappedValue.baseUrl = $0.isEmpty ? nil : $0 }),
                       prompt: Text(c.provider == "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1")).labelsHidden()
             if let note = addressNote(c.baseUrl, local: local, remote: remote) {
               Text(note).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
@@ -207,56 +208,56 @@ struct ModelSettingsView: View {
         }
         if localOptions, c.provider == "openai-compatible", let url = c.baseUrl {
           HStack {
-            if localModelLoading.contains(url) { Text("正在读取本机模型…").foregroundStyle(Palette.muted) }
+            if localModelLoading.contains(url) { Text(L10n.Settings.loadingLocalModels).foregroundStyle(Palette.muted) }
             else if let error = localModelErrors[url] { SettingsMessage(text: error) }
-            else if localModels[url] == [] { Text("服务已连接，但没有可用模型，请先在模型服务中下载或加载模型。").foregroundStyle(Palette.muted) }
+            else if localModels[url] == [] { Text(L10n.Settings.noLocalModels).foregroundStyle(Palette.muted) }
             Spacer()
-            Button("刷新模型") { Task { await loadLocalModels(url) } }.disabled(localModelLoading.contains(url))
+            Button(L10n.Settings.refreshModels) { Task { await loadLocalModels(url) } }.disabled(localModelLoading.contains(url))
           }
         }
       }
       // key 跟着用它的模型放：同一个提供商共用一个 key，分开设置时每一档都显示同一个。
       if let provider, provider.needsKey, !local { keyRow(provider, info: info) }
       if c.provider == "openai-compatible" {
-        Picker("思考强度", selection: Binding(get: { c.reasoningEffort ?? "" }, set: { config.wrappedValue.reasoningEffort = $0.isEmpty ? nil : $0 })) {
-          Text("跟随模型").tag("")
-          Text("关闭").tag("none")
-          Text("低").tag("low")
-          Text("中").tag("medium")
-          Text("高").tag("high")
+        Picker(L10n.Settings.thinkingEffort, selection: Binding(get: { c.reasoningEffort ?? "" }, set: { config.wrappedValue.reasoningEffort = $0.isEmpty ? nil : $0 })) {
+          Text(L10n.Settings.modelDefault).tag("")
+          Text(L10n.Settings.off).tag("none")
+          Text(L10n.Settings.low).tag("low")
+          Text(L10n.Settings.medium).tag("medium")
+          Text(L10n.Settings.high).tag("high")
         }
       }
       statusRow(tier, config: c, first: together || tier == Self.tiers[0])
     } header: {
-      Text(together ? "整理模型" : info.tierInfo[tier]?.label ?? tier)
+      Text(together ? L10n.Settings.summaryModel : L10n.Settings.tierName(tier, fallback: info.tierInfo[tier]?.label ?? tier))
     } footer: {
       if together {
         HStack(alignment: .firstTextBaseline) {
-          Note("实时整理、每小时汇总和每日时间线都用它。")
+          Note(L10n.Settings.sharedModelNote)
           Spacer()
-          Button("按任务分别设置") { splitTiers = true }.buttonStyle(.accentLink)
+          Button(L10n.Settings.separateModels) { splitTiers = true }.buttonStyle(.accentLink)
         }
       } else if tier == Self.tiers[0] {
         HStack(alignment: .firstTextBaseline) {
-          if let d = info.tierInfo[tier]?.description { Note(d) }
+          if let detail = L10n.Settings.tierDescription(tier, fallback: info.tierInfo[tier]?.description) { Note(detail) }
           Spacer()
           // 分开后能合回去：三个任务都改成这一组，没保存前可以撤销。
-          Button("全部任务都用这一组") {
+          Button(L10n.Settings.shareModel) {
             for t in Self.tiers { draft[t] = c }
             tests = tests[Self.tiers[0]].map { [Self.tiers[0]: $0] } ?? [:]
             splitTiers = false
-          }.buttonStyle(.accentLink).fixedSize()
+          }.buttonStyle(.accentLink)
         }
-      } else if let d = info.tierInfo[tier]?.description { Note(d) }
+      } else if let detail = L10n.Settings.tierDescription(tier, fallback: info.tierInfo[tier]?.description) { Note(detail) }
     }
     .task(id: c.baseUrl) { if localOptions, c.provider == "openai-compatible", let url = c.baseUrl { await loadLocalModels(url) } }
     .onChange(of: c) { _, _ in tests[tier] = nil }
   }
 
   private func addressNote(_ url: String?, local: Bool, remote: Bool) -> String? {
-    if remote { return "须能从远端后台访问；填本机地址时，指的是远端后台那台机器。" }
-    if local { return "本机地址也可能转发到云端，实际运行位置由模型服务决定。" }
-    if let url, !url.isEmpty { return "整理时，记录会发到这个地址。" }
+    if remote { return L10n.Settings.remoteModelAddressNote }
+    if local { return L10n.Settings.localModelAddressNote }
+    if let url, !url.isEmpty { return L10n.Settings.modelAddressNote }
     return nil
   }
 
@@ -269,24 +270,24 @@ struct ModelSettingsView: View {
       let target = health?.failingTier.flatMap { Self.tiers.contains($0) ? $0 : nil } ?? Self.tiers[0]
       return target == tier ? reason : nil
     }()
-    let button = Button(tests[tier] == .running ? "正在测试…" : "测试连接") { Task { await test(tier) } }
+    let button = Button(tests[tier] == .running ? L10n.Settings.testing : L10n.Settings.testConnection) { Task { await test(tier) } }
       .disabled(testingConnection || c.provider.isEmpty || c.model.isEmpty)
     if let failingHere {
-      SettingsMessage(text: failingHere)
+      SettingsMessage(text: L10n.Settings.modelFailure(failingHere, fallback: L10n.Settings.summaryFailure))
     }
     if first, healthUnavailable {
-      SettingsRow("最近整理") { HStack(spacing: 12) { Text("暂时读不到").foregroundStyle(Palette.attention); button } }
+      SettingsRow(L10n.Settings.latestSummary) { HStack(spacing: 12) { Text(L10n.Settings.currentlyUnavailable).foregroundStyle(Palette.attention); button } }
     } else if first, let time = health?.lastOkAt.flatMap(ViewerTime.parse) {
-      SettingsRow("最近整理") { HStack(spacing: 12) { Text(Fmt.dateTime(time)).foregroundStyle(Palette.muted); button } }
+      SettingsRow(L10n.Settings.latestSummary) { HStack(spacing: 12) { Text(Fmt.dateTime(time)).foregroundStyle(Palette.muted); button } }
     } else if first, state == .waiting {
-      SettingsRow("最近整理") { HStack(spacing: 12) { Text("等待首次完成").foregroundStyle(Palette.muted); button } }
+      SettingsRow(L10n.Settings.latestSummary) { HStack(spacing: 12) { Text(L10n.Settings.awaitingFirstSummary).foregroundStyle(Palette.muted); button } }
     } else {
-      HStack { Spacer(); button }
+      SettingsRow { button } label: { EmptyView() }
     }
     switch tests[tier] {
-    case .ok(let ms): Text(ms.map { String(format: "连接正常，用时 %.1f 秒。", $0 / 1000) } ?? "连接正常。").foregroundStyle(Palette.muted)
+    case .ok(let ms): Text(ms.map { L10n.Settings.connectionDuration($0 / 1000) } ?? L10n.Settings.connectionOK).foregroundStyle(Palette.muted)
     case .failed(let e): SettingsMessage(text: e)
-    case .running: Text("正在连接，最长等 1 分钟…").foregroundStyle(Palette.muted)
+    case .running: Text(L10n.Settings.connectionTestNote).foregroundStyle(Palette.muted)
     case nil: EmptyView()
     }
   }
@@ -298,12 +299,12 @@ struct ModelSettingsView: View {
     SettingsRow("API key") {
       HStack(spacing: 8) {
         switch info.keys[p.id] ?? nil {
-        case true?: Text("已设置").foregroundStyle(Palette.muted)
-        case false?: Text("未设置").foregroundStyle(Palette.attention)
-        case nil: Text(remote ? "读不到 API key 状态" : "读不到钥匙串").foregroundStyle(Palette.attention)
+        case true?: Text(L10n.Settings.configured).foregroundStyle(Palette.muted)
+        case false?: Text(L10n.Settings.notConfigured).foregroundStyle(Palette.attention)
+        case nil: Text(remote ? L10n.Settings.apiKeyStatusUnavailable : L10n.Settings.keychainUnavailable).foregroundStyle(Palette.attention)
         }
-        Button((info.keys[p.id] ?? nil) == true ? "更换…" : "设置…") { editingKey = p.id }
-        if (info.keys[p.id] ?? nil) == true { Button("删除…", role: .destructive) { removingKey = p.id } }
+        Button((info.keys[p.id] ?? nil) == true ? L10n.Settings.replaceEllipsis : L10n.Settings.setEllipsis) { editingKey = p.id }
+        if (info.keys[p.id] ?? nil) == true { Button(L10n.Settings.deleteEllipsis, role: .destructive) { removingKey = p.id } }
       }
     }
   }
@@ -315,11 +316,11 @@ struct ModelSettingsView: View {
       $0.needsKey && !used.contains($0.id) && (info.keys[$0.id] ?? nil) == true
     }
     if !others.isEmpty {
-      Section("其他已保存的 API key") {
+      Section(L10n.Settings.otherAPIKeys) {
         ForEach(others, id: \.id) { p in
-          SettingsRow(p.label) {
+          SettingsRow(L10n.Settings.providerName(p.id, fallback: p.label)) {
             HStack(spacing: 8) {
-              Button("删除…", role: .destructive) { removingKey = p.id }
+              Button(L10n.Settings.deleteEllipsis, role: .destructive) { removingKey = p.id }
             }
           }
         }
@@ -345,7 +346,7 @@ struct ModelSettingsView: View {
       try Task.checkCancellation()
       localModels[url] = models
     } catch is CancellationError {} catch {
-      if !Task.isCancelled { localModelErrors[url] = error.localizedDescription }
+      if !Task.isCancelled { localModelErrors[url] = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
     }
   }
 
@@ -368,15 +369,15 @@ struct ModelSettingsView: View {
 
   func placeholder(_ provider: String) -> String {
     switch provider {
-    case "anthropic": return "例如 claude-haiku-5-5"
-    case "codex-cli": return "例如 gpt-6-luna"
-    case "claude-cli": return "例如 claude-sonnet-5-5"
-    default: return "模型名"
+    case "anthropic": return L10n.Settings.anthropicModelExample
+    case "codex-cli": return L10n.Settings.codexModelExample
+    case "claude-cli": return L10n.Settings.claudeModelExample
+    default: return L10n.Settings.modelName
     }
   }
 
   func label(_ provider: String, info: ModelSettingsInfo?) -> String {
-    info?.providers.first { $0.id == provider }?.label ?? provider
+    L10n.Settings.providerName(provider, fallback: info?.providers.first { $0.id == provider }?.label ?? provider)
   }
 
   func load() async {
@@ -390,7 +391,7 @@ struct ModelSettingsView: View {
       error = nil
     }
     catch is CancellationError {}
-    catch { self.error = error.localizedDescription }
+    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 
   func loadHealth() async {
@@ -415,7 +416,7 @@ struct ModelSettingsView: View {
       if timelineDraft == timelineSaved { applyTimeline(settings) }
       else { timelineSettings = settings; timelineError = nil }
     }
-    catch is CancellationError {} catch { timelineError = error.localizedDescription }
+    catch is CancellationError {} catch { timelineError = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 
   private var canSaveModels: Bool {
@@ -437,7 +438,7 @@ struct ModelSettingsView: View {
         if let text = timelineDraft.limitText {
           guard let range = timelineSettings?.ranges["daily_token_limit"], range.count == 2, range[0] <= range[1],
                 let tokens = DailyTokenLimit.tokens(from: text, range: range[0]...range[1]) else {
-            error = "用量上限请填大于 0 的数字，最多四位小数。"
+            error = L10n.Settings.invalidTokenLimit
             return
           }
           values["daily_token_limit"] = tokens
@@ -456,7 +457,7 @@ struct ModelSettingsView: View {
         timelineDraft = TimelineDraft(settings)
         applyTimeline(settings)
       }
-    } catch { self.error = error.localizedDescription }
+    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 
   func test(_ tier: String) async {
@@ -472,14 +473,14 @@ struct ModelSettingsView: View {
     do {
       let r = try await store.api.testModel(tier: tier, config: c)
       guard draft[tier] == c else { return }
-      tests[tier] = r.ok ? .ok(r.ms) : .failed(r.error.map(ModelErrorText.plain) ?? "连接失败。")
-    } catch { if draft[tier] == c { tests[tier] = .failed(error.localizedDescription) } }
+      tests[tier] = r.ok ? .ok(r.ms) : .failed(r.error.map { L10n.Settings.modelFailure($0, fallback: L10n.Settings.connectionFailed) } ?? L10n.Settings.connectionFailed)
+    } catch { if draft[tier] == c { tests[tier] = .failed(L10n.Settings.modelFailure(error.localizedDescription, fallback: L10n.Settings.connectionFailed)) } }
   }
 
   func removeKey(_ provider: String) async {
     guard store.canManageBackend else { return }
     do { try await store.api.deleteKey(provider: provider); await load() }
-    catch { self.error = error.localizedDescription }
+    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 
@@ -496,15 +497,15 @@ private struct KeyEntrySheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text("设置 \(label) 的 API key").font(.system(size: TextSize.body, weight: .semibold))
+      Text(L10n.Settings.setAPIKey(label)).font(.system(size: TextSize.body, weight: .semibold))
       SecureField("API key", text: $key).frame(width: 360)
-      Text(store.isRemoteBackend ? "API key 加密保存在远端后台，设置后不再显示；同一个提供商共用一个。" : "存在这台 Mac 的钥匙串里，设置后不再显示；同一个提供商共用一个。")
+      Text(store.isRemoteBackend ? L10n.Settings.remoteKeyNote : L10n.Settings.localKeyNote)
         .foregroundStyle(Palette.muted)
       if let error { SettingsMessage(text: error) }
       HStack {
         Spacer()
-        Button("取消", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-        Button(busy ? "正在保存…" : "保存") { Task { await save() } }
+        Button(L10n.Settings.cancel, role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+        Button(busy ? L10n.Settings.saving : L10n.Settings.save) { Task { await save() } }
           .keyboardShortcut(.defaultAction).disabled(busy || key.trimmingCharacters(in: .whitespaces).isEmpty)
       }
     }
@@ -521,6 +522,6 @@ private struct KeyEntrySheet: View {
       key = ""
       await done()
       dismiss()
-    } catch { self.error = error.localizedDescription }
+    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }

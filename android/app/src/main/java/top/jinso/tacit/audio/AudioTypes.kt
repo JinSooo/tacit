@@ -7,7 +7,7 @@ import top.jinso.tacit.sources.Sources
 const val AUDIO_SOURCE = Sources.AUDIO
 internal const val SAMPLE_RATE = 16000
 
-data class AudioState(val recording: Boolean, val modelsReady: Boolean, val message: String)
+internal data class AudioState(val recording: Boolean, val modelsReady: Boolean, val message: Int?)
 data class AudioClip(val id: String, val start: Long, val durationMs: Long, val analyzed: Boolean,
     val conversationId: String? = null)
 data class AudioSpeaker(val id: String, val isMe: Boolean, val ignored: Boolean,

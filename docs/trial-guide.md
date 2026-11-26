@@ -1,3 +1,5 @@
+[English](en/trial-guide.md)
+
 # 试用说明
 
 这份说明发给来试用 Tacit 的朋友，装之前读一遍就行，5 分钟。

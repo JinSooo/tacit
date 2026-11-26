@@ -313,7 +313,7 @@ test("runSupervisor：转发 SIGTERM/SIGINT 并等待子进程退出，子进程
 
 test.skipIf(bindDenied)("CLI pair 管理邀请 5 分钟有效，显式地址排首位，且运行中的 serve 可完成配对", async () => {
   const dir = makeTempDir();
-  const { env } = sealedEnv(dir, { RA_LAN_PORT: "48611", TZ: "Asia/Shanghai" });
+  const { env } = sealedEnv(dir, { RA_LAN_PORT: "48611", TZ: "Asia/Shanghai", LC_ALL: "zh_CN.UTF-8" });
 
   // 先启动 serve（server 模式）
   const child = Bun.spawn([process.execPath, cli, "serve"], { env, stdout: "pipe", stderr: "pipe" });
@@ -429,7 +429,7 @@ test("时区校验与 UTC 告警：hub.json timezone 校验、状态接口提示
 
 test("keys import-db-key：从 stdin 导入原 db-key，校验现有库，绝不打印密钥且不覆盖不同密钥", () => {
   const dir = makeTempDir();
-  const { dataDir, env } = sealedEnv(dir, { TZ: "Asia/Shanghai" });
+  const { dataDir, env } = sealedEnv(dir, { TZ: "Asia/Shanghai", LC_ALL: "zh_CN.UTF-8" });
   const keyHex = randomBytes(32).toString("hex");
   const otherHex = randomBytes(32).toString("hex");
 

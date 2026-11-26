@@ -135,7 +135,7 @@ private var testCalendar: Calendar {
 }
 
 // 2026-11-24：信箱限流时状态行写“连不上信箱，请检查地址和网络”，让人白查地址；改为说明限流和再试时刻。
-@Test func limitedRelayExplainsPauseInsteadOfNetwork() throws {
+@Test(ChineseUITrait()) func limitedRelayExplainsPauseInsteadOfNetwork() throws {
   let base = """
     "mode":"custom","url":"https://relay.example","last_fetch_at":null,
     "used_bytes":0,"unprocessable":0,"devices":[],"retiring":[]

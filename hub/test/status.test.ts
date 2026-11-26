@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { toLocalIso, ulid } from "../../packages/record/index.ts";
+import { GENERAL_DEFAULTS, updateGeneral } from "../src/general-settings.ts";
 import { createHandler } from "../src/server.ts";
 import { hubStatus } from "../src/status.ts";
 import { fixture, setup } from "./helpers.ts";
@@ -84,6 +85,10 @@ test("GET /v1/status 需要 token；空库也能返回", async () => {
   const response = await request(`Bearer ${ctx.config.token}`);
   expect(response.status).toBe(200);
   const body = await response.json();
+  expect(body.language).toBe(GENERAL_DEFAULTS.language);
+  const language = body.language === "en" ? "zh" : "en";
+  updateGeneral(ctx.db, { language });
+  expect(await (await request(`Bearer ${ctx.config.token}`)).json()).toMatchObject({ language });
   expect(body.listen.port).toBe(5000);
   expect(body.records).toEqual({ total: 0, tombstones: 0, by_source: [], by_device: [] });
   expect(body.distill.last_round_at).toBeNull();

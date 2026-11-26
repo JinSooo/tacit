@@ -1,5 +1,7 @@
 import type { Api } from "./distillation.ts";
+import { englishLocale, type Lang } from "./i18n.ts";
 import { durationText } from "./history.ts";
+import { formatDate, formatDuration } from "../../hub/src/i18n/index.ts";
 
 type Counts = Record<string, number>;
 export interface TierUsage {
@@ -15,6 +17,7 @@ interface ManualRequest {
 /** 与 hub/src/status.ts 的返回保持一致。 */
 export interface HubStatus {
   generated_at: string;
+  language?: Lang;
   hub: { started_at: string; uptime_s: number; pid: number; bun: string | null; schema_version: number; busy: { since: string; total: number; by_route: { ingest: number; agent: number; web: number }; last_at: string | null } };
   listen: { host: string; port: number; localhost_only: boolean; lan_port: number | null };
   database: { file: string; bytes: number | null };
@@ -50,6 +53,22 @@ export const pendingNames: Record<string, string> = { project: "新项目", merg
 export const requestNames: Record<string, string> = { queued: "排队中", running: "进行中", done: "已完成", failed: "失败" };
 export const speakerNames: Record<string, string> = { new: "新出现", asked: "待确认", confirmed: "已确认", ignored: "已忽略", merged: "已合并" };
 
+export const englishStatusNames = {
+  tier: { minute: "Live", hour: "Hourly roundup", day: "Daily timeline" },
+  frame: { new: "Waiting", assigned: "Assigned to a task", ignored: "Ignored", candidate: "Collecting activity", candidate_expired: "No task formed" },
+  thread: { active: "In progress", paused: "Paused", done: "Completed", archived: "Archived", abandoned: "Abandoned" },
+  pending: { project: "New project", merge: "Possible duplicate project", thread_done: "Task completion", voice: "New voice" },
+  request: { queued: "Queued", running: "In progress", done: "Completed", failed: "Failed" },
+  speaker: { new: "New", asked: "To confirm", confirmed: "Confirmed", ignored: "Ignored", merged: "Merged" },
+  cooldown: { rate_limited: "too many requests", quota: "model quota reached", network: "model service is unreachable" },
+  source: {
+    "mac.audio": "Conversation", "mac.screen": "Screen", "mac.app": "App", "mac.clipboard": "Clipboard", "mac.file": "File", "mac.calendar": "Calendar", "mac.wechat": "WeChat",
+    "mac.shell": "Terminal", "mac.git": "Git", "mac.browser": "Browser", "claude_code.session": "Claude Code", "codex.session": "Codex",
+    "manual.note": "Note", "manual.correction": "Correction", "manual.agent": "AI note",
+    "android.audio": "Phone recording", "android.notification": "Phone chat", "android.usage": "Phone app", "claude_desktop.session": "Claude Desktop",
+  },
+} satisfies Record<string, Record<string, string>>;
+
 /**
  * 模型错误码给人看的一句话，和 Mac 的 ModelErrorText 一字不差（collector/Sources/CollectorCore/RuntimeModels.swift）。
  * 页面不显示错误码。
@@ -70,10 +89,27 @@ const errorNames: Record<string, string> = {
   usage_record_failed: "整理记录没能保存，请检查磁盘空间。",
   unknown: "原因不明，请检查模型设置。",
 };
+const englishErrors = {
+  auth: "Check your API key or sign in to the model’s command-line tool.",
+  quota: "Summarizing will resume when the model service quota is available again.",
+  bad_request: "The model service rejected the request, so check the model name, address, and reasoning effort.",
+  config_error: "Check the model settings and save them again.",
+  cli_missing: "Install and sign in to Claude Code or Codex, or use an API provider.",
+  cli_failed: "The command-line tool failed, so check that it is installed and signed in.",
+  network: "Check the network and the model service address.",
+  rate_limited: "The model service is receiving too many requests and Tacit will retry shortly.",
+  timeout: "The model service did not respond in time, so check the network or try again later.",
+  server_error: "The model service is temporarily unavailable and Tacit will retry shortly.",
+  schema_mismatch: "The response had an unexpected format, so try another model.",
+  invalid_json: "The response had an unexpected format, so try another model.",
+  usage_record_failed: "Tacit could not save its run log, so check the available disk space.",
+  unknown: "The model call failed for an unknown reason, so check the model settings.",
+} satisfies Record<string, string>;
 const errorCategory = (error: string | null) => error?.replace(/:[1-5][0-9]{2}$/, "") ?? "unknown";
-export function errorName(error: string | null): string {
+export function errorName(error: string | null, lang: Lang = "zh"): string {
+  const names: Record<string, string> = lang === "zh" ? errorNames : englishErrors;
   const code = errorCategory(error);
-  return Object.hasOwn(errorNames, code) ? errorNames[code]! : errorNames.unknown!;
+  return Object.hasOwn(names, code) ? names[code]! : names.unknown!;
 }
 /** 冷却原因的短说法，接在“因……”后面。 */
 export const cooldownNames: Record<string, string> = { rate_limited: "请求太频繁", quota: "额度用完", network: "连不上模型服务" };
@@ -89,17 +125,25 @@ export function errorNeedsAttention(error: NonNullable<HubStatus["distill"]["las
 }
 
 /** 本地时间：同一年写“11 月 25 日 09:00”，跨年带年份。 */
-export function formatDateTime(iso: string, now = Date.now()): string {
+export function formatDateTime(iso: string, now = Date.now(), lang: Lang = "zh"): string {
   const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return "时间未知";
+  if (!Number.isFinite(d.getTime())) return lang === "zh" ? "时间未知" : "Unknown time";
+  if (lang === "en") {
+    const date = formatDate(lang, d);
+    const year = d.getFullYear() === new Date(now).getFullYear() ? "" : `, ${d.getFullYear()}`;
+    return `${date}${year}, ${formatClock(iso, lang, false)}`;
+  }
   const pad = (n: number) => String(n).padStart(2, "0");
   const date = `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return d.getFullYear() === new Date(now).getFullYear() ? date : `${d.getFullYear()} 年 ${date}`;
 }
-export function formatClock(iso: string): string {
+export function formatClock(iso: string, lang: Lang = "zh", seconds = true): string {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return "—";
-  return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, "0")).join(":");
+  if (lang === "en") return new Intl.DateTimeFormat(englishLocale(), {
+    hour: "numeric", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}),
+  }).format(d);
+  return [d.getHours(), d.getMinutes(), ...(seconds ? [d.getSeconds()] : [])].map(n => String(n).padStart(2, "0")).join(":");
 }
 
 const number = new Intl.NumberFormat("zh-CN");
@@ -111,14 +155,16 @@ export function formatBytes(bytes: number | null): string {
   while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
   return `${unit === 0 ? value : value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
 }
-export function formatUptime(seconds: number): string {
+export function formatUptime(seconds: number, lang: Lang = "zh"): string {
+  if (lang === "en") return formatDuration(lang, seconds);
   const days = Math.floor(seconds / 86400), hours = Math.floor(seconds % 86400 / 3600), minutes = Math.floor(seconds % 3600 / 60);
   if (days) return `${days} 天${hours ? ` ${hours} 小时` : ""}`;
   if (hours) return `${hours} 小时${minutes ? ` ${minutes} 分` : ""}`;
   return minutes ? `${minutes} 分钟` : `${seconds} 秒`;
 }
 /** 模型调用的累计耗时，写法同其他时长。 */
-export function formatMs(ms: number): string {
+export function formatMs(ms: number, lang: Lang = "zh"): string {
+  if (lang === "en") return formatDuration(lang, Math.floor(ms / 1000));
   if (ms < 1000) return ms > 0 ? "不到 1 秒" : "0 秒";
   const seconds = Math.round(ms / 1000);
   return seconds < 60 ? `${seconds} 秒` : durationText(seconds);

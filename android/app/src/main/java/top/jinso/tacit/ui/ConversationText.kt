@@ -1,5 +1,6 @@
 package top.jinso.tacit.ui
 
+import top.jinso.tacit.R
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -26,13 +27,15 @@ import top.jinso.tacit.sources.Sources
 import top.jinso.tacit.ui.components.*
 
 
-private data class ConversationPart(val record: HistoryRecord, val text: String, val sensitive: Boolean)
+private data class ConversationPart(val record: HistoryRecord, val text: String, val original: String, val sensitive: Boolean)
 
 @Composable
 internal fun ConversationDetail(
     records: List<HistoryRecord>, app: TacitApp, vault: Vault, onBack: () -> Unit, notify: (String) -> Unit,
     onSelect: (HistoryRecord) -> Unit,
 ) {
+    val format = uiFormat()
+    val strings = uiStrings()
     val ordered = remember(records) { records.sortedBy { it.start } }
     val changes by vault.changes.collectAsState()
     val parts by produceState<List<ConversationPart>?>(null, ordered, changes) {
@@ -49,19 +52,20 @@ internal fun ConversationDetail(
                 else runCatching { AudioController(app).renderTranscripts(audio).get() }.getOrDefault(audio)
             current.map { (record, latest) ->
                 ConversationPart(record, latest?.body ?: readableTranscript(rendered[record.id] ?: record.body),
+                    latest?.body ?: record.body,
                     record.sensitivity == "private" || latest?.sensitivity == "private")
             }
         }
     }
     var expanded by rememberSaveable(ordered.first().id) { mutableStateOf(false) }
     val context = LocalContext.current
-    val wholeText = remember(parts) { parts.orEmpty().joinToString("\n\n") { it.text }.trim() }
+    val wholeText = remember(parts) { parts.orEmpty().joinToString("\n\n") { it.original } }
     Column(Modifier.fillMaxSize()) {
         PageBar("", onBack) {
             IconButton(enabled = wholeText.isNotBlank(), onClick = {
                 copyRecordText(context, wholeText, parts.orEmpty().any { it.sensitive })
-                notify("已复制")
-            }) { Icon(Icons.Outlined.ContentCopy, "复制") }
+                notify(strings.text(R.string.copied))
+            }) { Icon(Icons.Outlined.ContentCopy, strings.text(R.string.copy)) }
         }
         // Loading → the conversation as a cross-fade; the loading line itself only shows after a noticeable wait.
         LoadCrossfade(parts == null) { loading ->
@@ -72,7 +76,7 @@ internal fun ConversationDetail(
                     return@Column
                 }
                 if (current.isEmpty()) {
-                    Caption("这场对话的记录已移除。")
+                    Caption(strings.text(R.string.conversation_removed))
                     return@Column
                 }
                 val start = current.first().record.start
@@ -84,20 +88,20 @@ internal fun ConversationDetail(
                     val ids = current.map { it.record.id }.toSet()
                     vault.summaries().firstOrNull { m -> m.recordIds.any(ids::contains) }
                 }
-                DetailTitle(summary?.title ?: conversationTitle(private))
+                DetailTitle(summary?.title ?: format.conversationTitle(private))
                 if (summary != null) {
                     ReadingBody(summary.summary)
                     summary.points.forEach { Text("· $it", Modifier.padding(top = 6.dp), color = tacitColors.muted) }
                     Spacer(Modifier.height(20.dp))
                 }
                 val body = current.joinToString("\n\n") { it.text }.trim()
-                if (body.isBlank()) Caption("这场对话没有可显示的完整转写。")
+                if (body.isBlank()) Caption(strings.text(R.string.conversation_no_transcript))
                 else ReadingBody(body, transcript = true)
                 Spacer(Modifier.height(12.dp))
-                DetailLink("原始片段 ${countLabel(current.size)} 段", expanded) { expanded = !expanded }
+                DetailLink(strings.quantity(R.plurals.raw_clip_count, current.size, countLabel(current.size)), expanded) { expanded = !expanded }
                 Reveal(expanded) {
                     current.forEach { (record, _) ->
-                        EvidenceRow(date(record.start, "HH:mm:ss"), firstSentence(record.body).ifBlank { record.title },
+                        EvidenceRow(format.clock(record.start, seconds = true), firstSentence(record.body).ifBlank { recordTitle(record.title, record.source, strings) },
                             record.sensitivity == "private", onClick = { onSelect(record) })
                     }
                 }

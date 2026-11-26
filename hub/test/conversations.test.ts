@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { updateGeneral } from "../src/general-settings.ts";
 import { AudioStore } from "../src/audio.ts";
-import { conversationDetail, groupConversations, isNoise, parseTranscript, readableTurns, speakerNamer, type Line } from "../src/conversations.ts";
+import { conversationDetail, groupConversations, isNoise, meetsSummaryMinimum, parseTranscript, readableTurns, speakerNamer, type Line } from "../src/conversations.ts";
 import { readDayEvidence } from "../src/distill/day-evidence.ts";
 import { groundedQuote } from "../src/distill/quotes.ts";
 import { conversationStep, conversationTranscript, distillTick, type LLM, type LoopState } from "../src/distill/run.ts";
@@ -11,7 +12,7 @@ import type { RecordV1 } from "../../packages/record/index.ts";
 
 // 全部是合成的转写文字和假模型，不读用户录音、不调用真实模型。
 let ctx: ReturnType<typeof setup>;
-beforeEach(() => { ctx = setup(); });
+beforeEach(() => { ctx = setup(); updateGeneral(ctx.db, { language: "zh" }); });
 afterEach(() => ctx.cleanup());
 
 const MIN = 60_000;
@@ -19,7 +20,7 @@ const at = (hhmmss: string) => `2026-11-11T${hhmmss}+09:00`;
 function talk(start: string, end: string, body: string, extra: Partial<RecordV1> = {}): RecordV1 {
   return fixture({ source: "mac.audio", source_ref: `c-${start}`, kind: "span", t_start: at(start), t_end: at(end), title: `对话 · ${start.slice(0, 5)}`, body, capture: { method: "asr" }, context: { app: null }, ...extra });
 }
-const long = (who: string, clock: string) => `[${clock}] ${who}：${"这一段在说面试准备和薪资结构的事情，内容足够长。".repeat(9)}`;
+const long = (who: string, clock: string) => `[${clock}] ${who}：${"这一段在说面试准备和薪资结构的事情，内容足够长。".repeat(11)}`;
 
 // 用户报告：一场面试被静音切成五条记录，开会和会后聊天又混在一起。
 test("一场对话按会议软件和间隔合并，开会和不开会的不连在一起", () => {
@@ -34,9 +35,9 @@ test("一场对话按会议软件和间隔合并，开会和不开会的不连�
 });
 
 test("转写去掉语气词、假名碎片和两路录到的同一句，同一个人接着说的合成一段", () => {
-  expect(["Yeah.", "The.", "うん。", "嗯嗯。", "あ。", "被から？", "好。", "对对"].every(isNoise)).toBe(true);
+  expect(["Yeah.", "The.", "うん。", "嗯嗯。", "あ。", "被から？", "好。", "对对"].every(text => isNoise(text))).toBe(true);
   expect(isNoise("React 组件")).toBe(false);
-  expect(["可以听到我们说话吗？", "目前的月薪是17000"].some(isNoise)).toBe(false);
+  expect(["可以听到我们说话吗？", "目前的月薪是17000"].some(text => isNoise(text))).toBe(false);
   const lines = parseTranscript([
     "[16:03:31] 未知说话人：哎，你好。", "[16:03:31] 说话人 NR：哎，你好。", "[16:03:38] 说话人 NR：可以听到我们说话吗",
     "[16:03:41] 我：这个老师的麦好像没有声音。", "[16:03:43] 未知说话人：Yeah.", "[16:03:45] 我：稍等一下", "[16:05:30] 我：好了",
@@ -232,3 +233,33 @@ class DistillStoreForTest {
     return import("../src/distill/store.ts").then(({ DistillStore }) => new DistillStore(this.db).resolvePending(p.id, "rename", name));
   }
 }
+
+test("English transcripts retain meaningful short utterances and skip hesitation-only lines", () => {
+  const signal = ["I am", "Go on", "Right.", "Sure, let's do it."];
+  const noise = ["Um, uh…", "Hmm.", "…"];
+  expect(signal.some(text => isNoise(text, { cjkMajority: false }))).toBe(false);
+  expect(noise.every(text => isNoise(text, { cjkMajority: false }))).toBe(true);
+  const lines = [...signal, ...noise].map((text, i) => ({ label: "我", at_ms: i * 120_000, text }));
+  expect(readableTurns(lines, label => label).map(turn => turn.text)).toEqual(signal);
+  const mixed = ["那我们先把下一轮的安排定下来", "The.", "I am"].map((text, i) => ({ label: "我", at_ms: i * 120_000, text }));
+  expect(readableTurns(mixed, label => label).map(turn => turn.text)).toEqual([mixed[0]!.text, "I am"]);
+});
+
+test("Conversation summary eligibility is measured in speech units", () => {
+  expect(meetsSummaryMinimum("a ".repeat(99) + "…")).toBe(false);
+  expect(meetsSummaryMinimum("a ".repeat(100))).toBe(true);
+  expect(meetsSummaryMinimum("事".repeat(199) + "。")).toBe(false);
+  expect(meetsSummaryMinimum("事".repeat(198) + " one")).toBe(true);
+});
+
+test("English conversation detail translates display labels and keeps canonical raw text", () => {
+  const body = "[10:00:00] 我：I am\n[10:00:04] 对方 2：Go on\n[10:00:05] 未知说话人：Right.";
+  const record = talk("10:00:00", "10:01:00", body);
+  expect(ctx.db.ingest([record]).accepted).toBe(1);
+  const now = Date.parse(at("10:20:00"));
+  const zh = conversationDetail(ctx.db, record.id, now);
+  const en = conversationDetail(ctx.db, record.id, now, "en");
+  expect(zh.turns.map(turn => turn.speaker)).toEqual(["我", "对方 2", "其他人"]);
+  expect(en.turns.map(turn => [turn.speaker, turn.text])).toEqual([["Me", "I am"], ["Speaker 2", "Go on"], ["Others", "Right."]]);
+  expect(en.records[0]!.body).toBe(body);
+});

@@ -7,7 +7,13 @@ internal const val DEFAULT_AUDIO_RETENTION_DAYS = 7
 internal const val MAX_AUDIO_RETENTION_DAYS = 365
 
 class Preferences(context: Context) {
-    private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    internal companion object { const val FILE = "settings" }
+
+    internal var hubLanguage: String?
+        get() = prefs.getString("hub_language", null)
+        set(value) { prefs.edit().putString("hub_language", value).apply() }
+
     val device: String = prefs.getString("device", null) ?: ("android-" + UUID.randomUUID()).also { prefs.edit().putString("device", it).commit() }
     fun enabled(source: String): Boolean = prefs.getBoolean("enabled.$source", false)
     /** Whether the user requested ongoing microphone capture before a restart. */

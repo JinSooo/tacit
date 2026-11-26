@@ -35,7 +35,7 @@ struct DayStrata: View {
   static let axisHeight: CGFloat = 18
   static let chapterHeight: CGFloat = 22
 
-  var labelWidth: CGFloat { 60 }
+  var labelWidth: CGFloat { AppLanguage.current == .zh ? 60 : 84 }
   var laneHeight: CGFloat { 16 }
   var laneGap: CGFloat { 5 }
   var lanePitch: CGFloat { laneHeight + laneGap }
@@ -183,11 +183,11 @@ struct DayStrata: View {
       HStack(spacing: 4) {
         if canZoomToBrush, let b = brush {
           Button { zoom.show(b) } label: { PhIcon("magnifying-glass-plus", size: 14).frame(width: 22, height: 20) }
-            .help("放大到选区").accessibilityLabel("放大到选区")
+            .help(L10n.zoomToSelection).accessibilityLabel(L10n.zoomToSelection)
         }
         if zoom.window != nil {
           Button { zoom.window = nil } label: { PhIcon("arrows-out", size: 14).frame(width: 22, height: 20) }
-            .help("看整天").accessibilityLabel("看整天")
+            .help(L10n.showWholeDay).accessibilityLabel(L10n.showWholeDay)
         }
       }
       .buttonStyle(.plain)
@@ -254,7 +254,7 @@ struct DayStrata: View {
       var line = Path(); line.move(to: CGPoint(x: px, y: Self.axisHeight)); line.addLine(to: CGPoint(x: px, y: bottom))
       ctx.stroke(line, with: .color(Palette.ink.opacity(isMajor ? 0.08 : 0.035)), lineWidth: 1)
       if isMajor {
-        let label = major >= 3600 ? String(format: "%02d", cal.component(.hour, from: t)) : ViewerFormat.clock(t)
+        let label = major >= 3600 && AppLanguage.current == .zh ? String(format: "%02d", cal.component(.hour, from: t)) : ViewerFormat.clock(t)
         let text = labels.resolve(Text(label).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted))
         let halfWidth = text.measure(in: CGSize(width: 100, height: Self.axisHeight)).width / 2
         let labelX = min(max(px, halfWidth), plot.maxX - halfWidth)

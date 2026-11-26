@@ -1,3 +1,4 @@
+import { updateGeneral } from "../src/general-settings.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { AgentReads } from "../src/agent.ts";
 import { conversationDetail } from "../src/conversations.ts";
@@ -16,6 +17,7 @@ const at = (offset: number) => new Date(start + offset * minute).toISOString();
 const phone = "synthetic-phone";
 beforeEach(() => {
   ctx = setup();
+  updateGeneral(ctx.db, { language: "zh" });
   store = new DistillStore(ctx.db);
   store.setState("enabled_ms", start);
 });

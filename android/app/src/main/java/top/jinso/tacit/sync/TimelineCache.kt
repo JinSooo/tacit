@@ -15,7 +15,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -26,9 +25,7 @@ internal data class TimelineItem(
     val sources: List<String>, val recordIds: Set<String>,
     /** 还没被模型整理的草稿段，列表上用空心点，和 Mac 一致。 */
     val draft: Boolean = false,
-) {
-    fun timeLabel(zone: ZoneId = ZoneId.systemDefault()): String = clockFormat.format(start.atZone(zone))
-}
+)
 
 internal data class TimelineDay(
     val overview: String?, val items: List<TimelineItem>, val drafts: List<TimelineItem>,
@@ -43,12 +40,10 @@ internal data class TimelineSnapshot(
     val lastSync: Long = 0,
     val refreshFailedAt: Long? = null,
 ) {
-    fun staleTime(day: LocalDate, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String? {
+    fun staleSync(day: LocalDate, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): Instant? {
         if (refreshFailedAt == null || day != now.atZone(zone).toLocalDate() || day !in days ||
             lastSync == 0L || now.toEpochMilli() - lastSync <= 60 * 60_000L) return null
-        val synced = Instant.ofEpochMilli(lastSync).atZone(zone)
-        return if (synced.toLocalDate() == day) clockFormat.format(synced)
-        else DateTimeFormatter.ofPattern("M 月 d 日 HH:mm").format(synced)
+        return Instant.ofEpochMilli(lastSync)
     }
 }
 internal data class ProjectionCursor(val epoch: Long = 0, val seq: Long = 0) {
@@ -61,7 +56,6 @@ internal data class ProjectionCursor(val epoch: Long = 0, val seq: Long = 0) {
 }
 
 private const val TIMELINE_DAYS = 30
-private val clockFormat = DateTimeFormatter.ofPattern("HH:mm")
 internal fun JSONArray.objects() = (0 until length()).map(::getJSONObject)
 
 private fun JSONObject.items(key: String, draft: Boolean = false): List<TimelineItem> = optJSONArray(key)?.objects().orEmpty().map { item ->

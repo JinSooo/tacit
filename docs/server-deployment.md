@@ -1,3 +1,5 @@
+[English](en/server-deployment.md)
+
 # Tacit 中枢服务端独立部署指南
 
 本文档说明如何把 Tacit 中枢（Hub）单独部署在自己的 Linux 服务器或装了 Docker 的电脑上（24 小时在线），再由 Mac、Android 等设备经加密协议连接。Windows 电脑见[第 7 节](#7-windows-电脑docker-desktop)。

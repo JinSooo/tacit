@@ -152,7 +152,7 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
 }
 
 // 2026-11-25：设置页把 schema_mismatch 原样显示；当天概述偶尔超长失败，别的整理照常成功，红字却一直挂着。
-@Test func distillHealthShowsPlainProblemsAndHidesSelfHealingOnes() throws {
+@Test(ChineseUITrait()) func distillHealthShowsPlainProblemsAndHidesSelfHealingOnes() throws {
   let now = try #require(ViewerTime.parse("2026-11-25T14:40:00+08:00"))
   func health(_ error: String, lastOk: String) throws -> DistillHealth {
     try decode(DistillHealth.self, #"{"last_ok_at":"\#(lastOk)","last_error":{"at":"2026-11-25T14:33:18+08:00","tier":"day","error":"\#(error)","recovered":false}}"#)
@@ -240,7 +240,7 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
 }
 
 // 用户报告：标题用"·"连接（"Zen · Google Search""C童文科 · C童文科"），对话标题里一串说话人编号。
-@Test func recordTitlesUseColonsInsteadOfMiddleDots() {
+@Test(ChineseUITrait()) func recordTitlesUseColonsInsteadOfMiddleDots() {
   #expect(RecordTitles.display("Zen · Google Search", source: "mac.screen") == "Zen：Google Search")
   #expect(RecordTitles.display("Zen · Google Search", source: "mac.screen", appShown: true) == "Google Search")
   #expect(RecordTitles.display("Claude · Claude", source: "mac.screen") == "Claude")
@@ -290,7 +290,7 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(Waveform.peaks(wav: Data("not a wav file at all, definitely not".utf8), buckets: 4).isEmpty)
 }
 
-@Test func formatsDurations() {
+@Test(ChineseUITrait()) func formatsDurations() {
   #expect(ViewerFormat.compact(5 * 3600 + 28 * 60) == "5 小时 28 分")
   #expect(ViewerFormat.compact(2 * 3600) == "2 小时")
   #expect(ViewerFormat.compact(42 * 60 + 5) == "42 分")
@@ -544,7 +544,7 @@ private func placeRecord(_ id: String, _ source: String, _ title: String, second
   #expect(RecentRuns.group(bare).count == 2)
 }
 
-@Test func androidSourcesMapToLanesAndCollapseLikeMacCounterparts() throws {
+@Test(ChineseUITrait()) func androidSourcesMapToLanesAndCollapseLikeMacCounterparts() throws {
   #expect(Lane.of("android.audio") == .voice)
   #expect(Lane.of("android.notification") == .voice)
   #expect(Lane.of("android.usage") == .screen)

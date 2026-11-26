@@ -8,13 +8,13 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
   var id: String { rawValue }
   var title: String {
     switch self {
-    case .general: return "通用"
-    case .sources: return "数据源"
-    case .models: return "AI 模型"
-    case .agents: return "AI 工具"
-    case .hub: return "后台与连接"
-    case .privacy: return "隐私"
-    case .maintenance: return "维护"
+    case .general: return L10n.Settings.general
+    case .sources: return L10n.Settings.sources
+    case .models: return L10n.Settings.aiModels
+    case .agents: return L10n.Settings.aiTools
+    case .hub: return L10n.Settings.backendAndConnection
+    case .privacy: return L10n.Settings.privacy
+    case .maintenance: return L10n.Settings.maintenance
     }
   }
   var icon: String {
@@ -59,7 +59,7 @@ struct SettingsPage: View {
           if store.canManageBackend {
             AgentSettingsView().id(store.remoteBackend?.context.binding.route)
           } else {
-            directConnectionRequired("连接 AI 工具需要直连远端后台。")
+            directConnectionRequired(L10n.Settings.agentDirectNotice)
           }
         case .hub: HubSettingsView { group = .models }
         case .privacy: PrivacySettingsView()
@@ -69,7 +69,7 @@ struct SettingsPage: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .background(Palette.paper)
-    .navigationTitle("设置")
+    .navigationTitle(L10n.Settings.settings)
     .task(id: store.remoteBackend?.context.binding.route) {
       guard let model = store.remoteBackend, model.isRemote else { return }
       while !Task.isCancelled {
@@ -83,7 +83,7 @@ struct SettingsPage: View {
     SettingsForm {
       Section {
         SettingsMessage(text: message, warning: false)
-        Button("前往后台与连接") { group = .hub }
+        Button(L10n.Settings.openBackendSettings) { group = .hub }
       }
     }
     .tint(Palette.accent)
@@ -151,12 +151,25 @@ struct SettingsMessage: View {
 // MARK: 通用
 
 struct GeneralSettingsView: View {
+  @EnvironmentObject private var language: LanguageStore
+
   var body: some View {
     SettingsForm {
       LoginStartupSection()
-      Section("关于") {
-        SettingsRow("Tacit", value: "版本 " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版"))
-        SettingsRow("构建", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "本地")
+      Section {
+        SettingsRow(L10n.Settings.language) {
+          Picker(L10n.Settings.language, selection: $language.preference) {
+            ForEach(LanguagePreference.allCases, id: \.self) { preference in
+              Text(L10n.Settings.languageOption(preference)).tag(preference)
+            }
+          }
+          .labelsHidden()
+          .accessibilityLabel(L10n.Settings.language)
+        }
+      } footer: { Note(L10n.Settings.languageNote) }
+      Section(L10n.Settings.about) {
+        SettingsRow("Tacit", value: L10n.Settings.appVersion(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? L10n.Settings.developmentBuild))
+        SettingsRow(L10n.Settings.build, value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? L10n.Settings.localBuild)
       }
     }
   }
@@ -172,18 +185,18 @@ private struct LoginStartupSection: View {
   private var startup: LoginStartup? { store.loginStartup }
   var body: some View {
     Section {
-      Toggle("登录后自动启动", isOn: Binding(get: { enabled }, set: { value in
+      Toggle(L10n.Settings.startAtLogin, isOn: Binding(get: { enabled }, set: { value in
         busy = true; error = nil
         Task {
-          do { try startup?.setEnabled(value) } catch { self.error = error.localizedDescription }
+          do { try startup?.setEnabled(value) } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
           refresh(); busy = false
         }
       })).toggleStyle(.switch).disabled(!installed || busy)
-      if mixed { SettingsMessage(text: "部分启动项的设置不一致，重新打开这个开关可统一。") }
-      if !installed { SettingsMessage(text: "启动配置不完整，请重新安装应用。") }
+      if mixed { SettingsMessage(text: L10n.Settings.mixedStartup) }
+      if !installed { SettingsMessage(text: L10n.Settings.startupIncomplete) }
       if let error { SettingsMessage(text: error) }
-    } header: { Text("启动与运行") }
-    footer: { Note("登录这台 Mac 后在菜单栏运行，并启动保存与整理服务。关闭后本次继续运行，下次需手动打开应用。关闭主窗口不会停止记录。") }
+    } header: { Text(L10n.Settings.startup) }
+    footer: { Note(L10n.Settings.startupNote) }
     .task {
       while !Task.isCancelled { refresh(); await WindowVisibility.pause(.seconds(5)) }
     }
@@ -199,30 +212,30 @@ struct GeneralPreferencesSection: View {
     Section {
       if let d = Binding($p.draft) {
         // 自动归档天数由系统按默认值处理，不在设置页开放（2026-11-25）；context 只剩 true 一种。
-        row("自动带入的长度上限", value: d.injectTokens, key: "inject_tokens", unit: "token")
+        row(L10n.Settings.sessionContextLimit, value: d.injectTokens, key: "inject_tokens", unit: "token")
         // 已经是默认值、又没改动时，这一行什么都没有，不占位。
         if !p.isDefault(context: context) || p.changed(context: context) {
         HStack {
           // 已经是默认值时“恢复默认”没有用处，不出现。
           if !p.isDefault(context: context) {
-            Button("恢复默认") { p.restore(context: context) }.disabled(p.busy)
+            Button(L10n.Settings.restoreDefaults) { p.restore(context: context) }.disabled(p.busy)
           }
           Spacer()
           if p.changed(context: context) {
-            Button("撤销修改") { p.revert(context: context) }.disabled(p.busy)
-            Button(p.busy ? "正在保存…" : "保存") { Task { await p.save(api: store.api, context: context) } }.disabled(p.busy)
+            Button(L10n.Settings.revertChanges) { p.revert(context: context) }.disabled(p.busy)
+            Button(p.busy ? L10n.Settings.saving : L10n.Settings.save) { Task { await p.save(api: store.api, context: context) } }.disabled(p.busy)
           }
         }
         }
       } else if p.error == nil { ProgressView() }
       if let error = p.error {
         SettingsMessage(text: error)
-        Button("重试") { Task { await p.load(api: store.api) } }
+        Button(L10n.Settings.retry) { Task { await p.load(api: store.api) } }
       }
       if let message = p.message { SettingsMessage(text: message, warning: false) }
-    } header: { Text("自动带入项目进展") }
+    } header: { Text(L10n.Settings.sessionContext) }
     footer: {
-      Note("新会话按这个长度带入当前项目的进展，超出时先舍弃较旧的事项；更早、更细的内容 AI 会自己查。")
+      Note(L10n.Settings.sessionContextNote)
     }
     .task { await p.load(api: store.api) }
   }
@@ -241,8 +254,6 @@ struct GeneralPreferencesSection: View {
 }
 
 // MARK: 后台服务
-
-let localBackendPortNote = "端口只在冲突时改，保存后后台服务会自动重启，记录会接着保存。"
 
 struct HubSettingsView: View {
   let openModels: () -> Void
@@ -264,9 +275,9 @@ struct HubSettingsView: View {
         }
       } else if !store.isRemoteBackend {
         Section {
-          SettingsRow("当前后台", value: "这台 Mac")
+          SettingsRow(L10n.Settings.currentBackend, value: L10n.Settings.thisMac)
           localRows(c)
-        } header: { Text("后台服务") } footer: { Note(localBackendPortNote) }
+        } header: { Text(L10n.Settings.backgroundService) } footer: { Note(L10n.Settings.localPortNote) }
       }
       if store.canManageBackend {
         // 分组表单要直接拿到 Section：不在外面套 .id，换后台时由各分组自己按路由重读（2026-11-24 套 .id 曾让分组错位、标题重复）。
@@ -301,23 +312,23 @@ struct HubSettingsView: View {
   }
 
   @ViewBuilder private func localRows(_ c: CaptureSnapshot) -> some View {
-    SettingsRow("地址") {
+    SettingsRow(L10n.Settings.address) {
       Text(store.api.base.host ?? "").font(.mono(TextSize.body)).textSelection(.enabled)
     }
     let edited = info.map { !$0.locked && port != String($0.port) } ?? false
     let validPort = Int(port).flatMap { (1024...65535).contains($0) ? $0 : nil }
-    SettingsRow("端口") {
+    SettingsRow(L10n.Settings.port) {
       HStack(spacing: 8) {
-        TextField("端口", text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
+        TextField(L10n.Settings.port, text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
           .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
         if edited, let info {
-          Button("撤销修改") {
+          Button(L10n.Settings.revertChanges) {
             port = String(info.port)
             message = nil
             error = nil
           }
           .disabled(busy)
-          Button(busy ? "正在重启…" : "保存并重启") {
+          Button(busy ? L10n.Settings.restarting : L10n.Settings.saveAndRestart) {
             if let validPort { Task { await apply(validPort) } }
           }
           .disabled(busy || validPort == nil || validPort == info.port)
@@ -325,21 +336,21 @@ struct HubSettingsView: View {
       }
     }
     if edited && validPort == nil {
-      SettingsMessage(text: "端口必须是 1024–65535 之间的整数。")
+      SettingsMessage(text: L10n.Settings.invalidPort)
     }
-    SettingsRow("详细状态") {
-      Button("在浏览器中打开") {
-        if let url = store.api.statusPageURL() { openURL(url) } else { error = "后台服务尚未准备好，请稍后重试。" }
+    SettingsRow(L10n.Settings.webView) {
+      Button(L10n.Settings.openInBrowser) {
+        if let url = store.api.statusPageURL() { openURL(url) } else { error = L10n.Settings.backendNotReady }
       }
     }
-    if c.queue > 0 { SettingsRow("等待保存", value: "\(Fmt.count(c.queue)) 条") }
+    if c.queue > 0 { SettingsRow(L10n.Settings.waitingToSave, value: L10n.Settings.recordCount(c.queue)) }
     // 连得上就不占一行，只有检查中或出问题时才说。
     if let problem = store.sharedError ?? c.hubError {
-      SettingsRow("状态") { Text(problem).foregroundStyle(Palette.attention) }
+      SettingsRow(L10n.Settings.status) { Text(L10n.Settings.backgroundIssue(problem)).foregroundStyle(Palette.attention) }
     } else if info == nil {
-      SettingsRow("状态", value: "正在检查…")
+      SettingsRow(L10n.Settings.status, value: L10n.Settings.checking)
     }
-    if info?.locked == true { SettingsMessage(text: "端口由环境变量 RA_PORT 固定，这里不能改。", warning: false) }
+    if info?.locked == true { SettingsMessage(text: L10n.Settings.portLocked, warning: false) }
     if let message { SettingsMessage(text: message, warning: false) }
     if let error { SettingsMessage(text: error) }
   }
@@ -353,7 +364,7 @@ struct HubSettingsView: View {
       error = nil
     }
     catch is CancellationError {}
-    catch { self.error = error.localizedDescription }
+    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 
   /// 中枢写入 hub.json 后退出，launchd 用新端口拉起；采集端每次请求都现读 hub.json，跟着换过去。
@@ -363,18 +374,18 @@ struct HubSettingsView: View {
     do {
       let restarting = try await store.api.setHubPort(p)
       guard restarting else { await load(); return }
-      message = "后台服务正在重启…"
+      message = L10n.Settings.backendRestarting
       for _ in 0..<30 {
         try? await Task.sleep(for: .seconds(1))
         if let h = try? await store.api.hubSettings(), h.port == p {
-          info = h; port = String(p); message = "端口已更新。"
+          info = h; port = String(p); message = L10n.Settings.portUpdated
           await store.refreshShared()
           return
         }
       }
       message = nil
-      error = "30 秒内没连上后台服务，可以在维护里复制诊断信息排查。"
-    } catch { self.error = error.localizedDescription }
+      error = L10n.Settings.backendRestartTimeout
+    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 
@@ -386,30 +397,30 @@ struct PrivacySettingsView: View {
   var body: some View {
     let c = store.capture
     SettingsForm {
-      Section("暂停记录") {
+      Section(L10n.Settings.pauseRecording) {
         switch c.state {
         case .paused(let until):
-          SettingsRow("已暂停到 \(ViewerFormat.clock(until))") { Button("继续记录") { store.perform(.resume) } }
+          SettingsRow(L10n.Settings.pausedUntil(ViewerFormat.clock(until))) { Button(L10n.Settings.resumeRecording) { store.perform(.resume) } }
         default:
           SettingsRow(c.statusTitle) {
             // 数据源全关时本来就没在记录，暂停按钮没有用处。
             if c.sources.contains(where: \.enabled) {
               HStack {
-                Button("暂停 1 小时") { store.perform(.pauseHour) }
-                Button("暂停到明天") { store.perform(.pauseTomorrow) }
+                Button(L10n.Settings.pauseOneHour) { store.perform(.pauseHour) }
+                Button(L10n.Settings.pauseUntilTomorrow) { store.perform(.pauseTomorrow) }
               }
             }
           }
         }
       }
       Section {
-        SettingsRow("密码和密钥", value: "保存前换成 [已脱敏]，原文不写进磁盘")
-        SettingsRow("标为私密的内容", value: "不交给 AI 整理，也不自动带入")
-        SettingsRow("删除的记录", value: "在线的设备马上清掉，离线的下次连上时清掉")
+        SettingsRow(L10n.Settings.passwordsAndKeys, value: L10n.Settings.redactionRule)
+        SettingsRow(L10n.Settings.privateContent, value: L10n.Settings.privateDefaultRule)
+        SettingsRow(L10n.Settings.deletedRecords, value: L10n.Settings.deletionRule)
       } header: {
-        Text("处理规则")
+        Text(L10n.Settings.handlingRules)
       } footer: {
-        Note("已连接的 AI 工具主动查询时仍能读到私密记录，每次查询都记在运行记录里。")
+        Note(L10n.Settings.privateSearchNote)
       }
     }
   }
@@ -429,44 +440,44 @@ struct MaintenanceSettingsView: View {
 
   var body: some View {
     let c = store.capture
-    let localPrefix = store.isRemoteBackend ? "这台 Mac 的" : ""
+    let remote = store.isRemoteBackend
     SettingsForm {
       Section {
-        SettingsRow("运行记录") {
-          Button("打开") { store.path.append(.runtime) }
+        SettingsRow(L10n.Settings.runLog) {
+          Button(L10n.Settings.open) { store.path.append(.runtime) }
         }
         DiagnosticSettingsRow()
       }
       if !c.pluginsAvailable {
         Section {
-          SettingsMessage(text: "安装不完整，AI 会话和浏览器等数据源暂时不能运行。重新安装 Tacit 就能修好。")
+          SettingsMessage(text: L10n.Settings.missingSources)
         }
       }
-      operation(.syncAll, verb: "同步", job: c.jobs[.syncAll], extra: latest("round")?.statusText,
-                what: "把还没保存的记录送到后台服务，让开着的数据源读一次新内容，再整理一轮。",
-                detail: "读取所有开着的数据源，已有的不会重复，随后整理一轮。") {
+      operation(.syncAll, verb: L10n.Settings.sync, job: c.jobs[.syncAll], extra: latest("round")?.statusText,
+                what: L10n.Settings.syncAllWhat,
+                detail: L10n.Settings.syncAllDetail) {
         store.perform(.maintenance(.syncAll))
       }
-      operation(.reimportRecent, verb: "导入", job: c.jobs[.reimportRecent],
-                what: "从 7 天前重新读一遍 AI 会话和浏览器，补上漏掉的记录。",
-                detail: "读取 AI 会话、浏览器，已有的不会重复，按平常的节奏整理。") {
+      operation(.reimportRecent, verb: L10n.Settings.importRecords, job: c.jobs[.reimportRecent],
+                what: L10n.Settings.reimportWhat,
+                detail: L10n.Settings.reimportDetail) {
         store.perform(.maintenance(.reimportRecent))
       }
-      operation(.importAll, verb: "导入", job: c.jobs[.importAll],
-                what: "导入能读到的全部 AI 会话和浏览器历史，可能要几分钟，导入后能搜到、AI 工具也能查到。",
-                detail: "已有的不会重复，不自动整理，需要时用下面的“整理启用前的历史”。") {
+      operation(.importAll, verb: L10n.Settings.importRecords, job: c.jobs[.importAll],
+                what: L10n.Settings.importAllWhat,
+                detail: L10n.Settings.importAllDetail) {
         store.perform(.maintenance(.importAll))
       }
       Section {
         SettingsRow(MaintenanceTask.backfill.title) {
-          Button("整理") { Task { await requestBackfill() } }
+          Button(L10n.Settings.summarize) { Task { await requestBackfill() } }
             .disabled(!store.canManageBackend || latest("backfill").map { !$0.finished } == true)
         }
-        SettingsRow("日期范围") {
+        SettingsRow(L10n.Settings.dateRange) {
           HStack {
-            DatePicker("从", selection: $backfillFrom, in: ...backfillTo, displayedComponents: .date).labelsHidden()
-            Text("至").foregroundStyle(Palette.muted)
-            DatePicker("至", selection: $backfillTo, in: backfillFrom...Date(), displayedComponents: .date).labelsHidden()
+            DatePicker(L10n.Settings.from, selection: $backfillFrom, in: ...backfillTo, displayedComponents: .date).labelsHidden()
+            Text(L10n.Settings.to).foregroundStyle(Palette.muted)
+            DatePicker(L10n.Settings.to, selection: $backfillTo, in: backfillFrom...Date(), displayedComponents: .date).labelsHidden()
           }
           .disabled(!store.canManageBackend)
         }
@@ -474,15 +485,15 @@ struct MaintenanceSettingsView: View {
           if let r = latest("backfill") { SettingsMessage(text: r.statusText, warning: r.status == "failed") }
           if let requestError { SettingsMessage(text: requestError) }
         } else {
-          SettingsMessage(text: "整理远端后台的历史记录需要直连。", warning: false)
+          SettingsMessage(text: L10n.Settings.backfillDirectNotice, warning: false)
         }
-        facts(what: "把所选日期里还没整理的历史交给 AI，整理出事项、项目和每日时间线。",
-              detail: "读已有记录，不重新采集；整理过的不重复；会调用 AI 模型。")
+        facts(what: L10n.Settings.backfillWhat,
+              detail: L10n.Settings.backfillDetail)
       }
       Section {
-        SettingsRow("\(localPrefix)密钥备份") {
+        SettingsRow(L10n.Settings.keyBackup(onThisMac: remote)) {
           // 同其他复制按钮：复制后按钮写“已复制”，1.5 秒后复原（docs/ui.md）。
-          Button(keys == .running ? "正在读取…" : keys == .copied ? "已复制" : "复制") {
+          Button(keys == .running ? L10n.Settings.loading : keys == .copied ? L10n.Settings.copied : L10n.Settings.copy) {
             Task {
               keys = .running
               keys = await KeyBackup.copy()
@@ -491,11 +502,11 @@ struct MaintenanceSettingsView: View {
           }.disabled(keys == .running)
         }
         if case .failed(let message) = keys { SettingsMessage(text: message) }
-        SettingsRow("\(localPrefix)记录与音频的数据目录") {
-          Button("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([Config.load().dataDir]) }
+        SettingsRow(L10n.Settings.dataFolder(onThisMac: remote)) {
+          Button(L10n.Settings.showInFinder) { NSWorkspace.shared.activateFileViewerSelecting([Config.load().dataDir]) }
         }
-      } header: { Text("数据与备份") } footer: {
-        Note("只含密钥，不含记录和录音；换电脑时要和数据目录一起带走才能打开。")
+      } header: { Text(L10n.Settings.dataAndBackups) } footer: {
+        Note(L10n.Settings.keyBackupNote)
       }
     }
     .task(id: store.canManageBackend) {
@@ -516,11 +527,11 @@ struct MaintenanceSettingsView: View {
                  what: String, detail: String, action: @escaping () -> Void) -> some View {
     Section {
       SettingsRow {
-        Button(job?.running == true ? "进行中…" : verb, action: action).disabled(job?.running == true)
+        Button(job?.running == true ? L10n.Settings.inProgress : verb, action: action).disabled(job?.running == true)
       } label: {
         Text(task.title)
-        if let text = job?.text, !text.isEmpty { Text(text) }
-        if let extra { Text("整理：\(extra)") }
+        if let text = job?.text, !text.isEmpty { Text(L10n.Settings.operationStatus(text)) }
+        if let extra { Text(L10n.Settings.summaryStatus(extra)) }
       }
       facts(what: what, detail: detail)
     }
@@ -544,14 +555,14 @@ struct MaintenanceSettingsView: View {
     guard store.canManageBackend, !Task.isCancelled else { return }
     do { requests = try await store.api.distillRequests(); requestError = nil }
     catch is CancellationError {}
-    catch { requestError = error.localizedDescription }
+    catch { requestError = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
   func requestBackfill() async {
     guard store.canManageBackend else { return }
     do {
       try await store.api.requestDistill(kind: "backfill", range: DistillDateRange(start: backfillFrom, end: backfillTo))
       await loadRequests()
-    } catch { requestError = error.localizedDescription }
+    } catch { requestError = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 
@@ -563,7 +574,7 @@ enum KeyBackup {
   static func copy() async -> State {
     let config = Config.load()
     guard let repo = config.repo, FileManager.default.isExecutableFile(atPath: config.bun) else {
-      return .failed("安装不完整，请重新安装 Tacit 再试。")
+      return .failed(L10n.Settings.reinstallTacit)
     }
     let result: (status: Int32, out: String) = await Task.detached {
       let p = Process(), out = Pipe()
@@ -576,7 +587,7 @@ enum KeyBackup {
       return (p.terminationStatus, String(decoding: data, as: UTF8.self))
     }.value
     guard result.status == 0, !result.out.isEmpty else {
-      return .failed("有密钥没读到，备份不完整，所以没有复制；可以复制上面的诊断信息排查。")
+      return .failed(L10n.Settings.keyBackupFailed)
     }
     let pb = NSPasteboard.general
     pb.declareTypes([.string, .init("org.nspasteboard.ConcealedType"), .init("org.nspasteboard.TransientType")], owner: nil)

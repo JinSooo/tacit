@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import enum CollectorCore.L10n
 import struct CollectorCore.HubBinding
 import class CollectorCore.RemotePairing
 import struct CollectorCore.RemoteDeviceLink
@@ -14,11 +15,11 @@ import struct CollectorCore.DistillHealth
 
     var title: String {
       switch self {
-      case .choose: "选择连接"
-      case .target: "确认目标"
-      case .confirm: "确认切换"
-      case .sync: "同步历史"
-      case .remote: "使用远端"
+      case .choose: L10n.Settings.chooseConnection
+      case .target: L10n.Settings.confirmTarget
+      case .confirm: L10n.Settings.confirmSwitch
+      case .sync: L10n.Settings.syncHistory
+      case .remote: L10n.Settings.useRemote
       }
     }
   }
@@ -26,6 +27,10 @@ import struct CollectorCore.DistillHealth
   enum Channel: String {
     case direct = "直连"
     case relay = "通过中转信箱"
+
+    var title: String {
+      L10n.text(zh: rawValue, en: self == .direct ? L10n.Settings.directConnection : L10n.Settings.viaRelay)
+    }
   }
 
   /// 选到通道不等于后台在回应：只有本次状态请求拿到认证回执才算已连接。
@@ -78,7 +83,7 @@ import struct CollectorCore.DistillHealth
     let empty: Bool
 
     var explanation: String {
-      empty ? "本机备份已删除，切回只能建立空的本机后台。" : "切回前会核对本机备份与远端的删除和私密变更。"
+      empty ? L10n.Settings.emptyLocalBackendNote : L10n.Settings.reconcileBeforeReturn
     }
   }
 
@@ -156,7 +161,7 @@ import struct CollectorCore.DistillHealth
         invitation = parsed
         try validateInvitation(parsed)
       } catch {
-        self.error = Self.message(for: error, fallback: "请粘贴有效的邀请链接。")
+        self.error = Self.message(for: error, fallback: L10n.Settings.validInviteRequired)
       }
     }
   }
@@ -175,12 +180,12 @@ import struct CollectorCore.DistillHealth
   }
   var canCancelRePairing: Bool { context.rePairing == .recovery(canCancel: true) && !busy }
   var recoveryMessage: String {
-    if case .recovery = context.rePairing { return "上次重新配对尚未完成。" }
-    return "上次后台切换尚未完成。"
+    if case .recovery = context.rePairing { return L10n.Settings.rePairInterrupted }
+    return L10n.Settings.switchInterrupted
   }
   var cleanupNotice: String? {
     context.cleanupRequired || context.rePairing == .remoteCleanupRequired
-      ? "远端后台可能留有一条未完成的配对，请在远端后台的设备列表里移除。" : nil
+      ? L10n.Settings.unfinishedPairingNote : nil
   }
   var canCheck: Bool {
     guard !busy else { return false }
@@ -194,7 +199,7 @@ import struct CollectorCore.DistillHealth
   }
   var canConfirmTarget: Bool { !busy && (!repairing || (replacement != nil && !replacementExpired)) }
   var replacementNotice: String? {
-    replacementExpired ? "邀请链接已过期，请返回并粘贴新链接。" : nil
+    replacementExpired ? L10n.Settings.expiredReplacementInvite : nil
   }
   var canChangePause: Bool { !busy && !recovering && progress?.isComplete == false }
   var canReturn: Bool { !busy && !recovering && !frozen && backup != nil }
@@ -202,7 +207,7 @@ import struct CollectorCore.DistillHealth
     !busy && (manualAddress.isEmpty || DevicePairingInvitation.normalizeOrigin(manualAddress) != nil)
   }
   var checkingMessage: String {
-    mailboxDelivered ? "正在等待远端后台确认…" : "正在检查连接…"
+    mailboxDelivered ? L10n.Settings.awaitingRemoteConfirmation : L10n.Settings.checkingConnection
   }
   var canKeepIssue: Bool {
     !busy && !recovering && !frozen && progress?.isComplete == true &&
@@ -211,11 +216,11 @@ import struct CollectorCore.DistillHealth
   var canRetryIssue: Bool { canKeepIssue && channel != nil }
   var canDelete: Bool { !busy && !recovering && backup?.canDelete == true }
   var canManageBackend: Bool { !isRemote || (channel == .direct && !frozen && !recovering) }
-  static let managementNotice = "管理远端后台和使用 AI 工具需要直连。"
-  static let modelsNotice = "修改远端后台的模型设置需要直连。"
+  static var managementNotice: String { L10n.Settings.managementDirectNotice }
+  static var modelsNotice: String { L10n.Settings.modelsDirectNotice }
   var directNotice: String? {
     if !canManageBackend { return Self.managementNotice }
-    if channel == .direct && context.agentNeedsDirect { return "AI 工具尚未获得直连地址。" }
+    if channel == .direct && context.agentNeedsDirect { return L10n.Settings.agentDirectAddressMissing }
     return nil
   }
   var pendingAttention: Int? {
@@ -223,31 +228,30 @@ import struct CollectorCore.DistillHealth
     return count
   }
   var onlineTitle: String {
-    if frozen { return "连接已中断" }
+    if frozen { return L10n.Settings.connectionInterrupted }
     if channel == nil {
-      if unconfirmedChannel != nil { return "远端后台没有回应" }
-      return statusChecked ? "连接不可用" : "正在检查连接…"
+      if unconfirmedChannel != nil { return L10n.Settings.remoteUnresponsive }
+      return statusChecked ? L10n.Settings.connectionUnavailable : L10n.Settings.checkingConnection
     }
-    let name = context.link?.hubName ?? "远端后台"
-    let gap = name.first.map { $0.isASCII ? " " : "" } ?? ""
-    return "已连接到\(gap)\(name)"
+    let name = context.link?.hubName ?? L10n.Settings.remoteBackend
+    return L10n.Settings.connectedTo(name)
   }
   var importNotice: String? {
     guard let progress, !progress.isComplete || progress.hasPendingReceipt else { return nil }
-    if progress.isPaused { return "历史同步已暂停。" }
-    if frozen { return "恢复连接后继续同步历史。" }
+    if progress.isPaused { return L10n.Settings.historySyncPaused }
+    if frozen { return L10n.Settings.resumeHistoryWhenConnected }
     if (statusChecked && channel == nil) || progress.errorCategory == "connection_or_storage_unavailable" {
-      return "等连接恢复后继续。"
+      return L10n.Settings.resumeWhenConnected
     }
-    if progress.errorCategory != nil { return "历史同步遇到问题，可在详细状态中查看。" }
+    if progress.errorCategory != nil { return L10n.Settings.historySyncProblem }
     return nil
   }
   var backupBlock: String? {
     guard let backup, backup.recovery != .emptyLocalBackend, !canDelete else { return nil }
-    if switchingBack || context.returning { return "切回期间不能删除备份。" }
-    if progress?.hasPendingReceipt == true { return "还有记录未确认，暂时不能删除备份。" }
-    if progress?.isComplete != true { return "历史同步完成后才能删除备份。" }
-    return "备份仍在使用，暂时不能删除。"
+    if switchingBack || context.returning { return L10n.Settings.deleteBlockedDuringReturn }
+    if progress?.hasPendingReceipt == true { return L10n.Settings.deleteBlockedPendingReceipt }
+    if progress?.isComplete != true { return L10n.Settings.deleteBlockedDuringSync }
+    return L10n.Settings.backupInUse
   }
 
   func refreshContext() {
@@ -284,7 +288,7 @@ import struct CollectorCore.DistillHealth
         step = progress?.isComplete == true && !routeChanged ? .remote : .sync
       }
     } catch {
-      self.error = Self.message(for: error, fallback: "无法读取后台连接状态。")
+      self.error = Self.message(for: error, fallback: L10n.Settings.backendConnectionStatusUnavailable)
     }
   }
 
@@ -313,7 +317,7 @@ import struct CollectorCore.DistillHealth
       }
     } catch {
       guard context.binding == binding, !busy else { return }
-      self.error = Self.message(for: error, fallback: "无法恢复上次的重新配对。")
+      self.error = Self.message(for: error, fallback: L10n.Settings.recoverRePairFailed)
     }
   }
 
@@ -379,7 +383,7 @@ import struct CollectorCore.DistillHealth
     guard let checkedInvitation = invitation else { return }
     let text = invitationText
     let address = DevicePairingInvitation.normalizeOrigin(manualAddress)
-    await run(fallback: "无法检查远端后台，请重试。") {
+    await run(fallback: L10n.Settings.remoteCheckFailed) {
       let delivered: RemotePairing.MailboxDelivered = { [weak self] in
         await self?.didDeliverInvitation()
       }
@@ -410,7 +414,7 @@ import struct CollectorCore.DistillHealth
 
   func loadSwitchPreview() async {
     guard !repairing, target != nil, context.binding.phase == .preparing else { return }
-    await run(fallback: "无法读取本机记录或已配对设备，请重试。") {
+    await run(fallback: L10n.Settings.readLocalSwitchDataFailed) {
       preview = try await operations.previewSwitch()
       phonesConfirmed = false
       step = .confirm
@@ -419,7 +423,7 @@ import struct CollectorCore.DistillHealth
 
   func commit() async {
     guard canConfirm else { return }
-    await run(fallback: "无法切换后台，请重试。", refreshConnection: true) {
+    await run(fallback: L10n.Settings.switchBackendFailed, refreshConnection: true) {
       // Refresh the list before stopping the local service so newly paired phones aren't missed.
       let latest = try await operations.previewSwitch()
       if latest.phones.map(\.id) != preview?.phones.map(\.id) {
@@ -435,7 +439,7 @@ import struct CollectorCore.DistillHealth
 
   func commitReplacement() async {
     guard repairing, canConfirmTarget, let replacement else { return }
-    await run(fallback: "无法完成重新配对，请重试。", refreshConnection: true) {
+    await run(fallback: L10n.Settings.rePairFailed, refreshConnection: true) {
       if replacementExpiresAt == nil, try await isCurrentReplacement(replacement) == false {
         replacementUnavailable = true
         return
@@ -453,7 +457,7 @@ import struct CollectorCore.DistillHealth
       return
     }
     if context.binding.phase == .preparing {
-      await run(fallback: "无法取消这次配对，请重试。") {
+      await run(fallback: L10n.Settings.cancelPairingFailed) {
         try await operations.cancel(context.binding)
         prepared = nil
         preview = nil
@@ -471,7 +475,7 @@ import struct CollectorCore.DistillHealth
 
   func reauthenticate() async {
     guard canReauthenticate else { return }
-    await run(fallback: "无法用原连接恢复，请直连后台后重试或重新配对。", refreshConnection: true) {
+    await run(fallback: L10n.Settings.reauthenticateFailed, refreshConnection: true) {
       try await operations.reauthenticate(DevicePairingInvitation.normalizeOrigin(manualAddress))
       repairing = false
       resetEntry()
@@ -480,7 +484,7 @@ import struct CollectorCore.DistillHealth
 
   func changePause() async {
     guard canChangePause, let progress else { return }
-    await run(fallback: "无法更改历史同步状态，请重试。") {
+    await run(fallback: L10n.Settings.changeSyncFailed) {
       try await operations.pause(!progress.isPaused)
     }
   }
@@ -489,12 +493,12 @@ import struct CollectorCore.DistillHealth
     guard !busy else { return }
     defer { confirmDelete = false }
     guard canDelete else { return }
-    await run(fallback: "当前无法删除本机备份。") { try await operations.deleteBackup() }
+    await run(fallback: L10n.Settings.deleteBackupFailed) { try await operations.deleteBackup() }
   }
 
   func loadReturnPreview() async {
     guard canReturn, let backup else { return }
-    await run(fallback: "无法读取可转回本机的记录数量，请重试。") {
+    await run(fallback: L10n.Settings.returnCountUnavailable) {
       let pending = try await operations.previewReturn()
       returnPreview = .init(pending: pending, empty: backup.recovery == .emptyLocalBackend)
     }
@@ -504,17 +508,17 @@ import struct CollectorCore.DistillHealth
     guard canReturn, let returnPreview else { return }
     switchingBack = true
     defer { switchingBack = false; self.returnPreview = nil }
-    await run(fallback: "无法切回这台 Mac，当前仍使用远端后台。") {
+    await run(fallback: L10n.Settings.switchBackFailed) {
       try await operations.switchBack(returnPreview.empty)
     }
   }
 
   func cancelInterruptedReturn() async {
-    await run(fallback: "无法取消切回，请重试。", refreshConnection: true) { try await operations.cancelReturn() }
+    await run(fallback: L10n.Settings.cancelReturnFailed, refreshConnection: true) { try await operations.cancelReturn() }
   }
 
   func recover() async {
-    await run(fallback: "无法恢复上次的后台切换，请重试。", refreshConnection: true) { try await operations.recover() }
+    await run(fallback: L10n.Settings.recoverSwitchFailed, refreshConnection: true) { try await operations.recover() }
   }
 
   func cancelRePairing() async {
@@ -523,7 +527,7 @@ import struct CollectorCore.DistillHealth
   }
 
   private func cancelReplacement() async {
-    await run(fallback: "无法取消这次重新配对，请重试。") {
+    await run(fallback: L10n.Settings.cancelRePairFailed) {
       do { try await operations.cancelRePairing() }
       catch RemotePairing.Failure.remoteCleanupRequired {
         exitReplacement()
@@ -544,7 +548,7 @@ import struct CollectorCore.DistillHealth
   /// 用切回本机时保留的登记重新连接，成功后仍需确认切换。
   func reconnect(_ link: RemoteDeviceLink, address: URL? = nil) async {
     guard !busy, !isRemote, context.binding.phase == .local else { return }
-    await run(fallback: "无法重新连接这个远端后台，请重试。") {
+    await run(fallback: L10n.Settings.reconnectFailed) {
       do {
         let ready = try await operations.reconnect(link, address)
         repairing = false
@@ -567,14 +571,14 @@ import struct CollectorCore.DistillHealth
 
   func retryIssue(_ id: String) async {
     guard canRetryIssue, progress?.issues.contains(where: { $0.id == id }) == true else { return }
-    await changeIssue("正在安排重试…", fallback: "无法重试这条记录，请稍后再试。") {
+    await changeIssue(L10n.Settings.schedulingRetry, fallback: L10n.Settings.retryRecordFailed) {
       try await operations.retryIssue(id)
     }
   }
 
   func keepIssue(_ id: String) async {
     guard canKeepIssue, progress?.issues.contains(where: { $0.id == id && $0.category != "kept_in_backup" }) == true else { return }
-    await changeIssue("正在更新记录状态…", fallback: "无法更改这条记录的状态，请稍后再试。") {
+    await changeIssue(L10n.Settings.updatingRecordStatus, fallback: L10n.Settings.updateRecordStatusFailed) {
       try await operations.keepIssue(id)
     }
   }
@@ -590,7 +594,7 @@ import struct CollectorCore.DistillHealth
   }
 
   func dismissCleanup() async {
-    await run(fallback: "无法关闭这条提示，请重试。") { try await operations.dismissCleanup() }
+    await run(fallback: L10n.Settings.dismissNoticeFailed) { try await operations.dismissCleanup() }
   }
 
   private func resetEntry() {
@@ -633,18 +637,18 @@ import struct CollectorCore.DistillHealth
   }
 
   static func message(for error: Error, fallback: String) -> String {
-    if invitationUnavailable(error) { return "邀请链接已过期或已使用，请粘贴新链接。" }
+    if invitationUnavailable(error) { return L10n.Settings.inviteUnavailable }
     switch error {
     case RemotePairing.Failure.differentHub:
-      return "请粘贴当前后台签发的邀请链接，连接其他后台前需先切回这台 Mac。"
+      return L10n.Settings.inviteWrongBackend
     case RemoteSwitch.Failure.reconciliationIncomplete:
-      return "远端的删除和私密变更尚未核对完成，当前仍使用远端后台。"
+      return L10n.Settings.returnWaitingForReconciliation
     case RemoteSwitch.Failure.commandTimedOut:
-      return "后台服务等待超时，请查看详细状态。"
+      return L10n.Settings.backendTimedOut
     case let failure as RemoteSwitch.Failure:
       return failure.localizedDescription
     case let failure as RemotePairing.Failure:
-      return failure.localizedDescription
+      return L10n.Settings.pairingError(failure)
     default:
       return fallback
     }
@@ -679,14 +683,13 @@ struct RemoteBackendStatus: Decodable {
   var modelProgress: String? {
     guard let request = requests?.recent.first(where: { $0.status == "running" }),
           let done = request.done, let total = request.total, total > 0 else { return nil }
-    return "已整理 \(done.formatted()) / \(total.formatted()) 天"
+    return L10n.Settings.summarizedDays(done, total: total)
   }
 
-  var modelSetupNotice: String? { configError == nil ? nil : "设置模型后开始整理。" }
+  var modelSetupNotice: String? { configError == nil ? nil : L10n.Settings.setUpModelToStart }
 
   var timezoneNotice: String? {
     guard let timezone, timezone.warning != nil else { return nil }
-    let gap = timezone.current.first.map { $0.isASCII ? " " : "" } ?? ""
-    return "远端后台的时区是\(gap)\(timezone.current)，请管理员核对时间线使用的时区。"
+    return L10n.Settings.remoteTimeZone(timezone.current)
   }
 }

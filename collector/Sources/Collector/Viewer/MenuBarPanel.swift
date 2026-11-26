@@ -96,16 +96,16 @@ struct MenuBarPanel: View {
       switch c.state {
       case .recording:
         Menu {
-          Button("暂停 1 小时") { store.perform(.pauseHour) }
-          Button("暂停到明天") { store.perform(.pauseTomorrow) }
+          Button(L10n.Menu.pauseHour) { store.perform(.pauseHour) }
+          Button(L10n.Menu.pauseTomorrow) { store.perform(.pauseTomorrow) }
         } label: {
-          Text("暂停")
+          Text(L10n.Menu.pause)
         }
         .menuStyle(.borderedButton).fixedSize().controlSize(.small)
       case .paused:
-        Button("继续记录") { store.perform(.resume) }.controlSize(.small)
+        Button(L10n.Menu.resume) { store.perform(.resume) }.controlSize(.small)
       case .noPermission:
-        Button("授权…") { store.perform(.requestAX) }.controlSize(.small)
+        Button(L10n.text(zh: "授权…", en: "Grant permission…")) { store.perform(.requestAX) }.controlSize(.small)
       }
     }
     .animation(Motion.standard, value: c.state)
@@ -125,10 +125,10 @@ struct MenuBarPanel: View {
   /// 只说发送异常和录音状态。
   var subtitle: String? {
     let c = store.capture
-    if c.hubError != nil { return "连不上后台服务，记录暂存在内存里" }
-    if c.queue > 0 { return "\(Fmt.count(c.queue)) 条记录等待保存" }
+    if c.hubError != nil { return L10n.text(zh: "连不上后台服务，记录暂存在内存里", en: "Can't reach the background service. Records are temporarily held in memory.") }
+    if c.queue > 0 { return L10n.Menu.queued(c.queue) }
     // 录音状态行由 AudioCoordinator 生成，写法是"今天 N 段对话，待转写 M 段"。
-    return c.recordingEnabled ? c.audio.first : nil
+    return c.recordingEnabled ? c.audio.first.map(L10n.audioStatus) : nil
   }
 
   // MARK: 此刻
@@ -144,14 +144,14 @@ struct MenuBarPanel: View {
               .lineLimit(4).multilineTextAlignment(.leading)
               .fixedSize(horizontal: false, vertical: true)
           } else {
-            Text("记录一会儿之后，这里会写出你此刻在做什么。").font(.system(size: TextSize.body)).foregroundStyle(.secondary)
+            Text(L10n.text(zh: "记录一会儿之后，这里会写出你此刻在做什么。", en: "Your current activity will appear here after Tacit has recorded for a while.")).font(.system(size: TextSize.body)).foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
           if let at = state?.updatedAt.flatMap(ViewerTime.parse) {
             Text(Fmt.updated(at)).font(.system(size: TextSize.caption)).foregroundStyle(.secondary)
           }
         } else if now.error != nil {
-          Text("连不上后台服务，暂时看不到此刻在做什么。").font(.system(size: TextSize.body)).foregroundStyle(.secondary)
+          Text(L10n.text(zh: "连不上后台服务，暂时看不到此刻在做什么。", en: "Can't reach the background service to show your current activity.")).font(.system(size: TextSize.body)).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         } else {
           RoundedRectangle(cornerRadius: Radius.control).fill(.quaternary).frame(height: 40)
@@ -171,12 +171,15 @@ struct MenuBarPanel: View {
       let rows = hour.value ?? []
       VStack(alignment: .leading, spacing: 6) {
         HStack(alignment: .firstTextBaseline) {
-          Text("近 1 小时").font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(.secondary)
+          Text(L10n.text(zh: "近 1 小时", en: "Past hour")).font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(.secondary)
           Spacer()
           if hour.value != nil {
             // rows：结束（没有结束时间的按开始）落在这一小时里的记录条数。
             // 活跃：这些记录时段的并集落在这一小时内的长度，重叠只算一次。
-            let summary = rows.isEmpty ? "没有记录" : "\(Fmt.count(rows.count)) 条记录，活跃 \(Fmt.duration(ActiveTime.seconds(rows, within: range)))"
+            let activity = Fmt.duration(ActiveTime.seconds(rows, within: range))
+            let summary = rows.isEmpty ? L10n.text(zh: "没有记录", en: "No records") :
+              L10n.count(rows.count, one: "%@ record, \(activity) active", other: "%@ records, \(activity) active",
+                         zh: "%@ 条记录，活跃 \(activity)")
             Text(summary)
               .font(.system(size: TextSize.caption)).foregroundStyle(.secondary)
               .rollingNumber(summary)
@@ -192,7 +195,7 @@ struct MenuBarPanel: View {
   @ViewBuilder var recentList: some View {
     if let rows = recent.value {
       if rows.isEmpty {
-        Text("还没有记录").font(.system(size: TextSize.body)).foregroundStyle(.secondary)
+        Text(L10n.text(zh: "还没有记录", en: "No records yet")).font(.system(size: TextSize.body)).foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, minHeight: 60)
       } else {
         let runs = RecentRuns.group(rows)
@@ -207,7 +210,7 @@ struct MenuBarPanel: View {
         .padding(.horizontal, 6)
       }
     } else if let e = recent.error {
-      Text("读不到最近的记录").font(.system(size: TextSize.body)).foregroundStyle(.secondary).help(e).padding(.horizontal, 16).padding(.vertical, 12)
+      Text(L10n.text(zh: "读不到最近的记录", en: "Couldn't load recent records")).font(.system(size: TextSize.body)).foregroundStyle(.secondary).help(e).padding(.horizontal, 16).padding(.vertical, 12)
     } else {
       // 占住大致高度，读完后面板不会突然变高一大截。
       Color.clear.frame(height: 5 * RecentRow.height)
@@ -223,7 +226,7 @@ struct MenuBarPanel: View {
         Button { open(.pending) } label: {
           HStack(spacing: 6) {
             PhIcon("tray", size: 14)
-            Text("待确认")
+            Text(L10n.text(zh: "待确认", en: "To confirm"))
             Text("\(store.pending.count)").font(.system(size: TextSize.caption, weight: .semibold))
               .rollingNumber(store.pending.count)
               .padding(.horizontal, 6).frame(minWidth: 18, minHeight: 16)
@@ -235,9 +238,9 @@ struct MenuBarPanel: View {
       }
       Spacer()
       Button { open(.settings) } label: { PhIcon("gear-six", size: 16) }
-        .buttonStyle(PanelButtonStyle()).help("设置").accessibilityLabel("设置")
+        .buttonStyle(PanelButtonStyle()).help(L10n.Menu.settings).accessibilityLabel(L10n.Menu.settings)
       Button { open(.timeline) } label: { PhIcon("app-window", size: 16) }
-        .buttonStyle(PanelButtonStyle()).keyboardShortcut("o").help("打开 Tacit").accessibilityLabel("打开 Tacit")
+        .buttonStyle(PanelButtonStyle()).keyboardShortcut("o").help(L10n.Menu.open).accessibilityLabel(L10n.Menu.open)
     }
     .font(.system(size: TextSize.body))
     .foregroundStyle(.secondary)
@@ -253,7 +256,7 @@ struct RecentRow: View {
   let index: Int
   let last: Bool
   let action: (HistoryRecord) -> Void
-  private let timeWidth: CGFloat = 34
+  private var timeWidth: CGFloat { AppLanguage.current == .zh ? 34 : 61 }
   private let columnSpacing: CGFloat = 8
   private let verticalInset: CGFloat = 6
   /// 代表这一行的记录：微信取最新的一条消息，其他取最新的一条。
@@ -317,8 +320,8 @@ struct RecentRow: View {
   var title: String {
     if let chat { return chat }
     if record.source == "mac.clipboard", record.body?.isEmpty == false {
-      if let app = AppIcons.name(record.contextText("app")) { return "从 \(app) 复制" }
-      return "复制了一段文字"
+      if let app = AppIcons.name(record.contextText("app")) { return L10n.text(zh: "从 \(app) 复制", en: "Copied from \(app)") }
+      return L10n.text(zh: "复制了一段文字", en: "Copied text")
     }
     return RecordText.title(record)
   }
@@ -369,7 +372,7 @@ struct HourBar: View {
         Spacer()
         Text(ViewerFormat.clock(range.lowerBound.addingTimeInterval(span / 2)))
         Spacer()
-        Text("现在")
+        Text(L10n.text(zh: "现在", en: "Now"))
       }
       .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(.secondary)
     }
@@ -464,7 +467,8 @@ struct PanelButtonStyle: ButtonStyle {
       self?.close()
       self?.open(page)
     }, onSize: { [weak self] size in self?.resize(to: size) })
-    let host = NSHostingView(rootView: AnyView(content.environment(store)))
+    let store = store
+    let host = NSHostingView(rootView: AnyView(AppLanguageScope { content.environment(store) }))
     p.contentView = Self.backdrop(around: host)
     top = anchor.minY - 6
     centerX = anchor.midX

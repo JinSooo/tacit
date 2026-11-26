@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
+import enum CollectorCore.L10n
 import enum CollectorCore.DiagnosticSummary
 
 struct OpenLogsButton: View {
   var body: some View {
-    Button("打开日志文件夹") {
+    Button(L10n.Settings.openLogsFolder) {
       NSWorkspace.shared.open(Config.load().dataDir.appendingPathComponent("logs", isDirectory: true))
     }
   }
@@ -16,10 +17,10 @@ struct DiagnosticSettingsRow: View {
 
   var body: some View {
     SettingsRow {
-      Button("预览并复制…") { showing = true }
+      Button(L10n.Settings.previewAndCopy) { showing = true }
     } label: {
-      Text("诊断信息")
-      Text("包含版本、运行状态和日志事件，不包含记录内容。")
+      Text(L10n.Settings.diagnostics)
+      Text(L10n.Settings.diagnosticsNote)
         .font(.system(size: TextSize.caption))
         .foregroundStyle(Palette.muted)
     }
@@ -35,7 +36,7 @@ private struct DiagnosticPreview: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text("诊断信息").font(.system(size: TextSize.title, weight: .semibold))
+      Text(L10n.Settings.diagnostics).font(.system(size: TextSize.title, weight: .semibold))
         .accessibilityAddTraits(.isHeader)
       Group {
         if let summary {
@@ -45,11 +46,11 @@ private struct DiagnosticPreview: View {
               .padding(12)
               .textSelection(.enabled)
           }
-          .accessibilityLabel("诊断信息预览")
+          .accessibilityLabel(L10n.Settings.diagnosticsPreview)
           .background(Palette.fill, in: RoundedRectangle(cornerRadius: Radius.control))
         } else {
           ProgressView()
-            .accessibilityLabel("正在读取诊断信息")
+            .accessibilityLabel(L10n.Settings.loadingDiagnostics)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
       }
@@ -57,8 +58,8 @@ private struct DiagnosticPreview: View {
       HStack(spacing: 12) {
         OpenLogsButton()
         Spacer()
-        Button("关闭") { dismiss() }.keyboardShortcut(.cancelAction)
-        Button(copied ? "已复制" : "复制") {
+        Button(L10n.Settings.close) { dismiss() }.keyboardShortcut(.cancelAction)
+        Button(copied ? L10n.Settings.copied : L10n.Settings.copy) {
           guard let summary else { return }
           let pasteboard = NSPasteboard.general
           pasteboard.clearContents()
@@ -89,7 +90,7 @@ private struct DiagnosticPreview: View {
     #elseif arch(x86_64)
     let architecture = "x86_64"
     #else
-    let architecture = "未知架构"
+    let architecture = L10n.Settings.unknownArchitecture
     #endif
     let text = await Task.detached(priority: .utility) {
       DiagnosticSummary.make(dataDir: dataDir, hubReachable: result.reachable, hubStatus: result.status,

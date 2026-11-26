@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { cliLanguage, cliText } from "../../hub/src/agent-cli/locale.ts";
+import type { Lang } from "../../hub/src/i18n/language.ts";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -127,12 +129,14 @@ interface CollectOptions {
   browsers?: readonly Browser[];
   onRecord: (record: RecordV1) => void;
   log?: (message: string) => void;
+  lang?: Lang;
 }
 
 export async function collectBrowserHistory(options: CollectOptions): Promise<{ state: BrowserState; failed: boolean }> {
   const home = options.home ?? process.env.RA_BROWSER_HOME ?? homedir();
   const state: BrowserState = structuredClone(options.state ?? { version: 1, profiles: {} });
   const log = options.log ?? ((message: string) => console.error(message));
+  const t = (zh: string, en: string) => cliText(zh, en, options.lang ?? "zh");
   const now = options.now ?? Date.now();
   const cutoff = options.since?.getTime() ?? now - 7 * 86400_000;
   if (!Number.isFinite(cutoff)) throw new Error("--since 必须是有效的 RFC3339 时间");
@@ -145,7 +149,7 @@ export async function collectBrowserHistory(options: CollectOptions): Promise<{ 
         ? [browser.pathGlob]
         : [...new Bun.Glob(browser.pathGlob).scanSync({ cwd: home, onlyFiles: true })].sort();
     } catch {
-      log(`${browser.name}：无法枚举历史库，已跳过。`);
+      log(t(`${browser.name}：无法枚举历史库，已跳过。`, `${browser.name}: Could not find history databases. Skipped.`));
       failed = true;
       continue;
     }
@@ -280,9 +284,9 @@ export async function collectBrowserHistory(options: CollectOptions): Promise<{ 
         });
       } catch {
         if (browser.engine === "safari") {
-          log("Safari：无法读取历史库，请检查是否存在及采集端的完全磁盘访问权限，已跳过。");
+          log(t("Safari：无法读取历史库，请检查是否存在及采集端的完全磁盘访问权限，已跳过。", "Skipped Safari history. Check that it exists and Tacit has Full Disk Access."));
         } else {
-          log(`${browser.name}：历史库读取或记录输出失败，已跳过该 profile；本次 checkpoint 不应保存。`);
+          log(t(`${browser.name}：历史库读取或记录输出失败，已跳过该 profile；本次 checkpoint 不应保存。`, `${browser.name}: Could not read history or emit records for this profile. The checkpoint was not saved.`));
           failed = true;
         }
         continue;
@@ -327,12 +331,24 @@ if (import.meta.main) {
       const index = args.argv.indexOf(flag);
       if (index >= 0 && (!args.argv[index + 1] || args.argv[index + 1].startsWith("--"))) throw new Error(`${flag} 缺少参数`);
     }
-    const result = await collectBrowserHistory({ device: args.device, state: loadState(args.stateFile), since: args.since, onRecord: emitRecord });
+    const result = await collectBrowserHistory({ device: args.device, state: loadState(args.stateFile), since: args.since, onRecord: emitRecord, lang: cliLanguage() });
     if (result.failed) process.exitCode = 1;
     else emitCheckpoint(result.state);
   } catch (error) {
     // 不输出底层异常，避免数据库内容、URL 或凭据进入日志。
-    console.error(error instanceof Error && /^(请用|--|浏览器 checkpoint)/.test(error.message) ? error.message : "浏览器插件运行失败。");
+    const message = error instanceof Error ? error.message : "";
+    const known = new Map([
+      ["请用 --device 指定有效的设备名", "Use --device to specify a valid device name"],
+      ["--since 必须是带时区的 RFC3339 时间", "--since must be an RFC 3339 timestamp with a time zone"],
+      ["--state 缺少参数", "--state requires a value"],
+      ["--since 缺少参数", "--since requires a value"],
+      ["浏览器 checkpoint 格式无效", "Invalid browser checkpoint format"],
+      ["浏览器 checkpoint 进度无效", "Invalid browser checkpoint progress"],
+    ]);
+    console.error(cliText(
+      /^(请用|--|浏览器 checkpoint)/.test(message) ? message : "浏览器插件运行失败。",
+      known.get(message) ?? "The browser plugin failed",
+    ));
     process.exitCode = 1;
   }
 }

@@ -1,5 +1,9 @@
 package top.jinso.tacit.audio
 
+import android.content.res.Configuration
+import android.content.Context
+import top.jinso.tacit.i18n.AppLocale
+import top.jinso.tacit.R
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
@@ -19,6 +23,8 @@ import android.os.IBinder
 
 /** Never auto-started at boot or restarted by the OS. Only AudioController.start(visibleActivity). */
 class AudioRecorderService : Service() {
+    override fun attachBaseContext(newBase: Context) = super.attachBaseContext(AppLocale.wrapLegacy(newBase))
+
     private lateinit var runtime: AudioRuntime
     @Volatile private var running = false
     @Volatile private var recorder: AudioRecord? = null
@@ -34,23 +40,36 @@ class AudioRecorderService : Service() {
         }
         if (running) return START_NOT_STICKY
         try {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(NotificationChannel("tacit.audio", "录音", NotificationManager.IMPORTANCE_LOW))
-            val stop = PendingIntent.getService(this, 701, Intent(this, AudioRecorderService::class.java).setAction("stop"),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            val notification = Notification.Builder(this, "tacit.audio").setContentTitle("Tacit 正在录音")
-                .setContentText("原始音频仅加密保存在本机").setSmallIcon(top.jinso.tacit.R.drawable.ic_stat_tacit)
-                .setOngoing(true).setCategory(Notification.CATEGORY_SERVICE)
-                .addAction(Notification.Action.Builder(null, "停止", stop).build()).build()
+            val notification = recordingNotification()
             if (Build.VERSION.SDK_INT >= 30) startForeground(701, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
             else startForeground(701, notification)
             running = true
             thread = Thread({ capture(token) }, "tacit-microphone").also { it.start() }
         } catch (e: Exception) {
-            runtime.requested = false; runtime.report("暂时无法开启录音，请稍后重试"); stopSelf()
+            runtime.requested = false; runtime.report(R.string.recording_start_failed); stopSelf()
         }
         return START_NOT_STICKY
     }
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (running) getSystemService(NotificationManager::class.java).notify(701, recordingNotification())
+    }
+
+    private fun recordingNotification(): Notification {
+        val strings = AppLocale.strings(this)
+        val manager = getSystemService(NotificationManager::class.java)
+        val channel = "tacit.audio"
+        manager.createNotificationChannel(NotificationChannel(channel, strings.text(R.string.recording), NotificationManager.IMPORTANCE_LOW))
+        val stop = PendingIntent.getService(this, 701, Intent(this, AudioRecorderService::class.java).setAction("stop"),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return Notification.Builder(this, channel)
+            .setContentTitle(strings.text(R.string.recording_notification_title))
+            .setContentText(strings.text(R.string.recording_notification_body))
+            .setSmallIcon(R.drawable.ic_stat_tacit)
+            .setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_SERVICE)
+            .addAction(Notification.Action.Builder(null, strings.text(R.string.stop), stop).build()).build()
+    }
+
     private fun capture(token: Long) {
         var input: AudioRecord? = null
         var callback: AudioManager.AudioRecordingCallback? = null
@@ -62,7 +81,7 @@ class AudioRecorderService : Service() {
         try {
             val minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             check(minimum > 0)
-            if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) { runtime.report("麦克风权限已撤销");return }
+            if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) { runtime.report(R.string.recording_mic_revoked);return }
             val builder = AudioRecord.Builder().setAudioSource(MediaRecorder.AudioSource.MIC)
                 .setAudioFormat(AudioFormat.Builder().setSampleRate(SAMPLE_RATE)
                     .setChannelMask(AudioFormat.CHANNEL_IN_MONO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
@@ -92,7 +111,7 @@ class AudioRecorderService : Service() {
                 // A stop/pause may race the native start. Only a still-wanted, successful start persists intent.
                 if (!running || !runtime.requested || token != runtime.generation || !runtime.allowed()) return
                 runtime.app.prefs.audioCaptureWanted = true
-                runtime.message = ""
+                runtime.message = null
                 runtime.recording = true
             }
             runtime.schedule()
@@ -146,13 +165,13 @@ class AudioRecorderService : Service() {
             // Explicit stop retains the last segment; pause/revocation discards it.
         } catch (e: Exception) {
             if (running && runtime.requested) {
-                runtime.report(if (runtime.recording) "录音中断，请检查麦克风和存储空间后重试"
-                    else "暂时无法开启录音，请稍后重试")
+                runtime.report(if (runtime.recording) R.string.recording_interrupted
+                    else R.string.recording_start_failed)
             }
         } finally {
             if (!silence.silenced && used >= SAMPLE_RATE / 2) {
                 val tail=segment.copyOf(used)
-                try { runtime.captured(tail,start,token,final=true) } catch (_: Exception) { runtime.report("最后一段录音未能保存") } finally { tail.fill(0) }
+                try { runtime.captured(tail,start,token,final=true) } catch (_: Exception) { runtime.report(R.string.recording_tail_failed) } finally { tail.fill(0) }
             }
             synchronized(runtime.control) {
                 running = false

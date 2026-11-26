@@ -62,7 +62,7 @@ struct LocalHistoryPreview: Decodable, Equatable, Sendable {
 
   enum Failure: LocalizedError {
     case unavailable
-    var errorDescription: String? { "无法读取本机记录数量。" }
+    var errorDescription: String? { L10n.Settings.localRecordCountUnavailable }
   }
 
   private enum CodingKeys: String, CodingKey { case total, privateCount = "private_count" }

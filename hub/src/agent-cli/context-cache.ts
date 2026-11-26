@@ -1,3 +1,4 @@
+import { framing } from "./context-language.ts";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { readFile, readdir, rm } from "node:fs/promises";
@@ -153,7 +154,9 @@ export class ContextCache {
       signal.throwIfAborted();
       await rm(join(entries, name), { force: true });
     }
-    return `（离线缓存，同步于 ${toLocalIso(synced).slice(0, 16).replace("T", " ")}）\n${match.text}`;
+    const at = toLocalIso(synced).slice(0, 16).replace("T", " ");
+    const prefix = match.text.startsWith(framing.en.intro) ? `(Offline cache, synced at ${at})` : `（离线缓存，同步于 ${at}）`;
+    return `${prefix}\n${match.text}`;
   }
 
   async syncAudit(client: DeviceClient, signal: AbortSignal) {

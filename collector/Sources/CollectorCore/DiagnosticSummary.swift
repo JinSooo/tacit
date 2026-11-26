@@ -43,7 +43,7 @@ public enum DiagnosticSummary {
       return message
     }
     guard let setup = setupStatus(in: dataDir), !setup.ok else { return nil }
-    return "后台准备没有完成（退出码 \(setup.exit_code)）"
+    return L10n.text(zh: "后台准备没有完成（退出码 \(setup.exit_code)）", en: "Background service setup did not finish (exit code \(setup.exit_code))")
   }
 
   public static func make(
@@ -52,11 +52,12 @@ public enum DiagnosticSummary {
     now: Date = Date(), timeZone: TimeZone = .current
   ) -> String {
     var lines = [
-      "Tacit \(bundleIdentifier(version) ?? "开发版")，构建 \(bundleIdentifier(build) ?? "本地")",
+      L10n.text(zh: "Tacit \(bundleIdentifier(version) ?? "开发版")，构建 \(bundleIdentifier(build) ?? "本地")",
+                en: "Tacit \(bundleIdentifier(version) ?? "dev"), build \(bundleIdentifier(build) ?? "local")"),
       "macOS \(macOSVersion.majorVersion).\(macOSVersion.minorVersion).\(macOSVersion.patchVersion)，\(architecture)",
-      "生成于 \(LocalTime.iso(now, timeZone: timeZone))（\(timeZone.identifier)）",
+      L10n.text(zh: "生成于 \(LocalTime.iso(now, timeZone: timeZone))（\(timeZone.identifier)）", en: "Generated at \(LocalTime.iso(now, timeZone: timeZone)) (\(timeZone.identifier))"),
       "",
-      "后台服务\(hubReachable ? "可达" : "不可达")",
+      L10n.text(zh: "后台服务\(hubReachable ? "可达" : "不可达")", en: hubReachable ? "Background service reachable" : "Background service unreachable"),
     ]
     func add(_ label: String, _ value: String?) {
       if let value { lines.append("\(label)  \(value)") }
@@ -64,8 +65,8 @@ public enum DiagnosticSummary {
     if hubReachable, let hubStatus, let status = object(hubStatus) {
       let hub = status["hub"] as? Fields
       let database = status["database"] as? Fields
-      add("运行时长", number(hub?["uptime_s"]).map { "\($0) 秒" })
-      add("记录库大小", number(database?["bytes"]).map { "\($0) 字节" })
+      add(L10n.text(zh: "运行时长", en: "Uptime"), number(hub?["uptime_s"]).map { L10n.text(zh: "\($0) 秒", en: "\($0) sec") })
+      add(L10n.text(zh: "记录库大小", en: "Database size"), number(database?["bytes"]).map { L10n.text(zh: "\($0) 字节", en: "\($0) B") })
 
       let records = status["records"] as? Fields
       let sources = records?["by_source"] as? [Fields] ?? []
@@ -77,67 +78,67 @@ public enum DiagnosticSummary {
           name = id
         } else {
           otherSources += 1
-          name = "其他来源 \(otherSources)"
+          name = L10n.text(zh: "其他来源 \(otherSources)", en: "Other source \(otherSources)")
         }
-        let last = timestamp(source["last_received"]) ?? "未提供"
-        add(name, "\(count) 条，最近入库 \(last)")
+        let last = timestamp(source["last_received"]) ?? L10n.text(zh: "未提供", en: "Unavailable")
+        add(name, L10n.count(count.intValue, one: "%@ record, last received \(last)", other: "%@ records, last received \(last)", zh: "\(count) 条，最近入库 \(last)"))
       }
 
       let distill = status["distill"] as? Fields
-      add("整理最近响应", timestamp(distill?["heartbeat_at"]))
-      add("最近一轮整理", timestamp(distill?["last_round_at"]))
+      add(L10n.text(zh: "整理最近响应", en: "Last response from summarizer"), timestamp(distill?["heartbeat_at"]))
+      add(L10n.text(zh: "最近一轮整理", en: "Last summary round"), timestamp(distill?["last_round_at"]))
       if let error = distill?["last_error"] as? Fields {
-        add("最近模型错误", modelError(error["error"]))
+        add(L10n.text(zh: "最近模型错误", en: "Last model error"), modelError(error["error"]))
       }
       if let cooldown = distill?["cooldown"] as? Fields, let until = cooldownEnd(cooldown["until"]) {
         let active = until > now
-        let state = active ? "暂停重试至" : "暂停重试已结束于"
+        let state = active ? L10n.text(zh: "暂停重试至", en: "Retries paused until") : L10n.text(zh: "暂停重试已结束于", en: "Retry pause ended at")
         let category = modelError(cooldown["kind"])
-        add("模型重试", "\(state) \(LocalTime.iso(until, timeZone: timeZone))（\(category)）")
+        add(L10n.text(zh: "模型重试", en: "Model retries"), "\(state) \(LocalTime.iso(until, timeZone: timeZone))（\(category)）")
       }
       let usage = (status["llm_today"] as? Fields)?["total"] as? Fields
-      add("今天模型调用", number(usage?["calls"]).map { "\($0) 次" })
-      add("今天模型调用失败", number(usage?["failed"]).map { "\($0) 次" })
+      add(L10n.text(zh: "今天模型调用", en: "Model calls today"), number(usage?["calls"]).map { L10n.text(zh: "\($0) 次", en: "\($0)") })
+      add(L10n.text(zh: "今天模型调用失败", en: "Failed model calls today"), number(usage?["failed"]).map { L10n.text(zh: "\($0) 次", en: "\($0)") })
     } else if hubReachable {
-      lines.append("未能读取后台详细状态")
+      lines.append(L10n.text(zh: "未能读取后台详细状态", en: "Couldn't read background service status"))
     }
     if let failure = read(StartupFailure.self, at: dataDir.appendingPathComponent(startupFile)),
        let code = StartupCode(rawValue: failure.code) {
-      add("启动错误类别", code.rawValue)
+      add(L10n.text(zh: "启动错误类别", en: "Startup error category"), code.rawValue)
     }
     if let setup = setupStatus(in: dataDir) {
       lines.append("")
-      lines.append("后台准备")
-      add("时间", timestamp(setup.at))
-      add("Tacit 版本", bundleIdentifier(setup.version))
-      add("构建", bundleIdentifier(setup.build))
-      add("结果", setup.ok ? "成功" : "失败")
-      add("退出码", String(setup.exit_code))
+      lines.append(L10n.text(zh: "后台准备", en: "Background service setup"))
+      add(L10n.text(zh: "时间", en: "Time"), timestamp(setup.at))
+      add(L10n.text(zh: "Tacit 版本", en: "Tacit version"), bundleIdentifier(setup.version))
+      add(L10n.text(zh: "构建", en: "Build"), bundleIdentifier(setup.build))
+      add(L10n.text(zh: "结果", en: "Result"), setup.ok ? L10n.text(zh: "成功", en: "Succeeded") : L10n.text(zh: "失败", en: "Failed"))
+      add(L10n.text(zh: "退出码", en: "Exit code"), String(setup.exit_code))
     }
     if let data = readStatusFile(dataDir.appendingPathComponent("collector-status.json")),
        let capture = object(data) {
       lines.append("")
-      lines.append("记录状态")
-      add("更新时间", timestamp(capture["time"]))
-      for (key, label) in [("axTrusted", "辅助功能权限"), ("ocrGranted", "录屏权限")] {
-        add(label, boolean(capture[key]).map { $0 ? "已授权" : "未授权" })
+      lines.append(L10n.text(zh: "记录状态", en: "Recording status"))
+      add(L10n.text(zh: "更新时间", en: "Updated at"), timestamp(capture["time"]))
+      for (key, label) in [("axTrusted", L10n.text(zh: "辅助功能权限", en: "Accessibility permission")), ("ocrGranted", L10n.text(zh: "录屏权限", en: "Screen Recording permission"))] {
+        add(label, boolean(capture[key]).map { $0 ? L10n.text(zh: "已授权", en: "Granted") : L10n.text(zh: "未授权", en: "Not granted") })
       }
-      for (key, label, unit) in [("queue", "等待保存", "条"), ("sent", "本次已保存", "条"),
-                                 ("rejected", "拒收", "条"), ("dropped", "丢弃", "条"),
-                                 ("outboxBytes", "待发送文件大小", "字节"), ("outboxDropped", "待发送记录丢弃", "条")] {
+      for (key, label, unit) in [("queue", L10n.text(zh: "等待保存", en: "Waiting to be saved"), "条"), ("sent", L10n.text(zh: "本次已保存", en: "Saved this session"), "条"),
+                                 ("rejected", L10n.text(zh: "拒收", en: "Rejected"), "条"), ("dropped", L10n.text(zh: "丢弃", en: "Discarded"), "条"),
+                                 ("outboxBytes", L10n.text(zh: "待发送文件大小", en: "Pending upload size"), "字节"), ("outboxDropped", L10n.text(zh: "待发送记录丢弃", en: "Pending records discarded"), "条")] {
         add(label, number(capture[key]).map { "\($0) \(unit)" })
       }
-      if let error = capture["hubError"] as? String { add("保存错误类别", deliveryError(error)) }
+      if let error = capture["hubError"] as? String { add(L10n.text(zh: "保存错误类别", en: "Save error category"), deliveryError(error)) }
       if let transcription = capture["transcription"] as? Fields {
-        add("等待转写", number(transcription["pending"]).map { "\($0) 段" })
-        add("转写失败", number(transcription["failed"]).map { "\($0) 段" })
+        add(L10n.text(zh: "等待转写", en: "Awaiting transcription"), number(transcription["pending"]).map { L10n.text(zh: "\($0) 段", en: "\($0)") })
+        add(L10n.text(zh: "转写失败", en: "Transcription failed"), number(transcription["failed"]).map { L10n.text(zh: "\($0) 段", en: "\($0)") })
       }
-      add("待发送记录仅在内存中重试", boolean(capture["outboxDegraded"]).map { $0 ? "是" : "否" })
+      add(L10n.text(zh: "待发送记录仅在内存中重试", en: "Pending uploads retried from memory"), boolean(capture["outboxDegraded"]).map { $0 ? L10n.text(zh: "是", en: "Yes") : L10n.text(zh: "否", en: "No") })
     }
     let logs = dataDir.appendingPathComponent("logs")
     appendLogMetadata(in: logs, timeZone: timeZone, to: &lines)
     let events = recentEvents(in: logs)
-    if !events.isEmpty { lines += ["", "近期日志事件"] + events }
+    if !events.isEmpty { lines += ["", L10n.text(zh: "近期日志事件", en: "Recent log events")] + events }
     return lines.joined(separator: "\n")
   }
 
@@ -157,11 +158,11 @@ public enum DiagnosticSummary {
         label = basename
       } else {
         otherLogs += 1
-        label = "其他日志 \(otherLogs)"
+        label = L10n.text(zh: "其他日志 \(otherLogs)", en: "Other log \(otherLogs)")
       }
-      entries.append("\(label)  \(bytes) 字节，修改于 \(LocalTime.iso(modified, timeZone: timeZone))")
+      entries.append(L10n.text(zh: "\(label)  \(bytes) 字节，修改于 \(LocalTime.iso(modified, timeZone: timeZone))", en: "\(label)  \(bytes) B, modified \(LocalTime.iso(modified, timeZone: timeZone))"))
     }
-    if !entries.isEmpty { lines += ["", "日志文件"] + entries }
+    if !entries.isEmpty { lines += ["", L10n.text(zh: "日志文件", en: "Log files")] + entries }
   }
 
   /// 同一事件（除时间外字段都相同）合成一行并计次，免得一种错误每几秒刷一次就把别的事件挤出最近 30 条。
@@ -232,26 +233,26 @@ public enum DiagnosticSummary {
 
   private static func modelError(_ value: Any?) -> String {
     let labels = [
-      "timeout": "超时", "network": "网络不可用", "rate_limited": "请求太频繁", "quota": "额度用完",
-      "auth": "密钥无效", "bad_request": "请求被拒绝", "server_error": "服务出错",
-      "invalid_json": "返回不是 JSON", "schema_mismatch": "返回格式不对", "cli_missing": "没找到命令行工具",
-      "cli_failed": "命令行调用失败", "usage_record_failed": "用量记录失败", "config_error": "模型配置无效", "unknown": "未知错误",
+      "timeout": L10n.text(zh: "超时", en: "Timed out"), "network": L10n.text(zh: "网络不可用", en: "Network unavailable"), "rate_limited": L10n.text(zh: "请求太频繁", en: "Rate limited"), "quota": L10n.text(zh: "额度用完", en: "Quota exhausted"),
+      "auth": L10n.text(zh: "密钥无效", en: "Invalid API key"), "bad_request": L10n.text(zh: "请求被拒绝", en: "Request rejected"), "server_error": L10n.text(zh: "服务出错", en: "Service error"),
+      "invalid_json": L10n.text(zh: "返回不是 JSON", en: "Response is not JSON"), "schema_mismatch": L10n.text(zh: "返回格式不对", en: "Unexpected response format"), "cli_missing": L10n.text(zh: "没找到命令行工具", en: "Command-line tool missing"),
+      "cli_failed": L10n.text(zh: "命令行调用失败", en: "Command failed"), "usage_record_failed": L10n.text(zh: "用量记录失败", en: "Usage logging failed"), "config_error": L10n.text(zh: "模型配置无效", en: "Invalid model settings"), "unknown": L10n.text(zh: "未知错误", en: "Unknown error"),
     ]
     guard let raw = value as? String, ModelErrorText.isCode(raw),
-          let category = raw.split(separator: ":").first, let label = labels[String(category)] else { return "未知错误" }
+          let category = raw.split(separator: ":").first, let label = labels[String(category)] else { return L10n.text(zh: "未知错误", en: "Unknown error") }
     return "\(label)（\(raw)）"
   }
 
   private static func deliveryError(_ raw: String) -> String {
     // 旧采集端只保存错误原文。用固定前缀归类，不拼回剩余文本。
-    if raw.hasPrefix("找不到 hub 的 token") || raw.hasPrefix("找不到后台服务的访问凭证") { return "未找到访问令牌" }
-    if raw.hasPrefix("hub 连不上") || raw.hasPrefix("无法向 hub 发送") || raw.hasPrefix("连不上后台服务") { return "连不上后台服务" }
-    if raw.hasPrefix("hub 返回 ") || raw.hasPrefix("后台服务拒绝了记录") { return "后台服务拒绝请求" }
-    if raw.hasPrefix("后台未确认完整接收") { return "接收确认不完整" }
+    if raw.hasPrefix("找不到 hub 的 token") || raw.hasPrefix("找不到后台服务的访问凭证") { return L10n.text(zh: "未找到访问令牌", en: "Access token missing") }
+    if raw.hasPrefix("hub 连不上") || raw.hasPrefix("无法向 hub 发送") || raw.hasPrefix("连不上后台服务") { return L10n.text(zh: "连不上后台服务", en: "Can't reach background service") }
+    if raw.hasPrefix("hub 返回 ") || raw.hasPrefix("后台服务拒绝了记录") { return L10n.text(zh: "后台服务拒绝请求", en: "Background service rejected the request") }
+    if raw.hasPrefix("后台未确认完整接收") { return L10n.text(zh: "接收确认不完整", en: "Incomplete receipt confirmation") }
     if raw.hasPrefix("待发送记录无法安全保存") || raw.hasPrefix("有待发送记录无法安全保存") {
-      return "待发送记录保存失败"
+      return L10n.text(zh: "待发送记录保存失败", en: "Couldn't save pending records")
     }
-    return "未知错误"
+    return L10n.text(zh: "未知错误", en: "Unknown error")
   }
 
   private static func setupStatus(in dataDir: URL) -> SetupStatus? {

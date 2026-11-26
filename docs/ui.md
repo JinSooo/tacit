@@ -4,27 +4,36 @@ Mac 客户端、中枢网页状态页与 Android（见 `android/DESIGN.md`）沿
 
 ## 1. 用词
 
-界面只用左列的词，右列是代码和设计文档里的内部叫法。
+界面只用左列（中文）或中列（英文）的词，右列是代码和设计文档里的内部叫法。
 
-| 界面用词 | 内部叫法 | 说明 |
-| --- | --- | --- |
-| 这一天的全部记录 | History、records | 时间线页脚，切到当天详细档 |
-| 事项 | thread、线程 | 一件在做的事，如"修复登录页" |
-| 项目 | project | 不变 |
-| 整理 / 更新 | 提炼、distill | "6 分钟前更新"；维护页的"整理启用前的历史" |
-| 后台服务 | 中枢、hub | 设置分组、状态页 |
-| 网页版 | 中枢网页 | |
-| 自动带入 | 注入、inject | "新会话开始时带入" |
-| AI 工具 | Agent | Claude Code、Codex 等 |
-| 实时整理 / 每小时汇总 / 每日时间线 | 分钟档 / 小时档 / 天档 | Mac 模型界面的整理任务（三档配置一致时合为一组“整理模型”） |
-| 时间线 | 日记、days | Mac 主窗口默认页 |
-| 段 | timeline segment | 一次连续活动 |
-| 截图识字 | OCR 兜底 | 数据源名 |
-| 提供商 | provider | 模型设置 |
-| 依据 | evidence、证据 | 事实背后的原始记录 |
-| 补写 | manual.note | 用户手动添加的记录 |
+| 中文界面 | English UI | 内部叫法 | 说明 |
+| --- | --- | --- | --- |
+| 这一天的全部记录 | All records for this day | History、records | 时间线页脚，切到当天详细档 |
+| 事项 / 这件事的经过 | Task / Task history | thread、线程 | 一件在做的事，如"修复登录页"（英文不用 Thread，避免与 Codex 混淆） |
+| 项目 / 正在推进 / 最近的进展 | Project / In progress / Recent progress | project | |
+| 整理 / 更新 / 正在整理… | Summarize / Updated 6 min ago / Summarizing… | 提炼、distill | "6 分钟前更新"；维护页的"整理启用前的历史" |
+| 后台服务 / 网页版 | Background service / Web view | 中枢、hub | 设置分组、状态页 |
+| 自动带入 / 新会话会带入的内容 | Session context / What new sessions get | 注入、inject | "新会话开始时带入" |
+| AI 工具 | AI tools | Agent | Claude Code、Codex 等 |
+| 实时整理 / 每小时汇总 / 每日时间线 / 整理模型 | Live / Hourly roundup / Daily timeline / Summary model | 分钟档 / 小时档 / 天档 | Mac 模型界面的整理任务（三档一致时合为一组“整理模型”） |
+| 时间线 / 简约 / 详细 | Timeline / Simple / Detailed | 日记、days | Mac 主窗口默认页与视图切换 |
+| 段 | Activity | timeline segment | 一次连续活动（如 "3 activities, 11 sec total"） |
+| 当天概述 | Day overview | day summary | 时间线顶部的 2–4 句概述 |
+| 截图识字 | Screen text | OCR 兜底 | 数据源名 |
+| 提供商 | Provider | provider | 模型设置 |
+| 依据 | Based on | evidence、证据 | 事实背后的原始记录（"Based on 3 records"） |
+| 补写 | Note | manual.note | 用户手动添加的记录 |
+| 此刻 | Now | now | 菜单栏面板 |
+| 待确认 / 准备清单 | To confirm / Setup checklist | pending / setup | 时间线顶部提示行 |
+| 中转信箱 / 邀请链接 | Relay mailbox / Invite link | relay / pairing | 设备同步与连接 |
+| 未决 / 还没定的事 | Open questions | open facts | 自动带入前缀 `Open:` |
+| AI 记住的要点 / 这条不对 / 不属于这里 | What AI remembers / This is wrong / Doesn't belong here | facts correction | 事实纠错 |
+| 未入时间线 / 内容截至 / 已整理到 | Not on timeline / Up to / Summarized up to | omitted / cutoff | 时间线页脚与详细档标记 |
+| 未在记录 / 已暂停到… / 可以更新了 | Not recording / Paused until… / Update available | capture status / update | 状态与更新提示 |
+| 对话 / 手机录音 / 我 / 对方 N | Conversation / Phone recording / Me / Speaker N | audio / speakers | 录音显示名（"其他人" 用 `Others`） |
+| 私密 / 数据源 / 运行记录 | Private / Sources / Run log | sensitivity / sources / audit | 设置与隐私 |
 
-同一个动作只用一个动词：打开、添加、删除、修正、同步、导入、整理、连接、断开、暂停、继续、导出。不用"立即""马上"催促。
+同一个动作只用一个动词：打开、添加、删除、修正、同步、导入、整理、连接、断开、暂停、继续、导出；英文对应：Open, Add, Delete, Correct, Sync, Import, Summarize, Connect, Disconnect, Pause, Resume, Export。不用"立即""马上"催促。
 
 ## 2. 颜色
 
@@ -58,9 +67,9 @@ Mac 客户端、中枢网页状态页与 Android（见 `android/DESIGN.md`）沿
 | heading | 22 | 24px | 页面主标题、日期 |
 | display | 26 | 28px | 时间线日期；一句话摘要用 title 级宋体 |
 
-- 宋体只用于 title 及以上级别的叙述性文字（摘要、事项标题、日期），正文和说明都用系统无衬线。
+- 宋体只用于 title 及以上级别的叙述性文字（摘要、事项标题、日期），正文和说明都用系统无衬线。英文模式下，叙述性衬线字体拉丁优先（Mac `.design(.serif)` 即 New York 回落宋体，网页 `ui-serif, "New York", Georgia, "Songti SC"`，Android 系统衬线 / Noto Serif）；中文模式沿用当前字体。
 - 等宽字体只用于路径、命令、代码、端口。时间和数字用无衬线的等宽数字（Mac `.monospacedDigit()`，网页 `font-variant-numeric: tabular-nums`）。
-- 不用斜体、不用全大写、不加字间距。
+- 不用斜体、不用全大写、不加字间距。英文一律使用句首大写（sentence case），仅标准 macOS 菜单栏项遵循系统习惯。
 - 正文行高 1.5；宋体摘要 1.6。段落间距 = 一行正文的高度。
 
 ## 4. 形状与层次
@@ -79,8 +88,8 @@ Mac 客户端、中枢网页状态页与 Android（见 `android/DESIGN.md`）沿
 ## 5. 文案与数字
 
 - 能用布局和控件说清楚的不写说明；说明一句话说完，不用括号补充。
-- 除原始记录详情的来源时间行与屏幕、浏览器正文短行外，不用 `·` 拼接，改用逗号或分栏；"3 段，共 11 秒"。
-- 数字带单位且说明指什么："活跃 9 小时 27 分""12 条"；千位用逗号；时长 ≥ 1 小时写"x 小时 y 分"，不足 1 分钟写"不到 1 分钟"。
+- 除原始记录详情的来源时间行与屏幕、浏览器正文短行外，不用 `·` 拼接，改用逗号或分栏；"3 段，共 11 秒" / "3 activities, 11 sec total"。英文不使用感叹号，省略号统一用单字符 `…`。
+- 数字带单位且说明指什么："活跃 9 小时 27 分""12 条"；千位用逗号（`1,234`）；时长 ≥ 1 小时写"x 小时 y 分" / "x hr y min"，不足 1 分钟写"不到 1 分钟" / "Less than a minute"。英文必须正确处理单复数（如 "1 record" / "2 records"）。日期标题英文写 "Wednesday, November 26"，列表内写 "Nov 26"；中文时刻固定 24 小时制，英文按语言加地区跟随系统 12/24 小时制（时间列需容纳 "12:45 PM" 宽度）。
 - 文件大小只在详情里出现，列表里不出现字节数。
 - 删除等不可逆操作才二次确认；可撤销的操作直接执行，给撤销。危险按钮只染文字，不铺红底。
 - 删除放在操作行右端，和常用操作隔开；时间线展开区和记录详情一致。
@@ -91,7 +100,7 @@ Mac 客户端、中枢网页状态页与 Android（见 `android/DESIGN.md`）沿
 
 - 这一页有几种字号、几种颜色？
 - 每一段说明删掉以后，用户还能不能看懂？能的话就删掉。
-- 窗口拉到最小（Mac 1080×640）和最大时，以及网页状态页在 390px 宽时，有没有截断、重叠、横向滚动？
+- 窗口拉到最小（Mac 1080×640）和最大时，以及网页状态页与 Android 在 390px 宽时，中英文两种语言下有没有截断、重叠、横向滚动？
 - 深色、浅色都看一遍。
 
 ### Mac 主窗口

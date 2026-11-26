@@ -1,6 +1,8 @@
 import { toLocalIso } from "../../../packages/record/index.ts";
 import { chatKey, recordChat } from "../chat.ts";
 import { groupConversations } from "../conversations.ts";
+import { readGeneral } from "../general-settings.ts";
+import { speechUnits, summaryLength, type Lang } from "../i18n/index.ts";
 import type { HubDB } from "../db.ts";
 import { unionSeconds } from "../durations.ts";
 import { redactString } from "../redact.ts";
@@ -8,7 +10,8 @@ import { dayDisplayName, readDayEvidence, sampleDayEvidence, type DayReference, 
 import { AUDIO_SOURCES, SKELETON_SOURCES, audioDeviceGroup, sourceList } from "../record-sources.ts";
 import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
-import { fitSummary, MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, type DayOutput } from "./prompts.ts";
+import { daySchema, fitSummary, MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, summarySentences, type DayOutput } from "./prompts.ts";
+import { DAY_DESCRIPTION_WORDS } from "./prompts/en.ts";
 
 const MINUTE = 60_000;
 const MISC_SECONDS = 5 * 60;
@@ -38,7 +41,7 @@ export interface ReviewItem {
   active_seconds: number; sources: string[]; evidence: DayReference[];
   apps: { source: string; app: string | null }[]; record_ids: string[]; project_id: string | null;
 }
-export type DraftItem = Omit<ReviewItem, "description" | "evidence"> & { excerpt: string; thread_id?: string };
+export type DraftItem = Omit<ReviewItem, "description" | "evidence"> & { excerpt: string; thread_id?: string; title_kind?: "conversation" };
 export interface ReviewDetail {
   summary: string | null;
   timeline: { start: string; end: string; text: string }[];
@@ -70,7 +73,7 @@ export function isReadableReviewItem(item: { title?: unknown; description?: unkn
 
 type DraftWindow = { cutoff?: number; covered: ReadonlySet<string>; includeRelated?: boolean };
 
-function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow): ReviewRecord[] {
+function loadRecords(hub: HubDB, start: number, end: number, lang: Lang, draft?: DraftWindow): ReviewRecord[] {
   type RawRow = {
     id: string; source: string; source_ref: string | null; title: string; t_start: string; t_start_ms: number; t_end: string | null;
     context: string | null; key: string | null; thread_id: string | null; project_id: string | null; project_name: string | null; device: string;
@@ -110,7 +113,7 @@ function loadRecords(hub: HubDB, start: number, end: number, draft?: DraftWindow
     const key = row.key ?? frameKey({
       id: row.id, source: row.source, source_ref: row.source_ref ?? undefined, title: row.title, context,
     } as Parameters<typeof frameKey>[0]);
-    const title = terse(redactString(row.title).text, 120) || "原始记录";
+    const title = terse(redactString(row.title).text, 120) || (lang === "en" ? "Source record" : "原始记录");
     const reference = { id: row.id, source: row.source, title, at: row.t_start };
     const evidence = readDayEvidence(reference, original,
       row.body, !!row.corrected, evidenceStart, end);
@@ -390,7 +393,13 @@ function mergeAdjacent(candidates: Candidate[], gap: number) {
   return candidates;
 }
 
-function mergedDescription(preferred: string, other: string) {
+function mergedDescription(preferred: string, other: string, lang: Lang) {
+  if (lang === "en") {
+    if (preferred === other) return preferred;
+    const merged = [fitSummary(preferred, lang, 1), fitSummary(other, lang, 1)].filter(Boolean).join(" ");
+    const limit = daySchema(lang).properties.items.items.properties.description.maxLength;
+    return summaryLength(merged, lang) <= DAY_DESCRIPTION_WORDS && singleLine(merged, limit) ? merged : preferred;
+  }
   const sentences = (text: string) => text.split(/(?<=[。！？!?])|(?<=\.)\s+/u).map(s => s.trim()).filter(Boolean);
   return (preferred === other ? sentences(preferred).slice(0, 2)
     : [sentences(preferred)[0], sentences(other)[0]]).filter(Boolean).join(" ");
@@ -485,8 +494,8 @@ function reviewSegments(rows: ReviewRecord[], selected: Candidate[], evidenceLim
   });
 }
 
-export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 30) {
-  const rows = loadRecords(hub, start, end);
+export function reviewPlan(hub: HubDB, start: number, end: number, gapMinutes = 30, lang = readGeneral(hub).language) {
+  const rows = loadRecords(hub, start, end, lang);
   const gap = gapMinutes * MINUTE;
   const allCandidates = cutCandidates(rows, gap, eligible, audioDeviceGroup(hub));
   const candidates = allCandidates.filter(a => a.primary.some(r =>
@@ -536,7 +545,7 @@ const repeats = (a: string, b: string) => a === b || (Math.min(a.length, b.lengt
  * 不足 5 个字的当语气词跳过，剩下取最长的，同样长取先说的。只用于聊天、录音这类对话，AI 会话仍按输入顺序。
  */
 function informative(quotes: string[]) {
-  const size = (q: string) => Array.from(comparable(q).replace(/\s+/gu, "")).length;
+  const size = (q: string) => speechUnits(comparable(q));
   return quotes.filter(q => size(q) >= 5).reduce<string | undefined>((best, q) => best && size(best) >= size(q) ? best : q, undefined);
 }
 /** AI 会话记录标题是“工具 · 项目 · 首条输入”；工具已由图标表示、项目按当天项目数另标，草稿只用首条输入。 */
@@ -556,7 +565,8 @@ function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
   const apps = [...new Map(speaking.map(({ record: { source, app } }) =>
     [JSON.stringify([source, app]), { source, app }])).values()];
   const threads = new Set(speaking.flatMap(({ record }) => record.thread ?? []));
-  const title = AUDIO_SOURCES.has(primary.source) ? "一场对话"
+  const conversation = AUDIO_SOURCES.has(primary.source);
+  const title = conversation ? "一场对话"
     : primary.chat || (SESSION_SOURCES.has(primary.source) ? sessionTopic(primary.title) : primary.app || primary.title);
   // 标题已经是某句原话（AI 会话标题就是首条输入）时换一句，没有别的就不重复。
   const usable = (list: UnnumberedEvidence[]) => list.map(e => terse(firstSentence(e.text), 60))
@@ -567,7 +577,7 @@ function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
     ?? mine[0] ?? others[0] ?? "";
   return {
     id, t_start: toLocalIso(a.start), t_end: toLocalIso(a.end), active_seconds: a.seconds,
-    title, excerpt, sources: [...new Set(apps.map(app => app.source))], apps,
+    title, ...(conversation ? { title_kind: "conversation" } : {}), excerpt, sources: [...new Set(apps.map(app => app.source))], apps,
     record_ids: recordIds, project_id: a.activity.projectId,
     ...(threads.size === 1 ? { thread_id: [...threads][0]! } : {}),
   };
@@ -575,7 +585,7 @@ function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
 
 export function dayDrafts(hub: HubDB, start: number, end: number, window: DraftWindow): DraftItem[] {
   if (window.cutoff !== undefined && window.cutoff >= end - 1) return [];
-  const rows = loadRecords(hub, start, end, { ...window, includeRelated: window.cutoff === undefined });
+  const rows = loadRecords(hub, start, end, readGeneral(hub).language, { ...window, includeRelated: window.cutoff === undefined });
   return draftCandidates(rows, audioDeviceGroup(hub)).map(a => {
     const overlapping = rows.filter(r => inPiece(r, a)).flatMap(r => [r, ...(r.related ?? [])]);
     return draftItem(a, segmentId(a), [...new Set(recordMembership(a, overlapping).map(r => r.id))]);
@@ -586,7 +596,7 @@ const sameIds = (a: string[], b: string[]) => a.length === b.length && a.every(i
 
 /** Cut the full day locally. Only pending, quiet candidates get evidence numbered for the model. */
 export function incrementalReview(hub: HubDB, start: number, now: number, detail: ReviewDetail | null) {
-  const rows = loadRecords(hub, start, now + 1, { covered: new Set(), includeRelated: true });
+  const rows = loadRecords(hub, start, now + 1, readGeneral(hub).language, { covered: new Set(), includeRelated: true });
   const previous: PolishedSegment[] = detail?.polished_segments ?? (detail?.items ?? []).filter(item => Array.isArray(item.record_ids))
     .map(item => ({
       id: item.id, anchor: item.id, start: Date.parse(item.t_start), end: Date.parse(item.t_end),
@@ -692,17 +702,20 @@ const singleLine = (text: string, limit: number) => {
   return line && Array.from(line).length <= limit && !/[\r\n]/.test(line) ? line : null;
 };
 
-function summaryLine(text: string): string {
+function summaryLine(text: string, lang: Lang): string | null {
   const line = redactString(text).text.replace(/\s*[\r\n\u2028\u2029]+\s*/gu, " ").trim();
   // 一句都放不下时按码点截，码点数不超过上限时按字数也一定不超。
-  return fitSummary(line) ?? Array.from(line).slice(0, MAX_DAY_SUMMARY_CHARS).join("").trimEnd();
+  const fitted = fitSummary(line, lang);
+  if (lang === "en") return fitted && summarySentences(fitted, lang) >= 2 ? fitted : null;
+  return fitted ?? Array.from(line).slice(0, MAX_DAY_SUMMARY_CHARS).join("").trimEnd();
 }
 
-function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | undefined) {
+function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | undefined, lang: Lang) {
   if (a.evidence.length && a.evidence.every(e => e.role === "user" && requestOnly(e.text))) return null;
   if (!candidate) return null;
-  const title = singleLine(redactString(candidate.title).text, 20);
-  const description = singleLine(redactString(candidate.description).text, 160);
+  const limits = daySchema(lang).properties.items.items.properties;
+  const title = singleLine(redactString(candidate.title).text, limits.title.maxLength);
+  const description = singleLine(redactString(candidate.description).text, limits.description.maxLength);
   if (!title || !description || !candidate.refs.length || !isReadableReviewItem({ title, description })) return null;
   // 个别引用编号写坏时只丢那个引用；没有一条可用的直接依据才整段不收。
   const references = candidate.refs.flatMap(key => a.evidence.find(entry => `${a.key}:${entry.key}` === key) ?? []);
@@ -712,7 +725,7 @@ function modelItem(a: ReviewSegment, candidate: DayOutput["items"][number] | und
   return { title, description, evidence };
 }
 
-function reviewResults(segments: ReviewSegment[], output: DayOutput, warn: (activity: string) => void) {
+function reviewResults(segments: ReviewSegment[], output: DayOutput, warn: (activity: string) => void, lang: Lang) {
   const written = new Map(output.items.map(item => [item.activity, item]));
   const omissions = new Map((output.omissions ?? []).map(item => [item.activity, item]));
   const result = segments.flatMap(a => {
@@ -721,7 +734,7 @@ function reviewResults(segments: ReviewSegment[], output: DayOutput, warn: (acti
     if (excluded && omission && ["request_only", "empty", "excluded_session"].includes(omission.reason)) return [];
     // 未说明、未知理由或旧 content 标签均不能静默丢弃。有文字则按结果校验，否则报警并保留原文。
     if (excluded) warn(a.key);
-    const model = modelItem(a, item ?? (omission ? { ...omission, content: "result" } : undefined));
+    const model = modelItem(a, item ?? (omission ? { ...omission, content: "result" } : undefined), lang);
     if (!model) return [];
     const cited = new Set(model.evidence.map(r => r.id));
     const apps = [...new Map(a.records.filter(r => cited.has(r.id))
@@ -737,13 +750,13 @@ function reviewResults(segments: ReviewSegment[], output: DayOutput, warn: (acti
   return result;
 }
 
-export function composePolish(segments: ReviewSegment[], output: DayOutput, warn: (activity: string) => void) {
-  return reviewResults(segments, output, warn)?.map(({ segment }) => segment) ?? null;
+export function composePolish(segments: ReviewSegment[], output: DayOutput, warn: (activity: string) => void, lang: Lang = "zh") {
+  return reviewResults(segments, output, warn, lang)?.map(({ segment }) => segment) ?? null;
 }
 
 export function composeReview(segments: ReviewSegment[], output: DayOutput, dayEnd: number, cutoff: string,
-  omitted: string[], dependencies: string[], warn: (activity: string) => void = () => {}): ReviewDetail | null {
-  let result = reviewResults(segments, output, warn);
+  omitted: string[], dependencies: string[], warn: (activity: string) => void = () => {}, lang: Lang = "zh"): ReviewDetail | null {
+  let result = reviewResults(segments, output, warn, lang);
   if (!result) return null;
   // 模型省略中间候选后可能产生新的相邻段；同事项按相同规则兜底，不凭项目猜事项。
   for (let i = 0; i + 1 < result.length;) {
@@ -754,7 +767,7 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
     x.a = { ...x.a, ...mergedCandidate(x.a, y.a) };
     const apps = [...new Map([...x.segment.apps, ...y.segment.apps].map(a => [JSON.stringify(a), a])).values()];
     x.segment = { ...x.segment, title: preferred.title,
-      description: mergedDescription(preferred.description, other.description),
+      description: mergedDescription(preferred.description, other.description, lang),
       t_end: y.segment.t_end, active_seconds: x.a.seconds, apps,
       sources: [...new Set([...x.segment.sources, ...y.segment.sources])],
       record_ids: [...new Set([...x.segment.record_ids, ...y.segment.record_ids])],
@@ -780,7 +793,7 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
   const longest = result.filter(r => r.a.seconds > 0).sort((x,y) =>
     (projectSeconds.get(y.a.activity.projectId ?? y.a.activity.key) ?? 0) -
     (projectSeconds.get(x.a.activity.projectId ?? x.a.activity.key) ?? 0) || byImportance(x.a,y.a))[0]?.segment;
-  const summary = (main && highlight && summaryLine(highlight.text)) || longest?.title || null;
+  const summary = (main && highlight && summaryLine(highlight.text, lang)) || longest?.title || null;
   const timeline = result.map(({ a, segment }) => ({
     start: toLocalIso(a.start).slice(11, 16), end: a.end === dayEnd ? "24:00" : toLocalIso(a.end).slice(11, 16), text: segment.title,
   })).filter(chapter => chapter.start !== chapter.end);

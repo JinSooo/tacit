@@ -1,3 +1,4 @@
+import { updateGeneral } from "../src/general-settings.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { DistillStore } from "../src/distill/store.ts";
@@ -9,7 +10,7 @@ import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 
 // 合成数据 + 假模型（一律返回失败），不调用任何真实模型。
 let ctx: ReturnType<typeof setup>, store: DistillStore, requests: DistillRequests;
-beforeEach(() => { ctx = setup(); store = new DistillStore(ctx.db); requests = new DistillRequests(ctx.db); });
+beforeEach(() => { ctx = setup(); updateGeneral(ctx.db, { language: "zh" }); store = new DistillStore(ctx.db); requests = new DistillRequests(ctx.db); });
 afterEach(() => ctx.cleanup());
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;

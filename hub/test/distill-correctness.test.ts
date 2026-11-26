@@ -1,3 +1,4 @@
+import { updateGeneral } from "../src/general-settings.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { DistillStore } from "../src/distill/store.ts";
 import { assignStep, dayStep, digestStep, distillRound, nowStep, projectStep, touchThread, refreshDerivedState, type LLM } from "../src/distill/run.ts";
@@ -7,7 +8,7 @@ import type { LLMRequest } from "../src/llm/index.ts";
 import { emptyDayOutput, fixture, setup } from "./helpers.ts";
 
 let ctx: ReturnType<typeof setup>, store: DistillStore;
-beforeEach(() => { ctx = setup(); store = new DistillStore(ctx.db); });
+beforeEach(() => { ctx = setup(); updateGeneral(ctx.db, { language: "zh" }); store = new DistillStore(ctx.db); });
 afterEach(() => ctx.cleanup());
 const date = "2026-11-12", base = new Date(`${date}T10:00:00`).getTime(), MIN = 60_000;
 const iso = (n: number) => new Date(n).toISOString();

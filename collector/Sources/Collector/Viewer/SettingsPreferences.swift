@@ -1,4 +1,5 @@
 import SwiftUI
+import enum CollectorCore.L10n
 
 /// 草稿属于窗口，不随分组切换丢失；只提交当前分组修改的字段。
 @MainActor @Observable final class SettingsPreferences {
@@ -30,7 +31,7 @@ import SwiftUI
   func load(api: HubAPI) async {
     guard draft == saved, !busy else { return }
     do { let g = try await api.generalSettings(); saved = g; draft = g; error = nil }
-    catch is CancellationError {} catch { self.error = error.localizedDescription }
+    catch is CancellationError {} catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
   func save(api: HubAPI, context: Bool) async {
     guard let d = draft else { return }
@@ -40,7 +41,7 @@ import SwiftUI
       let values = context ? ["inject_tokens": d.injectTokens] : ["archive_days": d.archiveDays]
       for (key, value) in values {
         if let range = d.ranges[key], !(range[0]...range[1]).contains(value) {
-          error = "请输入 \(range[0])–\(range[1]) 之间的整数。"; return
+          error = L10n.Settings.integerInRange(range[0], range[1]); return
         }
       }
       let g = try await api.saveGeneral(values)
@@ -49,7 +50,7 @@ import SwiftUI
       if context && changed(context: false) { next.archiveDays = d.archiveDays }
       if !context && changed(context: true) { next.injectTokens = d.injectTokens }
       saved = g; draft = next
-      message = context ? "已保存，下次带入项目进展时生效。" : "已保存，下次整理时生效。"
-    } catch { self.error = error.localizedDescription }
+      message = context ? L10n.Settings.contextSaved : L10n.Settings.summarySettingsSaved
+    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }

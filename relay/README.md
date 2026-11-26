@@ -1,3 +1,5 @@
+[English](README.en.md) | 简体中文
+
 # Tacit 中转信箱
 
 手机和 Mac 不在同一网络、或 Mac 合盖时，手机把加密信封投进信箱，Mac 醒来再取。信箱只经手端到端加密的密文，看得到消息的时间和大小，看不到内容。协议见 `docs/contracts.md` 6.8。

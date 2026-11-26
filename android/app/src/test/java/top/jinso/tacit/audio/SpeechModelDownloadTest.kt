@@ -1,5 +1,8 @@
 package top.jinso.tacit.audio
 
+import top.jinso.tacit.i18n.AppLang
+import top.jinso.tacit.i18n.TestStrings
+import top.jinso.tacit.R
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -14,6 +17,7 @@ import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 
 class SpeechModelDownloadTest {
+    private val chinese = TestStrings(AppLang.ZH)
     @get:Rule val temp = TemporaryFolder()
     private val bytes = "fixed test model".toByteArray()
     private val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
@@ -94,13 +98,13 @@ class SpeechModelDownloadTest {
     }
     @Test fun rejectsHashMismatchAndRemovesPartialStage() {
         val error = failsCleanly(resource().copy(sha256 = "0".repeat(64))) { Connection(it, bytes) }
-        assertEquals("模型文件校验未通过，请重新下载", SpeechPreparationState().finished(error).message)
+        assertEquals("模型文件校验未通过，请重新下载", SpeechPreparationState().finished(error).message?.resolve(chinese))
     }
     @Test fun rejectsTruncatedUnknownLengthResponse() {
-        assertTrue(failsCleanly { Connection(it,bytes.copyOf(3),length = -1) }.message!!.contains("不完整"))
+        assertEquals(R.string.model_download_incomplete, (failsCleanly { Connection(it,bytes.copyOf(3),length = -1) } as SpeechModelProblem).label)
     }
     @Test fun rejectsOversizedUnknownLengthResponse() {
-        assertTrue(failsCleanly { Connection(it,bytes + bytes,length = -1) }.message!!.contains("大小"))
+        assertEquals(R.string.model_size_invalid, (failsCleanly { Connection(it,bytes + bytes,length = -1) } as SpeechModelProblem).label)
     }
     @Test fun rejectsWrongContentLengthBeforeReading() {
         failsCleanly { Connection(it,bytes,length = 1234,stream = object : InputStream() {
@@ -109,7 +113,7 @@ class SpeechModelDownloadTest {
     }
     @Test fun rejectsHttpErrorsWithoutTryingToLoadTheirBody() {
         val error = failsCleanly { Connection(it, bytes, status = 503) }
-        assertEquals("模型下载失败，请稍后重试", SpeechPreparationState().finished(error).message)
+        assertEquals("模型下载失败，请稍后重试", SpeechPreparationState().finished(error).message?.resolve(chinese))
     }
     @Test fun permitsHttpsRedirectButRejectsDowngrade() {
         var requests = 0

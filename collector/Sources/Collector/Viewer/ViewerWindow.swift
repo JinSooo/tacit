@@ -30,11 +30,16 @@ import CollectorCore
     if window == nil { window = makeWindow() }
     NSApp.setActivationPolicy(.regular)
     NSApp.applicationIconImage = AppIconArt.image(size: 512)
-    NSApp.mainMenu = makeMenu()
-    DispatchQueue.main.async { if let m = NSApp.mainMenu { Self.localizeSystemItems(m) } }
+    rebuildMenu()
     window?.makeKeyAndOrderFront(nil)
     NSApp.activate()
     if let window { WindowVisibility.update(window) }
+  }
+
+  func rebuildMenu() {
+    guard window != nil else { return }
+    NSApp.mainMenu = makeMenu()
+    DispatchQueue.main.async { if let m = NSApp.mainMenu { Self.localizeSystemItems(m) } }
   }
 
   /// 换一份全新的根视图，丢掉旧后台留下的页面状态。只换视图、不换窗口内容控制器：
@@ -49,7 +54,7 @@ import CollectorCore
   static let minimumContentSize = NSSize(width: 1080, height: 640)
 
   private static func root(_ store: ViewerStore, _ generation: Int) -> AnyView {
-    AnyView(RootView().environment(store).id(generation))
+    AnyView(AppLanguageScope { RootView().environment(store).id(generation) })
   }
 
   /// 保存的位置可能来自更大的屏幕，打开时收进当前屏幕的可见区域。
@@ -110,27 +115,33 @@ import CollectorCore
     }
     // ⌘Q 只关窗口：采集端要一直在后台记录，真正退出走菜单栏图标里的"退出"。
     submenu("Tacit", [
-      item("关于 Tacit", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp),
+      item(L10n.text(zh: "关于 Tacit", en: "About Tacit"), #selector(NSApplication.orderFrontStandardAboutPanel(_:)), target: NSApp),
       .separator(),
-      item("设置…", #selector(go(_:)), ",", target: self, tag: 3),
+      item(L10n.text(zh: "设置…", en: "Settings…"), #selector(go(_:)), ",", target: self, tag: 3),
       .separator(),
-      item("隐藏 Tacit", #selector(NSApplication.hide(_:)), "h", target: NSApp),
+      item(L10n.text(zh: "隐藏 Tacit", en: "Hide Tacit"), #selector(NSApplication.hide(_:)), "h", target: NSApp),
       .separator(),
-      item("关闭窗口（继续在后台记录）", #selector(closeWindow), "q", target: self),
+      item(L10n.text(zh: "关闭窗口（继续在后台记录）", en: "Close Window and Keep Recording"), #selector(closeWindow), "q", target: self),
     ])
-    submenu("编辑", [
-      // 不走系统的 undo:/redo:：AppKit 会按应用语言把标题改回 "Undo"/"Redo"（本应用不声明 zh-Hans，见 build.sh）。
-      item("撤销", #selector(undoInFocus(_:)), "z", target: self), item("重做", #selector(redoInFocus(_:)), "z", [.command, .shift], target: self), .separator(),
-      item("剪切", #selector(NSText.cut(_:)), "x"), item("复制", #selector(NSText.copy(_:)), "c"),
-      item("粘贴", #selector(NSText.paste(_:)), "v"), item("全选", #selector(NSText.selectAll(_:)), "a"),
+    // AppKit rewrites standard undo/redo titles in English because the bundle has no zh-Hans localization.
+    let undoItems = AppLanguage.current == .zh ? [
+      item("撤销", #selector(undoInFocus(_:)), "z", target: self),
+      item("重做", #selector(redoInFocus(_:)), "z", [.command, .shift], target: self),
+    ] : [
+      item("Undo", NSSelectorFromString("undo:"), "z"),
+      item("Redo", NSSelectorFromString("redo:"), "z", [.command, .shift]),
+    ]
+    submenu(L10n.text(zh: "编辑", en: "Edit"), undoItems + [.separator(),
+      item(L10n.text(zh: "剪切", en: "Cut"), #selector(NSText.cut(_:)), "x"), item(L10n.text(zh: "复制", en: "Copy"), #selector(NSText.copy(_:)), "c"),
+      item(L10n.text(zh: "粘贴", en: "Paste"), #selector(NSText.paste(_:)), "v"), item(L10n.text(zh: "全选", en: "Select All"), #selector(NSText.selectAll(_:)), "a"),
     ])
-    submenu("前往", [
-      item("时间线", #selector(go(_:)), "1", target: self, tag: 0),
-      item("搜索", #selector(go(_:)), "2", target: self, tag: 1),
+    submenu(L10n.text(zh: "前往", en: "Go"), [
+      item(L10n.text(zh: "时间线", en: "Timeline"), #selector(go(_:)), "1", target: self, tag: 0),
+      item(L10n.text(zh: "搜索", en: "Search"), #selector(go(_:)), "2", target: self, tag: 1),
     ])
-    submenu("窗口", [
-      item("最小化", #selector(NSWindow.performMiniaturize(_:)), "m"), item("缩放", #selector(NSWindow.performZoom(_:))),
-      item("关闭", #selector(NSWindow.performClose(_:)), "w"),
+    submenu(L10n.text(zh: "窗口", en: "Window"), [
+      item(L10n.text(zh: "最小化", en: "Minimize"), #selector(NSWindow.performMiniaturize(_:)), "m"), item(L10n.text(zh: "缩放", en: "Zoom"), #selector(NSWindow.performZoom(_:))),
+      item(L10n.text(zh: "关闭", en: "Close"), #selector(NSWindow.performClose(_:)), "w"),
     ])
     return main
   }
@@ -155,6 +166,7 @@ import CollectorCore
     MainActor.assumeIsolated { Self.localizeSystemItems(menu) }
   }
   static func localizeSystemItems(_ menu: NSMenu) {
+    guard AppLanguage.current == .zh else { return }
     for item in menu.items {
       // 有的项（听写）动作名和标识不同，两个都查。
       let keys = [item.action.map(NSStringFromSelector), item.identifier?.rawValue].compactMap { $0 }
@@ -175,4 +187,19 @@ import CollectorCore
   }
   @objc func undoInFocus(_ sender: NSMenuItem) { focusedUndoManager?.undo() }
   @objc func redoInFocus(_ sender: NSMenuItem) { focusedUndoManager?.redo() }
+}
+
+
+// The locale changes immediately, and rebuilding localized views also updates strings from shared formatters.
+struct AppLanguageScope<Content: View>: View {
+  @ObservedObject private var language = LanguageStore.shared
+  @ViewBuilder var content: () -> Content
+
+  var body: some View {
+    let resolved = language.resolved
+    content()
+      .environmentObject(language)
+      .environment(\.locale, resolved.locale())
+      .id(resolved)
+  }
 }

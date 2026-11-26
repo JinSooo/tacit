@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
+import fingerprint from "./fixtures/distill-zh-main.sha256.json";
 import { expect, test } from "bun:test";
 import Ajv2020 from "ajv/dist/2020.js";
-import { ASSIGN_SCHEMA, BRIEF_SCHEMA, THREAD_SCHEMA, CLASSIFY_SCHEMA, DAY_SCHEMA, DAY_SYSTEM, assignPrompt, briefPrompt, excerpt, keepGroundedFacts, normalizeDayOutput, threadPrompt } from "../src/distill/prompts.ts";
+import { getPrompts, CONVERSATION_SYSTEM_EN, CONVERSATION_SCHEMA_EN, CONVERSATION_SCHEMA_ZH, ASSIGN_SCHEMA, BRIEF_SCHEMA, THREAD_SCHEMA, CLASSIFY_SCHEMA, DAY_SCHEMA, DAY_SYSTEM, assignPrompt, briefPrompt, excerpt, keepGroundedFacts, normalizeDayOutput, threadPrompt } from "../src/distill/prompts.ts";
 
 test("每日概述提示词和输出 schema 约定四条带上下文的主线，保留旧单编号兼容", () => {
   expect(DAY_SYSTEM).toContain("最多 4 条主线，可跨项目，也包括聊天和录音中的工作沟通与生活");
@@ -118,3 +120,32 @@ test("当天概述超长时截到上限内最后一个整句，主线最多 4 �
   expect(out.highlight.text.endsWith("。")).toBe(true);
   expect(text.startsWith(out.highlight.text)).toBe(true);
 });
+
+test("Chinese prompt and schema bytes match the main baseline", () => {
+  expect(Object.keys(fingerprint)).toEqual(modelKeys(getPrompts("zh")));
+  for (const [key, expected] of Object.entries(fingerprint)) {
+    const value = getPrompts("zh")[key as keyof ReturnType<typeof getPrompts>];
+    const bytes = typeof value === "string" ? value : JSON.stringify(value);
+    expect(createHash("sha256").update(bytes).digest("hex"), key).toBe(expected);
+  }
+});
+
+test("English and Chinese prompts have matching rules and schema structure", () => {
+  const zh = getPrompts("zh"), en = getPrompts("en");
+  expect(modelKeys(en)).toEqual(modelKeys(zh));
+  const format = (text: string) => text.split("\n").map(line => /^\s*- /.test(line) ? "rule" : !line.trim() ? "blank" : /^\s/.test(line) ? "continuation" : "text");
+  const withoutLimits = (value: unknown) => JSON.parse(JSON.stringify(value, (key, field) => key === "maxLength" ? 0 : field));
+  for (const key of modelKeys(zh)) {
+    const id = key as keyof typeof zh;
+    const a = zh[id], b = en[id];
+    if (typeof a === "string" && typeof b === "string") expect(format(b), key).toEqual(format(a));
+    else expect(withoutLimits(b), key).toEqual(withoutLimits(a));
+  }
+  expect(en.CONVERSATION_SYSTEM).toBe(CONVERSATION_SYSTEM_EN);
+  expect(en.CONVERSATION_SCHEMA).toBe(CONVERSATION_SCHEMA_EN);
+  expect(zh.CONVERSATION_SCHEMA).toBe(CONVERSATION_SCHEMA_ZH);
+});
+
+function modelKeys(value: object) {
+  return Object.keys(value).filter(key => /(?:_SYSTEM|_SCHEMA)$|^DATA_RULES$/.test(key)).sort();
+}

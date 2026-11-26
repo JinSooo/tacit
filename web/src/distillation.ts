@@ -1,3 +1,4 @@
+import type { Lang } from "./i18n.ts";
 export type Api = <T>(path: string, init?: RequestInit) => Promise<T>;
 export type FactKind = "decision" | "rejected" | "open" | "next" | "inference";
 export interface Fact {
@@ -34,11 +35,18 @@ export function groupFacts(facts: Fact[]) {
 /** 两种纠错（AGENTS.md）：文案写错用"这条不对"改写，只给已定和推测；内容根本不是这件事的用"不属于这里"，只给挂在事项上的。 */
 export const canCorrect = (fact: Fact) => fact.kind === "decision" || fact.kind === "inference";
 export const canDetach = (fact: Fact) => !!fact.thread_id;
-export function relativeTime(value: number | string | null, now = Date.now()): string {
-  if (value === null) return "暂无活动";
+export function relativeTime(value: number | string | null, now = Date.now(), lang: Lang = "zh"): string {
+  if (value === null) return lang === "zh" ? "暂无活动" : "No recent activity";
   const time = typeof value === "number" ? value : Date.parse(value);
-  if (!Number.isFinite(time)) return "时间未知";
+  if (!Number.isFinite(time)) return lang === "zh" ? "时间未知" : "Unknown time";
   const minutes = Math.floor(Math.max(0, now - time) / 60000);
+  if (lang === "en") {
+    if (minutes < 1) return "Just now";
+    if (minutes < 60) return `${minutes.toLocaleString("en-US")} min ago`;
+    if (minutes < 1440) return `${Math.floor(minutes / 60)} hr ago`;
+    const days = Math.floor(minutes / 1440);
+    return `${days.toLocaleString("en-US")} ${days === 1 ? "day" : "days"} ago`;
+  }
   if (minutes < 1) return "刚刚";
   if (minutes < 60) return `${minutes} 分钟前`;
   if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`;

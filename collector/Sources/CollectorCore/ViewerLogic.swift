@@ -23,37 +23,39 @@ public enum AudioSource {
 /// 记录标题的显示写法。采集端存的标题是"应用 · 窗口""复制 · 文字""对话 · 时间 · 人""微信 · 会话 · 发言人"，
 /// 界面上不用中间点拼接：旁边已经有应用图标时去掉应用名，其余前缀改成冒号。空标题返回 nil，由调用方用来源名代替。
 public enum RecordTitles {
-  public static func display(_ raw: String, source: String, appShown: Bool = false) -> String? {
+  public static func display(_ raw: String, source: String, appShown: Bool = false, lang: AppLanguage = .current) -> String? {
     let t = raw.trimmingCharacters(in: .whitespaces)
     if t.isEmpty { return nil }
     // 对话标题里是转写当时的说话人编号（"说话人 OK"），对人没有意义；有总结时由调用方换成总结标题。
-    if source == "mac.audio" { return "对话" }
-    if source == "android.audio" { return "手机录音" }
+    if source == "mac.audio" { return L10n.text(zh: "对话", en: "Conversation", lang: lang) }
+    if source == "android.audio" { return L10n.text(zh: "手机录音", en: "Phone recording", lang: lang) }
     if source == "android.notification" || source == "android.usage" { return t }
     let parts = t.components(separatedBy: " · ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     guard parts.count > 1 else { return parts.first ?? t }
-    let head = parts[0], rest = parts.dropFirst().joined(separator: "，")
+    let comma = lang == .zh ? "，" : ", "
+    let colon = lang == .zh ? "：" : ": "
+    let head = parts[0], rest = parts.dropFirst().joined(separator: comma)
     switch source {
     case "mac.screen", "mac.app":
-      let window = parts.dropFirst().filter { $0 != head && $0 != "无标题" && $0 != "（无标题）" }.joined(separator: "，")
+      let window = parts.dropFirst().filter { $0 != head && $0 != "无标题" && $0 != "（无标题）" }.joined(separator: comma)
       if window.isEmpty { return head }
-      return appShown ? window : "\(head)：\(window)"
+      return appShown ? window : head + colon + window
     case "mac.wechat":
-      // 微信 · 会话 · 发言人：会话名在前，发言人跟在冒号后。
-      return parts.count >= 3 ? "\(parts[1])：\(parts.dropFirst(2).joined(separator: "，"))" : (appShown ? rest : "微信：\(rest)")
+      if parts.count >= 3 { return parts[1] + colon + parts.dropFirst(2).joined(separator: comma) }
+      return appShown ? rest : L10n.text(zh: "微信", en: "WeChat", lang: lang) + colon + rest
     default:
-      return "\(head)：\(rest)"
+      return head + colon + rest
     }
   }
 }
 
 /// 试听片段下面的说明。一段模糊的录音很难凭音色认出是谁，所以带上时间和他当时说的话。
 public enum SampleNote {
-  public static func line(stamp: String?, said: String?) -> String {
+  public static func line(stamp: String?, said: String?, lang: AppLanguage = .current) -> String {
     let quote = said?.trimmingCharacters(in: .whitespaces)
     switch (stamp, quote?.isEmpty == false ? quote : nil) {
-    case let (.some(stamp), .some(quote)): return "\(stamp)，当时说：\(quote)"
-    case let (.some(stamp), nil): return "\(stamp) 录到的"
+    case let (.some(stamp), .some(quote)): return L10n.text(zh: "\(stamp)，当时说：\(quote)", en: "\(stamp), said: \(quote)", lang: lang)
+    case let (.some(stamp), nil): return L10n.text(zh: "\(stamp) 录到的", en: "Recorded at \(stamp)", lang: lang)
     case (nil, _): return ""
     }
   }
@@ -103,50 +105,69 @@ public enum ViewerTime {
 }
 
 public enum ViewerFormat {
-  public static func clock(_ d: Date, calendar: Calendar = .current) -> String {
-    let c = calendar.dateComponents([.hour, .minute], from: d)
-    return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+  public static func clock(_ d: Date, calendar: Calendar = .current, lang: AppLanguage = .current) -> String {
+    L10n.clock(d, lang: lang, calendar: calendar)
   }
 
-  public static func duration(_ seconds: TimeInterval) -> String {
+  public static func duration(_ seconds: TimeInterval, lang: AppLanguage = .current) -> String {
     let s = Int(max(0, seconds))
-    if s < 60 { return "\(s) 秒" }
-    let m = s / 60
-    if m < 60 { return "\(m) 分钟" }
-    return m % 60 == 0 ? "\(m / 60) 小时" : "\(m / 60) 小时 \(m % 60) 分"
+    if s < 60 { return L10n.text(zh: "\(s) 秒", en: "\(s) sec", lang: lang) }
+    return minutes(s / 60, lang: lang)
   }
 
   /// 紧凑写法：9 小时 25 分、42 分、30 秒。
-  public static func compact(_ seconds: TimeInterval) -> String {
+  public static func compact(_ seconds: TimeInterval, lang: AppLanguage = .current) -> String {
     let s = Int(max(0, seconds))
-    if s < 60 { return "\(s) 秒" }
-    let m = s / 60
-    return m < 60 ? "\(m) 分" : (m % 60 == 0 ? "\(m / 60) 小时" : "\(m / 60) 小时 \(m % 60) 分")
+    if s >= 60, s < 3600, lang == .zh { return "\(s / 60) 分" }
+    return duration(seconds, lang: lang)
   }
 
-  public static func minutes(_ m: Int) -> String {
-    m < 60 ? "\(m) 分钟" : (m % 60 == 0 ? "\(m / 60) 小时" : "\(m / 60) 小时 \(m % 60) 分")
+  public static func minutes(_ m: Int, lang: AppLanguage = .current) -> String {
+    if lang == .en { return L10n.englishDuration(minutes: m) }
+    return m < 60 ? "\(m) 分钟" : (m % 60 == 0 ? "\(m / 60) 小时" : "\(m / 60) 小时 \(m % 60) 分")
   }
 
-  public static func relative(_ date: Date?, now: Date = Date()) -> String {
-    guard let date else { return "暂无活动" }
+  public static func relative(_ date: Date?, now: Date = Date(), lang: AppLanguage = .current) -> String {
+    guard let date else { return L10n.text(zh: "暂无活动", en: "No activity yet", lang: lang) }
     let m = Int(max(0, now.timeIntervalSince(date)) / 60)
-    if m < 1 { return "刚刚" }
-    if m < 60 { return "\(m) 分钟前" }
-    if m < 1440 { return "\(m / 60) 小时前" }
-    return "\(m / 1440) 天前"
+    if m < 1 { return L10n.text(zh: "刚刚", en: "Just now", lang: lang) }
+    if m < 60 { return L10n.text(zh: "\(m) 分钟前", en: "\(L10n.number(m)) min ago", lang: lang) }
+    if m < 1440 { return L10n.text(zh: "\(m / 60) 小时前", en: "\(L10n.number(m / 60)) hr ago", lang: lang) }
+    return L10n.count(m / 1440, one: "%@ day ago", other: "%@ days ago", zh: "\(m / 1440) 天前", lang: lang)
   }
 
-  public static func dayTitle(_ day: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
-    if calendar.isDate(day, inSameDayAs: now) { return "今天" }
-    if let y = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(day, inSameDayAs: y) { return "昨天" }
-    let c = calendar.dateComponents([.year, .month, .day, .weekday], from: day)
-    let year = c.year != calendar.component(.year, from: now) ? "\(c.year!) 年 " : ""
+  public static func updated(_ date: Date, now: Date = Date(), lang: AppLanguage = .current) -> String {
+    let age = relative(date, now: now, lang: lang)
+    return L10n.text(zh: age + "更新", en: age == "Just now" ? age : "Updated " + age, lang: lang)
+  }
+
+  public static func dayTitle(_ day: Date, now: Date = Date(), calendar: Calendar = .current, lang: AppLanguage = .current) -> String {
+    if calendar.isDate(day, inSameDayAs: now) { return L10n.text(zh: "今天", en: "Today", lang: lang) }
+    if let y = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(day, inSameDayAs: y) {
+      return L10n.text(zh: "昨天", en: "Yesterday", lang: lang)
+    }
+    return date(day, now: now, calendar: calendar, lang: lang)
+  }
+
+  public static func date(_ day: Date, now: Date = Date(), calendar: Calendar = .current, lang: AppLanguage = .current) -> String {
+    let c = calendar.dateComponents([.year, .month, .day], from: day)
+    let includeYear = c.year != calendar.component(.year, from: now)
+    if lang == .en {
+      let formatter = DateFormatter()
+      formatter.locale = lang.locale()
+      formatter.calendar = calendar
+      formatter.timeZone = calendar.timeZone
+      formatter.dateFormat = includeYear ? "MMM d, yyyy" : "MMM d"
+      return formatter.string(from: day)
+    }
+    let year = includeYear ? "\(c.year!) 年 " : ""
     return "\(year)\(c.month!) 月 \(c.day!) 日"
   }
 
-  public static func weekday(_ day: Date, calendar: Calendar = .current) -> String {
-    "星期" + ["日", "一", "二", "三", "四", "五", "六"][calendar.component(.weekday, from: day) - 1]
+  public static func weekday(_ day: Date, calendar: Calendar = .current, lang: AppLanguage = .current) -> String {
+    let index = calendar.component(.weekday, from: day) - 1
+    return L10n.text(zh: "星期" + ["日", "一", "二", "三", "四", "五", "六"][index],
+                     en: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][index], lang: lang)
   }
 
   public static func bytes(_ n: Int) -> String {
@@ -339,12 +360,12 @@ public enum Lane: Int, CaseIterable, Sendable {
   }
   public var title: String {
     switch self {
-    case .screen: return "屏幕"
-    case .browser: return "浏览"
+    case .screen: return L10n.text(zh: "屏幕", en: "Screen")
+    case .browser: return L10n.text(zh: "浏览", en: "Browsing")
     case .agent: return "Agent"
-    case .terminal: return "终端"
-    case .voice: return "对话"
-    case .other: return "其他"
+    case .terminal: return L10n.text(zh: "终端", en: "Terminal")
+    case .voice: return L10n.text(zh: "对话", en: "Conversation")
+    case .other: return L10n.text(zh: "其他", en: "Other")
     }
   }
 }

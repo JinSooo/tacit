@@ -1,3 +1,5 @@
+import { cliText } from "./agent-cli/locale.ts";
+import type { Lang } from "./i18n/language.ts";
 import { chmodSync, copyFileSync, readdirSync, lstatSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
@@ -24,6 +26,7 @@ export class AgentConfigError extends Error {
 
 type Json = Record<string, any>;
 export interface InstallEnvironment {
+  lang?: Lang;
   home?: string; repo?: string; bun?: string;
   which?: (command: string) => string | null;
   appExists?: (path: string) => boolean;
@@ -62,14 +65,14 @@ function ownsDesktopEntry(value: unknown): value is Json {
     && typeof value.args[0] === "string" && value.args[0].endsWith("/hub/src/cli.ts")
     && value.args.slice(1).join("\n") === "mcp\n--tool\nclaude-desktop";
 }
-function desktopFile(home: string, install: boolean, cli: string, bun: string) {
+function desktopFile(home: string, install: boolean, cli: string, bun: string, lang: Lang = "zh") {
   const file = desktopConfig(home), existed = existsSync(file), before = existed ? readFileSync(file, "utf8") : "";
   let data: Json;
-  try { data = existed ? JSON.parse(before) : {}; } catch { throw new AgentConfigError(`${file} 不是合法 JSON，未写入配置`, "agent_config_invalid_json"); }
-  if (!object(data) || data.mcpServers !== undefined && !object(data.mcpServers)) throw new AgentConfigError(`${file} 的 mcpServers 结构无效，未写入配置`, "agent_config_invalid_schema");
+  try { data = existed ? JSON.parse(before) : {}; } catch { throw new AgentConfigError(cliText(`${file} 不是合法 JSON，未写入配置`, `${file} contains invalid JSON. The configuration was not saved.`, lang), "agent_config_invalid_json"); }
+  if (!object(data) || data.mcpServers !== undefined && !object(data.mcpServers)) throw new AgentConfigError(cliText(`${file} 的 mcpServers 结构无效，未写入配置`, `The mcpServers section in ${file} is invalid. The configuration was not saved.`, lang), "agent_config_invalid_schema");
   const current = data.mcpServers?.[SERVER];
   if (Object.hasOwn(data.mcpServers ?? {}, SERVER) && !ownsDesktopEntry(current)) {
-    throw new AgentConfigError(`Claude Desktop 中的 ${SERVER} 名称已被其他配置占用，请先在 Claude Desktop 中检查该配置`, "agent_config_conflict");
+    throw new AgentConfigError(cliText(`Claude Desktop 中的 ${SERVER} 名称已被其他配置占用，请先在 Claude Desktop 中检查该配置`, `Another Claude Desktop connection already uses the name ${SERVER}. Check that connection first.`, lang), "agent_config_conflict");
   }
   const legacy = ownsDesktopEntry(data.mcpServers?.[LEGACY_SERVER]);
   if (!install && current === undefined && !legacy) return { file, existed, before, after: before };
@@ -93,11 +96,11 @@ function diff(file: string, before: string, after: string, existed: boolean) {
   return [`--- ${existed ? file : "/dev/null"}`, `+++ ${file}`, `@@ -${a.length ? 1 : 0},${a.length} +${b.length ? 1 : 0},${b.length} @@`,
     ...a.map(line => `-${line}`), ...(before && !before.endsWith("\n") ? ["\\ No newline at end of file"] : []), ...b.map(line => `+${line}`)].join("\n");
 }
-function hookFile(file: string, install: boolean, cli: string, bun: string, tool: AgentTool) {
+function hookFile(file: string, install: boolean, cli: string, bun: string, tool: AgentTool, lang: Lang = "zh") {
   const existed = existsSync(file), before = existed ? readFileSync(file, "utf8") : "";
   let data: Json;
-  try { data = existed ? JSON.parse(before) : {}; } catch { throw new AgentConfigError("配置文件不是合法 JSON，未写入配置。", "agent_config_invalid_json"); }
-  if (!object(data) || data.hooks !== undefined && !object(data.hooks) || data.hooks?.SessionStart !== undefined && !Array.isArray(data.hooks.SessionStart)) throw new AgentConfigError("配置文件结构无效，未写入配置。", "agent_config_invalid_schema");
+  try { data = existed ? JSON.parse(before) : {}; } catch { throw new AgentConfigError(cliText("配置文件不是合法 JSON，未写入配置。", "The configuration contains invalid JSON and was not saved.", lang), "agent_config_invalid_json"); }
+  if (!object(data) || data.hooks !== undefined && !object(data.hooks) || data.hooks?.SessionStart !== undefined && !Array.isArray(data.hooks.SessionStart)) throw new AgentConfigError(cliText("配置文件结构无效，未写入配置。", "The configuration has an invalid structure and was not saved.", lang), "agent_config_invalid_schema");
   // 按 shell 规则拆开再比，加没加引号都认得（2026-11-19：升级迁移写的全引号命令曾被当成没连接）。
   const ours = (hook: any) => {
     if (!object(hook) || typeof hook.command !== "string") return false;
@@ -217,13 +220,15 @@ function codexApprovals(file: string, install: boolean, preserved: string[] = []
 }
 
 export function runAgents(argv: string[], env: InstallEnvironment = {}, registerIdentity?: () => Promise<unknown>) {
+  const lang = env.lang ?? "zh";
+  const t = (zh: string, en: string) => cliText(zh, en, lang);
   const [action, ...flags] = argv;
-  if (action !== "install" && action !== "uninstall") throw new Error("用法：agents <install|uninstall> [--tool claude-code|codex|claude-desktop] [--yes]");
+  if (action !== "install" && action !== "uninstall") throw new Error(t("用法：agents <install|uninstall> [--tool claude-code|codex|claude-desktop] [--yes]", "Usage: agents <install|uninstall> [--tool claude-code|codex|claude-desktop] [--yes]"));
   let selected: AgentTool | undefined, yes = false;
   for (let i = 0; i < flags.length; i++) {
     if (flags[i] === "--yes") yes = true;
     else if (flags[i] === "--tool" && !selected && AGENT_TOOLS.includes(flags[i + 1] as AgentTool)) selected = flags[++i] as AgentTool;
-    else throw new Error("agents 参数无效");
+    else throw new Error(t("agents 参数无效", "Invalid agents arguments"));
   }
   const home = resolve(env.home ?? homedir()), repo = resolve(env.repo ?? fileURLToPath(new URL("../../", import.meta.url)));
   const bun = resolve(env.bun ?? process.execPath), cli = resolve(repo, "hub/src/cli.ts");
@@ -233,48 +238,57 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
   const run = env.run ?? ((command, args, home) => spawnSync(command, args, { encoding: "utf8", env: home === resolve(homedir()) ? process.env : { ...process.env, HOME: home, CODEX_HOME: resolve(home, ".codex"), CLAUDE_CONFIG_DIR: resolve(home, ".claude") }, timeout: 30000 }));
   const tools: AgentTool[] = selected ? [selected] : ["claude-code", "codex"];
   if (!selected && action === "uninstall" && existsSync(desktopConfig(home))) tools.push("claude-desktop");
-  if (action === "install" && tools.includes("claude-desktop") && !desktopInstalled(home, env)) throw new Error("这台 Mac 上没找到 Claude Desktop，安装后再连接。");
+  if (action === "install" && tools.includes("claude-desktop") && !desktopInstalled(home, env)) throw new Error(t("这台 Mac 上没找到 Claude Desktop，安装后再连接。", "Claude Desktop was not found on this Mac. Install it before connecting."));
   // 全部解析成功后才可能写入，防止第二份 JSON 无效时已改第一份。
-  const desktopPlan = tools.includes("claude-desktop") ? desktopFile(home, action === "install", cli, bun) : undefined;
+  const desktopPlan = tools.includes("claude-desktop") ? desktopFile(home, action === "install", cli, bun, lang) : undefined;
   const cliTools = tools.filter(tool => tool !== "claude-desktop");
-  const plans = cliTools.map(tool => hookFile(resolve(home, tool === "codex" ? ".codex/hooks.json" : ".claude/settings.json"), action === "install", cli, bun, tool));
+  const plans = cliTools.map(tool => hookFile(resolve(home, tool === "codex" ? ".codex/hooks.json" : ".claude/settings.json"), action === "install", cli, bun, tool, lang));
   const commands = cliTools.map(tool => ({ tool, command: which(tool === "codex" ? "codex" : "claude") }));
   const codexFile = resolve(home, ".codex/config.toml");
   // 提前校验 TOML，避免改完 MCP 后才发现原配置损坏。
   const approvalPlan = tools.includes("codex") ? codexApprovals(codexFile, action === "install") : undefined;
   const legacyApprovals = tools.includes("codex") ? codexApprovals(codexFile, false, [], LEGACY_SERVER).preserved : [];
-  print(yes ? "将执行以下改动：" : "预览（未写入；加 --yes 执行）：");
+  print(yes ? t("将执行以下改动：", "The following changes will be applied:") : t("预览（未写入；加 --yes 执行）：", "Preview. Add --yes to apply these changes."));
   for (const plan of plans) {
     if (plan.before !== plan.after) print(diff(plan.file, plan.before, plan.after, plan.existed));
-    else print(`${plan.file}：无需改动`);
+    else print(t(`${plan.file}：无需改动`, `${plan.file}: No changes needed`));
   }
   // Desktop 配置含其他连接器及用户偏好，预览不输出原文或凭据。
-  if (desktopPlan) print(`${desktopPlan.file}：${desktopPlan.before === desktopPlan.after ? "无需改动" : `${action === "install" ? "登记" : "移除"} Tacit 查询服务（保留其他配置）`}`);
+  if (desktopPlan) {
+    const unchanged = desktopPlan.before === desktopPlan.after;
+    const zh = unchanged ? "无需改动" : `${action === "install" ? "登记" : "移除"} Tacit 查询服务（保留其他配置）`;
+    const en = unchanged ? "No changes needed" : `${action === "install" ? "Connect" : "Disconnect"} Tacit, keeping other settings`;
+    print(t(`${desktopPlan.file}：${zh}`, `${desktopPlan.file}: ${en}`));
+  }
   const apply = () => {
     for (const { tool, command } of commands) {
-      if (!command) { print(`找不到 ${tool === "codex" ? "codex" : "claude"}，跳过 MCP 注册/移除`); continue; }
+      if (!command) {
+        const name = tool === "codex" ? "codex" : "claude";
+        print(t(`找不到 ${name}，跳过 MCP 注册/移除`, `Could not find ${name}. Skipping MCP setup.`));
+        continue;
+      }
       const remove = (name: string) => tool === "codex" ? ["mcp", "remove", name] : ["mcp", "remove", "--scope", "user", name];
       const add = ["mcp", "add", ...(tool === "codex" ? [] : ["--scope", "user"]), SERVER, "--", bun, cli, "mcp", "--tool", tool];
       const get = (name: string) => ["mcp", "get", name];
       print(`$ ${[command, ...get(SERVER)].map(quote).join(" ")}`);
-      print(`已注册时执行：${[command, ...remove(SERVER)].map(quote).join(" ")}`);
-      print(`旧名称已注册时执行：${[command, ...remove(LEGACY_SERVER)].map(quote).join(" ")}`);
+      print(t("已注册时执行：", "If registered: ") + [command, ...remove(SERVER)].map(quote).join(" "));
+      print(t("旧名称已注册时执行：", "If the old name is registered: ") + [command, ...remove(LEGACY_SERVER)].map(quote).join(" "));
       if (action === "install") print(`$ ${[command, ...add].map(quote).join(" ")}`);
       if (tool === "codex" && !yes && approvalPlan && approvalPlan.before !== approvalPlan.after) print(approvalDiff(approvalPlan));
       if (yes) {
         const execute = (args: string[]) => {
           try { return run(command, args, home); }
-          catch { throw new AgentCommandError("无法启动 AI 工具。", "agent_spawn_failed"); }
+          catch { throw new AgentCommandError(t("无法启动 AI 工具。", "Could not start the AI tool."), "agent_spawn_failed"); }
         };
         const registered = (name: string) => {
           const result = execute(get(name));
-          if (result.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(result.stderr + result.stdout)) throw new AgentCommandError(`查询失败，未继续${action === "install" ? "连接" : "断开"}。`, "agent_mcp_get_failed");
+          if (result.status !== 0 && !/not found|no .*server|does not exist|未找到|不存在/i.test(result.stderr + result.stdout)) throw new AgentCommandError(t(`查询失败，未继续${action === "install" ? "连接" : "断开"}。`, "Could not check the current MCP registration. No connection changes were made."), "agent_mcp_get_failed");
           return result.status === 0;
         };
         const current = registered(SERVER), legacy = registered(LEGACY_SERVER);
         if (tool === "codex" && approvalPlan?.existed) backupConnection(codexFile);
         for (const args of [...(legacy ? [remove(LEGACY_SERVER)] : []), ...(current ? [remove(SERVER)] : []), ...(action === "install" ? [add] : [])]) {
-          if (execute(args).status !== 0) throw new AgentCommandError("无法更新 AI 工具的连接。", "agent_mcp_update_failed");
+          if (execute(args).status !== 0) throw new AgentCommandError(t("无法更新 AI 工具的连接。", "Could not update the AI tool connection."), "agent_mcp_update_failed");
         }
         if (tool === "codex") {
           // 依次读取并保存：第二步必须基于第一步写入后的文件。
@@ -288,12 +302,15 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
     }
     if (yes) for (const plan of plans) if (plan.before !== plan.after) saveConnectionPlan(plan);
     if (yes && desktopPlan && desktopPlan.before !== desktopPlan.after) saveConnectionPlan(desktopPlan);
-    if (desktopPlan) print("完全退出并重新打开 Claude Desktop 后生效；连接后可让它查询历史记录。");
-    if (action === "install" && tools.includes("codex")) print("Codex 新 hook 需要在 Codex 里批准一次（trusted_hash）才会生效。");
+    if (desktopPlan) print(t("完全退出并重新打开 Claude Desktop 后生效；连接后可让它查询历史记录。", "Quit and reopen Claude Desktop to apply the change."));
+    if (action === "install" && tools.includes("codex")) print(t("Codex 新 hook 需要在 Codex 里批准一次（trusted_hash）才会生效。", "Approve the new hook once in Codex to enable session context."));
   };
   if (yes && action === "install" && cliTools.length && registerIdentity) {
     // 登记失败（中枢没在运行等）不挡接入：没有身份时 agent-cli 退回本机令牌（6.10.6 双栈），之后再接入一次即可补上。
-    return registerIdentity().catch(error => print(`暂未登记 AI 工具的设备身份（${error instanceof Error ? error.message : "原因未知"}），先用本机令牌接入。`)).then(apply);
+    return registerIdentity().catch(error => print(t(
+      `暂未登记 AI 工具的设备身份（${error instanceof Error ? error.message : "原因未知"}），先用本机令牌接入。`,
+      "AI tool identity registration failed. Using the local token for this connection.",
+    ))).then(apply);
   }
   apply();
 }

@@ -19,7 +19,7 @@ struct ReviewPage: View {
     .modifier(QuietPageTitle())
     // 页面每 30 秒、窗口重新露出和数据变化时都会自己刷新，不放刷新按钮；⌘R 留给想立刻重读的人。
     .background {
-      Button("刷新") { refresh += 1 }.keyboardShortcut("r", modifiers: .command)
+      Button(L10n.refresh) { refresh += 1 }.keyboardShortcut("r", modifiers: .command)
         .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
     }
   }
@@ -240,21 +240,23 @@ private struct ReviewDayContent: View {
     Button { picking = true } label: {
       HStack(alignment: .firstTextBaseline, spacing: 12) {
         // 日期栏不动，只有日期数字朝翻页方向滚过去。
-        Text(Fmt.date(selectedDay)).font(.serif(TextSize.display)).foregroundStyle(Palette.ink)
+        Text(AppLanguage.current == .zh ? Fmt.date(selectedDay) : L10n.dayHeader(selectedDay)).font(.serif(TextSize.display)).foregroundStyle(Palette.ink)
           .contentTransition(Motion.reduced ? .opacity : .numericText(countsDown: dateEdge == .leading))
-        Text(ViewerFormat.weekday(selectedDay)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
-          .contentTransition(.opacity)
+        if AppLanguage.current == .zh {
+          Text(ViewerFormat.weekday(selectedDay)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+            .contentTransition(.opacity)
+        }
       }
       .animation(Motion.standard, value: selectedDay)
       .padding(.vertical, 4).contentShape(Rectangle())
     }
-    .buttonStyle(.plain).help("跳到日期").popover(isPresented: $picking) {
-      DatePicker("选择日期", selection: Binding(get: { selectedDay }, set: {
+    .buttonStyle(.plain).help(L10n.jumpToDate).popover(isPresented: $picking) {
+      DatePicker(L10n.chooseDate, selection: Binding(get: { selectedDay }, set: {
         selectedDay = Calendar.current.startOfDay(for: $0)
         picking = false
       }), in: ...now, displayedComponents: .date)
         .datePickerStyle(.graphical).labelsHidden().padding(12)
-        .environment(\.locale, Locale(identifier: "zh_CN")).environment(\.calendar, ViewerCalendar.chinese)
+        .environment(\.locale, AppLanguage.current.locale()).environment(\.calendar, ViewerCalendar.formatting)
     }
   }
 
@@ -262,16 +264,16 @@ private struct ReviewDayContent: View {
     HStack(spacing: 16) {
       HStack(spacing: 0) {
         Button { shift(-1) } label: { PhIcon("caret-left", size: 14) }
-          .help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
-        Button("今天") { selectedDay = today }.disabled(selectedDay == today).keyboardShortcut("t", modifiers: .command)
+          .help(L10n.previousDay).accessibilityLabel(L10n.previousDay).keyboardShortcut("[", modifiers: .command)
+        Button(L10n.today) { selectedDay = today }.disabled(selectedDay == today).keyboardShortcut("t", modifiers: .command)
         Button { shift(1) } label: { PhIcon("caret-right", size: 14) }
-          .help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command).disabled(selectedDay == today)
+          .help(L10n.nextDay).accessibilityLabel(L10n.nextDay).keyboardShortcut("]", modifiers: .command).disabled(selectedDay == today)
       }
       .buttonStyle(ReviewDateButtonStyle())
       .font(.system(size: TextSize.body)).fixedSize()
       HStack(spacing: 2) {
-        densityButton(.compact, title: "简约")
-        densityButton(.detailed, title: "详细")
+        densityButton(.compact, title: L10n.simple)
+        densityButton(.detailed, title: L10n.detailed)
       }
       .padding(2)
       .background(Palette.fill, in: RoundedRectangle(cornerRadius: Radius.control))
@@ -323,23 +325,23 @@ private struct ReviewDayContent: View {
     if current, let error = diary.error ?? (hasContent ? nil : records.error) {
       Placeholder(kind: .error(error) { Task { await load() } })
     } else if failed && !hasSegments {
-      status("最近一次整理失败", color: Palette.attention)
+      status(L10n.lastSummaryFailed, color: Palette.attention)
     } else if diary.value == nil || (!hasContent && records.value == nil) {
-      DelayedProgress(label: "正在读取时间线")
+      DelayedProgress(label: L10n.loadingTimeline)
     } else if !drafts.isEmpty {
       EmptyView()
     } else if records.value?.isEmpty == true && review?.detail == nil {
-      status("这一天没有记录")
+      status(L10n.noRecordsForThisDay)
     } else if hasSegments && !items.isEmpty {
-      status("这一天的活动")
+      status(L10n.activitiesForThisDay)
     } else if hasSegments {
-      status("这一天的记录还没有可展示的整理结果")
+      status(L10n.noDaySummary)
     } else if review?.detail != nil {
-      status("这一天有原始记录")
+      status(L10n.dayHasOriginalRecords)
     } else if !isToday && review?.needsRegen?.value != true {
-      status("这一天还没有时间线")
+      status(L10n.noDayTimeline)
     } else {
-      status("正在整理")
+      status(L10n.summarizing)
     }
   }
 
@@ -347,15 +349,15 @@ private struct ReviewDayContent: View {
     HStack(alignment: .firstTextBaseline, spacing: 16) {
       if hasSegments, cutoff != nil, items.isEmpty, drafts.isEmpty {
         // 一段都还没有时截止时间没有意义：新装好时显示“内容截至 00:00”像是出了错（2026-11-25 虚拟机实测）。
-        if failed { Text("最近一次整理失败").foregroundStyle(Palette.attention) }
+        if failed { Text(L10n.lastSummaryFailed).foregroundStyle(Palette.attention) }
       } else if hasSegments, let at = cutoff {
         // 有草稿时截止时间只代表润色到哪，草稿本身已经更新到最新。
-        Text("\(drafts.isEmpty ? "内容截至" : "已整理到") \(ReviewTime.clock(at, on: day))\(failed ? "，最近一次整理失败" : "")")
+        Text(L10n.timelineCutoff(ReviewTime.clock(at, on: day), hasDrafts: !drafts.isEmpty, failed: failed))
           .foregroundStyle(failed ? Palette.attention : Palette.muted)
           .rollingNumber(at)
       }
       Spacer(minLength: 0)
-      Button("这一天的全部记录") { store.showDayRecords(day) }.buttonStyle(.accentLink)
+      Button(L10n.allRecordsForThisDay) { store.showDayRecords(day) }.buttonStyle(.accentLink)
     }
     .font(.system(size: TextSize.caption))
   }
@@ -494,12 +496,16 @@ struct ReviewHeadline: View {
   let size: CGFloat
 
   var body: some View {
-    let value = text.reduce(into: AttributedString()) { result, character in
-      var part = AttributedString(String(character))
-      part.font = character.isASCII ? .system(size: size, weight: .medium) : .serif(size)
-      result.append(part)
+    if AppLanguage.current == .en {
+      Text(text).font(.serif(size))
+    } else {
+      let value = text.reduce(into: AttributedString()) { result, character in
+        var part = AttributedString(String(character))
+        part.font = character.isASCII ? .system(size: size, weight: .medium) : .serif(size)
+        result.append(part)
+      }
+      Text(value)
     }
-    Text(value)
   }
 }
 
@@ -517,7 +523,7 @@ private struct ReviewDateButtonStyle: ButtonStyle {
 
 enum ReviewTime {
   static func clock(_ date: Date, on day: Date) -> String {
-    date == ViewerTime.dayBounds(day).end ? "24:00" : ViewerFormat.clock(date)
+    AppLanguage.current == .zh && date == ViewerTime.dayBounds(day).end ? "24:00" : ViewerFormat.clock(date)
   }
   static func range(_ item: DayDiary.Item, on day: Date) -> String {
     guard let a = ViewerTime.parse(item.tStart), let b = ViewerTime.parse(item.tEnd) else { return "" }
@@ -530,7 +536,7 @@ enum ReviewTime {
 private struct ReviewMetadata: View {
   let item: DayDiary.Item
   var body: some View {
-    Text(([Fmt.duration(item.activeSeconds)] + item.sources.map(SourceInfo.name)).joined(separator: "，"))
+    Text(([Fmt.duration(item.activeSeconds)] + item.sources.map(SourceInfo.name)).joined(separator: L10n.comma))
       .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
   }
 }
@@ -553,13 +559,13 @@ struct ReviewItemPage: View {
       Group {
         if let current = item.value ?? nil {
           VStack(alignment: .leading, spacing: 16) {
-            Text("\(Fmt.date(day))，\(ReviewTime.range(current, on: day))")
+            Text([Fmt.date(day), ReviewTime.range(current, on: day)].joined(separator: L10n.comma))
               .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
             Text(current.title).font(.system(size: TextSize.title, weight: .semibold)).foregroundStyle(Palette.ink)
               .accessibilityAddTraits(.isHeader)
             Text(current.description).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink).textSelection(.enabled)
             ReviewMetadata(item: current)
-            Text("经过与依据").font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(Palette.ink)
+            Text(L10n.taskHistoryAndEvidence).font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(Palette.ink)
               .padding(.top, 8).accessibilityAddTraits(.isHeader)
             VStack(alignment: .leading, spacing: 0) {
               ForEach(current.evidence) { ref in
@@ -588,13 +594,13 @@ struct ReviewItemPage: View {
         } else if item.value == nil {
           Placeholder(kind: .loading)
         } else {
-          Placeholder(kind: .empty("clock-counter-clockwise", "这件事已更新，可返回查看当天的时间线"))
+          Placeholder(kind: .empty("clock-counter-clockwise", L10n.timelineItemUpdated))
         }
       }
       .modifier(ReviewWidth())
     }
     .background(Palette.paper)
-    .navigationTitle("时间线")
+    .navigationTitle(L10n.timeline)
     .toolbar { BackButton() }
     .task(id: store.revision) { await load() }
   }

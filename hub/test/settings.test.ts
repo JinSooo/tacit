@@ -5,7 +5,7 @@ import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { createHandler } from "../src/server.ts";
 import { resolvePort, writeHubPort } from "../src/hub-json.ts";
-import { readGeneral } from "../src/general-settings.ts";
+import { GENERAL_DEFAULTS, readGeneral } from "../src/general-settings.ts";
 import { lifecycleStep } from "../src/distill/run.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { AgentReads } from "../src/agent.ts";
@@ -240,7 +240,7 @@ test("general：默认值、范围、只改给出的字段；注入上限和提�
   const h = handler();
   const initial = (await call(h, "GET", "/v1/settings/general")).body;
   const defaults = { inject_tokens: 800, ask_done_days: 3, archive_days: 7,
-    timeline_polish: "after_segment", timeline_overview: "hourly", daily_token_limit: null } as const;
+    timeline_polish: "after_segment", timeline_overview: "hourly", daily_token_limit: null, language: GENERAL_DEFAULTS.language } as const;
   expect(initial).toEqual({ ...defaults, defaults,
     ranges: { inject_tokens: [200, 4000], ask_done_days: [1, 30], archive_days: [1, 90], daily_token_limit: [1, 1_000_000_000] },
     model_usage: { days_with_usage: 0, average_daily_tokens: null, average_daily_timeline_tokens: null, today_tokens: 0 },
@@ -281,6 +281,19 @@ test("general：默认值、范围、只改给出的字段；注入上限和提�
   await call(h, "PUT", "/v1/settings/general", { archive_days: 1 });
   expect(lifecycleStep(store, now)).toMatchObject({ archived: 1, asked: 0 });
   expect(store.thread("quiet")?.status).toBe("archived");
+});
+
+test("general stores only resolved languages and applies invalid updates atomically", async () => {
+  const h = handler();
+  const path = "/v1/settings/general";
+  for (const language of ["zh", "en"]) {
+    expect(await call(h, "PUT", path, { language })).toMatchObject({ status: 200, body: { language } });
+    expect(await call(h, "GET", path)).toMatchObject({ status: 200, body: { language } });
+  }
+  for (const language of ["auto", "zh-CN", "EN", "", null, 1]) {
+    expect((await call(h, "PUT", path, { language, inject_tokens: 950 })).status).toBe(400);
+  }
+  expect(await call(h, "GET", path)).toMatchObject({ body: { language: "en", inject_tokens: 800 } });
 });
 
 test("general：时间线节奏和上限的保存、部分更新与整份校验", async () => {

@@ -13,7 +13,7 @@ struct SourcesSettingsView: View {
     VStack(alignment: .leading, spacing: 0) {
       if let id = selected, let source = sources.first(where: { $0.id == id }) {
         HStack {
-          Button { selected = nil } label: { Label("全部数据源", systemImage: "chevron.left") }
+          Button { selected = nil } label: { Label(L10n.Settings.allSources, systemImage: "chevron.left") }
           Text(source.title).font(.system(size: TextSize.title, weight: .semibold))
           Spacer()
         }.padding(20)
@@ -49,13 +49,13 @@ struct SourcesSettingsView: View {
           Spacer()
           if let last = s.lastRun {
             Text(ViewerFormat.clock(last)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
-              .accessibilityLabel("上次运行 " + ViewerFormat.clock(last))
+              .accessibilityLabel(L10n.Settings.lastRunAt(ViewerFormat.clock(last)))
           }
           PhIcon("caret-right", size: 14).foregroundStyle(Palette.muted)
         }.contentShape(Rectangle())
-      }.buttonStyle(.plain).accessibilityLabel([s.title, s.overviewStatus(paused: paused), "查看详情"].filter { !$0.isEmpty }.joined(separator: "，"))
+      }.buttonStyle(.plain).accessibilityLabel([s.title, s.overviewStatus(paused: paused), L10n.Settings.viewDetails].filter { !$0.isEmpty }.joined(separator: L10n.Settings.listSeparator))
       Toggle(s.title, isOn: Binding(get: { s.enabled }, set: { store.perform(.setSource(s.id, $0)) }))
-        .labelsHidden().toggleStyle(.switch).accessibilityLabel("启用" + s.title).disabled(store.extensions.busy)
+        .labelsHidden().toggleStyle(.switch).accessibilityLabel(L10n.Settings.enableSource(s.title)).disabled(store.extensions.busy)
     }
   }
 }
@@ -65,14 +65,14 @@ struct SourceDetail: View {
   let source: DataSourceStatus
 
   /// 每个数据源读什么、不读什么。
-  static let summaries: [String: String] = [
-    "screen": "正在用的窗口：应用、标题、网址，以及窗口里新出现的文字。",
-    "ocr": "读不到文字的应用在本机截图识别，截图只在内存里，识别完就丢掉。",
-    "audio": "有你说话的对话在本机转成文字，原始音频加密留在本机。",
-    "wechat": "微信在最前面时按会话记下看得到的消息；打开后“截图识字”不再重复读微信。",
-    "agent-sessions": "Claude Code 和 Codex 的会话，只记你说的话和它最后的回答。",
-    "browser": "Chrome、Arc、Safari 等浏览器的访问记录。",
-  ]
+  static var summaries: [String: String] { [
+    "screen": L10n.Settings.screenSourceNote,
+    "ocr": L10n.Settings.screenTextSourceNote,
+    "audio": L10n.Settings.audioSourceNote,
+    "wechat": L10n.Settings.wechatSourceNote,
+    "agent-sessions": L10n.Settings.aiSessionSourceNote,
+    "browser": L10n.Settings.browserSourceNote,
+  ] }
 
   var body: some View {
     let s = source
@@ -88,21 +88,21 @@ struct SourceDetail: View {
         Section {
           // 用不到这项权限（例如没装 Safari 历史）时不显示，免得写成“已授权”。
           if let name = s.permissionName, s.permission != .notNeeded {
-            SettingsRow(name + "权限") {
+            SettingsRow(L10n.Settings.permissionLabel(name)) {
               HStack(spacing: 8) {
                 Text(permissionText(s.permission)).foregroundStyle(s.permission.satisfied ? Palette.muted : Palette.attention)
-                if s.needsPermission { Button("授权…") { store.perform(.requestPermission(s.id)) } }
+                if s.needsPermission { Button(L10n.Settings.grantPermission) { store.perform(.requestPermission(s.id)) } }
               }
             }
           }
           if !s.detail.isEmpty {
-            SettingsRow("状态") { Text(s.detail).foregroundStyle(s.ok ? Palette.muted : Palette.attention) }
+            SettingsRow(L10n.Settings.status) { Text(L10n.Settings.sourceStatus(s.detail, source: s.id, succeeded: s.ok)).foregroundStyle(s.ok ? Palette.muted : Palette.attention) }
           }
           if s.running || s.lastRun != nil || s.canRunNow {
-            SettingsRow("上次运行") {
+            SettingsRow(L10n.Settings.lastRun) {
               HStack(spacing: 8) {
-                Text(s.running ? "正在运行…" : s.lastRun.map { ViewerFormat.clock($0) } ?? "还没运行过").foregroundStyle(Palette.muted)
-                if s.canRunNow { Button("运行") { store.perform(.runSource(s.id)) }.disabled(s.running) }
+                Text(s.running ? L10n.Settings.running : s.lastRun.map { ViewerFormat.clock($0) } ?? L10n.Settings.neverRun).foregroundStyle(Palette.muted)
+                if s.canRunNow { Button(L10n.Settings.run) { store.perform(.runSource(s.id)) }.disabled(s.running) }
               }
             }
           }
@@ -116,8 +116,8 @@ struct SourceDetail: View {
 
   func permissionText(_ p: SourcePermission) -> String {
     switch p {
-    case .granted, .notNeeded: return "已授权"
-    case .notDetermined, .denied: return "未授权"
+    case .granted, .notNeeded: return L10n.Settings.permissionGranted
+    case .notDetermined, .denied: return L10n.Settings.permissionMissing
     }
   }
 }
@@ -135,8 +135,8 @@ private struct AudioSourceSettings: View {
 
   var body: some View {
     let c = store.capture
-    Section("输入设备") {
-      Picker("麦克风", selection: Binding(get: { c.microphone }, set: { v in
+    Section(L10n.Settings.inputDevice) {
+      Picker(L10n.Settings.microphone, selection: Binding(get: { c.microphone }, set: { v in
         store.perform(.selectMicrophone(v))
         // 采集端在音频队列上写入设置，下一次快照才读得到；先按选中的显示。
         store.capture.microphone = v
@@ -147,75 +147,78 @@ private struct AudioSourceSettings: View {
       }
       // c.audio：第 0 行今天的计数，第 1 行麦克风，之后是问题。按原始位置拆开，麦克风行可能被 statusLines 去掉。
       if let mic = c.audio.dropFirst().first.flatMap({ MicrophoneChoices.statusLines([$0]).first }) {
-        Text(mic).foregroundStyle(Palette.muted)
+        Text(L10n.Settings.recordingStatus(mic)).foregroundStyle(Palette.muted)
       }
       ForEach(Array(c.audio.dropFirst(2).enumerated()), id: \.offset) { _, line in
-        SettingsMessage(text: line, warning: !line.hasPrefix("正在"))
+        SettingsMessage(text: L10n.Settings.recordingStatus(line), warning: !L10n.Settings.isDownloadingSpeechModel(line))
       }
     }
     Section {
-      SettingsRow("原始音频保留") {
-        Picker("原始音频保留", selection: $keepForever) {
-          Text("按天清除").tag(false)
-          Text("不自动清除").tag(true)
+      SettingsRow(L10n.Settings.originalAudioRetention) {
+        Picker(L10n.Settings.originalAudioRetention, selection: $keepForever) {
+          Text(L10n.Settings.clearAfterDays).tag(false)
+          Text(L10n.Settings.neverClearAutomatically).tag(true)
         }.labelsHidden().fixedSize()
       }
       if !keepForever {
-        SettingsRow("保留天数") {
+        SettingsRow(L10n.Settings.retentionDays) {
           HStack(spacing: 8) {
-            TextField("保留天数", value: $days, format: .number.grouping(.never))
-              .labelsHidden().accessibilityLabel("保留天数")
+            TextField(L10n.Settings.retentionDays, value: $days, format: .number.grouping(.never))
+              .labelsHidden().accessibilityLabel(L10n.Settings.retentionDays)
               .textFieldStyle(.roundedBorder).frame(width: 72).multilineTextAlignment(.trailing)
-            Text("天").foregroundStyle(Palette.muted)
-            Stepper("保留天数", value: $days, in: 1...365).labelsHidden()
+            Text(L10n.Settings.retentionUnit(days)).foregroundStyle(Palette.muted)
+            Stepper(L10n.Settings.retentionDays, value: $days, in: 1...365).labelsHidden()
           }
         }
       }
-      if let savedDays, (keepForever ? 0 : days) != savedDays {
+      if let savedDays, retentionValue != savedDays {
         HStack {
           Spacer()
-          Button("撤销修改") { keepForever = savedDays == 0; days = savedDays == 0 ? 7 : savedDays }.disabled(saving)
-          Button(saving ? "正在保存…" : "保存") { Task { await save() } }
+          Button(L10n.Settings.revertChanges) { keepForever = savedDays == 0; days = savedDays == 0 ? 7 : savedDays }.disabled(saving)
+          Button(saving ? L10n.Settings.saving : L10n.Settings.save) { Task { await save() } }
             .keyboardShortcut(.defaultAction)
-            .disabled(saving || (!keepForever && !(1...365).contains(days)))
+            .disabled(saving || retentionValue == nil)
         }
       }
       if let error { SettingsMessage(text: error) }
-    } header: { Text("音频保留") } footer: {
-      Note("只清原始音频，转好的文字一直保留。")
+    } header: { Text(L10n.Settings.audioRetention) } footer: {
+      Note(L10n.Settings.audioRetentionNote)
     }
     Section {
       HStack {
         Spacer()
         // 会丢东西的操作单独放在最下面，只染胭脂色。
-        Button("删除全部原始音频…", role: .destructive) { confirmPurge = true }
+        Button(L10n.Settings.deleteAudio, role: .destructive) { confirmPurge = true }
           .buttonStyle(.borderless).foregroundStyle(Palette.attention)
       }
       if let status { SettingsMessage(text: status, warning: false) }
     }
     .task { await load() }
-    .confirmationDialog("删除全部原始音频？", isPresented: $confirmPurge) {
-      Button("删除", role: .destructive) { Task { await purge() } }
-      Button("取消", role: .cancel) {}
+    .confirmationDialog(L10n.Settings.confirmDeleteAudio, isPresented: $confirmPurge) {
+      Button(L10n.Settings.delete, role: .destructive) { Task { await purge() } }
+      Button(L10n.Settings.cancel, role: .cancel) {}
     } message: {
-      Text("删除后不能恢复。转好的文字会保留，还没转成文字的对话会丢失；正在录的这一段不受影响。")
+      Text(L10n.Settings.deleteAudioNote)
     }
   }
 
   func load() async {
     do { let d = try await store.api.retentionDays(); keepForever = d == 0; days = d == 0 ? 7 : d; savedDays = d; error = nil }
     catch is CancellationError {}
-    catch { self.error = error.localizedDescription }
+    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+  }
+  private var retentionValue: Int? {
+    L10n.Settings.audioRetentionValue(keepForever: keepForever, days: days)
   }
   func save() async {
+    guard let value = retentionValue else { return }
     saving = true
     defer { saving = false }
-    let value = keepForever ? 0 : days
     do { try await store.api.setRetentionDays(value); savedDays = value; status = nil; error = nil }
-    catch { self.error = error.localizedDescription }
+    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
   func purge() async {
-    do { try await store.api.purgeAudio(); status = "已安排删除，各设备下次同步时清掉原始音频。"; error = nil }
-    catch { self.error = error.localizedDescription }
+    do { try await store.api.purgeAudio(); status = L10n.Settings.audioDeletionScheduled; error = nil }
+    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }

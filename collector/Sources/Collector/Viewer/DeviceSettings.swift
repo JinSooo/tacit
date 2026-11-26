@@ -1,7 +1,12 @@
+import CollectorCore
 import AppKit
 import SwiftUI
 import enum CollectorCore.ViewerFormat
 import enum CollectorCore.ViewerTime
+
+private func deviceMessage(_ error: Error, fallback: String) -> String {
+  (error as? HubError)?.actionMessage.map { L10n.Settings.serviceMessage($0, fallback: fallback) } ?? fallback
+}
 
 struct DeviceSettingsSection: View {
   private struct Session: Identifiable {
@@ -32,9 +37,9 @@ struct DeviceSettingsSection: View {
 
   var body: some View {
     let activeSession = session
-    Section("设备") {
+    Section(L10n.Settings.devices) {
       if needsUpdate {
-        SettingsMessage(text: "需要更新后台服务才能管理设备。", warning: false)
+        SettingsMessage(text: L10n.Settings.updateBackendForDevices, warning: false)
       } else {
         if let settings {
           ForEach(settings.displayedDevices) { device in
@@ -50,7 +55,7 @@ struct DeviceSettingsSection: View {
             }
             .disabled(busy)
           }
-          Button("添加设备") {
+          Button(L10n.Settings.addDevice) {
             step = .type
             sheetOpen = true
           }
@@ -58,9 +63,9 @@ struct DeviceSettingsSection: View {
         }
         if let error {
           SettingsMessage(text: error)
-          if settings == nil { Button("重试") { Task { await reload() } }.disabled(busy) }
+          if settings == nil { Button(L10n.Settings.retry) { Task { await reload() } }.disabled(busy) }
         } else if settings == nil {
-          Text("正在读取设备…").foregroundStyle(Palette.muted)
+          Text(L10n.Settings.loadingDevices).foregroundStyle(Palette.muted)
         }
       }
     }
@@ -72,25 +77,25 @@ struct DeviceSettingsSection: View {
       await reload()
     }
     // 用 presenting：点按钮时 isPresented 先置 false 清掉 demotion，按钮里再读 @State 就是 nil。
-    .alert(demotion.map { "取消“\($0.device.name)”的管理权限？" } ?? "", isPresented: Binding(
+    .alert(demotion.map { L10n.Settings.removeAdminQuestion($0.device.name) } ?? "", isPresented: Binding(
       get: { demotion != nil },
       set: { if !$0 { demotion = nil } }
     ), presenting: demotion) { pending in
-      Button("取消", role: .cancel) {}
-      Button("改为\(pending.role.title)", role: .destructive) { changeRole(pending.device, pending.role) }
+      Button(L10n.Settings.cancel, role: .cancel) {}
+      Button(L10n.Settings.changeRole(pending.role.title), role: .destructive) { changeRole(pending.device, pending.role) }
     } message: { _ in
-      Text("改完不能在这里改回管理，要用新的管理邀请重新配对。")
+      Text(L10n.Settings.demoteDeviceNote)
     }
-    .alert(deviceToRemove.map { "移除“\($0.name)”？" } ?? "", isPresented: Binding(
+    .alert(deviceToRemove.map { L10n.Settings.removeDeviceQuestion($0.name) } ?? "", isPresented: Binding(
       get: { deviceToRemove != nil },
       set: { if !$0 { deviceToRemove = nil } }
     ), presenting: deviceToRemove) { device in
-      Button("取消", role: .cancel) {}
-      Button("移除", role: .destructive) {
-        Task { await mutate(failure: "无法移除设备，请重试。") { try await store.api.removeDevice(device.id) } }
+      Button(L10n.Settings.cancel, role: .cancel) {}
+      Button(L10n.Settings.remove, role: .destructive) {
+        Task { await mutate(failure: L10n.Settings.removeDeviceFailed) { try await store.api.removeDevice(device.id) } }
       }
     } message: { _ in
-      Text("已保存的记录会保留，这台设备要重新配对才能再连接。")
+      Text(L10n.Settings.removeDeviceNote)
     }
     .sheet(isPresented: $sheetOpen, onDismiss: closeSheet) {
       if let activeSession {
@@ -118,25 +123,25 @@ struct DeviceSettingsSection: View {
 
   private func pairingSheet(_ session: Session) -> some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("添加设备").font(.system(size: TextSize.title, weight: .semibold))
+      Text(L10n.Settings.addDevice).font(.system(size: TextSize.title, weight: .semibold))
       if let connectedDevice {
-        Text("已连接 \(connectedDevice)")
+        Text(L10n.Settings.deviceConnected(connectedDevice))
       } else {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
           let remaining = max(0, Int(ceil(session.expires.timeIntervalSince(timeline.date))))
           VStack(alignment: .leading, spacing: 12) {
             if remaining > 0 {
               if session.platform == "mac" {
-                Text("复制邀请链接，在另一台 Mac 的“设置 → 后台与连接 → 连接远端后台”里粘贴。")
+                Text(L10n.Settings.macInviteNote)
                   .fixedSize(horizontal: false, vertical: true)
               } else if let qr = session.qr {
                 Image(decorative: qr, scale: 1)
                   .interpolation(.none)
                   .accessibilityHidden(true)
                   .frame(maxWidth: .infinity)
-                Text("用手机扫描二维码")
+                Text(L10n.Settings.scanQRCode)
               } else {
-                Text("二维码无法显示，请复制邀请链接。")
+                Text(L10n.Settings.qrCodeUnavailable)
               }
               Text(DeviceInvitationChoices.countdown(remaining))
                 .monospacedDigit()
@@ -145,12 +150,12 @@ struct DeviceSettingsSection: View {
                 .font(.system(size: TextSize.caption))
                 .foregroundStyle(Palette.muted)
                 .lineLimit(2)
-                .accessibilityLabel("邀请链接")
-              Button(copied ? "已复制" : "复制邀请链接") { copyInvitation(session) }
+                .accessibilityLabel(L10n.Settings.inviteLink)
+              Button(copied ? L10n.Settings.copied : L10n.Settings.copyInviteLink) { copyInvitation(session) }
                 .disabled(busy)
             } else {
-              Text("邀请已过期")
-              Button("重新生成") { Task { await createInvitation(session.role, platform: session.platform) } }
+              Text(L10n.Settings.inviteExpired)
+              Button(L10n.Settings.generateAgain) { Task { await createInvitation(session.role, platform: session.platform) } }
                 .disabled(busy)
             }
           }
@@ -158,7 +163,7 @@ struct DeviceSettingsSection: View {
         if let sheetError { SettingsMessage(text: sheetError) }
         HStack {
           Spacer()
-          Button("取消") { Task { await cancelInvitation() } }
+          Button(L10n.Settings.cancel) { Task { await cancelInvitation() } }
             .keyboardShortcut(.cancelAction)
             .disabled(busy)
         }
@@ -188,7 +193,7 @@ struct DeviceSettingsSection: View {
     } catch is CancellationError {
     } catch {
       settings = nil
-      self.error = (error as? HubError)?.actionMessage ?? "暂时无法读取设备。"
+      self.error = deviceMessage(error, fallback: L10n.Settings.devicesUnavailable)
     }
   }
 
@@ -210,7 +215,7 @@ struct DeviceSettingsSection: View {
       guard store.canManageBackend else { return }
       let invitation = try await store.api.createDeviceInvitation(role: role.rawValue)
       guard let expires = ViewerTime.parse(invitation.expiresAt) else {
-        throw HubError(message: "邀请有效期格式错误", status: 0)
+        throw HubError(message: L10n.Settings.invalidInviteExpiry, status: 0)
       }
       let active = Session(invitation: invitation, expires: expires, role: role, platform: platform,
                            previousDevices: Set(before.devices.map(\.id)), qr: platform == "android" ? invitation.qrCode() : nil)
@@ -218,7 +223,7 @@ struct DeviceSettingsSection: View {
       session = active
       sheetOpen = true
     } catch {
-      let message = (error as? HubError)?.actionMessage ?? "无法生成邀请，请重试。"
+      let message = deviceMessage(error, fallback: L10n.Settings.createInviteFailed)
       if sheetOpen { sheetError = message }
       else { self.error = message }
     }
@@ -265,7 +270,7 @@ struct DeviceSettingsSection: View {
           return
         } catch {
           if let message = (error as? HubError)?.actionMessage {
-            sheetError = message
+            sheetError = L10n.Settings.serviceMessage(message, fallback: L10n.Settings.devicesUnavailable)
             return
           }
           // 连接暂时中断时，保留邀请并在下一轮再检查。
@@ -290,13 +295,13 @@ struct DeviceSettingsSection: View {
         closeSheet()
         await loadSettings()
       } else {
-        sheetError = (error as? HubError)?.actionMessage ?? "无法取消邀请，请重试。"
+        sheetError = deviceMessage(error, fallback: L10n.Settings.cancelInviteFailed)
       }
     }
   }
 
   private func changeRole(_ device: DeviceSettings.Device, _ role: DeviceSettings.Role) {
-    Task { await mutate(failure: "无法修改设备权限，请重试。") {
+    Task { await mutate(failure: L10n.Settings.changeDeviceRoleFailed) {
       try await store.api.updateDeviceRole(device.id, role: role.rawValue)
     } }
   }
@@ -310,7 +315,7 @@ struct DeviceSettingsSection: View {
       try await operation()
       await loadSettings()
     } catch {
-      self.error = (error as? HubError)?.actionMessage ?? failure
+      self.error = deviceMessage(error, fallback: failure)
     }
   }
 
@@ -349,14 +354,14 @@ struct DeviceSettingsRow: View {
   private var canRemove: Bool { device.canRemove(isCurrent: isCurrent) }
 
   var body: some View {
-    let lastConnection = device.lastSeen.flatMap(ViewerTime.parse).map { ViewerFormat.relative($0) } ?? "暂无连接"
+    let lastConnection = device.lastSeen.flatMap(ViewerTime.parse).map { ViewerFormat.relative($0) } ?? L10n.Settings.noRecentConnection
     VStack(alignment: .trailing, spacing: 8) {
       HStack(spacing: 8) {
         Image(systemName: device.platform == "android" ? "iphone" : "laptopcomputer")
           .frame(width: 20).foregroundStyle(Palette.muted).accessibilityHidden(true)
         Text(device.name).lineLimit(1)
         if isCurrent {
-          Text("这台 Mac").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+          Text(L10n.Settings.thisMac).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
         }
         Spacer(minLength: 8)
         Text(device.role?.title ?? "").frame(width: 36, alignment: .leading)
@@ -364,7 +369,7 @@ struct DeviceSettingsRow: View {
           .monospacedDigit()
           .frame(minWidth: 84, alignment: .trailing)
           .foregroundStyle(Palette.muted)
-          .accessibilityLabel("最近连接")
+          .accessibilityLabel(L10n.Settings.lastConnection)
           .accessibilityValue(lastConnection)
         if canRemove || !roles.isEmpty {
           Button(action: toggle) {
@@ -372,8 +377,8 @@ struct DeviceSettingsRow: View {
           }
           .buttonStyle(.plain).foregroundStyle(hovering || focused || expanded ? Palette.ink : Palette.faint)
           .focused($focused)
-          .accessibilityLabel("\(device.name)的操作")
-          .accessibilityValue(expanded ? "已展开" : "已折叠")
+          .accessibilityLabel(L10n.Settings.deviceActions(device.name))
+          .accessibilityValue(expanded ? L10n.Settings.expanded : L10n.Settings.collapsed)
         } else {
           Color.clear.frame(width: 24, height: 20).accessibilityHidden(true)
         }
@@ -393,14 +398,14 @@ struct DeviceSettingsRow: View {
   @ViewBuilder private func actions(inline: Bool) -> some View {
     ForEach(roles, id: \.self) { role in
       Button { changeRole(role) } label: {
-        Text("改为\(role.title)").foregroundStyle(inline ? Palette.accent : Palette.ink)
+        Text(L10n.Settings.changeRole(role.title)).foregroundStyle(inline ? Palette.accent : Palette.ink)
       }
     }
     if canRemove {
       if inline {
-        Button(action: remove) { Text("移除").foregroundStyle(Palette.attention) }
+        Button(action: remove) { Text(L10n.Settings.remove).foregroundStyle(Palette.attention) }
       } else {
-        Button("移除", role: .destructive, action: remove)
+        Button(L10n.Settings.remove, role: .destructive, action: remove)
       }
     }
   }
@@ -421,20 +426,20 @@ struct DeviceInvitationChoices: View {
     VStack(alignment: .leading, spacing: 16) {
       Text(title).font(.system(size: TextSize.title, weight: .semibold))
       if step == .confirmAdmin {
-        Text("另一台 Mac 会得到管理权限，能删除记录和修改设置；邀请 5 分钟内有效，配好后可以改为查看。")
+        Text(L10n.Settings.grantMacAdminNote)
           .fixedSize(horizontal: false, vertical: true)
       }
       if let error { SettingsMessage(text: error) }
       HStack(spacing: 8) {
-        if step != .type { Button("返回", action: back) }
+        if step != .type { Button(L10n.Settings.back, action: back) }
         Spacer()
-        Button("取消", action: cancel).keyboardShortcut(.cancelAction)
+        Button(L10n.Settings.cancel, action: cancel).keyboardShortcut(.cancelAction)
         switch step {
         case .type:
-          Button("手机") { invite(.view, "android") }
-          Button("另一台 Mac", action: selectMac)
+          Button(L10n.Settings.phone) { invite(.view, "android") }
+          Button(L10n.Settings.anotherMac, action: selectMac)
         case .confirmAdmin:
-          Button("生成邀请") { invite(.admin, "mac") }
+          Button(L10n.Settings.generateInvite) { invite(.admin, "mac") }
             .buttonStyle(.accent).keyboardShortcut(.defaultAction)
         }
       }
@@ -447,15 +452,13 @@ struct DeviceInvitationChoices: View {
 
   static func countdown(_ remaining: Int) -> String {
     let (minutes, seconds) = max(0, remaining).quotientAndRemainder(dividingBy: 60)
-    if minutes == 0 { return "剩余 \(seconds) 秒" }
-    if seconds == 0 { return "剩余 \(minutes) 分钟" }
-    return "剩余 \(minutes) 分 \(seconds) 秒"
+    return L10n.Settings.inviteCountdown(minutes: minutes, seconds: seconds)
   }
 
   private var title: String {
     switch step {
-    case .type: "添加设备"
-    case .confirmAdmin: "授予管理权限？"
+    case .type: L10n.Settings.addDevice
+    case .confirmAdmin: L10n.Settings.grantAdminQuestion
     }
   }
 }

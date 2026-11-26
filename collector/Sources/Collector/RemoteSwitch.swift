@@ -81,16 +81,16 @@ protocol RemoteSwitchServices {
 
     var errorDescription: String? {
       switch self {
-      case .busy: return "后台切换已经在进行。"
-      case .invalidCheckpoint: return "无法核对上一次后台切换的状态。"
-      case .drainTimedOut: return "后台仍有操作未确认，等待超时。"
-      case .outboxNotPersisted: return "待发送记录尚未安全保存。"
-      case .reconciliationIncomplete: return "远端删除和私密变更尚未核对完成。"
-      case .servicesUnavailable: return "无法停止或恢复这台 Mac 的后台服务。"
-      case .databaseInUse: return "本机数据库仍在使用或未安全关闭。"
-      case .localHubUnverified: return "无法验证本机后台的身份或写入状态。"
-      case .commandTimedOut(let command): return "\(command) 等待超时。"
-      case .recoveryFailed: return "后台切换仍需恢复，已保留进度。"
+      case .busy: return L10n.Settings.backendSwitchBusy
+      case .invalidCheckpoint: return L10n.Settings.invalidSwitchCheckpoint
+      case .drainTimedOut: return L10n.Settings.pendingOperationsTimedOut
+      case .outboxNotPersisted: return L10n.Settings.outboxNotPersisted
+      case .reconciliationIncomplete: return L10n.Settings.reconciliationIncomplete
+      case .servicesUnavailable: return L10n.Settings.localServicesUnavailable
+      case .databaseInUse: return L10n.Settings.localDatabaseInUse
+      case .localHubUnverified: return L10n.Settings.localBackendUnverified
+      case .commandTimedOut(let command): return L10n.Settings.commandTimedOut(command)
+      case .recoveryFailed: return L10n.Settings.backendSwitchNeedsRecovery
       }
     }
   }

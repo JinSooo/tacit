@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import CollectorCore
 
 /// 全项目的动效语言。动效只用来交代“发生了什么”：东西从哪来、到哪去、和什么有关。
 /// 只有三档节奏，同一类变化只用其中一档；曲线都是不回弹的临界阻尼弹簧，动画进行中再次操作会从当前速度接上。
@@ -86,13 +87,14 @@ struct DisclosureChevron: View {
 /// 加载中：等一小会儿还没好才淡入转圈，读得快时什么都不闪。
 struct DelayedProgress: View {
   var size: ControlSize = .small
-  var label = "正在读取"
+  var label: String? = nil
+  @ObservedObject private var language = LanguageStore.shared
   @State private var visible = false
 
   var body: some View {
     ProgressView().controlSize(size)
       .opacity(visible ? 1 : 0)
-      .accessibilityLabel(label)
+      .accessibilityLabel(label ?? L10n.text(zh: "正在读取", en: "Loading", lang: language.resolved))
       .task {
         try? await Task.sleep(for: Motion.loadingDelay)
         withAnimation(Motion.quick) { visible = true }

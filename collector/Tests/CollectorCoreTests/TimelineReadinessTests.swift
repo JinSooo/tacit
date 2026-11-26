@@ -20,7 +20,7 @@ import Testing
   #expect(!TimelineSetup.shouldShow(permissionsReady: false, modelReady: true, agentReady: nil))
 }
 
-@Test func captureTitleDistinguishesDisabledSourcesAndGlobalPause() {
+@Test(ChineseUITrait()) func captureTitleDistinguishesDisabledSourcesAndGlobalPause() {
   let until = Date(timeIntervalSince1970: 1000)
   #expect(CaptureFooterStatus.title(state: .recording, enabledSources: 0) == "未在记录")
   #expect(CaptureFooterStatus.title(state: .noPermission, enabledSources: 0) == "未在记录")

@@ -1,5 +1,13 @@
 package top.jinso.tacit.ui
 
+import top.jinso.tacit.R
+import top.jinso.tacit.audio.STORED_CONVERSATION_TITLE
+import top.jinso.tacit.i18n.UiStrings
+import top.jinso.tacit.i18n.AppLang
+import top.jinso.tacit.core.SPEAKER_ME
+import top.jinso.tacit.core.speakerDisplayName
+import top.jinso.tacit.core.transcriptLine
+import top.jinso.tacit.core.localizeTranscriptLines
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.Context
@@ -10,6 +18,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -33,10 +42,13 @@ import top.jinso.tacit.data.Vault
 import top.jinso.tacit.sources.Sources
 import top.jinso.tacit.ui.components.*
 
+internal fun recordTitle(title: String, source: String, strings: UiStrings): String =
+    if (source == Sources.AUDIO && title == STORED_CONVERSATION_TITLE) strings.text(R.string.stored_conversation_title) else title
+
 internal val correctionOrder = compareBy<HistoryRecord> { it.start }.thenBy { it.id }
 
 internal fun copyRecordText(context: Context, body: String, sensitive: Boolean) {
-    val clip = ClipData.newPlainText("Tacit", body)
+    val clip = ClipData.newPlainText(context.getString(R.string.app_name), body)
     if (sensitive && Build.VERSION.SDK_INT >= 33) {
         clip.description.extras = PersistableBundle().apply {
             putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
@@ -50,69 +62,77 @@ internal fun RecordDetail(
     record: HistoryRecord, vault: Vault, app: TacitApp, onBack: () -> Unit, notify: (String) -> Unit,
     onSelect: (HistoryRecord) -> Unit, onDelete: (HistoryRecord) -> Unit,
 ) = key(record.id) {
+    val format = uiFormat()
+    val strings = uiStrings()
     var deleting by remember { mutableStateOf(false) }
     var raw by rememberSaveable { mutableStateOf(false) }
     val changes by vault.changes.collectAsState()
     val corrected by produceState(emptyList<HistoryRecord>(), record.id, changes) {
         value = withContext(Dispatchers.IO) { vault.corrections(record.id).sortedWith(correctionOrder) }
     }
-    val isAudio = record.source == Sources.AUDIO
+    val isPhoneAudio = record.source == Sources.AUDIO
+    val isAudio = isPhoneAudio || (record.source == "mac.audio" && format.lang == AppLang.EN)
     val rendered by produceState(record.body, record.id) {
-        if (isAudio) value = withContext(Dispatchers.IO) { renderedTranscript(AudioController(app), record) }
+        if (isPhoneAudio) value = withContext(Dispatchers.IO) { renderedTranscript(AudioController(app), record) }
     }
     val original by produceState<HistoryRecord?>(null, record.corrects, changes) {
         value = record.corrects?.let { withContext(Dispatchers.IO) { vault.get(it) } }
     }
     val latest = corrected.lastOrNull()
-    val body = latest?.body ?: if (isAudio) readableTranscript(rendered) else record.body
+    val body = latest?.body ?: when {
+        isAudio -> readableTranscript(rendered)
+        hasSpeakerMarkers(record.source) -> localizeTranscriptLines(record.body, format.lang, strings)
+        else -> record.body
+    }
     val context = LocalContext.current
     Column(Modifier.fillMaxSize()) {
         PageBar("", onBack) {
-            IconButton(enabled = body.isNotBlank(), onClick = {
-                copyRecordText(context, body, record.sensitivity == "private" || latest?.sensitivity == "private")
-                notify("已复制")
-            }) { Icon(Icons.Outlined.ContentCopy, "复制") }
+            val copy = latest?.body ?: record.body
+            IconButton(enabled = copy.isNotBlank(), onClick = {
+                copyRecordText(context, copy, record.sensitivity == "private" || latest?.sensitivity == "private")
+                notify(strings.text(R.string.copied))
+            }) { Icon(Icons.Outlined.ContentCopy, strings.text(R.string.copy)) }
         }
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 12.dp),
         ) {
             DetailInfo(record.source, record.start, record.end, record.sensitivity == "private", includeYear = true)
-            DetailTitle(record.title)
+            DetailTitle(recordTitle(record.title, record.source, strings))
             if (body.isNotBlank()) ReadingBody(body, isAudio)
-            else Caption("这一段没有可显示的完整内容。")
+            else Caption(strings.text(R.string.record_no_content))
             Spacer(Modifier.height(12.dp))
-            corrected.singleOrNull()?.let { DetailLink("查看这条修正") { onSelect(it) } }
+            corrected.singleOrNull()?.let { DetailLink(strings.text(R.string.view_correction)) { onSelect(it) } }
             if (body != record.body) {
-                DetailLink(if (raw) "收起原文" else if (isAudio) "查看转写原文" else "查看原文", expanded = raw) { raw = !raw }
+                DetailLink(if (raw) strings.text(R.string.hide_original) else if (isAudio) strings.text(R.string.view_raw_transcript) else strings.text(R.string.view_original), expanded = raw) { raw = !raw }
                 Reveal(raw) { ReadingBody(record.body) }
             }
-            original?.let { DetailLink("查看原记录") { onSelect(it) } }
+            original?.let { DetailLink(strings.text(R.string.view_original_record)) { onSelect(it) } }
             if (corrected.size > 1) {
                 GroupDivider()
-                SectionLabel("后续修正", Modifier.padding(top = 12.dp))
+                SectionLabel(strings.text(R.string.later_corrections), Modifier.padding(top = 12.dp))
                 corrected.asReversed().forEach { change ->
-                    DetailLink(date(change.start, "M 月 d 日 HH:mm") + " 的修正") { onSelect(change) }
+                    DetailLink(strings.text(R.string.correction_at, format.dateAndClock(change.start))) { onSelect(change) }
                 }
             }
-            if (record.redactions > 0) Caption("已隐去 ${countLabel(record.redactions)} 处密钥", Modifier.padding(top = 12.dp))
+            if (record.redactions > 0) Caption(strings.quantity(R.plurals.redactions_count, record.redactions, countLabel(record.redactions)), Modifier.padding(top = 12.dp))
         }
         GroupDivider()
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.End,
         ) {
-            TextAction("删除", { deleting = true }, color = tacitColors.attention)
+            TextAction(strings.text(R.string.delete), { deleting = true }, color = tacitColors.attention)
         }
     }
     if (deleting) AlertDialog(
         onDismissRequest = { deleting = false },
-        title = { Text("删除这条记录？") },
+        title = { Text(strings.text(R.string.delete_record_title)) },
         text = {
-            Text(if (corrected.isEmpty()) "删除后无法恢复。"
-                else "这条记录和它的 ${countLabel(corrected.size)} 条修正会一并删除，无法恢复。")
+            Text(if (corrected.isEmpty()) strings.text(R.string.delete_irreversible)
+                else strings.quantity(R.plurals.delete_record_corrections_message, corrected.size, countLabel(corrected.size)))
         },
-        confirmButton = { TextAction("删除", { deleting = false; onDelete(record) }, color = tacitColors.attention) },
-        dismissButton = { TextAction("取消", { deleting = false }) },
+        confirmButton = { TextAction(strings.text(R.string.delete), { deleting = false; onDelete(record) }, color = tacitColors.attention) },
+        dismissButton = { TextAction(strings.text(R.string.cancel), { deleting = false }) },
     )
 }
 
@@ -127,10 +147,11 @@ internal fun EmptyState(title: String, message: String) {
 
 @Composable
 internal fun DetailInfo(source: String, start: Long, end: Long?, private: Boolean, includeYear: Boolean = false) {
-    val label = detailTimeLabel(start, end, includeYear)
+    val format = uiFormat()
+    val label = format.detailTimeLabel(start, end, includeYear)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         SourceIcon(source, 20.dp)
-        Caption("${sourceName(source)} · $label", Modifier.weight(1f, fill = false))
+        Caption("${format.sourceName(source)} · $label", Modifier.weight(1f, fill = false))
         if (private) PrivacyLock()
     }
 }
@@ -143,16 +164,20 @@ internal fun DetailTitle(title: String) {
 
 @Composable
 internal fun ReadingBody(body: String, transcript: Boolean = false) {
+    val strings = uiStrings()
+    val lang = uiFormat().lang
     SelectionContainer {
         if (!transcript) Text(body, color = tacitColors.readingBody)
         else Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
             body.split(Regex("\\r?\\n[ \\t]*\\r?\\n")).filter { it.isNotBlank() }.forEach { paragraph ->
-                val at = paragraph.indexOf('：')
-                if (at > 0 && at <= 80 && '\n' !in paragraph.take(at)) {
-                    val speaker = paragraph.take(at).trim()
-                    Text(speaker, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium,
-                        color = if (speaker == "我") tacitColors.accent else tacitColors.muted)
-                    Text(paragraph.substring(at + 1).trimStart(), color = tacitColors.readingBody)
+                val turn = transcriptLine(paragraph)
+                val speaker = turn.speaker
+                if (speaker.isNotEmpty() && speaker.length <= 80 && '\n' !in speaker) {
+                    DisableSelection {
+                        Text(speakerDisplayName(speaker, lang, strings), style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium, color = if (speaker == SPEAKER_ME) tacitColors.accent else tacitColors.muted)
+                    }
+                    Text(turn.text, color = tacitColors.readingBody)
                 } else Text(paragraph, color = tacitColors.readingBody)
             }
         }

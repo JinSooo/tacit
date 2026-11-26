@@ -168,7 +168,7 @@
   transform: translateY(4px) rotate(225deg);
 }
 
-/* 简约 / 详细切换与展开动画 */
+/* Simple / detailed switch and expansion. */
 @media (prefers-reduced-motion: no-preference) {
   #day-simple:not([hidden]),
   #day-detailed:not([hidden]) {
@@ -302,6 +302,7 @@
 }
 
 .day-chart {
+  --day-range: 600;
   --day-source-width: 6.5em;
   padding-block: 12px;
   border-block: 1px solid var(--line);
@@ -343,12 +344,12 @@
   background: var(--fill);
 }
 
-/* The chart covers 600 minutes (09:00–19:00). Source colors are confined to the lanes. */
+/* Source colors are confined to the lanes. */
 .day-chart-track::before {
   position: absolute;
   inset-block: 0;
-  left: calc(var(--day-start) * 100% / 600);
-  width: calc(var(--day-duration) * 100% / 600);
+  left: calc(var(--day-start) * 100% / var(--day-range));
+  width: calc(var(--day-duration) * 100% / var(--day-range));
   border-radius: inherit;
   background: var(--day-source-color, var(--accent));
   content: "";
@@ -401,6 +402,10 @@
 .day-project-overview {
   margin-top: 8px;
   color: var(--reading);
+}
+
+html[lang="en"] .day-project-overview {
+  font-family: var(--serif);
 }
 
 .day-project-current {

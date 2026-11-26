@@ -10,20 +10,20 @@ struct DayNavigation: ToolbarContent {
     ToolbarItemGroup(placement: .navigation) {
       ControlGroup {
         Button { shift(-1) } label: { PhIcon("caret-left", size: PhIcon.toolbar) }
-          .help("前一天").accessibilityLabel("前一天").keyboardShortcut("[", modifiers: .command)
-        Button("今天") { day = today }.disabled(day >= today).keyboardShortcut("t", modifiers: .command)
+          .help(L10n.previousDay).accessibilityLabel(L10n.previousDay).keyboardShortcut("[", modifiers: .command)
+        Button(L10n.today) { day = today }.disabled(day >= today).keyboardShortcut("t", modifiers: .command)
         Button { shift(1) } label: { PhIcon("caret-right", size: PhIcon.toolbar) }
-          .help("后一天").accessibilityLabel("后一天").keyboardShortcut("]", modifiers: .command).disabled(day >= today)
+          .help(L10n.nextDay).accessibilityLabel(L10n.nextDay).keyboardShortcut("]", modifiers: .command).disabled(day >= today)
       }
       Button { picking = true } label: { PhIcon("calendar-blank", size: PhIcon.toolbar) }
-        .help("跳到日期").accessibilityLabel("跳到日期")
+        .help(L10n.jumpToDate).accessibilityLabel(L10n.jumpToDate)
         .popover(isPresented: $picking, arrowEdge: .bottom) {
-          DatePicker("", selection: Binding(get: { day }, set: {
+          DatePicker(L10n.datePickerAccessibility, selection: Binding(get: { day }, set: {
             day = Calendar.current.startOfDay(for: $0)
             picking = false
           }), in: ...Date(), displayedComponents: .date)
             .datePickerStyle(.graphical).labelsHidden().padding(12)
-            .environment(\.locale, Locale(identifier: "zh_CN")).environment(\.calendar, ViewerCalendar.chinese)
+            .environment(\.locale, AppLanguage.current.locale()).environment(\.calendar, ViewerCalendar.formatting)
         }
     }
   }

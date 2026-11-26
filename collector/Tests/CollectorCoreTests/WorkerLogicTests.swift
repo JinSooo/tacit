@@ -92,7 +92,7 @@ import Foundation
   #expect(WorkerLogic.normalize([0, 0]) == [0, 0])
 }
 
-@Test func sampleNoteShowsWhenAndWhatWasSaid() {
+@Test(ChineseUITrait()) func sampleNoteShowsWhenAndWhatWasSaid() {
   #expect(SampleNote.line(stamp: nil, said: "你好") == "")
   #expect(SampleNote.line(stamp: "11 月 9 日 02:00", said: nil) == "11 月 9 日 02:00 录到的")
   #expect(SampleNote.line(stamp: "11 月 9 日 02:00", said: "  这个方案下周再定 ") == "11 月 9 日 02:00，当时说：这个方案下周再定")

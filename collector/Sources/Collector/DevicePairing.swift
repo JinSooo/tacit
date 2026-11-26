@@ -1,3 +1,4 @@
+import enum CollectorCore.L10n
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Foundation
@@ -16,10 +17,10 @@ struct DeviceSettings: Decodable {
 
     var title: String {
       switch self {
-      case .collect: "采集"
-      case .view: "查看"
-      case .admin: "管理"
-      case .agent: "AI 工具"
+      case .collect: L10n.Settings.collectRole
+      case .view: L10n.Settings.viewRole
+      case .admin: L10n.Settings.adminRole
+      case .agent: L10n.Settings.aiTools
       }
     }
   }

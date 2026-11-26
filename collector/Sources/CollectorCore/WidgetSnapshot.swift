@@ -33,11 +33,13 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     }
   }
 
+  public let language: AppLanguage?
   public let day: String
   public let summary: String?
   public let segments: [Segment]
 
-  public init(day: String, summary: String? = nil, segments: [Segment] = []) {
+  public init(day: String, summary: String? = nil, segments: [Segment] = [], language: AppLanguage? = nil) {
+    self.language = language
     self.day = day
     self.summary = summary
     self.segments = segments
@@ -48,6 +50,18 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     guard let home = getpwuid(getuid())?.pointee.pw_dir else { return nil }
     return URL(fileURLWithPath: String(cString: home), isDirectory: true)
       .appendingPathComponent("Library/Application Support/record-anything/widget/today.json")
+  }
+
+  /// Legacy snapshots always used Chinese. With no snapshot, use the host's published preference or the system.
+  public var resolvedLanguage: AppLanguage { language ?? .zh }
+
+  public static func languageURL(for file: URL) -> URL {
+    file.deletingLastPathComponent().appendingPathComponent("language")
+  }
+
+  public static func readLanguage(for file: URL) -> AppLanguage? {
+    guard let raw = try? String(contentsOf: languageURL(for: file), encoding: .utf8) else { return nil }
+    return AppLanguage(rawValue: raw)
   }
 
   public static func iconDirectory(for file: URL) -> URL {

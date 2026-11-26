@@ -154,3 +154,18 @@ test("设备和来源显示名字，不显示内部编号", () => {
   expect(html).not.toContain("android-zzzz9999");
   expect(html).not.toContain("android.audio");
 });
+
+test("English status localizes labels, errors and singular or plural units", () => {
+  const status = { ...emptyStatus(), language: "en" as const };
+  status.records.total = 1234;
+  status.records.by_source = [{ source: "android.audio", count: 1, last_received: generated_at }];
+  status.llm_today.used_tokens = 1;
+  status.llm_today.token_limit = 2000;
+  status.llm_today.by_tier = [{ ...total, tier: "hour", models: ["example-model"], calls: 1 }];
+  status.distill.last_error = { at: generated_at, tier: "hour", error: "schema_mismatch", recovered: true };
+  const html = render(status);
+  for (const text of ["Background service", "Less than a minute", "1,234 records", "Phone recording", ">1 record<", "Hourly roundup", "Used 1 token today, limit 2,000 tokens", 'data-label="Input tokens"', "The response had an unexpected format"]) {
+    expect(html).toContain(text);
+  }
+  expect(html).not.toMatch(/schema_mismatch|[\p{Script=Han}]/u);
+});

@@ -119,8 +119,8 @@
 | POST | `/v1/settings/models/test` | `{ tier, config? }`；`config` 是一档未保存的配置，不给就用已保存的 | `{ ok, ms, provider, model, error }`。最小提示调用一次，要求返回 `ok=true`，只验证连接与输出格式，超时 60 秒，`error` 已脱敏、≤300 字；不写 `llm_usage`。同一时间只跑一个，否则 409 |
 | PUT | `/v1/settings/keys/:provider` | `{ key }`，8–1024 个可见 ASCII，不含空格、`"`、`\` | `{ provider, set: true }`；写钥匙串 service `record-anything`、account `provider:<provider>`（已有则覆盖） |
 | DELETE | `/v1/settings/keys/:provider` | — | `{ provider, deleted }`；`deleted` 为删除前是否存在 |
-| GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, timeline_polish, timeline_overview, daily_token_limit, defaults, ranges, model_usage }` |
-| PUT | `/v1/settings/general` | 六个设置字段中任意几项 | 同 GET。空请求、未知字段及非法值返回 400，整份不写 |
+| GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, timeline_polish, timeline_overview, daily_token_limit, language, defaults, ranges, model_usage }` |
+| PUT | `/v1/settings/general` | 七个设置字段中任意几项 | 同 GET。空请求、未知字段及非法值返回 400，整份不写 |
 | GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial }] }`，`id` 为 `claude-code`、`codex`、`claude-desktop`。前两者的会话开始钩子（`~/.claude/settings.json`、`~/.codex/hooks.json`）和 MCP 登记（`~/.claude.json` 的 `mcpServers`、`~/.codex/config.toml` 的 `mcp_servers`）都在才算 `connected`，只有一个算 `partial`。Desktop 检查 `/Applications/Claude.app` 或 `~/Applications/Claude.app` 是否存在，MCP 配置见下，不要求 hook。状态表示配置已登记，不表示应用已重载 |
 | PUT | `/v1/settings/agents/:id` | `{ connected }` | `{ tools, note }`。等同 `cli.ts agents install|uninstall --tool <id> --yes`；本机找不到该工具时连接返回 409；执行失败 500，带原因。Codex 连接后的 `note` 提醒首次批准钩子；Desktop 连接、断开均提醒完全退出并重新打开应用；其他情况为 null |
 
@@ -136,7 +136,8 @@
 
 - `inject_tokens` 200–4000（默认 800）、`ask_done_days` 1–30 使用天（默认 3）、`archive_days` 1–90 使用天（默认 7），都是整数。
 - `timeline_polish` 为 `after_segment`（默认）、`hourly` 或 `nightly`。`timeline_overview` 为 `hourly`（默认）、`every_3h` 或 `nightly`。
-- `daily_token_limit` 为 1–1,000,000,000 的整数，单位为 token，默认 `null` 表示不限。`defaults` 返回全部设置的默认值，`ranges` 返回整数设置的上下界。
+- `daily_token_limit` 为 1–1,000,000,000 的整数，单位为 token，默认 `null` 表示不限。`language` 为 `"zh"` 或 `"en"`（不存 `"auto"`）：已有数据库升级迁移为 `"zh"`，全新数据库未设置时默认 `"en"`（服务端模式可用 `TACIT_LANGUAGE` 覆盖；Mac 管理设备首次连上或切换语言时会写入其解析后的语言）。`defaults` 返回全部设置的默认值，`ranges` 返回整数设置的上下界。
+- 记录正文里的说话人标记（`我`、`对方 N`、`[我]`、`[AI]`、`[HH:MM:SS] 我：`）为稳定存储协议，任何语言下写入新记录均沿用该格式，仅在客户端展示时按界面语言替换显示标签（英文：`Me`、`Speaker N`、`Others`），复制原文保留存储文本。
 - `model_usage` 只读，包含 `days_with_usage`、`average_daily_tokens`、`average_daily_timeline_tokens` 和 `today_tokens`。窗口包含今天和之前六个本地自然日，按有已知 token 数的日期平均，输入和输出合计。时间线部分统计 `day`、`day_polish`、`day_brief`，使用相同的天数作分母。排除 `connection_test`，旧整理调用的空任务名计入总量。无数据时两个平均值为 `null`，今天没有已知用量时 `today_tokens` 为 0。
 
 在 Claude Code、Codex 和 Claude Desktop 里登记的服务名是 `tacit`（工具名形如 `mcp__tacit__search`）。0.2.0 以前叫 `record-anything`：升级时（`hub/src/relocate-install.ts`）把本应用登记的旧条目原位改名，Codex 的工具审批子表和 Claude Code 用户设置里 `mcp__record-anything…` 的权限规则一并改名；设置页连接或断开时也会移除本应用的旧条目。同名的他人条目不动。
@@ -279,7 +280,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 
 本地今天的 `GET /v1/days/:date` 额外返回顶层 `drafts` 数组（可为空）。尚无整理结果时仍返回 `{ date, detail: null, drafts }`，草稿从当天开始取材。已有结果时按今天的切段核对已处理段的成员、重叠记录和活动边界。新段和有变化的段作为草稿显示，有变化的旧段沿用原 ID。迟到记录即使早于 `detail.cutoff`，也会参与核对。没有成员元数据的旧结果仍用截断时间裁取跨界记录。`omitted_record_ids` 记录不成草稿或模型省略、且未出现在其他段的记录。删除或修正时立即撤下受影响的文字和概述，保留其他段。
 
-草稿按开始时间正序返回，沿用现有的切段和 ID 锚点规则，不调用模型。每项有 `id`、`t_start`、`t_end`、`active_seconds`、`sources`、`apps: [{ source, app }]`、`title`、`excerpt`、`record_ids`、`project_id`，有明确事项时附 `thread_id`。标题取聊天对象、会话标题、“一场对话”或应用名；摘录优先在用户原话中跳过不足 5 字的语气词取最长一句，没有再用对方原话（AI 会话按输入顺序取），脱敏后至多 60 字。草稿排除私密内容、评测与发布检查、自动续跑、压缩摘要，以及只有时间骨架或短同意、催促的段。普通时间骨架可作为展开的原文成员；同一条跨界原始记录仍可通过完整原文 ID 打开。历史日期和 Agent 视图省略 `drafts`。
+草稿按开始时间正序返回，沿用现有的切段和 ID 锚点规则，不调用模型。每项有 `id`、`t_start`、`t_end`、`active_seconds`、`sources`、`apps: [{ source, app }]`、`title`、`title_kind?`、`excerpt`、`record_ids`、`project_id`，有明确事项时附 `thread_id`。标题取聊天对象、会话标题、默认对话标题（返回 `title_kind: "conversation"`，由客户端按界面语言渲染，兼容旧客户端仍可附默认 `title`）或应用名；摘录优先在用户原话中跳过不足 5 `speechUnits` 的语气词取最长一句，没有再用对方原话（AI 会话按输入顺序取），脱敏后至多 60 字。草稿排除私密内容、评测与发布检查、自动续跑、压缩摘要，以及只有时间骨架或短同意、催促的段。普通时间骨架可作为展开的原文成员；同一条跨界原始记录仍可通过完整原文 ID 打开。历史日期和 Agent 视图省略 `drafts`。
 
 增量整理按草稿的切段结果取材，每次最多送 50 段，保留 `continues`、项目名和段内依据编号等字段。校验省略时沿用全天规则。每个段成功处理后记下成员快照，代码不会再次送出成员和边界未变的段。内部 `days.detail.polished_segments` 保存处理过的段（含省略段）的稳定 ID、当前锚点、边界、成员和依赖记录；待重润色的段附 `pending`。内部 `overview_input` 保存概述输入摘要，`overview_checked_ms` 记录检查时刻。这些内部字段不由接口返回，跨天收尾用全天结果替换它们。
 
@@ -574,10 +575,10 @@ Mac 中枢和 Android 之间唯一的通道。采集权限下只传手机自己�
 |---|---|---|---|
 | `ingest` | `{ records }` | 同 `/v1/ingest` | 额外规则：`record.device` 必须等于调用方；`source` 与修正范围按 6.10.1 检查，不符合的那一条进 `rejected` |
 | `delete` | `{ ids }`（1–100） | `{ deleted }` | `collect` 和 `view` 只删除本设备的记录，忽略已知属于其他设备的 id。中枢还没有的 id 留一个不含内容的墓碑，之后同 id 的记录到达时按重复处理。`admin` 可以删除任意已入库记录；远程设备删除其他设备的记录受 6.11.4 限额，删本设备记录不计入。所有路径走真删流程，连带删除目标的修正。 |
-| `sync` | `{ cursor }`（首次 0） | `{ changes, cursor, more }` | 中枢下发给这台设备的变更，按 `seq` 升序，每页最多 200 条；见 6.6 |
+| `sync` | `{ cursor }`（首次 0） | `{ changes, cursor, more, language }` | 中枢下发给这台设备的变更，按 `seq` 升序，每页最多 200 条；`language` 为中枢当前的 `"zh" \| "en"`，供已配对手机对齐单场总结语言；见 6.6 |
 | `sync.ack` | `{ cursor }` | `{ ok: true }` | 删除 `seq ≤ cursor` 的待下发变更 |
 | `conversations` | `{ from, to }`（毫秒，范围不超过 32 天） | `{ conversations: [{ id, record_ids, start_ms, end_ms, title, summary, points }] }` | 只读：中枢为这台设备自己的录音按场写好的总结（同 `GET /v1/conversations` 的分场和总结）。只返回已有总结且记录全属于调用方的场次；没写总结的场（太短、私密、还在等）不返回，手机照旧显示自己的原文。 |
-| `conversations.put` | `{ summarizing, summaries: [{ id, record_ids, title, summary, points }] }`（`summaries` 最多 50 项；title ≤ 40、summary ≤ 400、points ≤ 5 条且每条 ≤ 120 字符） | `{ saved: [id], stale: [id] }` | 手机每次同步都发：`summarizing` 说明它开没开“AI 总结”，开着时中枢不再给这台设备的对话写总结（已移除的设备不算）。每项是手机按 `conversations` 同一规则分出的一场；`record_ids` 和中枢分出的那一场完全一致、都属于调用方、不私密时才写进 `conversation_summaries`（`saved`），否则 `stale`，手机不再重发。手机只在这一场的记录都已被中枢确认接收后才发。 |
+| `conversations.put` | `{ summarizing, summaries: [{ id, record_ids, title, summary, points }] }`（`summaries` 最多 50 项；title ≤ 80、summary ≤ 700、points ≤ 5 条且每条 ≤ 200 字符，兼容中文与英文上限） | `{ saved: [id], stale: [id] }` | 手机每次同步都发：`summarizing` 说明它开没开“AI 总结”，开着时中枢不再给这台设备的对话写总结（已移除的设备不算）。每项是手机按 `conversations` 同一规则分出的一场；`record_ids` 和中枢分出的那一场完全一致、都属于调用方、不私密时才写进 `conversation_summaries`（`saved`），否则 `stale`，手机不再重发。手机只在这一场的记录都已被中枢确认接收后才发。 |
 | `audio.sync`、`audio.sync.ack`、`audio.embeddings`、`audio.skipped`（body 带 `conversation_ref`）、`audio.samples`、`audio.lines` | 同 5.4 对应接口 | 同 5.4 | `audio.lines` 对应本机 `POST /v1/audio/lines`（`{ conversation_ref, lines: [{ at, speaker_id, hidden }] }` → `{ stored }`）。设备只可上传分给自己的样本；对话键不能属于其他设备；上传 `audio.lines` 前须已上传该对话的记录或声纹。本机登记的 Mac（`platform=mac`、`local_only=1`）与历史 `device="mac"` 共享音频归属、清理与分场身份，远端设备按各自 `device_id` 隔离。 |
 | `collector.status` | `{ time, transcription: { pending, failed } \| null, outbox_bytes, outbox_dropped, outbox_degraded, hub_busy, queue_peak }` | `{ ok: true }` | 采集端每 60 秒或出错时上报本机健康状态；`time` 为带时区的 RFC 3339，`transcription` 为 `null` 表示录音关闭。中枢按 `device_id` 存进 `distill_state`（`collector_status:<device_id>`），状态接口优先读取已登记设备的上报（优先本机 Mac），无上报时回落到 `collector-status.json`。移除设备时清除其上报。 |
 

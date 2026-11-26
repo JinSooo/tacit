@@ -1,5 +1,7 @@
 package top.jinso.tacit.ui.onboarding
 
+import top.jinso.tacit.R
+import top.jinso.tacit.i18n.AppLocale
 import android.Manifest
 import android.app.ActivityManager
 import android.app.NotificationManager
@@ -69,6 +71,7 @@ internal enum class SystemPage { APP, NOTIFICATIONS, BATTERY_OPTIMIZATION, BATTE
 
 /** OEM pages are deliberately not guessed. Fall back to app info, never report a jump as a grant. */
 internal fun openSystemPage(context: Context, page: SystemPage, notify: (String) -> Unit) {
+    val strings = AppLocale.strings(context)
     val appInfo = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri())
     val intent = when (page) {
         SystemPage.APP -> appInfo
@@ -79,7 +82,7 @@ internal fun openSystemPage(context: Context, page: SystemPage, notify: (String)
     }
     fun launch(target: Intent) = runCatching { context.startActivity(target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
     if (!launch(intent)) {
-        if (page != SystemPage.APP && launch(appInfo)) notify("这台手机没有提供直接入口，请在应用信息中检查")
-        else notify("无法打开系统设置，请从手机设置中找到 Tacit")
+        if (page != SystemPage.APP && launch(appInfo)) notify(strings.text(R.string.system_page_unavailable))
+        else notify(strings.text(R.string.system_page_failed))
     }
 }

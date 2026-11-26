@@ -1,20 +1,21 @@
 # Tacit 官网
 
-单页静态站，没有依赖，用 Bun 自带能力构建。
+中英文静态站，没有依赖，用 Bun 自带能力构建。
 
 ```sh
 bun site/build.ts           # 构建到 site/dist
-bun site/build.ts --serve   # 构建并在 http://localhost:4300 预览，刷新即重建
-open site/dist/index.html   # 不起服务也能直接打开看
+bun site/build.ts --serve   # 在 http://localhost:4300 预览，刷新页面即重建
+open site/dist/index.html   # 直接打开中文版
+open site/dist/en/index.html # 直接打开英文版
 ```
 
-构建产物是一个内联了全部样式、脚本和来源符号的 `index.html`，加上 `assets/` 里的图片，可以直接放到任何静态托管上。
+构建产物在 `site/dist/`。中文版是 `index.html`，英文版是 `en/index.html`，两页都内联样式、脚本和来源符号，共用 `assets/`，可通过 `file://` 打开。供 Mac 应用检查更新的 `latest.json` 只放在根目录。
 
-`src/index.html` 是页面骨架，`<!-- include: sections/x.html -->` 在构建时换成区块内容。每个区块有自己的 `sections/x.html`、`styles/x.css`，需要交互时再加 `scripts/x.js`。公共层只有 `styles/base.css`、`scripts/main.js` 和 `assets/` 里的标志、来源符号。页面不请求任何外部资源，不放统计脚本。
+`src/zh/` 和 `src/en/` 各有页面骨架 `index.html`、区块 `sections/*.html` 和在多处使用的 `day-overview.html`。`<!-- include: 路径 -->` 在构建时替换，路径相对包含它的文件。两页共用 `src/styles/`、`src/scripts/`、`src/assets/`。主题和复制等交互的文案由各页的 HTML 提供。构建会核对区块文件、区块顺序、元素 ID 和下载链接。页面不请求外部资源，不放统计脚本。
 
 ## 部署
 
-线上地址：https://tacit.jinso.top 。运行 `bun site/build.ts` 后，将 `site/dist/` 上传到任意静态托管服务（如 Cloudflare Pages、GitHub Pages 或自建 Nginx）即可。
+线上中文页为 https://tacit.jinso.top/ ，英文页为 https://tacit.jinso.top/en/ 。运行 `bun site/build.ts` 后，将整个 `site/dist/` 上传到静态托管服务（如 Cloudflare Pages、GitHub Pages 或自建 Nginx）。语言入口在顶栏。浏览器语言列表不含当前语言时，页面显示一行可关闭的提示，始终由读者选择是否切换。
 
 > 若使用 `wrangler pages deploy` 手动部署，建议先把 `site/dist` 复制到仓库外的临时目录再执行，避免 wrangler 在仓库根目录自动生成配置文件。
 
@@ -46,13 +47,25 @@ open site/dist/index.html   # 不起服务也能直接打开看
 
 ## 文案
 
-- 中文，短句，具体。说清它做什么、怎么做，不用“革命性”“智能”“赋能”“无缝”这类词，不用感叹号。
+- 中英文都用短句，说清它做什么、怎么做，不用宣传用语或感叹号。英文用句首大写，叙述性标题和概述使用拉丁衬线字体优先。
 - 不在标题上方加小标签（eyebrow），版式自己说明层级。能用布局说清楚的不写说明。
 - 界面用词按 `docs/ui.md` 第 1 节：事项、整理、自动带入、AI 工具、时间线、段、依据。不出现中枢、提炼、线程、注入、档位、OCR。
 - 如实：支持 Apple 芯片 Mac（macOS 14 及以上）与 arm64 Android（Android 9 及以上）；用云端模型整理时相关文字会发给你配置的模型服务；不收集遥测。不承诺尚未支持的能力（Windows 仅写计划支持/敬请期待，Intel Mac 暂不支持，iOS 仍在调研中）。
-- 下载链接：Mac 指向 `https://github.com/JinSooo/tacit/releases/tag/mac-v<版本号>`，Android 指向 `https://github.com/JinSooo/tacit/releases/tag/android-v<版本号>`（预发布期间 `releases/latest` 是 404）。每次发版要同步更新 `src/sections/hero.html` 和 `src/sections/download.html` 里的下载链接。
+- 下载链接：Mac 指向 `https://github.com/JinSooo/tacit/releases/tag/mac-v<版本号>`，Android 指向 `https://github.com/JinSooo/tacit/releases/tag/android-v<版本号>`（预发布期间 `releases/latest` 是 404）。每次发版要同步更新 `src/zh/sections/` 和 `src/en/sections/` 下的 `hero.html`、`download.html`。
 
-## 虚构的一天（全站示例数据共用）
+## 虚构的一天
+
+英文页用共享预算应用 Sunledger 作演示，所有人物和记录均为虚构。各区块使用同一天的记录，微信只作为可选 Mac 来源说明。
+
+| 开始 | 来源 | 活动 |
+| --- | --- | --- |
+| 09:20 | Codex | 增加 CSV 日期格式检测，让英国银行导出的 03/04 按 4 月 3 日读取 |
+| 10:45 | 手机录音 | 与设计师 Sam 定下把四步引导改成一屏 |
+| 13:30 | Claude Code | 完成月度预算结转，已删除分类的处理仍待定 |
+| 15:10 | Mac 上的 Zoom 录音 | 测试用户 Nora 希望合租者能看到谁欠谁钱 |
+| 19:40 | 手机录音 | 与 Leo 约好周六徒步 |
+
+### 中文示例
 
 示例一律虚构。主角是一位独立开发者，在做记账 App「晴天记账」，和设计师小林、产品搭档阿杰合作。日期：11 月 19 日 星期四。所有入时间线的活动段都以主体来源（AI 会话、微信、录音）驱动，浏览器和屏幕只作附带时间骨架与可搜索原文。
 
@@ -84,7 +97,10 @@ Tacit 记录的近期上下文（截至 11 月 19 日 17:52）
 
 ## 验收
 
-- `bun site/build.ts` 通过。
-- 1440、1024、390 三种宽度，浅色和深色各看一遍：没有横向滚动、截断、重叠；390 宽时两侧留白 16px。
+- `bun site/build.ts` 通过，并打印中英文一致性检查结果。确认产物只含一个根目录 `latest.json`，页面不存在未展开的 include、模块脚本或外部来源符号引用。
+- 直接打开两个 HTML，点顶栏语言链接来回切换。再用 `--serve` 确认 `/`、`/en`、`/en/` 均可打开，刷新时都重建。
+- 检查规范网址与 `zh-CN`、`en`、`x-default` 互链，资源路径分别是 `assets/`、`../assets/`。英文产物中的中文只出现在语言入口和提示链接。检查分享图是否使用对应语言。
+- 分别用含 `zh` 和含 `en` 的浏览器首选语言打开两个页面，确认只有语言不匹配时显示提示。关闭后刷新，提示保持隐藏。
+- 两页在 1440、1024、390 三种宽度下，浅色和深色各看一遍：没有横向滚动、截断、重叠；390 宽时两侧留白 16px。
 - 键盘能走到每个可交互元素，焦点可见；装饰性图形 `aria-hidden="true"`。
 - `prefers-reduced-motion: reduce` 下所有内容直接可读。

@@ -5,11 +5,11 @@
         <h2 class="display" id="download-heading">下载 Tacit</h2>
         <div>
           <div class="download-actions" data-platform-actions>
-            <a class="btn btn-primary" data-platform-target="mac" href="https://github.com/JinSooo/tacit/releases/tag/mac-v0.6.6">
+            <a class="btn btn-primary" data-platform-target="mac" href="https://github.com/JinSooo/tacit/releases/tag/mac-v0.7.0">
               <svg aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
               下载 Mac 版
             </a>
-            <a class="btn btn-quiet" data-platform-target="android" href="https://github.com/JinSooo/tacit/releases/tag/android-v0.6.6">
+            <a class="btn btn-quiet" data-platform-target="android" href="https://github.com/JinSooo/tacit/releases/tag/android-v0.7.0">
               <svg aria-hidden="true"><use href="assets/sources.svg#download"/></svg>
               下载 Android 版
             </a>
@@ -34,7 +34,8 @@
               <p>如果没有这个按钮，在终端运行下面的命令，再打开 Tacit。</p>
               <div class="download-command">
                 <code id="download-command">xattr -dr com.apple.quarantine /Applications/Tacit.app</code>
-                <button class="download-copy" type="button" aria-label="复制终端命令" hidden>复制</button>
+                <button class="download-copy" type="button" aria-label="复制终端命令"
+                  data-copied="已复制命令" data-copy-failed="无法自动复制，请选中命令手动复制。" hidden>复制</button>
               </div>
               <p class="download-copy-status caption" role="status"></p>
             </li>
@@ -58,21 +59,3 @@
     </div>
   </div>
 </section>
-
-<script type="module">
-  const button = document.querySelector(".download-copy");
-  const command = document.querySelector("#download-command");
-  const status = document.querySelector(".download-copy-status");
-
-  if (navigator.clipboard?.writeText) {
-    button.hidden = false;
-    button.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(command.textContent.trim());
-        status.textContent = "已复制命令";
-      } catch {
-        status.textContent = "无法自动复制，请选中命令手动复制。";
-      }
-    });
-  }
-</script>

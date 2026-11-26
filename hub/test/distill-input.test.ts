@@ -1,3 +1,4 @@
+import { updateGeneral } from "../src/general-settings.ts";
 import { expect, test } from "bun:test";
 import Ajv from "ajv";
 import { fixture, setup } from "./helpers.ts";
@@ -35,6 +36,7 @@ test("实测归属引用回归：拒绝编造片段 ID，短编号还原已有�
 
 function seed(bodies: string[]) {
   const ctx = setup(), store = new DistillStore(ctx.db);
+  updateGeneral(ctx.db, { language: "zh" });
   const records = bodies.map((body, i) => fixture({ source: "codex.session", source_ref: `synthetic-${i}`, title: `记录${i}`, body, t_start: new Date(now + i).toISOString() }));
   const ingested = ctx.db.ingest(records);
   if (ingested.accepted !== records.length) { ctx.cleanup(); throw new Error(JSON.stringify(ingested)); }

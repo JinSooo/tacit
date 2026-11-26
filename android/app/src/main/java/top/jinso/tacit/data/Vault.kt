@@ -1,5 +1,6 @@
 package top.jinso.tacit.data
 
+import top.jinso.tacit.sync.RECORD_TOO_LARGE
 import android.content.ContentValues
 import android.content.Context
 import net.zetetic.database.sqlcipher.SQLiteDatabase
@@ -331,7 +332,7 @@ class Vault(context: Context, private val prefs: Preferences, private val onSend
                 val copy = sendingCopy(wire, device)
                 val length = copy.toString().toByteArray().size + 1
                 if (length > bodyBudget) {
-                    setSyncState(id, "rejected", "记录太大，无法发送")
+                    setSyncState(id, "rejected", RECORD_TOO_LARGE)
                     continue
                 }
                 if (bytes + length > bodyBudget) return@buildList

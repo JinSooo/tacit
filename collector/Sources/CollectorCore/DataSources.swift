@@ -12,13 +12,18 @@ public enum SourcePermission: Equatable, Sendable {
 public struct DataSourceDescriptor: Equatable, Sendable {
   public enum Kind: Equatable, Sendable { case builtin, plugin }
   public let id: String
-  public let title: String
+  private let defaultTitle: String
+  public var title: String { L10n.text(zh: defaultTitle, en: Self.englishTitles[id] ?? defaultTitle) }
   /// 设置存储里的开关键；OCR 和录音沿用原来的键，升级后用户的选择不丢。
   public let defaultsKey: String
   public let defaultEnabled: Bool
   public let kind: Kind
+  private static let englishTitles = [
+    "screen": "Screen activity", "ocr": "Screen text", "audio": "Recording",
+    "wechat": "WeChat conversations", "agent-sessions": "AI sessions", "browser": "Browser",
+  ]
   public init(id: String, title: String, defaultsKey: String? = nil, defaultEnabled: Bool = true, kind: Kind = .builtin) {
-    self.id = id; self.title = title; self.defaultsKey = defaultsKey ?? "source.\(id).enabled"
+    self.id = id; self.defaultTitle = title; self.defaultsKey = defaultsKey ?? "source.\(id).enabled"
     self.defaultEnabled = defaultEnabled; self.kind = kind
   }
 }
@@ -98,10 +103,10 @@ public enum MaintenanceTask: String, CaseIterable, Sendable {
   case syncAll, reimportRecent, importAll, backfill
   public var title: String {
     switch self {
-    case .syncAll: return "同步全部"
-    case .reimportRecent: return "重新导入最近 7 天"
-    case .importAll: return "导入全部历史"
-    case .backfill: return "整理启用前的历史"
+    case .syncAll: return L10n.text(zh: "同步全部", en: "Sync all")
+    case .reimportRecent: return L10n.text(zh: "重新导入最近 7 天", en: "Reimport the past 7 days")
+    case .importAll: return L10n.text(zh: "导入全部历史", en: "Import all history")
+    case .backfill: return L10n.text(zh: "整理启用前的历史", en: "Summarize earlier history")
     }
   }
 }
@@ -140,27 +145,32 @@ public enum PluginImport {
     let head: String
     if !ok {
       let labels = [
-        "sandbox": "当前系统无法隔离此数据源，未执行",
-        "permission": "无权读取来源",
-        "missing_file": "来源文件或程序不存在",
-        "network": "连接失败",
-        "interrupted": "已中断",
-        "storage": "记录保存失败",
-        "protocol": "读取结果有问题",
-        "rejected": "部分记录格式不对，没有保存",
-        "cleanup": "清理临时数据失败",
+        "sandbox": L10n.text(zh: "当前系统无法隔离此数据源，未执行", en: "This source couldn't run because macOS couldn't isolate it"),
+        "permission": L10n.text(zh: "无权读取来源", en: "Permission to read the source is missing"),
+        "missing_file": L10n.text(zh: "来源文件或程序不存在", en: "The source file or program is missing"),
+        "network": L10n.text(zh: "连接失败", en: "Connection failed"),
+        "interrupted": L10n.text(zh: "已中断", en: "Interrupted"),
+        "storage": L10n.text(zh: "记录保存失败", en: "Couldn't save records"),
+        "protocol": L10n.text(zh: "读取结果有问题", en: "Couldn't read the source results"),
+        "rejected": L10n.text(zh: "部分记录格式不对，没有保存", en: "Some records had an invalid format and were skipped"),
+        "cleanup": L10n.text(zh: "清理临时数据失败", en: "Couldn't clear temporary data"),
       ]
-      head = failure.flatMap { labels[$0] } ?? "读取失败"
+      head = failure.flatMap { labels[$0] } ?? L10n.text(zh: "读取失败", en: "Couldn't read the source")
     }
-    else if let accepted { head = accepted == 0 ? "没有新记录" : "新增 \(accepted.formatted()) 条" }
-    else { head = "完成" }
+    else if let accepted { head = accepted == 0 ? L10n.text(zh: "没有新记录", en: "No new records") :
+        L10n.count(accepted, one: "%@ new record", other: "%@ new records", zh: "新增 \(accepted.formatted()) 条") }
+    else { head = L10n.text(zh: "完成", en: "Done") }
     let s = Int(elapsed)
     let took = s >= 60 ? (s % 60 == 0 ? "\(s / 60) 分钟" : "\(s / 60) 分 \(s % 60) 秒") : s >= 1 ? "\(s) 秒" : nil
-    let base = took.map { "\(head)，用时 \($0)" } ?? head
+    let base = took.map {
+      let elapsed = s >= 60 ? L10n.englishDuration(minutes: s / 60) : "\(s) sec"
+      return L10n.text(zh: "\(head)，用时 \($0)", en: "\(head), took \(elapsed)")
+    } ?? head
     // 告警由 runner 按计数生成，不含正文；最多显示两条。
     let notes = warnings.prefix(2).filter { !$0.isEmpty && $0.count <= 80 }
     guard !notes.isEmpty else { return base }
-    return base + "；" + notes.joined(separator: "；")
+    let separator = L10n.text(zh: "；", en: ", ")
+    return base + separator + notes.joined(separator: separator)
   }
 }
 
@@ -203,17 +213,19 @@ public struct DistillRequestInfo: Decodable, Equatable, Identifiable, Sendable {
   public var finished: Bool { status == "done" || status == "failed" }
   /// 界面上的一行状态。常驻提炼进程没在跑时请求会一直排队，如实显示。
   public var statusText: String {
-    let range = from.flatMap { f in to.map { "\(f) 至 \($0)" } }
-    let prefix = range.map { "\($0)：" } ?? ""
+    let range = from.flatMap { f in to.map { L10n.text(zh: "\(f) 至 \($0)", en: "\(f) to \($0)") } }
+    let prefix = range.map { L10n.text(zh: "\($0)：", en: "\($0): ") } ?? ""
     switch status {
-    case "queued": return prefix + "排队中，等待后台整理"
+    case "queued": return prefix + L10n.text(zh: "排队中，等待后台整理", en: "Waiting for the background service to summarize")
     case "running":
-      if let p = progress, p.total > 0, p.done < p.total { return prefix + "正在准备，已完成 \(p.done) 天，共 \(p.total) 天" }
-      return prefix + (kind == "backfill" ? "正在整理事项和每日时间线" : "正在整理")
+      if let p = progress, p.total > 0, p.done < p.total { return prefix + L10n.text(zh: "正在准备，已完成 \(p.done) 天，共 \(p.total) 天", en: "Preparing, \(L10n.number(p.done)) of \(L10n.number(p.total)) days complete") }
+      return prefix + (kind == "backfill" ? L10n.text(zh: "正在整理事项和每日时间线", en: "Summarizing tasks and daily timelines…") : L10n.text(zh: "正在整理", en: "Summarizing…"))
     case "done":
-      if kind == "backfill", let p = progress { return prefix + (p.total == 0 ? "完成，这段日期里没有要整理的记录" : "完成，整理了 \(p.total) 天") }
-      return prefix + "完成"
-    case "failed": return prefix + "没有成功，\(error.map(ModelErrorText.plain) ?? "原因不明。")"
+      if kind == "backfill", let p = progress { return prefix + (p.total == 0 ? L10n.text(zh: "完成，这段日期里没有要整理的记录", en: "Done. No records to summarize in this date range") : L10n.count(p.total, one: "Done. Summarized %@ day", other: "Done. Summarized %@ days", zh: "完成，整理了 \(p.total) 天")) }
+      return prefix + L10n.text(zh: "完成", en: "Done")
+    case "failed":
+      let reason = error.map(ModelErrorText.plain) ?? L10n.text(zh: "原因不明。", en: "Unknown error.")
+      return prefix + L10n.text(zh: "没有成功，\(reason)", en: "Failed. \(reason)")
     default: return prefix + status
     }
   }

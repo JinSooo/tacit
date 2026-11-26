@@ -1,5 +1,7 @@
 package top.jinso.tacit.audio
 
+import top.jinso.tacit.core.SPEAKER_ME
+import top.jinso.tacit.core.speakerNumber
 import org.json.JSONArray
 import org.json.JSONObject
 import top.jinso.tacit.sync.MacVoiceprint
@@ -39,8 +41,8 @@ internal fun isMeSpeaker(speaker: JSONObject?, mac: MacVoiceprint?): Boolean {
 }
 
 internal fun transcriptSpeakerLabel(speaker: JSONObject?, mac: MacVoiceprint? = null, number: () -> Int): String {
-    if (isMeSpeaker(speaker, mac)) return "我"
-    return speaker?.optString("name")?.takeIf(String::isNotEmpty) ?: "对方 ${number()}"
+    if (isMeSpeaker(speaker, mac)) return SPEAKER_ME
+    return speaker?.optString("name")?.takeIf(String::isNotEmpty) ?: speakerNumber(number())
 }
 
 /** A voice heard this long has a stable center; shorter ones only attach to such voices (as on the Mac). */
@@ -177,7 +179,7 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
         val labels = conversation?.optJSONObject("labels")
         val members = labels?.keys()?.asSequence()?.filter { labels.getInt(it) == number }?.toList().orEmpty()
         val voices = (listOf(speaker) + (members - speaker)).mapNotNull(find)
-        if (voices.any(isMe)) return "我"
+        if (voices.any(isMe)) return SPEAKER_ME
         return transcriptSpeakerLabel(voices.firstOrNull { it.optString("name").isNotEmpty() } ?: find(speaker), mac) { number }
     }
     fun label(clip: JSONObject, speaker: String): Int = participantLabel(

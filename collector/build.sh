@@ -21,7 +21,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSAccentColorName</key><string>AccentColor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.6.6</string>
+  <key>CFBundleShortVersionString</key><string>0.7.0</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
@@ -31,12 +31,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleURLSchemes</key><array><string>tacit</string></array>
   </dict></array>
   <key>NSBonjourServices</key><array><string>_tacit._tcp</string></array>
-  <key>NSLocalNetworkUsageDescription</key><string>让手机在局域网内找到这台 Mac。</string>
-  <key>NSMicrophoneUsageDescription</key><string>录制麦克风中的人声，在本机加密保存并整理对话记录。</string>
-  <key>NSAudioCaptureUsageDescription</key><string>录制系统播放的人声，在本机加密保存并整理对话记录。</string>
-  <key>NSDesktopFolderUsageDescription</key><string>记录桌面中新出现的文件名和路径，不读取文件内容。</string>
-  <key>NSDocumentsFolderUsageDescription</key><string>记录文稿中新出现的文件名和路径，不读取文件内容。</string>
-  <key>NSDownloadsFolderUsageDescription</key><string>记录下载完成的文件名、路径和来源，不读取文件内容。</string>
+  <key>NSLocalNetworkUsageDescription</key><string>Tacit lets your phone find this Mac on the local network. 让手机在局域网内找到这台 Mac。</string>
+  <key>NSMicrophoneUsageDescription</key><string>Tacit records voices from the microphone to create conversation records and encrypts the audio on this Mac. 录制麦克风中的人声，在本机加密保存并整理对话记录。</string>
+  <key>NSAudioCaptureUsageDescription</key><string>Tacit records voices played by the system to create conversation records and encrypts the audio on this Mac. 录制系统播放的人声，在本机加密保存并整理对话记录。</string>
+  <key>NSDesktopFolderUsageDescription</key><string>Tacit records only the names and paths of new files on your Desktop. 记录桌面中新出现的文件名和路径，不读取文件内容。</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>Tacit records only the names and paths of new files in your Documents folder. 记录文稿中新出现的文件名和路径，不读取文件内容。</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>Tacit records only the names, paths, and sources of completed downloads. 记录下载完成的文件名、路径和来源，不读取文件内容。</string>
 </dict></plist>
 PLIST
 WIDGET="$APP/Contents/PlugIns/TacitWidget.appex"
@@ -61,7 +61,8 @@ PLIST
 # ExtensionFoundation needs the Foundation entry point. Keep the Swift @main it dispatches to.
 xcrun --sdk macosx swiftc -target arm64-apple-macosx14.0 -O -application-extension -parse-as-library \
   -Xlinker -e -Xlinker _NSExtensionMain -Xlinker -u -Xlinker _main \
-  Sources/CollectorCore/WidgetSnapshot.swift Sources/Collector/Viewer/Palette.swift Widget/DayWidgetView.swift Widget/TacitWidget.swift \
+  Sources/CollectorCore/WidgetSnapshot.swift Sources/CollectorCore/AppLanguage.swift Sources/CollectorCore/L10n.swift \
+  Sources/Collector/Viewer/Palette.swift Widget/DayWidgetView.swift Widget/TacitWidget.swift \
   -o "$WIDGET/Contents/MacOS/TacitWidget"
 mkdir -p "$APP/Contents/Frameworks"
 LIB="vendor/sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib/lib"
@@ -138,3 +139,13 @@ codesign -dvv "$RUNTIME_BIN" 2>&1 | grep -q '^Authority=Record Anything Dev$' \
   || { echo "自带的运行时没有用本应用的证书重签，系统后台提示会显示 Bun 作者的名字" >&2; exit 1; }
 [ "$("$RUNTIME_BIN" -e 'let s = 0; for (let i = 0; i < 1e6; i++) s += i; console.log(s)')" = "499999500000" ] \
   || { echo "重签后的运行时无法运行" >&2; exit 1; }
+# Bundled localizations change AppKit punctuation spacing and other applications' display names.
+LOCALIZATIONS="$(find "$APP" -iname '*.lproj' -print)"
+[ -z "$LOCALIZATIONS" ] || { printf 'Unexpected bundle localizations:\n%s\n' "$LOCALIZATIONS" >&2; exit 1; }
+for plist in "$APP/Contents/Info.plist" "$WIDGET/Contents/Info.plist"; do
+  if /usr/libexec/PlistBuddy -c 'Print :CFBundleLocalizations' "$plist" >/dev/null 2>&1 ||
+     [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDevelopmentRegion' "$plist" 2>/dev/null)" = "zh-Hans" ]; then
+    echo "$plist declares a forbidden bundle localization" >&2
+    exit 1
+  fi
+done

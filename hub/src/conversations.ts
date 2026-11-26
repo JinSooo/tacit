@@ -1,6 +1,7 @@
 import type { HubDB } from "./db.ts";
 import { InputError } from "./db.ts";
 import { AUDIO_SOURCES, audioDeviceGroup, audioEquivalentDevices, recordDeviceFilter, sourceList } from "./record-sources.ts";
+import { speakerDisplayName, speechUnits, type Lang } from "./i18n/index.ts";
 
 /**
  * 一场对话常被静音切成几条记录，按规则合成一组；
@@ -35,8 +36,9 @@ export function saveLines(db: HubDB, ref: string, lines: { at: string; speaker_i
 
 /** 相邻两条对话记录间隔不超过它，且同在一个会议软件里（或都不在会议里），算同一场对话。 */
 export const CONVERSATION_GAP_MS = 10 * 60_000;
-/** 转写整理后不到这么多字的不总结，看原文就够了。 */
+/** 转写整理后不到这么多语音单位的不总结，看原文就够了。 */
 export const SUMMARY_MIN_CHARS = 200;
+export const meetsSummaryMinimum = (text: string) => speechUnits(text) >= SUMMARY_MIN_CHARS;
 
 export interface AudioRow { id: string; start_ms: number; end_ms: number; app: string | null; private: boolean; device?: string; source?: string }
 export interface ConversationGroup { id: string; record_ids: string[]; start_ms: number; end_ms: number; app: string | null; private: boolean; device?: string }
@@ -97,13 +99,18 @@ export function parseTranscript(body: string, t_start: string, source?: string):
 }
 
 const FILLER = /^(嗯|啊|哦|噢|呃|额|唉|哎|诶|欸|嘿|喂|哈|呀|yeah|yes|yep|oh|ok|okay|hello|hi|hey|wei|uh|um|hmm|mm|bye)+$/i;
+const EN_HESITATION = /^(?:uh+|um+|hmm+|mm+)$/i;
 /** 识别噪声：语气词、一两个字的碎片、夹在中文里的假名（背景声被认成日语）。 */
-export function isNoise(text: string): boolean {
+export function isNoise(text: string, { cjkMajority = true }: { cjkMajority?: boolean } = {}): boolean {
   const t = text.replace(/[\s\p{P}\p{S}]/gu, "");
+  if (!cjkMajority) {
+    const words = text.match(/[\p{L}\p{N}]+/gu) ?? [];
+    return !words.length || words.every(word => EN_HESITATION.test(word));
+  }
   if (t.length <= 2) return true;
   if (FILLER.test(t)) return true;
   // 中文对话里单独冒出的一个短英文词（"The."），多半是背景声被认成了英文。
-  if (/^[A-Za-z]{1,5}$/.test(t)) return true;
+  if (/^[A-Za-z]{1,5}$/.test(text.trim().replace(/[\p{P}\p{S}]+$/gu, ""))) return true;
   return /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(t) && t.replace(/[\p{Script=Hiragana}\p{Script=Katakana}ー]/gu, "").length <= 3;
 }
 
@@ -113,8 +120,16 @@ export interface Turn { at: string; speaker: string; text: string }
 export function readableTurns(lines: Line[], name: (label: string, speakerId?: string | null) => string): Turn[] {
   const kept: (Line & { speaker: string })[] = [];
   const norm = (s: string) => s.replace(/[\s\p{P}\p{S}]/gu, "");
+  let cjk = 0, letters = 0;
+  for (const { text } of lines) {
+    for (const letter of text.match(/\p{L}/gu) ?? []) {
+      letters++;
+      if (/[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]/u.test(letter)) cjk++;
+    }
+  }
+  const cjkMajority = cjk > letters / 2;
   for (const l of lines.slice().sort((a, b) => a.at_ms - b.at_ms)) {
-    if (isNoise(l.text)) continue;
+    if (isNoise(l.text, { cjkMajority })) continue;
     const n = norm(l.text);
     if (kept.some(k => l.at_ms - k.at_ms <= 10_000 && norm(k.text) === n)) continue;
     kept.push({ ...l, speaker: name(l.label, l.speaker_id) });
@@ -123,7 +138,9 @@ export function readableTurns(lines: Line[], name: (label: string, speakerId?: s
   for (const k of kept) {
     const prev = out.at(-1);
     if (prev && prev.speaker === k.speaker && k.at_ms - prev.last <= 60_000) {
-      prev.text += /[。！？!?…,，、；;：:]$/.test(prev.text) ? k.text : `，${k.text}`;
+      prev.text += cjkMajority
+        ? (/[。！？!?…,，、；;：:]$/.test(prev.text) ? k.text : `，${k.text}`)
+        : (/[.!?…,;:]$/.test(prev.text) ? ` ${k.text}` : `, ${k.text}`);
       prev.last = k.at_ms;
     } else out.push({ at: new Date(k.at_ms).toISOString(), speaker: k.speaker, text: k.text, last: k.at_ms });
   }
@@ -262,12 +279,12 @@ export type SummaryState = "ready" | "waiting" | "short" | "private";
 export function summaryState(g: ConversationGroup, turns: Turn[], summary: Summary | null, now = Date.now()): SummaryState {
   if (summary) return "ready";
   if (g.private) return "private";
-  if (turns.reduce((n, t) => n + t.text.length, 0) < SUMMARY_MIN_CHARS) return "short";
+  if (!meetsSummaryMinimum(turns.map(t => t.text).join("\n"))) return "short";
   return "waiting";
 }
 
 /** 查看界面打开一条对话记录时用：它所在的整场对话、整理过的原文和总结。 */
-export function conversationDetail(db: HubDB, recordId: string, now = Date.now()) {
+export function conversationDetail(db: HubDB, recordId: string, now = Date.now(), lang: Lang = "zh") {
   const r = db.db.prepare<[string], { t_start_ms: number; device: string }>(
     `SELECT t_start_ms,device FROM records WHERE id=? AND source IN (${sourceList(AUDIO_SOURCES)})`).get(recordId);
   if (!r) throw new InputError("不是对话记录");
@@ -280,7 +297,8 @@ export function conversationDetail(db: HubDB, recordId: string, now = Date.now()
     return row ? [{ id: row.id, t_start: row.t_start, t_end: row.t_end, body: bodyOf(db, row) }] : [];
   });
   return { id: g.id, record_ids: g.record_ids, start: new Date(g.start_ms).toISOString(), end: new Date(g.end_ms).toISOString(), app: g.app,
-    state: summaryState(g, turns, summary, now), title: summary?.title ?? null, summary: summary?.summary ?? null, points: summary?.points ?? [], turns, records };
+    state: summaryState(g, turns, summary, now), title: summary?.title ?? null, summary: summary?.summary ?? null, points: summary?.points ?? [],
+    turns: lang === "zh" ? turns : turns.map(turn => ({ ...turn, speaker: speakerDisplayName(turn.speaker, lang) })), records };
 }
 
 /** 列表用：每场对话的组成和标题（有总结时）。 */

@@ -1,5 +1,11 @@
 package top.jinso.tacit.ui
 
+import top.jinso.tacit.R
+import top.jinso.tacit.i18n.AppLang
+import top.jinso.tacit.i18n.UiStrings
+import java.util.Locale
+import java.time.format.DateTimeFormatter
+import java.time.ZoneId
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -70,6 +76,8 @@ import java.util.concurrent.CompletableFuture
     macRemoved: Boolean,
     health: CollectionHealth?,
 ) {
+    val format = uiFormat()
+    val strings = uiStrings()
     val activity=LocalActivity.current ?: return
     val audio=remember{AudioController(app)};val scope=rememberCoroutineScope()
     var state by remember{mutableStateOf(audio.state())};var speakers by remember{mutableStateOf(emptyList<AudioSpeaker>())}
@@ -88,7 +96,7 @@ import java.util.concurrent.CompletableFuture
                 after()
                 notify(success)
             } catch (_: Exception) {
-                notify("操作未完成，请稍后重试")
+                notify(strings.text(R.string.operation_failed))
             } finally {
                 busy = false
             }
@@ -139,7 +147,7 @@ import java.util.concurrent.CompletableFuture
     val local = remember(rows, timeline.days, today) {
         val projectedIds = timeline.days.flatMap { (date, value) -> value.entries(date == today) }
             .flatMap { it.recordIds }.toSet()
-        undisplayedConversations(rows, projectedIds).groupBy { LocalDate.parse(date(it.start, "yyyy-MM-dd")) }
+        undisplayedConversations(rows, projectedIds).groupBy { Instant.ofEpochMilli(it.start).atZone(ZoneId.systemDefault()).toLocalDate() }
     }
     val availableDays = local.keys + timeline.days.filter { (date, value) ->
         !value.overview.isNullOrBlank() || value.entries(date == today).isNotEmpty()
@@ -158,14 +166,14 @@ import java.util.concurrent.CompletableFuture
             val earlierTint by animateColorAsState(if (earlier != null) tacitColors.muted else tacitColors.faint, Motion.quick(), label = "earlier")
             val laterTint by animateColorAsState(if (later != null) tacitColors.muted else tacitColors.faint, Motion.quick(), label = "later")
             IconButton(onClick = { earlier?.let(onDay) }, enabled = earlier != null) {
-                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, "前一天", tint = earlierTint)
+                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, strings.text(R.string.previous_day), tint = earlierTint)
             }
-            if (day != today) TextButton(onClick = { onDay(today) }) { Text("今天") }
+            if (day != today) TextButton(onClick = { onDay(today) }) { Text(strings.text(R.string.today)) }
             IconButton(onClick = { later?.let(onDay) }, enabled = later != null) {
-                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, "后一天", tint = laterTint)
+                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, strings.text(R.string.next_day), tint = laterTint)
             }
             IconButton(onClick = { onOpenSettings(null) }) {
-                Icon(Icons.Outlined.Settings, "设置", tint = tacitColors.muted)
+                Icon(Icons.Outlined.Settings, strings.text(R.string.settings), tint = tacitColors.muted)
             }
         }
         AnimatedContent(day, transitionSpec = {
@@ -183,13 +191,13 @@ import java.util.concurrent.CompletableFuture
         val notice = recordingNotice(
             state, app.prefs.audioCaptureWanted,
             activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
-            health?.recordingNotificationsBlocked == true, macRemoved,
+            health?.recordingNotificationsBlocked == true, macRemoved, strings,
         )
         if (notice != null) item(key = "notice") {
                     Box(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) {
                 val route = notice.route
                 when {
-                    notice.start -> NoticeAction(notice.text, "开启", !busy, startRecording)
+                    notice.start -> NoticeAction(notice.text, strings.text(R.string.turn_on), !busy, startRecording)
                     route != null -> NoticeRow(notice.text) { onOpenSettings(route) }
                     notice.openNotifications -> NoticeRow(notice.text) { openSystemPage(activity, SystemPage.NOTIFICATIONS, notify) }
                     else -> NoticeText(notice.text)
@@ -203,13 +211,13 @@ import java.util.concurrent.CompletableFuture
                             play = { toggleSample(candidate.id) },
                     mark = {
                         audio.stopPlayback()
-                        work({ audio.markMe(candidate.id) }, "已标记为我，将补转写保留期内的录音") {
+                        work({ audio.markMe(candidate.id) }, strings.text(R.string.voice_marked_me)) {
                             speakers = speakers.map { if (it.id == candidate.id) it.copy(isMe = true) else it }
                         }
                     },
                     ignore = {
                         audio.stopPlayback()
-                        work({ audio.setIgnored(candidate.id, true) }, "好的，换一段再问") {
+                        work({ audio.setIgnored(candidate.id, true) }, strings.text(R.string.voice_try_another)) {
                             speakers = speakers.filterNot { it.id == candidate.id }
                         }
                     },
@@ -218,9 +226,9 @@ import java.util.concurrent.CompletableFuture
         }
                 if ((!loaded && !loadFailed) || busy) item(key = "progress") { ProgressLine(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) }
                 if (loadFailed) item(key = "failed") {
-                    Caption("暂时无法读取录音，正在重试。", Modifier.itemMotion(this).padding(top = 16.dp), color = tacitColors.attention)
+                    Caption(strings.text(R.string.recordings_unavailable), Modifier.itemMotion(this).padding(top = 16.dp), color = tacitColors.attention)
         } else if (loaded && day !in availableDays) item(key = "empty") {
-                    Text("说过的话，会按天写在这里。", Modifier.itemMotion(this).padding(top = 48.dp, end = 12.dp),
+                    Text(strings.text(R.string.timeline_empty), Modifier.itemMotion(this).padding(top = 48.dp, end = 12.dp),
                 style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif,
                 fontWeight = FontWeight.Normal, color = tacitColors.muted)
         }
@@ -248,17 +256,19 @@ import java.util.concurrent.CompletableFuture
         }
         val untranscribed = scenes.count { it.records.isEmpty() }
         if (untranscribed > 0) item(key = "untranscribed-$day") {
-            val other = if (entries.isNotEmpty()) "另有 " else ""
+            val caption = if (entries.isNotEmpty()) R.plurals.more_audio_without_voice else R.plurals.audio_without_voice
                     Row(Modifier.itemMotion(this).padding(vertical = 12.dp)) {
-                Box(Modifier.width(56.dp).padding(top = 9.dp)) {
+                Box(Modifier.width(format.timeColumnWidth.dp).padding(top = 9.dp)) {
                     Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
                 }
-                Caption("$other${countLabel(untranscribed)} 段没认出你的声音，未转写")
+                Caption(strings.quantity(caption, untranscribed, countLabel(untranscribed)))
             }
         }
-        timeline.staleTime(day)?.let { synced ->
+        timeline.staleSync(day)?.let { instant ->
+            val synced = if (instant.atZone(ZoneId.systemDefault()).toLocalDate() == day) format.clock(instant.toEpochMilli())
+                else format.dateAndClock(instant.toEpochMilli())
             item(key = "timeline-sync-time") {
-                Caption("已同步到 $synced", Modifier.padding(top = 12.dp, end = 12.dp))
+                Caption(strings.text(R.string.timeline_synced, synced), Modifier.padding(top = 12.dp, end = 12.dp))
             }
         }
     }
@@ -269,6 +279,7 @@ import java.util.concurrent.CompletableFuture
 /** One tap does both system prompts and the start, because capture may only begin from a visible page. */
 @Composable
 internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, notify: (String) -> Unit, after: () -> Unit): () -> Unit {
+    val strings = uiStrings()
     val activity = LocalActivity.current ?: return {}
     val owner = activity as? LifecycleOwner
     val scope = rememberCoroutineScope()
@@ -277,7 +288,7 @@ internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, not
             app.prefs.setEnabled(AUDIO_SOURCE, true)
             audio.start(activity)
         } catch (_: Exception) {
-            notify("暂时无法开启录音，请稍后重试")
+            notify(strings.text(R.string.recording_start_failed))
         }
         after()
     }
@@ -288,7 +299,7 @@ internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, not
             // The result arrives before the page is resumed, and capture may only start from a visible page:
             // starting here failed the first time ("无法开始录音") right after the permission dialogs.
             scope.launch { owner?.lifecycle?.withResumed { start() } ?: start() }
-        } else notify("麦克风未授权，录音没有开启")
+        } else notify(strings.text(R.string.microphone_ungranted_recording))
     }
     return {
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
@@ -310,18 +321,19 @@ internal fun recordingNotice(
     microphoneGranted: Boolean,
     notificationsBlocked: Boolean,
     macRemoved: Boolean,
+    strings: UiStrings,
 ): RecordingNotice? = when {
     !microphoneGranted && (wanted || state.recording) ->
-        RecordingNotice("麦克风未授权", Sources.AUDIO)
-    !state.recording && !wanted && state.message.isEmpty() ->
-        RecordingNotice("录音没有开启", start = true)
-    !state.recording && state.message.isNotEmpty() ->
-        RecordingNotice(state.message, start = true)
+        RecordingNotice(strings.text(R.string.microphone_ungranted), Sources.AUDIO)
+    !state.recording && !wanted && state.message == null ->
+        RecordingNotice(strings.text(R.string.recording_off), start = true)
+    !state.recording && state.message != null ->
+        RecordingNotice(strings.text(state.message), start = true)
     !state.modelsReady ->
-        RecordingNotice("语音模型未准备，录音暂时不能转写", SettingsRoutes.SPEECH)
-    state.message.isNotEmpty() -> RecordingNotice(state.message)
-    notificationsBlocked -> RecordingNotice("录音通知未开启", openNotifications = true)
-    macRemoved -> RecordingNotice("已在 Mac 上移除，请在 Mac 的 Tacit 里重新添加这台手机", SettingsRoutes.MAC)
+        RecordingNotice(strings.text(R.string.recording_models_missing), SettingsRoutes.SPEECH)
+    state.message != null -> RecordingNotice(strings.text(state.message))
+    notificationsBlocked -> RecordingNotice(strings.text(R.string.recording_notifications_off), openNotifications = true)
+    macRemoved -> RecordingNotice(strings.text(R.string.mac_removed_notice), SettingsRoutes.MAC)
     else -> null
 }
 
@@ -349,16 +361,20 @@ private fun NoticeText(text: String) {
 /** Serif date as the day's anchor; today also carries the weekday under it. */
 @Composable
 private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Modifier, stacked: Boolean = false) {
-    val relative = when (day) { today -> "今天"; today.minusDays(1) -> "昨天"; else -> null }
-    val weekday = "星期" + "一二三四五六日"[day.dayOfWeek.value - 1]
-    val note = listOfNotNull(relative, weekday).joinToString("，")
-    val title = if (day.year == today.year) "${day.monthValue} 月 ${day.dayOfMonth} 日" else "${day.year} 年 ${day.monthValue} 月 ${day.dayOfMonth} 日"
+    val strings = uiStrings()
+    val relative = when (day) { today -> strings.text(R.string.today); today.minusDays(1) -> strings.text(R.string.yesterday); else -> null }
+    val lang = uiFormat().lang
+    val locale = if (lang == AppLang.ZH) Locale.SIMPLIFIED_CHINESE else Locale.ENGLISH
+    val titlePattern = strings.text(if (day.year == today.year) R.string.day_heading else R.string.day_heading_year)
+    val title = day.format(DateTimeFormatter.ofPattern(titlePattern, locale))
+    val weekday = day.format(DateTimeFormatter.ofPattern(strings.text(R.string.weekday_pattern), locale))
+    val note = relative?.let { strings.text(R.string.day_heading_note, it, weekday) } ?: weekday
     if (stacked) Column(modifier) {
         Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)
-        Caption(note)
+        if (note != null) Caption(note)
     } else Row(modifier, verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)
-        Caption(note, Modifier.padding(bottom = 4.dp))
+        if (note != null) Caption(note, Modifier.padding(bottom = 4.dp))
     }
 }
 
@@ -367,6 +383,7 @@ private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Mo
 private fun VoiceConfirmation(
     speaker: AudioSpeaker, enabled: Boolean, playing: Boolean, play: () -> Unit, mark: () -> Unit, ignore: () -> Unit,
 ) {
+    val strings = uiStrings()
     val context = LocalActivity.current ?: return
     val seconds by produceState<Int?>(null, speaker.id, speaker.seconds) {
         value = withContext(Dispatchers.IO) {
@@ -384,13 +401,13 @@ private fun VoiceConfirmation(
     val wave by animateColorAsState(if (playing) tacitColors.accent else tacitColors.faint, Motion.quick(), label = "wave")
     GroupCard {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("这是你的声音吗？", style = MaterialTheme.typography.titleLarge)
-            Caption("确认一次，之后自动认出你")
+            Text(strings.text(R.string.voice_question), style = MaterialTheme.typography.titleLarge)
+            Caption(strings.text(R.string.voice_question_hint))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilledIconButton(onClick = play, enabled = enabled,
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = tacitColors.fill, contentColor = tacitColors.ink)) {
                     Crossfade(playing, animationSpec = Motion.quick(), label = "play") {
-                        if (it) Icon(Icons.Outlined.Stop, "停止试听") else Icon(Icons.Outlined.PlayArrow, "试听")
+                        if (it) Icon(Icons.Outlined.Stop, strings.text(R.string.preview_stop)) else Icon(Icons.Outlined.PlayArrow, strings.text(R.string.preview_play))
                     }
                 }
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
@@ -399,11 +416,11 @@ private fun VoiceConfirmation(
                         Box(Modifier.width(3.dp).height(height.dp).background(wave, CircleShape))
                     }
                 }
-                seconds?.let { Caption("$it 秒") }
+                seconds?.let { Caption(strings.quantity(R.plurals.sample_seconds, it, countLabel(it))) }
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PrimaryButton("是我", mark, enabled)
-                TonalButton("不是", ignore, enabled = enabled)
+                PrimaryButton(strings.text(R.string.voice_yes), mark, enabled)
+                TonalButton(strings.text(R.string.voice_no), ignore, enabled = enabled)
             }
         }
     }
@@ -419,19 +436,20 @@ private fun RecordedConversation(
     scene: AudioConversationRow, summary: ConversationSummary?, onConversation: (List<HistoryRecord>) -> Unit,
     modifier: Modifier, showsSource: Boolean = false,
 ) {
+    val format = uiFormat()
     val records = scene.records
     Row(
         modifier.fillMaxWidth().heightIn(min = 56.dp)
             .clickable(enabled = records.isNotEmpty()) { onConversation(records) }.padding(top = 12.dp, bottom = 12.dp, end = 12.dp),
     ) {
-        Caption(date(scene.start, "HH:mm"), Modifier.width(56.dp).padding(top = 5.dp))
+        Caption(format.clock(scene.start), Modifier.width(format.timeColumnWidth.dp).padding(top = 5.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             // The title and summary once the phone or the Mac has written them. Until then a mixed timeline titles it like the
             // Mac's drafts ("一场对话" with the most telling sentence under it); the phone-only list uses that sentence as the title.
             // When the summary arrives it cross-fades in place of the sentence.
             val draftExcerpt = if (summary == null) telltaleSentence(records) else ""
-            val title = summary?.title ?: if (showsSource) conversationTitle(scene.private)
-                else draftExcerpt.ifBlank { conversationTitle(scene.private) }
+            val title = summary?.title ?: if (showsSource) format.conversationTitle(scene.private)
+                else draftExcerpt.ifBlank { format.conversationTitle(scene.private) }
             val text = summary?.summary ?: draftExcerpt.takeIf { showsSource && it.isNotBlank() }
             CrossSwap(title to text) { (title, text) ->
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -443,7 +461,7 @@ private fun RecordedConversation(
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (showsSource) SourceIcon(AUDIO_SOURCE, 14.dp)
-                Caption(durationLabel(conversationDuration(records)))
+                Caption(format.durationLabel(conversationDuration(records)))
                 if (scene.private) PrivacyLock()
             }
         }

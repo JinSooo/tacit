@@ -115,6 +115,17 @@ class DeviceProtocolTest {
         assertEquals(listOf("sync 0", "apply 0", "sync.ack 100", "sync 100", "apply 2", "sync.ack 102"), events)
     }
 
+    @Test fun syncLanguageArrivesEvenWhenThereAreNoChanges() {
+        val languages = mutableListOf<String>()
+        for (language in listOf("en", null, "invalid", "zh")) {
+            pullChanges({ op, _ ->
+                assertEquals("sync", op)
+                JSONObject().put("changes", JSONArray()).put("cursor", 0).put("more", false).put("language", language)
+            }, onLanguage = languages::add) { error("Empty page should not be applied") }
+        }
+        assertEquals(listOf("en", "zh"), languages)
+    }
+
     @Test fun doesNotAcknowledgeAnUncommittedPage() {
         assertThrows(IllegalStateException::class.java) {
             pullChanges({ op, _ ->

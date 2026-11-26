@@ -23,7 +23,7 @@ struct ProjectPage: View {
       VStack(alignment: .leading, spacing: 32) {
         projectOverview
         VStack(alignment: .leading, spacing: 12) {
-          sectionTitle("正在推进")
+          sectionTitle(L10n.inProgress)
           ongoingWork
         }
         .padding(.horizontal, TimelineReadingLayout.edge)
@@ -32,7 +32,7 @@ struct ProjectPage: View {
           while !Task.isCancelled { await loadContext(); await WindowVisibility.pause(.seconds(180)) }
         }
         VStack(alignment: .leading, spacing: 12) {
-          sectionTitle("最近的进展").padding(.horizontal, TimelineReadingLayout.edge)
+          sectionTitle(L10n.recentProgress).padding(.horizontal, TimelineReadingLayout.edge)
           results
         }
       }
@@ -46,9 +46,9 @@ struct ProjectPage: View {
       if let project = store.project(id) {
         ToolbarItem(placement: .primaryAction) {
           Menu {
-            Button("移除项目…", role: .destructive) { store.projectToRemove = project }.disabled(store.removingProject)
+            Button(L10n.removeProject, role: .destructive) { store.projectToRemove = project }.disabled(store.removingProject)
           } label: { PhIcon("dots-three", size: PhIcon.toolbar) }
-            .menuIndicator(.hidden).help("更多").accessibilityLabel("更多")
+            .menuIndicator(.hidden).help(L10n.more).accessibilityLabel(L10n.more)
         }
       }
     }
@@ -75,7 +75,7 @@ struct ProjectPage: View {
     if showsName || brief != nil {
       VStack(alignment: .leading, spacing: 8) {
         if showsName {
-          Text(store.project(id)?.name ?? "项目")
+          Text(store.project(id)?.name ?? L10n.project)
             .font(.system(size: TextSize.heading, weight: .semibold)).foregroundStyle(Palette.ink)
             .accessibilityAddTraits(.isHeader)
         }
@@ -100,7 +100,7 @@ struct ProjectPage: View {
       Placeholder(kind: .error(error) { Task { await loadContext() } })
     } else if contextRevision == store.revision, let list = context.value {
       if list.isEmpty {
-        Text("现在没有正在推进的事。")
+        Text(L10n.noTasksInProgress)
           .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
       } else {
         VStack(alignment: .leading, spacing: 0) {
@@ -110,11 +110,11 @@ struct ProjectPage: View {
             }
           }
         }
-        Text("新会话会带入这几件事。")
+        Text(L10n.newSessionsGetContextForTheseTasks)
           .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
       }
     } else {
-      DelayedProgress(label: "正在读取正在推进的事")
+      DelayedProgress(label: L10n.loadingTasksInProgress)
     }
   }
 
@@ -123,7 +123,7 @@ struct ProjectPage: View {
       Placeholder(kind: .error(error) { Task { await load() } })
     } else if current, let page = timeline.value {
       if page.days.isEmpty {
-        Text("这个项目还没有可展示的整理结果。")
+        Text(L10n.noSummaryToShowForThisProject)
           .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
           .padding(.horizontal, TimelineReadingLayout.edge)
       } else {
@@ -147,7 +147,7 @@ struct ProjectPage: View {
           }
         }
         if let next = page.nextCursor {
-          Button("加载更早的日期") { Task { await loadMore(before: next) } }.buttonStyle(.accentLink)
+          Button(L10n.loadEarlierDays) { Task { await loadMore(before: next) } }.buttonStyle(.accentLink)
             .font(.system(size: TextSize.caption)).disabled(loadingMore)
             .padding(.horizontal, TimelineReadingLayout.edge)
         }
@@ -158,7 +158,7 @@ struct ProjectPage: View {
         }
       }
     } else {
-      DelayedProgress(label: "正在读取项目进展")
+      DelayedProgress(label: L10n.loadingProjectProgress)
     }
   }
 
@@ -254,12 +254,12 @@ private struct ProjectContextRow: View {
       }
       .buttonStyle(TimelineRowStyle())
       .hoverState($hovering)
-      .accessibilityValue(expanded ? "已展开" : "已折叠")
-      .accessibilityHint(expanded ? "收起这件事的经过" : "展开这件事的经过")
+      .accessibilityValue(expanded ? L10n.expanded : L10n.collapsed)
+      .accessibilityHint(expanded ? L10n.collapseTaskHistory : L10n.expandTaskHistory)
       if expanded {
         VStack(alignment: .leading, spacing: 8) {
           StoryUpdates(threadId: thread.id)
-          Button("AI 记住的要点") { store.path.append(.thread(thread.id)) }
+          Button(L10n.whatAIRemembers) { store.path.append(.thread(thread.id)) }
             .buttonStyle(.accentLink).font(.system(size: TextSize.caption))
         }
         .padding(.leading, 16).padding(.bottom, 16)

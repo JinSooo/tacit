@@ -554,17 +554,32 @@ private func locateBun() -> String? {
     #expect(snapDay1.summary == "完成了灯塔巡检排班表重构。")
     #expect(snapDay1.segments.count == 1)
 
+    // Switching the host language republishes the same diary and refreshes the widget.
+    let reloadsBeforeLanguageChange = reloadCount.get()
+    publisher.languageChanged(to: .zh)
+    await publisher.refreshNow()
+    #expect(WidgetSnapshot.readLanguage(for: widgetFile) == .zh)
+    #expect(WidgetSnapshot.readToday(from: widgetFile, now: day1, calendar: calendar)?.language == .zh)
+    publisher.languageChanged(to: .en)
+    await publisher.refreshNow()
+    let english = try #require(WidgetSnapshot.readToday(from: widgetFile, now: day1, calendar: calendar))
+    #expect(english.language == .en)
+    #expect(english.summary == snapDay1.summary)
+    #expect(english.segments == snapDay1.segments)
+    #expect(reloadCount.get() > reloadsBeforeLanguageChange)
+
     // 跨到 Day 2（尚无 Day 2 数据）：旧快照必须被立即删除。
     let reloadsBefore = reloadCount.get()
     nowBox.set(day2)
     await publisher.refreshNow()
     #expect(!FileManager.default.fileExists(atPath: widgetFile.path))
+    #expect(WidgetSnapshot.readLanguage(for: widgetFile) == .en)
     #expect(reloadCount.get() > reloadsBefore)
   }
 
   // MARK: 5. 真实中枢等价性与删除联动测试（sealed-file + local-bootstrap + 合成数据）
 
-  @Test func liveHubEquivalenceAndDeletion() async throws {
+  @Test(ChineseUITrait()) func liveHubEquivalenceAndDeletion() async throws {
     let repoRoot = try #require(locateRepoRoot(), "找不到仓库根目录 hub/src/cli.ts")
     let bunPath = try #require(locateBun(), "找不到 bun 可执行文件")
 
@@ -1289,6 +1304,12 @@ private func locateBun() -> String? {
     let savedGeneral = try await api.saveGeneral(["archive_days": 15])
     _ = try await api.saveGeneral(["archive_days": originalGeneral.archiveDays])
     #expect(try await actions.saveGeneral(["archive_days": 15]) == savedGeneral)
+    #expect(try await api.generalSettings().archiveDays == 15)
+    struct HubLanguage: Decodable { let language: AppLanguage }
+    _ = try await actions.saveGeneral(["language": "en"])
+    #expect(try await api.call(HubLanguage.self, "GET", "/v1/settings/general", nil).language == .en)
+    _ = try await api.saveGeneral(["language": "zh"])
+    #expect(try await api.call(HubLanguage.self, "GET", "/v1/settings/general", nil).language == .zh)
     #expect(try await api.generalSettings().archiveDays == 15)
 
     let provider = "openai-compatible"

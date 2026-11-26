@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CollectorCore
 
-@Test func sourceOverviewSeparatesEnabledFromPermissionAndPause() {
+@Test(ChineseUITrait()) func sourceOverviewSeparatesEnabledFromPermissionAndPause() {
   var source = DataSourceStatus(id: "screen", title: "屏幕文字", kind: .builtin, enabled: true,
     permission: .denied, permissionName: "辅助功能", lastRun: nil, detail: "", ok: true, canRunNow: false)
   #expect(SourceFilter.enabled.includes(source) && SourceFilter.attention.includes(source))
@@ -103,7 +103,7 @@ private final class Probe {
   #expect(probe.events == ["screen.enable(true)", "screen.stop"])
 }
 
-@Test func statusesSkipPermissionProbeForDisabledSources() {
+@Test(ChineseUITrait()) func statusesSkipPermissionProbeForDisabledSources() {
   let store = MemorySettings(["ocrEnabled": false])
   let registry = DataSourceRegistry(toggles: SourceToggles(store: store))
   let probe = Probe()
@@ -141,7 +141,7 @@ private final class Probe {
   #expect(DistillDateRange(start: a, end: b, calendar: cal) == DistillDateRange(from: "2026-02-27", to: "2026-03-01"))
 }
 
-@Test func decodesDistillRequestsAndStatusText() throws {
+@Test(ChineseUITrait()) func decodesDistillRequestsAndStatusText() throws {
   let json = #"""
   {"requests":[
     {"id":"A","kind":"backfill","from":"2026-10-11","to":"2026-11-09","status":"running","created_at":"2026-11-09T03:00:00.000Z","started_at":"2026-11-09T03:00:01.000Z","progress":{"done":3,"total":10}},

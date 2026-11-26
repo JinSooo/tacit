@@ -40,19 +40,19 @@ class TimelineSyncTest {
         sync.applyPage(page, cache.cursor)
 
         val restored = TimelineCache(disk) { today }.apply { bind("test-hub:test-phone") }
-        assertNull(restored.snapshots.value.staleTime(today, later, zone))
+        assertNull(restored.snapshots.value.staleSync(today, later, zone))
         restored.refreshFailed()
-        assertEquals("已过一小时的今天仍应显示同步时刻", "18:00", restored.snapshots.value.staleTime(today, later, zone))
-        assertNull(restored.snapshots.value.staleTime(today, first.plusSeconds(3600), zone))
-        assertNull(restored.snapshots.value.staleTime(today.minusDays(1), later, zone))
+        assertEquals("已过一小时的今天仍应显示同步时刻", first, restored.snapshots.value.staleSync(today, later, zone))
+        assertNull(restored.snapshots.value.staleSync(today, first.plusSeconds(3600), zone))
+        assertNull(restored.snapshots.value.staleSync(today.minusDays(1), later, zone))
 
         time = later
         cache.refreshFailed()
-        assertEquals("18:00", cache.snapshots.value.staleTime(today, later, zone))
+        assertEquals(first, cache.snapshots.value.staleSync(today, later, zone))
         sync.pull("view") { operation, _ ->
             if (operation == "projection.pull") page.put("changes", JSONArray()) else JSONObject().put("ok", true)
         }
-        assertNull(cache.snapshots.value.staleTime(today, later, zone))
+        assertNull(cache.snapshots.value.staleSync(today, later, zone))
     }
 
     @Test fun appliesUpsertDeleteRecordGoneAndReset() {
@@ -210,7 +210,7 @@ class TimelineSyncTest {
         cache.apply(1, 1, JSONArray(listOf(change)))
         val item = cache.snapshots.value.days.getValue(today).items.single()
         assertEquals(Instant.parse("2026-11-23T12:43:41Z"), item.start)
-        assertEquals("07:43", item.timeLabel(ZoneId.of("America/New_York")))
+        assertEquals("07:43", item.start.atZone(ZoneId.of("America/New_York")).toLocalTime().toString().take(5))
         assertEquals("", item.description)
     }
 

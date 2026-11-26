@@ -8,6 +8,7 @@ import { DistillStore } from "../src/distill/store.ts";
 import { HubDB } from "../src/db.ts";
 import { createHandler } from "../src/server.ts";
 import { AgentReads } from "../src/agent.ts";
+import { updateGeneral } from "../src/general-settings.ts";
 import { ulid } from "../../packages/record/index.ts";
 import { fixture, reviewEvidence, setup, removeProjectionSchema } from "./helpers.ts";
 
@@ -173,6 +174,7 @@ test("后台日志只读固定文件的结构化状态，不暴露错误原文�
 });
 
 test("自动带入保存实际返回快照，锁冲突不阻塞查询且留下缺失标记", async () => {
+  updateGeneral(ctx.db, { language: "zh" });
   const store = new DistillStore(ctx.db);
   store.upsertProject({id:"p",name:"合成项目",keys:{repos:["/synthetic/runtime"],hosts:[],chats:[]}});
   store.upsertThread({id:"t",title:"合成事项",brief:"合成旧进展",project_id:"p",domain:"work",status:"active",needs_regen:1});

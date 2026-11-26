@@ -7,6 +7,8 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 xcrun --sdk macosx swiftc -target arm64-apple-macosx14.0 -parse-as-library \
+  "$root/collector/Sources/CollectorCore/AppLanguage.swift" \
+  "$root/collector/Sources/CollectorCore/L10n.swift" \
   "$root/collector/Sources/CollectorCore/WidgetSnapshot.swift" \
   "$root/collector/Sources/Collector/Viewer/Palette.swift" \
   "$root/collector/Widget/DayWidgetView.swift" "$root/scripts/export-widget-previews.swift" \

@@ -1,5 +1,4 @@
-// 公共脚本：导航滚动分隔线与章节高亮、主题切换、进入视口淡入。区块脚本各自独立，不依赖这里。
-// 根据访问设备调整下载按钮主次与顺序（保留双端入口，便于跨设备下载）
+// Prioritize the current platform without hiding the other download.
 if (document.documentElement.getAttribute("data-platform") === "android") {
   for (const group of document.querySelectorAll("[data-platform-actions]")) {
     const mac = group.querySelector('[data-platform-target="mac"]');
@@ -19,6 +18,24 @@ if (document.documentElement.getAttribute("data-platform") === "android") {
 }
 
 const nav = document.getElementById("nav");
+const languageNotice = document.getElementById("language-notice");
+const pageLanguage = document.documentElement.lang.toLowerCase().split("-")[0];
+const preferredLanguages = navigator.languages?.length ? navigator.languages : [navigator.language].filter(Boolean);
+const noticeKey = `tacit-language-notice-${pageLanguage}`;
+let noticeDismissed = false;
+try { noticeDismissed = localStorage.getItem(noticeKey) === "dismissed"; } catch {}
+if (preferredLanguages.length && !noticeDismissed && !preferredLanguages.some(
+  (language) => language.toLowerCase().split("-")[0] === pageLanguage,
+)) {
+  languageNotice.hidden = false;
+  languageNotice.querySelector("button").addEventListener("click", () => {
+    languageNotice.hidden = true;
+    try { localStorage.setItem(noticeKey, "dismissed"); } catch {}
+    nav.querySelector(".nav-language").focus();
+    updateNav();
+  });
+}
+
 const navLinks = [...document.querySelectorAll(".nav-links a[href^='#']")];
 const linkById = new Map(navLinks.map((link) => [link.getAttribute("href").slice(1), link]));
 const allSections = [...document.querySelectorAll("main > section[id]")];
@@ -47,22 +64,24 @@ const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const widgetPicture = document.querySelector(".more-widgets");
 const widgetSource = widgetPicture?.querySelector("source");
 const widgetImg = widgetPicture?.querySelector("img");
+const lightWidget = widgetImg?.getAttribute("src");
+const darkWidget = widgetSource?.getAttribute("srcset");
 
 function syncThemeUi(theme) {
   if (!toggle) return;
   const isDark = theme === "dark" || (!theme && darkQuery.matches);
-  toggle.textContent = isDark ? "浅色" : "深色";
-  toggle.setAttribute("aria-label", isDark ? "切换到浅色外观" : "切换到深色外观");
+  toggle.textContent = isDark ? toggle.dataset.light : toggle.dataset.dark;
+  toggle.setAttribute("aria-label", isDark ? toggle.dataset.lightLabel : toggle.dataset.darkLabel);
   if (widgetSource && widgetImg) {
     if (theme === "dark") {
       widgetSource.media = "all";
-      widgetImg.src = "assets/widget-dark.png";
+      widgetImg.src = darkWidget;
     } else if (theme === "light") {
       widgetSource.media = "not all";
-      widgetImg.src = "assets/widget-light.png";
+      widgetImg.src = lightWidget;
     } else {
       widgetSource.media = "(prefers-color-scheme: dark)";
-      widgetImg.src = "assets/widget-light.png";
+      widgetImg.src = lightWidget;
     }
   }
 }

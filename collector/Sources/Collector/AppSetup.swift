@@ -72,14 +72,14 @@ enum AppSetup {
     let alert = NSAlert()
     if Bundle.main.bundlePath.contains("/AppTranslocation/") {
       // 已经在“应用程序”里，但不是用访达拖进去的（例如命令行复制），macOS 会挪到临时位置运行（2026-11-25 虚拟机实测）。
-      alert.messageText = "macOS 正把 Tacit 放在临时位置运行"
-      alert.informativeText = "在访达里把 Tacit 从“应用程序”拖到桌面，再拖回“应用程序”，然后重新打开。"
+      alert.messageText = L10n.Settings.temporaryAppLocation
+      alert.informativeText = L10n.Settings.moveAppAndBack
     } else {
-      alert.messageText = "请先把 Tacit 拖到“应用程序”文件夹"
-      alert.informativeText = "从“应用程序”文件夹打开后，Tacit 才能在后台持续记录，并在登录时自动启动。"
+      alert.messageText = L10n.Settings.moveAppToApplications
+      alert.informativeText = L10n.Settings.launchFromApplications
     }
-    alert.addButton(withTitle: "打开“应用程序”文件夹")
-    alert.addButton(withTitle: "退出")
+    alert.addButton(withTitle: L10n.Settings.openApplications)
+    alert.addButton(withTitle: L10n.Settings.quit)
     if alert.runModal() == .alertFirstButtonReturn {
       NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications"))
     }
@@ -109,7 +109,7 @@ final class AudioModelDownload {
     lock.lock()
     if running { lock.unlock(); return }
     guard let repo = config.repo, FileManager.default.isExecutableFile(atPath: config.bun) else {
-      lastFailure = "安装不完整，无法下载语音模型，请重新安装 Tacit"; lock.unlock(); completion(false); return
+      lastFailure = L10n.Settings.speechModelInstallationMissing(lang: .zh); lock.unlock(); completion(false); return
     }
     running = true; lastFailure = nil; lock.unlock()
     DispatchQueue.global(qos: .utility).async { [self] in
@@ -126,7 +126,7 @@ final class AudioModelDownload {
         reason = String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
       } catch { reason = error.localizedDescription }
       lock.lock(); running = false
-      if !ok { lastFailure = "语音模型下载失败" + (reason.isEmpty ? "" : "：\(reason)") + "。请检查网络，稍后会自动重试" }
+      if !ok { lastFailure = L10n.Settings.speechModelDownloadFailed(reason, lang: .zh) }
       lock.unlock()
       completion(ok)
     }

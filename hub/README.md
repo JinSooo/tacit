@@ -1,3 +1,5 @@
+[English](README.en.md) | 简体中文
+
 # Tacit 后台
 
 Bun 后台负责接收文字记录、加密存储、全文搜索、整理调度，以及网页与 AI 工具接口。采集和系统权限由 Mac 端持有。完整请求格式与边界以 [接口契约](../docs/contracts.md) 为准。

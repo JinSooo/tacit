@@ -62,7 +62,7 @@ exit "$TEST_SETUP_STATUS"
     for (const file of ["collector.json", "app-setup.json"]) writeFileSync(join(data, file), "old");
 
     const run = (status: string) => spawnSync("/bin/sh", [join(root, "install.sh")], {
-      env: { HOME: home, PATH: bin + ":/usr/bin:/bin", TEST_STATE: state, TEST_DATA: data, TEST_SETUP_STATUS: status, TEST_BUN: process.execPath },
+      env: { HOME: home, PATH: bin + ":/usr/bin:/bin", LC_ALL: "zh_CN.UTF-8", TEST_STATE: state, TEST_DATA: data, TEST_SETUP_STATUS: status, TEST_BUN: process.execPath },
       encoding: "utf8", timeout: 10_000,
     });
     const failing = run("7");

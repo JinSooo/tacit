@@ -8,6 +8,7 @@ import { conversationsIn, saveSummary, setSelfSummarizing, storedSummary } from 
 import { InputError, type HubDB } from "../db.ts";
 import { isDatabaseBusy } from "../db-busy.ts";
 import { logFailure } from "../diagnostics.ts";
+import { readGeneral } from "../general-settings.ts";
 import { deviceKeychain, relayKeychain, type DeviceKeyStorage, type RelayKeyStorage } from "../keys.ts";
 import { base64url, deviceID, identityFromRaw, invalidEnvelope, object,
   openRequest, readEnvelope, responseSealer, suite, unpaired, validateRequest, WireError } from "./envelope.ts";
@@ -841,8 +842,8 @@ export class DeviceService {
       const it = object(item) ?? {};
       const ids = it.record_ids, points = it.points ?? [];
       if (!text(it.id, 26) || !idPattern.test(it.id as string) || !Array.isArray(ids) || ids.length < 1 || ids.length > 500 ||
-        !ids.every(id => typeof id === "string" && idPattern.test(id)) || !text(it.title, 40) || !text(it.summary, 400) ||
-        !Array.isArray(points) || points.length > 5 || !points.every(p => typeof p === "string" && p.length <= 120)) throw new InputError("对话总结格式无效");
+        !ids.every(id => typeof id === "string" && idPattern.test(id)) || !text(it.title, 80) || !text(it.summary, 700) ||
+        !Array.isArray(points) || points.length > 5 || !points.every(p => typeof p === "string" && p.length <= 200)) throw new InputError("对话总结格式无效");
       return { id: it.id as string, record_ids: ids as string[], title: (it.title as string).trim(), summary: (it.summary as string).trim(),
         points: (points as string[]).map(p => p.trim()).filter(Boolean) };
     });
@@ -988,7 +989,7 @@ export class DeviceService {
         }
       case "devices.remove": return ok(removeDevice(this.sql, body.id, { actor: device, now: this.clock() }));
       case "relay": return ok({ relay: this.relay.config(device), role });
-      case "sync": return ok(this.hub.deviceChanges(device, cursorOf(body.cursor)));
+      case "sync": return ok({ ...this.hub.deviceChanges(device, cursorOf(body.cursor)), language: readGeneral(this.hub).language });
       case "sync.ack":
         this.sql.prepare("DELETE FROM device_changes WHERE device=? AND seq<=?").run(device, cursorOf(body.cursor));
         return ok({ ok: true });

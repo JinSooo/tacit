@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { HubDB, InputError } from "./db.ts";
 import { historySegments } from "./history.ts";
 import { conversationDetail } from "./conversations.ts";
+import { resolveLang } from "./i18n/index.ts";
 import { hubStatus } from "./status.ts";
 import { DEFAULT_LAN_PORT, DEFAULT_PORT, dataDirOf, hubModeOf, resolveLanPort, type HubMode } from "./hub-json.ts";
 import { createSettings, type SettingsDeps } from "./settings.ts";
@@ -98,12 +99,13 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       try { return await request.json(); } catch { throw new InputError("请求体必须是 JSON"); }
     };
     return await handleRoute(method, url, readJSON, request.body !== null,
-      host === `127.0.0.1:${port}` ? `http://127.0.0.1:${port}/v1/device` : undefined);
+      host === `127.0.0.1:${port}` ? `http://127.0.0.1:${port}/v1/device` : undefined, undefined, request.headers.get("accept-language"));
   };
   // The HTTP entry authenticates its token. DeviceService authorizes its own
   // identity and can enter here only with a route compiled from the op registry.
   const handleRoute = async (method: string, url: URL, readJSON: () => Promise<unknown>,
-                             hasBody: boolean, loopbackEndpoint?: string, actor?: ViewerActor): Promise<Response> => {
+                             hasBody: boolean, loopbackEndpoint?: string, actor?: ViewerActor,
+                             acceptLanguage?: string | null): Promise<Response> => {
     try {
       if (method === "GET" && url.pathname.startsWith("/v1/agent/")) return await new AgentReads(db).handle(url.pathname.slice("/v1/agent/".length),url.searchParams);
       if (method === "POST" && url.pathname === "/v1/agent/append") return new AgentReads(db).append(url.searchParams,await readJSON());
@@ -229,7 +231,7 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       if (method === "GET" && url.pathname === "/v1/records") return Response.json(db.list(url.searchParams));
       if (method === "GET" && url.pathname === "/v1/history/segments") return Response.json(historySegments(db,url.searchParams));
       const conversation = /^\/v1\/conversations\/([0-9A-HJKMNP-TV-Z]{26})$/.exec(url.pathname);
-      if (method === "GET" && conversation) return Response.json(conversationDetail(db,conversation[1]!));
+      if (method === "GET" && conversation) return Response.json(conversationDetail(db, conversation[1]!, Date.now(), resolveLang(acceptLanguage, "zh")));
       if (method === "POST" && url.pathname === "/v1/records") {
         const record = await readJSON();
         if (!record || typeof record !== "object" || typeof (record as { source?: unknown }).source !== "string"

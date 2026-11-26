@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import enum CollectorCore.L10n
 
 // 与 docs/plugins.md 的清单和本机管理 CLI 一致。
 enum PluginValue: Codable, Equatable {
@@ -60,13 +61,13 @@ struct PluginFailure: LocalizedError { let message: String; var errorDescription
       if let preview = result.preview { self.preview = preview }
       if let plugin = result.plugin {
         plugins.removeAll { $0.id == plugin.id }; plugins.append(plugin)
-        if request.action == "install" { preview = nil; message = "已安装，确认配置后可开启。" }
-        else { message = "已保存，下次运行时生效。" }
+        if request.action == "install" { preview = nil; message = L10n.Settings.pluginInstalled }
+        else { message = L10n.Settings.pluginSaved }
       }
-      if request.action == "uninstall" { plugins.removeAll { $0.id == request.id }; message = request.deleteRecords == true ? "已卸载并删除相关记录。" : "已卸载，历史记录已保留。" }
+      if request.action == "uninstall" { plugins.removeAll { $0.id == request.id }; message = request.deleteRecords == true ? L10n.Settings.pluginDeleted : L10n.Settings.pluginUninstalled }
       if request.action == "discard" { preview = nil }
       store.capture = controls.captureSnapshot()
       return result
-    } catch { self.error = error.localizedDescription; return nil }
+    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.pluginOperationFailed); return nil }
   }
 }

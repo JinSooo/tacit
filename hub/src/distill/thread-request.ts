@@ -1,3 +1,4 @@
+import type { Lang } from "../i18n/language.ts";
 import { threadPrompt, THREAD_SCHEMA, type FactView, type FrameView, type ProjectHint, type ThreadOutput } from "./prompts.ts";
 import { groundedQuote, knownUserTexts, withUserStatements } from "./quotes.ts";
 
@@ -7,7 +8,7 @@ export type ThreadModelOutput = Omit<ThreadOutput, "new_facts"> & {
 
 /** 引用只在本次请求内有效。长存储 ID 不交给模型抄写，输出也不做模糊纠错。 */
 export function threadRequest(thread: { title: string; detail: unknown }, facts: FactView[], frames: FrameView[], project: ProjectHint = null,
-  readRecord?: (id: string) => { source: string; body: string } | null | undefined) {
+  readRecord?: (id: string) => { source: string; body: string } | null | undefined, lang: Lang = "zh") {
   const recordRefs = new Map<string, string>(), factRefs = new Map<string, string>();
   const excerpts = new Map<string, { source: string; body: string }[]>();
   const recordRef = (id: string) => {
@@ -60,7 +61,7 @@ export function threadRequest(thread: { title: string; detail: unknown }, facts:
   const currentIDs = new Set([...recordRefs].filter(([, ref]) => current.has(ref)).map(([id]) => id));
   return {
     refs: Object.fromEntries([...recordsByRef, ...factsByRef, ...frames.map((f,i) => [`s${i+1}`,f.id] as const)]),
-    prompt: threadPrompt({ ...thread, detail: { ...oldDetail, quotes } }, inputFacts, inputFrames, project), schema,
+    prompt: threadPrompt({ ...thread, detail: { ...oldDetail, quotes } }, inputFacts, inputFrames, project, lang), schema,
     decode(out: ThreadModelOutput): ThreadOutput {
       return { ...out,
         detail: { ...out.detail, quotes: out.detail.quotes.flatMap(q => {

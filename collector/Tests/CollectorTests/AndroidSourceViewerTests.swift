@@ -1,9 +1,9 @@
-import CollectorCore
+@testable import CollectorCore
 import Foundation
 import Testing
 @testable import Collector
 
-@Test func androidSourcesHaveDistinctNamesOrderAndPhosphorIcons() {
+@Test(ChineseUITrait()) func androidSourcesHaveDistinctNamesOrderAndPhosphorIcons() {
   #expect(SourceInfo.name("android.audio") == "手机录音")
   #expect(SourceInfo.name("android.notification") == "手机聊天")
   #expect(SourceInfo.name("android.usage") == "手机应用")
@@ -20,7 +20,7 @@ import Testing
   #expect(SourceInfo.symbol("android.usage") != SourceInfo.symbol("mac.app"))
 }
 
-@MainActor @Test func androidConversationAndSegmentPresentationMatchRules() throws {
+@MainActor @Test(ChineseUITrait()) func androidConversationAndSegmentPresentationMatchRules() throws {
   let titled = ConversationRef(id: "c1", recordIds: ["c1"], startMs: 0, endMs: 60_000, title: "苗圃交接")
   let untitled = ConversationRef(id: "c2", recordIds: ["c2"], startMs: 0, endMs: 60_000, title: nil)
   #expect(ConversationText.title(titled, source: "android.audio") == "手机录音：苗圃交接")
@@ -46,4 +46,10 @@ import Testing
   let block = SegmentBlock(segment: segment, records: [audio, chat])
   #expect(SegmentText.title(block) == "手机录音")
   #expect(SegmentText.windows(block) == "温室值班群")
+}
+
+struct ChineseUITrait: TestTrait, TestScoping {
+  func provideScope(for test: Test, testCase: Test.Case?, performing function: @Sendable () async throws -> Void) async throws {
+    try await AppLanguage.$scopedLanguage.withValue(.zh, operation: function)
+  }
 }

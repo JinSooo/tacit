@@ -40,7 +40,7 @@ struct TimelineSearchPage: View {
       VStack(alignment: .leading, spacing: 20) {
         HStack(spacing: 10) {
           PhIcon("magnifying-glass", size: 16).foregroundStyle(Palette.muted).accessibilityHidden(true)
-          TextField("搜索时间线和记录", text: $store.timelineSearch)
+          TextField(L10n.searchTimelineAndRecords, text: $store.timelineSearch)
             .textFieldStyle(.plain).font(.system(size: TextSize.body)).focused($focused)
           if !store.timelineSearch.isEmpty {
             Button {
@@ -49,10 +49,10 @@ struct TimelineSearchPage: View {
             } label: {
               PhIcon("x", size: 13).foregroundStyle(Palette.muted)
             }
-            .buttonStyle(.plain).help("清除搜索").accessibilityLabel("清除搜索")
+            .buttonStyle(.plain).help(L10n.clearSearch).accessibilityLabel(L10n.clearSearch)
             .transition(.opacity)
           }
-          if loading { DelayedProgress(size: .mini, label: "正在搜索").transition(.opacity) }
+          if loading { DelayedProgress(size: .mini, label: L10n.searching).transition(.opacity) }
         }
         .animation(Motion.quick, value: store.timelineSearch.isEmpty)
         .animation(Motion.quick, value: loading)
@@ -77,7 +77,7 @@ struct TimelineSearchPage: View {
     if let result, result.query == query {
       results(result)
       if result.hasMore {
-        Button("加载更多结果") { Task { await load(query, previous: result, request: request) } }
+        Button(L10n.loadMoreResults) { Task { await load(query, previous: result, request: request) } }
           .buttonStyle(.accentLink).font(.system(size: TextSize.caption)).disabled(loading)
       }
       if let loadError {
@@ -97,7 +97,7 @@ struct TimelineSearchPage: View {
       let records = Dictionary(grouping: result.records) { TimelineDay.key($0.start) }
       let dates = Set(segments.keys).union(records.keys).sorted(by: >)
       if dates.isEmpty {
-        Text("没有找到匹配的活动或记录。")
+        Text(L10n.noMatchingActivitiesOrRecords)
           .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
       }
       LazyVStack(alignment: .leading, spacing: 20) {
@@ -120,7 +120,7 @@ struct TimelineSearchPage: View {
                           snippet: SearchSnippet.make(record.body ?? "", query: query)) {
                   Task { await showRecord(record) }
                 }
-                .accessibilityHint("转到时间线")
+                .accessibilityHint(L10n.goToTimeline)
                 .disabled(openingRecord != nil)
               }
             }

@@ -15,7 +15,7 @@ export class AgentError extends Error {
 
 function readBinding(dir: string) {
   try { return readHubBinding(dir); }
-  catch { throw new AgentError("无法读取 Tacit 后台绑定"); }
+  catch { throw new AgentError("Unable to read the Tacit background service configuration"); }
 }
 
 async function connection(params: URLSearchParams, signal: AbortSignal, options: AgentClientOptions) {
@@ -24,20 +24,20 @@ async function connection(params: URLSearchParams, signal: AbortSignal, options:
   const { remote } = binding;
   const checkBinding = () => {
     if (remote && lstatSync(join(dir, remote.dir, "repair-transaction.json"), { throwIfNoEntry: false })) {
-      throw new AgentError("Tacit 正在恢复远端连接，请稍后重试");
+      throw new AgentError("Tacit is restoring the remote connection. Try again shortly.");
     }
     const current = readBinding(dir);
     if (current.generation !== binding.generation || current.remote?.hub_id !== remote?.hub_id) {
-      throw new AgentError("Tacit 后台已切换，请重试");
+      throw new AgentError("The Tacit background service changed. Try again.");
     }
   };
   checkBinding();
   if (params.get("tool") === "claude-desktop") {
-    if (remote) throw new AgentError("Claude Desktop 的本机连接在远端模式下不可用");
+    if (remote) throw new AgentError("The local Claude Desktop connection is unavailable in remote mode");
     return { linked: null, checkBinding };
   }
   const link = await readBoundAgentLink(dir, signal, remote).catch(() => {
-    throw new AgentError(remote ? "无法读取远端 Agent 连接配置，请在 Tacit 中检查登记" : "无法读取 Agent 连接配置");
+    throw new AgentError(remote ? "Unable to read the remote AI tool connection. Check the connection in Tacit." : "Unable to read the AI tool connection");
   });
   if (!link) return { linked: null, checkBinding };
   const secrets = options.secrets ?? agentSecrets(dir);
@@ -47,7 +47,7 @@ async function connection(params: URLSearchParams, signal: AbortSignal, options:
       cache: new ContextCache(dir, link, secrets, remote),
       async client(signal: AbortSignal) {
         try { return await linkedClient(link, env, dir, secrets, signal, remote); }
-        catch { throw new AgentError(remote ? "无法读取远端 Agent 私钥，请在 Tacit 中检查登记" : "无法读取 Agent 设备私钥或地址"); }
+        catch { throw new AgentError(remote ? "Unable to read the remote AI tool private key. Check the connection in Tacit." : "Unable to read the AI tool private key or address"); }
       },
     },
   };
@@ -57,21 +57,19 @@ async function request(client: DeviceClient, kind: string, body: object, signal:
   let reply: Awaited<ReturnType<DeviceClient["send"]>>;
   try { reply = await client.send(`agent.${kind}`, body, { signal }); }
   catch (error) {
-    if (signal.aborted) throw new AgentError("查询 hub 超时", true);
+    if (signal.aborted) throw new AgentError("The Tacit request timed out", true);
     if (error instanceof DeviceTransportError) {
-      throw new AgentError(`hub 查询失败（HTTP ${error.status}）`, error.status >= 500);
+      throw new AgentError(`Tacit request failed (HTTP ${error.status})`, error.status >= 500);
     }
     if (error instanceof TypeError) {
-      throw new AgentError(remote ? "当前无法直连远端 Tacit 中枢" : "当前无法连接 Tacit 中枢", true);
+      throw new AgentError(remote ? "Unable to reach the remote Tacit background service directly" : "Unable to reach the Tacit background service", true);
     }
-    throw new AgentError("无法验证 Tacit 中枢的设备响应");
+    throw new AgentError("Unable to verify the response from Tacit");
   }
   if (reply.status === 200) return reply.body;
-  const message = object(reply.body)?.error;
-  const safe = typeof message === "string" && message.length <= 300 ? message : undefined;
-  if (kind === "append" && reply.status === 400) throw new AgentError(safe ? `hub 拒绝写入：${safe}` : "hub 拒绝写入（HTTP 400）");
-  if (reply.status === 503) throw new AgentError(safe ?? "hub 暂时不可用，请稍后重试（HTTP 503）", true);
-  throw new AgentError(`hub 查询失败（HTTP ${reply.status}）`, reply.status >= 500);
+  if (kind === "append" && reply.status === 400) throw new AgentError("Tacit rejected the record. Check the supplied fields (HTTP 400).");
+  if (reply.status === 503) throw new AgentError("Tacit is temporarily unavailable. Try again shortly (HTTP 503).", true);
+  throw new AgentError(`Tacit request failed (HTTP ${reply.status})`, reply.status >= 500);
 }
 
 export async function readHub(kind: string, params: URLSearchParams, signal: AbortSignal, body?: unknown, options: AgentClientOptions = {}) {
@@ -93,7 +91,7 @@ export async function sessionContext(params: URLSearchParams, signal: AbortSigna
   if (!linked) {
     checkBinding();
     const result = readContextResult(await legacy("context", params, signal, undefined, options.env));
-    if (!result) throw new AgentError("hub 上下文格式无效");
+    if (!result) throw new AgentError("Tacit returned an invalid session context");
     checkBinding();
     if (!signal.aborted) emit(result.text);
     return;
@@ -109,7 +107,7 @@ export async function sessionContext(params: URLSearchParams, signal: AbortSigna
     result = readContextResult(await request(client, "context", {
       ...Object.fromEntries(params), cache: true, ...(repoRemote ? { remote: repoRemote } : {}),
     }, querySignal, !!remote));
-    if (!result) throw new AgentError("hub 上下文格式无效");
+    if (!result) throw new AgentError("Tacit returned an invalid session context");
   } catch (error) {
     if (signal.aborted || (!querySignal.aborted && !(error instanceof AgentError && error.unavailable))) throw error;
     // 先确认绑定没换，再写离线审计，免得在旧后台的缓存目录留下没发出的审计。
@@ -133,12 +131,12 @@ export async function sessionContext(params: URLSearchParams, signal: AbortSigna
 async function legacy(kind: string, params: URLSearchParams, signal: AbortSignal, body?: unknown, env = process.env): Promise<unknown> {
   const dir = dataDirOf(env);
   let port: number;
-  try { port = resolvePort(env, dir).port; } catch (error) { throw new AgentError(error instanceof Error ? error.message : "端口配置无效"); }
-  if (port < 1) throw new AgentError("RA_PORT 必须是 1–65535 的整数");
+  try { port = resolvePort(env, dir).port; } catch { throw new AgentError("Invalid Tacit port configuration"); }
+  if (port < 1) throw new AgentError("RA_PORT must be an integer from 1 to 65535");
   let token: string;
   try { token = (await readFile(join(dir, "agent-token"), { encoding: "utf8", signal })).trim(); }
-  catch { throw new AgentError("无法读取 AI 查询令牌，请重新安装 Tacit"); }
-  if (!token) throw new AgentError("AI 查询令牌为空");
+  catch { throw new AgentError("Unable to read the AI query token. Reinstall Tacit."); }
+  if (!token) throw new AgentError("The AI query token is empty");
   let response: Response;
   try {
     response = await fetch(`http://127.0.0.1:${port}/v1/agent/${kind}?${params}`, {
@@ -147,24 +145,19 @@ async function legacy(kind: string, params: URLSearchParams, signal: AbortSignal
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal, redirect: "error",
     });
   } catch {
-    throw new AgentError(signal.aborted ? "查询 hub 超时" : "当前无法连接 Tacit 中枢。后台服务没运行，请打开 Tacit");
-  }
-  // 不转述服务端错误正文，避免把请求或鉴权信息带进错误通道。
-  // 例外：写入的 400 和 503 的 error 是 hub 给出的可读提示。
-  if ((body !== undefined && response.status === 400) || response.status === 503) {
-    let message: unknown;
-    try { message = (await response.json() as { error?: unknown }).error; } catch {}
-    if (response.status === 503) throw new AgentError(typeof message === "string" && message.length <= 300 ? message : "hub 暂时不可用，请稍后重试（HTTP 503）");
-    throw new AgentError(typeof message === "string" && message.length <= 300 ? `hub 拒绝写入：${message}` : "hub 拒绝写入（HTTP 400）");
+    throw new AgentError(signal.aborted ? "The Tacit request timed out" : "Unable to reach the Tacit background service. Open Tacit to start it.");
   }
   if (!response.ok) {
+    // Error bodies can contain user data or text in the service's UI language.
     await response.body?.cancel();
-    throw new AgentError(`hub 查询失败（HTTP ${response.status}）`);
+    if (response.status === 503) throw new AgentError("Tacit is temporarily unavailable. Try again shortly (HTTP 503).", true);
+    if (body !== undefined && response.status === 400) throw new AgentError("Tacit rejected the record. Check the supplied fields (HTTP 400).");
+    throw new AgentError(`Tacit request failed (HTTP ${response.status})`);
   }
   try { return await response.json(); }
-  catch { throw new AgentError(signal.aborted ? "查询 hub 超时" : "hub 返回的 JSON 无效"); }
+  catch { throw new AgentError(signal.aborted ? "The Tacit request timed out" : "Tacit returned invalid JSON"); }
 }
 
 export function reason(error: unknown): string {
-  return error instanceof AgentError ? error.message : "Agent 查询失败";
+  return error instanceof AgentError ? error.message : "The Tacit request failed";
 }

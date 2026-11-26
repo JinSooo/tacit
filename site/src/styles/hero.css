@@ -27,6 +27,11 @@
   text-wrap: initial;
 }
 
+html[lang="en"] .hero-intro .display {
+  font-size: min(var(--fs-display), 14cqi, 64px);
+  text-wrap: balance;
+}
+
 .hero-lead {
   max-width: 28em;
   margin-top: 28px;
@@ -40,6 +45,10 @@
   flex-wrap: wrap;
   gap: 12px;
   margin-block: 28px 12px;
+}
+
+html[lang="en"] .hero-actions .btn {
+  padding-inline: 16px;
 }
 
 .hero-window {

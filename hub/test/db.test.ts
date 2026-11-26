@@ -1,13 +1,70 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { AudioStore } from "../src/audio.ts";
 import { HubDB } from "../src/db.ts";
+import { GENERAL_DEFAULTS, readGeneral, updateGeneral } from "../src/general-settings.ts";
 import { fixture, setup, removeProjectionSchema } from "./helpers.ts";
 import { ulid } from "../../packages/record/index.ts";
 
 let ctx: ReturnType<typeof setup>;
 beforeEach(() => { ctx = setup(); });
 afterEach(() => ctx.cleanup());
+
+test("Fresh databases use the default after reopening, even if records arrived before setting a language", () => {
+  expect(readGeneral(ctx.db).language).toBe(GENERAL_DEFAULTS.language);
+  expect(ctx.db.db.prepare("SELECT v FROM distill_state WHERE k='general_settings'").get()).toBeUndefined();
+  expect(ctx.db.ingest([fixture()]).accepted).toBe(1);
+  updateGeneral(ctx.db, { inject_tokens: 900 });
+  const reopened = new HubDB(ctx.file, ctx.config.dbKey);
+  try {
+    expect(readGeneral(reopened).language).toBe(GENERAL_DEFAULTS.language);
+    expect(readGeneral(reopened).inject_tokens).toBe(900);
+    const row = reopened.db.prepare<[], { v: string }>("SELECT v FROM distill_state WHERE k='general_settings'").get();
+    expect(JSON.parse(row!.v)).not.toHaveProperty("language");
+  } finally { reopened.close(); }
+});
+
+test.each([
+  [null, { language: "zh" }],
+  [{ inject_tokens: 900, legacy: true }, { inject_tokens: 900, legacy: true, language: "zh" }],
+  [{ language: "en", legacy: true }, { language: "en", legacy: true }],
+] as const)("Existing database upgrades language while retaining stored settings (%j)", (old, expected) => {
+  const record = fixture();
+  if (!old) expect(ctx.db.ingest([record]).accepted).toBe(1);
+  // Simulate a database created before the language migration was introduced.
+  ctx.db.db.prepare("DELETE FROM distill_state WHERE k='general_language_initialized'").run();
+  if (old) ctx.db.db.prepare("INSERT INTO distill_state(k,v) VALUES('general_settings',?)").run(JSON.stringify(old));
+  ctx.db.close();
+  const reopened = new HubDB(ctx.file, ctx.config.dbKey);
+  try {
+    expect(readGeneral(reopened).language).toBe(expected.language);
+    const row = reopened.db.prepare<[], { v: string }>("SELECT v FROM distill_state WHERE k='general_settings'").get();
+    expect(JSON.parse(row!.v)).toEqual(expected);
+    if (!old) expect(reopened.get(record.id)?.body).toBe(record.body);
+    updateGeneral(reopened, { language: "en" });
+  } finally { reopened.close(); }
+  const restarted = new HubDB(ctx.file, ctx.config.dbKey);
+  try { expect(readGeneral(restarted).language).toBe("en"); }
+  finally { restarted.close(); }
+});
+
+test("Fresh database language defaults to English and honors only valid TACIT_LANGUAGE overrides", () => {
+  const modulePath = new URL("../src/general-settings.ts", import.meta.url).pathname;
+  const databasePath = new URL("../src/db.ts", import.meta.url).pathname;
+  for (const [override, expected] of [["", "en"], ["auto", "en"], ["en", "en"], ["zh", "zh"]]) {
+    const result = spawnSync(process.execPath, ["-e", `
+      import { HubDB } from ${JSON.stringify(databasePath)};
+      import { readGeneral } from ${JSON.stringify(modulePath)};
+      const hub = new HubDB(${JSON.stringify(join(ctx.dir, `language-${override || "empty"}.db`))}, "synthetic-test-db-key");
+      console.log(readGeneral(hub).language);
+      hub.close();
+    `], { env: { ...process.env, TACIT_LANGUAGE: override }, encoding: "utf8" });
+    expect({ code: result.status, error: result.stderr, output: result.stdout.trim() })
+      .toEqual({ code: 0, error: "", output: expected });
+  }
+});
 
 test("迁移失败重试时，截断或等长但损坏的备份会被完整副本替换", () => {
   // 模拟一份有结构冲突的旧库，迁移失败后可以立即检验留下的副本。

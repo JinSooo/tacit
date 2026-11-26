@@ -46,6 +46,7 @@ const llm: LLM = { async complete<T>(req: LLMRequest) {
 
 beforeEach(() => {
   ctx = setup();
+  updateGeneral(ctx.db, { language: "zh" });
   store = new DistillStore(ctx.db);
   calls = [];
   failOverview = false;
@@ -63,7 +64,7 @@ const polishCalls = () => calls.filter(req => req.task === "day_polish");
 const overviewCalls = () => calls.filter(req => req.task === "day_brief");
 const save = (...records: RecordV1[]) => expect(ctx.db.ingest(records).accepted).toBe(records.length);
 const setModes = (polish: string, overview: string) =>
-  store.setState("general_settings", { timeline_polish: polish, timeline_overview: overview });
+  store.setState("general_settings", { language: "zh", timeline_polish: polish, timeline_overview: overview });
 
 function covers(minute: number, records: RecordV1[]) {
   const { detail, drafts } = view(minute);

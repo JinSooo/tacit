@@ -1,13 +1,15 @@
 import { toLocalIso } from "../../packages/record/index.ts";
 import type { HubDB } from "./db.ts";
 import { DistillStore, type Thread } from "./distill/store.ts";
+import type { Lang } from "./i18n/language.ts";
 
 const day = 24 * 3600_000;
 export const emptyNowBrief = "最近 24 小时没有活跃的线程。";
 export const pendingBrief = "有新活动待整理。";
 const emptyBrief = emptyNowBrief;
+const englishEmptyBrief = "No active tasks in the last 24 hours.";
 
-export function nowSummary(store: DistillStore, clock: number, include?: (id: string) => boolean) {
+export function nowSummary(store: DistillStore, clock: number, include?: (id: string) => boolean, lang: Lang = "zh") {
   // 暂停的事项只要近 24 小时有活动，也仍属于此刻。
   type Recent = Pick<Thread, "id" | "title" | "updated_at"> & { brief: string; last_ms: number; project: string | null };
   const candidates = store.hub.db.prepare<[number, number], Recent>(`SELECT t.id,t.title,t.brief,t.last_ms,t.updated_at,p.name project
@@ -21,7 +23,8 @@ export function nowSummary(store: DistillStore, clock: number, include?: (id: st
   }
   const threads = rows.map(t => ({ thread_id: t.id, title: t.title, brief: t.brief, project: t.project, last: toLocalIso(t.last_ms) }));
   const top = threads[0];
-  const brief = top ? (top.project && !top.brief.includes(top.project) ? `${top.project}：${top.brief}` : top.brief) : emptyBrief;
+  const brief = top ? (top.project && !top.brief.includes(top.project) ? `${top.project}${lang === "zh" ? "：" : ": "}${top.brief}` : top.brief)
+    : lang === "zh" ? emptyBrief : englishEmptyBrief;
   const updated = rows[0]?.updated_at;
   return { brief, detail: { threads }, updated_at: top ? (updated && Number.isFinite(Date.parse(updated)) ? updated : null) : toLocalIso(clock) };
 }
@@ -41,26 +44,36 @@ function pendingActivity(store: DistillStore, clock: number) {
 }
 
 /** 在读取时计算，模型离线时也能看见状态；不把错误正文带到摘要中。 */
-export function currentNow(hub: HubDB, clock = Date.now()) {
+export function currentNow(hub: HubDB, clock = Date.now(), lang: Lang = "zh") {
   const store = new DistillStore(hub);
   const saved = store.getState<{ brief?: string; detail?: unknown; updated_at?: string | null }>("now");
   const hasCachedSummary = !!saved?.brief?.trim() && saved.brief !== emptyBrief;
-  const live = hasCachedSummary ? null : nowSummary(store, clock);
+  const live = hasCachedSummary ? null : nowSummary(store, clock, undefined, lang);
   const summary = live?.detail.threads.length ? live : saved;
   const hasSummary = hasCachedSummary || !!live?.detail.threads.length;
   const updated = Date.parse(summary?.updated_at ?? "") || 0;
   const call = hub.db.prepare("SELECT at,ok FROM llm_usage WHERE task IN ('assign','thread_digest','thread_brief') ORDER BY julianday(at) DESC,id DESC LIMIT 1").get() as { at: string; ok: number } | undefined;
   const failed = call && !call.ok && Date.parse(call.at) >= updated;
   if (!hasSummary && pendingActivity(store, clock)) {
-    return { brief: pendingBrief, detail: { threads: [] }, updated_at: null,
-      feedback: failed ? "最近一次整理失败。请到设置检查 AI 模型连接。" : null };
+    return { brief: lang === "zh" ? pendingBrief : "New activity is waiting to be summarized.", detail: { threads: [] }, updated_at: null,
+      feedback: failed ? (lang === "zh" ? "最近一次整理失败。请到设置检查 AI 模型连接。" : "The last summary failed. Check the AI model connection in Settings.") : null };
   }
   let feedback: string | null = null;
-  if (failed) feedback = "最近一次整理失败，显示的摘要可能不是最新内容。请到设置检查 AI 模型连接。";
+  if (failed) feedback = lang === "zh" ? "最近一次整理失败，显示的摘要可能不是最新内容。请到设置检查 AI 模型连接。"
+    : "The last summary failed and the recap may be out of date. Check the AI model connection in Settings.";
   else if ((hasSummary || !summary) && clock - updated > 3600_000) {
     const latest = hub.db.prepare("SELECT MAX(t_start_ms) ms FROM records WHERE sensitivity!='private'").get() as { ms: number | null };
-    if ((latest.ms ?? 0) > updated) feedback = hasSummary ? "有新活动尚未整理，下面是此前的摘要。" : "已有活动记录，等待整理出摘要。";
+    if ((latest.ms ?? 0) > updated) feedback = lang === "zh"
+      ? (hasSummary ? "有新活动尚未整理，下面是此前的摘要。" : "已有活动记录，等待整理出摘要。")
+      : (hasSummary ? "New activity is waiting to be summarized. Showing the previous recap." : "Activity has been recorded and is waiting for a summary.");
   }
   if (!summary && !feedback) return null;
+  if (lang === "en" && summary?.brief === emptyBrief) return { ...summary, brief: englishEmptyBrief, feedback };
+  if (lang === "en" && summary?.detail && typeof summary.detail === "object" && "threads" in summary.detail && Array.isArray(summary.detail.threads)) {
+    const top = summary.detail.threads[0];
+    if (top?.project && typeof top.brief === "string" && summary.brief === `${top.project}：${top.brief}`) {
+      return { ...summary, brief: `${top.project}: ${top.brief}`, feedback };
+    }
+  }
   return { ...summary, feedback };
 }

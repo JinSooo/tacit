@@ -1,10 +1,17 @@
+import { updateGeneral } from "../src/general-settings.ts";
 import { expect, test } from "bun:test";
 import { toLocalIso } from "../../packages/record/index.ts";
 import { composeReview, reviewInput, reviewMaterial, reviewPlan } from "../src/distill/day-review.ts";
 import { dayStep, distillRound, sliceStep, touchThread, type LLM } from "../src/distill/run.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { createHandler } from "../src/server.ts";
-import { emptyDayOutput, fixture, setup } from "./helpers.ts";
+import { emptyDayOutput, fixture, setup as testDB } from "./helpers.ts";
+
+function setup() {
+  const ctx = testDB();
+  updateGeneral(ctx.db, { language: "zh" });
+  return ctx;
+}
 
 type ReviewInput = { activities: { key: string; kind: string; active_minutes: number; project: string | null; summary_eligible: boolean;
   evidence: { key: string; source: string; role: string; text: string; at?: string; chat?: string; speaker?: string }[] }[] };

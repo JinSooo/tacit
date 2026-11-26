@@ -10,16 +10,25 @@ enum Radius {
 }
 
 enum SourceInfo {
-  static let names: [String: String] = [
-    "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板", "mac.file": "文件", "mac.calendar": "日历", "mac.wechat": "微信",
-    "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
-    "android.audio": "手机录音", "android.notification": "手机聊天", "android.usage": "手机应用",
-    "manual.note": "补写", "manual.correction": "修正", "manual.agent": "AI 补写",
+  private static let names: [String: String] = [
+    "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板",
+    "mac.file": "文件", "mac.calendar": "日历", "mac.wechat": "微信", "mac.shell": "终端", "mac.git": "Git",
+    "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex", "android.audio": "手机录音",
+    "android.notification": "手机聊天", "android.usage": "手机应用", "manual.note": "补写",
+    "manual.correction": "修正", "manual.agent": "AI 补写",
+  ]
+  private static let englishNames = [
+    "mac.audio": "Conversation", "mac.screen": "Screen", "mac.app": "App", "mac.clipboard": "Clipboard",
+    "mac.file": "File", "mac.calendar": "Calendar", "mac.wechat": "WeChat", "mac.shell": "Terminal",
+    "mac.browser": "Browser", "android.audio": "Phone recording", "android.notification": "Phone chats",
+    "android.usage": "Phone apps", "manual.note": "Note", "manual.correction": "Correction", "manual.agent": "AI note",
   ]
   static let order = ["mac.screen", "mac.browser", "claude_code.session", "codex.session", "mac.shell", "mac.git",
                       "mac.audio", "android.audio", "mac.calendar", "mac.wechat", "android.notification",
                       "android.usage", "mac.clipboard", "mac.file", "manual.note", "manual.agent"]
-  static func name(_ s: String) -> String { names[s] ?? s }
+  static func name(_ s: String) -> String {
+    L10n.text(zh: names[s] ?? s, en: englishNames[s] ?? names[s] ?? s)
+  }
   /// Phosphor 图标名（见 PhosphorGlyphs）。
   static func symbol(_ s: String) -> String {
     switch s {
@@ -42,10 +51,15 @@ enum SourceInfo {
     default: return "circle-dashed"
     }
   }
-  static let factLabels: [(kind: String, label: String, symbol: String)] = [
-    ("next", "下一步", "arrow-circle-right"), ("open", "未决", "question"), ("decision", "已定", "seal-check"),
-    ("inference", "推测", "sparkle"), ("rejected", "否决", "x-circle"),
-  ]
+  static var factLabels: [(kind: String, label: String, symbol: String)] {
+    [
+      ("next", L10n.text(zh: "下一步", en: "Next"), "arrow-circle-right"),
+      ("open", L10n.text(zh: "未决", en: "Open"), "question"),
+      ("decision", L10n.text(zh: "已定", en: "Decided"), "seal-check"),
+      ("inference", L10n.text(zh: "推测", en: "Inferred"), "sparkle"),
+      ("rejected", L10n.text(zh: "否决", en: "Rejected"), "x-circle"),
+    ]
+  }
 }
 
 /// 记录里的 app 是 bundle id 时取真实应用图标，取不到再退回来源符号。
@@ -94,7 +108,10 @@ struct SourceGlyph: View {
 
 extension Font {
   /// 叙述性文字用宋体：系统 serif 设计对中文标点的回退会留出大空隙，宋体自带的标点宽度正确。
-  static func serif(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .custom("Songti SC", size: size).weight(weight) }
+  static func serif(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+    AppLanguage.current == .zh ? .custom("Songti SC", size: size).weight(weight)
+      : .system(size: size, weight: weight, design: .serif)
+  }
   static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .system(size: size, weight: weight, design: .monospaced) }
 }
 
@@ -140,6 +157,7 @@ struct CardModifier: ViewModifier {
 struct ProjectTag: View {
   let name: String
   var unconfirmed = false
+  @ObservedObject private var language = LanguageStore.shared
   var body: some View {
     HStack(spacing: 4) {
       PhIcon(unconfirmed ? "folder-dashed" : "folder", size: 12)
@@ -147,7 +165,9 @@ struct ProjectTag: View {
     }
     .font(.system(size: TextSize.caption, weight: .medium))
     .foregroundStyle(Palette.muted)
-    .help(unconfirmed ? "项目 \(name)，还没确认" : "项目 \(name)")
+    .help(unconfirmed
+      ? L10n.text(zh: "项目 \(name)，还没确认", en: "Project \(name), not yet confirmed", lang: language.resolved)
+      : L10n.text(zh: "项目 \(name)", en: "Project \(name)", lang: language.resolved))
   }
 }
 
@@ -189,6 +209,7 @@ extension ButtonStyle where Self == AccentLinkStyle {
 struct Placeholder: View {
   enum Kind { case loading, error(String, () -> Void), empty(String, String) }
   let kind: Kind
+  @ObservedObject private var language = LanguageStore.shared
   var body: some View {
     VStack(spacing: 12) {
       switch kind {
@@ -197,7 +218,7 @@ struct Placeholder: View {
       case .error(let message, let retry):
         PhIcon("warning", size: 24).foregroundStyle(Palette.attention)
         Text(message).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).multilineTextAlignment(.center).textSelection(.enabled)
-        Button("重试", action: retry).controlSize(.small)
+        Button(L10n.text(zh: "重试", en: "Retry", lang: language.resolved), action: retry).controlSize(.small)
       case .empty(let symbol, let text):
         PhIcon(symbol, size: 32).foregroundStyle(Palette.faint)
         Text(text).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)

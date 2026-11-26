@@ -225,7 +225,7 @@ export function hubStatus(hub: HubDB, options: {
   }
   const byTier = [...tiers.values()].map(({ modelSet, ...t }) => ({ ...t, models: [...modelSet].sort() })).sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || a.tier.localeCompare(b.tier));
   const byTask = [...tasks.values()].sort((a, b) => (a.task ?? "").localeCompare(b.task ?? ""));
-  const dailyLimit = readGeneral(hub).daily_token_limit;
+  const { daily_token_limit: dailyLimit, language } = readGeneral(hub);
   const todayTokens = usageTokens(total);
 
   // at 有本地时间和 UTC 两种写法，按 ULID 判断调用写入顺序。旧行缺少用途，无法证明同类恢复。
@@ -252,6 +252,7 @@ export function hubStatus(hub: HubDB, options: {
   };
 
   return {
+    language,
     devices: deviceList(hub),
     relay: options.relay ?? null,
     generated_at: toLocalIso(now),

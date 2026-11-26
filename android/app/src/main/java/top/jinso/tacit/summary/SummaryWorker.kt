@@ -20,6 +20,9 @@ import org.json.JSONObject
 import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.AudioController
 import top.jinso.tacit.core.readableTranscript
+import top.jinso.tacit.i18n.AppLocale
+import top.jinso.tacit.i18n.UiStrings
+import top.jinso.tacit.i18n.speechUnits
 import top.jinso.tacit.data.ConversationSummary
 import top.jinso.tacit.data.Vault
 import top.jinso.tacit.sources.Sources
@@ -39,8 +42,10 @@ internal class PhoneSummarizer(private val app: TacitApp) {
             return@withLock 0
         }
         if (state.optLong("pausedUntil") > now) return@withLock 0
+        val paired = vault.syncConnection()?.optBoolean("removed") == false
+        val lang = summaryLanguage(paired, app.prefs.hubLanguage, AppLocale.language(app))
         val client = try {
-            SummaryClient(model)
+            SummaryClient(model, lang)
         } catch (e: SummaryFailure) {
             fail(model, e)
             return@withLock 0
@@ -50,7 +55,7 @@ internal class PhoneSummarizer(private val app: TacitApp) {
             currentCoroutineContext().ensureActive()
             if (!vault.usesSummaryModel(model)) break
             val summary = try {
-                client.summarize(group.start, group.end, summaryTranscript(turns))
+                client.summarize(group.start, group.end, summaryTranscript(turns, lang = lang))
             } catch (e: SummaryFailure) {
                 fail(model, e)
                 break
@@ -89,7 +94,7 @@ internal class PhoneSummarizer(private val app: TacitApp) {
                     ?: readableTranscript(runCatching { audio.renderTranscript(r.id, r.body).get() }.getOrDefault(r.body))
                 summaryTurns(r.start, body)
             }
-            if (turns.sumOf { it.text.length } < SummaryRules.MIN_CHARS) null else g to turns
+            if (turns.sumOf { speechUnits(it.text) } < SummaryRules.MIN_CHARS) null else g to turns
         }.take(SummaryRules.PER_ROUND).toList()
     }
 
@@ -145,7 +150,7 @@ private fun Vault.usesSummaryModel(model: SummaryModel): Boolean =
 
 internal data class SummaryProblem(val error: SummaryError, val firstFailureAt: Long) {
     val showAt: Long get() = if (error.needsUser) firstFailureAt else firstFailureAt + 60 * 60_000L
-    fun messageAt(now: Long): String? = error.reason.takeIf { now >= showAt }
+    fun messageAt(now: Long, strings: UiStrings): String? = if (now >= showAt) error.reason(strings) else null
 }
 
 internal fun JSONObject.summaryProblem(): SummaryProblem? {

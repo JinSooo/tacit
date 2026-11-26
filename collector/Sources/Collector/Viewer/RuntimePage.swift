@@ -5,10 +5,10 @@ struct RuntimePage: View {
   @State private var section = "models"
   var body: some View {
     VStack(spacing: 0) {
-      Picker("运行记录类型", selection: $section) {
-        Text("模型整理").tag("models")
-        Text("AI 工具读取").tag("reads")
-        Text("后台运行").tag("background")
+      Picker(L10n.runLogType, selection: $section) {
+        Text(L10n.modelSummaries).tag("models")
+        Text(L10n.aiToolReads).tag("reads")
+        Text(L10n.backgroundActivity).tag("background")
       }.pickerStyle(.segmented).frame(maxWidth: 460).padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 8)
       Group {
         if section == "models" { ModelCallsPage() }
@@ -16,7 +16,7 @@ struct RuntimePage: View {
         else { BackgroundCallsPage() }
       }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .background(Palette.paper).navigationTitle("运行记录")
+    .background(Palette.paper).navigationTitle(L10n.runLog)
   }
 }
 
@@ -30,10 +30,10 @@ private struct ModelCallsPage: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
-        Text("正文在本机保存 7 天。删除任一历史记录时，所有调用正文会一并清空，时间和状态保留。")
+        Text(L10n.callRetentionExplanation)
           .font(.system(size:TextSize.body)).foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
         if let error { Text(error).foregroundStyle(Palette.attention).textSelection(.enabled) }
-        if calls.isEmpty && !busy && error == nil { Placeholder(kind:.empty("clock", "还没有模型调用")).frame(height:240) }
+        if calls.isEmpty && !busy && error == nil { Placeholder(kind:.empty("clock", L10n.noModelCallsYet)).frame(height:240) }
         LazyVStack(spacing:0) {
           ForEach(calls) { call in
             if call.id != calls.first?.id { Divider().padding(.horizontal,16) }
@@ -41,7 +41,7 @@ private struct ModelCallsPage: View {
           }
         }.card()
         if busy { ProgressView().frame(maxWidth:.infinity) }
-        else if cursor != nil { Button("加载更多") { Task { await load(reset:false) } }.frame(maxWidth:.infinity) }
+        else if cursor != nil { Button(L10n.loadMore) { Task { await load(reset:false) } }.frame(maxWidth:.infinity) }
       }
       .frame(maxWidth:1080,alignment:.leading).padding(.horizontal,32).padding(.vertical,24).frame(maxWidth:.infinity)
     }.task {
@@ -75,7 +75,7 @@ private struct ModelCallRow: View {
         HStack(alignment:.top,spacing:16) {
           VStack(alignment:.leading,spacing:5) {
             Text(call.title).font(.system(size:TextSize.body,weight:.medium)).foregroundStyle(Palette.ink)
-            Text(call.model ?? "模型未记录").font(.system(size:TextSize.caption)).foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
+            Text(call.model ?? L10n.modelUnknown).font(.system(size:TextSize.caption)).foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
             Text(call.status).font(.system(size:TextSize.body)).foregroundStyle(call.error == nil ? Palette.muted : Palette.attention)
           }
           Spacer(minLength:8)
@@ -85,12 +85,12 @@ private struct ModelCallRow: View {
           }.font(.system(size:TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
           DisclosureChevron(expanded: expanded, size: 12, sideways: true).foregroundStyle(Palette.muted)
         }.padding(16).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
-      }.buttonStyle(.plain).accessibilityLabel("\(call.title)，\(call.status)").accessibilityValue(expanded ? "已展开" : "已收起")
+      }.buttonStyle(.plain).accessibilityLabel([call.title, call.status].joined(separator: L10n.comma)).accessibilityValue(expanded ? L10n.expanded : L10n.closed)
       if expanded {
         VStack(alignment:.leading,spacing:12) {
-          Text("输入 \(call.inputTokens.map(Fmt.count) ?? "未知") / 输出 \(call.outputTokens.map(Fmt.count) ?? "未知") token")
+          Text(L10n.callTokens(input: call.inputTokens, output: call.outputTokens))
             .font(.system(size:TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
-          Text("返回：\(call.providerState == "returned" ? "已返回" : call.providerState == "sending" ? "等待中" : "失败或未发送")　校验：\(call.validationState == "passed" ? "通过" : call.validationState == "failed" ? "未通过" : "未记录")")
+          Text(L10n.callStates(provider: call.providerState, validation: call.validationState))
             .font(.system(size:TextSize.body)).foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
           if let error = call.error { Text(ModelErrorText.plain(error)).foregroundStyle(Palette.attention).textSelection(.enabled) }
           if let missing = CallSnapshot.missing(call.contentState), call.contentState == "not_recorded" {
@@ -116,14 +116,14 @@ struct RuntimeSnapshotView: View {
         if let missing = snapshot.missing { Text(missing).foregroundStyle(Palette.muted) }
         else {
           if snapshot.kind != "context" {
-            Text(snapshot.transport == "cli" ? "这是交给命令行工具的内容；工具内部附加的说明和网络请求不可见。" : "这是交给模型服务的请求正文，认证凭据不在其中。")
+            Text(snapshot.transport == "cli" ? L10n.commandLineSnapshotExplanation : L10n.apiSnapshotExplanation)
               .foregroundStyle(Palette.muted).fixedSize(horizontal:false,vertical:true)
           }
-          if snapshot.redactions > 0 { Text("已隐藏 \(snapshot.redactions) 处可能的密钥。").foregroundStyle(Palette.muted) }
-          DisclosureGroup(snapshot.kind == "context" ? "当时自动带入的内容" : "发送内容", isExpanded:$inputOpen) { code(snapshot.inputText) }
+          if snapshot.redactions > 0 { Text(L10n.snapshotRedactions(snapshot.redactions)).foregroundStyle(Palette.muted) }
+          DisclosureGroup(snapshot.kind == "context" ? L10n.savedSessionContext : L10n.request, isExpanded:$inputOpen) { code(snapshot.inputText) }
           if snapshot.kind != "context" {
-            DisclosureGroup(snapshot.responseTruncated.value ? "返回内容（仅保留前 \(Fmt.count(128_000)) 字符）" : "返回内容",isExpanded:$outputOpen) {
-              if let response = snapshot.response { code(response) } else { Text("尚无可展示的返回内容。").foregroundStyle(Palette.muted) }
+            DisclosureGroup(snapshot.responseTruncated.value ? L10n.truncatedResponse(128_000) : L10n.response,isExpanded:$outputOpen) {
+              if let response = snapshot.response { code(response) } else { Text(L10n.noResponseToShowYet).foregroundStyle(Palette.muted) }
             }
           }
         }
@@ -156,13 +156,13 @@ private struct BackgroundCallsPage: View {
     ScrollView {
       VStack(alignment:.leading,spacing:16) {
         HStack {
-          Picker("来源",selection:$source) { Text("后台服务").tag("hub"); Text("内容整理").tag("distill"); Text("活动采集").tag("collector") }.frame(maxWidth:240)
+          Picker(L10n.source,selection:$source) { Text(L10n.backgroundService).tag("hub"); Text(L10n.summaries).tag("distill"); Text(L10n.activityCapture).tag("collector") }.frame(maxWidth:240)
           Spacer()
         }
-        Text("展示最近的结构化状态与计数。含原文的诊断行不会显示在这里。").font(.system(size:TextSize.body)).foregroundStyle(Palette.muted)
+        Text(L10n.backgroundLogExplanation).font(.system(size:TextSize.body)).foregroundStyle(Palette.muted)
         if let error { Text(error).foregroundStyle(Palette.attention) }
         else if let page {
-          if page.events.isEmpty { Placeholder(kind:.empty("clock","暂时没有可展示的运行状态")).frame(height:240) }
+          if page.events.isEmpty { Placeholder(kind:.empty("clock",L10n.emptyBackgroundLog)).frame(height:240) }
           ForEach(Array(page.events.enumerated()),id:\.offset) { _,event in
             Text(event.prettyJSON).font(.system(size:TextSize.caption,design:.monospaced)).textSelection(.enabled)
               .frame(maxWidth:.infinity,alignment:.leading).padding(16).card()

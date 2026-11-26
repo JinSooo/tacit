@@ -12,8 +12,8 @@ android {
         applicationId = "top.jinso.tacit"
         minSdk = 28
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.6.6"
+        versionCode = 16
+        versionName = "0.7.0"
         ndk { abiFilters += "arm64-v8a" }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -26,6 +26,8 @@ android {
         getByName("release") { signingConfig = signingConfigs.findByName("release") }
         getByName("debug") { signingConfigs.findByName("release")?.let { signingConfig = it } }
     }
+    // Both locales must be present for the existing-install pin, even on English devices.
+    bundle { language { enableSplit = false } }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }

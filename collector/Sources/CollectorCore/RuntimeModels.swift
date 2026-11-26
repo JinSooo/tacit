@@ -31,7 +31,7 @@ public struct DistillHealth: Decodable, Equatable, Sendable {
   /// 用户能处理的错误马上说；格式不对、超时这类下一轮会自己重试的，整理连续 1 小时都没成功才说（2026-11-25）。
   static func problem(_ code: String, lastOk: Date?, now: Date) -> String? {
     if !ModelErrorText.needsUser(code), let lastOk, now.timeIntervalSince(lastOk) < 3600 { return nil }
-    return "整理没能完成：" + ModelErrorText.plain(code)
+    return L10n.text(zh: "整理没能完成：", en: "Summarizing failed. ") + ModelErrorText.plain(code)
   }
 
   public func isResponding(at now: Date) -> Bool {
@@ -62,20 +62,33 @@ public struct ModelCall: Decodable, Identifiable, Sendable {
   public let error: String?
   public var date: Date? { ViewerTime.parse(at) }
   public var title: String {
-    guard let task else { return "早期调用" }
-    return ["assign":"整理活动", "thread_digest":"整理事项", "thread_brief":"事项摘要", "classify":"判断归属", "dedupe":"合并事项", "project":"项目进展", "project_brief":"项目摘要", "day":"每日时间线", "day_brief":"当天概述", "conversation_summary":"对话总结", "connection_test":"测试连接"][task] ?? "模型整理"
+    guard let task else { return L10n.text(zh: "早期调用", en: "Earlier call") }
+    switch task {
+    case "assign": return L10n.text(zh: "整理活动", en: "Summarize activities")
+    case "thread_digest": return L10n.text(zh: "整理事项", en: "Summarize tasks")
+    case "thread_brief": return L10n.text(zh: "事项摘要", en: "Task summary")
+    case "classify": return L10n.text(zh: "判断归属", en: "Classify activities")
+    case "dedupe": return L10n.text(zh: "合并事项", en: "Merge tasks")
+    case "project": return L10n.text(zh: "项目进展", en: "Project progress")
+    case "project_brief": return L10n.text(zh: "项目摘要", en: "Project summary")
+    case "day": return L10n.text(zh: "每日时间线", en: "Daily timeline")
+    case "day_brief": return L10n.text(zh: "当天概述", en: "Day overview")
+    case "conversation_summary": return L10n.text(zh: "对话总结", en: "Conversation summary")
+    case "connection_test": return L10n.text(zh: "测试连接", en: "Test connection")
+    default: return L10n.text(zh: "模型整理", en: "Summarize with model")
+    }
   }
   public var status: String {
-    if applicationState == "discarded" { return "记录已变化，未采用" }
-    if applicationState == "applied" { return "已用于更新" }
-    if error != nil { return "失败" }
-    if applicationState == "unknown" { return validationState == "passed" ? "调用成功，采用情况未记录" : "调用失败" }
-    if validationState == "passed" { return "校验通过，待确认采用" }
-    if providerState == "sending" { return "等待模型返回" }
-    if providerState == "returned" { return "已返回，校验未通过" }
-    return "准备发送"
+    if applicationState == "discarded" { return L10n.text(zh: "记录已变化，未采用", en: "Records changed, result discarded") }
+    if applicationState == "applied" { return L10n.text(zh: "已用于更新", en: "Applied") }
+    if error != nil { return L10n.text(zh: "失败", en: "Failed") }
+    if applicationState == "unknown" { return validationState == "passed" ? L10n.text(zh: "调用成功，采用情况未记录", en: "Call succeeded, application status unavailable") : L10n.text(zh: "调用失败", en: "Call failed") }
+    if validationState == "passed" { return L10n.text(zh: "校验通过，待确认采用", en: "Validation passed, awaiting application") }
+    if providerState == "sending" { return L10n.text(zh: "等待模型返回", en: "Waiting for the model") }
+    if providerState == "returned" { return L10n.text(zh: "已返回，校验未通过", en: "Response received, validation failed") }
+    return L10n.text(zh: "准备发送", en: "Preparing to send")
   }
-  public var elapsed: String { ms.map { $0 < 1000 ? "\(Int($0)) ms" : String(format: "%.1f 秒", $0 / 1000) } ?? "进行中" }
+  public var elapsed: String { ms.map { $0 < 1000 ? "\(Int($0)) ms" : String(format: L10n.text(zh: "%.1f 秒", en: "%.1f sec"), $0 / 1000) } ?? L10n.text(zh: "进行中", en: "In progress") }
 }
 
 public struct ModelCallPage: Decodable, Sendable {
@@ -92,7 +105,13 @@ public struct CallSnapshot: Decodable, Sendable {
   public let redactions: Int
   public var missing: String? { Self.missing(contentState) }
   public static func missing(_ state: String) -> String? {
-    ["deleted":"删除历史记录时，调用正文已一并清空。", "expired":"已超过 7 天，正文已清除。", "not_recorded":"这次调用发生时没有保存正文，无法还原当时发送的内容。", "unavailable":"当时未能保存正文。"][state]
+    switch state {
+    case "deleted": return L10n.text(zh: "删除历史记录时，调用正文已一并清空。", en: "The call content was cleared when its history records were deleted.")
+    case "expired": return L10n.text(zh: "已超过 7 天，正文已清除。", en: "The call content was cleared after 7 days.")
+    case "not_recorded": return L10n.text(zh: "这次调用发生时没有保存正文，无法还原当时发送的内容。", en: "This call has no saved content.")
+    case "unavailable": return L10n.text(zh: "当时未能保存正文。", en: "The call content couldn't be saved.")
+    default: return nil
+    }
   }
   public var inputText: String {
     if kind == "context", case .object(let fields) = request { return fields["text"]?.text ?? "" }
@@ -137,23 +156,25 @@ public enum ModelErrorText {
   }
 
   /// 不是错误码的文字（例如后台给的中文原因）原样返回。
-  public static func plain(_ code: String) -> String {
+  public static func plain(_ code: String) -> String { plain(code, lang: .current) }
+
+  public static func plain(_ code: String, lang: AppLanguage) -> String {
     guard isCode(code) else { return code }
     switch category(code) {
-    case "auth": return "API key 没设置或无效；用账号登录的，请确认已登录。"
-    case "quota": return "模型服务的额度用完了，充值或额度恢复后会自动继续。"
-    case "bad_request": return "模型服务拒绝了请求，请检查模型名、地址和思考强度。"
-    case "config_error": return "模型设置有问题，请检查后重新保存。"
+    case "auth": return L10n.text(zh: "API key 没设置或无效；用账号登录的，请确认已登录。", en: "Check your API key or sign in if you connect with an account.", lang: lang)
+    case "quota": return L10n.text(zh: "模型服务的额度用完了，充值或额度恢复后会自动继续。", en: "The model service quota ran out. Summarizing will resume when quota is available.", lang: lang)
+    case "bad_request": return L10n.text(zh: "模型服务拒绝了请求，请检查模型名、地址和思考强度。", en: "The model service rejected the request. Check the model name, address, and reasoning effort.", lang: lang)
+    case "config_error": return L10n.text(zh: "模型设置有问题，请检查后重新保存。", en: "Check your model settings and save them again.", lang: lang)
     // 默认模型借用本机的 Claude Code；朋友的 Mac 上常常没装（2026-11-25 虚拟机实测）。
-    case "cli_missing": return "这台 Mac 上没找到 Claude Code 或 Codex。装好并登录，或改填 API。"
-    case "cli_failed": return "命令行工具调用失败，请确认已安装并登录。"
-    case "network": return "连不上模型服务，请检查网络和地址。"
-    case "rate_limited": return "请求太频繁，模型服务暂时限流，稍后会自动重试。"
-    case "timeout": return "模型服务一直没有回应，请检查网络或稍后再试。"
-    case "server_error": return "模型服务暂时出错，稍后会自动重试。"
-    case "schema_mismatch", "invalid_json": return "模型返回的内容不合格式，可以换个模型试试。"
-    case "usage_record_failed": return "整理记录没能保存，请检查磁盘空间。"
-    default: return "原因不明，请检查模型设置。"
+    case "cli_missing": return L10n.text(zh: "这台 Mac 上没找到 Claude Code 或 Codex。装好并登录，或改填 API。", en: "Install and sign in to Claude Code or Codex, or configure an API provider.", lang: lang)
+    case "cli_failed": return L10n.text(zh: "命令行工具调用失败，请确认已安装并登录。", en: "The command failed. Check that the tool is installed and signed in.", lang: lang)
+    case "network": return L10n.text(zh: "连不上模型服务，请检查网络和地址。", en: "Can't reach the model service. Check your network and the service address.", lang: lang)
+    case "rate_limited": return L10n.text(zh: "请求太频繁，模型服务暂时限流，稍后会自动重试。", en: "The model service is limiting requests. Tacit will retry automatically.", lang: lang)
+    case "timeout": return L10n.text(zh: "模型服务一直没有回应，请检查网络或稍后再试。", en: "The model service didn't respond. Check your network or try again later.", lang: lang)
+    case "server_error": return L10n.text(zh: "模型服务暂时出错，稍后会自动重试。", en: "The model service encountered an error. Tacit will retry automatically.", lang: lang)
+    case "schema_mismatch", "invalid_json": return L10n.text(zh: "模型返回的内容不合格式，可以换个模型试试。", en: "The model returned an unexpected format. Try a different model.", lang: lang)
+    case "usage_record_failed": return L10n.text(zh: "整理记录没能保存，请检查磁盘空间。", en: "The summary couldn't be saved. Check your disk space.", lang: lang)
+    default: return L10n.text(zh: "原因不明，请检查模型设置。", en: "An unexpected error occurred. Check your model settings.", lang: lang)
     }
   }
 }

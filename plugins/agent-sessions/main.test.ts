@@ -254,7 +254,7 @@ test("损坏行累计一条诊断，跳过后正常输出 checkpoint，半行仍
   const offset = state.files[file]!.offset;
   fs.appendFileSync(file, partial.slice(50) + "\n");
   const next = await s.run(base + 7_200_000, state); expect(next.records[0]!.body).toBe("[我] 下次完整消息"); expect(next.state.files[file]!.offset).toBeGreaterThan(offset);
-  const cli = Bun.spawnSync(["bun", path.join(import.meta.dir, "main.ts"), "--device", "mac"], { env: { ...process.env, RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir } });
+  const cli = Bun.spawnSync(["bun", path.join(import.meta.dir, "main.ts"), "--device", "mac"], { env: { ...process.env, LC_ALL: "zh_CN.UTF-8", RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir } });
   expect(cli.exitCode).toBe(0); expect(cli.stderr.toString().trim()).toBe("跳过 2 行损坏数据");
   expect(JSON.parse(cli.stdout.toString().trim().split("\n").at(-1)!)).toMatchObject({ type: "checkpoint", sessionWarnings: { damaged: 2 } });
 });
@@ -394,13 +394,13 @@ test("单文件格式变化告警；未知事件、角色、时刻及正文均�
   ];
   s.write(s.file("claude"), Array.from({ length: 20 }, (_, i) => unknown[i % unknown.length]), at);
   s.write(s.file("claude", "ordinary.jsonl"), Array.from({ length: 55 }, () => claude("user", "可见消息", at)), at);
-  const env = { ...process.env, RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir, RA_DATA_DIR: s.root };
+  const env = { ...process.env, LC_ALL: "en_US.UTF-8", RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir, RA_DATA_DIR: s.root };
   const result = Bun.spawnSync([process.execPath, path.join(import.meta.dir, "main.ts"), "--device", "mac"], { env });
   expect(result.exitCode).toBe(0);
   const lines = result.stdout.toString().trim().split("\n").map(line => JSON.parse(line));
   expect(lines.at(-1).sessionWarnings).toEqual({ unrecognized: 20 });
   expect(lines.filter(line => line.type === "record").map(line => line.record.body)).toEqual(["[我] 可见消息"]);
-  expect(result.stderr.toString().trim()).toBe("Claude Code / Codex 会话格式可能已变化，有 20 行没有识别");
+  expect(result.stderr.toString().trim()).toBe("Skipped 20 unrecognized Claude Code or Codex log lines. The session format may have changed.");
   expect(JSON.stringify(lines.at(-1)) + result.stderr.toString()).not.toContain("合成日志原文");
 });
 

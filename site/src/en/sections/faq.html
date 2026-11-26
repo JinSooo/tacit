@@ -1,0 +1,42 @@
+<section class="section" id="faq" aria-labelledby="faq-heading">
+  <div class="wrap faq-layout">
+    <header class="section-head" data-reveal>
+      <h2 class="heading" id="faq-heading">Frequently asked questions</h2>
+    </header>
+
+    <div class="faq-list" data-reveal-group>
+      <details>
+        <summary>Can I replay my screen?</summary>
+        <p>Tacit keeps no screenshots or video to replay. Screen records provide app names, titles and time spent. Tacit summarizes what you did and decided from AI sessions, chats and recordings, with links to the original records.</p>
+      </details>
+      <details>
+        <summary>Why does macOS block Tacit the first time?</summary>
+        <p>Tacit uses a self-signed certificate without Apple notarization. <a class="link" href="#download-open">Allow Tacit to open once</a>. Updates use the same certificate and keep the permissions you granted.</p>
+      </details>
+      <details>
+        <summary>Can I run my own model?</summary>
+        <p>Yes. Set the summary model to your own OpenAI-compatible endpoint. You can also use Claude Code or Codex if you’re signed in locally. These tools use their own model settings.</p>
+      </details>
+      <details>
+        <summary>Which devices can run Tacit?</summary>
+        <p>Tacit runs on Apple silicon Macs with macOS 14 or later and arm64 phones with Android 9 or later. Android records and transcribes audio on the phone. Pair it for encrypted sync over your local network or the relay mailbox and view the full timeline. You can also use it on its own with optional conversation summaries. A Windows app is planned. You can <a class="link" href="https://github.com/JinSooo/tacit/blob/main/docs/server-deployment.md">run the background service</a> with Docker on Windows or Linux today. Intel Macs are unsupported. iOS is still being explored.</p>
+      </details>
+      <details>
+        <summary>Can AI tools change my records?</summary>
+        <p>AI tools can search and read records. They can add a record only when you ask, and cannot edit or delete one. You can correct what AI remembers from a project page or task.</p>
+      </details>
+      <details>
+        <summary>How much does it cost?</summary>
+        <p>Tacit is free and open source under the MIT license. Summaries use your API or account allowance. Change the update frequency or set a daily token limit in settings. Tacit pauses summarizing for the day when you reach that limit.</p>
+      </details>
+      <details>
+        <summary>Which AI tools can connect?</summary>
+        <p>Any AI tool with MCP support can search or add records. Connect Claude Code or Codex in settings to bring current project progress into new sessions. Choose a separate summary model from Anthropic, an OpenAI-compatible endpoint, a custom service, or your signed-in Claude Code or Codex.</p>
+      </details>
+      <details>
+        <summary>Can Tacit record WeChat conversations?</summary>
+        <p>Yes. WeChat is an optional macOS source and is off by default. When enabled, Tacit reads the WeChat window and separates the conversation into messages.</p>
+      </details>
+    </div>
+  </div>
+</section>

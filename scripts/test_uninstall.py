@@ -29,14 +29,17 @@ class UninstallTests(unittest.TestCase):
                 command = bin_dir / name
                 command.write_text("#!/bin/sh\nexit 0\n")
                 command.chmod(0o700)
-            env = dict(os.environ, HOME=str(home), PATH=f"{bin_dir}:/usr/bin:/bin", LC_ALL="C")
-            result = subprocess.run(["/bin/sh", str(script)], env=env, start_new_session=True,
-                                    capture_output=True, text=True, timeout=5)
+            for locale, expected in (("C", f"Data remains in {data}"), ("zh_CN.UTF-8", f"数据保留在 {data}（")):
+                widget.mkdir(parents=True, exist_ok=True)
+                (widget / "today.json").write_text('{"day":"2026-01-15"}')
+                env = dict(os.environ, HOME=str(home), PATH=f"{bin_dir}:/usr/bin:/bin", LC_ALL=locale)
+                result = subprocess.run(["/bin/sh", str(script)], env=env, start_new_session=True,
+                                        capture_output=True, text=True, timeout=5)
 
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(widget.exists())
-            self.assertEqual(history.read_text(), "fictional history")
-            self.assertIn(f"数据保留在 {data}（", result.stdout)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(widget.exists())
+                self.assertEqual(history.read_text(), "fictional history")
+                self.assertIn(expected, result.stdout)
 
 
 if __name__ == "__main__":

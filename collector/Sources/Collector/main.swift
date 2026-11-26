@@ -282,6 +282,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Replace the root to discard view-local loaders and expanded raw records.
     viewer.replaceRoot()
     if !config.allowsLocalHub { deviceDiscovery.update(nil) }
+    syncedLanguageRoute = nil
+    syncLanguageIfNeeded()
     widgetPublisher?.refresh()
   }
 
@@ -296,6 +298,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   var statusItem: NSStatusItem!
   let statusMenu = NSMenu()
+  @MainActor private var languageSyncTask: Task<Void, Never>?
+  @MainActor private var syncedLanguage: AppLanguage?
+  @MainActor private var syncedLanguageRoute: HubBinding.Route?
+
+  @MainActor private func syncLanguageIfNeeded() {
+    guard !terminating, languageSyncTask == nil, let route = try? config.hubRoute() else { return }
+    let language = LanguageStore.shared.resolved
+    guard syncedLanguageRoute != route || syncedLanguage != language else { return }
+    languageSyncTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      // The device operation is admin-only. Local HTTP can also bootstrap with the local token.
+      let saved = (try? await self.api.saveGeneral(["language": language.rawValue])) != nil
+      self.languageSyncTask = nil
+      if saved, (try? self.config.hubRoute()) == route {
+        self.syncedLanguage = language
+        self.syncedLanguageRoute = route
+      }
+      if LanguageStore.shared.resolved != language { self.syncLanguageIfNeeded() }
+    }
+  }
   lazy var panel: StatusPanel = MainActor.assumeIsolated {
     let p = StatusPanel(store: viewer.store) { [weak self] page in self?.viewer.show(page) }
     p.onVisibilityChange = { [weak self] visible in
@@ -358,7 +380,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     statusItem.button?.target = self
     statusItem.button?.action = #selector(statusClicked(_:))
     statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+    LanguageStore.shared.onResolvedChange = { [weak self] language in
+      guard let self, !self.terminating else { return }
+      self.viewer.rebuildMenu()
+      self.menuNeedsUpdate(self.statusMenu)
+      self.widgetPublisher?.languageChanged(to: language)
+      self.syncLanguageIfNeeded()
+    }
+    NotificationCenter.default.addObserver(forName: NSLocale.currentLocaleDidChangeNotification, object: nil, queue: .main) { _ in
+      MainActor.assumeIsolated { LanguageStore.shared.refreshSystemLanguage() }
+    }
     registerSources()
+    syncLanguageIfNeeded()
     // 上次开启录音时崩溃：先关掉录音开关，再启动各数据源。
     if audio.initiallyBlocked { toggles.setEnabled("audio", false) }
     sources.launch(paused: paused)
@@ -389,7 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       MainActor.assumeIsolated {
         widgetPublisher = WidgetSnapshotPublisher(dataSource: viewerDataSource, file: file,
                                                   hubRoute: { [config] in try config.hubRoute() })
-        widgetPublisher?.refresh()
+        widgetPublisher?.languageChanged(to: LanguageStore.shared.resolved)
       }
       ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
         MainActor.assumeIsolated { self?.widgetPublisher?.refresh() }
@@ -442,7 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       s.request = { ocr.requestAccess(); if !ocr.granted { SystemPermissions.openPrivacyPane("Privacy_ScreenCapture") } }
       s.onEnable = { _ in if !ocr.granted { ocr.requestAccess() } }
       s.last = { [weak self] in self?.lastOCRRun }
-      s.describe = { [weak self] in self?.enabled("screen") == false ? ("要先打开“屏幕文字”", false) : ("", true) }
+      s.describe = { [weak self] in self?.enabled("screen") == false ? (L10n.text(zh: "要先打开“屏幕文字”", en: "Turn on Screen activity first"), false) : ("", true) }
     })
     sources.register(BlockSource("audio") { s in
       s.permissionName = "麦克风"
@@ -625,27 +658,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func menuNeedsUpdate(_ menu: NSMenu) {
     menu.removeAllItems()
     updateIcon()
-    let f = DateFormatter(); f.dateFormat = "HH:mm"
     let state: String
     // 和主窗口底部一致：暂停优先，其次缺权限，数据源全关时写“未在记录”。
-    if let p = pausedUntil, paused { state = "已暂停到 \(f.string(from: p))" }
-    else if missingAX { state = "需要辅助功能权限" }
-    else if !sources.statuses().contains(where: { DataSourceCatalog.isVisible($0.id) && $0.enabled }) { state = "未在记录" }
-    else { state = "正在记录" }
+    if let p = pausedUntil, paused { state = CaptureFooterStatus.title(state: .paused(p), enabledSources: 0) }
+    else if missingAX { state = L10n.text(zh: "需要辅助功能权限", en: "Accessibility permission required") }
+    else if !sources.statuses().contains(where: { DataSourceCatalog.isVisible($0.id) && $0.enabled }) { state = L10n.text(zh: "未在记录", en: "Not recording") }
+    else { state = L10n.text(zh: "正在记录", en: "Recording") }
     menu.addItem(disabled(state))
     let pending = hub.pendingCount
-    if let e = hub.lastError { menu.addItem(disabled("\(e)，\(pending) 条记录等待保存")) }
-    else if pending > 0 { menu.addItem(disabled("\(pending) 条记录等待保存")) }
+    let queued = L10n.text(zh: "\(pending) 条记录等待保存", en: L10n.Menu.queued(pending))
+    if let e = hub.lastError {
+      let separator = L10n.text(zh: "，", en: ", ")
+      menu.addItem(disabled(L10n.deliveryIssue(e) + separator + queued))
+    } else if pending > 0 { menu.addItem(disabled(queued)) }
     let dropped = hub.queue.dropped + hub.outboxStatus.dropped
-    if dropped > 0 { menu.addItem(disabled("已丢弃 \(dropped) 条最旧的待保存记录")) }
+    if dropped > 0 { menu.addItem(disabled(L10n.count(dropped, one: "Discarded the oldest pending record", other: "Discarded the %@ oldest pending records", zh: "已丢弃 \(dropped) 条最旧的待保存记录"))) }
     menu.addItem(.separator())
 
-    if paused { menu.addItem(item("继续记录", #selector(resume))) }
+    if paused { menu.addItem(item(L10n.Menu.resume, #selector(resume))) }
     else {
-      menu.addItem(item("暂停 1 小时", #selector(pauseHour)))
-      menu.addItem(item("暂停到明天", #selector(pauseTomorrow)))
+      menu.addItem(item(L10n.Menu.pauseHour, #selector(pauseHour)))
+      menu.addItem(item(L10n.Menu.pauseTomorrow, #selector(pauseTomorrow)))
     }
-    let open = item("打开 Tacit", #selector(openHistory)); open.keyEquivalent = "o"
+    let open = item(L10n.Menu.open, #selector(openHistory)); open.keyEquivalent = "o"
     menu.addItem(open)
     menu.addItem(.separator())
 
@@ -653,15 +688,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func sourceItems(_ s: DataSourceStatus, into target: NSMenu) {
       var title = s.title
       if s.enabled {
-        if s.running { title += "（正在运行）" }
-        else if !s.ok, !s.detail.isEmpty { title += "：" + s.detail }
-        else if let last = s.lastRun { title += "（\(f.string(from: last)) 运行过）" }
+        if s.running { title += L10n.text(zh: "（正在运行）", en: " (running)") }
+        else if !s.ok, !s.detail.isEmpty { title += L10n.text(zh: "：", en: ": ") + (s.id == "audio" ? L10n.audioStatus(s.detail) : s.detail) }
+        else if let last = s.lastRun { title += L10n.text(zh: "（\(ViewerFormat.clock(last)) 运行过）", en: " (last ran at \(ViewerFormat.clock(last)))") }
       }
       let toggle = item(title, #selector(toggleSource(_:)))
       toggle.representedObject = s.id; toggle.state = s.enabled ? .on : .off
       target.addItem(toggle)
       if s.needsPermission, let name = s.permissionName {
-        let grant = item("    授权\(name)…", #selector(requestSourcePermission(_:)))
+        let grant = item(L10n.text(zh: "    授权\(name)…", en: "    Grant \(L10n.permission(name)) permission…"), #selector(requestSourcePermission(_:)))
         grant.representedObject = s.id; target.addItem(grant)
       }
     }
@@ -670,16 +705,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       sourceItems(s, into: menu)
       if s.id == "audio" {
         menu.addItem(microphoneMenu())
-        if s.enabled { for line in MicrophoneChoices.statusLines(Array(audio.status().dropFirst())) { menu.addItem(disabled("    " + line)) } }
+        if s.enabled { for line in MicrophoneChoices.statusLines(Array(audio.status().dropFirst())) { menu.addItem(disabled("    " + L10n.audioStatus(line))) } }
       }
     }
     // AI 会话、浏览器和其他数据源放在一起，不另立“插件”子菜单；用户不需要知道哪个是插件。
-    if !plugins.available { menu.addItem(disabled("安装不完整，请重新安装 Tacit")) }
+    if !plugins.available { menu.addItem(disabled(L10n.Menu.installationIncomplete)) }
     for s in statuses where s.kind == .plugin { sourceItems(s, into: menu) }
-    let runAll = item("同步 AI 会话和浏览器", #selector(runPlugins)); runAll.isEnabled = plugins.available
+    let runAll = item(L10n.text(zh: "同步 AI 会话和浏览器", en: "Sync AI sessions and browser activity"), #selector(runPlugins)); runAll.isEnabled = plugins.available
     menu.addItem(runAll)
     menu.addItem(.separator())
-    menu.addItem(item("退出", #selector(quit)))
+    menu.addItem(item(L10n.text(zh: "退出", en: "Quit"), #selector(quit)))
   }
 
   func microphoneMenu() -> NSMenuItem {
@@ -692,7 +727,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       entry.state = choice.value == setting ? .on : .off
       microphones.addItem(entry)
     }
-    let microphoneMenu = NSMenuItem(title: "    麦克风", action: nil, keyEquivalent: "")
+    let microphoneMenu = NSMenuItem(title: "    " + L10n.Menu.microphone, action: nil, keyEquivalent: "")
     microphoneMenu.submenu = microphones
     return microphoneMenu
   }
@@ -745,7 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     guard task != .backfill, jobs[task]?.running != true else { return }
     guard plugins.available else { jobs[task] = .init(running: false, text: "安装不完整，请重新安装 Tacit。"); return }
     let names = plugins.plugins.filter(enabled)
-    jobs[task] = .init(running: true, text: task == .syncAll ? "正在同步…" : "正在导入…")
+    jobs[task] = .init(running: true, text: task == .syncAll ? L10n.text(zh: "正在同步…", en: "Syncing…") : L10n.text(zh: "正在导入…", en: "Importing…"))
     if task == .syncAll { hub.flush() }
     let api = api
     plugins.run(names, since: PluginImport.since(task)) { [weak self] results in
@@ -772,6 +807,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func writeStatus(forceReport: Bool = false) {
     MainActor.assumeIsolated {
+      syncLanguageIfNeeded()
       if config.allowsLocalHub { deviceDiscovery.refreshIfDue(api: api) }
       else { deviceDiscovery.update(nil) }
     }
@@ -854,7 +890,19 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-icon"), i + 1 < Comman
   catch { FileHandle.standardError.write(Data("\(error)\n".utf8)); exit(1) }
 }
 
+@MainActor private func initializeAppLanguage(_ config: Config) {
+  let priorFiles = Set((try? FileManager.default.contentsOfDirectory(atPath: config.dataDir.path)) ?? [])
+  let priorDefaults = Bundle.main.bundleIdentifier.flatMap { UserDefaults.standard.persistentDomain(forName: $0) } ?? [:]
+  LanguageStore.shared.initialize(existingInstallation: LanguagePreference.hasExistingInstallation(
+    fileNames: priorFiles, defaultsKeys: Set(priorDefaults.keys)))
+}
+
 let config = Config.load()
+// The source installer prepares the Hub before launching the collector.
+if CommandLine.arguments.contains("--initialize-language") {
+  MainActor.assumeIsolated { initializeAppLanguage(config) }
+  exit(0)
+}
 let logFile = config.dataDir.appendingPathComponent("logs/collector.log")
 let launchedByAgent = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"]?.hasPrefix("dev.record-anything.") == true
 let launchSource: DiagnosticLog.LaunchSource = launchedByAgent || DiagnosticLog.isFile(logFile, on: STDERR_FILENO)
@@ -877,6 +925,7 @@ if case .held = instanceLock {
   guard let lock = InstanceLock.wait(path: lockPath), !CleanQuitMarker.isMarked(in: config.dataDir) else { exit(0) }
   instanceLock = .acquired(lock)
 }
+MainActor.assumeIsolated { initializeAppLanguage(config) }
 CleanQuitMarker.clear(in: config.dataDir)
 DiagnosticLog.shared.record(.started(DiagnosticBuild(), launchSource))
 

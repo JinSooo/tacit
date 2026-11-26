@@ -1,5 +1,6 @@
 package top.jinso.tacit.sync
 
+import top.jinso.tacit.R
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -203,18 +204,22 @@ internal fun uploadReceipt(json: JSONObject, count: Int): Map<Int, String> {
 }
 
 /** Show one recognizable reason per record, even if its receipt listed several validation errors. */
-internal fun rejectedRecordCategories(reasons: Map<String, Int>): Map<String, Int> = buildMap {
+// The previous value is still present in some vaults' queued rejection receipts.
+internal const val RECORD_TOO_LARGE = "record_too_large"
+private const val LEGACY_RECORD_TOO_LARGE = "记录太大，无法发送"
+
+internal fun rejectedRecordCategories(reasons: Map<String, Int>): Map<Int, Int> = buildMap {
     for ((reason, count) in reasons) {
         val label = reason.split('；').firstNotNullOfOrNull { part ->
             val field = part.substringBefore(' ')
             when {
-                part == "记录太大，无法发送" || field in setOf("/body", "/title") && "must NOT have more than" in part -> "单条内容过长"
-                field == "/t_start" || field == "/t_end" -> "时间格式异常"
-                field == "/source" -> "来源不支持"
-                field == "/device" -> "设备身份不匹配"
+                part == RECORD_TOO_LARGE || part == LEGACY_RECORD_TOO_LARGE || field in setOf("/body", "/title") && "must NOT have more than" in part -> R.string.rejection_too_long
+                field == "/t_start" || field == "/t_end" -> R.string.rejection_invalid_time
+                field == "/source" -> R.string.rejection_source
+                field == "/device" -> R.string.rejection_device
                 else -> null
             }
-        } ?: "其他格式问题"
+        } ?: R.string.rejection_format
         put(label, (get(label) ?: 0) + count)
     }
 }.toList().sortedByDescending { it.second }.toMap()
@@ -224,7 +229,11 @@ internal sealed interface Change {
     data class Correction(val record: JSONObject) : Change
 }
 
-internal inline fun pullChanges(send: (String, JSONObject) -> JSONObject, apply: (List<Change>) -> Unit) {
+internal fun syncLanguage(page: JSONObject): String? =
+    top.jinso.tacit.i18n.AppLang.fromHub(page.optionalString("language"))?.code
+
+internal inline fun pullChanges(send: (String, JSONObject) -> JSONObject,
+    onLanguage: (String) -> Unit = {}, apply: (List<Change>) -> Unit) {
     var cursor = 0L
     do {
         val page = send("sync", JSONObject().put("cursor", cursor))
@@ -248,6 +257,7 @@ internal inline fun pullChanges(send: (String, JSONObject) -> JSONObject, apply:
             apply(changes)
             check(send("sync.ack", JSONObject().put("cursor", next)).get("ok") == true)
         }
+        syncLanguage(page)?.let(onLanguage)
         cursor = next
     } while (more)
 }

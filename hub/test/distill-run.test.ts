@@ -1,3 +1,4 @@
+import { updateGeneral } from "../src/general-settings.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ import { toLocalIso, type RecordV1 } from "../../packages/record/index.ts";
 // 全部用合成数据和假模型，不调用任何真实模型。
 let ctx: ReturnType<typeof setup>, store: DistillStore, repo: string;
 beforeEach(() => {
-  ctx = setup(); store = new DistillStore(ctx.db);
+  ctx = setup(); updateGeneral(ctx.db, { language: "zh" }); store = new DistillStore(ctx.db);
   repo = realpathSync(ctx.dir) + "/synthetic-repo"; mkdirSync(repo);
   expect(spawnSync("git", ["init", repo]).status).toBe(0);
 });

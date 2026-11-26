@@ -1,5 +1,7 @@
 package top.jinso.tacit.audio
 
+import top.jinso.tacit.i18n.UiMessage
+import top.jinso.tacit.R
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.File
@@ -78,14 +80,14 @@ internal fun installTaggingWith(dir: File, files: List<SpeechModelResource>, dow
 }
 
 /** Only model errors with deliberately authored copy are shown verbatim. */
-internal class SpeechModelProblem(message: String) : IllegalArgumentException(message)
+internal class SpeechModelProblem(val label: Int) : IllegalArgumentException()
 
 enum class SpeechPreparationPhase { IDLE, DOWNLOADING, VALIDATING, IMPORTING, READY, CANCELLED, ERROR }
-data class SpeechPreparationState(
+internal data class SpeechPreparationState(
     val phase: SpeechPreparationPhase = SpeechPreparationPhase.IDLE,
     val receivedBytes: Long = 0,
     val totalBytes: Long = SpeechModelCatalog.totalBytes,
-    val message: String = "",
+    val message: UiMessage? = null,
     val cancelling: Boolean = false
 ) {
     val busy get() = phase in setOf(SpeechPreparationPhase.DOWNLOADING, SpeechPreparationPhase.VALIDATING, SpeechPreparationPhase.IMPORTING)
@@ -100,13 +102,13 @@ data class SpeechPreparationState(
             else -> SpeechPreparationPhase.ERROR
         }
         val message = when (cause) {
-            null -> ""
-            is CancellationException -> "已取消，未更换现有模型"
-            is java.net.SocketTimeoutException -> "下载超时，请检查网络后重试"
-            is java.net.UnknownHostException, is java.net.ConnectException -> "无法连接模型站点，请检查网络后重试，也可手动导入"
-            is SecurityException -> "无法联网下载，请检查应用网络权限，也可手动导入"
-            is SpeechModelProblem -> requireNotNull(cause.message)
-            else -> "模型准备失败，请检查网络、存储空间和模型文件后重试"
+            null -> null
+            is CancellationException -> UiMessage(R.string.model_cancelled)
+            is java.net.SocketTimeoutException -> UiMessage(R.string.model_download_timeout)
+            is java.net.UnknownHostException, is java.net.ConnectException -> UiMessage(R.string.model_download_unreachable)
+            is SecurityException -> UiMessage(R.string.model_download_no_permission)
+            is SpeechModelProblem -> UiMessage(cause.label)
+            else -> UiMessage(R.string.model_preparation_failed)
         }
         return copy(phase = phase, message = message, cancelling = false)
     }
@@ -139,9 +141,9 @@ internal class SpeechModelDownload(
 ) {
     fun prepare(root: File, cancellation: ModelDownloadCancellation, progress: (Long, String) -> Unit): File {
         cancellation.check()
-        if (root.usableSpace < resources.sumOf { it.bytes } + 32L * 1024 * 1024) throw SpeechModelProblem("存储空间不足，请腾出空间后重试")
+        if (root.usableSpace < resources.sumOf { it.bytes } + 32L * 1024 * 1024) throw SpeechModelProblem(R.string.model_storage)
         val stage = File(root, UUID.randomUUID().toString())
-        if (!stage.mkdirs()) throw SpeechModelProblem("无法保存模型，请检查存储空间")
+        if (!stage.mkdirs()) throw SpeechModelProblem(R.string.model_storage_write)
         try {
             var received = 0L
             for (resource in resources) {
@@ -164,7 +166,7 @@ internal class SpeechModelDownload(
         progress: (Long) -> Unit) {
         var url = URL(resource.url)
         repeat(6) {
-            if (url.protocol != "https" || url.userInfo != null) throw SpeechModelProblem("下载遇到网络问题，请稍后重试")
+            if (url.protocol != "https" || url.userInfo != null) throw SpeechModelProblem(R.string.model_download_network)
             cancellation.check()
             val connection = openConnection(url)
             try {
@@ -177,13 +179,13 @@ internal class SpeechModelDownload(
                 cancellation.attach(connection)
                 val status = connection.responseCode
                 if (status in listOf(301, 302, 303, 307, 308)) {
-                    val location = connection.getHeaderField("Location") ?: throw SpeechModelProblem("下载遇到网络问题，请稍后重试")
+                    val location = connection.getHeaderField("Location") ?: throw SpeechModelProblem(R.string.model_download_network)
                     url = try { URL(url, location) }
-                    catch (_: java.net.MalformedURLException) { throw SpeechModelProblem("下载遇到网络问题，请稍后重试") }
+                    catch (_: java.net.MalformedURLException) { throw SpeechModelProblem(R.string.model_download_network) }
                 } else {
-                    if (status != 200) throw SpeechModelProblem("模型下载失败，请稍后重试")
+                    if (status != 200) throw SpeechModelProblem(R.string.model_download_failed)
                     val length = connection.contentLengthLong
-                    if (length >= 0 && length != resource.bytes) throw SpeechModelProblem("模型文件大小不符，请重新下载")
+                    if (length >= 0 && length != resource.bytes) throw SpeechModelProblem(R.string.model_size_invalid)
                     connection.inputStream.use { copyVerified(it, target, resource, cancellation, progress) }
                     return
                 }
@@ -193,7 +195,7 @@ internal class SpeechModelDownload(
                 runCatching { cancellation.attach(null) }
             }
         }
-        throw SpeechModelProblem("下载遇到网络问题，请稍后重试")
+        throw SpeechModelProblem(R.string.model_download_network)
     }
 
     companion object {
@@ -209,14 +211,14 @@ internal class SpeechModelDownload(
                     if (n < 0) break
                     cancellation.check()
                     total += n
-                    if (total > resource.bytes) throw SpeechModelProblem("模型文件大小不符，请重新下载")
+                    if (total > resource.bytes) throw SpeechModelProblem(R.string.model_size_invalid)
                     digest.update(buffer, 0, n)
                     output.write(buffer, 0, n)
                     progress(total)
                 }
-                if (total != resource.bytes) throw SpeechModelProblem("模型下载不完整，请重试")
+                if (total != resource.bytes) throw SpeechModelProblem(R.string.model_download_incomplete)
                 val hash = digest.digest().joinToString("") { "%02x".format(it) }
-                if (hash != resource.sha256) throw SpeechModelProblem("模型文件校验未通过，请重新下载")
+                if (hash != resource.sha256) throw SpeechModelProblem(R.string.model_checksum_failed)
                 cancellation.check()
                 output.fd.sync()
             }

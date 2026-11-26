@@ -56,9 +56,9 @@ public enum CaptureFooterStatus {
   public enum State { case recording, paused(Date), noPermission }
   public static func title(state: State, enabledSources: Int) -> String {
     switch state {
-    case .paused(let until): return "已暂停到 \(ViewerFormat.clock(until))"
-    case .recording: return enabledSources == 0 ? "未在记录" : "正在记录"
-    case .noPermission: return enabledSources == 0 ? "未在记录" : "需要辅助功能权限"
+    case .paused(let until): return L10n.text(zh: "已暂停到 \(ViewerFormat.clock(until))", en: "Paused until \(ViewerFormat.clock(until))")
+    case .recording: return enabledSources == 0 ? L10n.text(zh: "未在记录", en: "Not recording") : L10n.text(zh: "正在记录", en: "Recording")
+    case .noPermission: return enabledSources == 0 ? L10n.text(zh: "未在记录", en: "Not recording") : L10n.text(zh: "需要辅助功能权限", en: "Accessibility permission required")
     }
   }
 }

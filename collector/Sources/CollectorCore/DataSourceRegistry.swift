@@ -95,7 +95,7 @@ public final class DataSourceRegistry {
       let d = s.descriptor, on = isEnabled(d.id)
       // 停用的数据源不探测权限（浏览器的探测要打开文件）。
       let permission: SourcePermission = on ? s.permission : .notNeeded
-      let detail = on ? s.detail : (text: "已停用", ok: true)
+      let detail = on ? s.detail : (text: L10n.text(zh: "已停用", en: "Disabled"), ok: true)
       return DataSourceStatus(id: d.id, title: d.title, kind: d.kind, enabled: on, permission: permission,
         permissionName: s.permissionName, lastRun: on ? s.lastRun : nil, detail: detail.text, ok: detail.ok,
         canRunNow: on && s.canRunNow, running: on && s.running)

@@ -105,7 +105,7 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
     try await ensureReady()
     let key = TimelineDay.key(day, calendar: calendar)
     if let entity = try sync.cache.get(kind: .day, id: key) {
-      let decoded = try HubJSON.decoder().decode(DayDiary.self, from: entity.payloadData)
+      let decoded = try HubAPI.decodeDiary(entity.payloadData)
       return normalizeDayDiary(decoded)
     }
     if key < retentionCutoffDayKey(), let httpFallback {
@@ -142,7 +142,7 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
     }
     try await ensureReady()
     guard let entity = try sync.cache.get(kind: .project, id: id) else {
-      throw HubError(message: "内容不存在", status: 404)
+      throw HubError(message: L10n.contentNotFound, status: 404)
     }
     return try HubJSON.decoder().decode(EntityDetail.self, from: entity.payloadData)
   }
@@ -156,7 +156,7 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
     if try sync.cache.get(kind: .project, id: id) != nil {
       return []
     }
-    throw HubError(message: "内容不存在", status: 404)
+    throw HubError(message: L10n.contentNotFound, status: 404)
   }
 
   func thread(_ id: String, level: String) async throws -> EntityDetail {
@@ -173,7 +173,7 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
     if let httpFallback {
       return try await httpFallback.thread(id, level: level)
     }
-    throw HubError(message: "内容不存在", status: 404)
+    throw HubError(message: L10n.contentNotFound, status: 404)
   }
 
   func timeline(projectId: String?, threadId: String?, query: String?, before: String?) async throws -> HubAPI.TimelineResult {
@@ -291,10 +291,10 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
   func record(_ id: String) async throws -> RecordDetail {
     let result = try await sync.getRecords(ids: [id], includeCorrections: true, includePrivate: await privateReadAllowed())
     guard let json = result.records[id] else {
-      throw HubError(message: "记录不存在", status: 404)
+      throw HubError(message: L10n.recordNotFound, status: 404)
     }
     if json.objectValue?["redacted_private"]?.boolValue == true {
-      throw HubError(message: "记录不存在", status: 404)
+      throw HubError(message: L10n.recordNotFound, status: 404)
     }
     let data = try JSONEncoder().encode(json)
     return try HubJSON.decoder().decode(RecordDetail.self, from: data)
@@ -807,9 +807,9 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
         }
         if try unavailable.get() { return nil }
       } catch {
-        throw HubError(message: "连不上后台服务：设备连接信息读不出来", status: 0)
+        throw HubError(message: L10n.unreadableDeviceConnection, status: 0)
       }
-      throw HubError(message: "连不上后台服务：设备连接不可用", status: 0)
+      throw HubError(message: L10n.deviceConnectionUnavailable, status: 0)
     }
     do {
       let reply = try await session.sync.client.send(op: op, body: body, timeout: timeout)
@@ -899,19 +899,19 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
   static func mapDeviceError(_ error: DeviceClientError) -> HubError {
     switch error {
     case .transportError(let msg):
-      return HubError(message: "连不上后台服务：\(msg)", status: 0)
+      return HubError(message: L10n.unreachableService(msg), status: 0)
     case .hubBusy(let msg):
-      return HubError(message: msg ?? "数据库忙，稍后再试", status: 503)
+      return HubError(message: msg ?? L10n.databaseBusyTryAgainShortly, status: 503)
     case .operationError(_, 403, let msg), .plaintextError(403, let msg):
-      return HubError(message: msg ?? "当前设备权限不足", status: 403)
+      return HubError(message: msg ?? L10n.devicePermissionDenied, status: 403)
     case .operationError(_, let status, let msg), .plaintextError(let status, let msg):
-      return HubError(message: msg ?? "请求失败（\(status)）", status: status)
+      return HubError(message: msg ?? L10n.requestFailed(status), status: status)
     case .envelopeTooLarge(let msg):
-      return HubError(message: msg ?? "响应过大，请缩小查询范围", status: 413)
+      return HubError(message: msg ?? L10n.responseTooLarge, status: 413)
     case .deviceRemoved(let msg):
-      return HubError(message: msg ?? "请求失败（401）", status: 401)
+      return HubError(message: msg ?? L10n.requestFailed401, status: 401)
     default:
-      return HubError(message: "后台服务返回的数据读不出来", status: 0)
+      return HubError(message: L10n.unreadableResponse, status: 0)
     }
   }
 

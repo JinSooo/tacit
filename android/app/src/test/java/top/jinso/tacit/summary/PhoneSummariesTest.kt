@@ -1,5 +1,7 @@
 package top.jinso.tacit.summary
 
+import top.jinso.tacit.i18n.AppLang
+import top.jinso.tacit.i18n.TestStrings
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -11,6 +13,7 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 
 class PhoneSummariesTest {
+    private val chinese = TestStrings(AppLang.ZH)
     private val minute = 60_000L
     private fun record(id: String, start: Long, end: Long?, sensitivity: String = "normal") =
         HistoryRecord(id, "android.audio", "对话记录", "", start * minute, end?.let { it * minute }, null, sensitivity, null, 0)
@@ -37,6 +40,44 @@ class PhoneSummariesTest {
         assertNull(parseSummary("{\"title\":\"${"长".repeat(41)}\",\"summary\":\"x\",\"points\":[]}").first)
         assertNull(parseSummary("{\"title\":\"t\",\"summary\":\"x\",\"points\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\"]}").first)
         assertNull(parseSummary("不是 JSON").first)
+    }
+
+    @Test fun parserEnforcesAllLanguageSpecificSchemaLimits() {
+        for ((lang, limits) in listOf(AppLang.ZH to listOf(40, 400, 120), AppLang.EN to listOf(80, 700, 200))) {
+            val (title, summary, point) = limits
+            fun reply(t: Int, s: Int, p: Int) = JSONObject()
+                .put("title", "t".repeat(t)).put("summary", "s".repeat(s))
+                .put("points", org.json.JSONArray(listOf("p".repeat(p)))).toString()
+            assertTrue(parseSummary(reply(title, summary, point), lang).first != null)
+            assertNull(parseSummary(reply(title + 1, summary, point), lang).first)
+            assertNull(parseSummary(reply(title, summary + 1, point), lang).first)
+            assertNull(parseSummary(reply(title, summary, point + 1), lang).first)
+        }
+        assertNull(parseSummary("""{"title":"t","summary":"s"}""", AppLang.EN).first)
+        assertNull(parseSummary("""{"title":42,"summary":"s","points":[]}""", AppLang.EN).first)
+        assertNull(parseSummary("""{"title":"t","summary":"s","points":[42]}""", AppLang.EN).first)
+    }
+
+    @Test fun pairedSummaryLanguageTakesPrecedenceOnlyWhenKnown() {
+        assertEquals(AppLang.EN, summaryLanguage(true, "en", AppLang.ZH))
+        assertEquals(AppLang.ZH, summaryLanguage(true, "zh", AppLang.EN))
+        assertEquals(AppLang.EN, summaryLanguage(true, null, AppLang.EN))
+        assertEquals(AppLang.EN, summaryLanguage(true, "invalid", AppLang.EN))
+        assertEquals(AppLang.EN, summaryLanguage(false, "zh", AppLang.EN))
+    }
+
+    @Test fun englishSummaryUsesTheEnglishPromptAndRetryWhileKeepingTheCanonicalTranscript() {
+        val sent = mutableListOf<String>()
+        val client = SummaryClient(SummaryModel("https://api.example.com/v1", "m", ""), AppLang.EN) { _, _, body ->
+            sent += body
+            val content = if (sent.size == 1) "Not JSON" else """{"title":"Budget","summary":"We set the budget.","points":[]}"""
+            200 to """{"choices":[{"finish_reason":"stop","message":{"content":${JSONObject.quote(content)}}}]}"""
+        }
+        assertEquals("Budget", client.summarize(0, minute, "10:00 我：We set the budget.").title)
+        assertTrue(sent.first().contains("Summarize one recorded conversation"))
+        assertTrue(sent.first().contains("我：We set the budget."))
+        assertTrue(sent.last().contains("The previous reply did not match the schema"))
+        assertEquals("Check your API key.", SummaryError.AUTH.reason(TestStrings(AppLang.EN)))
     }
 
     @Test fun retriesOnceWithTheReason() {
@@ -73,7 +114,7 @@ class PhoneSummariesTest {
         )
         for ((status, expected) in expectations) {
             val client = SummaryClient(SummaryModel("https://api.example.com/v1", "m", "k")) { _, _, _ -> status to "{}" }
-            assertEquals(expected, assertThrows(SummaryFailure::class.java) { client.test() }.reason)
+            assertEquals(expected, assertThrows(SummaryFailure::class.java) { client.test() }.error.reason(chinese))
         }
         val quota = SummaryClient(SummaryModel("https://api.example.com/v1", "m", "k")) { _, _, _ ->
             429 to """{"error":{"code":"insufficient_quota"}}"""
@@ -87,7 +128,7 @@ class PhoneSummariesTest {
             SocketTimeoutException() to "模型服务一直没有回应，请检查网络或稍后再试。",
         )) {
             val client = SummaryClient(SummaryModel("https://api.example.com/v1", "m", "")) { _, _, _ -> throw exception }
-            assertEquals(expected, assertThrows(SummaryFailure::class.java) { client.test() }.reason)
+            assertEquals(expected, assertThrows(SummaryFailure::class.java) { client.test() }.error.reason(chinese))
         }
     }
 
@@ -96,11 +137,11 @@ class PhoneSummariesTest {
         val state = JSONObject().put("error", "服务拒绝了请求（400）")
         assertNull(state.summaryProblem())
         state.recordSummaryFailure(SummaryFailure(SummaryError.NETWORK), start)
-        assertNull(state.summaryProblem()?.messageAt(start))
+        assertNull(state.summaryProblem()?.messageAt(start, chinese))
         state.recordSummaryFailure(SummaryFailure(SummaryError.SERVER), start + 45 * minute)
         val problem = requireNotNull(state.summaryProblem())
-        assertNull(problem.messageAt(start + 60 * minute - 1))
-        assertEquals(SummaryError.SERVER.reason, problem.messageAt(start + 60 * minute))
+        assertNull(problem.messageAt(start + 60 * minute - 1, chinese))
+        assertEquals(SummaryError.SERVER.reason(chinese), problem.messageAt(start + 60 * minute, chinese))
     }
 
     @Test fun actionableFailuresSurfaceImmediatelyAndRecoveryResetsTheFailureClock() {
@@ -108,7 +149,7 @@ class PhoneSummariesTest {
         val state = JSONObject()
         for (error in listOf(SummaryError.AUTH, SummaryError.QUOTA, SummaryError.CONFIG, SummaryError.REJECTED)) {
             state.recordSummaryFailure(SummaryFailure(error), start)
-            assertEquals(error.reason, state.summaryProblem()?.messageAt(start))
+            assertEquals(error.reason(chinese), state.summaryProblem()?.messageAt(start, chinese))
         }
         state.recordSummaryFailure(SummaryFailure(SummaryError.RATE_LIMIT, 30 * minute), start + minute)
         assertEquals(start + 31 * minute, state.optLong("pausedUntil"))
@@ -116,7 +157,7 @@ class PhoneSummariesTest {
         assertNull(state.summaryProblem())
         assertEquals(0L, state.optLong("pausedUntil"))
         state.recordSummaryFailure(SummaryFailure(SummaryError.FORMAT), start + 70 * minute)
-        assertNull(state.summaryProblem()?.messageAt(start + 129 * minute))
-        assertEquals(SummaryError.FORMAT.reason, state.summaryProblem()?.messageAt(start + 130 * minute))
+        assertNull(state.summaryProblem()?.messageAt(start + 129 * minute, chinese))
+        assertEquals(SummaryError.FORMAT.reason(chinese), state.summaryProblem()?.messageAt(start + 130 * minute, chinese))
     }
 }

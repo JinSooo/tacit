@@ -805,7 +805,7 @@ private func waitFor(_ condition: () async -> Bool) async throws {
   #expect(try OutboxStore(dataDirectory: dir, key: key).count == 1)
 }
 
-@Test func remoteBindingInvalidConfigQueuesWithoutLocalFallback() async throws {
+@Test(ChineseUITrait()) func remoteBindingInvalidConfigQueuesWithoutLocalFallback() async throws {
   let dir = try syntheticDirectory()
   defer { try? FileManager.default.removeItem(at: dir) }
   let hub = Curve25519.KeyAgreement.PrivateKey()

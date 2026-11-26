@@ -1,3 +1,5 @@
+import { cliLanguage, cliText } from "../../hub/src/agent-cli/locale.ts";
+import type { Lang } from "../../hub/src/i18n/language.ts";
 import { capturePrefix } from "../../packages/record/capture-prefix.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -23,7 +25,7 @@ interface Bucket { part: number; messages: Message[] }
 interface Session { provider: Provider; id: string; cwd: string | null; seen: { [hour: string]: string[] }; buckets: { [hour: string]: Bucket }; mtime: number; lastActivity?: number }
 interface FileProgress { offset: number; mtime: number; size: number; identity: string; session: string | null; cwd?: string | null }
 export interface State { version: 2; since: number; replaySince: number; files: { [file: string]: FileProgress }; sessions: { [id: string]: Session } }
-export interface Options { device: string; now?: number; since?: number; state?: State; claudeDir?: string; codexDir?: string; excludeDirs?: string[]; onRecord?: (record: RecordV1) => void | Promise<void>; onWarning?: (message: string) => void; onDiagnostics?: (warnings: SessionWarnings) => void }
+export interface Options { device: string; lang?: Lang; now?: number; since?: number; state?: State; claudeDir?: string; codexDir?: string; excludeDirs?: string[]; onRecord?: (record: RecordV1) => void | Promise<void>; onWarning?: (message: string) => void; onDiagnostics?: (warnings: SessionWarnings) => void }
 
 function* walk(root: string): Generator<string> {
   if (!fs.existsSync(root)) return;
@@ -229,13 +231,19 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
   state.replaySince = Math.max(state.replaySince, replaySince);
   const warnings: SessionWarnings = {};
   const warn = options.onWarning ?? console.error;
+  const lang = options.lang ?? "zh";
   if (unrecognizedFile || (unrecognized >= 50 && unrecognized * 2 > parsed)) {
     warnings.unrecognized = unrecognized;
-    warn(`Claude Code / Codex 会话格式可能已变化，有 ${unrecognized} 行没有识别`);
+    warn(cliText(
+      `Claude Code / Codex 会话格式可能已变化，有 ${unrecognized} 行没有识别`,
+      unrecognized ? `Skipped ${unrecognized} unrecognized Claude Code or Codex log lines. The session format may have changed.`
+        : "Some Claude Code or Codex session logs could not be recognized.",
+      lang,
+    ));
   }
   if (damaged) {
     warnings.damaged = damaged;
-    warn(`跳过 ${damaged} 行损坏数据`);
+    warn(cliText(`跳过 ${damaged} 行损坏数据`, `Skipped ${damaged} damaged log ${damaged === 1 ? "line" : "lines"}.`, lang));
   }
   if (warnings.unrecognized || warnings.damaged) options.onDiagnostics?.(warnings);
   return state;
@@ -249,7 +257,7 @@ if (import.meta.main) {
     const state = args.stateFile && fs.existsSync(args.stateFile) ? JSON.parse(fs.readFileSync(args.stateFile, "utf8")) as State : undefined;
     let sessionWarnings: SessionWarnings | undefined;
     const checkpoint = await collect({
-      device: args.device, since: args.since?.getTime(), state,
+      device: args.device, since: args.since?.getTime(), state, lang: cliLanguage(),
       onRecord: record => new Promise<void>((resolve, reject) => {
         process.stdout.write(JSON.stringify({ type: "record", record }) + "\n", error => error ? reject(error) : resolve());
       }),
@@ -258,7 +266,17 @@ if (import.meta.main) {
     process.stdout.write(JSON.stringify({ type: "checkpoint", state: checkpoint, sessionWarnings }) + "\n");
   } catch (error) {
     // 不回显日志行、JSON.parse 的片段或文件路径，避免泄露真实数据。
-    console.error(error instanceof Error && /^(?:不支持的 checkpoint|--since|记录不符合契约|当前会话待保存内容超过上限)/.test(error.message) ? error.message : "读取会话日志或 checkpoint 失败");
+    const message = error instanceof Error ? error.message : "";
+    const known = new Map([
+      ["不支持的 checkpoint 格式", "Unsupported session checkpoint format"],
+      ["--since 必须是有效的 RFC3339 时间", "--since must be a valid RFC 3339 timestamp"],
+      ["记录不符合契约", "The session record does not match the record schema"],
+      [PENDING_LIMIT, "This session has too much unsaved content. Close it and try again."],
+    ]);
+    console.error(cliText(
+      /^(?:不支持的 checkpoint|--since|记录不符合契约|当前会话待保存内容超过上限)/.test(message) ? message : "读取会话日志或 checkpoint 失败",
+      known.get(message) ?? "Could not read the session logs or checkpoint",
+    ));
     process.exitCode = 1;
   }
 }

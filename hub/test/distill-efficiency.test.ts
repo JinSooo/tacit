@@ -1,3 +1,4 @@
+import { updateGeneral } from "../src/general-settings.ts";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { HubDB } from "../src/db.ts";
 import { DistillStore } from "../src/distill/store.ts";
@@ -11,7 +12,7 @@ import type { LLMRequest } from "../src/llm/index.ts";
 import { fixture, setup } from "./helpers.ts";
 
 let ctx: ReturnType<typeof setup>, store: DistillStore;
-beforeEach(() => { ctx = setup(); store = new DistillStore(ctx.db); });
+beforeEach(() => { ctx = setup(); updateGeneral(ctx.db, { language: "zh" }); store = new DistillStore(ctx.db); });
 afterEach(() => ctx.cleanup());
 const now = new Date("2026-11-08T18:00:00").getTime(), date = "2026-11-08";
 const base = new Date(`${date}T10:00:00`).getTime(), MIN = 60_000;

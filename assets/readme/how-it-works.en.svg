@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title description">
+  <title id="title">How Tacit works</title>
+  <desc id="description">AI sessions, WeChat chats, recordings, and screen and browser activity feed Tacit. It builds a Timeline, Day overview, and Tasks. You can read them in the app and widgets. AI tools can search records and get Session context.</desc>
+  <style>
+    .bg { fill: #fbfaf7; }
+    .card { fill: #ffffff; stroke: #e7e3dc; }
+    .core { fill: #211f1d; }
+    .h { font: 600 15px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #1c1b1a; }
+    .t { font: 15px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #1c1b1a; }
+    .s { font: 13px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #6e6860; }
+    .label { font: 600 13px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #3b7468; letter-spacing: 1px; }
+    .ct { font: 600 22px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #eeeae3; }
+    .cs { font: 14px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #b7afa5; }
+    .ci { font: 15px 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #eeeae3; }
+    .dot { fill: #3b7468; }
+    .cdot { fill: #93cbbd; }
+    .line { stroke: #c9c2b8; stroke-width: 1.5; fill: none; }
+    .arrow { fill: #c9c2b8; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #181716; }
+      .card { fill: #211f1d; stroke: #2f2c29; }
+      .core { fill: #2b2825; }
+      .h, .t { fill: #f2efea; }
+      .s { fill: #a8a197; }
+      .label { fill: #7db8a9; }
+      .dot { fill: #7db8a9; }
+      .line { stroke: #5e5953; }
+      .arrow { fill: #5e5953; }
+    }
+  </style>
+  <rect class="bg" width="1200" height="430" rx="24"/>
+
+  <text class="label" x="48" y="56">Sources</text>
+  <g>
+    <rect class="card" x="48" y="74" width="300" height="70" rx="12"/>
+    <circle class="dot" cx="72" cy="101" r="4"/>
+    <text class="t" x="88" y="106">AI sessions</text>
+    <text class="s" x="88" y="128">Your prompts and their results</text>
+
+    <rect class="card" x="48" y="156" width="300" height="70" rx="12"/>
+    <circle class="dot" cx="72" cy="183" r="4"/>
+    <text class="t" x="88" y="188">WeChat chats</text>
+    <text class="s" x="88" y="210">Off by default. Saves each message.</text>
+
+    <rect class="card" x="48" y="238" width="300" height="70" rx="12"/>
+    <circle class="dot" cx="72" cy="265" r="4"/>
+    <text class="t" x="88" y="270">Recordings</text>
+    <text class="s" x="88" y="292">Local transcripts with speaker labels</text>
+
+    <rect class="card" x="48" y="320" width="300" height="70" rx="12"/>
+    <circle class="dot" cx="72" cy="347" r="4"/>
+    <text class="t" x="88" y="352">Screen and browser</text>
+    <text class="s" x="88" y="374">App, title, and duration for timing</text>
+  </g>
+
+  <path class="line" d="M348 109 C 390 109, 390 232, 432 232"/>
+  <path class="line" d="M348 191 C 390 191, 390 232, 432 232"/>
+  <path class="line" d="M348 273 C 390 273, 390 232, 432 232"/>
+  <path class="line" d="M348 355 C 390 355, 390 232, 432 232"/>
+  <path class="arrow" d="M432 226 L444 232 L432 238 Z"/>
+
+  <text class="label" x="452" y="56">Summarize on your device</text>
+  <rect class="core" x="452" y="74" width="296" height="316" rx="16"/>
+  <text class="ct" x="480" y="124">Tacit</text>
+  <text class="cs" x="480" y="152">Encrypted storage, your model</text>
+  <circle class="cdot" cx="486" cy="203" r="4"/>
+  <text class="ci" x="502" y="208">A Timeline of activities</text>
+  <circle class="cdot" cx="486" cy="247" r="4"/>
+  <text class="ci" x="502" y="252">Day overview updated hourly</text>
+  <circle class="cdot" cx="486" cy="291" r="4"/>
+  <text class="ci" x="502" y="296">Tasks and decisions across days</text>
+  <circle class="cdot" cx="486" cy="335" r="4"/>
+  <text class="ci" x="502" y="340">Open the original records</text>
+
+  <path class="line" d="M748 232 C 790 232, 790 150, 832 150"/>
+  <path class="line" d="M748 232 C 790 232, 790 314, 832 314"/>
+  <path class="arrow" d="M832 144 L844 150 L832 156 Z"/>
+  <path class="arrow" d="M832 308 L844 314 L832 320 Z"/>
+
+  <text class="label" x="852" y="56">Where it goes</text>
+  <rect class="card" x="852" y="74" width="300" height="152" rx="12"/>
+  <text class="h" x="876" y="108">For you</text>
+  <text class="t" x="876" y="140">Timeline of what you did today</text>
+  <text class="t" x="876" y="168">Projects and their recent progress</text>
+  <text class="t" x="876" y="196">Desktop widgets for a quick look</text>
+
+  <rect class="card" x="852" y="238" width="300" height="152" rx="12"/>
+  <text class="h" x="876" y="272">For AI tools</text>
+  <text class="t" x="876" y="304">Search records and Project progress</text>
+  <text class="t" x="876" y="332">Session context for this Project</text>
+  <text class="s" x="876" y="360">Claude Code and Codex via MCP</text>
+</svg>

@@ -66,7 +66,7 @@ private func fixture() -> DeviceSettings {
   }
 }
 
-@MainActor @Test func acknowledgingTimelineSecurityEventRemovesIt() async throws {
+@MainActor @Test(ChineseUITrait()) func acknowledgingTimelineSecurityEventRemovesIt() async throws {
   let event = TimelineSecurityEvent(id: "fixture-event", action: .modelKeyChange)
   let api = HubAPI(base: { URL(string: "http://unused.test")! }, token: { nil }, deviceAction: { op, fields, _, _ in
     switch op {
@@ -143,7 +143,7 @@ private func fixture() -> DeviceSettings {
   }
 }
 
-@Test(arguments: [(-5, "剩余 0 秒"), (45, "剩余 45 秒"), (60, "剩余 1 分钟"), (300, "剩余 5 分钟"), (305, "剩余 5 分 5 秒")])
+@Test(ChineseUITrait(), arguments: [(-5, "剩余 0 秒"), (45, "剩余 45 秒"), (60, "剩余 1 分钟"), (300, "剩余 5 分钟"), (305, "剩余 5 分 5 秒")])
 func deviceInvitationCountdown(_ seconds: Int, _ expected: String) {
   #expect(DeviceInvitationChoices.countdown(seconds) == expected)
 }

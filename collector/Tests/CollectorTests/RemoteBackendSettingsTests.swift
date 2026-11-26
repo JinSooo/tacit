@@ -216,7 +216,7 @@ import Testing
   }
 }
 
-@MainActor @Test func remoteWizardPairingChecksInvitationAndWaitsForAuthenticatedTarget() async throws {
+@MainActor @Test(ChineseUITrait()) func remoteWizardPairingChecksInvitationAndWaitsForAuthenticatedTarget() async throws {
   let fixture = try WizardFixture()
   let model = fixture.model()
   model.start()
@@ -320,7 +320,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   #expect(store.section == .review)
 }
 
-@MainActor @Test func remoteWizardManagementRequiresDirectConnection() async throws {
+@MainActor @Test(ChineseUITrait()) func remoteWizardManagementRequiresDirectConnection() async throws {
   let fixture = try WizardFixture()
   let model = fixture.model()
   let store = fixture.viewer(model)
@@ -341,7 +341,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   #expect(!store.canManageBackend)
 }
 
-@MainActor @Test func remoteWizardDisablesExpiredReplacementBeforeSubmitting() async throws {
+@MainActor @Test(ChineseUITrait()) func remoteWizardDisablesExpiredReplacementBeforeSubmitting() async throws {
   let fixture = try WizardFixture()
   fixture.useRemote(frozen: true)
   let model = fixture.model()
@@ -360,7 +360,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   #expect(model.replacementNotice == nil)
 }
 
-@MainActor @Test func remoteWizardRejectsAnExpiredRestoredReplacementBeforeSubmitting() async throws {
+@MainActor @Test(ChineseUITrait()) func remoteWizardRejectsAnExpiredRestoredReplacementBeforeSubmitting() async throws {
   let fixture = try WizardFixture()
   fixture.useRemote(frozen: true)
   fixture.replacement = try fixture.savedReplacement()
@@ -374,7 +374,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   #expect(model.replacementNotice?.contains("粘贴新链接") == true)
 }
 
-@MainActor @Test func remoteWizardEmphasizesOnlyNonzeroPendingCounts() throws {
+@MainActor @Test(ChineseUITrait()) func remoteWizardEmphasizesOnlyNonzeroPendingCounts() throws {
   let fixture = try WizardFixture()
   fixture.useRemote()
   let model = fixture.model()
@@ -424,7 +424,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   #expect(!model.confirmDelete)
 }
 
-@MainActor @Test func remoteWizardDisplaysHistoryAndBackendStatusSeparately() async throws {
+@MainActor @Test(ChineseUITrait()) func remoteWizardDisplaysHistoryAndBackendStatusSeparately() async throws {
   let fixture = try WizardFixture()
   fixture.useRemote()
   let model = fixture.model()
@@ -459,7 +459,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   #expect(fixture.deleted)
 }
 
-@MainActor @Test func remoteWizardReturnRequiresPreviewAndKeepsRemoteOnIncompleteReconciliation() async throws {
+@MainActor @Test(ChineseUITrait()) func remoteWizardReturnRequiresPreviewAndKeepsRemoteOnIncompleteReconciliation() async throws {
   let fixture = try WizardFixture()
   fixture.useRemote()
   let model = fixture.model()
@@ -479,7 +479,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
   #expect(fixture.returns == [true])
 }
 
-@MainActor @Test func remoteWizardRestoresFromExistingCheckpointsAndReplacement() async throws {
+@MainActor @Test(ChineseUITrait()) func remoteWizardRestoresFromExistingCheckpointsAndReplacement() async throws {
   let fixture = try WizardFixture()
   #expect(fixture.model().step == nil)
   fixture.context = .init(binding: fixture.binding(.preparing, generation: 0), link: fixture.link, checkpoint: .committing)
@@ -534,7 +534,7 @@ func remoteWizardKeepsSettingsAndShowsSyncAfterBindingReset(repairing: Bool) asy
 
 // 2026-11-24 向导第 1 轮审查回归（第 1、2、7、8 条）：保留的远端能重新连接，
 // 重新配对中断能恢复或取消，通道无回执不算已连接，失败项可逐条处理。
-@MainActor @Test func remoteWizardReconnectsRetainedRemoteRecoversRePairingAndHandlesIssues() async throws {
+@MainActor @Test(ChineseUITrait()) func remoteWizardReconnectsRetainedRemoteRecoversRePairingAndHandlesIssues() async throws {
   let fixture = try WizardFixture()
   fixture.context = .init(binding: fixture.binding(.local, generation: 2), retained: [fixture.link])
   let local = fixture.model()
@@ -732,7 +732,7 @@ private enum ImportSnapshotFailure: Error { case retry }
 }
 
 // 2026-11-24 终审回归：失效身份提示新管理邀请，并打开粘贴入口。
-@MainActor @Test func finalReviewRevokedRetainedWizardShowsAdminInvitationEntry() async throws {
+@MainActor @Test(ChineseUITrait()) func finalReviewRevokedRetainedWizardShowsAdminInvitationEntry() async throws {
   let fixture = try WizardFixture()
   fixture.context.retained = [fixture.link]
   fixture.reconnectError = DeviceClientError.deviceRemoved(message: nil)
@@ -786,7 +786,7 @@ func finalReviewWizardCancelsReplacementFromEitherPage(interrupted: Bool) async 
 }
 
 // 2026-11-24 终审回归：操作只在对应状态可用，等待和失败都在详情中展示。
-@MainActor @Test func finalReviewWizardReportsIssueActionInDetails() async throws {
+@MainActor @Test(ChineseUITrait()) func finalReviewWizardReportsIssueActionInDetails() async throws {
   let fixture = try WizardFixture()
   fixture.useRemote()
   let model = fixture.model()

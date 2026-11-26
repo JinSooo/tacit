@@ -105,7 +105,7 @@ struct HistoryPage<Header: View>: View {
         .toolbar {
           ToolbarItem(placement: .primaryAction) {
             Button { selection = nil } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar).scaleEffect(x: -1) }
-              .help("隐藏详情").accessibilityLabel("隐藏详情").keyboardShortcut("i", modifiers: [.command, .option])
+              .help(L10n.hideDetails).accessibilityLabel(L10n.hideDetails).keyboardShortcut("i", modifiers: [.command, .option])
           }
         }
     }
@@ -190,9 +190,9 @@ struct HistoryPage<Header: View>: View {
         } else if loadedKey == nil || dayRecords == nil {
           Placeholder(kind: .loading).frame(height: 240)
         } else if records.isEmpty {
-          Placeholder(kind: .empty("moon-stars", "这一天没有记录")).frame(height: 260)
+          Placeholder(kind: .empty("moon-stars", L10n.noRecordsForThisDay)).frame(height: 260)
         } else if blocks.isEmpty {
-          Placeholder(kind: .empty("funnel-simple", "没有符合筛选的记录")).frame(height: 200)
+          Placeholder(kind: .empty("funnel-simple", L10n.noRecordsMatchTheFilters)).frame(height: 200)
         } else {
           // 修饰符加在 ForEach 上会分发给每一行，留白用独立的占位视图。
           Color.clear.frame(height: 8)
@@ -214,7 +214,7 @@ struct HistoryPage<Header: View>: View {
         HStack(spacing: 8) {
           if let b = brush { chip("\(ViewerFormat.clock(b.lowerBound))–\(ViewerFormat.clock(b.upperBound))", "clock") { Motion.animate { brush = nil } } }
           if let l = lane { chip(l.name, "funnel-simple") { Motion.animate { lane = nil } } }
-          Text("\(Fmt.count(visible.count)) 条记录").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+          Text(L10n.recordCount(visible.count)).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
             .rollingNumber(visible.count)
         }
         .transition(.notice)
@@ -242,7 +242,7 @@ struct HistoryPage<Header: View>: View {
       .background(Palette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
     }
     .buttonStyle(.plain)
-    .help("清除这个筛选")
+    .help(L10n.clearThisFilter)
   }
 
   // MARK: 行
@@ -255,7 +255,7 @@ struct HistoryPage<Header: View>: View {
     ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
       let hour = cal.component(.hour, from: item.start)
       if i == 0 || cal.component(.hour, from: items[i - 1].start) != hour {
-        HourMark(hour: hour).padding(.top, i == 0 ? 4 : 12).padding(.horizontal, HistoryLayout.inset)
+        HourMark(hour: hour, day: day).padding(.top, i == 0 ? 4 : 12).padding(.horizontal, HistoryLayout.inset)
       }
       switch item {
       case .single(let block):
@@ -310,15 +310,15 @@ struct HistoryPage<Header: View>: View {
   private var toolbar: some ToolbarContent {
     ToolbarItemGroup(placement: .primaryAction) {
       Menu {
-        Picker("来源", selection: $lane) {
-          Text("全部来源").tag(Lane?.none)
+        Picker(L10n.source, selection: $lane) {
+          Text(L10n.allSources).tag(Lane?.none)
           ForEach(Lane.allCases.filter { l in records.contains { Lane.of($0.source) == l } }, id: \.self) { Text($0.name).tag(Lane?.some($0)) }
         }
         .pickerStyle(.inline)
         let devices = Set(records.map { HistoryDeviceFilter.group($0.device) }).sorted()
         if devices.count > 1 {
-          Picker("设备", selection: $device) {
-            Text("全部设备").tag(String?.none)
+          Picker(L10n.device, selection: $device) {
+            Text(L10n.allDevices).tag(String?.none)
             ForEach(devices, id: \.self) { Text($0).tag(String?.some($0)) }
           }
           .pickerStyle(.inline)
@@ -326,9 +326,9 @@ struct HistoryPage<Header: View>: View {
       } label: {
         PhIcon("funnel-simple", fill: lane != nil || device != nil, size: PhIcon.toolbar)
       }
-      .help("筛选").accessibilityLabel("筛选")
+      .help(L10n.filter).accessibilityLabel(L10n.filter)
       Button { note = true } label: { PhIcon("note-pencil", size: PhIcon.toolbar) }
-        .help("补写一条记录").accessibilityLabel("补写一条记录").keyboardShortcut("n", modifiers: .command)
+        .help(L10n.addANote).accessibilityLabel(L10n.addANote).keyboardShortcut("n", modifiers: .command)
     }
   }
 }
@@ -339,21 +339,22 @@ struct HistoryDayStats: View {
   let start: Date?
 
   var body: some View {
-    let startLabel = start.map { "开始 " + ViewerFormat.clock($0) }
-    let stats = ["\(Fmt.count(count)) 段活动", "活跃 \(Fmt.duration(activeSeconds))"] + (startLabel.map { [$0] } ?? [])
-    Text(stats.joined(separator: "，"))
+    let startLabel = start.map { L10n.startTime(ViewerFormat.clock($0)) }
+    let stats = [L10n.activityCount(count), L10n.activeTime(Fmt.duration(activeSeconds))] + (startLabel.map { [$0] } ?? [])
+    Text(stats.joined(separator: L10n.comma))
       .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
       .rollingNumber(stats)
       .multilineTextAlignment(.trailing)
-      .help("活跃时长按记录覆盖的时段算，几个来源同时在记录只算一次")
+      .help(L10n.activeTimeHelp)
   }
 }
 
 struct HourMark: View {
   let hour: Int
+  let day: Date
   var body: some View {
     HStack(spacing: 10) {
-      Text(String(format: "%02d:00", hour)).font(.system(size: TextSize.caption, weight: .medium)).monospacedDigit().foregroundStyle(Palette.muted)
+      Text(AppLanguage.current == .zh ? String(format: "%02d:00", hour) : L10n.hourLabel(hour, on: day)).font(.system(size: TextSize.caption, weight: .medium)).monospacedDigit().foregroundStyle(Palette.muted)
         .frame(width: RecordRow.timeWidth, alignment: .trailing)
       Rectangle().fill(Palette.hairline).frame(height: 1)
     }
@@ -362,7 +363,7 @@ struct HourMark: View {
 }
 
 struct RecordRow: View {
-  static let timeWidth: CGFloat = 86
+  static var timeWidth: CGFloat { AppLanguage.current == .zh ? 86 : 128 }
   let record: HistoryRecord
   let run: RecordRun?
   let selected: Bool
@@ -406,8 +407,8 @@ struct RecordRow: View {
         Spacer(minLength: 8)
         // 相邻、同标题的几条记录合成了一行（记录本身没合并）。
         if let run, run.records.count > 1, run.conversation == nil {
-          Text("\(run.records.count) 条").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
-            .help("连续 \(run.records.count) 条同样的记录合成一行")
+          Text(L10n.shortRecordCount(run.records.count)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
+            .help(L10n.groupedRecords(run.records.count))
         }
         if let d = durationText {
           Text(d).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).frame(minWidth: 52, alignment: .trailing)
@@ -431,9 +432,9 @@ struct RecordRow: View {
 
   @ViewBuilder var badges: some View {
     if includesOmissions { TimelineOmissionLabel() }
-    if record.capture?.method == "ocr" { badge("截图识字") }
-    if record.sensitivity == "redacted" || (record.redactions ?? 0) > 0 { badge("已隐去密钥") }
-    if record.sensitivity == "private" { PhIcon("lock", size: 12).foregroundStyle(Palette.muted).help("私密：不交给 AI 整理") }
+    if record.capture?.method == "ocr" { badge(L10n.screenText) }
+    if record.sensitivity == "redacted" || (record.redactions ?? 0) > 0 { badge(L10n.secretsHidden) }
+    if record.sensitivity == "private" { PhIcon("lock", size: 12).foregroundStyle(Palette.muted).help(L10n.privateRecordHelp) }
   }
   func badge(_ text: String) -> some View {
     Text(text).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
@@ -466,12 +467,12 @@ struct RecordRow: View {
   }
 }
 
-/// 中文的月份和星期名，但一周从哪天开始仍按用户的系统设置（zh_CN 默认周日）。
+/// 日期选择器按界面语言显示月份和星期，一周从哪天开始仍按系统设置。
 enum ViewerCalendar {
-  static var chinese: Calendar {
+  static var formatting: Calendar {
     var c = Calendar.current
     let first = c.firstWeekday
-    c.locale = Locale(identifier: "zh_CN")
+    c.locale = AppLanguage.current.locale()
     c.firstWeekday = first
     return c
   }

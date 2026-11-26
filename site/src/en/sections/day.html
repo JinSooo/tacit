@@ -1,0 +1,228 @@
+<section class="section day" id="day" aria-labelledby="day-title">
+  <div class="wrap">
+    <header class="section-head" data-reveal>
+      <h2 class="heading" id="day-title">A timeline for each day</h2>
+      <p class="lead">Expand an activity to read the original records. The project page brings together tasks in progress and their open questions.</p>
+    </header>
+
+    <div class="day-layout">
+      <section class="day-window day-timeline" aria-labelledby="day-date" data-reveal>
+        <header class="day-window-bar">Timeline</header>
+        <div class="day-window-content">
+          <div class="day-date">
+            <div class="day-date-label">
+              <h3 class="title num" id="day-date"><time datetime="2026-11-19">Thursday, November 19</time></h3>
+            </div>
+            <div class="day-switch" role="group" aria-label="Timeline view" hidden>
+              <button type="button" aria-pressed="true" aria-controls="day-simple">Simple</button>
+              <button type="button" aria-pressed="false" aria-controls="day-detailed">Detailed</button>
+            </div>
+          </div>
+          <p class="day-overview num"><!-- include: ../day-overview.html --></p>
+
+          <ol class="day-segments" id="day-simple" role="list" aria-label="Activities for this day">
+            <li>
+              <details class="day-segment">
+                <summary>
+                  <time class="caption num" datetime="19:40">19:40</time>
+                  <span class="day-segment-text">
+                    <strong>Planned a Saturday hike with Leo</strong>
+                    <span class="caption">Agreed to meet at the trailhead at 9 am.</span>
+                    <span class="day-sources">
+                      <span class="day-source" title="Phone recording"><svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg><span class="visually-hidden">Phone recording</span></span>
+                    </span>
+                  </span>
+                </summary>
+                <div class="day-record">
+                  <p class="caption num">Phone recording · 19:40–19:48</p>
+                  <dl>
+                    <div><dt>Me</dt><dd>Can we meet at the trailhead at 9 on Saturday?</dd></div>
+                    <div><dt>Speaker 1</dt><dd>Yes. I’ll bring the map.</dd></div>
+                  </dl>
+                </div>
+              </details>
+            </li>
+            <li>
+              <details class="day-segment">
+                <summary>
+                  <time class="caption num" datetime="15:10">15:10</time>
+                  <span class="day-segment-text">
+                    <strong>Heard Nora’s request for rent splitting</strong>
+                    <span class="caption">She wants to see who owes whom after her roommates split rent.</span>
+                    <span class="day-sources">
+                      <span class="day-source" title="Zoom recording on Mac"><svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg><span class="visually-hidden">Zoom recording on Mac</span></span>
+                    </span>
+                  </span>
+                </summary>
+                <div class="day-record">
+                  <p class="caption num">Zoom recording on Mac · 15:10–15:32</p>
+                  <dl>
+                    <div><dt>Me</dt><dd>What would help when you split rent with your roommates?</dd></div>
+                    <div><dt>Speaker 1</dt><dd>I want to open the app and see who owes whom.</dd></div>
+                    <div><dt>Me</dt><dd>I’ll use that example when we sketch rent splitting.</dd></div>
+                  </dl>
+                </div>
+              </details>
+            </li>
+            <li>
+              <details class="day-segment" open>
+                <summary>
+                  <time class="caption num" datetime="13:30">13:30</time>
+                  <span class="day-segment-text">
+                    <strong>Built monthly budget rollover</strong>
+                    <span class="caption">How to handle deleted categories is still open.</span>
+                    <span class="day-sources">
+                      <span class="day-source" title="Claude Code"><svg aria-hidden="true"><use href="assets/sources.svg#terminal"/></svg><span class="visually-hidden">Claude Code</span></span>
+                    </span>
+                  </span>
+                </summary>
+                <div class="day-record">
+                  <p class="caption num">Claude Code · 13:30–13:55</p>
+                  <dl>
+                    <div><dt>Me</dt><dd>Carry each category’s unused budget into the next month.</dd></div>
+                    <div><dt>Claude Code</dt><dd>Monthly rollover now carries over each active category’s unused budget. How should it handle deleted categories?</dd></div>
+                    <div><dt>Me</dt><dd>Leave deleted categories open for now.</dd></div>
+                  </dl>
+                </div>
+              </details>
+            </li>
+            <li>
+              <details class="day-segment">
+                <summary>
+                  <time class="caption num" datetime="10:45">10:45</time>
+                  <span class="day-segment-text">
+                    <strong>Cut the onboarding tour to one screen</strong>
+                    <span class="caption">Agreed with Sam, the designer, to replace the four-step tour.</span>
+                    <span class="day-sources">
+                      <span class="day-source" title="Phone recording"><svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg><span class="visually-hidden">Phone recording</span></span>
+                    </span>
+                  </span>
+                </summary>
+                <div class="day-record">
+                  <p class="caption num">Phone recording · 10:45–10:57</p>
+                  <dl>
+                    <div><dt>Me</dt><dd>Can we cut the four-step tour to one screen? I want people to get to their budget sooner.</dd></div>
+                    <div><dt>Speaker 1</dt><dd>Yes. One screen with the first step is enough. I’ll sketch it this afternoon.</dd></div>
+                  </dl>
+                </div>
+              </details>
+            </li>
+            <li>
+              <details class="day-segment">
+                <summary>
+                  <time class="caption num" datetime="09:20">09:20</time>
+                  <span class="day-segment-text">
+                    <strong>Fixed CSV dates for UK bank exports</strong>
+                    <span class="caption">Added date-format detection so 03/04 is read as 3 April in UK exports.</span>
+                    <span class="day-sources">
+                      <span class="day-source" title="Codex"><svg aria-hidden="true"><use href="assets/sources.svg#terminal"/></svg><span class="visually-hidden">Codex</span></span>
+                    </span>
+                  </span>
+                </summary>
+                <div class="day-record">
+                  <p class="caption num">Codex · 09:20–09:40</p>
+                  <dl>
+                    <div><dt>Me</dt><dd>The UK bank export uses day/month dates. The preview reads 03/04 as March 4 because it assumes US dates for every CSV. Can we detect the format from the export?</dd></div>
+                    <div><dt>Codex</dt><dd>Yes. The CSV import now detects the date format for UK bank exports. I added a case for 03/04 so the import produces 3 April.</dd></div>
+                  </dl>
+                </div>
+              </details>
+            </li>
+          </ol>
+
+          <div id="day-detailed" hidden>
+            <p class="caption num day-stats">5 activities, 1 hr 27 min total, first at 09:20</p>
+            <figure class="day-chart" aria-labelledby="day-chart-title" style="--day-range: 720">
+              <figcaption class="visually-hidden" id="day-chart-title">Activity by source from 08:00 to 20:00</figcaption>
+              <div class="day-chart-scale caption num" aria-hidden="true">
+                <span>08:00</span><span>11:00</span><span>14:00</span><span>17:00</span><span>20:00</span>
+              </div>
+              <ol class="day-chart-lanes" role="list">
+                <li style="--day-start: 80; --day-duration: 20">
+                  <span>Codex</span><span class="day-chart-track" aria-hidden="true"></span>
+                  <span class="visually-hidden">09:20 to 09:40, Fixed CSV dates for UK bank exports</span>
+                </li>
+                <li style="--day-start: 165; --day-duration: 12">
+                  <span>Phone recording</span><span class="day-chart-track" aria-hidden="true"></span>
+                  <span class="visually-hidden">10:45 to 10:57, Cut the onboarding tour to one screen</span>
+                </li>
+                <li style="--day-start: 330; --day-duration: 25">
+                  <span>Claude Code</span><span class="day-chart-track" aria-hidden="true"></span>
+                  <span class="visually-hidden">13:30 to 13:55, Built monthly budget rollover</span>
+                </li>
+                <li style="--day-start: 430; --day-duration: 22">
+                  <span>Zoom on Mac</span><span class="day-chart-track" aria-hidden="true"></span>
+                  <span class="visually-hidden">15:10 to 15:32, Heard Nora’s request for rent splitting</span>
+                </li>
+                <li style="--day-start: 700; --day-duration: 8">
+                  <span>Phone recording</span><span class="day-chart-track" aria-hidden="true"></span>
+                  <span class="visually-hidden">19:40 to 19:48, Planned a Saturday hike with Leo</span>
+                </li>
+              </ol>
+            </figure>
+
+            <ol class="day-hour-list" role="list" aria-label="Records by hour">
+              <li>
+                <h4 class="caption num"><time datetime="09:00">09:00</time></h4>
+                <svg aria-hidden="true"><use href="assets/sources.svg#terminal"/></svg>
+                <p>Fixed CSV dates for UK bank exports<span class="caption num">Codex, 09:20–09:40</span></p>
+              </li>
+              <li>
+                <h4 class="caption num"><time datetime="10:00">10:00</time></h4>
+                <svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg>
+                <p>Cut the onboarding tour to one screen<span class="caption num">Phone recording, 10:45–10:57</span></p>
+              </li>
+              <li>
+                <h4 class="caption num"><time datetime="13:00">13:00</time></h4>
+                <svg aria-hidden="true"><use href="assets/sources.svg#terminal"/></svg>
+                <p>Built monthly budget rollover<span class="caption num">Claude Code, 13:30–13:55</span></p>
+              </li>
+              <li>
+                <h4 class="caption num"><time datetime="15:00">15:00</time></h4>
+                <svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg>
+                <p>Heard Nora’s request for rent splitting<span class="caption num">Zoom recording on Mac, 15:10–15:32</span></p>
+              </li>
+              <li>
+                <h4 class="caption num"><time datetime="19:00">19:00</time></h4>
+                <svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg>
+                <p>Planned a Saturday hike with Leo<span class="caption num">Phone recording, 19:40–19:48</span></p>
+              </li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section class="day-window day-project" aria-labelledby="day-project-title" data-reveal data-reveal-group style="--reveal-delay: 90ms">
+        <header class="day-window-bar">Project</header>
+        <div class="day-window-content">
+          <h3 class="title" id="day-project-title">Sunledger</h3>
+          <p class="day-project-overview">A shared-budget app with UK bank imports and monthly budget rollover.</p>
+          <div class="day-project-current">
+            <h4 class="caption">In progress</h4>
+            <ul class="day-project-items" role="list">
+              <li>
+                <h5 class="day-item-title">Monthly budget rollover</h5>
+                <p>Unused budget carries over for active categories.</p>
+                <ul class="caption" role="list">
+                  <li>What happens when a category is deleted?</li>
+                </ul>
+              </li>
+              <li>
+                <h5 class="day-item-title">Onboarding</h5>
+                <p>Sam and I agreed to replace the four-step tour with one screen.</p>
+              </li>
+              <li>
+                <h5 class="day-item-title">Rent splitting</h5>
+                <p>Nora wants to see who owes whom.</p>
+                <ul class="caption" role="list">
+                  <li>How should roommates mark payments?</li>
+                </ul>
+              </li>
+            </ul>
+            <p class="caption day-project-foot">These tasks are included in new sessions</p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

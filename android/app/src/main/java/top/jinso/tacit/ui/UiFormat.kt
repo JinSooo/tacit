@@ -1,7 +1,13 @@
 package top.jinso.tacit.ui
 
+import top.jinso.tacit.R
+import top.jinso.tacit.i18n.AppLang
+import top.jinso.tacit.i18n.UiStrings
+import top.jinso.tacit.i18n.speechUnits
 import top.jinso.tacit.core.HistoryRecord
 import top.jinso.tacit.core.readableTranscript
+import top.jinso.tacit.core.SPEAKER_ME
+import top.jinso.tacit.core.transcriptLine
 import top.jinso.tacit.sources.Sources
 import top.jinso.tacit.data.MAX_AUDIO_RETENTION_DAYS
 import java.text.NumberFormat
@@ -10,44 +16,100 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-internal fun date(time: Long, pattern: String): String = Instant.ofEpochMilli(time)
-    .atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern(pattern, Locale.SIMPLIFIED_CHINESE))
-
 internal fun countLabel(n: Int): String = NumberFormat.getIntegerInstance(Locale.US).format(n)
 
-internal fun detailTimeLabel(start: Long, end: Long?, includeYear: Boolean): String {
-    val full = "yyyy 年 M 月 d 日 HH:mm"
-    val startLabel = date(start, if (includeYear) full else "M 月 d 日 HH:mm")
-    if (end == null) return startLabel
-    val endLabel = when {
-        date(start, full) == date(end, full) -> ""
-        date(start, "yyyy-MM-dd") != date(end, "yyyy-MM-dd") ->
-            "–" + date(end, if (includeYear || date(start, "yyyy") != date(end, "yyyy")) full else "M 月 d 日 HH:mm")
-        else -> "–" + date(end, "HH:mm")
+internal class UiFormat(private val strings: UiStrings, val lang: AppLang, private val use24Hour: Boolean) {
+    private val locale = if (lang == AppLang.ZH) Locale.SIMPLIFIED_CHINESE else Locale.ENGLISH
+    val timeColumnWidth get() = if (lang == AppLang.EN && !use24Hour) 76 else 56
+
+    private fun date(time: Long, pattern: String): String = Instant.ofEpochMilli(time)
+        .atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern(pattern, locale))
+
+    fun clock(time: Long, seconds: Boolean = false): String = date(time, when {
+        lang == AppLang.ZH || use24Hour -> if (seconds) "HH:mm:ss" else "HH:mm"
+        else -> if (seconds) "h:mm:ss a" else "h:mm a"
+    })
+
+    fun calendarDate(time: Long, year: Boolean): String =
+        date(time, strings.text(if (year) R.string.date_with_year else R.string.date_without_year))
+
+    fun dateAndClock(time: Long, year: Boolean = false): String =
+        strings.text(R.string.date_and_time, calendarDate(time, year), clock(time))
+
+    fun detailTimeLabel(start: Long, end: Long?, includeYear: Boolean): String {
+        val startLabel = dateAndClock(start, includeYear)
+        if (end == null) return startLabel
+        val endLabel = when {
+            date(start, "yyyy-MM-dd HH:mm") == date(end, "yyyy-MM-dd HH:mm") -> ""
+            date(start, "yyyy-MM-dd") != date(end, "yyyy-MM-dd") ->
+                "–" + dateAndClock(end, includeYear || date(start, "yyyy") != date(end, "yyyy"))
+            else -> "–" + clock(end)
+        }
+        return "$startLabel$endLabel · ${durationLabel(end - start)}"
     }
-    return "$startLabel$endLabel · ${durationLabel(end - start)}"
+
+    internal fun sourceName(source: String): String = strings.text(when (source) {
+        "mac.audio" -> R.string.source_conversation
+        "mac.screen" -> R.string.source_screen
+        "mac.app" -> R.string.source_app
+        "mac.clipboard" -> R.string.source_clipboard
+        "mac.file" -> R.string.source_file
+        "mac.calendar" -> R.string.source_calendar
+        "mac.wechat" -> R.string.source_wechat
+        "mac.shell" -> R.string.source_terminal
+        "mac.git" -> R.string.source_git
+        "mac.browser" -> R.string.source_browser
+        "claude_code.session" -> R.string.source_claude_code
+        "codex.session" -> R.string.source_codex
+        Sources.AUDIO -> R.string.source_phone_recording
+        Sources.NOTIFICATION -> R.string.source_phone_chat
+        Sources.USAGE -> R.string.source_phone_app
+        Sources.NOTE -> R.string.source_note
+        Sources.CORRECTION -> R.string.source_correction
+        "manual.agent" -> R.string.source_ai_note
+        else -> R.string.source_other
+    })
+
+    fun lastHeardLabel(time: Long, now: Long = System.currentTimeMillis()): String {
+        val zone = ZoneId.systemDefault()
+        val day = Instant.ofEpochMilli(time).atZone(zone).toLocalDate()
+        val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        return when (day) {
+            today -> strings.text(R.string.today_at, clock(time))
+            today.minusDays(1) -> strings.text(R.string.yesterday_at, clock(time))
+            else -> calendarDate(time, day.year != today.year)
+        }
+    }
+
+    fun speakerStatus(speaker: top.jinso.tacit.audio.AudioSpeaker, now: Long = System.currentTimeMillis()): String =
+        listOfNotNull(speaker.lastSeen?.let { lastHeardLabel(it, now) }, totalSpeechLabel(speaker.seconds))
+            .joinToString(if (lang == AppLang.ZH) " · " else ", ")
+
+    fun totalSpeechLabel(seconds: Double): String =
+        if (seconds < 60) strings.text(R.string.duration_short)
+        else strings.text(R.string.duration_total, durationLabel((seconds * 1000).toLong()))
+
+    fun durationLabel(millis: Long): String {
+        val minutes = millis / 60_000
+        fun count(value: Long) = NumberFormat.getIntegerInstance(Locale.US).format(value)
+        return when {
+            minutes < 1 -> strings.text(R.string.duration_short)
+            minutes < 60 -> strings.text(R.string.duration_minutes, count(minutes))
+            minutes % 60 == 0L -> strings.text(R.string.duration_hours, count(minutes / 60))
+            else -> strings.text(R.string.duration_hours_minutes, count(minutes / 60), count(minutes % 60))
+        }
+    }
+
+    fun conversationTitle(private: Boolean) =
+        strings.text(if (private) R.string.conversation_private else R.string.conversation_untitled)
+
+    fun retentionLabel(days: Int): String = if (days == 0) strings.text(R.string.keep_forever)
+        else strings.quantity(R.plurals.duration_days, days, countLabel(days))
 }
 
-internal fun sourceName(source: String): String = when (source) {
-    "mac.audio" -> "对话"
-    "mac.screen" -> "屏幕"
-    "mac.app" -> "应用"
-    "mac.clipboard" -> "剪贴板"
-    "mac.file" -> "文件"
-    "mac.calendar" -> "日历"
-    "mac.wechat" -> "微信"
-    "mac.shell" -> "终端"
-    "mac.git" -> "Git"
-    "mac.browser" -> "浏览器"
-    "claude_code.session" -> "Claude Code"
-    "codex.session" -> "Codex"
-    Sources.AUDIO -> "手机录音"
-    Sources.NOTIFICATION -> "手机聊天"
-    Sources.USAGE -> "手机应用"
-    Sources.NOTE -> "补写"
-    Sources.CORRECTION -> "修正"
-    "manual.agent" -> "AI 补写"
-    else -> "其他"
+internal fun hasSpeakerMarkers(source: String): Boolean = when (source) {
+    "mac.audio", Sources.AUDIO, "codex.session", "claude_code.session" -> true
+    else -> false
 }
 
 // Same lanes the Mac folds when a segment opens: screen, browser and app usage are only the time skeleton.
@@ -91,72 +153,34 @@ internal fun orderedSpeakers(speakers: List<top.jinso.tacit.audio.AudioSpeaker>)
             it.name != null }.thenByDescending { it.seconds })
 }
 
-/** 最近一次出现的时刻：今天、昨天写到几点，更早写日期。 */
-internal fun lastHeardLabel(time: Long, now: Long = System.currentTimeMillis()): String {
-    val zone = java.time.ZoneId.systemDefault()
-    val day = Instant.ofEpochMilli(time).atZone(zone).toLocalDate()
-    val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
-    return when (day) {
-        today -> "今天 " + date(time, "HH:mm")
-        today.minusDays(1) -> "昨天 " + date(time, "HH:mm")
-        else -> date(time, if (day.year == today.year) "M 月 d 日" else "yyyy 年 M 月 d 日")
-    }
-}
-
-internal fun speakerStatus(speaker: top.jinso.tacit.audio.AudioSpeaker, now: Long = System.currentTimeMillis()): String =
-    listOfNotNull(speaker.lastHeardOrNull(now), totalSpeechLabel(speaker.seconds)).joinToString(" · ")
-
-internal fun totalSpeechLabel(seconds: Double): String =
-    if (seconds < 60) "不到 1 分钟" else "共 " + durationLabel((seconds * 1000).toLong())
-
-private fun top.jinso.tacit.audio.AudioSpeaker.lastHeardOrNull(now: Long) = lastSeen?.let { lastHeardLabel(it, now) }
-
-internal fun durationLabel(millis: Long): String {
-    val minutes = millis / 60_000
-    return when {
-        minutes < 1 -> "不到 1 分钟"
-        minutes < 60 -> "$minutes 分钟"
-        minutes % 60 == 0L -> "${minutes / 60} 小时"
-        else -> "${minutes / 60} 小时 ${minutes % 60} 分"
-    }
-}
-
 internal fun conversationDuration(records: List<HistoryRecord>) =
     records.maxOf { it.end ?: it.start } - records.minOf { it.start }
 
-internal fun conversationTitle(private: Boolean) = if (private) "一场私密对话" else "一场对话"
+// A period ends a sentence only at whitespace or end of line, so decimals and URLs stay intact.
+private val sentences = Regex("""[。！？!?…]+|\.(?=\s|$)""")
 
-private val speakerPrefix = Regex("^(?:(?:我|对方(?:[ 　]*[0-9]+)?)[：:]|[^：]+：)\\s*")
-
-private fun sentence(line: String): String {
-    val ending = line.indexOfFirst { it in "。！？!?…" }
-    return if (ending < 0) line else line.take(ending + 1)
+private fun sentenceParts(line: String): Sequence<String> = sequence {
+    var start = 0
+    for (end in sentences.findAll(line)) {
+        yield(line.substring(start, end.range.last + 1).trim())
+        start = end.range.last + 1
+    }
+    yield(line.substring(start).trim())
 }
 
-/** The first line that says something; a line of only punctuation (recognized noise) is skipped. */
-internal fun firstSentence(raw: String): String = sentence(readableTranscript(raw).lineSequence()
-    .map { it.trim().replaceFirst(speakerPrefix, "") }.firstOrNull { line -> line.any(Char::isLetterOrDigit) }.orEmpty())
+/** The first line that says something; punctuation-only recognition noise is skipped. */
+internal fun firstSentence(raw: String): String = readableTranscript(raw).lineSequence()
+    .flatMap { sentenceParts(transcriptLine(it).text) }.firstOrNull { speechUnits(it) > 0 }.orEmpty()
 
-/**
- * The line a conversation without a summary shows: the one that says the most, as the Mac timeline drafts do
- * (2026-11-23: the first line was someone else's misrecognized "싫."). The user's own lines first; under 5
- * characters counts as filler; then the longest, the earlier on a tie; someone else's only when the user has none.
- */
-internal fun telltaleSentence(records: List<top.jinso.tacit.core.HistoryRecord>): String {
-    // A turn joins the speaker's consecutive lines, so every sentence in it is a candidate.
-    val lines = records.sortedBy { it.start }.flatMap { readableTranscript(it.body).lines() }.flatMap { raw ->
-        val line = raw.trim()
-        val mine = Regex("^我[：:]").containsMatchIn(line)
-        Regex("[^。！？!?…]+[。！？!?…]*").findAll(line.replaceFirst(speakerPrefix, ""))
-            .map { it.value.trim() }.filter { it.any(Char::isLetterOrDigit) }.map { mine to it }.toList()
-    }
-    fun best(mine: Boolean) = lines.filter { it.first == mine && it.second.count(Char::isLetterOrDigit) >= 5 }
-        .maxByOrNull { it.second.count(Char::isLetterOrDigit) }?.second
+/** Prefer the user's most informative sentence, with the earlier sentence winning ties. */
+internal fun telltaleSentence(records: List<HistoryRecord>): String {
+    val lines = records.sortedBy { it.start }.asSequence().flatMap { readableTranscript(it.body).lineSequence() }
+        .map(::transcriptLine).flatMap { turn ->
+            sentenceParts(turn.text).map { Triple(turn.speaker == SPEAKER_ME, it, speechUnits(it)) }
+        }.filter { it.third > 0 }.toList()
+    fun best(mine: Boolean) = lines.filter { it.first == mine && it.third >= 5 }.maxByOrNull { it.third }?.second
     return best(true) ?: best(false) ?: lines.firstOrNull()?.second.orEmpty()
 }
-
-internal fun retentionLabel(days: Int): String = if (days == 0) "不自动清除" else "$days 天"
-
 
 internal fun localRetentionDays(entered: String, keepForever: Boolean): Int? =
     if (keepForever) 0 else entered.toIntOrNull()?.takeIf { it in 1..MAX_AUDIO_RETENTION_DAYS }

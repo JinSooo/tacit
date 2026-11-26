@@ -3,11 +3,37 @@ import org.junit.Assert.*
 import org.junit.Test
 import top.jinso.tacit.ui.firstSentence
 import top.jinso.tacit.ui.telltaleSentence
-import top.jinso.tacit.core.HistoryRecord
+import top.jinso.tacit.i18n.AppLang
+import top.jinso.tacit.i18n.TestStrings
 class ReadableTranscriptTest {
     @Test fun removesStandaloneFillersAndJoinsConsecutiveTurns() {
         assertEquals("我：今天开始，明天继续。\n\n对方 1：知道了。",readableTranscript("我：嗯。\n我：今天开始\n我：明天继续。\n对方 1：知道了。"))
     }
+    @Test fun englishTurnsHaveSpacesAndKeepSentenceEndings() {
+        val raw = "[10:00:00] 我：We can ship.\n[10:00:02] 我：Run the checks\n[10:00:04] 我：before lunch."
+        assertEquals("我：We can ship. Run the checks before lunch.", readableTranscript(raw))
+        assertEquals("We can ship.", firstSentence(raw))
+        assertEquals("我：先检查。再交付。", readableTranscript("我：先检查。\n我：再交付。"))
+    }
+
+    @Test fun speakerLabelsAreLocalizedOnlyForDisplay() {
+        val raw = "[10:00:00] 我：We can ship.\n对方 12：Yes.\n其他人：Yes.\n小林：Ready.\n[我] Draft text\n[AI] Good\nInside the text: [我]"
+        val english = TestStrings(AppLang.EN)
+        assertEquals("Me", speakerDisplayName(SPEAKER_ME, AppLang.EN, english))
+        assertEquals("Speaker 12", speakerDisplayName(speakerNumber(12), AppLang.EN, english))
+        assertEquals("Others", speakerDisplayName("其他人", AppLang.EN, english))
+        assertEquals("[10:00:00] Me：We can ship.\nSpeaker 12：Yes.\nOthers：Yes.\n小林：Ready.\n[Me] Draft text\n[AI] Good\nInside the text: [我]",
+            localizeTranscriptLines(raw, AppLang.EN, english))
+        assertEquals(raw, localizeTranscriptLines(raw, AppLang.ZH, TestStrings(AppLang.ZH)))
+        assertEquals(SPEAKER_ME, transcriptLine(raw.lineSequence().first()).speaker)
+    }
+
+    @Test fun englishPreviewRequiresAtLeastThreeSpokenWords() {
+        fun record(body: String) = HistoryRecord("r", "android.audio", "Conversation", body, 0, null, null, "normal", null, 0)
+        assertEquals("Check all shipments.", telltaleSentence(listOf(record("我：Absolutely.\n对方 1：Check all shipments."))))
+        assertEquals("Ship the build.", telltaleSentence(listOf(record("我：Ship the build.\n对方 1：Check all of the shipments."))))
+    }
+
     @Test fun preservesShortDecisionsAndOtherLanguages() {
         val output=readableTranscript("我：不行\n对方 1：Yes\n对方 2：こんにちは。")
         assertTrue(output.contains("不行"));assertTrue(output.contains("Yes"));assertTrue(output.contains("こんにちは"))

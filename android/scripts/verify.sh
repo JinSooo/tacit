@@ -13,12 +13,32 @@ generated="$base/../assets/icons/generated/android/res"
 (cd "$generated" && find . -type f) | while read -r file; do
     cmp -s "$generated/$file" "$base/app/src/main/res/$file" || { echo "Android 图标与 assets/icons/generated 不一致: $file（运行 scripts/export-icons.sh 后复制）" >&2; exit 1; }
 done
-# The phone writes conversation summaries with the Mac's prompt; a copy that drifts writes differently shaped summaries.
-python3 - "$base/../hub/src/distill/prompts.ts" "$base/app/src/main/java/top/jinso/tacit/summary/PhoneSummaries.kt" <<'PY'
-import re, sys
-hub = re.search(r'export const CONVERSATION_SYSTEM = `(.*?)`;', open(sys.argv[1], encoding="utf-8").read(), re.S)
-phone = re.search(r'const val SYSTEM = """(.*?)"""', open(sys.argv[2], encoding="utf-8").read(), re.S)
-if not hub or not phone or hub.group(1) != phone.group(1):
-    sys.exit("手机的对话总结提示词与 hub/src/distill/prompts.ts 的 CONVERSATION_SYSTEM 不一致")
-PY
+# The phone sends the same prompts and schemas as the hub. Its parser reads limits from those schemas.
+python3 - "$base/../hub/src/distill/prompts" "$base/app/src/main/java/top/jinso/tacit/summary/PhoneSummaries.kt" <<'PYTHON'
+import json
+import re
+import sys
+from pathlib import Path
+
+phone = Path(sys.argv[2]).read_text(encoding="utf-8")
+for language, suffix in (("zh", ""), ("en", "_EN")):
+    hub = (Path(sys.argv[1]) / f"{language}.ts").read_text(encoding="utf-8")
+    system = f"CONVERSATION_SYSTEM{suffix}"
+    hub_prompt = re.search(rf"export const {system} = `(.*?)`;", hub, re.S)
+    phone_prompt = re.search(rf'const val SYSTEM{suffix} = """(.*?)"""', phone, re.S)
+    if not hub_prompt or not phone_prompt or hub_prompt[1] != phone_prompt[1]:
+        sys.exit(f"Android {language} conversation prompt differs from {system}")
+
+    name = f"CONVERSATION_SCHEMA_{language.upper()}"
+    schema = re.search(rf"export const {name} = (\{{.*?\n\}}) as const;", hub, re.S)
+    phone_schema = re.search(rf'const val SCHEMA{suffix} = """(.*?)"""', phone, re.S)
+    if not schema or not phone_schema:
+        sys.exit(f"Missing Android or Hub {language} conversation schema")
+    # The Hub constants use JSON values with unquoted keys and trailing commas.
+    hub_json = re.sub(r'\b(\w+):', r'"\1":', schema[1])
+    hub_json = re.sub(r',\s*([}\]])', r'\1', hub_json)
+    if json.loads(hub_json) != json.loads(phone_schema[1]):
+        sys.exit(f"Android {language} conversation schema differs from {name}")
+    print(f"Android {language} conversation prompt and schema match the Hub")
+PYTHON
 "$base/gradlew" -p "$base" --offline testDebugUnitTest assembleDebug lintDebug assembleDebugAndroidTest

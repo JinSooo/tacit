@@ -1,5 +1,6 @@
 package top.jinso.tacit.ui
 
+import top.jinso.tacit.R
 import android.Manifest
 import android.app.NotificationManager
 import android.content.pm.PackageManager
@@ -45,6 +46,7 @@ internal fun SettingsPage(
     macDays: Int?,
     refreshHealth: () -> Unit,
 ) {
+    val strings = uiStrings()
     var parent by rememberSaveable { mutableStateOf<String?>(null) }
     val activity = LocalActivity.current ?: return
     var pendingPermission by rememberSaveable { mutableStateOf<String?>(null) }
@@ -62,7 +64,7 @@ internal fun SettingsPage(
         // 被永久拒绝后系统不再弹框，直接打开系统设置让人手动开，免得“允许”变成点了没反应的按钮。
         if (!granted && (requested == null || !activity.shouldShowRequestPermissionRationale(requested))) {
             openSystemPage(activity, if (pendingPermission == Sources.AUDIO) SystemPage.APP else SystemPage.NOTIFICATIONS, notify)
-        } else notify(if (granted) "权限已更新" else "未授权，可打开应用信息检查")
+        } else notify(if (granted) strings.text(R.string.permissions_updated) else strings.text(R.string.permission_missing_hint))
         pendingPermission = null
     }
     fun requestMicrophone() {
@@ -85,7 +87,7 @@ internal fun SettingsPage(
         setRoute(parent)
         parent = null
     }
-    val title = if (selected == Sources.AUDIO) "麦克风" else SettingsRoutes.title(selected) ?: "设置"
+    val title = if (selected == Sources.AUDIO) strings.text(R.string.microphone) else SettingsRoutes.title(selected, strings) ?: strings.text(R.string.settings)
     BackHandler(LocalContentActive.current) { if (selected != null) back() else onClose() }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageBar(title, onBack = { if (selected != null) back() else onClose() })
@@ -112,14 +114,14 @@ internal fun SettingsPage(
                                 ProgressLine()
                             } else {
                                 SettingsRow(
-                                    "麦克风权限", status = if (granted) null else "未授权",
+                                    strings.text(R.string.microphone_permission), status = if (granted) null else strings.text(R.string.permission_missing),
                                     problem = !granted, leading = { StatusMark(checkMark(granted)) },
                                 ) {
-                                    if (!granted) TonalButton("允许", ::requestMicrophone)
+                                    if (!granted) TonalButton(strings.text(R.string.allow), ::requestMicrophone)
                                 }
                                 GroupDivider()
                             }
-                            SettingsRow("系统麦克风开关", onClick = { openSystemPage(activity, SystemPage.PRIVACY, notify) })
+                            SettingsRow(strings.text(R.string.system_microphone_toggle), onClick = { openSystemPage(activity, SystemPage.PRIVACY, notify) })
                         }
                     }
                     else -> SettingsHome(app, health, mac, macDays, resumed, notify, setRoute)
@@ -137,6 +139,8 @@ private fun SettingsHome(
     app: TacitApp, health: CollectionHealth?, mac: MacStatus?, macDays: Int?, resumed: Int, notify: (String) -> Unit,
     open: (String) -> Unit,
 ) {
+    val format = uiFormat()
+    val strings = uiStrings()
     val ready by produceState<Boolean?>(null, app, resumed) {
         value = withContext(Dispatchers.IO) { runCatching { AudioController(app).state().modelsReady }.getOrNull() }
     }
@@ -148,22 +152,22 @@ private fun SettingsHome(
     val start = rememberRecordingStarter(app, audio, notify) { on = app.prefs.audioCaptureWanted || audio.state().recording }
     GroupCard {
         // The whole row is the switch, so it is one large target and reads as one control.
-        SettingsRow("录音", onClick = { if (on) { audio.stop(); on = false } else start() }, trailing = {
-            Switch(on, null, Modifier.semantics { contentDescription = if (on) "录音已开启" else "录音已关闭" },
+        SettingsRow(strings.text(R.string.recording), onClick = { if (on) { audio.stop(); on = false } else start() }, trailing = {
+            Switch(on, null, Modifier.semantics { contentDescription = if (on) strings.text(R.string.recording_enabled) else strings.text(R.string.recording_disabled) },
                 colors = SwitchDefaults.colors(checkedTrackColor = tacitColors.accent, checkedThumbColor = tacitColors.paper))
         })
     }
     GroupCard {
         val macValue = when {
             mac == null -> null
-            mac.removed -> "已移除"
-            mac.name == null -> "未连接"
+            mac.removed -> strings.text(R.string.removed)
+            mac.name == null -> strings.text(R.string.not_connected)
             else -> mac.name
         }
-        SettingsRow("连接 Mac", value = macValue, problem = mac?.removed == true,
+        SettingsRow(strings.text(R.string.connect_mac), value = macValue, problem = mac?.removed == true,
             onClick = { open(SettingsRoutes.MAC) })
         GroupDivider()
-        SettingsRow("语音转写", value = if (ready == false) "未准备" else null, problem = ready == false,
+        SettingsRow(strings.text(R.string.speech_transcription), value = if (ready == false) strings.text(R.string.models_not_ready) else null, problem = ready == false,
             onClick = { open(SettingsRoutes.SPEECH) })
         GroupDivider()
         val summary by produceState<JSONObject?>(null, app) {
@@ -171,14 +175,14 @@ private fun SettingsHome(
         }
         val summaryProblem = visibleSummaryProblem(summary)
         val summaryValue = summary?.takeIf { it.optBoolean("enabled") }?.optString("model")?.takeIf(String::isNotBlank)
-        SettingsRow("AI 总结", status = summaryProblem, value = summaryValue.takeIf { summaryProblem == null },
+        SettingsRow(strings.text(R.string.ai_summaries), status = summaryProblem, value = summaryValue.takeIf { summaryProblem == null },
             problem = summaryProblem != null, onClick = { open(SettingsRoutes.SUMMARY) })
         GroupDivider()
-        SettingsRow("录音保留", value = retentionLabel(macDays ?: app.prefs.retentionDays),
+        SettingsRow(strings.text(R.string.audio_retention), value = format.retentionLabel(macDays ?: app.prefs.retentionDays),
             onClick = { open(SettingsRoutes.RETENTION) })
         GroupDivider()
         val problems = health?.let(::backgroundProblemCount) ?: 0
-        SettingsRow("后台运行", value = if (problems > 0) "$problems 项要处理" else null, problem = problems > 0,
+        SettingsRow(strings.text(R.string.background_operation), value = if (problems > 0) strings.quantity(R.plurals.setup_problem_count, problems, countLabel(problems)) else null, problem = problems > 0,
             onClick = { open(SettingsRoutes.BACKGROUND) })
     }
     Caption("Tacit ${BuildConfig.VERSION_NAME}")

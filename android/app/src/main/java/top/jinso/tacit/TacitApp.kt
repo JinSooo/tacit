@@ -1,6 +1,7 @@
 package top.jinso.tacit
 
 import android.app.Application
+import top.jinso.tacit.i18n.AppLocale
 import android.net.ConnectivityManager
 import android.net.Network
 import top.jinso.tacit.sync.SyncCoordinator
@@ -19,6 +20,7 @@ class TacitApp : Application() {
     override fun onCreate() {
         super.onCreate()
         if (getProcessName().endsWith(":qnn")) return
+        AppLocale.initialize(this)
         prefs = Preferences(this)
         prefs.dropRemovedSettings()
         top.jinso.tacit.sources.Sources.retireRemovedCollectors(this)

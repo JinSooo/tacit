@@ -66,7 +66,7 @@ test("CLI 数据库迁移错误保留中文首行和错误码，屏蔽原始异�
     // 合成的不完整 v2 结构让打开阶段产生可识别的迁移错误。
     removeProjectionSchema(ctx.db.db);
     ctx.db.db.exec("DROP TABLE agent_reads; PRAGMA user_version=2;");
-    const result = spawnSync(process.execPath, [cli, "init"], { env: { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey }, encoding: "utf8" });
+    const result = spawnSync(process.execPath, [cli, "init"], { env: { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey, LC_ALL: "zh_CN.UTF-8" }, encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stderr.split("\n")[0]).toBe("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。");
     expect(result.stderr).toContain("Error (db_migration_failed)");
@@ -110,7 +110,7 @@ test.skipIf(bindDenied)("serve 识别真实端口冲突，下次开始监听后�
   const busy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
   let child: ReturnType<typeof Bun.spawn> | undefined;
   try {
-    const env = { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey, RA_PORT: String(busy.port) };
+    const env = { ...process.env, RA_DATA_DIR: ctx.dir, RA_DB_KEY: ctx.config.dbKey, RA_PORT: String(busy.port), LC_ALL: "zh_CN.UTF-8" };
     const target = join(ctx.dir, "hub-startup-error.json");
     const failed = spawnSync(process.execPath, [cli, "serve"], { env, timeout: 5_000 });
     expect(failed.status).toBe(1);
@@ -161,4 +161,19 @@ test("keys export 输出三个密钥的恢复命令，设备密钥尚未生成�
   expect(bad.missing).toEqual(["数据库", "音频"]);
   expect(bad.text).not.toContain("rm -rf");
   expect(bad.text).not.toContain("add-generic-password -U");
+});
+
+test("CLI help honors locale precedence and falls back to English", () => {
+  for (const [locale, expected] of [
+    [{ LC_ALL: "zh_TW.UTF-8", LC_MESSAGES: "en_US", LANG: "en_US" }, "用法："],
+    [{ LC_ALL: "", LC_MESSAGES: "zh_CN", LANG: "en_US" }, "用法："],
+    [{ LC_ALL: "", LC_MESSAGES: "", LANG: "zh_CN" }, "用法："],
+    [{ LC_ALL: "en_GB.UTF-8", LC_MESSAGES: "zh_CN", LANG: "zh_CN" }, "Usage:"],
+    [{ LC_ALL: "", LC_MESSAGES: "", LANG: "" }, "Usage:"],
+  ] as const) {
+    const result = spawnSync(process.execPath, [cli, "--help"], { env: { ...process.env, ...locale }, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toStartWith(expected);
+    expect(result.stderr).toBe("");
+  }
 });

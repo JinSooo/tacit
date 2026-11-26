@@ -16,6 +16,7 @@ import CollectorCore
   private var timer: Timer?
   private var request: Task<Void, Never>?
   private var snapshotRevision = 0
+  private var language = AppLanguage.current
 
   init(
     dataSource: any ViewerDataSource,
@@ -88,6 +89,21 @@ import CollectorCore
     return String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
   }
 
+  func languageChanged(to language: AppLanguage) {
+    self.language = language
+    do {
+      if WidgetSnapshot.readLanguage(for: file) != language {
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try PrivateFile.write(Data(language.rawValue.utf8), to: WidgetSnapshot.languageURL(for: file))
+        reloadTimelines()
+      }
+    } catch {
+      logger.error("Unable to publish widget language: \((error as NSError).code, privacy: .public)")
+    }
+    refresh()
+  }
+
   func refresh(invalidate: Bool = false) {
     request?.cancel()
     timer?.invalidate()
@@ -117,7 +133,7 @@ import CollectorCore
       guard snapshotRevision == revision, (try? hubRoute()) == route,
             day == TimelineDay.key(clock(), calendar: calendar) else { return }
       // 草稿可早于当天概述出现，是否发布由快照投影后的内容决定。
-      let snapshot = WidgetSnapshot(diary: diary, now: now, calendar: calendar, iconFor: publishIcon)
+      let snapshot = WidgetSnapshot(diary: diary, now: now, calendar: calendar, language: language, iconFor: publishIcon)
       if snapshot.summary == nil && snapshot.segments.isEmpty {
         removeSnapshot()
         return

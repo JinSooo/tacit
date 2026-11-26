@@ -1,0 +1,61 @@
+<section class="section" id="download" aria-labelledby="download-heading">
+  <div class="wrap">
+    <div class="download-layout">
+      <header class="section-head" data-reveal>
+        <h2 class="display" id="download-heading">Download Tacit</h2>
+        <div>
+          <div class="download-actions" data-platform-actions>
+            <a class="btn btn-primary" data-platform-target="mac" href="https://github.com/JinSooo/tacit/releases/tag/mac-v0.7.0">
+              <svg aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
+              Download for Mac
+            </a>
+            <a class="btn btn-quiet" data-platform-target="android" href="https://github.com/JinSooo/tacit/releases/tag/android-v0.7.0">
+              <svg aria-hidden="true"><use href="assets/sources.svg#download"/></svg>
+              Download for Android
+            </a>
+          </div>
+          <p class="platform-note caption" data-platform-note="windows">A Windows app is planned. You can already <a class="link" href="https://github.com/JinSooo/tacit/blob/main/docs/server-deployment.md">run the background service</a> on Windows with Docker.</p>
+          <p class="platform-note caption" data-platform-note="ios">The iOS app is still being explored. You can use Tacit on an Apple silicon Mac or an Android phone.</p>
+          <p class="download-requirements caption num">Apple silicon Mac, macOS 14 or later. Android arm64, Android 9 or later.</p>
+        </div>
+      </header>
+
+      <div class="download-guide" data-reveal-group>
+        <div class="download-mac">
+          <h3 class="title">Get started on Mac</h3>
+          <ol class="download-steps" role="list">
+            <li>
+              <strong>Drag Tacit into Applications</strong>
+              <p>Open <code>Tacit-&lt;version&gt;.dmg</code> and drag Tacit into Applications.</p>
+            </li>
+            <li id="download-open">
+              <strong>Open Tacit for the first time</strong>
+              <p>Open Tacit from Applications. If macOS blocks it, click Done. Go to <strong>System Settings › Privacy &amp; Security</strong>, find Tacit, then click <strong>Open Anyway</strong> and enter your password.</p>
+              <p>If you don’t see that button, run this command in Terminal and open Tacit again.</p>
+              <div class="download-command">
+                <code id="download-command">xattr -dr com.apple.quarantine /Applications/Tacit.app</code>
+                <button class="download-copy" type="button" aria-label="Copy Terminal command"
+                  data-copied="Command copied" data-copy-failed="Select the command and copy it manually." hidden>Copy</button>
+              </div>
+              <p class="download-copy-status caption" role="status"></p>
+            </li>
+            <li>
+              <strong>Finish setup</strong>
+              <p>The main window opens and the background service starts. Follow the setup checklist at the top of the timeline. Tacit keeps recording from the menu bar when you close the window.</p>
+            </li>
+          </ol>
+        </div>
+
+        <div class="download-android">
+          <h3 class="title">Get started on Android</h3>
+          <p>Install <code>Tacit-&lt;version&gt;.apk</code> and enable recording and transcription. For end-to-end encrypted sync and timeline viewing, go to <strong>Settings › Devices</strong> on your Mac and scan the pairing code with your phone. You can also use the app on its own and enable conversation summaries in settings.</p>
+        </div>
+
+        <div class="download-server">
+          <h3 class="title">Run your own background service</h3>
+          <p>The background service runs on your Mac by default. To share a separate service across devices, run <code>ghcr.io/jinsooo/tacit-hub</code> on Linux or Windows with Docker. See the <a class="link" href="https://github.com/JinSooo/tacit/blob/main/docs/server-deployment.md">deployment guide</a>.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

@@ -10,25 +10,20 @@
   <meta property="og:title" content="Tacit：让 AI 接上你的上下文">
   <meta property="og:description" content="跨设备把每天的活动与对话整理成一条时间线，给你回看，也通过 MCP 让任意 AI 工具不用重讲背景直接接着用。">
   <meta property="og:type" content="website">
+  <meta property="og:url" content="https://tacit.jinso.top/">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:locale:alternate" content="en_US">
+  <link rel="canonical" href="https://tacit.jinso.top/">
+  <link rel="alternate" hreflang="zh-CN" href="https://tacit.jinso.top/">
+  <link rel="alternate" hreflang="en" href="https://tacit.jinso.top/en/">
+  <link rel="alternate" hreflang="x-default" href="https://tacit.jinso.top/">
   <meta property="og:image" content="https://tacit.jinso.top/assets/og-cover.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://tacit.jinso.top/assets/og-cover.png">
   <link rel="icon" href="assets/favicon.ico" sizes="any">
   <link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-  <script>
-    document.documentElement.classList.add("has-js");
-    (() => {
-      const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
-      const ua = navigator.userAgent || "";
-      let os = "other";
-      if (/android/i.test(ua) || /android/i.test(p)) os = "android";
-      else if (/iphone|ipad|ipod/i.test(ua) || (/mac/i.test(p) && navigator.maxTouchPoints > 1)) os = "ios";
-      else if (/win/i.test(p) || /windows/i.test(ua)) os = "windows";
-      else if (/mac/i.test(p) || /macintosh|mac os/i.test(ua)) os = "mac";
-      document.documentElement.setAttribute("data-platform", os);
-    })();
-  </script>
+  <script type="module" src="scripts/platform.js"></script>
   <link rel="stylesheet" href="styles/base.css">
   <link rel="stylesheet" href="styles/hero.css">
   <link rel="stylesheet" href="styles/day.css">
@@ -51,11 +46,20 @@
         <a href="#faq">常见问题</a>
       </nav>
       <div class="nav-actions">
-        <button class="theme-toggle" type="button" id="theme-toggle" aria-label="切换深浅色外观" hidden>深色</button>
+        <a class="nav-language" href="en/index.html" hreflang="en" lang="en">English</a>
+        <button class="theme-toggle" type="button" id="theme-toggle" aria-label="切换深浅色外观"
+          data-light="浅色" data-dark="深色" data-light-label="切换到浅色外观" data-dark-label="切换到深色外观" hidden>深色</button>
         <a class="btn btn-primary" href="#download">下载</a>
       </div>
     </div>
   </header>
+
+  <div class="language-notice" id="language-notice" hidden>
+    <div class="wrap language-notice-inner caption">
+      <a class="link" href="en/index.html" hreflang="en" lang="en">This page is also available in English.</a>
+      <button type="button" aria-label="关闭语言提示">×</button>
+    </div>
+  </div>
 
   <main id="top">
     <!-- include: sections/hero.html -->
@@ -85,5 +89,6 @@
   <script type="module" src="scripts/day.js"></script>
   <script type="module" src="scripts/ai.js"></script>
   <script type="module" src="scripts/more.js"></script>
+  <script type="module" src="scripts/download.js"></script>
 </body>
 </html>

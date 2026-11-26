@@ -1,5 +1,7 @@
 package top.jinso.tacit.ui.onboarding
 
+import top.jinso.tacit.ui.uiStrings
+import top.jinso.tacit.R
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 import top.jinso.tacit.ui.components.*
@@ -23,6 +25,7 @@ internal fun BackgroundChecklist(
     onRequestNotifications: () -> Unit,
     notify: (String) -> Unit,
 ) {
+    val strings = uiStrings()
     val context = LocalContext.current
     if (health == null) {
         ProgressLine()
@@ -31,46 +34,46 @@ internal fun BackgroundChecklist(
     fun open(page: SystemPage) = openSystemPage(context, page, notify)
     GroupCard {
         if (health.microphoneCaptureExpected) {
-            CheckItem("麦克风", health.microphoneGranted, "未授权", "打开") { onOpenMicrophone() }
+            CheckItem(strings.text(R.string.microphone), health.microphoneGranted, strings.text(R.string.permission_missing), strings.text(R.string.open)) { onOpenMicrophone() }
             GroupDivider()
         }
         val allowed = health.notificationsEnabled
         val mark = checkMark(allowed)
         SettingsRow(
-            "运行通知",
-            when (allowed) { true -> null; false -> "通知未开启"; null -> "暂时无法检查" },
+            strings.text(R.string.activity_notifications),
+            when (allowed) { true -> null; false -> strings.text(R.string.notifications_disabled); null -> strings.text(R.string.status_unknown) },
             problem = mark == Mark.PROBLEM, leading = { StatusMark(mark) },
         ) {
             if (allowed != true) {
-                if (health.notificationPermissionMissing) TonalButton("允许", onRequestNotifications)
-                else TonalButton("打开", { open(SystemPage.NOTIFICATIONS) })
+                if (health.notificationPermissionMissing) TonalButton(strings.text(R.string.allow), onRequestNotifications)
+                else TonalButton(strings.text(R.string.open), { open(SystemPage.NOTIFICATIONS) })
             }
         }
         GroupDivider()
         if (health.audioChannel == ChannelAccess.BLOCKED) {
-            CheckItem("录音通知", false, "通知已关闭", "打开") { open(SystemPage.NOTIFICATIONS) }
+            CheckItem(strings.text(R.string.recording_notifications), false, strings.text(R.string.notifications_channel_disabled), strings.text(R.string.open)) { open(SystemPage.NOTIFICATIONS) }
             GroupDivider()
         }
-        CheckItem("电池优化", health.batteryExempt, "待机时录音可能被系统暂停", "打开") {
+        CheckItem(strings.text(R.string.battery_optimization), health.batteryExempt, strings.text(R.string.battery_optimization_hint), strings.text(R.string.open)) {
             open(SystemPage.BATTERY_OPTIMIZATION)
         }
         GroupDivider()
-        CheckItem("后台限制", health.backgroundRestricted?.not(), "后台录音可能被系统停止", "打开") {
+        CheckItem(strings.text(R.string.background_restriction), health.backgroundRestricted?.not(), strings.text(R.string.background_restriction_hint), strings.text(R.string.open)) {
             open(SystemPage.APP)
         }
         GroupDivider()
-        CheckItem("省电模式", health.powerSave?.not(), "开启时录音可能被系统暂停", "打开") {
+        CheckItem(strings.text(R.string.power_save), health.powerSave?.not(), strings.text(R.string.power_save_hint), strings.text(R.string.open)) {
             open(SystemPage.BATTERY_SAVER)
         }
         GroupDivider()
         // The system exposes no autostart flag.
-        SettingsRow("自启动", "系统无法查询，请在应用信息里确认", leading = { StatusMark(Mark.UNKNOWN) }) {
-            TonalButton("打开", { open(SystemPage.APP) })
+        SettingsRow(strings.text(R.string.auto_start), strings.text(R.string.auto_start_hint), leading = { StatusMark(Mark.UNKNOWN) }) {
+            TonalButton(strings.text(R.string.open), { open(SystemPage.APP) })
         }
         GroupDivider()
-        SettingsRow("最近任务锁定", "在最近任务里长按 Tacit 卡片并锁定", leading = { StatusMark(Mark.UNKNOWN) })
+        SettingsRow(strings.text(R.string.lock_recents), strings.text(R.string.lock_recents_hint), leading = { StatusMark(Mark.UNKNOWN) })
     }
-    Caption("手机重启或被系统停止后，打开一次 Tacit 就会接着录。")
+    Caption(strings.text(R.string.recording_restart_hint))
 }
 
 internal fun checkMark(ok: Boolean?): Mark = when (ok) {
@@ -81,9 +84,10 @@ internal fun checkMark(ok: Boolean?): Mark = when (ok) {
 
 @Composable
 private fun CheckItem(title: String, ok: Boolean?, no: String, label: String, action: () -> Unit) {
+    val strings = uiStrings()
     val mark = checkMark(ok)
     // A check mark already says "fine"; words are only for what still needs a hand.
-    val status = when (ok) { true -> null; false -> no; null -> "暂时无法检查" }
+    val status = when (ok) { true -> null; false -> no; null -> strings.text(R.string.status_unknown) }
     SettingsRow(title, status, problem = mark == Mark.PROBLEM, leading = { StatusMark(mark) }) {
         if (mark != Mark.OK) TonalButton(label, action)
     }

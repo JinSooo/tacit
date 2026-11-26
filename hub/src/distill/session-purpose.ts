@@ -9,5 +9,6 @@ export function excludedSession(body: string, context?: { extra?: Record<string,
     /\[我\] <pasted_content\b[\s\S]*# MCP Server Instructions[\s\S]*^## tacit_eval\s*$/m.test(body);
 }
 export function requestOnly(text: string) {
-  return /^(?:同意(?:现在)?(?:更新正式库)?|继续(?:吧)?|安装(?:吧)?|可以|好的?|OK|确认|执行吧|怎么又不跑了|咋又不跑了|又卡住了)[。！!？?\s]*$/i.test(text.trim());
+  return /^(?:同意(?:现在)?(?:更新正式库)?|继续(?:吧)?|安装(?:吧)?|可以|好的?|OK|确认|执行吧|怎么又不跑了|咋又不跑了|又卡住了)[。！!？?\s]*$/i.test(text.trim())
+    || /^(?:ok|okay|yes|sure|continue|go ahead|go on|proceed|sounds good|do it|lgtm|approved|install it)[\p{P}\s]*$/iu.test(text.trim());
 }

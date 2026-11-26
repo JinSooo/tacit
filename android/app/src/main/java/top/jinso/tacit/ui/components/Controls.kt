@@ -1,5 +1,9 @@
 package top.jinso.tacit.ui.components
 
+import top.jinso.tacit.ui.uiStrings
+import top.jinso.tacit.R
+import top.jinso.tacit.i18n.AppLang
+import top.jinso.tacit.ui.uiFormat
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -64,6 +68,7 @@ internal fun SettingsRow(
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
+    val english = uiFormat().lang == AppLang.EN
     Row(
         Modifier.fillMaxWidth().heightIn(min = 48.dp)
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
@@ -83,7 +88,7 @@ internal fun SettingsRow(
         if (value != null) {
             Text(value, Modifier.widthIn(max = 108.dp), style = MaterialTheme.typography.bodySmall,
                 color = if (problem) tacitColors.attention else tacitColors.muted,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                maxLines = if (english) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis)
         }
         if (trailing != null) trailing()
         else if (onClick != null) {
@@ -171,6 +176,7 @@ internal fun TextAction(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PageBar(title: String, onBack: () -> Unit, close: Boolean = false, actions: @Composable RowScope.() -> Unit = {}) {
+    val strings = uiStrings()
     TopAppBar(
         title = {
             Crossfade(title, animationSpec = Motion.quick(), label = "page-title") {
@@ -179,7 +185,7 @@ internal fun PageBar(title: String, onBack: () -> Unit, close: Boolean = false, 
         },
         navigationIcon = {
             IconButton(onClick = onBack) {
-                Icon(if (close) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack, if (close) "关闭" else "返回")
+                Icon(if (close) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack, if (close) strings.text(R.string.close) else strings.text(R.string.back))
             }
         },
         actions = actions,
@@ -189,7 +195,8 @@ internal fun PageBar(title: String, onBack: () -> Unit, close: Boolean = false, 
 
 @Composable
 internal fun PrivacyLock() {
-    Icon(Icons.Outlined.Lock, "私密", Modifier.size(16.dp), tint = tacitColors.muted)
+    val strings = uiStrings()
+    Icon(Icons.Outlined.Lock, strings.text(R.string.private_record), Modifier.size(16.dp), tint = tacitColors.muted)
 }
 
 /** Thin accent progress line; the Material default is a heavy ink bar on this palette. */

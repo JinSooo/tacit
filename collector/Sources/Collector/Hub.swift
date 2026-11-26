@@ -467,7 +467,7 @@ final class PluginScheduler {
   }
   func manage(_ request: PluginRequest) async throws -> PluginResponse {
     let config = self.config
-    guard config.allowsLocalHub else { throw PluginFailure(message: "需要连接这台 Mac 的后台") }
+    guard config.allowsLocalHub else { throw PluginFailure(message: L10n.Settings.localBackendRequired) }
     let writeGate = self.writeGate
     let queue = ["install", "configure", "uninstall"].contains(request.action) ? jobs : DispatchQueue.global(qos: .utility)
     return try await withCheckedThrowingContinuation { continuation in
@@ -475,8 +475,8 @@ final class PluginScheduler {
         do {
           try writeGate?.begin()
           defer { writeGate?.end() }
-          guard config.allowsLocalHub else { throw PluginFailure(message: "需要连接这台 Mac 的后台") }
-          guard let repo = config.repo else { throw PluginFailure(message: "找不到安装目录，请重新安装应用。") }
+          guard config.allowsLocalHub else { throw PluginFailure(message: L10n.Settings.localBackendRequired) }
+          guard let repo = config.repo else { throw PluginFailure(message: L10n.Settings.installFolderMissing) }
           let p = Process(), output = Pipe(), input = Pipe()
           p.executableURL = URL(fileURLWithPath: config.bun)
           p.arguments = ["\(repo)/hub/src/cli.ts", "plugins"]
@@ -549,9 +549,9 @@ final class PluginScheduler {
 
   private func run(_ name: String, since: Date?) -> Outcome {
     do { try writeGate?.begin() }
-    catch { return Outcome(ok: false, accepted: 0, text: "正在切换后台", at: Date()) }
+    catch { return Outcome(ok: false, accepted: 0, text: L10n.Settings.switchingBackend, at: Date()) }
     defer { writeGate?.end() }
-    guard let repo = config.repo else { return Outcome(ok: false, accepted: 0, text: "未配置仓库", at: Date()) }
+    guard let repo = config.repo else { return Outcome(ok: false, accepted: 0, text: L10n.Settings.repoMissing, at: Date()) }
     lock.lock(); current = name; lock.unlock()
     defer { lock.lock(); current = nil; process = nil; lock.unlock() }
     let route: HubBinding.Route
@@ -560,7 +560,7 @@ final class PluginScheduler {
       route = try config.hubRoute()
       connection = try resolveConnection(on: route)
     } catch {
-      return set(name, Outcome(ok: false, accepted: 0, text: "后台设备连接不可用", at: Date()))
+      return set(name, Outcome(ok: false, accepted: 0, text: L10n.Settings.backendDeviceUnavailable, at: Date()))
     }
     let p = Process()
     p.executableURL = URL(fileURLWithPath: config.bun)
@@ -586,8 +586,8 @@ final class PluginScheduler {
     p.standardOutput = out; p.standardError = FileHandle.nullDevice
     let started = Date()
     lock.lock()
-    guard active.contains(name) && isEnabled(name) else { lock.unlock(); return Outcome(ok: true, accepted: 0, text: "已停用或暂停", at: Date()) }
-    do { try p.run(); process = p; lock.unlock() } catch { lock.unlock(); return set(name, Outcome(ok: false, accepted: 0, text: "启动失败", at: Date())) }
+    guard active.contains(name) && isEnabled(name) else { lock.unlock(); return Outcome(ok: true, accepted: 0, text: L10n.Settings.disabledOrPaused, at: Date()) }
+    do { try p.run(); process = p; lock.unlock() } catch { lock.unlock(); return set(name, Outcome(ok: false, accepted: 0, text: L10n.Settings.failedToStart, at: Date())) }
     let timer = DispatchWorkItem { if p.isRunning { p.terminate() } }
     DispatchQueue.global().asyncAfter(deadline: .now() + PluginImport.timeout(since: since), execute: timer)
     let summary: String

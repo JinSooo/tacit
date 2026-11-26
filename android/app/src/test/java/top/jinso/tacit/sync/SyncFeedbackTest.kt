@@ -1,11 +1,16 @@
 package top.jinso.tacit.sync
 
+import top.jinso.tacit.i18n.AppLang
+import top.jinso.tacit.i18n.TestStrings
+import top.jinso.tacit.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SyncFeedbackTest {
+    private val chinese = TestStrings(AppLang.ZH)
+    private val english = TestStrings(AppLang.EN)
     @Test fun rejectedRecordsAreGroupedWithoutExposingValidationText() {
         val reasons = mapOf(
             "/body must NOT have more than 200000 characters" to 2,
@@ -26,7 +31,7 @@ class SyncFeedbackTest {
             "设备身份不匹配" to 2,
             "其他格式问题" to 2,
             "来源不支持" to 1,
-        ), categories)
+        ), categories.mapKeys { chinese.text(it.key) })
         assertEquals(reasons.values.sum(), categories.values.sum())
     }
 
@@ -38,20 +43,24 @@ class SyncFeedbackTest {
             MacUnavailable(false) to "暂时连不上 Mac，记录已排队等待同步",
         )
         for ((error, text) in cases) {
-            assertEquals(text, syncError(error))
-            assertTrue(isSyncWaiting(text))
+            val categorized = syncError(error)
+            assertEquals(text, chinese.text(categorized.label))
+            assertTrue(categorized.waiting)
+            assertEquals(categorized, restoreSyncError(text, chinese))
+            assertEquals(categorized, restoreSyncError(categorized.name, chinese))
         }
         val connectError = syncError(MacUnavailable(true), pairing = true)
-        assertFalse(isSyncWaiting(connectError, pairing = true))
-        assertEquals("这批同步内容太大，暂时无法同步", syncError(EnvelopeTooLarge()))
+        assertEquals(SyncError.NETWORK_MISMATCH, connectError)
+        assertEquals("这批同步内容太大，暂时无法同步", chinese.text(syncError(EnvelopeTooLarge()).label))
     }
 
     // 2026-11-25 复审：本机因超限标为被拒的记录归到“其他”；配对时信箱限流被说成“会自动重试”。
     @Test fun localOversizeIsTooLongAndPairingRelayFailuresNeedTheUser() {
-        assertEquals(mapOf("单条内容过长" to 2), rejectedRecordCategories(mapOf("记录太大，无法发送" to 2)))
+        assertEquals(mapOf(R.string.rejection_too_long to 3), rejectedRecordCategories(mapOf("记录太大，无法发送" to 2, RECORD_TOO_LARGE to 1)))
         val limited = syncError(RelayStatus(429), pairing = true)
-        assertFalse("自动" in limited)
-        assertFalse(isSyncWaiting(limited, pairing = true))
-        assertTrue(isSyncWaiting(syncError(RelayStatus(429)), pairing = false))
+        assertFalse("自动" in chinese.text(limited.label))
+        assertFalse(limited.waiting)
+        assertEquals("Can't reach your Mac. Records are queued for sync.", english.text(SyncError.QUEUED.label))
+        assertTrue(syncError(RelayStatus(429)).waiting)
     }
 }

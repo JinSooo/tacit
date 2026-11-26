@@ -20,6 +20,7 @@ import { deviceRoleSchema, pruneSecurityAudit, securityEventsSchema } from "./se
 import { historyImportSchema } from "./devices/history-import.ts";
 import { deviceSchema } from "./devices/store.ts";
 import { runtimeSchema, expireSnapshots, eraseSnapshots, sanitizeStoredModelErrors } from "./runtime-log.ts";
+import { initializeGeneralLanguage } from "./general-settings.ts";
 
 export type StoredRecord = RecordV1 & { t_received: string };
 export interface IngestResult { accepted: number; duplicates: number; rejected: { index: number; errors: string[] }[] }
@@ -215,6 +216,8 @@ export class HubDB {
         }
         if (version < 18) this.db.exec(securityEventsSchema);
         if (version < 19) this.db.exec(historyImportSchema);
+        // JSON-only migration. Keep the schema version so older readers can still open the database.
+        initializeGeneralLanguage(this, version > 0);
       }).immediate();
       migrating = false;
       const backups = file === ":memory:" ? [] : readdirSync(dirname(file)).filter(name =>

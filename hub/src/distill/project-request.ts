@@ -1,3 +1,4 @@
+import type { Lang } from "../i18n/language.ts";
 import { ulid } from "../../../packages/record/index.ts";
 import { redactString } from "../redact.ts";
 import { DistillStore, type Fact, type Thread } from "./store.ts";
@@ -12,7 +13,7 @@ export type ProjectModelOutput = P.ProjectOutput & { resolutions?: Resolution[] 
  * 只有 since 之后新写入的决定才作为完成依据：更早的依据上一次项目整理已经核对过，
  * 每次都重送最近 30 条原文会让单次输入涨到十万 token 以上（2026-11-18）。
  */
-export function projectRequest(store: DistillStore, projectId: string, name: string, threads: P.ThreadView[], since = Number.NEGATIVE_INFINITY) {
+export function projectRequest(store: DistillStore, projectId: string, name: string, threads: P.ThreadView[], since = Number.NEGATIVE_INFINITY, lang: Lang = "zh") {
   const facts = store.facts("project_id", projectId);
   const byRef = new Map(facts.map((f, i) => [`f${i + 1}`, f]));
   const factRefs = new Map([...byRef].map(([ref, f]) => [f.id, ref]));
@@ -62,7 +63,7 @@ export function projectRequest(store: DistillStore, projectId: string, name: str
   return {
     schema,
     refs: Object.fromEntries([...byRef].map(([ref, f]) => [ref, f.id]).concat([...records].map(([ref, r]) => [ref, r.id]), [...summaries].map(([ref, t]) => [ref, t.id]))),
-    prompt: `项目：${name}\n\n<data>\n${JSON.stringify({ threads, facts: views, summary_targets: [...summaries].map(([ref, t]) => ({ id: ref, title: t.title, brief: t.brief, last: t.last_ms })), resolution_targets: options, completion_evidence: [...records].map(([ref, { id, ...r }]) => ({ id: ref, ...r })) })}\n</data>`,
+    prompt: `${lang === "zh" ? `项目：${name}\n\n` : ""}<data>\n${JSON.stringify({ ...(lang === "en" ? { project: name } : {}), threads, facts: views, summary_targets: [...summaries].map(([ref, t]) => ({ id: ref, title: t.title, brief: t.brief, last: t.last_ms })), resolution_targets: options, completion_evidence: [...records].map(([ref, { id, ...r }]) => ({ id: ref, ...r })) })}\n</data>`,
     apply(out: ProjectModelOutput, now: number): number {
       let resolved = 0;
       const updated = new Set<string>();
@@ -88,7 +89,7 @@ export function projectRequest(store: DistillStore, projectId: string, name: str
           || !record.excerpt.includes(resolution.quote) || !raw.body.includes(resolution.quote)) continue;
         const sourceTitle = store.thread(source.thread_id)!.title;
         const replacement: Fact = { ...source, id: ulid(), thread_id: thread.id, project_id: projectId, origin: "llm",
-          text: `后续进展（${sourceTitle}）：${resolution.quote}`, evidence: [...new Set([...(target?.evidence ?? []), record.id])],
+          text: lang === "en" ? `Follow-up (${sourceTitle}): ${resolution.quote}` : `后续进展（${sourceTitle}）：${resolution.quote}`, evidence: [...new Set([...(target?.evidence ?? []), record.id])],
           reason: resolution.reason, valid_at: record.end, created_at: new Date(now).toISOString() };
         const mark = store.getState<Record<string, unknown>>(`digest:${thread.id}`);
         if (mark) store.setState(`digest:${thread.id}`, { ...mark, fact_ids: store.facts("thread_id", thread.id).map(f => f.id).sort() });

@@ -46,7 +46,7 @@ struct AgentSettingsView: View {
               HStack(spacing: 8) {
                 if let text = status(t) { Text(text).foregroundStyle(t.partial ? Palette.attention : Palette.muted) }
                 if t.installed || t.connected || t.partial {
-                  Button(busy == t.id ? (t.connected ? "正在断开…" : "正在连接…") : (t.connected ? "断开" : "连接")) {
+                  Button(busy == t.id ? (t.connected ? L10n.Settings.disconnecting : L10n.Settings.connecting) : (t.connected ? L10n.Settings.disconnect : L10n.Settings.connect)) {
                     Task { await set(t, !t.connected) }
                   }
                   .disabled(busy != nil)
@@ -60,7 +60,7 @@ struct AgentSettingsView: View {
         if let note { SettingsMessage(text: note, warning: false) }
         if let error { SettingsMessage(text: error) }
       } footer: {
-        Note("连接后，新会话会带入当前项目进展，AI 也能查你的历史记录；每次读取都记在运行记录里。")
+        Note(L10n.Settings.toolsNote)
       }
       GeneralPreferencesSection(context: true)
     }
@@ -69,22 +69,25 @@ struct AgentSettingsView: View {
 
   /// 连接与否由右边的“连接 / 断开”说明，这里只写按钮说明不了的。
   func status(_ t: AgentToolState) -> String? {
-    if !t.installed { return "这台 Mac 上没有安装" }
-    if t.partial { return "连接不完整，请重新连接。" }
+    if !t.installed { return L10n.Settings.toolNotInstalled }
+    if t.partial { return L10n.Settings.toolPartiallyConnected }
     return nil
   }
 
   func load() async {
     do { tools = try await store.api.agentTools(); error = nil }
     catch is CancellationError {}
-    catch { self.error = error.localizedDescription }
+    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.agentOperationFailed) }
   }
 
   func set(_ t: AgentToolState, _ on: Bool) async {
     busy = t.id; note = nil; error = nil
     defer { busy = nil }
-    do { let r = try await store.api.setAgent(t.id, connected: on); tools = r.tools; note = r.note }
-    catch { self.error = error.localizedDescription }
+    do {
+      let result = try await store.api.setAgent(t.id, connected: on)
+      tools = result.tools
+      note = result.note.map(L10n.Settings.agentNote).flatMap { $0.isEmpty ? nil : $0 }
+    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.agentOperationFailed) }
   }
 }
 
@@ -107,24 +110,24 @@ struct SetupChecklist: View {
         Button { Motion.animate { expanded.toggle() } } label: {
           HStack(spacing: 8) {
             PhIcon("check-circle", size: 14)
-            Text("还差几步")
+            Text(L10n.Settings.setupChecklist)
             Spacer()
             DisclosureChevron(expanded: expanded, sideways: true)
           }.padding(.vertical, 4)
         }
         .buttonStyle(.accentLink).font(.system(size: TextSize.body))
-        .accessibilityValue(expanded ? "已展开" : "已折叠")
+        .accessibilityValue(expanded ? L10n.Settings.expanded : L10n.Settings.collapsed)
         if expanded {
-          step(done: missing.isEmpty, title: "打开系统权限", detail: permissionDetail(missing)) {
-            if let first = missing.first { Button("授权…") { store.perform(.requestPermission(first.id)) } }
+          step(done: missing.isEmpty, title: L10n.Settings.grantSystemPermissions, detail: permissionDetail(missing)) {
+            if let first = missing.first { Button(L10n.Settings.grantPermission) { store.perform(.requestPermission(first.id)) } }
           }
           Divider()
-          step(done: modelReady, title: "让 AI 整理你的记录", detail: modelDetail(health.state)) {
-            Button("检查 AI 模型…") { open(.models) }
+          step(done: modelReady, title: L10n.Settings.setupModels, detail: modelDetail(health.state)) {
+            Button(L10n.Settings.checkModels) { open(.models) }
           }
           Divider()
-          step(done: agentsReady, title: "连接你使用的 AI 工具", detail: agentsReady ? nil : agentDetail(tools)) {
-            if tools.contains(where: \.installed) { Button("连接…") { open(.agents) } }
+          step(done: agentsReady, title: L10n.Settings.setupTools, detail: agentsReady ? nil : agentDetail(tools)) {
+            if tools.contains(where: \.installed) { Button(L10n.Settings.connectEllipsis) { open(.agents) } }
           }
         }
       }
@@ -134,19 +137,19 @@ struct SetupChecklist: View {
   func permissionDetail(_ missing: [DataSourceStatus]) -> String? {
     var names: [String] = []
     for n in missing.compactMap(\.permissionName) where !names.contains(n) { names.append(n) }
-    return names.isEmpty ? nil : "还缺" + names.joined(separator: "、") + "权限。"
+    return names.isEmpty ? nil : L10n.Settings.missingPermissions(names)
   }
 
   func agentDetail(_ tools: [AgentToolState]) -> String {
     tools.contains(where: \.installed)
-      ? "连接后，可以让 AI 查询你最近在做什么。"
-      : "这台 Mac 上没找到 Claude Code 或 Codex，装好并登录后再回来连接。"
+      ? L10n.Settings.toolSearchNote
+      : L10n.Settings.setupToolInstallNote
   }
 
   func modelDetail(_ s: DistillHealth.State) -> String? {
     switch s {
-    case .waiting: return "第一次整理会在 15 分钟内完成。"
-    case .failing(let reason): return reason
+    case .waiting: return L10n.Settings.firstSummaryNote
+    case .failing(let reason): return L10n.Settings.modelFailure(reason, fallback: L10n.Settings.summaryFailure)
     case .working: return nil
     }
   }

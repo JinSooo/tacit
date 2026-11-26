@@ -1,5 +1,6 @@
 package top.jinso.tacit.audio
 
+import top.jinso.tacit.R
 import android.content.Context
 import android.os.Build
 import android.util.AtomicFile
@@ -48,7 +49,7 @@ internal class QnnModels(private val context: Context) {
         val active = current()
         root.listFiles()?.filter { it.isDirectory && it != active && Regex("[a-f0-9-]{36}").matches(it.name) }
             ?.forEach { check(it.deleteRecursively()) { "无法清理上次未完成的加速模型" } }
-        if (root.usableSpace < 480_000_000) throw SpeechModelProblem("存储空间不足，请至少腾出 480 MB 后重试")
+        if (root.usableSpace < 480_000_000) throw SpeechModelProblem(R.string.acceleration_storage)
         val stage = SpeechModelDownload(listOf(QnnCatalog.archive)).prepare(root, cancel, progress)
         try {
             QnnCatalog.extract(File(stage, QnnCatalog.archive.path), stage, cancel)

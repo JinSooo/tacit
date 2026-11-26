@@ -64,9 +64,9 @@ struct RecordInspector: View {
           // cur.start 是修正记录写入的时间。
           HStack(spacing: 8) {
             PhIcon("note-pencil", size: 14)
-            Text(ViewerFormat.relative(cur.start) == "刚刚" ? "刚刚修正过" : "\(ViewerFormat.relative(cur.start))修正过")
+            Text(L10n.correctedAt(cur.start))
             Spacer()
-            Button(showOriginal ? "收起原文" : "查看原文") { Motion.animate { showOriginal.toggle() } }.buttonStyle(.accentLink)
+            Button(showOriginal ? L10n.hideOriginal : L10n.showOriginal) { Motion.animate { showOriginal.toggle() } }.buttonStyle(.accentLink)
           }
           .font(.system(size: TextSize.body))
           .foregroundStyle(Palette.muted)
@@ -75,7 +75,7 @@ struct RecordInspector: View {
         else { RecordBodyText(text: cur.body ?? "", source: r.source) }
         if showOriginal, cur.id != r.id {
           VStack(alignment: .leading, spacing: 8) {
-            Text("原文").sectionTitle()
+            Text(L10n.original).sectionTitle()
             RecordBodyText(text: r.body ?? "", source: r.source)
           }
           .transition(.reveal)
@@ -122,22 +122,22 @@ struct RecordInspector: View {
     let rows = contextRows(r)
     if !rows.isEmpty {
       VStack(alignment: .leading, spacing: 8) {
-        Text("记录时的情况").sectionTitle()
+        Text(L10n.recordingContext).sectionTitle()
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
           ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-            let (label, value) = row
+            let (key, label, value) = row
             GridRow {
               Text(label).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
                 .fixedSize().gridColumnAlignment(.leading)
-              if label == "网址", let url = URL(string: value), ["http", "https"].contains(url.scheme ?? "") {
+              if key == "url", let url = URL(string: value), ["http", "https"].contains(url.scheme ?? "") {
                 Link(destination: url) {
                   Text(value).multilineTextAlignment(.leading).foregroundStyle(Palette.accent)
                 }.lineLimit(3)
-              } else if ["仓库", "目录", "路径"].contains(label) {
+              } else if ["repo", "cwd", "dir", "path"].contains(key) {
                 Button { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: (value as NSString).expandingTildeInPath) } label: {
                   Text(value).font(.mono(TextSize.body)).foregroundStyle(Palette.readingBody).multilineTextAlignment(.leading)
                 }
-                .buttonStyle(.plain).help("在访达中显示")
+                .buttonStyle(.plain).help(L10n.showInFinder)
               } else {
                 Text(value).foregroundStyle(Palette.readingBody).textSelection(.enabled).lineLimit(4)
               }
@@ -149,46 +149,47 @@ struct RecordInspector: View {
     }
   }
 
-  func contextRows(_ r: HistoryRecord) -> [(String, String)] {
-    var rows: [(String, String)] = []
+  func contextRows(_ r: HistoryRecord) -> [(key: String, label: String, value: String)] {
+    var rows: [(key: String, label: String, value: String)] = []
     let app = r.contextText("app")
-    if let name = AppIcons.name(app) { rows.append(("应用", name)) }
-    for (key, label) in [("window", "窗口"), ("url", "网址"), ("repo", "仓库"), ("cwd", "目录"), ("chat", "会话"), ("place", "地点")] {
+    if let name = AppIcons.name(app) { rows.append(("app", L10n.app, name)) }
+    for (key, label) in [("window", L10n.window), ("url", L10n.url), ("repo", L10n.repository), ("cwd", L10n.folder), ("chat", L10n.conversation), ("place", L10n.location)] {
       if let v = r.contextText(key) {
         let shown = key == "repo" || key == "cwd" ? (v as NSString).abbreviatingWithTildeInPath : v
-        if key == "cwd", rows.contains(where: { $0.1 == shown }) { continue }
-        rows.append((label, shown))
+        if key == "cwd", rows.contains(where: { $0.value == shown }) { continue }
+        rows.append((key, label, shown))
       }
     }
     if case .object(let extra)? = r.context?["extra"] {
-      let names = ["hash": "提交", "files": "文件数", "added": "新增行", "deleted": "删除行", "author": "作者", "from_url": "下载来源",
-                   "size": "大小", "dir": "目录", "profile": "浏览器配置", "exit": "退出码", "duration_ms": "耗时", "location": "地点",
-                   "attendees": "参会人", "calendar": "日历"]
+      let names = ["hash": L10n.commit, "files": L10n.fileCount, "added": L10n.linesAdded, "deleted": L10n.linesDeleted, "author": L10n.author, "from_url": L10n.downloadSource,
+                   "size": L10n.size, "dir": L10n.folder, "profile": L10n.browserProfile, "exit": L10n.exitCode, "duration_ms": L10n.duration, "location": L10n.location,
+                   "attendees": L10n.attendees, "calendar": L10n.calendar]
       for (k, v) in extra.sorted(by: { $0.key < $1.key }) {
         guard let label = names[k], var text = v.text else { continue }
         if k == "hash" { text = String(text.prefix(10)) }
         if k == "size", let n = Int(text) { if n == 0 { continue }; text = ViewerFormat.bytes(n) }
         if k == "duration_ms", let n = Double(text) { text = Fmt.duration(n / 1000) }
-        rows.append((label, text))
+        rows.append((k, label, text))
       }
     }
     var capture = r.capture?.method ?? ""
-    capture = ["ax": "读取窗口文字", "ocr": "截图识字", "db": "读取数据库", "api": "系统接口", "file": "读取文件", "hook": "终端钩子", "asr": "语音转文字", "manual": "手动补写"][capture] ?? capture
+    capture = ["ax": L10n.windowText, "ocr": L10n.screenText, "db": L10n.databaseRead, "api": L10n.systemAPI, "file": L10n.fileRead, "hook": L10n.terminalHook, "asr": L10n.speechToText, "manual": L10n.note][capture] ?? capture
     // confidence 是采集端给的识别置信度（OCR、转写），0–1。
-    if let c = r.capture?.confidence { capture += "，识别把握 \(Int((c * 100).rounded()))%" }
-    if !capture.isEmpty { rows.append(("怎么记的", capture)) }
-    rows.append(("设备", r.device))
-    if (r.redactions ?? 0) > 0 { rows.append(("隐去的密钥", "\(r.redactions!) 处")) }
+    if let c = r.capture?.confidence { capture += L10n.comma + L10n.captureConfidence(Int((c * 100).rounded())) }
+    if !capture.isEmpty { rows.append(("capture", L10n.captureMethod, capture)) }
+    rows.append(("device", L10n.device, r.device))
+    if let n = r.redactions, n > 0 { rows.append(("redactions", L10n.redactedSecrets, L10n.redactionCount(n))) }
     return rows
   }
 
   func actions(_ d: RecordDetail) -> some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 16) {
-        Button { correcting = true } label: { Label { Text("修正") } icon: { PhIcon("pencil-simple", size: TextSize.body) } }
+        Button { correcting = true } label: { Label { Text(L10n.correct) } icon: { PhIcon("pencil-simple", size: TextSize.body) } }
         Button {
           NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(conversation.map(ConversationBody.plain) ?? d.current.body ?? d.record.title, forType: .string)
+          let original = conversation.flatMap(ConversationBody.originalTranscript) ?? d.current.body ?? d.record.title
+          NSPasteboard.general.setString(original, forType: .string)
           withAnimation(Motion.quick) { copied = true }
           copyReset?.cancel()
           copyReset = Task {
@@ -196,12 +197,12 @@ struct RecordInspector: View {
             if !Task.isCancelled { withAnimation(Motion.quick) { copied = false } }
           }
         } label: {
-          Label { Text(copied ? "已复制" : "复制") } icon: {
+          Label { Text(copied ? L10n.copied : L10n.copy) } icon: {
             PhIcon(copied ? "check" : "copy", size: TextSize.body).id(copied).transition(.opacity)
           }
         }
         Spacer()
-        Button("删除") { confirmDelete = true }
+        Button(L10n.delete) { confirmDelete = true }
           .buttonStyle(RecordActionStyle(attention: true))
           .disabled(busy)
       }
@@ -213,11 +214,11 @@ struct RecordInspector: View {
     }
     .animation(Motion.standard, value: deleteError)
     .controlSize(.small)
-    .confirmationDialog("删除这条记录？", isPresented: $confirmDelete) {
-      Button("删除", role: .destructive) { Task { await delete(d) } }
-      Button("取消", role: .cancel) {}
+    .confirmationDialog(L10n.deleteThisRecord, isPresented: $confirmDelete) {
+      Button(L10n.delete, role: .destructive) { Task { await delete(d) } }
+      Button(L10n.cancel, role: .cancel) {}
     } message: {
-      Text("删除后不能恢复。已经交给云端 AI 的内容收不回来。")
+      Text(L10n.recordDeletionExplanation)
     }
   }
 
@@ -255,15 +256,16 @@ private struct RecordBodyText: View {
 
   var body: some View {
     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      Text("这条没有正文").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+      Text(L10n.thisRecordHasNoText).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
     } else {
-      let lines = RecordReadingLines.display(text, source: source)
+      let transcript = AudioSource.isAudio(source) || ["claude_code.session", "codex.session"].contains(source)
+      let lines = RecordReadingLines.display(transcript ? L10n.transcript(text) : text, source: source)
       let previewLimit = 40
       VStack(alignment: .leading, spacing: 8) {
         Text(showAll ? lines.joined(separator: "\n") : lines.prefix(previewLimit).joined(separator: "\n"))
           .recordReadingStyle()
         if lines.count > previewLimit {
-          Button(showAll ? "收起" : "展开全部") { showAll.toggle() }
+          Button(showAll ? L10n.collapse : L10n.showAll) { showAll.toggle() }
             .buttonStyle(.accentLink).font(.system(size: TextSize.body))
         }
       }
@@ -296,8 +298,8 @@ struct CorrectionSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text("修正这条记录").font(.system(size: TextSize.title, weight: .semibold))
-      Text("原文会保留，以后显示和整理都用你改的版本。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+      Text(L10n.correctThisRecord).font(.system(size: TextSize.title, weight: .semibold))
+      Text(L10n.recordCorrectionExplanation).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
       TextEditor(text: $text)
         .font(.system(size: TextSize.body))
         .scrollContentBackground(.hidden)
@@ -307,8 +309,8 @@ struct CorrectionSheet: View {
       if let error { Text(error).font(.system(size: TextSize.body)).foregroundStyle(Palette.attention) }
       HStack {
         Spacer()
-        Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-        Button(busy ? "正在修正…" : "修正") { Task { await save() } }
+        Button(L10n.cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+        Button(busy ? L10n.correcting : L10n.correct) { Task { await save() } }
           .buttonStyle(.accent)
           .keyboardShortcut(.defaultAction).disabled(busy || text.count > 200_000 || text == (original.body ?? ""))
       }
@@ -347,12 +349,12 @@ struct NoteSheet: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("补写一条记录").font(.system(size: TextSize.title, weight: .semibold))
+      Text(L10n.addANote).font(.system(size: TextSize.title, weight: .semibold))
       Form {
-        DatePicker("开始", selection: $start, in: ...Date())
-        Toggle("持续了一段时间", isOn: $hasEnd.animation(Motion.standard))
-        if hasEnd { DatePicker("结束", selection: $end, in: start...) }
-        TextField("标题", text: $title, prompt: Text("做了什么"))
+        DatePicker(L10n.start, selection: $start, in: ...Date())
+        Toggle(L10n.setAnEndTime, isOn: $hasEnd.animation(Motion.standard))
+        if hasEnd { DatePicker(L10n.end, selection: $end, in: start...) }
+        TextField(L10n.title, text: $title, prompt: Text(L10n.whatDidYouDo))
       }
       .formStyle(.columns)
       TextEditor(text: $text)
@@ -363,15 +365,15 @@ struct NoteSheet: View {
         .frame(minHeight: 180)
         .overlay(alignment: .topLeading) {
           if text.isEmpty {
-            Text("想多写点可以写在这里").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+            Text(L10n.addMoreDetailHere).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
               .padding(.horizontal, 13).padding(.vertical, 8).allowsHitTesting(false)
           }
         }
       if let error { Text(error).font(.system(size: TextSize.body)).foregroundStyle(Palette.attention) }
       HStack {
         Spacer()
-        Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-        Button(busy ? "正在保存…" : "保存") { Task { await save() } }
+        Button(L10n.cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+        Button(busy ? L10n.saving : L10n.save) { Task { await save() } }
           .buttonStyle(.accent)
           .keyboardShortcut(.defaultAction)
           .disabled(busy || trimmed.isEmpty || trimmed.count > 200 || (hasEnd && end < start))
@@ -406,23 +408,23 @@ struct ConversationBody: View {
     VStack(alignment: .leading, spacing: 20) {
       summary(c)
       if c.turns.isEmpty {
-        Text("没有转出能读的内容").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        Text(L10n.noReadableTranscript).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
       } else {
         VStack(alignment: .leading, spacing: 12) {
-          Text("对话内容").sectionTitle()
+          Text(L10n.conversationContent).sectionTitle()
           let shown = showAll ? c.turns : Array(c.turns.prefix(80))
           ForEach(Array(shown.enumerated()), id: \.offset) { _, t in turn(t) }
           if c.turns.count > 80 {
-            Button(showAll ? "收起" : "展开全部 \(Fmt.count(c.turns.count)) 段") { showAll.toggle() }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
+            Button(showAll ? L10n.collapse : L10n.showTurns(c.turns.count)) { showAll.toggle() }.buttonStyle(.accentLink).font(.system(size: TextSize.body))
           }
         }
       }
-      if let raw = c.records, !raw.isEmpty {
+      if let original = Self.originalTranscript(c) {
         VStack(alignment: .leading, spacing: 8) {
-          Button(showRaw ? "收起转写原文" : "查看转写原文") { Motion.animate { showRaw.toggle() } }
+          Button(showRaw ? L10n.hideOriginalTranscript : L10n.showOriginalTranscript) { Motion.animate { showRaw.toggle() } }
             .buttonStyle(.accentLink).font(.system(size: TextSize.body))
           if showRaw {
-            Text(raw.map(\.body).joined(separator: "\n")).recordReadingStyle().transition(.reveal)
+            Text(L10n.transcript(original)).recordReadingStyle().transition(.reveal)
           }
         }
       }
@@ -443,24 +445,25 @@ struct ConversationBody: View {
           }
         }
       }
-    case "waiting": Text("总结稍后生成").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
-    case "private": Text("私密内容不生成总结").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+    case "waiting": Text(L10n.theSummaryWillAppearLater).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+    case "private": Text(L10n.privateConversation).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
     default: EmptyView()
     }
+  }
+
+  static func originalTranscript(_ conversation: ConversationDetail) -> String? {
+    guard let records = conversation.records, !records.isEmpty else { return nil }
+    return records.map(\.body).joined(separator: "\n")
   }
 
   func turn(_ t: ConversationDetail.Turn) -> some View {
     VStack(alignment: .leading, spacing: 2) {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text(t.speaker).font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(Palette.ink)
+        Text(L10n.speaker(t.speaker)).font(.system(size: TextSize.body, weight: .semibold)).foregroundStyle(Palette.ink)
         if let d = ViewerTime.parse(t.at) { Text(ViewerFormat.clock(d)).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted) }
       }
       Text(t.text).recordReadingStyle()
     }
   }
 
-  /// 复制时给整理过的原文，"16:03 我：……"一行一段。
-  static func plain(_ c: ConversationDetail) -> String {
-    c.turns.map { t in "\(ViewerTime.parse(t.at).map { ViewerFormat.clock($0) } ?? "") \(t.speaker)：\(t.text)" }.joined(separator: "\n")
-  }
 }

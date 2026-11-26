@@ -1,5 +1,6 @@
 package top.jinso.tacit.ui
 
+import top.jinso.tacit.R
 import kotlinx.coroutines.flow.merge
 
 import androidx.activity.compose.BackHandler
@@ -32,6 +33,7 @@ import java.time.LocalDate
 
 @Composable
 fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
+    val strings = uiStrings()
     val scope = rememberCoroutineScope()
     val activity = LocalActivity.current as ViewModelStoreOwner
     val reading = remember(activity) { ViewModelProvider(activity)[ReadingModel::class.java] }
@@ -54,7 +56,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     fun notify(text: String) { scope.launch { snackbar.showSnackbar(text) } }
     fun offerUndo(text: String, undo: suspend () -> Unit) {
         scope.launch {
-            if (snackbar.showSnackbar(text, actionLabel = "撤销", duration = SnackbarDuration.Long) != SnackbarResult.ActionPerformed) {
+            if (snackbar.showSnackbar(text, actionLabel = strings.text(R.string.undo), duration = SnackbarDuration.Long) != SnackbarResult.ActionPerformed) {
                 return@launch
             }
             try {
@@ -62,7 +64,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
-                snackbar.showSnackbar("暂时无法撤销，请稍后重试")
+                snackbar.showSnackbar(strings.text(R.string.undo_failed))
             }
         }
     }
@@ -115,7 +117,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                 val shownItem = rememberLatest(timelineItem?.takeIf { page.kind == PageKind.TIMELINE && it.id == page.id })
                 ActiveScope(active) { Box(Modifier.fillMaxSize().background(tacitColors.paper)) {
                     when {
-                        page.kind == PageKind.LOCKED -> EmptyState("记录库暂时无法打开", "密钥或数据库不可用，原文件已保留，请勿卸载应用或清除数据。")
+                        page.kind == PageKind.LOCKED -> EmptyState(strings.text(R.string.vault_locked), strings.text(R.string.vault_locked_hint))
                         page.kind == PageKind.LOADING || store == null -> ProgressLine()
                         page.kind == PageKind.RECORD -> if (shownDetail != null) RecordDetail(
                             shownDetail, store, app, onBack = ::back, notify = ::notify,
@@ -132,8 +134,8 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                                 }
                                 reading.conversation = reading.conversation.filterNot { it.id == record.id }
                                 reading.detail = null
-                                notify(if (deletedCount > 1) "已删除记录和关联修正" else "已删除")
-                            } catch (_: Exception) { notify("删除未完成，请重试") }
+                                notify(if (deletedCount > 1) strings.text(R.string.deleted_record_corrections) else strings.text(R.string.deleted))
+                            } catch (_: Exception) { notify(strings.text(R.string.delete_retry)) }
                         }
                     },
                 )

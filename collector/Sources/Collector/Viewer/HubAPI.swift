@@ -5,10 +5,10 @@ struct HubError: LocalizedError {
   let message: String
   let status: Int
   var errorDescription: String? { message }
-  static let needsLocalHub = HubError(message: "需要连接这台 Mac 的后台", status: 0)
-  static let invalidBinding = HubError(message: "后台连接配置无法读取", status: 0)
-  static let remoteUnavailable = HubError(message: "远端后台连接不可用", status: 0)
-  static let needsDirectHub = HubError(message: "需要直连远端后台才能读取这些内容", status: 0)
+  static var needsLocalHub: HubError { HubError(message: L10n.localServiceRequired, status: 0) }
+  static var invalidBinding: HubError { HubError(message: L10n.unreadableConnectionSettings, status: 0) }
+  static var remoteUnavailable: HubError { HubError(message: L10n.remoteServiceUnavailable, status: 0) }
+  static var needsDirectHub: HubError { HubError(message: L10n.directServiceRequired, status: 0) }
   var actionMessage: String? { [403, 409, 429].contains(status) ? message : nil }
 }
 
@@ -91,6 +91,7 @@ final class HubAPI: @unchecked Sendable {
     }
     var r = URLRequest(url: c.url!)
     r.httpMethod = method
+    r.setValue(AppLanguage.current.rawValue, forHTTPHeaderField: "Accept-Language")
     if let timeout { r.timeoutInterval = timeout }
     if authenticated {
       var token = tokenProvider()
@@ -98,7 +99,7 @@ final class HubAPI: @unchecked Sendable {
         try await Task.sleep(for: .seconds(1))
         token = tokenProvider()
       }
-      guard let token else { throw HubError(message: "找不到后台服务的访问令牌，后台服务可能还没启动过", status: 0) }
+      guard let token else { throw HubError(message: L10n.missingAccessToken, status: 0) }
       r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
     if let body { r.httpBody = body; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
@@ -109,8 +110,8 @@ final class HubAPI: @unchecked Sendable {
       let response: URLResponse
       do { (data, response) = try await dataWaitingForStartup(r) }
       catch let e as URLError where e.code == .cancelled { throw CancellationError() }
-      catch let e as URLError { throw HubError(message: e.code == .timedOut ? "后台服务没有响应" : "连不上后台服务", status: 0) }
-      catch { throw HubError(message: "连不上后台服务", status: 0) }
+      catch let e as URLError { throw HubError(message: e.code == .timedOut ? L10n.serviceTimedOut : L10n.cantReachBackgroundService, status: 0) }
+      catch { throw HubError(message: L10n.cantReachBackgroundService, status: 0) }
       try checkBinding()
       status = (response as? HTTPURLResponse)?.statusCode ?? 0
       guard status == 503, let wait else { break }
@@ -118,7 +119,7 @@ final class HubAPI: @unchecked Sendable {
     }
     guard (200..<300).contains(status) else {
       let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-      throw HubError(message: msg ?? "请求失败（\(status)）", status: status)
+      throw HubError(message: msg ?? L10n.requestFailed(status), status: status)
     }
     return data
   }
@@ -156,7 +157,7 @@ final class HubAPI: @unchecked Sendable {
 
   private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
     do { return try HubJSON.decoder().decode(T.self, from: data) }
-    catch { throw HubError(message: "后台服务返回的数据读不出来：\(error)", status: 0) }
+    catch { throw HubError(message: L10n.unreadableResponse(String(describing: error)), status: 0) }
   }
 
   func get<T: Decodable>(_ type: T.Type, _ path: String, _ query: [String: String?] = [:], device: DeviceOperation? = nil) async throws -> T {
@@ -228,7 +229,7 @@ final class HubAPI: @unchecked Sendable {
     let device = DeviceOperation("delete", ["ids": .array([.string(id)])]) { reply in
       struct Result: Decodable { let deleted: Int }
       if try self.decode(Result.self, from: reply.bodyData).deleted == 0 {
-        throw HubError(message: "记录不存在", status: 404)
+        throw HubError(message: L10n.recordNotFound, status: 404)
       }
       return reply.bodyData
     }
@@ -241,13 +242,43 @@ final class HubAPI: @unchecked Sendable {
     let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     if (j?["accepted"] as? Int) != 1 {
       let errors = ((j?["rejected"] as? [[String: Any]]) ?? []).flatMap { ($0["errors"] as? [String]) ?? [] }
-      throw HubError(message: errors.isEmpty ? "记录未写入，请重试" : errors.joined(separator: "；"), status: 0)
+      throw HubError(message: errors.isEmpty ? L10n.recordSaveFailed : errors.joined(separator: L10n.errorSeparator), status: 0)
     }
   }
 
   func diary(_ day: Date) async throws -> DayDiary? {
-    do { return try await get(DayDiary.self, "/v1/days/\(TimelineDay.key(day))") }
-    catch let e as HubError where e.status == 404 { return nil }
+    do {
+      return try Self.decodeDiary(await request("/v1/days/\(TimelineDay.key(day))"))
+    } catch let error as HubError where error.status == 404 {
+      return nil
+    }
+  }
+
+  static func decodeDiary(_ data: Data) throws -> DayDiary {
+    do {
+      // Store the canonical placeholder in the Viewer model so a cached diary can
+      // be displayed in either language. Older hubs already send this title.
+      var payload = data
+      if var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+         var drafts = object["drafts"] as? [[String: Any]] {
+        var changed = false
+        for index in drafts.indices where drafts[index]["title_kind"] as? String == "conversation" {
+          let current = drafts[index]["title"] as? String ?? ""
+          let canonical = L10n.draftTitle(current, kind: "conversation", lang: .zh)
+          if current != canonical {
+            drafts[index]["title"] = canonical
+            changed = true
+          }
+        }
+        if changed {
+          object["drafts"] = drafts
+          payload = try JSONSerialization.data(withJSONObject: object)
+        }
+      }
+      return try HubJSON.decoder().decode(DayDiary.self, from: payload)
+    } catch {
+      throw HubError(message: L10n.unreadableResponse(String(describing: error)), status: 0)
+    }
   }
 
   func correctSegment(day: Date, id: String, description: String) async throws {

@@ -3,11 +3,11 @@ import Foundation
 extension WidgetSnapshot {
   /// Both the day review and its live drafts exclude private originals and corrections at the hub.
   public init(diary: DayDiary?, now: Date, calendar: Calendar = .current,
-              iconFor: (DayDiary.Item.App) -> String? = { _ in nil }) {
+              language: AppLanguage? = nil, iconFor: (DayDiary.Item.App) -> String? = { _ in nil }) {
     let day = TimelineDay.key(now, calendar: calendar)
     guard let diary, diary.date == day,
           let midnight = calendar.dateInterval(of: .day, for: now)?.end else {
-      self.init(day: day)
+      self.init(day: day, language: language)
       return
     }
     let stored = diary.detail?.items
@@ -23,6 +23,6 @@ extension WidgetSnapshot {
         title: title, description: item.description, source: first?.source, icon: first.flatMap(iconFor)
       ))
     }.sorted { ($0.segment.start, $0.id) > ($1.segment.start, $1.id) }
-    self.init(day: day, summary: reviewed == nil ? nil : diary.summary, segments: segments.map(\.segment))
+    self.init(day: day, summary: reviewed == nil ? nil : diary.summary, segments: segments.map(\.segment), language: language)
   }
 }

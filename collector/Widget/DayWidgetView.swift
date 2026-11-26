@@ -7,7 +7,8 @@ struct DayWidgetView: View {
   let snapshot: WidgetSnapshot
 
   private var large: Bool { family == .systemLarge }
-  private let timeWidth: CGFloat = 34
+  private var language: AppLanguage { snapshot.resolvedLanguage }
+  private var timeWidth: CGFloat { language == .zh ? 34 : 61 }
   private let columnSpacing: CGFloat = 8
 
   var body: some View {
@@ -33,7 +34,7 @@ struct DayWidgetView: View {
   private func contents(recentCount: Int) -> some View {
     VStack(alignment: .leading, spacing: large ? 16 : 4) {
       VStack(alignment: .leading, spacing: large ? 6 : 4) {
-        Text(date.formatted(.dateTime.month(.wide).day().weekday(.wide).locale(Locale(identifier: "zh_CN"))))
+        Text(L10n.dayHeader(date, lang: language))
           .font(.system(size: TextSize.title, weight: .semibold, design: .serif))
           .foregroundStyle(Palette.ink)
           .lineLimit(1)
@@ -58,7 +59,7 @@ struct DayWidgetView: View {
           }
         }
       } else if snapshot.summary == nil {
-        Text("今天暂无时间线内容")
+        Text(L10n.text(zh: "今天暂无时间线内容", en: "No timeline activity today", lang: language))
           .font(.system(size: TextSize.body))
           .foregroundStyle(Palette.muted)
           .lineLimit(1)
@@ -69,7 +70,8 @@ struct DayWidgetView: View {
 
   private func activityStrip(_ range: ClosedRange<Date>) -> some View {
     let start = clock(range.lowerBound)
-    let end = Calendar.current.isDate(date, inSameDayAs: range.upperBound) ? clock(range.upperBound) : "24:00"
+    let crossesMidnight = !Calendar.current.isDate(date, inSameDayAs: range.upperBound)
+    let end = crossesMidnight && language == .zh ? "24:00" : clock(range.upperBound)
     return VStack(spacing: 4) {
       Canvas { context, size in
         let span = range.upperBound.timeIntervalSince(range.lowerBound)
@@ -97,8 +99,8 @@ struct DayWidgetView: View {
       .foregroundStyle(Palette.muted)
     }
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("当天活动时段")
-    .accessibilityValue("\(start) 至 \(end)")
+    .accessibilityLabel(L10n.text(zh: "当天活动时段", en: "Activity today", lang: language))
+    .accessibilityValue(L10n.text(zh: "\(start) 至 \(end)", en: "\(start) to \(end)", lang: language))
   }
 
   private func recentRow(_ segment: WidgetSnapshot.Segment, index: Int, last: Bool) -> some View {
@@ -152,6 +154,6 @@ struct DayWidgetView: View {
   }
 
   private func clock(_ date: Date) -> String {
-    date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(Locale(identifier: "zh_CN")))
+    L10n.clock(date, lang: language)
   }
 }

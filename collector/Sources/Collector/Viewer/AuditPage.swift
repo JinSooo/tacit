@@ -15,12 +15,12 @@ struct AuditPage: View {
   var body: some View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
-        Text("内容链接查看的是当前记录；自动带入可查看当时保存的正文。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+        Text(L10n.auditExplanation).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
           .padding(.bottom, 24)
         if reads.isEmpty {
           if loading { Placeholder(kind: .loading).frame(height: 240) }
           else if let error { Placeholder(kind: .error(error) { Task { await load(reset: true) } }).frame(height: 240) }
-          else { Placeholder(kind: .empty("eye-slash", "AI 工具还没有读取过")).frame(height: 240) }
+          else { Placeholder(kind: .empty("eye-slash", L10n.aiToolsHaventReadAnythingYet)).frame(height: 240) }
         }
         let days = Dictionary(grouping: reads) { Calendar.current.startOfDay(for: $0.date ?? .distantPast) }.sorted { $0.key > $1.key }
         ForEach(days, id: \.key) { day, rows in
@@ -54,11 +54,11 @@ struct AuditPage: View {
       .frame(maxWidth: .infinity)
     }
     .background(Palette.paper)
-    .navigationTitle("运行记录")
+    .navigationTitle(L10n.runLog)
     .toolbar {
       ToolbarItem(placement: .principal) {
-        Picker("工具", selection: $tool) {
-          Text("全部").tag(""); Text("Claude Code").tag("claude-code"); Text("Codex").tag("codex")
+        Picker(L10n.tool, selection: $tool) {
+          Text(L10n.all).tag(""); Text("Claude Code").tag("claude-code"); Text("Codex").tag("codex")
         }
         .pickerStyle(.segmented).labelsHidden()
       }
@@ -121,7 +121,7 @@ struct AuditRow: View {
           VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
               Text(action).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink)
-              if !read.ok.value { Text("失败").font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.attention) }
+              if !read.ok.value { Text(L10n.failed).font(.system(size: TextSize.caption, weight: .semibold)).foregroundStyle(Palette.attention) }
             }
             if path != nil || summary != nil {
               HStack(spacing: 8) {
@@ -134,11 +134,11 @@ struct AuditRow: View {
           Spacer(minLength: 16)
           // count：连续几次一模一样的读取被合成这一行；resultIds：这次读到 / 带入的项目、事项、事实和记录的条数。
           Group {
-            if count > 1 { Text("重复 \(count) 次").help("连续 \(count) 次相同的读取，点开逐次查看") }
-            else if !read.resultIds.isEmpty { Text("读到 \(Fmt.count(Set(read.resultIds).count)) 项").help(read.kind == "context" ? "带入了几个项目和事项" : "读到了几个项目、事项、事实或记录") }
+            if count > 1 { Text(L10n.repeatedReads(count)).help(L10n.groupedReads(count)) }
+            else if !read.resultIds.isEmpty { Text(L10n.itemsRead(Set(read.resultIds).count)).help(read.kind == "context" ? L10n.contextResultCountHelp : L10n.readResultCountHelp) }
           }
           .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
-          Text(read.date.map { ViewerFormat.clock($0) } ?? "").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).frame(width: 40, alignment: .trailing)
+          Text(read.date.map { ViewerFormat.clock($0) } ?? "").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).frame(width: AppLanguage.current == .zh ? 40 : 66, alignment: .trailing)
           DisclosureChevron(expanded: expanded, size: 12, sideways: true).foregroundStyle(Palette.faint)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
@@ -149,14 +149,14 @@ struct AuditRow: View {
       .hoverState($hovering)
       if expanded && count == 1 {
         VStack(alignment: .leading, spacing: 4) {
-          if read.resultIds.isEmpty { Text("这次没有读到内容").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4) }
+          if read.resultIds.isEmpty { Text(L10n.nothingWasReturned).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4) }
           ForEach(Array(Set(read.resultIds)).sorted(), id: \.self) { id in target(id) }
           if read.kind == "context" {
-            Button(showSnapshot ? "收起当时带入" : "查看当时带入") { Motion.animate { showSnapshot.toggle() } }.buttonStyle(.accentLink).padding(.vertical,8)
+            Button(showSnapshot ? L10n.hideSavedSessionContext : L10n.showSavedSessionContext) { Motion.animate { showSnapshot.toggle() } }.buttonStyle(.accentLink).padding(.vertical,8)
             if showSnapshot { RuntimeSnapshotView(id:read.id).transition(.reveal) }
           }
           // bytes：返回给 AI 工具的 JSON 大小。
-          Text("共返回 \(ViewerFormat.bytes(read.bytes))").font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).padding(.top, 4)
+          Text(L10n.bytesReturned(ViewerFormat.bytes(read.bytes))).font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted).padding(.top, 4)
         }
         .padding(.leading, 56).padding(.trailing, 16).padding(.bottom, 12)
         .transition(.reveal)
@@ -167,14 +167,14 @@ struct AuditRow: View {
   @ViewBuilder func target(_ id: String) -> some View {
     switch targets[id] {
     case .none:
-      HStack(spacing: 8) { ProgressView().controlSize(.mini); Text("正在读取…").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted) }.padding(.vertical, 4)
+      HStack(spacing: 8) { ProgressView().controlSize(.mini); Text(L10n.loading).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted) }.padding(.vertical, 4)
     case .some(.none):
-      Text("这一项已经删除").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4).help(id)
+      Text(L10n.thisItemWasDeleted).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).padding(.vertical, 4).help(id)
     case .some(.some(let t)):
       let label = HStack(spacing: 8) {
         PhIcon(t.kind == "thread" ? "list-bullets" : t.kind == "project" ? "folder" : "file-text", size: 14)
           .foregroundStyle(Palette.muted).frame(width: 16)
-          .help(["thread": "事项", "project": "项目", "record": "记录"][t.kind] ?? "")
+          .help(["thread": L10n.task, "project": L10n.project, "record": L10n.record][t.kind] ?? "")
         Text(t.title).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink).lineLimit(1)
         Spacer()
       }
@@ -191,12 +191,12 @@ struct AuditRow: View {
 
   var action: String {
     switch read.kind {
-    case "context": return read.args["event"]?.text == "compact" ? "对话压缩后重新带入" : "新会话开始时带入"
-    case "now": return "查看此刻"
-    case "get": return "读取\(["brief": "简介", "detail": "详情", "evidence": "依据"][read.args["level"]?.text ?? "brief"] ?? "内容")"
-    case "search": return "搜索历史记录"
-    case "timeline": return "查看时间线"
-    case "append": return "添加到历史记录"
+    case "context": return read.args["event"]?.text == "compact" ? L10n.contextAfterCompaction : L10n.contextAtSessionStart
+    case "now": return L10n.viewNow
+    case "get": return L10n.readAction(read.args["level"]?.text ?? "brief")
+    case "search": return L10n.searchRecords
+    case "timeline": return L10n.viewTimeline
+    case "append": return L10n.addToRecords
     default: return read.kind
     }
   }
@@ -210,10 +210,10 @@ struct AuditRow: View {
       // 线程、项目显示标题；按天读取的 id 就是日期；认不出来时显示 id。
       if let t = targets[id], let title = t?.title { parts.append(title) } else { parts.append(id) }
     }
-    if let n = read.args["q_length"]?.text { parts.append("搜了 \(n) 个字") }
-    if let r = read.args["result"]?.text { parts.append(["created": "新添加一条", "unchanged": "已经有了，没有重复添加", "corrected": "内容变了，记成一条修正", "deleted": "以前删过，没有添加"][r] ?? r) }
-    if let n = read.args["redactions"]?.text { parts.append("隐去了 \(n) 处密钥") }
+    if let n = read.args["q_length"]?.text { parts.append(L10n.searchCharacters(n)) }
+    if let r = read.args["result"]?.text { parts.append(["created": L10n.addedARecord, "unchanged": L10n.alreadySaved, "corrected": L10n.appendedCorrection, "deleted": L10n.previouslyDeleted][r] ?? r) }
+    if let n = read.args["redactions"]?.text { parts.append(L10n.hiddenSecrets(n)) }
     if let from = read.args["from"]?.text ?? read.args["to"]?.text { parts.append(from) }
-    return parts.isEmpty ? nil : parts.joined(separator: "，")
+    return parts.isEmpty ? nil : parts.joined(separator: L10n.comma)
   }
 }

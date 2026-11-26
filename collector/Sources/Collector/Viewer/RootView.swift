@@ -11,7 +11,7 @@ struct RootView: View {
             set: { sidebarVisible = $0 != .detailOnly })
   }
 
-  private var sidebarAction: String { sidebarVisible ? "隐藏侧栏" : "显示侧栏" }
+  private var sidebarAction: String { sidebarVisible ? L10n.hideSidebar : L10n.showSidebar }
 
   var body: some View {
     @Bindable var store = store
@@ -29,13 +29,13 @@ struct RootView: View {
       }
     }
     .toolbar(removing: .sidebarToggle)
-    .alert("移除“\(store.projectToRemove?.name ?? "")”？",
+    .alert(L10n.removeProjectPrompt(store.projectToRemove?.name ?? ""),
            isPresented: Binding(get: { store.projectToRemove != nil }, set: { if !$0 { store.projectToRemove = nil } }),
            presenting: store.projectToRemove) { project in
-      Button("移除", role: .destructive) { Task { await store.confirmProjectRemoval(project) } }
-      Button("取消", role: .cancel) {}
+      Button(L10n.remove, role: .destructive) { Task { await store.confirmProjectRemoval(project) } }
+      Button(L10n.cancel, role: .cancel) {}
     } message: { _ in
-      Text("原始记录不会删除。这个目录以后不再自动识别为项目，新会话也不再带入它的内容。")
+      Text(L10n.projectRemovalExplanation)
     }
     .background(BehindWindowMaterial().ignoresSafeArea())
     .tint(Palette.accent)
@@ -61,7 +61,7 @@ struct RootView: View {
       Button { sidebarVisible.toggle() } label: { PhIcon("sidebar-simple", size: PhIcon.toolbar) }
         .help(sidebarAction)
         .accessibilityLabel(sidebarAction)
-        .accessibilityValue(sidebarVisible ? "已展开" : "已折叠")
+        .accessibilityValue(sidebarVisible ? L10n.expanded : L10n.collapsed)
         .keyboardShortcut("s", modifiers: [.control, .command])
     }
   }
@@ -101,11 +101,11 @@ struct Sidebar: View {
     let (recent, older) = Project.byRecency(store.projects, now: .now)
     List(selection: Binding(get: { store.section }, set: { if let s = $0 { store.section = s } })) {
       Section {
-        SidebarLabel(title: "时间线", icon: "clock-counter-clockwise").tag(Page.review)
-        SidebarLabel(title: "搜索", icon: "magnifying-glass").tag(Page.search)
+        SidebarLabel(title: L10n.timeline, icon: "clock-counter-clockwise").tag(Page.review)
+        SidebarLabel(title: L10n.search, icon: "magnifying-glass").tag(Page.search)
       }
       if !store.projects.isEmpty {
-        Section("项目", isExpanded: $projectsExpanded) {
+        Section(L10n.project, isExpanded: $projectsExpanded) {
           ForEach(recent) { projectRow($0) }
           if !older.isEmpty {
             // 一周没有活动的收进“更早”，有新活动自动回到上面；选中的项目在里面时保持展开。
@@ -113,7 +113,7 @@ struct Sidebar: View {
             let open = olderExpanded || older.contains { store.section == .project($0.id) }
             Button { Motion.animate { olderExpanded = !open } } label: {
               Label {
-                Text("更早").lineLimit(1)
+                Text(L10n.earlier).lineLimit(1)
               } icon: {
                 DisclosureChevron(expanded: open, size: 16, sideways: true).frame(width: 16)
               }
@@ -142,9 +142,9 @@ struct Sidebar: View {
   // 还没确认的项目用虚线文件夹，和待确认里"新项目"同一个图标。
   private func projectRow(_ p: Project) -> some View {
     SidebarLabel(title: p.name, icon: p.confirmed.value ? "folder" : "folder-dashed")
-      .help(p.confirmed.value ? p.name : "\(p.name)，还没确认")
+      .help(p.confirmed.value ? p.name : L10n.unconfirmedProject(p.name))
       .contextMenu {
-        Button("移除项目…", role: .destructive) { store.projectToRemove = p }
+        Button(L10n.removeProject, role: .destructive) { store.projectToRemove = p }
           .disabled(store.removingProject)
       }
       .tag(Page.project(p.id))
@@ -187,7 +187,7 @@ struct CaptureFooter: View {
       Button { store.showSettings() } label: { PhIcon("gear-six", size: 16).frame(width: 28, height: 28).contentShape(Rectangle()) }
         .buttonStyle(.plain)
         .foregroundStyle(store.section == .settings ? Palette.accent : Palette.muted)
-        .help("设置").accessibilityLabel("设置")
+        .help(L10n.Menu.settings).accessibilityLabel(L10n.Menu.settings)
     }
     .padding(.horizontal, 8).padding(.vertical, 12)
     .overlay(alignment: .top) { Rectangle().fill(Palette.hairline).frame(height: 1) }
@@ -203,18 +203,18 @@ struct CaptureFooter: View {
     switch store.capture.state {
     case .recording:
       Menu {
-        Button("暂停 1 小时") { store.perform(.pauseHour) }
-        Button("暂停到明天") { store.perform(.pauseTomorrow) }
+        Button(L10n.Menu.pauseHour) { store.perform(.pauseHour) }
+        Button(L10n.Menu.pauseTomorrow) { store.perform(.pauseTomorrow) }
       } label: { PhIcon("pause-circle", size: 18).frame(width: 28, height: 28).contentShape(Rectangle()) }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         .foregroundStyle(Palette.muted)
-        .help("暂停记录").accessibilityLabel("暂停记录")
+        .help(L10n.pauseRecording).accessibilityLabel(L10n.pauseRecording)
     case .paused:
       Button { store.perform(.resume) } label: { PhIcon("play", size: 16).frame(width: 28, height: 28).contentShape(Rectangle()) }
         .buttonStyle(.plain).foregroundStyle(Palette.accent)
-        .help("继续记录").accessibilityLabel("继续记录")
+        .help(L10n.Menu.resume).accessibilityLabel(L10n.Menu.resume)
     case .noPermission:
-      Button("授权…") { store.perform(.requestAX) }.buttonStyle(.accentLink).fixedSize()
+      Button(L10n.grantAccess) { store.perform(.requestAX) }.buttonStyle(.accentLink).fixedSize()
     }
   }
 
@@ -229,18 +229,18 @@ struct CaptureFooter: View {
   /// 所以缺权限时标题只写“需要授权”，缺的是哪项放到下面一行。
   var title: String {
     let c = store.capture
-    if c.state == .noPermission && c.sources.contains(where: \.enabled) { return "需要授权" }
+    if c.state == .noPermission && c.sources.contains(where: \.enabled) { return L10n.permissionNeeded }
     return c.statusTitle
   }
 
   var subtitle: String? {
     let c = store.capture
-    if c.hubError != nil { return "连不上后台服务" }
-    if c.queue > 0 { return "\(Fmt.count(c.queue)) 条记录等待保存" }
-    if c.state == .noPermission && c.sources.contains(where: \.enabled) { return "辅助功能权限" }
+    if c.hubError != nil { return L10n.cantReachBackgroundService }
+    if c.queue > 0 { return L10n.Menu.queued(c.queue) }
+    if c.state == .noPermission && c.sources.contains(where: \.enabled) { return L10n.accessibilityPermission }
     guard c.state == .recording else { return nil }
     let n = c.sources.filter(\.enabled).count
-    return n == 0 ? "所有数据源都已关闭" : "\(n) 个数据源"
+    return n == 0 ? L10n.allSourcesAreOff : L10n.sourceCount(n)
   }
 }
 

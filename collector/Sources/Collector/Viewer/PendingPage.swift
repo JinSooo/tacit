@@ -12,7 +12,7 @@ struct PendingPage: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 32) {
         if !items.isEmpty {
-          Text("这些是需要你确认的事。不处理也没关系，记录和整理照常进行。")
+          Text(L10n.pendingExplanation)
             .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
         }
         if items.isEmpty, let error = store.sharedError {
@@ -22,16 +22,16 @@ struct PendingPage: View {
           // 刷新失败时下面是上一次读到的列表，可能已经过时。
           HStack(spacing: 8) {
             PhIcon("warning", size: 14).foregroundStyle(Palette.attention)
-            Text("连不上后台服务，下面是上次读到的内容。").help(error)
-            Button("重试") { Task { await store.refreshShared() } }.buttonStyle(.accentLink)
+            Text(L10n.showingCachedPending).help(error)
+            Button(L10n.retry) { Task { await store.refreshShared() } }.buttonStyle(.accentLink)
           }
           .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
         } else if items.isEmpty {
           VStack(spacing: 12) {
             PhIcon("check-circle", size: 32).foregroundStyle(Palette.faint)
             VStack(spacing: 4) {
-              Text("没有要确认的事").font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink)
-              Text("拿不准的事会放在这里问你。").font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
+              Text(L10n.nothingToConfirm).font(.system(size: TextSize.body, weight: .medium)).foregroundStyle(Palette.ink)
+              Text(L10n.pendingEmptyExplanation).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
             }
           }
           .frame(maxWidth: .infinity).padding(.vertical, 80)
@@ -59,13 +59,13 @@ struct PendingPage: View {
       .frame(maxWidth: .infinity)
     }
     .background(Palette.paper)
-    .navigationTitle("待确认")
+    .navigationTitle(L10n.toConfirm)
     .task { await store.refreshShared() }
   }
 
   var groups: [(kind: String, title: String, symbol: String, items: [PendingItem])] {
-    [("voice", "这是谁的声音", "waveform"), ("project", "新项目", "folder-dashed"),
-     ("merge", "是同一个项目吗", "git-merge")]
+    [("voice", L10n.whoseVoiceIsThis, "waveform"), ("project", L10n.newProject, "folder-dashed"),
+     ("merge", L10n.areTheseTheSameProject, "git-merge")]
       .map { g in (g.0, g.1, g.2, items.filter { $0.kind == g.0 }) }
       .filter { !$0.3.isEmpty }
   }
@@ -79,7 +79,7 @@ struct TimelinePendingLine: View {
       Button { Motion.animate { store.timelinePendingExpanded.toggle() } } label: {
         HStack(spacing: 8) {
           PhIcon("tray", size: 14)
-          Text("\(Fmt.count(store.pending.count)) 个问题待确认").rollingNumber(store.pending.count)
+          Text(L10n.pendingCount(store.pending.count)).rollingNumber(store.pending.count)
           Spacer()
           DisclosureChevron(expanded: store.timelinePendingExpanded, sideways: true)
         }
@@ -87,7 +87,7 @@ struct TimelinePendingLine: View {
       }
       .buttonStyle(.accentLink)
       .font(.system(size: TextSize.body))
-      .accessibilityValue(store.timelinePendingExpanded ? "已展开" : "已折叠")
+      .accessibilityValue(store.timelinePendingExpanded ? L10n.expanded : L10n.collapsed)
       if store.timelinePendingExpanded {
         ForEach(store.pending) { item in
           PendingCard(item: item) { Motion.animate { store.didResolvePending(item.id) } }
@@ -121,10 +121,10 @@ struct PendingCard: View {
     .card()
     .popover(isPresented: $renaming, arrowEdge: .bottom) {
       VStack(alignment: .leading, spacing: 12) {
-        Text(item.kind == "voice" ? "这是谁？" : "项目叫什么？").font(.system(size: TextSize.body, weight: .semibold))
-        TextField(item.kind == "voice" ? "名字" : "项目名", text: $name).textFieldStyle(.roundedBorder).frame(width: 220)
+        Text(item.kind == "voice" ? L10n.whoIsThis : L10n.whatsTheProjectCalled).font(.system(size: TextSize.body, weight: .semibold))
+        TextField(item.kind == "voice" ? L10n.name : L10n.projectName, text: $name).textFieldStyle(.roundedBorder).frame(width: 220)
           .onSubmit(submitName)
-        HStack { Spacer(); Button("确定", action: submitName).buttonStyle(.accent).keyboardShortcut(.defaultAction).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty) }
+        HStack { Spacer(); Button(L10n.confirm, action: submitName).buttonStyle(.accent).keyboardShortcut(.defaultAction).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty) }
       }
       .padding(16)
     }
@@ -148,9 +148,9 @@ struct PendingCard: View {
     case "voice":
       // conversations：这个声音出现过的对话数；seconds：它在这些对话里一共说了多久。
       HStack(alignment: .firstTextBaseline) {
-        Text(p.label ?? "新的声音").font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
+        Text(p.label.map { L10n.speaker($0) } ?? L10n.newVoice).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
         Spacer()
-        Text("\(p.conversations ?? 0) 段对话里说了 \(Fmt.speech(p.seconds ?? 0))")
+        Text(L10n.spokeInConversations(p.conversations ?? 0, duration: Fmt.speech(p.seconds ?? 0)))
           .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
       }
       VStack(spacing: 4) {
@@ -163,18 +163,18 @@ struct PendingCard: View {
           }
         }
         if p.samplesPending == true {
-          Text("试听片段还在路上，录到它的设备连上后就能听。").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+          Text(L10n.samplePending).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
         } else if (p.samples ?? []).isEmpty {
           // 录音过了保留期已经清掉，不会再有试听片段（以前一直写"还在路上"）。
-          Text("录音已经过了保留期，听不到了。").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+          Text(L10n.sampleExpired).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
       }
     case "project":
       HStack(spacing: 8) {
         PhIcon("folder-dashed", size: 16).foregroundStyle(Palette.muted)
-        Text(p.name ?? "未命名项目").font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
+        Text(p.name ?? L10n.unnamedProject).font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
       }
       VStack(alignment: .leading, spacing: 4) {
         ForEach(basis, id: \.1) { symbol, text in
@@ -188,7 +188,7 @@ struct PendingCard: View {
           Text(p.title ?? "").font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink)
             .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
         }
-        .buttonStyle(.plain).help("打开这件事项")
+        .buttonStyle(.plain).help(L10n.openTask)
       } else {
         Text(p.title ?? "").font(.serif(TextSize.title, .semibold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
       }
@@ -228,48 +228,48 @@ struct PendingCard: View {
       PendingActionFlow {
         switch item.kind {
         case "voice":
-          Button("是我") { resolve("me") }.buttonStyle(.accent)
-          Button("填名字") { name = ""; renaming = true }.help("这是别人，填上他的名字")
+          Button(L10n.itsMe) { resolve("me") }.buttonStyle(.accent)
+          Button(L10n.enterAName) { name = ""; renaming = true }.help(L10n.enterThisPersonsName)
           // 同名的人只列一次；还没确认的只列像样的几个（见 SpeakerMenu）。
           let known = SpeakerMenu.known(store.speakers, excluding: p.speakerId)
           let unknown = SpeakerMenu.unknown(store.speakers, excluding: p.speakerId)
           if !known.isEmpty || !unknown.isEmpty {
-            Menu("是已有的人") {
-              ForEach(known) { s in Button(s.name) { resolve("merge_into", target: s.id) } }
+            Menu(L10n.matchAnExistingPerson) {
+              ForEach(known) { s in Button(L10n.speaker(s.name)) { resolve("merge_into", target: s.id) } }
               if !unknown.isEmpty {
-                Section("还没确认的声音") {
+                Section(L10n.unconfirmedVoices) {
                   ForEach(unknown) { s in
-                    Button("\(s.name)，\(s.conversations) 段对话") { resolve("merge_into", target: s.id) }
+                    Button(s.name + L10n.comma + L10n.conversationCount(s.conversations)) { resolve("merge_into", target: s.id) }
                   }
                 }
               }
             }
             .fixedSize()
-            .help("这个声音和已有的某个人是同一个人")
+            .help(L10n.matchVoiceHelp)
           }
-          Button("忽略") { resolve("ignore") }.buttonStyle(.borderless).foregroundStyle(Palette.muted).help("以后不再问这个声音")
+          Button(L10n.ignore) { resolve("ignore") }.buttonStyle(.borderless).foregroundStyle(Palette.muted).help(L10n.ignoreVoiceHelp)
         case "project":
-          Button("是个项目") { resolve("confirm") }.buttonStyle(.accent)
-          Button("改名…") { name = p.name ?? ""; renaming = true }
+          Button(L10n.confirmProject) { resolve("confirm") }.buttonStyle(.accent)
+          Button(L10n.rename) { name = p.name ?? ""; renaming = true }
           let others = store.projects.filter { $0.id != p.projectId }
           if !others.isEmpty {
-            Menu("并入已有项目") { ForEach(others) { o in Button(o.name) { resolve("merge_into", target: o.id) } } }.fixedSize()
+            Menu(L10n.mergeIntoExistingProject) { ForEach(others) { o in Button(o.name) { resolve("merge_into", target: o.id) } } }.fixedSize()
           }
-          Button("不是项目") { resolve("ignore") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
+          Button(L10n.dismissProject) { resolve("ignore") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
         case "thread_done":
-          Button("做完了") { resolve("done") }.buttonStyle(.accent)
-          Button("还在做") { resolve("continue") }
-          Button("不做了") { resolve("abandon") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
+          Button(L10n.markDone) { resolve("done") }.buttonStyle(.accent)
+          Button(L10n.keepInProgress) { resolve("continue") }
+          Button(L10n.dropped) { resolve("abandon") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
         default:
-          Button("合并") { resolve("merge") }.buttonStyle(.accent)
-          Button("保持分开") { resolve("keep") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
+          Button(L10n.merge) { resolve("merge") }.buttonStyle(.accent)
+          Button(L10n.keepSeparate) { resolve("keep") }.buttonStyle(.borderless).foregroundStyle(Palette.muted)
         }
       }
       if item.kind == "thread_done", let n = PendingArchive.notice(createdAt: item.createdAt) {
         Text(n).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
           .fixedSize(horizontal: false, vertical: true)
       }
-      if busy { DelayedProgress() }
+      if busy { DelayedProgress(label: L10n.loadingAccessibility) }
     }
     .controlSize(.regular)
   }
@@ -304,8 +304,8 @@ struct SamplePlayer: View {
           .background(Palette.accent, in: Circle())
       }
       .buttonStyle(.plain)
-      .help(playing ? "暂停" : "试听")
-      .accessibilityLabel(playing ? "暂停" : "试听")
+      .help(playing ? L10n.Menu.pause : L10n.playSample)
+      .accessibilityLabel(playing ? L10n.Menu.pause : L10n.playSample)
       TimelineView(.animation(paused: !playing)) { _ in
         let progress = sound.map { $0.duration > 0 ? $0.currentTime / $0.duration : 0 } ?? 0
         WaveformShape(peaks: peaks.isEmpty ? Array(repeating: 0.15, count: 64) : peaks)
@@ -337,7 +337,7 @@ struct SamplePlayer: View {
       data = d
       peaks = Waveform.peaks(wav: d, buckets: 64)
     } catch is CancellationError {
-    } catch { self.error = (error as? HubError)?.actionMessage ?? "取不到片段" }
+    } catch { self.error = (error as? HubError)?.actionMessage ?? L10n.couldntLoadTheSample }
   }
 
   func toggle() async {
@@ -345,7 +345,7 @@ struct SamplePlayer: View {
     if data == nil { await fetch() }
     guard let data else { return }
     if sound == nil || sound!.currentTime >= sound!.duration - 0.05 { sound = NSSound(data: data) }
-    guard let s = sound, s.resume() || s.play() else { error = "播放失败"; return }
+    guard let s = sound, s.resume() || s.play() else { error = L10n.couldntPlayTheSample; return }
     playing = true
     while playing, s.isPlaying { try? await Task.sleep(for: .milliseconds(150)) }
     playing = false

@@ -1,5 +1,7 @@
 package top.jinso.tacit.ui
 
+import top.jinso.tacit.R
+import top.jinso.tacit.core.localizeTranscriptLines
 import android.net.ConnectivityManager
 import android.net.Network
 import androidx.activity.compose.LocalActivity
@@ -42,13 +44,14 @@ import java.util.concurrent.atomic.AtomicReference
 
 @Composable
 internal fun Modifier.timelineAxis(first: Boolean, last: Boolean, draft: Boolean = false): Modifier {
+    val axisX = (uiFormat().timeColumnWidth - 9).dp
     val line = tacitColors.faint
     val dot = tacitColors.accent
     val paper = tacitColors.paper
     // When a draft is written up its hollow dot fills in place rather than swapping.
     val filled by animateFloatAsState(if (draft) 0f else 1f, Motion.enter(), label = "dot")
     return drawBehind {
-        val x = 47.dp.toPx()
+        val x = axisX.toPx()
         val y = 26.dp.toPx()
         drawLine(line, Offset(x, if (first) y else 0f), Offset(x, if (last) y else size.height), 1.dp.toPx())
             // 还没整理的段画空心点（Mac 时间线同样如此），整理好的是实心点。
@@ -63,9 +66,10 @@ internal fun Modifier.timelineAxis(first: Boolean, last: Boolean, draft: Boolean
 
 @Composable
 internal fun ProjectedTimelineRow(item: TimelineItem, modifier: Modifier, onClick: () -> Unit) {
+    val format = uiFormat()
     Row(modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick)
         .padding(top = 12.dp, bottom = 12.dp, end = 12.dp)) {
-        Caption(item.timeLabel(), Modifier.width(56.dp).padding(top = 5.dp))
+        Caption(format.clock(item.start.toEpochMilli()), Modifier.width(format.timeColumnWidth.dp).padding(top = 5.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             // A draft's sentence gives way to the written title and description with a cross-fade, in place.
             CrossSwap(item.title to item.description) { (title, description) ->
@@ -94,6 +98,8 @@ internal fun TimelineDetails(
     app: TacitApp, item: TimelineItem, invalidation: Long, onBack: () -> Unit,
     onOpenLocal: (List<HistoryRecord>) -> Unit,
 ) {
+    val format = uiFormat()
+    val strings = uiStrings()
     val owner = LocalActivity.current as? LifecycleOwner
     // Survives sync invalidation so the page reloads in place instead of flashing through loading.
     var local by remember(item.id) { mutableStateOf<List<AudioConversationRow>?>(null) }
@@ -158,7 +164,7 @@ internal fun TimelineDetails(
     }
     var showsBackdrop by remember(item.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
-        PageBar("原始记录", onBack)
+        PageBar(strings.text(R.string.original_records), onBack)
         LazyColumn(contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item(key = "head") {
@@ -168,31 +174,31 @@ internal fun TimelineDetails(
             local.orEmpty().forEach { row ->
                 item(key = row.key) {
                     TextButton(onClick = { onOpenLocal(row.records) }, Modifier.itemMotion(this)) {
-                        Text(if (local.orEmpty().size == 1) "这台手机录的对话"
-                            else "这台手机录的对话，${date(row.start, "HH:mm")}")
+                        Text(if (local.orEmpty().size == 1) strings.text(R.string.phone_conversation)
+                            else strings.text(R.string.phone_conversation_at, format.clock(row.start)))
                     }
                 }
             }
             // Keyed so the loading line fades out as the originals fade in.
             when {
                 remoteIds?.isEmpty() == true && local.orEmpty().isNotEmpty() -> Unit
-                remoteIds?.isEmpty() == true -> item(key = "none") { Caption("没有可读取的原文", Modifier.itemMotion(this)) }
+                remoteIds?.isEmpty() == true -> item(key = "none") { Caption(strings.text(R.string.originals_empty), Modifier.itemMotion(this)) }
                 offline -> item(key = "offline") {
                     Row(Modifier.itemMotion(this), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Caption("暂时无法读取原文")
-                        TextAction("重试", { retries.trySend(Unit) })
+                        Caption(strings.text(R.string.originals_unavailable))
+                        TextAction(strings.text(R.string.retry), { retries.trySend(Unit) })
                     }
                 }
                 originals == null -> item(key = "loading") { ProgressLine(Modifier.itemMotion(this).fillMaxWidth()) }
-                originals.isNullOrEmpty() -> item(key = "none") { Caption("没有可读取的原文", Modifier.itemMotion(this)) }
+                originals.isNullOrEmpty() -> item(key = "none") { Caption(strings.text(R.string.originals_empty), Modifier.itemMotion(this)) }
                 else -> {
                     val (main, backdrop) = splitBackdrop(originals, local.orEmpty().isNotEmpty()) { it.source }
                     main.forEach { record -> item(key = "original-${record.id}") { OriginalRecord(record, Modifier.itemMotion(this)) } }
                     if (backdrop.isNotEmpty()) {
                         item(key = "backdrop") {
                             Box(Modifier.itemMotion(this)) {
-                                DetailLink("另有 ${countLabel(backdrop.size)} 条屏幕和网页记录", showsBackdrop) { showsBackdrop = !showsBackdrop }
+                                DetailLink(strings.quantity(R.plurals.backdrop_count, backdrop.size, countLabel(backdrop.size)), showsBackdrop) { showsBackdrop = !showsBackdrop }
                             }
                         }
                         if (showsBackdrop) backdrop.forEach { record ->
@@ -207,12 +213,15 @@ internal fun TimelineDetails(
 
 @Composable
 private fun OriginalRecord(record: TimelineOriginal, modifier: Modifier) {
+    val format = uiFormat()
+    val strings = uiStrings()
     Column(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             SourceIcon(record.source)
-            Caption(date(record.start.toEpochMilli(), "HH:mm"))
-            Caption(record.title.ifBlank { sourceName(record.source) })
+            Caption(format.clock(record.start.toEpochMilli()))
+            Caption(recordTitle(record.title, record.source, strings).ifBlank { format.sourceName(record.source) })
         }
-        ReadingBody(readingText(record.body, record.source))
+        val body = readingText(record.body, record.source)
+        ReadingBody(if (hasSpeakerMarkers(record.source)) localizeTranscriptLines(body, format.lang, strings) else body)
     }
 }

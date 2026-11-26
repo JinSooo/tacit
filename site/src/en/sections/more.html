@@ -1,0 +1,154 @@
+<section class="section" id="more" aria-labelledby="more-heading">
+  <div class="wrap">
+    <header class="section-head" data-reveal>
+      <h2 class="heading" id="more-heading">Find what you saw and said</h2>
+      <p class="lead">Find a record, revisit a conversation or glance at your day from the desktop.</p>
+    </header>
+
+    <article class="more-feature" data-reveal>
+      <div class="more-copy">
+        <h3 class="title">Search your records</h3>
+        <p>Search screen and browser text, conversations and AI sessions. Filter by date, source or device to find the original record.</p>
+      </div>
+      <div class="more-search" aria-label="Search example" role="group">
+        <form class="more-search-form" role="search" aria-label="Search example records">
+          <label class="more-search-field">
+            <svg aria-hidden="true"><use href="assets/sources.svg#search"/></svg>
+            <span class="visually-hidden">Search example records</span>
+            <input type="search" name="query" value="CSV" autocomplete="off" spellcheck="false" readonly>
+          </label>
+          <div class="more-search-filters">
+            <select name="day" aria-label="Date" disabled>
+              <option value="">All dates</option>
+              <option value="11-19">Nov 19</option>
+            </select>
+            <select name="source" aria-label="Source" disabled>
+              <option value="">All sources</option>
+              <option value="voice">Recording</option>
+              <option value="terminal">AI session</option>
+            </select>
+            <select name="device" aria-label="Device" disabled>
+              <option value="">All devices</option>
+              <option value="mac">This Mac</option>
+              <option value="phone">Phone</option>
+            </select>
+          </div>
+          <div class="more-search-chips" aria-label="Try a search" hidden>
+            <button type="button" data-chip="CSV">CSV</button>
+            <button type="button" data-chip="onboarding">Onboarding</button>
+            <button type="button" data-chip="rent">Rent</button>
+            <button type="button" data-chip="">All</button>
+          </div>
+        </form>
+
+        <div class="more-search-results" aria-live="polite">
+          <div class="more-search-day" data-day="11-19">
+            <h4 class="caption num">Thursday, November 19</h4>
+            <ul>
+              <li data-source="terminal" data-device="mac">
+                <div class="more-search-meta caption">
+                  <span>Timeline</span><time class="num" datetime="09:20">09:20</time>
+                </div>
+                <p class="more-search-result-title" data-search-text>Fixed <mark>CSV</mark> dates for UK bank exports</p>
+                <p class="more-search-excerpt" data-search-text>Added date-format detection so 03/04 is read as 3 April in UK exports.</p>
+              </li>
+              <li data-source="terminal" data-device="mac">
+                <div class="more-search-meta caption">
+                  <span><svg aria-hidden="true"><use href="assets/sources.svg#terminal"/></svg>Original record, Codex</span>
+                  <time class="num" datetime="09:20">09:20</time>
+                </div>
+                <p class="more-search-result-title" data-search-text>Detect the <mark>CSV</mark> date format</p>
+                <p class="more-search-excerpt" data-search-text>I added a case for 03/04 so the import produces 3 April.</p>
+              </li>
+              <li data-source="voice" data-device="mac" hidden>
+                <div class="more-search-meta caption">
+                  <span><svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg>Zoom recording on Mac</span>
+                  <time class="num" datetime="15:10">15:10</time>
+                </div>
+                <p class="more-search-result-title" data-search-text>Heard Nora’s request for rent splitting</p>
+                <p class="more-search-excerpt" data-search-text>She wants to see who owes whom after her roommates split rent.</p>
+              </li>
+              <li data-source="voice" data-device="phone" hidden>
+                <div class="more-search-meta caption">
+                  <span><svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg>Phone recording</span>
+                  <time class="num" datetime="10:45">10:45</time>
+                </div>
+                <p class="more-search-result-title" data-search-text>Cut the onboarding tour to one screen</p>
+                <p class="more-search-excerpt" data-search-text>Agreed with Sam, the designer, to replace the four-step tour.</p>
+              </li>
+              <li data-source="terminal" data-device="mac" hidden>
+                <div class="more-search-meta caption">
+                  <span><svg aria-hidden="true"><use href="assets/sources.svg#terminal"/></svg>Claude Code</span>
+                  <time class="num" datetime="13:30">13:30</time>
+                </div>
+                <p class="more-search-result-title" data-search-text>Built monthly budget rollover</p>
+                <p class="more-search-excerpt" data-search-text>How to handle deleted categories is still open.</p>
+              </li>
+            </ul>
+          </div>
+          <p class="more-search-empty" hidden>No matching records in this example.</p>
+        </div>
+      </div>
+    </article>
+
+    <article class="more-feature more-feature-meeting" data-reveal data-reveal-group>
+      <div class="more-copy">
+        <h3 class="title">Meetings and chats</h3>
+        <p>Mac and Android transcribe audio on your device by default. Tacit groups recordings by conversation and shows a summary and a transcript without fillers. Android can sync records to your Mac with end-to-end encryption and show the timeline on your phone. WeChat is an optional macOS source.</p>
+      </div>
+      <div class="more-meeting">
+        <p class="more-meeting-meta caption">
+          <svg aria-hidden="true"><use href="assets/sources.svg#voice"/></svg>
+          <span>Zoom recording on Mac</span><time class="num" datetime="15:10">15:10</time>
+        </p>
+        <h4 class="title">Call with Nora, a beta user</h4>
+        <p>Nora shares rent with roommates and wants to see who owes whom.</p>
+        <dl class="more-transcript">
+          <div><dt>Me</dt><dd>What would help when you split rent with your roommates?</dd></div>
+          <div><dt>Speaker 1</dt><dd>I want to open the app and see who owes whom.</dd></div>
+          <div><dt>Me</dt><dd>I’ll use that example when we sketch rent splitting.</dd></div>
+        </dl>
+      </div>
+    </article>
+
+    <article class="more-feature more-feature-widget" data-reveal>
+      <div class="more-copy">
+        <h3 class="title">Desktop widgets</h3>
+        <p>Medium and large widgets show the day overview, activity bars and recent activities. Click one to open the day’s timeline.</p>
+      </div>
+      <div class="widget-previews" role="group" aria-label="Large and medium desktop widget examples">
+        <div class="widget-preview">
+          <h4 class="title">Thursday, November 19</h4>
+          <p class="widget-overview"><!-- include: ../day-overview.html --></p>
+          <div class="widget-activity" aria-hidden="true">
+            <span style="--start: 11.1%; --duration: 2.8%"></span>
+            <span style="--start: 22.9%; --duration: 1.7%"></span>
+            <span style="--start: 45.8%; --duration: 3.5%"></span>
+            <span style="--start: 59.7%; --duration: 3.1%"></span>
+            <span style="--start: 97.2%; --duration: 1.1%"></span>
+          </div>
+          <ol class="widget-timeline">
+            <li><time class="num" datetime="19:40">19:40</time> Planned a Saturday hike with Leo</li>
+            <li><time class="num" datetime="15:10">15:10</time> Heard Nora’s request for rent splitting</li>
+            <li><time class="num" datetime="13:30">13:30</time> Built monthly budget rollover</li>
+          </ol>
+        </div>
+        <div class="widget-preview">
+          <h4 class="title">Thursday, November 19</h4>
+          <p class="widget-overview"><!-- include: ../day-overview.html --></p>
+          <div class="widget-activity" aria-hidden="true">
+            <span style="--start: 11.1%; --duration: 2.8%"></span>
+            <span style="--start: 22.9%; --duration: 1.7%"></span>
+            <span style="--start: 45.8%; --duration: 3.5%"></span>
+            <span style="--start: 59.7%; --duration: 3.1%"></span>
+            <span style="--start: 97.2%; --duration: 1.1%"></span>
+          </div>
+          <ol class="widget-timeline">
+            <li><time class="num" datetime="19:40">19:40</time> Planned a Saturday hike with Leo</li>
+            <li><time class="num" datetime="15:10">15:10</time> Heard Nora’s request for rent splitting</li>
+          </ol>
+        </div>
+      </div>
+    </article>
+  </div>
+</section>

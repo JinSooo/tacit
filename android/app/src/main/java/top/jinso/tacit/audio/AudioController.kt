@@ -1,5 +1,7 @@
 package top.jinso.tacit.audio
 
+import top.jinso.tacit.i18n.UiMessage
+import top.jinso.tacit.R
 import android.Manifest
 import android.app.Activity
 import android.content.Context
@@ -24,6 +26,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import java.util.concurrent.atomic.AtomicBoolean
 
+internal const val STORED_CONVERSATION_TITLE = "对话记录"
+
 /** All futures run off main. Observe completion on the UI dispatcher. Never call Future.get on UI. */
 class AudioController internal constructor(
     runtimeProvider: Lazy<AudioRuntime>,
@@ -44,12 +48,12 @@ class AudioController internal constructor(
             check(!runtime.recording) { "录音正在停止，请稍后重试" }
             runtime.requested = true
             runtime.generation++
-            runtime.message = ""
+            runtime.message = null
             runtime.processingProblem = null
             try {
                 activity.startForegroundService(Intent(activity, AudioRecorderService::class.java)
                     .putExtra("generation", runtime.generation))
-            } catch (e: Exception) { runtime.requested = false; runtime.report("暂时无法开启录音，请稍后重试"); throw e }
+            } catch (e: Exception) { runtime.requested = false; runtime.report(R.string.recording_start_failed); throw e }
         }
     }
     fun stop(discardPending: Boolean = false) {
@@ -57,7 +61,7 @@ class AudioController internal constructor(
             if (!discardPending) runtime.app.prefs.audioCaptureWanted = false
             runtime.requested = false
             if (discardPending) runtime.generation++
-            runtime.message = ""
+            runtime.message = null
             runtime.processingProblem = null
         }
         runtime.context.stopService(Intent(runtime.context, AudioRecorderService::class.java))
@@ -65,11 +69,11 @@ class AudioController internal constructor(
     }
     /** Bumps whenever recordings, voices or status change; pages re-read on it instead of polling. */
     val changes: StateFlow<Long> get() = runtime.changes
-    fun state(): AudioState {
+    internal fun state(): AudioState {
         val recording = runtime.recording
         return AudioState(recording, modelsReady(), recordingStatus(
             recording, runtime.silenced, runtime.playingOut,
-            if (recording) runtime.processingProblem.orEmpty() else runtime.message,
+            if (recording) runtime.processingProblem else runtime.message,
         ))
     }
     internal fun modelsReady() = runtime.models.current() != null
@@ -118,7 +122,7 @@ class AudioController internal constructor(
         return runtime.change { synchronized(runtime.lock) { runtime.ledger.ignore(id, ignored) } }
     }
     fun ignore(id: String): CompletableFuture<Unit> = setIgnored(id, true)
-    fun modelPreparation() = runtime.modelPreparation
+    internal fun modelPreparation() = runtime.modelPreparation
     fun downloadModels(): CompletableFuture<Unit> = runtime.downloadModels()
     fun supportsNpu() = QnnCatalog.supported()
     fun accelerationUsingFallback() = runtime.accelerationFallback
@@ -208,16 +212,16 @@ internal class AudioRuntime private constructor(val context: Context) {
         check(!modelPreparation.busy) { "模型正在准备，请等待完成或取消下载" }
         ModelDownloadCancellation().also {
             modelCancellation = it
-            modelPreparation = SpeechPreparationState(phase, message = if (phase == SpeechPreparationPhase.IMPORTING) "等待当前录音处理完成" else "正在连接模型下载站点")
+            modelPreparation = SpeechPreparationState(phase, message = if (phase == SpeechPreparationPhase.IMPORTING) UiMessage(R.string.model_wait_recording) else UiMessage(R.string.model_connecting_download))
         }
     }
     fun cancelModelDownload() = synchronized(modelLock) {
         if (modelPreparation.canCancel && modelCancellation?.cancel() == true)
-            modelPreparation = modelPreparation.copy(cancelling = true, message = "正在取消，现有模型保持可用")
+            modelPreparation = modelPreparation.copy(cancelling = true, message = UiMessage(R.string.model_cancelling))
     }
-    private fun updateModelPreparation(phase: SpeechPreparationPhase, bytes: Long, message: String) = synchronized(modelLock) {
+    private fun updateModelPreparation(phase: SpeechPreparationPhase, bytes: Long, message: UiMessage) = synchronized(modelLock) {
         modelPreparation = modelPreparation.copy(phase = phase, receivedBytes = bytes,
-            message = if (modelPreparation.cancelling) "正在取消，现有模型保持可用" else message)
+            message = if (modelPreparation.cancelling) UiMessage(R.string.model_cancelling) else message)
     }
     private fun modelFinished(error: Throwable?) = synchronized(modelLock) {
         modelPreparation = modelPreparation.finished(error)
@@ -227,15 +231,15 @@ internal class AudioRuntime private constructor(val context: Context) {
         val cancellation = beginModelPreparation(SpeechPreparationPhase.DOWNLOADING)
         return CompletableFuture.supplyAsync({
             val stage = models.download(cancellation) { bytes, path ->
-                updateModelPreparation(SpeechPreparationPhase.DOWNLOADING, bytes, "正在下载 $path")
+                updateModelPreparation(SpeechPreparationPhase.DOWNLOADING, bytes, UiMessage(R.string.model_downloading_file, path))
             }
             try {
                 cancellation.check()
-                updateModelPreparation(SpeechPreparationPhase.VALIDATING, SpeechModelCatalog.totalBytes, "等待当前录音处理完成")
+                updateModelPreparation(SpeechPreparationPhase.VALIDATING, SpeechModelCatalog.totalBytes, UiMessage(R.string.model_wait_recording))
                 // Only native load and pointer switch share the audio worker; network IO never blocks it.
                 prepareModel {
                     cancellation.check()
-                    updateModelPreparation(SpeechPreparationPhase.VALIDATING, SpeechModelCatalog.totalBytes, "下载校验通过，正在本机加载模型")
+                    updateModelPreparation(SpeechPreparationPhase.VALIDATING, SpeechModelCatalog.totalBytes, UiMessage(R.string.model_verified_loading))
                     replaceSpeechEngine(::closeEngine, ::schedule) { models.activate(stage, cancellation) }
                 }.get()
             } catch (error: Throwable) {
@@ -252,13 +256,13 @@ internal class AudioRuntime private constructor(val context: Context) {
         return CompletableFuture.supplyAsync({
             check(models.current() != null) { "请先准备语音模型" }
             val stage = qnnModels.download(cancellation) { bytes, _ ->
-                updateModelPreparation(SpeechPreparationPhase.DOWNLOADING, bytes, "正在下载加速模型")
+                updateModelPreparation(SpeechPreparationPhase.DOWNLOADING, bytes, UiMessage(R.string.acceleration_downloading))
             }
             try {
-                updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, "等待当前录音处理完成")
+                updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, UiMessage(R.string.model_wait_recording))
                 prepareModel {
                     cancellation.check()
-                    updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, "正在验证本机加速")
+                    updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, UiMessage(R.string.acceleration_validating))
                     replaceSpeechEngine(::closeEngine, ::schedule) { qnnModels.activate(stage, cancellation) }
                 }.get()
             } catch (error: Throwable) {
@@ -271,7 +275,7 @@ internal class AudioRuntime private constructor(val context: Context) {
     fun importModels(install: () -> java.io.File): CompletableFuture<Unit> {
         beginModelPreparation(SpeechPreparationPhase.IMPORTING)
         return prepareModel {
-            updateModelPreparation(SpeechPreparationPhase.IMPORTING, 0, "正在导入并验证模型")
+            updateModelPreparation(SpeechPreparationPhase.IMPORTING, 0, UiMessage(R.string.model_importing))
             replaceSpeechEngine(::closeEngine, ::schedule, install)
         }.whenComplete { _, error -> modelFinished(error) }
     }
@@ -294,13 +298,13 @@ internal class AudioRuntime private constructor(val context: Context) {
     @Volatile var generation = 0L
     private val policyRevisions = java.util.concurrent.atomic.AtomicLong()
     private val policyRevision get() = policyRevisions.get()
-    @Volatile var message = ""
-    @Volatile var processingProblem: String? = null
+    @Volatile var message: Int? = null
+    @Volatile var processingProblem: Int? = null
     private var engine: AcceleratedSpeechEngine? = null
     val playback = SamplePlayback()
     fun allowed() = app.prefs.enabled(AUDIO_SOURCE)
     fun invalidatePolicy() { policyRevisions.incrementAndGet() }
-    fun report(text: String) { message = text; changed() }
+    fun report(text: Int) { message = text; changed() }
     fun <T> submit(block: () -> T): CompletableFuture<T> = CompletableFuture.supplyAsync(block, worker)
     /** Read-only queries that hold [lock] themselves; they run beside the processing [worker]. */
     fun <T> read(block: () -> T): CompletableFuture<T> = CompletableFuture.supplyAsync(block, reader)
@@ -322,11 +326,11 @@ internal class AudioRuntime private constructor(val context: Context) {
             changed()
             schedule()
         }.whenComplete { _, error ->
-            if (error != null) reportProcessingProblem(token, "录音未能保存，请检查存储空间后重试")
+            if (error != null) reportProcessingProblem(token, R.string.recording_save_failed)
         }
     }
 
-    private fun reportProcessingProblem(token: Long, problem: String?) {
+    private fun reportProcessingProblem(token: Long, problem: Int?) {
         synchronized(control) {
             if (generation != token || !requested || processingProblem == problem) return
             processingProblem = problem
@@ -344,7 +348,7 @@ internal class AudioRuntime private constructor(val context: Context) {
                 drain()
                 completed = true
             } catch (error: Throwable) {
-                reportProcessingProblem(token, "本地音频处理失败，请检查模型和存储空间后重试")
+                reportProcessingProblem(token, R.string.audio_processing_failed)
                 throw error
             } finally {
                 queued.set(false)
@@ -369,7 +373,7 @@ internal class AudioRuntime private constructor(val context: Context) {
             accelerationFallback = status == QNN_UNAVAILABLE || status == QNN_INTERRUPTED
         }.also { engine = it }
         AudioProcessor(store, lock, speech, voiceprint).drain({ allowed() && token == generation && policy == policyRevision }) { p ->
-            app.vault.ingest(Draft(source = AUDIO_SOURCE, title = "对话记录", body = p.body,
+            app.vault.ingest(Draft(source = AUDIO_SOURCE, title = STORED_CONVERSATION_TITLE, body = p.body,
                 start = p.start, end = p.end,
                 sourceRef = "audio:${p.clipId}", method = "asr"), offset = p.offset)
         }
@@ -426,8 +430,8 @@ internal class AudioRuntime private constructor(val context: Context) {
     }
 }
 
-internal fun recordingStatus(recording: Boolean, silenced: Boolean, playingOut: Boolean, message: String): String = when {
-    recording && silenced -> "麦克风正由其他应用使用，等待系统恢复"
-    recording && playingOut -> "手机正在外放声音，暂不录音"
+internal fun recordingStatus(recording: Boolean, silenced: Boolean, playingOut: Boolean, message: Int?): Int? = when {
+    recording && silenced -> R.string.recording_mic_busy
+    recording && playingOut -> R.string.recording_speaker_playing
     else -> message
 }

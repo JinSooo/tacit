@@ -15,6 +15,7 @@ import { AudioSettings } from "./audio-views.tsx";
 import { createSettingsApi } from "./settings.ts";
 import { AgentSettings, GeneralSettings, HubSettingsBlock, ModelSettings } from "./settings-views.tsx";
 import { StatusView } from "./status-view.tsx";
+import { browserLanguage, statusPageCopy } from "./i18n.ts";
 import { initialPage, pageHash, parseHash, type Page } from "./route.ts";
 import "./style.css";
 
@@ -299,6 +300,14 @@ export function App() {
 }
 function StatusApp() {
   const [token, setToken] = useState(() => readToken("status"));
+  const [fallback] = useState(browserLanguage);
+  const [statusLang, setStatusLang] = useState(fallback);
+  const lang = token ? statusLang : fallback;
+  const copy = statusPageCopy[lang];
+  useEffect(() => {
+    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+    document.title = copy.title;
+  }, [lang, copy.title]);
   useEffect(() => {
     const sync = () => setToken(readToken("status"));
     window.addEventListener("hashchange", sync);
@@ -308,8 +317,8 @@ function StatusApp() {
     forgetToken();
     setToken("");
   }), [token]);
-  if (!token) return <div className="token-prompt"><strong>请从 Tacit 打开状态页</strong><p className="muted">在 Tacit 的“设置 → 后台与连接”里点“在浏览器中打开”。</p></div>;
-  return <main><header><div className="heading-row"><h1>Tacit 详细状态</h1></div></header><StatusView api={api} focus={startFocus} /></main>;
+  if (!token) return <div className="token-prompt"><strong>{copy.open}</strong><p className="muted">{copy.instructions}</p></div>;
+  return <main><header><div className="heading-row"><h1>{copy.title}</h1></div></header><StatusView api={api} focus={startFocus} fallback={fallback} onLanguage={setStatusLang} /></main>;
 }
 
 createRoot(document.getElementById("root")!).render(<StatusApp />);

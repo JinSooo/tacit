@@ -24,7 +24,7 @@ import CollectorCore
       out.append(t)
       if out.count == limit { break }
     }
-    return out.isEmpty ? nil : out.joined(separator: "、")
+    return out.isEmpty ? nil : out.joined(separator: L10n.listSeparator)
   }
 
   static func time(_ s: HistorySegment) -> String {
@@ -70,7 +70,7 @@ struct SegmentRow: View {
               .layoutPriority(1)
             if let p = segment.thread?.projectName { ProjectTag(name: p) }
             if includesOmissions { TimelineOmissionLabel() }
-            if segment.privateCount > 0 { PhIcon("lock", size: 12).foregroundStyle(Palette.muted).help("含私密记录") }
+            if segment.privateCount > 0 { PhIcon("lock", size: 12).foregroundStyle(Palette.muted).help(L10n.includesPrivateRecords) }
           }
           if segment.thread == nil, let w = conversation ?? SegmentText.windows(block) {
             Text(w).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted).lineLimit(1)
@@ -84,10 +84,10 @@ struct SegmentRow: View {
             Text(Fmt.duration(segment.activeSeconds)).monospacedDigit()
           }
           HStack(spacing: 4) {
-            Text("\(Fmt.count(block.records.count)) 条").monospacedDigit()
+            Text(L10n.shortRecordCount(block.records.count, grouped: true)).monospacedDigit()
             DisclosureChevron(expanded: expanded, size: 10, sideways: true)
           }
-          .help(expanded ? "收起原始记录" : "展开 \(block.records.count) 条原始记录")
+          .help(expanded ? L10n.collapseOriginalRecords : L10n.expandRecords(block.records.count))
         }
         .font(.system(size: TextSize.caption))
         .foregroundStyle(Palette.muted)
@@ -130,7 +130,7 @@ struct SegmentRow: View {
         }
         .fixedSize()
       }
-      if segment.apps.count > n { Text("等 \(segment.apps.count) 个应用").fixedSize() }
+      if segment.apps.count > n { Text(L10n.appTotal(segment.apps.count)).fixedSize() }
     }
   }
 }
@@ -169,7 +169,7 @@ struct SegmentInspector: View {
                 Button { store.section = .project(id) } label: { ProjectTag(name: p) }.buttonStyle(.plain)
               } else { ProjectTag(name: p) }
             }
-            if let s = threadStatus[segment.thread?.status ?? ""], segment.thread?.status != "active" {
+            if let s = threadStatus(segment.thread?.status ?? ""), segment.thread?.status != "active" {
               Text(s).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
             }
           }
@@ -182,9 +182,9 @@ struct SegmentInspector: View {
   }
 
   var timeLine: String {
-    let c = Calendar.current.dateComponents([.month, .day], from: segment.start)
-    var s = "\(c.month!) 月 \(c.day!) 日 \(SegmentText.time(segment))"
-    if segment.activeSeconds >= 60 { s += "，活跃 \(Fmt.duration(segment.activeSeconds))" }
+    let date = ViewerFormat.date(segment.start, now: segment.start)
+    var s = "\(date) \(SegmentText.time(segment))"
+    if segment.activeSeconds >= 60 { s += L10n.comma + L10n.activeTime(Fmt.duration(segment.activeSeconds)) }
     return s
   }
 
@@ -195,20 +195,20 @@ struct SegmentInspector: View {
         Text(w).font(.system(size: TextSize.body)).lineSpacing(TextSize.lineSpacing(TextSize.body)).foregroundStyle(Palette.ink)
           .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
       }
-      Text("这段还没整理，整理后会写出在做什么。").font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
+      Text(L10n.unsummarizedActivity).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
     }
   }
 
   var appList: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("应用").sectionTitle()
+      Text(L10n.app).sectionTitle()
       VStack(alignment: .leading, spacing: 8) {
         ForEach(segment.apps, id: \.self) { a in
           HStack(spacing: 8) {
             SourceGlyph(source: a.source, app: a.app, size: 16)
             Text(SegmentText.appName(a)).font(.system(size: TextSize.body)).foregroundStyle(Palette.ink)
             Spacer()
-            Text(a.seconds >= 60 ? Fmt.duration(a.seconds) : "\(a.records) 条记录")
+            Text(a.seconds >= 60 ? Fmt.duration(a.seconds) : L10n.recordCount(a.records, grouped: false))
               .font(.system(size: TextSize.caption)).monospacedDigit().foregroundStyle(Palette.muted)
           }
         }
@@ -253,14 +253,14 @@ struct MinorSegmentsRow: View {
           }
         }
         .frame(width: 26, alignment: .leading)
-        Text(apps.prefix(4).map(SegmentText.appName).joined(separator: "、") + (apps.count > 4 ? " 等" : ""))
+        Text(apps.prefix(4).map(SegmentText.appName).joined(separator: L10n.listSeparator) + (apps.count > 4 ? L10n.andOthers : ""))
           .font(.system(size: TextSize.body))
           .foregroundStyle(Palette.muted)
           .lineLimit(1)
         Spacer(minLength: 8)
         if includesOmissions { TimelineOmissionLabel() }
         HStack(spacing: 4) {
-          Text("\(blocks.count) 段零碎活动").monospacedDigit()
+          Text(L10n.shortActivityCount(blocks.count)).monospacedDigit()
           DisclosureChevron(expanded: expanded, size: 10, sideways: true)
         }
         .font(.system(size: TextSize.caption))
@@ -277,14 +277,14 @@ struct MinorSegmentsRow: View {
     }
     .buttonStyle(.plain)
     .hoverState($hovering)
-    .help("每段不到 2 分钟、还没整理的活动，折在一起")
+    .help(L10n.shortActivitiesHelp)
   }
 }
 
 struct TimelineOmissionLabel: View {
   var body: some View {
-    Text("未入时间线")
+    Text(L10n.notOnTimeline)
       .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize()
-      .help("包含因当天活动段数达到上限而留在原始列表里的记录")
+      .help(L10n.notOnTimelineHelp)
   }
 }

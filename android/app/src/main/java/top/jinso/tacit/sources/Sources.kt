@@ -1,5 +1,7 @@
 package top.jinso.tacit.sources
 
+import top.jinso.tacit.i18n.AppLocale
+import top.jinso.tacit.R
 import android.content.Context
 import android.content.pm.ShortcutManager
 import androidx.work.WorkManager
@@ -19,7 +21,7 @@ object Sources {
         listOf("tacit-usage-periodic", "tacit-usage-open", "tacit-resume").forEach(work::cancelUniqueWork)
         runCatching {
             context.getSystemService(ShortcutManager::class.java)
-                .disableShortcuts(listOf("write"), "Tacit 手机端只录音，不再补写")
+                .disableShortcuts(listOf("write"), AppLocale.strings(context).text(R.string.retired_shortcut))
         }
     }
 }

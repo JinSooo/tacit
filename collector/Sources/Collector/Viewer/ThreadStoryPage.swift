@@ -18,7 +18,7 @@ struct ThreadStoryPage: View {
             .accessibilityAddTraits(.isHeader)
           StoryUpdates(threadId: id)
         } else {
-          DelayedProgress(label: "正在读取这件事的经过")
+          DelayedProgress(label: L10n.loadingTaskHistory)
         }
       }
       .modifier(ReviewWidth())
@@ -36,7 +36,7 @@ struct ThreadStoryPage: View {
       let thread = try await store.dataSource.thread(id, level: "brief")
       try Task.checkCancellation()
       guard revision == store.revision else { throw CancellationError() }
-      return thread.title ?? "这件事的经过"
+      return thread.title ?? L10n.taskHistory
     }
     if !Task.isCancelled, revision == store.revision, loadedRevision != revision {
       Motion.animate { loadedRevision = revision }
@@ -48,7 +48,8 @@ struct TimelineDayHeading: View {
   let day: Date
 
   var body: some View {
-    Text("\(Fmt.date(day)) \(ViewerFormat.weekday(day))")
+    let title = AppLanguage.current == .zh ? "\(Fmt.date(day)) \(ViewerFormat.weekday(day))" : Fmt.date(day)
+    Text(title)
       .font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted)
       .accessibilityAddTraits(.isHeader)
   }
@@ -68,13 +69,13 @@ struct StoryUpdates: View {
         Placeholder(kind: .error(error) { Task { await load() } })
       } else if loadedRevision == store.revision, let days = story.value {
         if days.isEmpty {
-          Text("这件事还没有可展示的经过。")
+          Text(L10n.noHistoryToShowForThisTask)
             .font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
         } else {
           updates(days)
         }
       } else {
-        DelayedProgress(label: "正在读取这件事的经过")
+        DelayedProgress(label: L10n.loadingTaskHistory)
       }
     }
     .task(id: store.revision) { await load() }
