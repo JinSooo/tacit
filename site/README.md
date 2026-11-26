@@ -14,7 +14,7 @@ bun test site/              # 运行官网构建、路由与文档链接测试
 
 | 路径 | 产物文件 | 说明 |
 | --- | --- | --- |
-| `/` | `index.html` | 轻量语言分流入口：读取 `localStorage`（`tacit-lang`），否则按浏览器语言判断（`zh` 开头进 `/zh/`，其余默认进 `/en/`），提供无 JS 回落与 `hreflang` |
+| `/` | `index.html` | 轻量语言分流入口：有 JS 时按 `localStorage`（`tacit-lang`）或浏览器语言跳转（`zh` 开头进 `/zh/`，其余进 `/en/`）并保留查询参数与 `#` 片段；禁用 JS 时通过 `<meta http-equiv="refresh" content="0; url=en/">` 回落到英文首页（纯静态 HTML 无法在无 JS 下拼接原 query/hash，如需在无 JS 场景保留片段应在托管层配置重定向） |
 | `/en/`、`/zh/` | `en/index.html`、`zh/index.html` | 产品首页；Hero 与末尾收尾区按设备仅展示一个主下载按钮，并附「全部平台下载」链接 |
 | `/en/download/`、`/zh/download/` | `en/download/index.html`、`zh/download/index.html` | 独立下载页：Mac（含 3 步首次放行与可复制命令）、Android、Docker 独立服务端与计划支持平台 |
 | `/en/docs/`、`/zh/docs/` | `en/docs/index.html`、`zh/docs/index.html` | 文档首页概览 |
@@ -60,7 +60,7 @@ bun test site/              # 运行官网构建、路由与文档链接测试
 - 中英文都用短句，说清它做什么、怎么做，不用宣传用语或感叹号。英文用句首大写，叙述性标题和概述使用拉丁衬线字体优先。
 - 界面用词按 `docs/ui.md` 第 1 节：事项、整理、自动带入、AI 工具、时间线、段、依据。不出现中枢、提炼、线程、注入、档位、OCR。
 - 如实：支持 Apple 芯片 Mac（macOS 14 及以上）与 arm64 Android（Android 9 及以上）；用云端模型整理时相关文字会发给你配置的模型服务；不收集遥测。不承诺尚未支持的能力（Windows 仅写计划支持/敬请期待，Intel Mac 暂不支持，iOS 仍在调研中）。
-- 下载链接：Mac 指向 `https://github.com/JinSooo/tacit/releases/tag/mac-v<版本号>`，Android 指向 `https://github.com/JinSooo/tacit/releases/tag/android-v<版本号>`。每次发版要同步更新 `site/src/latest.json`、`site/src/{en,zh}/sections/{hero,download}.html` 与 `site/src/{en,zh}/download.html`。
+- 下载链接与版本号：构建时自动从 `site/src/latest.json`（Mac）、`android/app/build.gradle.kts`（Android）和 `package.json`（Docker 服务端）派生，替换首页与下载页中的模板占位符并校验一致性；发版时更新对应版本源后重新运行 `bun site/build.ts` 即可，无需手工修改 HTML。
 
 ## 验收
 

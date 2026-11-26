@@ -26,6 +26,23 @@ export interface RenderedDoc {
   toc: TocItem[];
 }
 
+export interface ReleaseVersions {
+  mac: {
+    version: string;
+    tag: string;
+    url: string;
+  };
+  android: {
+    version: string;
+    tag: string;
+    url: string;
+  };
+  hub: {
+    version: string;
+  };
+  summary: string;
+}
+
 export interface BuildResult {
   pages: string[];
   homeSections: number;
@@ -38,6 +55,58 @@ export interface BuildResult {
 
 export const SITE_ORIGIN = "https://tacit.jinso.top";
 export const REPO_BLOB_BASE = "https://github.com/JinSooo/tacit/blob/main";
+const RELEASE_TAG_BASE = "https://github.com/JinSooo/tacit/releases/tag";
+
+export function readReleaseVersions(baseRepoRoot: string): ReleaseVersions {
+  const latestPath = join(baseRepoRoot, "site/src/latest.json");
+  const latest = JSON.parse(readFileSync(latestPath, "utf8")) as {
+    mac?: { version?: string; url?: string };
+  };
+  if (!latest?.mac?.version || !latest?.mac?.url) {
+    throw new Error("site/src/latest.json 缺少 mac.version 或 mac.url");
+  }
+  const macVersion = latest.mac.version.trim();
+  const macUrl = latest.mac.url.trim();
+  const macTag = /\/releases\/tag\/([^/?#]+)$/.exec(macUrl)?.[1] ?? `mac-v${macVersion}`;
+
+  const gradlePath = join(baseRepoRoot, "android/app/build.gradle.kts");
+  const gradleText = readFileSync(gradlePath, "utf8");
+  const androidVersion = /\bversionName\s*=\s*"([^"]+)"/.exec(gradleText)?.[1]?.trim();
+  if (!androidVersion) {
+    throw new Error("android/app/build.gradle.kts 缺少 versionName");
+  }
+  const androidTag = `android-v${androidVersion}`;
+  const androidUrl = `${RELEASE_TAG_BASE}/${androidTag}`;
+
+  const pkgPath = join(baseRepoRoot, "package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string };
+  const hubVersion = pkg.version?.trim();
+  if (!hubVersion) {
+    throw new Error("package.json 缺少 version");
+  }
+
+  const summary =
+    macVersion === androidVersion ? `v${macVersion}` : `Mac v${macVersion} · Android v${androidVersion}`;
+
+  return {
+    mac: { version: macVersion, tag: macTag, url: macUrl },
+    android: { version: androidVersion, tag: androidTag, url: androidUrl },
+    hub: { version: hubVersion },
+    summary,
+  };
+}
+
+export function applyReleaseTokens(html: string, versions: ReleaseVersions): string {
+  return html
+    .replaceAll("{{MAC_VERSION}}", escapeHtml(versions.mac.version))
+    .replaceAll("{{MAC_RELEASE_TAG}}", escapeHtml(versions.mac.tag))
+    .replaceAll("{{MAC_RELEASE_URL}}", escapeHtml(versions.mac.url))
+    .replaceAll("{{ANDROID_VERSION}}", escapeHtml(versions.android.version))
+    .replaceAll("{{ANDROID_RELEASE_TAG}}", escapeHtml(versions.android.tag))
+    .replaceAll("{{ANDROID_RELEASE_URL}}", escapeHtml(versions.android.url))
+    .replaceAll("{{HUB_VERSION}}", escapeHtml(versions.hub.version))
+    .replaceAll("{{RELEASE_SUMMARY}}", escapeHtml(versions.summary));
+}
 
 export const DOCS: readonly DocMeta[] = [
   {
@@ -264,6 +333,158 @@ export function transformAlerts(html: string, locale: Locale): string {
   });
 }
 
+const DROP_DOC_TAGS = new Set([
+  "script",
+  "style",
+  "iframe",
+  "frame",
+  "frameset",
+  "object",
+  "embed",
+  "applet",
+  "noscript",
+  "template",
+  "svg",
+  "math",
+  "form",
+  "button",
+  "textarea",
+  "select",
+  "option",
+  "link",
+  "meta",
+  "base",
+  "title",
+  "head",
+  "html",
+  "body",
+]);
+
+const ALLOWED_DOC_TAGS = new Set([
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+  "br",
+  "hr",
+  "blockquote",
+  "pre",
+  "code",
+  "ul",
+  "ol",
+  "li",
+  "dl",
+  "dt",
+  "dd",
+  "table",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "th",
+  "td",
+  "strong",
+  "b",
+  "em",
+  "i",
+  "del",
+  "s",
+  "sub",
+  "sup",
+  "a",
+  "img",
+  "kbd",
+  "input",
+]);
+
+const ALLOWED_DOC_ATTRS: Record<string, ReadonlySet<string>> = {
+  a: new Set(["href", "title"]),
+  img: new Set(["src", "alt", "title", "width", "height"]),
+  code: new Set(["class"]),
+  th: new Set(["align", "colspan", "rowspan"]),
+  td: new Set(["align", "colspan", "rowspan"]),
+  ol: new Set(["start"]),
+  li: new Set(["class"]),
+  input: new Set(["type", "disabled", "checked"]),
+};
+
+export function isSafeDocUrl(rawUrl: string, kind: "href" | "src"): boolean {
+  const decoded = decodeHtmlEntities(rawUrl).replace(/[\u0000-\u001f\u007f]+/g, "").trim();
+  if (!decoded) return false;
+  if (decoded.startsWith("//")) return false;
+  const schemeMatch = /^([a-z][a-z0-9+.-]*):/i.exec(decoded);
+  if (!schemeMatch) return true;
+  const scheme = schemeMatch[1]!.toLowerCase();
+  if (kind === "href") return scheme === "http" || scheme === "https" || scheme === "mailto" || scheme === "tel";
+  return scheme === "http" || scheme === "https";
+}
+
+function encodeAttrValueForRewriter(value: string): string {
+  // HTMLRewriter.setAttribute 会转义双引号，但不会把 & 转为 &amp;，先处理 &/< />，避免实体缺失或二次转义。
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/**
+ * 清洗 Markdown 渲染出的原始 HTML：仅放行文档正文需要的安全标签、属性与 URL 协议。
+ */
+export function sanitizeDocHtml(rawHtml: string): string {
+  return new HTMLRewriter()
+    .on("*", {
+      element(element) {
+        const tag = element.tagName.toLowerCase();
+        if (DROP_DOC_TAGS.has(tag)) {
+          element.remove();
+          return;
+        }
+        if (!ALLOWED_DOC_TAGS.has(tag)) {
+          element.removeAndKeepContent();
+          return;
+        }
+        if (tag === "input") {
+          const type = decodeHtmlEntities(element.getAttribute("type") ?? "").trim().toLowerCase();
+          if (type !== "checkbox") {
+            element.remove();
+            return;
+          }
+        }
+
+        const allowed = ALLOWED_DOC_ATTRS[tag];
+        for (const [rawName, rawValue] of [...element.attributes]) {
+          const name = rawName.toLowerCase();
+          if (name.startsWith("on") || !allowed?.has(name)) {
+            element.removeAttribute(rawName);
+            continue;
+          }
+          if (tag === "code" && name === "class") {
+            const cls = decodeHtmlEntities(rawValue).trim();
+            if (!/^language-[a-z0-9_+-]+$/i.test(cls)) element.removeAttribute(rawName);
+            continue;
+          }
+          if (tag === "li" && name === "class") {
+            const cls = decodeHtmlEntities(rawValue).trim();
+            if (cls !== "task-list-item") element.removeAttribute(rawName);
+            continue;
+          }
+          if (name === "href" && !isSafeDocUrl(rawValue, "href")) {
+            element.removeAttribute(rawName);
+            continue;
+          }
+          if (name === "src" && !isSafeDocUrl(rawValue, "src")) {
+            element.removeAttribute(rawName);
+            continue;
+          }
+        }
+        if (tag === "input") {
+          element.setAttribute("disabled", "");
+        }
+      },
+    })
+    .transform(rawHtml);
+}
+
 export function renderDocMarkdown(markdown: string, sourceRepoRelPath: string, locale: Locale): RenderedDoc {
   const cleaned = stripDocPreamble(markdown);
 
@@ -274,12 +495,14 @@ export function renderDocMarkdown(markdown: string, sourceRepoRelPath: string, l
     return "";
   });
 
-  let html = Bun.markdown.html(bodyMarkdown, {
-    tables: true,
-    strikethrough: true,
-    tasklists: true,
-    autolinks: true,
-  });
+  let html = sanitizeDocHtml(
+    Bun.markdown.html(bodyMarkdown, {
+      tables: true,
+      strikethrough: true,
+      tasklists: true,
+      autolinks: true,
+    }),
+  );
 
   // 先把 <pre>...</pre> 抽成占位符，避免后续正则误改代码示例里的内容
   const codeBlocks: string[] = [];
@@ -331,11 +554,22 @@ export function renderDocMarkdown(markdown: string, sourceRepoRelPath: string, l
     return `<h${level} id="${escapeHtml(id)}">${inner}</h${level}>`;
   });
 
-  // 重写文档内相对链接
-  html = html.replace(/<a\b([^>]*?)\bhref="([^"]+)"([^>]*)>/g, (_, before: string, href: string, after: string) => {
-    const rewritten = rewriteDocHref(href, sourceRepoRelPath);
-    return `<a${before}href="${escapeHtml(rewritten)}"${after}>`;
-  });
+  // 使用 HTMLRewriter 解析属性并先解码实体，避免 &amp; 二次转义，同时只放行安全链接
+  html = new HTMLRewriter()
+    .on("a[href]", {
+      element(element) {
+        const rawHref = element.getAttribute("href");
+        if (!rawHref) return;
+        const decoded = decodeHtmlEntities(rawHref);
+        if (!isSafeDocUrl(decoded, "href")) {
+          element.removeAttribute("href");
+          return;
+        }
+        const rewritten = rewriteDocHref(decoded, sourceRepoRelPath);
+        element.setAttribute("href", encodeAttrValueForRewriter(rewritten));
+      },
+    })
+    .transform(html);
 
   // 表格响应式包裹
   html = html.replace(/<table>([\s\S]*?)<\/table>/g, '<div class="doc-table-wrap"><table>$1</table></div>');
@@ -710,7 +944,7 @@ interface PageAudit {
   internalRefs: Array<{ attr: string; value: string }>;
 }
 
-function auditHtmlPage(pagePath: string, html: string): PageAudit {
+export function auditHtmlPage(pagePath: string, html: string): PageAudit {
   const ids = new Set<string>();
   const sections: string[] = [];
   const downloads: string[] = [];
@@ -732,33 +966,66 @@ function auditHtmlPage(pagePath: string, html: string): PageAudit {
     })
     .on("a[data-platform-target]", {
       element(element) {
-        downloads.push(`${element.getAttribute("data-platform-target")} ${element.getAttribute("href")}`);
+        downloads.push(`${element.getAttribute("data-platform-target")} ${decodeHtmlEntities(element.getAttribute("href") ?? "")}`);
       },
     })
     .on("a[href]", {
       element(element) {
-        const href = element.getAttribute("href");
-        if (href) internalRefs.push({ attr: "href", value: href });
+        const rawHref = element.getAttribute("href");
+        if (!rawHref) return;
+        const href = decodeHtmlEntities(rawHref);
+        if (!isSafeDocUrl(href, "href")) {
+          throw new Error(`${pagePath} 存在不安全的链接协议：${href}`);
+        }
+        internalRefs.push({ attr: "href", value: href });
       },
     })
     .on("link[href]", {
       element(element) {
         const rel = element.getAttribute("rel");
         if (rel === "canonical" || rel === "alternate") return;
-        const href = element.getAttribute("href");
-        if (href) internalRefs.push({ attr: "href", value: href });
+        const rawHref = element.getAttribute("href");
+        if (!rawHref) return;
+        const href = decodeHtmlEntities(rawHref);
+        if (!isSafeDocUrl(href, "href")) {
+          throw new Error(`${pagePath} 存在不安全的资源链接协议：${href}`);
+        }
+        internalRefs.push({ attr: "href", value: href });
       },
     })
     .on("img[src]", {
       element(element) {
-        const srcAttr = element.getAttribute("src");
-        if (srcAttr) internalRefs.push({ attr: "src", value: srcAttr });
+        const rawSrc = element.getAttribute("src");
+        if (!rawSrc) return;
+        const srcAttr = decodeHtmlEntities(rawSrc);
+        if (!isSafeDocUrl(srcAttr, "src")) {
+          throw new Error(`${pagePath} 存在不安全的图片地址协议：${srcAttr}`);
+        }
+        internalRefs.push({ attr: "src", value: srcAttr });
       },
     })
     .on("source[srcset]", {
       element(element) {
         const srcset = element.getAttribute("srcset");
-        if (srcset) internalRefs.push({ attr: "srcset", value: srcset.split(",")[0]!.trim().split(/\s+/)[0]! });
+        if (srcset) internalRefs.push({ attr: "srcset", value: decodeHtmlEntities(srcset.split(",")[0]!.trim().split(/\s+/)[0]!) });
+      },
+    })
+    .on(".doc-prose *", {
+      element(element) {
+        const tag = element.tagName.toLowerCase();
+        const isTrustedCopyButton =
+          tag === "button" &&
+          element.getAttribute("data-copy-code") !== null &&
+          element.getAttribute("type") === "button";
+        if (DROP_DOC_TAGS.has(tag) && !isTrustedCopyButton) {
+          throw new Error(`${pagePath} 文档正文包含禁止的标签：<${tag}>`);
+        }
+        for (const [rawName] of element.attributes) {
+          const name = rawName.toLowerCase();
+          if (name.startsWith("on") || name === "style") {
+            throw new Error(`${pagePath} 文档正文包含禁止的属性：${rawName}`);
+          }
+        }
       },
     })
     .transform(html);
@@ -773,12 +1040,7 @@ function assertParity(label: string, zh: string[], en: string[]) {
 }
 
 export function build(): BuildResult {
-  const latest = JSON.parse(readFileSync(join(src, "latest.json"), "utf8")) as {
-    mac: { version: string; url: string };
-  };
-  if (!latest?.mac?.version || !latest?.mac?.url) {
-    throw new Error("site/src/latest.json 缺少 mac.version 或 mac.url");
-  }
+  const versions = readReleaseVersions(repoRoot);
 
   const zhSectionFiles = readdirSync(join(src, "zh/sections")).filter((name) => name.endsWith(".html")).sort();
   const enSectionFiles = readdirSync(join(src, "en/sections")).filter((name) => name.endsWith(".html")).sort();
@@ -792,13 +1054,13 @@ export function build(): BuildResult {
 
   for (const locale of ["en", "zh"] as const) {
     // 1. Home page: /en/ & /zh/
-    const homeRaw = expand(join(src, locale, "index.html"));
+    const homeRaw = applyReleaseTokens(expand(join(src, locale, "index.html")), versions);
     const homeHtml = inline(homeRaw, "../");
     builtPages.set(`${locale}/index.html`, homeHtml);
     homeAudits[locale] = auditHtmlPage(`${locale}/index.html`, homeHtml);
 
     // 2. Download page: /en/download/ & /zh/download/
-    const downloadRaw = expand(join(src, locale, "download.html"));
+    const downloadRaw = applyReleaseTokens(expand(join(src, locale, "download.html")), versions);
     const downloadHtml = inline(downloadRaw, "../../");
     builtPages.set(`${locale}/download/index.html`, downloadHtml);
     downloadAudits[locale] = auditHtmlPage(`${locale}/download/index.html`, downloadHtml);
@@ -827,11 +1089,11 @@ export function build(): BuildResult {
   assertParity("下载页元素 id", [...downloadAudits.zh.ids].sort(), [...downloadAudits.en.ids].sort());
   assertParity("下载页版本下载链接", downloadAudits.zh.downloads, downloadAudits.en.downloads);
 
-  // 校验所有页面无重复 ID、无未展开标记，且 Mac 下载链接与 latest.json 一致
+  // 校验所有页面无重复 ID、无未展开标记，且 Mac / Android 下载链接与版本源一致
   const allAudits = new Map<string, PageAudit>();
   let totalDownloadLinks = 0;
   for (const [pagePath, html] of builtPages) {
-    const missing = html.match(/<!--\s*include:[^>]*-->|type="module"|sources\.svg#|<!--CODE_BLOCK_\d+-->/);
+    const missing = html.match(/<!--\s*include:[^>]*-->|type="module"|sources\.svg#|<!--CODE_BLOCK_\d+-->|\{\{[A-Z0-9_]+\}\}/);
     if (missing) throw new Error(`${pagePath} 存在未处理的引用：${missing[0]}`);
 
     const audit = auditHtmlPage(pagePath, html);
@@ -840,8 +1102,11 @@ export function build(): BuildResult {
     for (const entry of audit.downloads) {
       totalDownloadLinks += 1;
       const [target, href] = entry.split(" ");
-      if (target === "mac" && href !== latest.mac.url) {
-        throw new Error(`${pagePath} 的 Mac 下载链接 (${href}) 与 latest.json (${latest.mac.url}) 不一致`);
+      if (target === "mac" && href !== versions.mac.url) {
+        throw new Error(`${pagePath} 的 Mac 下载链接 (${href}) 与 latest.json (${versions.mac.url}) 不一致`);
+      }
+      if (target === "android" && href !== versions.android.url) {
+        throw new Error(`${pagePath} 的 Android 下载链接 (${href}) 与 build.gradle.kts (${versions.android.url}) 不一致`);
       }
     }
   }
@@ -862,7 +1127,7 @@ export function build(): BuildResult {
     const pageDir = posix.dirname(pagePath);
     for (const ref of audit.internalRefs) {
       const value = ref.value;
-      if (/^(?:https?:|mailto:|tel:|data:|javascript:)/i.test(value)) continue;
+      if (/^(?:https?:|mailto:|tel:)/i.test(value)) continue;
       checkedLinks += 1;
 
       const hashIdx = value.indexOf("#");

@@ -3,17 +3,22 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  applyReleaseTokens,
+  auditHtmlPage,
   build,
   DOCS,
+  readReleaseVersions,
   renderDocMarkdown,
   resolveDocSource,
   resolveServeTarget,
   rewriteDocHref,
+  sanitizeDocHtml,
   slugifyHeading,
   stripDocPreamble,
 } from "./build.ts";
 
 const siteDir = import.meta.dir;
+const repoRoot = join(siteDir, "..");
 const distDir = join(siteDir, "dist");
 const tempDirs: string[] = [];
 
@@ -50,12 +55,14 @@ describe("site/build.ts 多页官网与文档站构建", () => {
     expect(result.pages.length).toBe(1 + 2 * (1 + 1 + 1 + DOCS.length));
   });
 
-  test("根路径 index.html 实现默认英文语言分流与无 JS 回落", () => {
+  test("根路径 index.html 的 JS 语言分流保留 query/hash，静态无 JS 回落指向 en/", () => {
     const rootHtml = readFileSync(join(distDir, "index.html"), "utf8");
+    // JS 语言分流分支（保留 search 与 hash）
     expect(rootHtml).toContain('localStorage.getItem("tacit-lang")');
     expect(rootHtml).toContain("navigator.languages");
     expect(rootHtml).toContain('primary.startsWith("zh")');
-    expect(rootHtml).toContain("location.replace(");
+    expect(rootHtml).toContain("location.replace(target + location.search + location.hash)");
+    // 静态无 JS 回落（纯静态 HTML 仅跳转至默认英文首页，不拼接 query/hash）
     expect(rootHtml).toContain('<meta http-equiv="refresh" content="0; url=en/">');
     expect(rootHtml).toContain('<link rel="canonical" href="https://tacit.jinso.top/en/">');
     expect(rootHtml).toContain('<link rel="alternate" hreflang="en" href="https://tacit.jinso.top/en/">');
@@ -103,17 +110,34 @@ describe("site/build.ts 多页官网与文档站构建", () => {
     }
   });
 
-  test("独立下载页包含 Mac、Android、Docker 与计划平台说明", () => {
+  test("独立下载页从实时版本源派生 Mac、Android、Docker 链接与文件名", () => {
+    const versions = readReleaseVersions(repoRoot);
     for (const locale of ["en", "zh"] as const) {
       const html = readFileSync(join(distDir, `${locale}/download/index.html`), "utf8");
-      expect(html).toContain("https://github.com/JinSooo/tacit/releases/tag/mac-v0.7.0");
-      expect(html).toContain("https://github.com/JinSooo/tacit/releases/tag/android-v0.7.0");
+      expect(html).toContain(versions.mac.url);
+      expect(html).toContain(`Tacit-${versions.mac.version}.dmg`);
+      expect(html).toContain(versions.android.url);
+      expect(html).toContain(`Tacit-${versions.android.version}.apk`);
+      expect(html).toContain(`docker pull ghcr.io/jinsooo/tacit-hub:${versions.hub.version}`);
       expect(html).toContain("xattr -dr com.apple.quarantine /Applications/Tacit.app");
-      expect(html).toContain("ghcr.io/jinsooo/tacit-hub");
       expect(html).toContain('href="../docs/server-deployment/"');
       expect(html).toContain('href="https://github.com/JinSooo/tacit/releases"');
       expect(html).toContain('aria-current="page"');
+      expect(html).not.toMatch(/\{\{[A-Z0-9_]+\}\}/);
     }
+  });
+
+  test("两端版本号独立变更时 applyReleaseTokens 正确生成各自链接与摘要", () => {
+    const template = "{{RELEASE_SUMMARY}}|{{MAC_RELEASE_URL}}|Tacit-{{MAC_VERSION}}.dmg|{{ANDROID_RELEASE_URL}}|Tacit-{{ANDROID_VERSION}}.apk|{{HUB_VERSION}}";
+    const rendered = applyReleaseTokens(template, {
+      mac: { version: "0.8.0", tag: "mac-v0.8.0", url: "https://github.com/JinSooo/tacit/releases/tag/mac-v0.8.0" },
+      android: { version: "0.7.2", tag: "android-v0.7.2", url: "https://github.com/JinSooo/tacit/releases/tag/android-v0.7.2" },
+      hub: { version: "0.8.0" },
+      summary: "Mac v0.8.0 · Android v0.7.2",
+    });
+    expect(rendered).toBe(
+      "Mac v0.8.0 · Android v0.7.2|https://github.com/JinSooo/tacit/releases/tag/mac-v0.8.0|Tacit-0.8.0.dmg|https://github.com/JinSooo/tacit/releases/tag/android-v0.7.2|Tacit-0.7.2.apk|0.8.0",
+    );
   });
 
   test("文档站正确渲染 Markdown 并移除顶部注释和 GitHub 语言切换行", () => {
@@ -221,6 +245,44 @@ describe("Markdown 清洗、链接重写与渲染辅助函数", () => {
     expect(rendered.html).toContain('class="doc-code-block"');
     expect(rendered.html).toContain("data-copy-code");
     expect(rendered.html).toContain("&lt;a href=&quot;troubleshooting.md&quot;&gt;keep literal&lt;/a&gt;");
+  });
+
+  test("renderDocMarkdown 清洗原始 HTML、阻断主动内容且不对查询参数双重转义", () => {
+    const md = [
+      "# Security",
+      "",
+      "Check [query link](https://example.com/?p=1&q=2) and [bad](javascript:alert(1)).",
+      "",
+      "<details open><summary>Note</summary>Safe text</details>",
+      "",
+      '<script>window.pwned = true</script><iframe src="https://evil.example"></iframe>',
+      '<a href="&#106;avascript:alert(1)" onclick="alert(1)">encoded</a>',
+      '<img src="data:image/svg+xml,<svg/>" onerror="alert(1)">',
+    ].join("\n");
+
+    const rendered = renderDocMarkdown(md, "docs/en/trial-guide.md", "en");
+    expect(rendered.html).toContain('href="https://example.com/?p=1&amp;q=2"');
+    expect(rendered.html).not.toContain("&amp;amp;");
+    expect(rendered.html).not.toContain("<script");
+    expect(rendered.html).not.toContain("window.pwned");
+    expect(rendered.html).not.toContain("<iframe");
+    expect(rendered.html).not.toContain("<details");
+    expect(rendered.html).not.toContain("<summary");
+    expect(rendered.html).toContain("Safe text");
+    expect(rendered.html).not.toContain("onclick");
+    expect(rendered.html).not.toContain("onerror");
+    expect(rendered.html).not.toContain("javascript:");
+    expect(rendered.html).not.toContain("data:image");
+
+    expect(sanitizeDocHtml('<a href="https://example.com/?a=1&amp;b=2" style="color:red">ok</a>')).toBe(
+      '<a href="https://example.com/?a=1&amp;b=2">ok</a>',
+    );
+    expect(() =>
+      auditHtmlPage("en/docs/test/index.html", '<div class="doc-prose"><script>1</script></div>'),
+    ).toThrow(/禁止的标签/);
+    expect(() =>
+      auditHtmlPage("en/docs/test/index.html", '<div class="doc-prose"><a href="javascript:alert(1)">x</a></div>'),
+    ).toThrow(/不安全的链接协议/);
   });
 });
 

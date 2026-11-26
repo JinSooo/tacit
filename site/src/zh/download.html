@@ -73,7 +73,7 @@
             </div>
             <div>
               <dt>当前版本</dt>
-              <dd>v0.7.0</dd>
+              <dd>{{RELEASE_SUMMARY}}</dd>
             </div>
           </dl>
         </div>
@@ -90,11 +90,11 @@
                 <h2 class="title">Mac</h2>
                 <span class="device-badge" data-device-badge="mac">当前设备</span>
               </div>
-              <p class="caption num">Apple 芯片 · macOS 14 或更新 · 发布版 mac-v0.7.0</p>
+              <p class="caption num">Apple 芯片 · macOS 14 或更新 · 发布版 {{MAC_RELEASE_TAG}}</p>
             </div>
-            <a class="btn btn-primary" data-platform-target="mac" href="https://github.com/JinSooo/tacit/releases/tag/mac-v0.7.0">
+            <a class="btn btn-primary" data-platform-target="mac" href="{{MAC_RELEASE_URL}}">
               <svg aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
-              下载 Tacit-0.7.0.dmg
+              下载 Tacit-{{MAC_VERSION}}.dmg
             </a>
           </div>
 
@@ -103,7 +103,7 @@
             <ol class="download-steps" role="list">
               <li>
                 <strong>拖进“应用程序”</strong>
-                <p>打开下载的 <code>Tacit-0.7.0.dmg</code>，把 Tacit 拖进“应用程序”文件夹。</p>
+                <p>打开下载的 <code>Tacit-{{MAC_VERSION}}.dmg</code>，把 Tacit 拖进“应用程序”文件夹。</p>
               </li>
               <li id="download-open">
                 <strong>首次打开 Tacit</strong>
@@ -137,18 +137,18 @@
                 <h2 class="title">Android</h2>
                 <span class="device-badge" data-device-badge="android">当前设备</span>
               </div>
-              <p class="caption num">arm64 · Android 9 或更新 · 发布版 android-v0.7.0</p>
+              <p class="caption num">arm64 · Android 9 或更新 · 发布版 {{ANDROID_RELEASE_TAG}}</p>
             </div>
-            <a class="btn btn-primary" data-platform-target="android" href="https://github.com/JinSooo/tacit/releases/tag/android-v0.7.0">
+            <a class="btn btn-primary" data-platform-target="android" href="{{ANDROID_RELEASE_URL}}">
               <svg aria-hidden="true"><use href="assets/sources.svg#download"/></svg>
-              下载 Tacit-0.7.0.apk
+              下载 Tacit-{{ANDROID_VERSION}}.apk
             </a>
           </div>
 
           <div class="download-card-body download-split">
             <div>
               <h3 class="download-subhead">配合 Mac 扫码配对</h3>
-              <p>安装 <code>Tacit-0.7.0.apk</code> 并开启本机录音与转写。在 Mac 的<strong>设置 › 设备</strong>生成配对二维码，用手机扫码即可端到端加密同步，并在手机上查看完整时间线。</p>
+              <p>安装 <code>Tacit-{{ANDROID_VERSION}}.apk</code> 并开启本机录音与转写。在 Mac 的<strong>设置 › 设备</strong>生成配对二维码，用手机扫码即可端到端加密同步，并在手机上查看完整时间线。</p>
             </div>
             <div>
               <h3 class="download-subhead">独立使用</h3>
@@ -175,7 +175,7 @@
           <div class="download-card-body">
             <p class="prose">后台服务默认在 Mac 本机运行，不需要额外服务器。如果希望多台设备共用一个 24 小时在线的加密后台，可在 Linux 服务器或装有 Docker Desktop 的 Windows 电脑上拉取官方镜像运行。</p>
             <div class="download-command">
-              <code id="docker-pull-command">docker pull ghcr.io/jinsooo/tacit-hub:0.7.0</code>
+              <code id="docker-pull-command">docker pull ghcr.io/jinsooo/tacit-hub:{{HUB_VERSION}}</code>
               <button class="download-copy" type="button" aria-label="复制 Docker 拉取命令"
                 data-copy-target="docker-pull-command" data-copy-status-id="docker-pull-status"
                 data-copied="已复制命令" data-copied-button="已复制" data-copy-failed="无法自动复制，请选中命令手动复制。" hidden>复制</button>
