@@ -139,6 +139,8 @@
     <string name="models_preparing">Speech models are being prepared. Try again later.</string>
     <string name="models_replace_folder">Change model folder</string>
     <string name="month_heading">MMMM yyyy</string>
+    <string name="my_voice">My voice</string>
+    <string name="my_voice_hint">Only your voice needs confirmation. Other speakers are labeled automatically.</string>
     <string name="next_day">Next day</string>
     <string name="next_month">Next month</string>
     <string name="not_connected">Not connected</string>
@@ -191,7 +193,6 @@
     <string name="rejection_too_long">Record too long</string>
     <string name="relay_disabled">The relay mailbox is off. Sync resumes on the same network as your Mac.</string>
     <string name="removed">Removed</string>
-    <string name="restore">Restore</string>
     <string name="retention_days">Days to keep</string>
     <string name="retention_hint">Only audio expires. Transcripts stay available.</string>
     <string name="retention_period">Retention period</string>
@@ -266,7 +267,6 @@
     <string name="turn_on">Turn on</string>
     <string name="undo">Undo</string>
     <string name="undo_failed">Couldn\'t undo. Try again later.</string>
-    <string name="unnamed_voice">Voice %1$d</string>
     <string name="upload_rejected">Couldn\'t be received</string>
     <string name="vault_locked">Can\'t open the record library</string>
     <string name="vault_locked_hint">The key or database is unavailable. Keep Tacit and its app data to preserve your files.</string>
@@ -274,22 +274,17 @@
     <string name="view_original">View original</string>
     <string name="view_original_record">View original record</string>
     <string name="view_raw_transcript">View original transcript</string>
+    <string name="voice_confirm_on_home_hint">After a conversation is recorded, Tacit will ask you to listen and confirm once on the home screen.</string>
     <string name="voice_marked_me">Marked as me. Tacit will transcribe saved recordings.</string>
-    <string name="voice_name">Name</string>
-    <string name="voice_name_add">Name voice</string>
-    <string name="voice_name_edit">Rename voice</string>
-    <string name="voice_name_saved">Name updated</string>
     <string name="voice_no">No</string>
+    <string name="voice_not_confirmed">Not confirmed yet</string>
     <string name="voice_not_me">This isn\'t me</string>
     <string name="voice_question">Is this your voice?</string>
     <string name="voice_question_hint">Confirm once so Tacit can recognize your voice</string>
-    <string name="voice_restored">Voice restored</string>
+    <string name="voice_synced_from_mac">Synced from Mac</string>
     <string name="voice_try_another">Tacit will ask about another sample</string>
     <string name="voice_unmarked">Removed the Me label</string>
     <string name="voice_yes">That\'s me</string>
-    <string name="voices">Voices</string>
-    <string name="voices_empty">No voices to show</string>
-    <string name="voices_ignored">Ignored voices</string>
     <string name="voices_unavailable">Couldn\'t read the voice list</string>
     <string name="weekday_pattern">EEEE</string>
     <string name="yesterday">Yesterday</string>
@@ -313,10 +308,6 @@
     <plurals name="duration_days">
         <item quantity="one">%1$s day</item>
         <item quantity="other">%1$s days</item>
-    </plurals>
-    <plurals name="ignored_voice_count">
-        <item quantity="one">%1$s voice</item>
-        <item quantity="other">%1$s voices</item>
     </plurals>
     <plurals name="more_audio_without_voice">
         <item quantity="one">%1$s more clip skipped because your voice wasn\'t recognized</item>

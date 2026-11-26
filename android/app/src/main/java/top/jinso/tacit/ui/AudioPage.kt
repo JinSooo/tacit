@@ -144,8 +144,7 @@ import java.util.concurrent.CompletableFuture
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
     // Each day has its own cards, so a sample playing for the old day would keep going with no stop button in sight.
     LaunchedEffect(day) { audio.stopPlayback() }
-    val candidate = if (macVoice || speakers.any { it.isMe }) null else speakers
-        .filter { !it.ignored && it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
+    val candidate = myVoiceOverview(speakers, macVoice).candidate
     val today = LocalDate.now()
     val local = remember(rows, timeline.days, today) {
         val projectedIds = timeline.days.flatMap { (date, value) -> value.entries(date == today) }

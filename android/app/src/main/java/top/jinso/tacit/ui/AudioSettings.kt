@@ -18,6 +18,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.lifecycle.Lifecycle
@@ -139,6 +140,7 @@ import java.util.concurrent.CompletableFuture
     SpeakerSettings(audio, resumed, notify, offerUndo)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SpeakerSettings(
     audio: AudioController, resumed: Int, notify: (String) -> Unit, offerUndo: (String, suspend () -> Unit) -> Unit,
@@ -146,20 +148,21 @@ private fun SpeakerSettings(
     val format = uiFormat()
     val strings = uiStrings()
     var speakers by remember { mutableStateOf<List<AudioSpeaker>?>(null) }
+    var macVoice by remember { mutableStateOf(false) }
     var loadFailed by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
-    var expanded by rememberSaveable { mutableStateOf(false) }
     var mineExpanded by rememberSaveable { mutableStateOf(false) }
-    var naming by rememberSaveable { mutableStateOf<String?>(null) }
-    var speakerName by rememberSaveable { mutableStateOf("") }
-    var namingTitle by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(audio, resumed, refresh) {
         loadFailed = false
         try {
-            speakers = withContext(Dispatchers.IO) { audio.listSpeakers(includeIgnored = true).get() }
+            val loaded = withContext(Dispatchers.IO) {
+                audio.listSpeakers(includeIgnored = false).get() to audio.macVoiceKnown().get()
+            }
+            speakers = loaded.first
+            macVoice = loaded.second
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -206,16 +209,14 @@ private fun SpeakerSettings(
         }
     }
 
-    SectionLabel(strings.text(R.string.voices))
+    SectionLabel(strings.text(R.string.my_voice))
     val current = speakers
     when {
         loadFailed -> GroupCard { SettingsRow(strings.text(R.string.voices_unavailable)) }
         current == null -> ProgressLine()
         else -> GroupCard {
-            val (mine, others) = orderedSpeakers(current)
-            val visible = mine + others
-            val ignored = current.filter { it.ignored }
-            if (current.isEmpty()) SettingsRow(strings.text(R.string.voices_empty))
+            val overview = myVoiceOverview(current, macVoice)
+            val mine = overview.confirmed
             @Composable fun mineRow(speaker: AudioSpeaker, title: String, status: String) =
                 SettingsRow(title, status = status) {
                     Row {
@@ -224,68 +225,70 @@ private fun SpeakerSettings(
                     }
                 }
             // 好几个声音都被认成“我”时合成一行，点开逐个核对；每个都标上最近出现和说了多久。
-            if (mine.size == 1) mineRow(mine[0], strings.text(R.string.speaker_me), format.speakerStatus(mine[0]))
-            else if (mine.isNotEmpty()) {
-                SettingsRow(strings.text(R.string.speaker_me), status = format.totalSpeechLabel(mine.sumOf { it.seconds }),
-                    value = strings.quantity(R.plurals.voice_count, mine.size, countLabel(mine.size)), expanded = mineExpanded,
-                    onClick = { mineExpanded = !mineExpanded })
-                Reveal(mineExpanded) {
-                    Column {
-                        mine.forEach { speaker ->
-                            GroupDivider()
-                            mineRow(speaker, speaker.lastSeen?.let { format.lastHeardLabel(it) } ?: strings.text(R.string.earlier_recordings),
-                                format.totalSpeechLabel(speaker.seconds))
-                        }
-                    }
-                }
-            }
-            var unnamed = 0
-            others.forEachIndexed { index, speaker ->
-                if (index > 0 || mine.isNotEmpty()) GroupDivider()
-                val label = speaker.name ?: strings.text(R.string.unnamed_voice, ++unnamed)
-                SettingsRow(label, status = format.speakerStatus(speaker)) {
-                    Row {
-                        SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
-                        val action = if (speaker.name == null) strings.text(R.string.voice_name_add) else strings.text(R.string.voice_name_edit)
-                        TextAction(action, {
-                            speakerName = speaker.name.orEmpty()
-                            namingTitle = action
-                            naming = speaker.id
-                        }, enabled = !busy)
-                    }
-                }
-            }
-            if (ignored.isNotEmpty()) {
-                if (visible.isNotEmpty()) GroupDivider()
-                SettingsRow(strings.text(R.string.voices_ignored), value = strings.quantity(R.plurals.ignored_voice_count, ignored.size, countLabel(ignored.size)),
-                    expanded = expanded, onClick = { expanded = !expanded })
-                Reveal(expanded) {
-                    ignored.forEachIndexed { index, speaker ->
-                        GroupDivider()
-                        SettingsRow(speaker.name ?: strings.text(R.string.unnamed_voice, index + 1), status = format.speakerStatus(speaker)) {
-                            Row {
-                                SpeakerPlay(speaker, !busy, playingSpeaker == speaker.id) { toggleSample(speaker.id) }
-                                TextAction(strings.text(R.string.restore), { work({ audio.setIgnored(speaker.id, false) }, strings.text(R.string.voice_restored)) }, enabled = !busy)
+            when {
+                mine.size == 1 -> mineRow(mine[0], strings.text(R.string.speaker_me), format.speakerStatus(mine[0]))
+                mine.size > 1 -> {
+                    SettingsRow(
+                        strings.text(R.string.speaker_me),
+                        status = format.totalSpeechLabel(mine.sumOf { it.seconds }),
+                        value = strings.quantity(R.plurals.voice_count, mine.size, countLabel(mine.size)),
+                        expanded = mineExpanded,
+                        onClick = { mineExpanded = !mineExpanded },
+                    )
+                    Reveal(mineExpanded) {
+                        Column {
+                            mine.forEach { speaker ->
+                                GroupDivider()
+                                mineRow(
+                                    speaker,
+                                    speaker.lastSeen?.let { format.lastHeardLabel(it) } ?: strings.text(R.string.earlier_recordings),
+                                    format.totalSpeechLabel(speaker.seconds),
+                                )
                             }
                         }
                     }
                 }
+                overview.syncedFromMac -> SettingsRow(
+                    strings.text(R.string.speaker_me),
+                    status = strings.text(R.string.voice_synced_from_mac),
+                )
+                overview.candidate != null -> {
+                    val candidate = overview.candidate
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    strings.text(R.string.voice_question),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Caption(format.speakerStatus(candidate))
+                            }
+                            SpeakerPlay(candidate, !busy, playingSpeaker == candidate.id) { toggleSample(candidate.id) }
+                        }
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PrimaryButton(strings.text(R.string.voice_yes), {
+                                audio.stopPlayback()
+                                work({ audio.markMe(candidate.id) }, strings.text(R.string.voice_marked_me))
+                            }, enabled = !busy)
+                            TonalButton(strings.text(R.string.voice_no), {
+                                audio.stopPlayback()
+                                work({ audio.setIgnored(candidate.id, true) }, strings.text(R.string.voice_try_another))
+                            }, enabled = !busy)
+                        }
+                    }
+                }
+                else -> SettingsRow(
+                    strings.text(R.string.voice_not_confirmed),
+                    status = strings.text(R.string.voice_confirm_on_home_hint),
+                )
             }
         }
     }
-
-    val target = naming
-    if (target != null) AlertDialog(
-        onDismissRequest = { naming = null },
-        title = { Text(namingTitle) },
-        text = { OutlinedTextField(speakerName, { speakerName = it.take(80) }, label = { Text(strings.text(R.string.voice_name)) }, singleLine = true) },
-        confirmButton = { TextAction(strings.text(R.string.save), {
-            val label = speakerName
-            work({ audio.renameSpeaker(target, label) }, strings.text(R.string.voice_name_saved))
-            naming = null
-        }, enabled = !busy) },
-        dismissButton = { TextAction(strings.text(R.string.cancel), { naming = null }) },
-    )
+    Caption(strings.text(R.string.my_voice_hint))
 }
 
 @Composable

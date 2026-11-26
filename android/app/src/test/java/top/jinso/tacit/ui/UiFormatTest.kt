@@ -4,6 +4,9 @@ import top.jinso.tacit.i18n.AppLang
 import top.jinso.tacit.i18n.TestStrings
 import top.jinso.tacit.R
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -51,20 +54,52 @@ class UiFormatTest {
         assertEquals("1,234", countLabel(1234))
     }
 
-    // 用户反馈：语音转写页连着十行“我”、一串“声音 N”，分不清哪个是哪个。
-    @Test fun speakersGroupMeAndShowWhenAndHowLong() {
-        fun voice(id: String, me: Boolean, seconds: Double, last: Long?, name: String? = null, ignored: Boolean = false) =
-            top.jinso.tacit.audio.AudioSpeaker(id, me, ignored, 1, seconds, true, name, 1, last)
+    // 精简声音列表：设置页只管理“我”的声音，不平铺陌生人列表。
+    @Test fun myVoiceOverviewShowsConfirmedMacSyncOrLongestPlayableCandidate() {
+        fun voice(
+            id: String,
+            me: Boolean,
+            seconds: Double,
+            last: Long?,
+            name: String? = null,
+            ignored: Boolean = false,
+            sampleAvailable: Boolean = true,
+        ) = top.jinso.tacit.audio.AudioSpeaker(id, me, ignored, 1, seconds, sampleAvailable, name, 1, last)
+
         val day = LocalDateTime.parse("2026-11-25T10:00:00").atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val (mine, others) = orderedSpeakers(listOf(
-            voice("a", true, 30.0, day - 86_400_000), voice("b", true, 90.0, day),
-            voice("c", false, 600.0, null), voice("d", false, 20.0, day),
-            voice("e", false, 5.0, day - 1, name = "小林"), voice("f", false, 40.0, day, ignored = true),
-        ))
-        assertEquals(listOf("b", "a"), mine.map { it.id })
-        assertEquals(listOf("e", "c", "d"), others.map { it.id })
-        assertEquals("今天 10:00 · 共 1 分钟", chinese.speakerStatus(mine[0], now = day + 3_600_000))
-        assertEquals("昨天 10:00 · 不到 1 分钟", chinese.speakerStatus(mine[1], now = day + 3_600_000))
-        assertEquals("共 10 分钟", chinese.speakerStatus(others[1], now = day))
+        val confirmed = myVoiceOverview(
+            listOf(
+                voice("a", true, 30.0, day - 86_400_000),
+                voice("b", true, 90.0, day),
+                voice("c", false, 600.0, null),
+                voice("d", false, 40.0, day, ignored = true),
+            ),
+            macVoiceKnown = false,
+        )
+        assertEquals(listOf("b", "a"), confirmed.confirmed.map { it.id })
+        assertFalse(confirmed.syncedFromMac)
+        assertNull(confirmed.candidate)
+        assertEquals("今天 10:00 · 共 1 分钟", chinese.speakerStatus(confirmed.confirmed[0], now = day + 3_600_000))
+        assertEquals("昨天 10:00 · 不到 1 分钟", chinese.speakerStatus(confirmed.confirmed[1], now = day + 3_600_000))
+
+        val macOnly = myVoiceOverview(listOf(voice("c", false, 600.0, day)), macVoiceKnown = true)
+        assertTrue(macOnly.confirmed.isEmpty())
+        assertTrue(macOnly.syncedFromMac)
+        assertNull(macOnly.candidate)
+
+        val unconfirmed = myVoiceOverview(
+            listOf(
+                voice("named", false, 300.0, day, name = "小林"),
+                voice("expired", false, 200.0, day, sampleAvailable = false),
+                voice("ignored", false, 180.0, day, ignored = true),
+                voice("short", false, 25.0, day),
+                voice("long", false, 90.0, day),
+            ),
+            macVoiceKnown = false,
+        )
+        assertTrue(unconfirmed.confirmed.isEmpty())
+        assertFalse(unconfirmed.syncedFromMac)
+        assertEquals("long", unconfirmed.candidate?.id)
+        assertEquals("共 10 分钟", chinese.speakerStatus(voice("c", false, 600.0, null), now = day))
     }
 }
