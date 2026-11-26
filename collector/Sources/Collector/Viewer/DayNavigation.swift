@@ -2,6 +2,7 @@ import SwiftUI
 import CollectorCore
 
 struct DayNavigation: ToolbarContent {
+  @Environment(ViewerStore.self) private var store
   @Binding var day: Date
   @Binding var picking: Bool
   var today = Calendar.current.startOfDay(for: Date())
@@ -18,12 +19,14 @@ struct DayNavigation: ToolbarContent {
       Button { picking = true } label: { PhIcon("calendar-blank", size: PhIcon.toolbar) }
         .help(L10n.jumpToDate).accessibilityLabel(L10n.jumpToDate)
         .popover(isPresented: $picking, arrowEdge: .bottom) {
-          DatePicker(L10n.datePickerAccessibility, selection: Binding(get: { day }, set: {
-            day = Calendar.current.startOfDay(for: $0)
-            picking = false
-          }), in: ...Date(), displayedComponents: .date)
-            .datePickerStyle(.graphical).labelsHidden().padding(12)
-            .environment(\.locale, AppLanguage.current.locale()).environment(\.calendar, ViewerCalendar.formatting)
+          TimelineCalendarPopover(
+            selectedDay: $day,
+            today: today,
+            isPresented: $picking,
+            dataSource: store.dataSource,
+            cache: store.activeDaysCache,
+            revision: store.revision
+          )
         }
     }
   }

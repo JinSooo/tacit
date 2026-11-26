@@ -1472,6 +1472,18 @@ public actor ProjectionSync {
     )
   }
 
+  /// 按需调用 `days.active`，查询某自然月有内容的日期；历史月份走内存 LRU，当月可跳过缓存避免滞后。
+  public func activeDays(month: String, includePrivate: Bool = false, useCache: Bool = true) async throws -> DeviceResponsePayload {
+    var body: [String: DeviceJSON] = ["month": .string(month)]
+    if includePrivate { body["include_private"] = .bool(true) }
+    return try await cachedRead(
+      op: "days.active",
+      body: body,
+      invalidateOnAnyRecordGone: true,
+      useCache: useCache
+    )
+  }
+
   // MARK: - 内部辅助
 
   private static func recordCacheKey(id: String, includeCorrections: Bool, includePrivate: Bool = false) -> String {

@@ -41,6 +41,7 @@ private struct ReviewDayContent: View {
   @State private var loadedRevision: Int?
   @State private var expanded: String?
   @State private var picking = false
+  @State private var hoveringDateTitle = false
   @Namespace private var densityPill
   @State private var setup: (health: DistillHealth, tools: [AgentToolState])?
   @State private var startupMessage: String?
@@ -238,7 +239,7 @@ private struct ReviewDayContent: View {
 
   private var dateTitle: some View {
     Button { picking = true } label: {
-      HStack(alignment: .firstTextBaseline, spacing: 12) {
+      HStack(alignment: .firstTextBaseline, spacing: 10) {
         // 日期栏不动，只有日期数字朝翻页方向滚过去。
         Text(AppLanguage.current == .zh ? Fmt.date(selectedDay) : L10n.dayHeader(selectedDay)).font(.serif(TextSize.display)).foregroundStyle(Palette.ink)
           .contentTransition(Motion.reduced ? .opacity : .numericText(countsDown: dateEdge == .leading))
@@ -246,17 +247,29 @@ private struct ReviewDayContent: View {
           Text(ViewerFormat.weekday(selectedDay)).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
             .contentTransition(.opacity)
         }
+        DisclosureChevron(expanded: picking, size: 11)
+          .foregroundStyle(hoveringDateTitle || picking ? Palette.muted : Palette.faint)
       }
       .animation(Motion.standard, value: selectedDay)
-      .padding(.vertical, 4).contentShape(Rectangle())
+      .padding(.horizontal, 8).padding(.vertical, 4)
+      .background(hoveringDateTitle || picking ? Palette.fill : Color.clear,
+                  in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+      .padding(.leading, -8)
+      .contentShape(Rectangle())
     }
-    .buttonStyle(.plain).help(L10n.jumpToDate).popover(isPresented: $picking) {
-      DatePicker(L10n.chooseDate, selection: Binding(get: { selectedDay }, set: {
-        selectedDay = Calendar.current.startOfDay(for: $0)
-        picking = false
-      }), in: ...now, displayedComponents: .date)
-        .datePickerStyle(.graphical).labelsHidden().padding(12)
-        .environment(\.locale, AppLanguage.current.locale()).environment(\.calendar, ViewerCalendar.formatting)
+    .buttonStyle(.plain)
+    .hoverState($hoveringDateTitle)
+    .help(L10n.jumpToDate)
+    .accessibilityHint(L10n.jumpToDate)
+    .popover(isPresented: $picking, arrowEdge: .bottom) {
+      TimelineCalendarPopover(
+        selectedDay: $selectedDay,
+        today: today,
+        isPresented: $picking,
+        dataSource: store.dataSource,
+        cache: store.activeDaysCache,
+        revision: store.revision
+      )
     }
   }
 

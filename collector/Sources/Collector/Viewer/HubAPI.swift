@@ -254,6 +254,10 @@ final class HubAPI: @unchecked Sendable {
     }
   }
 
+  func activeDays(inMonth month: String) async throws -> ActiveDaysResponse {
+    try await get(ActiveDaysResponse.self, "/v1/days/active", ["month": month])
+  }
+
   static func decodeDiary(_ data: Data) throws -> DayDiary {
     do {
       // Store the canonical placeholder in the Viewer model so a cached diary can
