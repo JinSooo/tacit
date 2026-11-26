@@ -40,7 +40,14 @@ class SpeechModelDownloadTest {
         assertEquals(4, SpeechModelCatalog.resources.size)
         val contract = generateSequence(File(requireNotNull(System.getProperty("user.dir")))) { it.parentFile }
             .map { File(it, "docs/contracts.md") }.first { it.isFile }.readText()
-        (SpeechModelCatalog.resources + SpeechModelCatalog.tagging).forEach { assertTrue("Hash drift: ${it.path}", contract.lineSequence().any { line -> line.contains(it.path) && line.contains(it.sha256) }) }
+        (SpeechModelCatalog.resources + SpeechModelCatalog.tagging).forEach { resource ->
+            (listOf(resource.sha256) + resource.alternates.map { it.second }).forEach { hash ->
+                assertTrue("Hash drift: ${resource.path}", contract.lineSequence().any { line -> line.contains(resource.path) && line.contains(hash) })
+            }
+        }
+        (SpeechModelCatalog.resources + SpeechModelCatalog.taggingArchive + QnnCatalog.archive).forEach {
+            assertTrue("Mirror first: ${it.path}", it.url.startsWith(SpeechModelCatalog.mirror + "/") && it.fallbackUrls.isNotEmpty())
+        }
         assertEquals(SpeechModels.tagging, SpeechModelCatalog.tagging.map { it.path })
     }
     @Test fun taggingInstallUnpacksOnlyVerifiedFilesAndCleansUp() {
@@ -76,6 +83,26 @@ class SpeechModelDownloadTest {
         File(dir, "audio-tagging").deleteRecursively()
         assertTrue(install(archive("$folder/model.int8.onnx" to model)).isFailure)
         assertEquals(emptyList<String>(), dir.list()!!.toList())
+    }
+    // Regression: upstream re-uploaded the speaker model on 2026-11-19 and every new install failed its checksum.
+    @Test fun fallsBackToUpstreamAndAcceptsVerifiedAlternateVersion() {
+        val reexport = "fixed test model, re-exported".toByteArray()
+        fun sha(b: ByteArray) = MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
+        val model = resource().copy(url = "https://mirror.example/m", fallbackUrls = listOf("https://upstream.example/m"),
+            alternates = listOf(reexport.size.toLong() to sha(reexport)))
+        val requested = mutableListOf<String>()
+        val stage = SpeechModelDownload(listOf(model)) {
+            requested += it.toString()
+            if (it.host == "mirror.example") Connection(it, reexport, status = 404) else Connection(it, reexport)
+        }.prepare(temp.root, ModelDownloadCancellation()) { _, _ -> }
+        assertEquals(listOf("https://mirror.example/m", "https://upstream.example/m"), requested)
+        assertArrayEquals(reexport, File(stage, model.path).readBytes())
+        stage.deleteRecursively()
+
+        val tampered = "fixed test model, tampered!!!".toByteArray()
+        assertEquals(reexport.size, tampered.size)
+        val error = failsCleanly(model) { Connection(it, tampered) }
+        assertEquals(R.string.model_checksum_failed, (error as SpeechModelProblem).label)
     }
     @Test fun downloadsAllFilesWithMonotonicProgressAndClosesConnections() {
         val resources = listOf(resource(), resource("tokens.txt"))

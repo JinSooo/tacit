@@ -11,9 +11,9 @@ import java.util.UUID
 
 internal object QnnCatalog {
     const val folder = "sherpa-onnx-qnn-SM8650-binary-30-seconds-sense-voice-zh-en-ja-ko-yue-2024-07-17-int8"
-    val archive = SpeechModelResource("model.tar.bz2",
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models-qnn-binary/$folder.tar.bz2",
-        161991500, "8d050c08b01898b73144329be150cb4d4cc8802d72d6cae6add16e96fb7f0ef5")
+    val archive = SpeechModelResource("model.tar.bz2", "${SpeechModelCatalog.mirror}/$folder.tar.bz2",
+        161991500, "8d050c08b01898b73144329be150cb4d4cc8802d72d6cae6add16e96fb7f0ef5",
+        listOf("https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models-qnn-binary/$folder.tar.bz2"))
     val files = listOf(
         SpeechModelResource("model.bin", "", 255995904, "f66bc5b70ce1d0c7c5abab3f45bbe59fdc266952ab6defc99d9864149ffd0098"),
         SpeechModelResource("tokens.txt", "", 315894, "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"))

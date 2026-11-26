@@ -6,25 +6,33 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const GITHUB = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
+// 我们自己 Release 上的原样副本，排在上游前面：上游重传文件（2026-11-19 换了声纹模型）不会再挡住新安装。
+export const MIRROR = "https://github.com/JinSooo/tacit/releases/download/models-v1";
 const SENSE = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17";
 const SPEAKER = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx";
 
 export interface Model {
-  file: string; sha256: string;
+  file: string;
+  /** 认可的 sha256；上游重新导出、效果一致的版本一并列上。 */
+  sha256: string[];
   /** 依次尝试的地址。 */
   urls: string[];
   /** 从压缩包取文件时的包内路径；压缩包地址排在 urls 之后，其他地址失败才用。 */
   archive?: { url: string; member: string };
 }
 export const AUDIO_MODELS: Model[] = [
-  { file: "silero_vad.onnx", sha256: "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6", urls: [`${GITHUB}/asr-models/silero_vad.onnx`] },
-  { file: SPEAKER, sha256: "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b", urls: [`${GITHUB}/speaker-recongition-models/${SPEAKER}`] },
-  // 单独下载约 240MB；GitHub 只有约 1GB 的整包，单独下载失败时才用。
-  { file: "sense-voice/model.int8.onnx", sha256: "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
-    urls: [`https://huggingface.co/csukuangfj/${SENSE}/resolve/main/model.int8.onnx`],
+  { file: "silero_vad.onnx", sha256: ["9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"],
+    urls: [`${MIRROR}/silero_vad.onnx`, `${GITHUB}/asr-models/silero_vad.onnx`] },
+  // 上游 2026-11-19 重新导出（多 1 字节、几乎每个字节都变），实测同一段语音两版声纹余弦为 1.000000，两版都认。
+  { file: SPEAKER, sha256: ["1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
+    "f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498"],
+    urls: [`${MIRROR}/${SPEAKER}`, `${GITHUB}/speaker-recongition-models/${SPEAKER}`] },
+  // 单独下载约 240MB；GitHub 只有约 1GB 的整包，单独下载都失败时才用。
+  { file: "sense-voice/model.int8.onnx", sha256: ["c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"],
+    urls: [`${MIRROR}/sense-voice-model.int8.onnx`, `https://huggingface.co/csukuangfj/${SENSE}/resolve/main/model.int8.onnx`],
     archive: { url: `${GITHUB}/asr-models/${SENSE}.tar.bz2`, member: `${SENSE}/model.int8.onnx` } },
-  { file: "sense-voice/tokens.txt", sha256: "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
-    urls: [`https://huggingface.co/csukuangfj/${SENSE}/resolve/main/tokens.txt`],
+  { file: "sense-voice/tokens.txt", sha256: ["f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"],
+    urls: [`${MIRROR}/sense-voice-tokens.txt`, `https://huggingface.co/csukuangfj/${SENSE}/resolve/main/tokens.txt`],
     archive: { url: `${GITHUB}/asr-models/${SENSE}.tar.bz2`, member: `${SENSE}/tokens.txt` } },
 ];
 
@@ -75,7 +83,7 @@ export async function ensureAudioModels(dir: string, options: Options = {}): Pro
   const missing: Model[] = [];
   for (const model of models) {
     const file = join(dir, model.file);
-    if (!existsSync(file) || await sha256(file) !== model.sha256) missing.push(model);
+    if (!existsSync(file) || !model.sha256.includes(await sha256(file))) missing.push(model);
   }
   if (!missing.length) return;
   const staging = mkdtempSync(join(dir, ".download-"));
@@ -85,7 +93,7 @@ export async function ensureAudioModels(dir: string, options: Options = {}): Pro
       const staged = join(staging, model.file.replaceAll("/", "_"));
       let ok = false;
       for (const url of model.urls) {
-        try { log(`下载 ${model.file}`); await download(url, staged, o); ok = await sha256(staged) === model.sha256; }
+        try { log(`下载 ${model.file}`); await download(url, staged, o); ok = model.sha256.includes(await sha256(staged)); }
         catch (error) { log(`${model.file}：${error instanceof Error ? error.message : "下载失败"}`); }
         if (ok) break;
         rmSync(staged, { force: true });
@@ -104,7 +112,7 @@ export async function ensureAudioModels(dir: string, options: Options = {}): Pro
           archives.set(model.archive.url, extracted);
         }
         const from = join(extracted, model.archive.member);
-        if (existsSync(from)) { renameSync(from, staged); ok = await sha256(staged) === model.sha256; }
+        if (existsSync(from)) { renameSync(from, staged); ok = model.sha256.includes(await sha256(staged)); }
       }
       if (!ok) throw new Error(`语音模型下载或校验失败：${model.file}`);
       const target = join(dir, model.file);

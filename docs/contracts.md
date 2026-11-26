@@ -384,16 +384,16 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 ### 5.2 模型与库
 
 - sherpa-onnx v2.0.1（`sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib`），dylib 打进 app 的 `Contents/Frameworks` 并用同一张自签名证书签名；头文件 `sherpa-onnx/c-api/c-api.h`（同版本源码）。
-- 模型在第一次开启录音时由 `cli.ts audio-models`（`hub/src/audio-models.ts`）下载到 `<数据目录>/models/`，不进安装包、不进仓库，逐个校验 sha256，不符就不放进去。SenseVoice 两个文件优先从 Hugging Face `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17` 单独下载，失败才从下表的整包取：
+- 模型在第一次开启录音时由 `cli.ts audio-models`（`hub/src/audio-models.ts`）下载到 `<数据目录>/models/`，不进安装包、不进仓库，逐个校验 sha256，不符就不放进去。每个文件先从我们自己的 Release 副本 `github.com/JinSooo/tacit/releases/download/models-v1/` 下载（原样复制，资产名见下表），失败再走上游：sherpa-onnx 的 GitHub Release，SenseVoice 两个文件是 Hugging Face `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17`，再失败才从上游整包取。上游会重传文件（2026-11-19 重新导出了声纹模型，校验值变了、效果不变），所以一个文件可以认多个 sha256；新认一个版本前要用同一段语音比对声纹或转写结果一致。换副本内容时发新的 `models-v<N>`，不改已发的。
 
-| 文件 | 来源（github.com/k2-fsa/sherpa-onnx/releases/download/…） | sha256 |
-|---|---|---|
-| `silero_vad.onnx` | `asr-models/silero_vad.onnx` | `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6` |
-| `3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx` | `speaker-recongition-models/同名` | `1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b` |
-| `sense-voice/model.int8.onnx` | `asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2` 内 | `c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51` |
-| `sense-voice/tokens.txt` | 同上 | `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc` |
+| 文件 | 副本资产名 | 上游（github.com/k2-fsa/sherpa-onnx/releases/download/…） | sha256 |
+|---|---|---|---|
+| `silero_vad.onnx` | 同名 | `asr-models/silero_vad.onnx` | `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6` |
+| `3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx` | 同名 | `speaker-recongition-models/同名` | `1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b`（39593761 字节，副本是这一版）或 `f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498`（39593762 字节，上游 2026-11-19 起） |
+| `sense-voice/model.int8.onnx` | `sense-voice-model.int8.onnx` | `asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2` 内 | `c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51` |
+| `sense-voice/tokens.txt` | `sense-voice-tokens.txt` | 同上 | `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc` |
 
-Android 另有一个可选的音乐识别模型（ced-tiny，AudioSet 527 类），只在已检出人声的片段上判断是不是歌，缺了它录音照常、只是不挡别处放的歌。新下载时随语音模型一起取，早先装好的由后台任务补下；同样逐个校验 sha256。来源是 `audio-tagging-models/sherpa-onnx-ced-tiny-audio-tagging-2024-04-19.tar.bz2`（28531989 字节，sha256 `84baf315b57d61aa69480c4fee878dab54cbc7be3e877db334e65d8b087e23c3`），只解出下面两个文件：
+Android 另有一个可选的音乐识别模型（ced-tiny，AudioSet 527 类），只在已检出人声的片段上判断是不是歌，缺了它录音照常、只是不挡别处放的歌。新下载时随语音模型一起取，早先装好的由后台任务补下；同样逐个校验 sha256。来源是副本里的同名压缩包，失败再走上游 `audio-tagging-models/sherpa-onnx-ced-tiny-audio-tagging-2024-04-19.tar.bz2`（28531989 字节，sha256 `84baf315b57d61aa69480c4fee878dab54cbc7be3e877db334e65d8b087e23c3`），只解出下面两个文件：
 
 | 文件 | sha256 |
 |---|---|
