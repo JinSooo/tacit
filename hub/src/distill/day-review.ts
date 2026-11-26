@@ -36,7 +36,8 @@ type Activity = {
   start: number; end: number; records: ReviewRecord[];
 };
 type Piece = { activity: Activity; start: number; end: number };
-type Candidate = Piece & { primary: ReviewRecord[]; seconds: number; spans: Span[] };
+/** peers：同一时间各自成段的其他活动的记录，不算进这一段。 */
+type Candidate = Piece & { primary: ReviewRecord[]; seconds: number; spans: Span[]; peers?: ReadonlySet<ReviewRecord> };
 export interface ReviewItem {
   id: string; title: string; description: string; t_start: string; t_end: string;
   active_seconds: number; sources: string[]; evidence: DayReference[];
@@ -349,15 +350,24 @@ function splitOverlaps(activities: Activity[], accepts = eligible): Candidate[] 
       const counts = active.get(c.activity);
       if (counts) counts[c.rank] = counts[c.rank]! + c.delta;
     }
-    let winner: Activity | undefined, best = -2;
-    const last = pieces.at(-1), incumbent = last?.end === start ? last.activity : undefined;
+    // 同时进行、各有内容的活动（AI 会话、录音、聊天）作为一个整体和时间骨架裁决，赢下的时间各自成段、可以交叠：
+    // 一边录音一边在几个 Agent 之间轮流输入时，按发言来回切会把每件事剪成一两分钟的碎段（2026-11-26 决定）。
+    const contenders = new Map<Activity, { score: number; start: number; key: string }>();
     for (const [a, counts] of active) {
+      const contender = concurrentActivity(a) ? concurrent : a, score = counts.findLastIndex(n => n > 0);
+      const seen = contenders.get(contender);
+      if (!seen) contenders.set(contender, { score, start: a.start, key: a.key });
+      else contenders.set(contender, { score: Math.max(seen.score, score), start: Math.min(seen.start, a.start),
+        key: seen.key < a.key ? seen.key : a.key });
+    }
+    let winner: Activity | undefined, best = -2, winnerStart = 0, winnerKey = "";
+    const last = pieces.at(-1), incumbent = last?.end === start ? last.activity : undefined;
+    for (const [a, { score, start: began, key }] of contenders) {
       // 并行活动意图相同，保留较早开始的当前段，避免同级短活动反复打断正文。
-      const score = counts.findLastIndex(n => n > 0);
       const preferred = a === incumbent || winner !== incumbent && winner &&
-        (a.start < winner.start || (a.start === winner.start && a.key < winner.key));
+        (began < winnerStart || (began === winnerStart && key < winnerKey));
       if (score > best || (score === best && preferred)) {
-        winner = a; best = score;
+        winner = a; best = score; winnerStart = began; winnerKey = key;
       }
     }
     if (!winner) continue;
@@ -365,19 +375,50 @@ function splitOverlaps(activities: Activity[], accepts = eligible): Candidate[] 
     else pieces.push({ activity: winner, start, end });
   }
 
-  const candidates = pieces.flatMap(candidatesIn).filter(a => accepts(a.activity.kind, a.primary, a.seconds));
+  const members = activities.filter(a => concurrentActivity(a) && a.start !== a.end &&
+    accepts(a.kind, a.records, unionSeconds(a.records.filter(r => r.end > r.start).map(r => [r.start, r.end]))));
+  const accepted = (a: Candidate) => accepts(a.activity.kind, a.primary, a.seconds);
+  const candidates = pieces.flatMap(piece => {
+    if (piece.activity !== concurrent) return candidatesIn(piece).filter(accepted);
+    const whole = members.filter(a => a.start < piece.end && a.end > piece.start)
+      .flatMap(activity => candidatesIn({ activity, start: piece.start, end: piece.end })).filter(accepted);
+    const shown = whole.flatMap(c => splitAtSwitches(c, whole.filter(o => o.activity !== c.activity))).filter(accepted);
+    return shown.map(c => ({ ...c, peers: new Set(shown.filter(o => o.activity !== c.activity).flatMap(o => o.activity.records)) }));
+  });
   // 瞬时事件落在可见段内时作为来源和原文归入该段，否则同一时刻保留意图最强的事件。
   points.sort((a, b) => a.start - b.start || eventRank(b.records[0]!) - eventRank(a.records[0]!) || a.key.localeCompare(b.key));
   const covered = candidates.slice();
-  let i = 0, lastPoint: number | undefined;
+  let lastPoint: number | undefined;
   for (const a of points) {
-    while (covered[i] && covered[i]!.end <= a.start) i++;
-    if (a.start === lastPoint || (covered[i] && covered[i]!.start <= a.start)) continue;
+    if (a.start === lastPoint || covered.some(c => c.start <= a.start && a.start < c.end)) continue;
     candidates.push(makeCandidate({ activity: a, start: a.start, end: a.end })!);
     lastPoint = a.start;
   }
-  return candidates.sort((a, b) => a.start - b.start);
+  return candidates.sort((a, b) => a.start - b.start || a.activity.key.localeCompare(b.activity.key));
 }
+
+/** 另一件事整个落在这段自己的记录空档里，是中途换了事：在那里断开，回来另起一段。 */
+function splitAtSwitches(candidate: Candidate, others: Candidate[]): Candidate[] {
+  const spans = [...candidate.spans].sort((x, y) => x[0] - y[0]);
+  const groups: Span[] = [];
+  for (const [from, to] of spans) {
+    const last = groups.at(-1);
+    if (last && !others.some(o => o.start >= last[1] && o.end <= from)) last[1] = Math.max(last[1], to);
+    else groups.push([from, to]);
+  }
+  if (groups.length < 2) return [candidate];
+  return groups.flatMap(([start, end]) => makeCandidate({ activity: candidate.activity, start, end }) ?? []);
+}
+
+const CONCURRENT_KINDS = new Set<Kind>(["thread", "speech", "session", "chat"]);
+/**
+ * 用户自己在里面说了、写了的活动（AI 会话、录音、聊天）：几个同时进行时各自成段，时间可以交叠。
+ * 只有别人说话或只有时间骨架的仍按证据区间让位，原文留在同时进行的那一段里。
+ */
+function concurrentActivity(a: Activity) {
+  return CONCURRENT_KINDS.has(a.kind) && a.records.some(r => !SKELETON_SOURCES.has(r.source) && r.evidence.some(e => e.role === "user"));
+}
+const concurrent: Activity = { key: "", kind: "misc", projectId: null, start: 0, end: 0, records: [] };
 
 function sameActivity(a: Candidate, b: Candidate) {
   return a.activity.key === b.activity.key && ["thread", "session", "chat"].includes(a.activity.kind);
@@ -388,23 +429,43 @@ function canMerge(a: Candidate, b: Candidate, gap: number) {
     unionSeconds([...a.spans, ...b.spans]) * 1000 >= 0.6 * (b.end - a.start);
 }
 
+/**
+ * 排在 i 后面、可与它接续的同活动段。和它同时进行的其他段不算隔开；
+ * 完全落在两段空档里的段说明中途换了事，照旧挡在中间。
+ */
+function nextNeighbor<T>(list: T[], i: number, candidate: (item: T) => Candidate) {
+  const a = candidate(list[i]!);
+  const j = list.findIndex((item, k) => k > i && candidate(item).activity.key === a.activity.key);
+  if (j < 0) return -1;
+  const b = candidate(list[j]!);
+  for (let k = i + 1; k < j; k++) {
+    const c = candidate(list[k]!);
+    if (!concurrentActivity(a.activity) || !concurrentActivity(c.activity) || (c.start >= a.end && c.end <= b.start)) return -1;
+  }
+  return j;
+}
+
 function mergedCandidate(a: Candidate, b: Candidate): Candidate {
   const primary = [...new Set([...a.primary, ...b.primary])], spans = [...a.spans, ...b.spans];
-  return { ...a, end: b.end, primary, spans, seconds: unionSeconds(spans),
+  const peers = a.peers || b.peers ? new Set([...a.peers ?? [], ...b.peers ?? []]) : undefined;
+  return { ...a, end: b.end, primary, spans, seconds: unionSeconds(spans), ...(peers ? { peers } : {}),
     activity: { ...a.activity, start: a.start, end: b.end, records: primary } };
 }
 
 function mergeAdjacent(candidates: Candidate[], gap: number) {
   // 每次优先合并最短的一对，合并后重新检查两侧，直到没有合规的相邻段。
   for (;;) {
-    let merge = -1, shortest = Infinity;
+    let merge = -1, partner = -1, shortest = Infinity;
     for (let i = 0; i + 1 < candidates.length; i++) {
-      const a = candidates[i]!, b = candidates[i + 1]!;
+      const j = nextNeighbor(candidates, i, c => c);
+      if (j < 0) continue;
+      const a = candidates[i]!, b = candidates[j]!;
       if (a.seconds + b.seconds >= shortest || !canMerge(a, b, gap)) continue;
-      merge = i; shortest = a.seconds + b.seconds;
+      merge = i; partner = j; shortest = a.seconds + b.seconds;
     }
     if (merge < 0) break;
-    candidates.splice(merge, 2, mergedCandidate(candidates[merge]!, candidates[merge + 1]!));
+    candidates[merge] = mergedCandidate(candidates[merge]!, candidates[partner]!);
+    candidates.splice(partner, 1);
   }
   return candidates;
 }
@@ -482,8 +543,14 @@ function recordMembership(a: Candidate, overlapping: ReviewRecord[]) {
   return overlapping.filter(r => !a.activity.projectId || !r.projectId || r.projectId === a.activity.projectId);
 }
 
+function recordsInPiece(rows: ReviewRecord[], candidate: Candidate) {
+  // 同时进行的其他活动有自己的段，它们的记录不算进这一段的记录和依据。
+  return rows.filter(r => inPiece(r, candidate) && !candidate.peers?.has(r))
+    .flatMap(r => [r, ...(r.related ?? [])]);
+}
+
 function overlappingRecords(rows: ReviewRecord[], candidate: Candidate) {
-  return [...new Set(rows.filter(r => inPiece(r, candidate)).flatMap(r => [r, ...(r.related ?? [])]))]
+  return [...new Set(recordsInPiece(rows, candidate))]
     .sort((x,y) => Date.parse(x.at)-Date.parse(y.at) || x.id.localeCompare(y.id));
 }
 
@@ -603,7 +670,7 @@ export function dayDrafts(hub: HubDB, start: number, end: number, window: DraftW
   if (window.cutoff !== undefined && window.cutoff >= end - 1) return [];
   const rows = loadRecords(hub, start, end, readGeneral(hub).language, { ...window, includeRelated: window.cutoff === undefined });
   return draftCandidates(rows, audioDeviceGroup(hub)).map(a => {
-    const overlapping = rows.filter(r => inPiece(r, a)).flatMap(r => [r, ...(r.related ?? [])]);
+    const overlapping = recordsInPiece(rows, a);
     return draftItem(a, segmentId(a), [...new Set(recordMembership(a, overlapping).map(r => r.id))]);
   });
 }
@@ -776,8 +843,9 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
   if (!result) return null;
   // 模型省略中间候选后可能产生新的相邻段；同事项按相同规则兜底，不凭项目猜事项。
   for (let i = 0; i + 1 < result.length;) {
-    const x = result[i]!, y = result[i + 1]!;
-    if (!canMerge(x.a, y.a, 30 * MINUTE)) { i++; continue; }
+    const j = nextNeighbor(result, i, r => r.a);
+    const x = result[i]!, y = result[j]!;
+    if (j < 0 || !canMerge(x.a, y.a, 30 * MINUTE)) { i++; continue; }
     const preferred = x.a.seconds >= y.a.seconds ? x.segment : y.segment;
     const other = preferred === x.segment ? y.segment : x.segment;
     x.a = { ...x.a, ...mergedCandidate(x.a, y.a) };
@@ -789,7 +857,7 @@ export function composeReview(segments: ReviewSegment[], output: DayOutput, dayE
       record_ids: [...new Set([...x.segment.record_ids, ...y.segment.record_ids])],
       evidence: [...new Map([...x.segment.evidence, ...y.segment.evidence].map(e => [e.id, e])).values()] };
     x.summaryKeys.push(...y.summaryKeys);
-    result.splice(i + 1, 1);
+    result.splice(j, 1);
     // 合并后的覆盖率可能让前一对也满足条件。
     i = Math.max(0, i - 1);
   }

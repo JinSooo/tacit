@@ -778,3 +778,25 @@ test("未归属线程的 AI 段按真实会话识别，不沿用旧帧的共享�
     expect(reviewInput(ctx.db,base,base+21*min)).toHaveLength(2);
   } finally { ctx.cleanup(); }
 });
+
+test("几个 AI 会话和录音同时进行时各成一整段，轮流发言不把会话切碎，依据不串到别的段", () => {
+  const ctx = setup();
+  try {
+    const batch = (ref: string, from: number, to: number, text: string) => span(from, to, {
+      source: "codex.session", source_ref: ref, body: `[我] ${text}\n\n[AI] 已处理。` });
+    const release = [[0, 4], [6, 10], [12, 16], [18, 22]].map(([from, to], i) => batch(`synthetic-release#${i}`, from!, to!, `发布展板第 ${i} 步。`));
+    const fix = [[3, 7], [9, 13], [15, 19]].map(([from, to], i) => batch(`synthetic-fix#${i}`, from!, to!, `修图例第 ${i} 步。`));
+    // 同时在录的一场对话，“我”每隔几分钟说一句：以前和 AI 会话按发言来回抢时间。
+    const lines = [1, 5, 8, 11, 14, 17, 20].map(m => `[10:${String(m).padStart(2, "0")}:00] 我：展厅第 ${m} 分钟的安排。`).join("\n");
+    const talk = span(0, 22, { source: "mac.audio", source_ref: "synthetic-talk", body: lines });
+    ctx.db.ingest([...release, ...fix, talk]);
+    const segments = reviewPlan(ctx.db, base, base + 40 * min).segments;
+    expect(segments.map(s => [s.start, s.end, s.records.map(r => r.id)])).toEqual([
+      [base, base + 22 * min, release.map(r => r.id)],
+      [base, base + 22 * min, [talk.id]],
+      [base + 3 * min, base + 19 * min, fix.map(r => r.id)],
+    ]);
+    expect(segments[0]!.evidence.every(e => !e.text.includes("修图例"))).toBe(true);
+    expect(segments[1]!.evidence.every(e => !e.text.includes("发布展板"))).toBe(true);
+  } finally { ctx.cleanup(); }
+});
