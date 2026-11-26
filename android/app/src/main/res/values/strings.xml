@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="acceleration">On-device acceleration</string>
-    <string name="acceleration_cpu_fallback">On-device acceleration is unavailable. Transcription will continue without it.</string>
+    <string name="acceleration">Hardware acceleration</string>
+    <string name="acceleration_cpu_fallback">Temporarily unavailable; switched to standard transcription</string>
     <string name="acceleration_downloading">Downloading acceleration models</string>
-    <string name="acceleration_prepare_failed">Couldn\'t prepare on-device acceleration. Try again later.</string>
-    <string name="acceleration_size">About 162 MB</string>
+    <string name="acceleration_enabled">Enabled</string>
+    <string name="acceleration_prepare_failed">Couldn\'t prepare hardware acceleration. Try again later.</string>
+    <string name="acceleration_size">Uses your phone\'s NPU for faster, lower-power transcription (~162 MB, optional)</string>
     <string name="acceleration_storage">Free at least 480 MB of storage and try again</string>
-    <string name="acceleration_validating">Checking on-device acceleration</string>
+    <string name="acceleration_validating">Checking hardware acceleration</string>
     <string name="activity_notifications">Background notifications</string>
     <string name="address_empty_hint">Leave blank for automatic discovery</string>
     <string name="ai_summaries">AI summaries</string>

@@ -102,4 +102,42 @@ class UiFormatTest {
         assertEquals("long", unconfirmed.candidate?.id)
         assertEquals("共 10 分钟", chinese.speakerStatus(voice("c", false, 600.0, null), now = day))
     }
+
+    @Test fun accelerationCopyExplainsNpuPurposeAndStatesInBothLanguages() {
+        val zh = TestStrings(AppLang.ZH)
+        val en = TestStrings(AppLang.EN)
+
+        assertEquals("芯片加速转写", zh.text(R.string.acceleration))
+        assertEquals("Hardware acceleration", en.text(R.string.acceleration))
+
+        val zhUnprepared = accelerationDisplay(ready = false, fallback = false, strings = zh)
+        assertEquals("用手机 NPU 加快本机转写并更省电（约 162 MB，可选）", zhUnprepared.status)
+        assertNull(zhUnprepared.value)
+        assertFalse(zhUnprepared.problem)
+
+        val zhEnabled = accelerationDisplay(ready = true, fallback = false, strings = zh)
+        assertNull(zhEnabled.status)
+        assertEquals("已启用", zhEnabled.value)
+        assertFalse(zhEnabled.problem)
+
+        val zhFallback = accelerationDisplay(ready = true, fallback = true, strings = zh)
+        assertEquals("暂时不可用，已自动改用普通转写", zhFallback.status)
+        assertNull(zhFallback.value)
+        assertTrue(zhFallback.problem)
+
+        val enUnprepared = accelerationDisplay(ready = false, fallback = false, strings = en)
+        assertEquals("Uses your phone's NPU for faster, lower-power transcription (~162 MB, optional)", enUnprepared.status)
+        assertNull(enUnprepared.value)
+        assertFalse(enUnprepared.problem)
+
+        val enEnabled = accelerationDisplay(ready = true, fallback = false, strings = en)
+        assertNull(enEnabled.status)
+        assertEquals("Enabled", enEnabled.value)
+        assertFalse(enEnabled.problem)
+
+        val enFallback = accelerationDisplay(ready = true, fallback = true, strings = en)
+        assertEquals("Temporarily unavailable; switched to standard transcription", enFallback.status)
+        assertNull(enFallback.value)
+        assertTrue(enFallback.problem)
+    }
 }

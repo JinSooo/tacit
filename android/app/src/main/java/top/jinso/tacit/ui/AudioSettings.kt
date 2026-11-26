@@ -33,10 +33,39 @@ import top.jinso.tacit.TacitApp
 import top.jinso.tacit.audio.*
 import top.jinso.tacit.data.DEFAULT_AUDIO_RETENTION_DAYS
 import top.jinso.tacit.data.MAX_AUDIO_RETENTION_DAYS
+import top.jinso.tacit.i18n.UiStrings
 import top.jinso.tacit.ui.components.*
 import java.util.concurrent.CompletableFuture
 
 /** Model controls live only in Settings; opening this page never starts a download. */
+internal data class AccelerationDisplay(
+    val status: String?,
+    val value: String?,
+    val problem: Boolean,
+)
+
+internal fun accelerationDisplay(
+    ready: Boolean,
+    fallback: Boolean,
+    strings: UiStrings,
+): AccelerationDisplay = when {
+    !ready -> AccelerationDisplay(
+        status = strings.text(R.string.acceleration_size),
+        value = null,
+        problem = false,
+    )
+    fallback -> AccelerationDisplay(
+        status = strings.text(R.string.acceleration_cpu_fallback),
+        value = null,
+        problem = true,
+    )
+    else -> AccelerationDisplay(
+        status = null,
+        value = strings.text(R.string.acceleration_enabled),
+        problem = false,
+    )
+}
+
 @Composable internal fun SpeechSettings(
     app: TacitApp, notify: (String) -> Unit, resumed: Int, offerUndo: (String, suspend () -> Unit) -> Unit,
 ) {
@@ -123,17 +152,21 @@ import java.util.concurrent.CompletableFuture
         )
         if (audio.supportsNpu()) {
             GroupDivider()
-            val status = when {
-                !accelerationReady -> strings.text(R.string.acceleration_size)
-                accelerationFallback -> strings.text(R.string.acceleration_cpu_fallback)
-                else -> null
-            }
-            SettingsRow(strings.text(R.string.acceleration), status, problem = accelerationReady && accelerationFallback) {
-                if (!accelerationReady) TonalButton(strings.text(R.string.prepare), {
-                    runCatching { audio.downloadAcceleration() }.onFailure { notify(strings.text(R.string.acceleration_prepare_failed)) }
-                    preparation = audio.modelPreparation()
-                }, enabled = modelsReady == true && canImport)
-            }
+            val display = accelerationDisplay(accelerationReady, accelerationFallback, strings)
+            SettingsRow(
+                strings.text(R.string.acceleration),
+                status = display.status,
+                value = display.value,
+                problem = display.problem,
+                trailing = if (!accelerationReady) {
+                    {
+                        TonalButton(strings.text(R.string.prepare), {
+                            runCatching { audio.downloadAcceleration() }.onFailure { notify(strings.text(R.string.acceleration_prepare_failed)) }
+                            preparation = audio.modelPreparation()
+                        }, enabled = modelsReady == true && canImport)
+                    }
+                } else null,
+            )
         }
     }
     Caption(strings.text(R.string.speech_models_hint))

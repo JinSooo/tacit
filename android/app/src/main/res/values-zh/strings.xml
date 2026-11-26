@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="acceleration">本机加速</string>
-    <string name="acceleration_cpu_fallback">本机加速暂时不可用，将改用普通转写</string>
+    <string name="acceleration">芯片加速转写</string>
+    <string name="acceleration_cpu_fallback">暂时不可用，已自动改用普通转写</string>
     <string name="acceleration_downloading">正在下载加速模型</string>
-    <string name="acceleration_prepare_failed">暂时无法准备本机加速，请稍后重试</string>
-    <string name="acceleration_size">约 162 MB</string>
+    <string name="acceleration_enabled">已启用</string>
+    <string name="acceleration_prepare_failed">暂时无法准备芯片加速转写，请稍后重试</string>
+    <string name="acceleration_size">用手机 NPU 加快本机转写并更省电（约 162 MB，可选）</string>
     <string name="acceleration_storage">存储空间不足，请至少腾出 480 MB 后重试</string>
-    <string name="acceleration_validating">正在验证本机加速</string>
+    <string name="acceleration_validating">正在验证芯片加速转写</string>
     <string name="activity_notifications">运行通知</string>
     <string name="address_empty_hint">留空自动发现</string>
     <string name="ai_summaries">AI 总结</string>
