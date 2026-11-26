@@ -152,6 +152,7 @@ struct SettingsMessage: View {
 
 struct GeneralSettingsView: View {
   @EnvironmentObject private var language: LanguageStore
+  @Environment(ViewerStore.self) private var store
 
   var body: some View {
     SettingsForm {
@@ -174,7 +175,7 @@ struct GeneralSettingsView: View {
         Note(L10n.Settings.languageNote)
       }
       Section(L10n.Settings.about) {
-        SettingsRow("Tacit", value: L10n.Settings.appVersion(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? L10n.Settings.developmentBuild))
+        SettingsVersionRow(notice: store.update)
         SettingsRow(L10n.Settings.build, value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? L10n.Settings.localBuild)
       }
     }

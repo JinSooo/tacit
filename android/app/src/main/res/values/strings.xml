@@ -266,6 +266,13 @@
     <string name="testing_connection">Testing…</string>
     <string name="timeline_empty">Your conversations will appear here by day.</string>
     <string name="timeline_synced">Synced up to %1$s</string>
+    <string name="update_available">Tacit %1$s is available</string>
+    <string name="skip_this_version">Skip</string>
+    <string name="download">Download</string>
+    <string name="download_version">Download %1$s</string>
+    <string name="check_for_updates">Check for updates</string>
+    <string name="up_to_date">Up to date</string>
+    <string name="update_check_failed">Couldn’t connect</string>
     <string name="today">Today</string>
     <string name="today_at">Today at %1$s</string>
     <string name="transcribe_queued">Queued for transcription</string>

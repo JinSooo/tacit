@@ -1,4 +1,4 @@
-<!-- source: site/README.md @ 6210abc5e68197a2390925987ae7d84f1ba1427a -->
+<!-- source: site/README.md @ febf29da8ba11243dbcdafd8a7a1b3e84b70c8cb -->
 
 [English](README.md) | 简体中文
 
@@ -14,7 +14,7 @@ bun test site/              # 运行官网构建、路由与文档链接测试
 
 ## 路由结构
 
-构建产物在 `site/dist/`，所有页面内联公共样式、脚本和来源符号，共用根目录 `assets/`。供 Mac 应用检查更新的 `latest.json` 保持在根目录。
+构建产物在 `site/dist/`，所有页面内联公共样式、脚本和来源符号，共用根目录 `assets/`。供 Mac 和 Android 应用检查更新的 `latest.json` 保持在根目录。
 
 | 路径 | 产物文件 | 说明 |
 | --- | --- | --- |
@@ -23,7 +23,7 @@ bun test site/              # 运行官网构建、路由与文档链接测试
 | `/en/download/`、`/zh/download/` | `en/download/index.html`、`zh/download/index.html` | 独立下载页：Mac（含 3 步首次放行与可复制命令）、Android、Docker 独立服务端与计划支持平台 |
 | `/en/docs/`、`/zh/docs/` | `en/docs/index.html`、`zh/docs/index.html` | 文档首页概览 |
 | `/en/docs/<slug>/`、`/zh/docs/<slug>/` | `en/docs/<slug>/index.html`、`zh/docs/<slug>/index.html` | 直接由仓库 `docs/` Markdown 构建的文档子页（`trial-guide`、`troubleshooting`、`server-deployment`、`installation`、`plugins`） |
-| `/latest.json` | `latest.json` | 从 `site/src/latest.json` 原样复制，供 Mac 客户端每日检查更新 |
+| `/latest.json` | `latest.json` | 从 `site/src/latest.json` 原样复制，供 Mac 和 Android 客户端每日检查更新 |
 
 `site/src/en/` 和 `site/src/zh/` 各有首页骨架 `index.html`、首页区块 `sections/*.html`、独立下载页 `download.html` 以及共享片段 `day-overview.html`。`<!-- include: 路径 -->` 在构建时展开，路径相对包含它的文件。文档站由 `site/build.ts` 直接读取仓库 `docs/` 生成，同时兼容中文在 `docs/<slug>.md`（英文在 `docs/en/<slug>.md`）与英文优先在 `docs/<slug>.md`（中文在 `docs/zh/<slug>.md`）两种布局。页面不请求外部 CDN 资源，不放统计脚本。
 

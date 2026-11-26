@@ -266,6 +266,13 @@
     <string name="testing_connection">正在测试…</string>
     <string name="timeline_empty">说过的话，会按天写在这里。</string>
     <string name="timeline_synced">已同步到 %1$s</string>
+    <string name="update_available">Tacit %1$s 可以更新了</string>
+    <string name="skip_this_version">跳过</string>
+    <string name="download">下载</string>
+    <string name="download_version">下载 %1$s</string>
+    <string name="check_for_updates">检查更新</string>
+    <string name="up_to_date">已是最新</string>
+    <string name="update_check_failed">暂时连不上</string>
     <string name="today">今天</string>
     <string name="today_at">今天 %1$s</string>
     <string name="transcribe_queued">已开始补转写</string>

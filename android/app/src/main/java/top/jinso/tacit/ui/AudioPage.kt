@@ -1,6 +1,8 @@
 package top.jinso.tacit.ui
 
 import top.jinso.tacit.R
+import top.jinso.tacit.data.AppUpdate
+import androidx.compose.ui.platform.LocalUriHandler
 import top.jinso.tacit.i18n.AppLang
 import top.jinso.tacit.i18n.UiStrings
 import java.util.Locale
@@ -92,6 +94,8 @@ import java.util.concurrent.CompletableFuture
     var loadFailed by remember { mutableStateOf(false) }
     var summaries by remember { mutableStateOf(emptyMap<String, ConversationSummary>()) }
     val includeIgnored = false
+    val update by app.updates.state.collectAsState()
+    LaunchedEffect(resumed) { app.updates.checkIfDue() }
     fun work(task: () -> CompletableFuture<Unit>, success: String, after: () -> Unit = {}) {
         scope.launch {
             busy = true
@@ -238,6 +242,13 @@ import java.util.concurrent.CompletableFuture
                     notice.openNotifications -> NoticeRow(notice.text) { openSystemPage(activity, SystemPage.NOTIFICATIONS, notify) }
                     else -> NoticeText(notice.text)
                 }
+            }
+        }
+        // 页首只出一行：录音问题优先，没有问题时才提示新版本。
+        val available = update.available
+        if (notice == null && available != null) item(key = "update") {
+                    Box(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) {
+                UpdateLine(available, skip = app.updates::skip)
             }
         }
         if (candidate != null) item(key = "voice-${candidate.id}") {
@@ -516,6 +527,20 @@ private fun NoticeAction(text: String, action: String, enabled: Boolean, onClick
             verticalAlignment = Alignment.CenterVertically) {
             Text(text, Modifier.weight(1f), color = tacitColors.ink)
             PrimaryButton(action, onClick, enabled)
+        }
+    }
+}
+
+@Composable
+private fun UpdateLine(update: AppUpdate, skip: () -> Unit) {
+    val strings = uiStrings()
+    val uri = LocalUriHandler.current
+    Surface(color = tacitColors.fill, shape = MaterialTheme.shapes.medium) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(strings.text(R.string.update_available, update.version), Modifier.weight(1f), color = tacitColors.ink)
+            TextButton(onClick = skip) { Text(strings.text(R.string.skip_this_version), color = tacitColors.muted) }
+            TextButton(onClick = { runCatching { uri.openUri(update.page) } }) { Text(strings.text(R.string.download)) }
         }
     }
 }

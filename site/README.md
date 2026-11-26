@@ -12,7 +12,7 @@ bun test site/              # Run build, routing, and documentation link tests
 
 ## Routes
 
-The build writes to `site/dist/`. Every page inlines shared styles, scripts, and source icons. Pages share the root `assets/` directory. The Mac app's update feed, `latest.json`, stays at the root.
+The build writes to `site/dist/`. Every page inlines shared styles, scripts, and source icons. Pages share the root `assets/` directory. The apps' update feed, `latest.json`, stays at the root.
 
 | Route | Output | Description |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ The build writes to `site/dist/`. Every page inlines shared styles, scripts, and
 | `/en/download/`, `/zh/download/` | `en/download/index.html`, `zh/download/index.html` | Download pages for Mac, Android, and the standalone Docker service, plus planned platforms. The Mac instructions include three first-launch steps and a command you can copy. |
 | `/en/docs/`, `/zh/docs/` | `en/docs/index.html`, `zh/docs/index.html` | Documentation indexes. |
 | `/en/docs/<slug>/`, `/zh/docs/<slug>/` | `en/docs/<slug>/index.html`, `zh/docs/<slug>/index.html` | Guides built from Markdown in `docs/` for trying Tacit, troubleshooting, server deployment, installation, and plugins. |
-| `/latest.json` | `latest.json` | A copy of `site/src/latest.json` for the Mac app's daily update check. |
+| `/latest.json` | `latest.json` | A copy of `site/src/latest.json` for the Mac and Android apps' daily update checks. |
 
 Each locale under `site/src/en/` and `site/src/zh/` has a homepage shell (`index.html`), sections (`sections/*.html`), a download page (`download.html`), and a shared fragment (`day-overview.html`). The build expands `<!-- include: path -->` directives. Paths are relative to the file containing the directive.
 

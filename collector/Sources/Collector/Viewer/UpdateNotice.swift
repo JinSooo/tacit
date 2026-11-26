@@ -8,7 +8,12 @@ import enum CollectorCore.L10n
 @MainActor @Observable final class UpdateNotice {
   private static let skippedKey = "update.skippedVersion"
   private static let checkedKey = "update.checkedAt"
+  /// 官网上比当前新的版本；时间线那一行还要再排除用户跳过的版本。
+  private(set) var latest: UpdateManifest?
   private(set) var available: UpdateManifest?
+  /// 设置里手动检查的结果：nil 是还没手动查过。
+  private(set) var manual: ManualCheck?
+  enum ManualCheck: Equatable { case checking, upToDate, failed }
   @ObservationIgnored private var timer: Timer?
 
   func start() {
@@ -27,11 +32,23 @@ import enum CollectorCore.L10n
   }
 
   func download() {
-    guard let available else { return }
-    NSWorkspace.shared.open(available.page)
+    guard let page = (available ?? latest)?.page else { return }
+    NSWorkspace.shared.open(page)
   }
 
-  private var currentVersion: String? {
+  /// 设置里的“检查更新”：不管离上次多久都立刻查，结果留在那一行里。
+  func checkNow() {
+    guard manual != .checking else { return }
+    manual = .checking
+    Task {
+      let ok = await check()
+      manual = !ok ? .failed : latest == nil ? .upToDate : nil
+    }
+  }
+
+  var canCheck: Bool { currentVersion != nil }
+
+  var currentVersion: String? {
     Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
   }
 
@@ -43,7 +60,7 @@ import enum CollectorCore.L10n
     Task { await check() }
   }
 
-  private func check() async {
+  @discardableResult private func check() async -> Bool {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil
     configuration.urlCache = nil
@@ -52,16 +69,18 @@ import enum CollectorCore.L10n
     let session = URLSession(configuration: configuration)
     defer { session.finishTasksAndInvalidate() }
     guard let (data, response) = try? await session.data(from: UpdateManifest.url),
-          (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 16 * 1024 else { return }
+          (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 16 * 1024 else { return false }
     UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.checkedKey)
     UserDefaults.standard.set(data, forKey: Self.checkedKey + ".body")
     apply(data)
+    return true
   }
 
   private func apply(_ data: Data) {
-    let latest = UpdateManifest.newer(than: currentVersion, in: data)
+    let newest = UpdateManifest.newer(than: currentVersion, in: data)
     let skipped = UserDefaults.standard.string(forKey: Self.skippedKey)
-    let next = latest?.version == skipped ? nil : latest
+    let next = newest?.version == skipped ? nil : newest
+    latest = newest
     if next != available { Motion.animate { self.available = next } }
   }
 }
@@ -81,5 +100,34 @@ struct TimelineUpdateLine: View {
     .font(.system(size: TextSize.body))
     .foregroundStyle(Palette.accent)
     .padding(.vertical, 4)
+  }
+}
+
+/// 设置“关于”里的版本行：版本号 + 检查更新，结果就写在这一行。
+struct SettingsVersionRow: View {
+  let notice: UpdateNotice
+
+  var body: some View {
+    SettingsRow("Tacit") {
+      HStack(spacing: 12) {
+        Text(L10n.Settings.appVersion(notice.currentVersion ?? L10n.Settings.developmentBuild)).foregroundStyle(Palette.muted)
+        if notice.canCheck { trailing }
+      }
+    }
+  }
+
+  @ViewBuilder private var trailing: some View {
+    if let latest = notice.latest {
+      Button(L10n.Settings.updateTo(latest.version)) { notice.download() }.buttonStyle(.accentLink).fixedSize()
+    } else {
+      switch notice.manual {
+      case .checking: ProgressView().controlSize(.small)
+      case .upToDate: Text(L10n.Settings.upToDate).foregroundStyle(Palette.muted)
+      case .failed:
+        Text(L10n.Settings.updateCheckFailed).foregroundStyle(Palette.muted)
+        Button(L10n.Settings.checkForUpdates) { notice.checkNow() }.buttonStyle(.accentLink).fixedSize()
+      case nil: Button(L10n.Settings.checkForUpdates) { notice.checkNow() }.buttonStyle(.accentLink).fixedSize()
+      }
+    }
   }
 }

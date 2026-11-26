@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import top.jinso.tacit.BuildConfig
@@ -185,5 +186,33 @@ private fun SettingsHome(
         SettingsRow(strings.text(R.string.background_operation), value = if (problems > 0) strings.quantity(R.plurals.setup_problem_count, problems, countLabel(problems)) else null, problem = problems > 0,
             onClick = { open(SettingsRoutes.BACKGROUND) })
     }
-    Caption("Tacit ${BuildConfig.VERSION_NAME}")
+    VersionLine(app)
+}
+
+/** The app version with “Check for updates”; the result stays on this line. */
+@Composable
+private fun VersionLine(app: TacitApp) {
+    val strings = uiStrings()
+    val update by app.updates.state.collectAsState()
+    val scope = rememberCoroutineScope()
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
+    val latest = update.latest
+    Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Caption("Tacit ${BuildConfig.VERSION_NAME}")
+        when {
+            latest != null -> TextButton(onClick = { runCatching { uri.openUri(latest.page) } }) {
+                Text(strings.text(R.string.download_version, latest.version), style = MaterialTheme.typography.bodySmall)
+            }
+            update.manual == top.jinso.tacit.data.UpdateCheck.Manual.CHECKING ->
+                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = tacitColors.muted)
+            update.manual == top.jinso.tacit.data.UpdateCheck.Manual.UP_TO_DATE -> Caption(strings.text(R.string.up_to_date))
+            else -> {
+                if (update.manual == top.jinso.tacit.data.UpdateCheck.Manual.FAILED) Caption(strings.text(R.string.update_check_failed))
+                TextButton(onClick = { scope.launch { app.updates.checkNow() } }) {
+                    Text(strings.text(R.string.check_for_updates), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
 }

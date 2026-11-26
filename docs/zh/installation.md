@@ -1,4 +1,4 @@
-<!-- source: docs/installation.md @ a20e88e5c6c47cc4cbe73f51a76624106c8a876d -->
+<!-- source: docs/installation.md @ dbacf5c433311d125c195fb39a442ac2b793ef6f -->
 
 [English](../installation.md) | 简体中文
 
@@ -62,8 +62,8 @@ Mac 和 Android 各自发版、版本号各自递增，哪端有改动就只发�
 
 | 平台 | 版本与链接来源 |
 | --- | --- |
-| Mac | `site/src/latest.json` 提供 `mac.version` 和 Release 页面地址 `mac.url`。顶层只保留 `mac` 字段。 |
-| Android | 按 `android/app/build.gradle.kts` 的 `versionName` 生成 Android Release tag 和链接。 |
+| Mac | `site/src/latest.json` 提供 `mac.version` 和 Release 页面地址 `mac.url`。 |
+| Android | 按 `android/app/build.gradle.kts` 的 `versionName` 生成 Android Release tag 和链接。`site/src/latest.json` 的 `android` 条目只给手机检查更新用，要和 `versionName` 一致。 |
 | Docker | 按 `package.json` 的 `version` 生成后台服务镜像 tag 和带版本的拉取命令。 |
 
 `hero.html` 和 `download.html` 的下载信息由构建自动填入。
@@ -74,13 +74,13 @@ Mac：
 2. 在已配置代码签名证书、装了 [uv](https://docs.astral.sh/uv/) 的 Mac 上运行 `scripts/release-dmg.sh`（安装盘窗口布局由 `uvx` 临时拉取固定版本的 dmgbuild 写入）。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
 3. 推送 tag，建 Release 并上传这两个文件：`gh release create mac-v<版本号> dist/Tacit-<版本号>.dmg dist/Tacit-<版本号>.dmg.sha256 --prerelease --title "Tacit v<版本号> - Mac" --notes-file <说明>`。
    推送 `mac-v<版本号>` tag 会触发 `.github/workflows/hub-image.yml`，把同一份后台代码的服务端镜像推到 `ghcr.io/jinsooo/tacit-hub:<版本号>` 和 `:latest`；在 Actions 里确认它跑通。
-4. Release 上传完成后部署官网（步骤见[官网说明](../../site/README.zh-CN.md)）。已安装的 Tacit 每天读一次 `https://tacit.jinso.top/latest.json`，比自己新就在时间线顶部提示“可以更新了”。请求不带 Cookie 和本机信息，失败时不提示。先部署官网再传安装包，用户会点到还没有安装包的页面。
+4. Release 上传完成后部署官网（步骤见[官网说明](../../site/README.zh-CN.md)）。已安装的 Tacit 每天读一次 `https://tacit.jinso.top/latest.json`，比自己新就在时间线顶部提示“可以更新了”；设置“通用”的版本行也能手动检查。请求不带 Cookie 和本机信息，失败时不提示。先部署官网再传安装包，用户会点到还没有安装包的页面。
 
 Android：
 
-1. 改 `android/app/build.gradle.kts` 的 `versionName`，`versionCode` 加 1。提交并打 `android-v<版本号>` tag。
+1. 改 `android/app/build.gradle.kts` 的 `versionName`，`versionCode` 加 1，`site/src/latest.json` 的 `android` 条目改成同一版本和新 tag 的 Release 页面（`scripts/release-version.test.ts` 检查）。提交并打 `android-v<版本号>` tag。
 2. 在已配置 Android 正式签名钥匙的环境下运行 `scripts/release-apk.sh`，前提条件同上，输出 `dist/Tacit-<版本号>.apk` 和 `.sha256`，只打 arm64-v8a。
-3. 推送 tag，建 Release 并上传这两个文件：`gh release create android-v<版本号> dist/Tacit-<版本号>.apk dist/Tacit-<版本号>.apk.sha256 --prerelease --latest=false --title "Tacit v<版本号> - Android" --notes-file <说明>`。`--latest=false` 免得 Android 版被标成最新。注意 GitHub 的 `releases/latest` 不认预发布版，两端都是预发布时这个地址是 404，所以 README 的下载链接指向 `releases` 列表页，官网下载按钮指向各端的新 tag 页面。APK 上传完成后重新构建并部署官网。
+3. 推送 tag，建 Release 并上传这两个文件：`gh release create android-v<版本号> dist/Tacit-<版本号>.apk dist/Tacit-<版本号>.apk.sha256 --prerelease --latest=false --title "Tacit v<版本号> - Android" --notes-file <说明>`。`--latest=false` 免得 Android 版被标成最新。注意 GitHub 的 `releases/latest` 不认预发布版，两端都是预发布时这个地址是 404，所以 README 的下载链接指向 `releases` 列表页，官网下载按钮指向各端的新 tag 页面。APK 上传完成后重新构建并部署官网：手机每天读一次 `latest.json`，比自己新就在首页顶部提示“可以更新了”（录音有问题时先显示录音问题），设置页底部的版本行也能手动检查；同样不带 Cookie 和本机信息。
 
 Release 标题只用 `Tacit v<版本号> - Mac` 和 `Tacit v<版本号> - Android` 两种，“开发预览”由 GitHub 的 Pre-release 标记表达，不写进标题。
 

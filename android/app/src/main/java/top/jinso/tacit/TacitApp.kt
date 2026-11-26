@@ -13,6 +13,7 @@ class TacitApp : Application() {
     lateinit var prefs: Preferences; private set
     private var opened: Vault? = null
     internal val sync by lazy { SyncCoordinator(this) }
+    internal val updates by lazy { top.jinso.tacit.data.UpdateCheck(this, BuildConfig.VERSION_NAME) }
     val vault: Vault get() = synchronized(this) {
         opened ?: Vault(this, prefs) { SyncWorker.enqueue(this, newRecord = true) }.also { opened = it }
     }

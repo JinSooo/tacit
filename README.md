@@ -159,7 +159,7 @@ Choose your Summary model separately from the AI tools you connect. Tacit suppor
 - **Recording.** Transcription runs on the device by default. Tacit transcribes conversations that contain your voice, with an exception for meetings on Mac. Follow local recording laws and tell people before recording.
 - **Private records.** Tacit excludes `private` records from summaries and Session context by default. AI tools can still retrieve them through a direct query.
 - **Secret filtering.** Tacit blocks known key and token formats before writing records. Some secret formats may go undetected.
-- **Update checks.** The Mac app reads the website's `latest.json` once a day and shows Update available on the Timeline when a new version is available. The request contains no cookies or device details. The website host can see the source IP address.
+- **Update checks.** The Mac and Android apps read the website's `latest.json` once a day and show Update available on the Timeline when a new version is available. You can also check from Settings. The request contains no cookies or device details. The website host can see the source IP address.
 
 <details>
 <summary>Capture filters and other details</summary>

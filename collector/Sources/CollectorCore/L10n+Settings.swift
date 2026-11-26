@@ -493,6 +493,12 @@ public extension L10n {
     public static func appVersion(_ version: String) -> String {
       L10n.text(zh: "版本 \(version)", en: "Version \(version)")
     }
+    public static var checkForUpdates: String { L10n.text(zh: "检查更新", en: "Check for updates") }
+    public static var upToDate: String { L10n.text(zh: "已是最新", en: "Up to date") }
+    public static var updateCheckFailed: String { L10n.text(zh: "暂时连不上", en: "Couldn’t connect") }
+    public static func updateTo(_ version: String) -> String {
+      L10n.text(zh: "下载 \(version)", en: "Download \(version)")
+    }
 
     public static func recordCount(_ count: Int, chineseUsesSystemLocale: Bool = false, lang: AppLanguage = .current) -> String {
       L10n.count(count, one: "%@ record", other: "%@ records",

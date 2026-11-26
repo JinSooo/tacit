@@ -20,3 +20,11 @@ test("官网 latest.json 指向当前 Mac 版本的 Release", () => {
   expect(mac.version).toBe(version);
   expect(mac.url).toMatch(new RegExp(`^https://github\\.com/JinSooo/tacit/releases/tag/(?:mac-)?v${version.replaceAll(".", "\\.")}$`));
 });
+
+// 手机也读同一份 latest.json 的 android 条目来提示“可以更新了”，跟 versionName 一起改。
+test("官网 latest.json 指向当前 Android 版本的 Release", () => {
+  const version = /\bversionName\s*=\s*"([^"]+)"/.exec(read("android/app/build.gradle.kts"))?.[1];
+  const android = JSON.parse(read("site/src/latest.json")).android as { version: string; url: string };
+  expect(android.version).toBe(version!);
+  expect(android.url).toBe(`https://github.com/JinSooo/tacit/releases/tag/android-v${version}`);
+});

@@ -60,8 +60,8 @@ Update the relevant version source and run `bun site/build.ts` for each release.
 
 | Platform | Source |
 | --- | --- |
-| Mac | `site/src/latest.json` supplies `mac.version` and the `mac.url` release page. Keep `mac` as the only top-level field. |
-| Android | `versionName` in `android/app/build.gradle.kts` determines the Android release tag and link. |
+| Mac | `site/src/latest.json` supplies `mac.version` and the `mac.url` release page. |
+| Android | `versionName` in `android/app/build.gradle.kts` determines the Android release tag and link. The `android` entry in `site/src/latest.json` feeds the phone's update check and must match `versionName`. |
 | Docker | `version` in `package.json` determines the Background service image tag and versioned pull command. |
 
 The build fills the download templates in `hero.html` and `download.html` automatically.
@@ -77,11 +77,11 @@ The build fills the download templates in `hero.html` and `download.html` automa
    ```
 
    Pushing `mac-v<version>` triggers `.github/workflows/hub-image.yml` to publish the image to `ghcr.io/jinsooo/tacit-hub:<version>` and `:latest`. Check the workflow result in Actions.
-4. Deploy the website once the installer is available. See the [site README](../site/README.md). Tacit checks `https://tacit.jinso.top/latest.json` daily and shows Update available on the Timeline if the published version is newer. The request includes no cookies or device details. Failed checks stay quiet.
+4. Deploy the website once the installer is available. See the [site README](../site/README.md). Tacit checks `https://tacit.jinso.top/latest.json` daily and shows Update available on the Timeline if the published version is newer. The version row in Settings › General also checks on demand. The request includes no cookies or device details. Failed checks stay quiet.
 
 ### Android
 
-1. Update `versionName` in `android/app/build.gradle.kts` and increment `versionCode`. Commit and tag `android-v<version>`.
+1. Update `versionName` in `android/app/build.gradle.kts` and increment `versionCode`. Set the `android` entry in `site/src/latest.json` to the same version and the new release tag page. `scripts/release-version.test.ts` checks both. Commit and tag `android-v<version>`.
 2. Run `scripts/release-apk.sh` with the release signing key configured, a clean working tree, and the tag on the current commit. It writes `dist/Tacit-<version>.apk` and its `.sha256` file. The APK targets `arm64-v8a`.
 3. Push the tag and upload both files to the release.
 
@@ -89,7 +89,7 @@ The build fills the download templates in `hero.html` and `download.html` automa
    gh release create android-v<version> dist/Tacit-<version>.apk dist/Tacit-<version>.apk.sha256 --prerelease --latest=false --title "Tacit v<version> - Android" --notes-file <notes-file>
    ```
 
-   `--latest=false` keeps GitHub from marking Android as the latest release. GitHub's `releases/latest` returns 404 while all releases are prereleases. The README links to the release list. The site links to the individual release tags. Rebuild and deploy it after the APK is available.
+   `--latest=false` keeps GitHub from marking Android as the latest release. GitHub's `releases/latest` returns 404 while all releases are prereleases. The README links to the release list. The site links to the individual release tags. Rebuild and deploy it after the APK is available. The phone reads `latest.json` daily and shows Update available at the top of its timeline when a newer build is listed, after any recording problem. The version line at the bottom of Settings also checks on demand. The request includes no cookies or device details.
 
 Use `Tacit v<version> - Mac` or `Tacit v<version> - Android` as the release title. GitHub's Pre-release label indicates preview status.
 
