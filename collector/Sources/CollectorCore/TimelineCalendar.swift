@@ -13,6 +13,15 @@ public struct ActiveDaysResponse: Decodable, Equatable, Sendable {
 
 /// 时间线月历选择器的纯逻辑：月份导航、网格生成、未来日禁用、星期表头与无障碍文案。
 public enum TimelineCalendar {
+  /// Hub 协议的 `YYYY-MM` / `YYYY-MM-DD` 统一使用公历，同时保留系统时区、地区与每周起始日设置。
+  public static func protocolCalendar(from base: Calendar = .current) -> Calendar {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = base.timeZone
+    cal.firstWeekday = base.firstWeekday
+    cal.locale = base.locale
+    return cal
+  }
+
   public struct Month: Hashable, Comparable, Sendable {
     public let year: Int
     public let month: Int
@@ -23,7 +32,8 @@ public enum TimelineCalendar {
     }
 
     public init(containing date: Date, calendar: Calendar = .current) {
-      let c = calendar.dateComponents([.year, .month], from: date)
+      let proto = TimelineCalendar.protocolCalendar(from: calendar)
+      let c = proto.dateComponents([.year, .month], from: date)
       self.year = c.year ?? 1970
       self.month = c.month ?? 1
     }
@@ -33,18 +43,19 @@ public enum TimelineCalendar {
     }
 
     public func startDate(calendar: Calendar = .current) -> Date? {
-      calendar.date(from: DateComponents(year: year, month: month, day: 1))
+      TimelineCalendar.protocolCalendar(from: calendar).date(from: DateComponents(year: year, month: month, day: 1))
     }
 
     public func shifted(byMonths delta: Int, calendar: Calendar = .current) -> Month {
-      guard let start = startDate(calendar: calendar),
-            let shifted = calendar.date(byAdding: .month, value: delta, to: start) else {
+      let proto = TimelineCalendar.protocolCalendar(from: calendar)
+      guard let start = startDate(calendar: proto),
+            let shifted = proto.date(byAdding: .month, value: delta, to: start) else {
         let total = year * 12 + (month - 1) + delta
         let nextYear = total >= 0 ? total / 12 : (total - 11) / 12
         let nextMonth = ((total % 12) + 12) % 12 + 1
         return Month(year: nextYear, month: nextMonth)
       }
-      return Month(containing: shifted, calendar: calendar)
+      return Month(containing: shifted, calendar: proto)
     }
 
     public static func < (lhs: Month, rhs: Month) -> Bool {
@@ -77,9 +88,10 @@ public enum TimelineCalendar {
     today: Date,
     calendar: Calendar = .current
   ) -> Bool {
-    let todayStart = calendar.startOfDay(for: today)
-    let selectedStart = calendar.startOfDay(for: selectedDay)
-    return selectedStart != todayStart || displayedMonth != Month(containing: todayStart, calendar: calendar)
+    let proto = protocolCalendar(from: calendar)
+    let todayStart = proto.startOfDay(for: today)
+    let selectedStart = proto.startOfDay(for: selectedDay)
+    return selectedStart != todayStart || displayedMonth != Month(containing: todayStart, calendar: proto)
   }
 
   /// 按 `calendar.firstWeekday` 排列的 7 列星期表头。
@@ -96,11 +108,12 @@ public enum TimelineCalendar {
     if lang == .zh {
       return "\(month.year) 年 \(month.month) 月"
     }
-    guard let start = month.startDate(calendar: calendar) else { return month.key }
+    let proto = protocolCalendar(from: calendar)
+    guard let start = month.startDate(calendar: proto) else { return month.key }
     let formatter = DateFormatter()
     formatter.locale = lang.locale()
-    formatter.calendar = calendar
-    formatter.timeZone = calendar.timeZone
+    formatter.calendar = proto
+    formatter.timeZone = proto.timeZone
     formatter.dateFormat = "MMMM yyyy"
     return formatter.string(from: start)
   }
@@ -113,15 +126,16 @@ public enum TimelineCalendar {
     calendar: Calendar = .current,
     lang: AppLanguage = .current
   ) -> String {
+    let proto = protocolCalendar(from: calendar)
     let dateText: String
     if lang == .zh {
-      let c = calendar.dateComponents([.year, .month, .day], from: date)
+      let c = proto.dateComponents([.year, .month, .day], from: date)
       dateText = "\(c.year!) 年 \(c.month!) 月 \(c.day!) 日"
     } else {
       let formatter = DateFormatter()
       formatter.locale = lang.locale()
-      formatter.calendar = calendar
-      formatter.timeZone = calendar.timeZone
+      formatter.calendar = proto
+      formatter.timeZone = proto.timeZone
       formatter.dateFormat = "MMMM d, yyyy"
       dateText = formatter.string(from: date)
     }
@@ -139,12 +153,13 @@ public enum TimelineCalendar {
     activeDayKeys: Set<String>,
     calendar: Calendar = .current
   ) -> [Cell] {
-    guard let start = month.startDate(calendar: calendar),
-          let range = calendar.range(of: .day, in: .month, for: start) else { return [] }
-    let todayStart = calendar.startOfDay(for: today)
-    let selectedStart = calendar.startOfDay(for: selectedDay)
-    let firstWeekdayOfMonth = calendar.component(.weekday, from: start)
-    let leadingBlanks = (firstWeekdayOfMonth - calendar.firstWeekday + 7) % 7
+    let proto = protocolCalendar(from: calendar)
+    guard let start = month.startDate(calendar: proto),
+          let range = proto.range(of: .day, in: .month, for: start) else { return [] }
+    let todayStart = proto.startOfDay(for: today)
+    let selectedStart = proto.startOfDay(for: selectedDay)
+    let firstWeekdayOfMonth = proto.component(.weekday, from: start)
+    let leadingBlanks = (firstWeekdayOfMonth - proto.firstWeekday + 7) % 7
 
     var result: [Cell] = []
     result.reserveCapacity(42)
@@ -155,9 +170,9 @@ public enum TimelineCalendar {
     }
 
     for day in range {
-      guard let rawDate = calendar.date(from: DateComponents(year: month.year, month: month.month, day: day)) else { continue }
-      let date = calendar.startOfDay(for: rawDate)
-      let key = TimelineDay.key(date, calendar: calendar)
+      guard let rawDate = proto.date(from: DateComponents(year: month.year, month: month.month, day: day)) else { continue }
+      let date = proto.startOfDay(for: rawDate)
+      let key = TimelineDay.key(date, calendar: proto)
       let isFuture = date > todayStart
       result.append(Cell(
         id: key,

@@ -5,34 +5,70 @@ import enum CollectorCore.L10n
 import class CollectorCore.LanguageStore
 import enum CollectorCore.TimelineCalendar
 
-/// 按月缓存在月历弹窗里查到的活跃日期，切换后台时清空。
+/// 按月缓存在月历弹窗里查到的活跃日期，切换后台时清空；区分在线权威结果与离线回退，并限制容量与新鲜期。
 @MainActor @Observable final class ActiveDaysCache {
-  private var months: [String: Set<String>] = [:]
-  private var loadedRevision: [String: Int] = [:]
+  private struct Entry {
+    var dates: Set<String>
+    var revision: Int?
+    var loadedAt: Date?
+    var authoritative: Bool
+    var lastAccessed: Date
+  }
+
+  let maxEntries: Int
+  let pastMonthTTL: TimeInterval
+  private var entries: [String: Entry] = [:]
+
+  init(maxEntries: Int = 24, pastMonthTTL: TimeInterval = 300) {
+    self.maxEntries = max(1, maxEntries)
+    self.pastMonthTTL = max(0, pastMonthTTL)
+  }
+
+  var count: Int { entries.count }
 
   func dates(for month: String, fallback: Set<String>) -> Set<String> {
-    months[month] ?? fallback
+    entries[month]?.dates ?? fallback
   }
 
-  func seedIfEmpty(month: String, dates: Set<String>) {
-    guard months[month] == nil, !dates.isEmpty else { return }
-    months[month] = dates
+  func seedIfEmpty(month: String, dates: Set<String>, now: Date = Date()) {
+    guard entries[month] == nil, !dates.isEmpty else { return }
+    entries[month] = Entry(dates: dates, revision: nil, loadedAt: nil, authoritative: false, lastAccessed: now)
+    evictIfNeeded()
   }
 
-  func needsLoad(month: String, revision: Int, isCurrentMonth: Bool) -> Bool {
-    guard let loaded = loadedRevision[month] else { return true }
-    if loaded != revision { return true }
-    return isCurrentMonth
+  func needsLoad(month: String, revision: Int, isCurrentMonth: Bool, now: Date = Date()) -> Bool {
+    guard let entry = entries[month], entry.authoritative, let loadedRevision = entry.revision, let loadedAt = entry.loadedAt else {
+      return true
+    }
+    if loadedRevision != revision { return true }
+    if isCurrentMonth { return true }
+    return now.timeIntervalSince(loadedAt) >= pastMonthTTL
   }
 
-  func store(month: String, dates: Set<String>, revision: Int) {
-    months[month] = dates
-    loadedRevision[month] = revision
+  func store(month: String, dates: Set<String>, revision: Int, authoritative: Bool = true, now: Date = Date()) {
+    if !authoritative {
+      // 离线回退不能覆盖已有的在线结果，也不标为 authoritative，确保恢复连接或重新打开时会重新请求。
+      if let existing = entries[month], existing.authoritative {
+        entries[month]?.lastAccessed = now
+        return
+      }
+      entries[month] = Entry(dates: dates, revision: nil, loadedAt: nil, authoritative: false, lastAccessed: now)
+      evictIfNeeded()
+      return
+    }
+    entries[month] = Entry(dates: dates, revision: revision, loadedAt: now, authoritative: true, lastAccessed: now)
+    evictIfNeeded()
   }
 
   func clear() {
-    months.removeAll()
-    loadedRevision.removeAll()
+    entries.removeAll()
+  }
+
+  private func evictIfNeeded() {
+    while entries.count > maxEntries {
+      guard let oldestKey = entries.min(by: { $0.value.lastAccessed < $1.value.lastAccessed })?.key else { break }
+      entries.removeValue(forKey: oldestKey)
+    }
   }
 }
 
@@ -69,10 +105,15 @@ struct TimelineCalendarPopover: View {
     self.dataSource = dataSource
     self.cache = cache
     self.revision = revision
-    _displayedMonth = State(initialValue: TimelineCalendar.Month(containing: selectedDay.wrappedValue))
+    _displayedMonth = State(
+      initialValue: TimelineCalendar.Month(
+        containing: selectedDay.wrappedValue,
+        calendar: TimelineCalendar.protocolCalendar(from: ViewerCalendar.formatting)
+      )
+    )
   }
 
-  private var calendar: Calendar { ViewerCalendar.formatting }
+  private var calendar: Calendar { TimelineCalendar.protocolCalendar(from: ViewerCalendar.formatting) }
   private var monthKey: String { displayedMonth.key }
   private var canAdvance: Bool { TimelineCalendar.canAdvance(from: displayedMonth, today: today, calendar: calendar) }
   private var showsTodayShortcut: Bool {
@@ -144,7 +185,7 @@ struct TimelineCalendarPopover: View {
       let currentMonth = TimelineCalendar.Month(containing: today, calendar: cal).key
       guard cache.needsLoad(month: targetMonth, revision: revision, isCurrentMonth: targetMonth == currentMonth) else { return }
       guard let fetched = try? await dataSource.activeDays(inMonth: targetMonth), !Task.isCancelled else { return }
-      cache.store(month: targetMonth, dates: fetched, revision: revision)
+      cache.store(month: targetMonth, dates: fetched.dates, revision: revision, authoritative: fetched.authoritative)
     }
   }
 

@@ -533,7 +533,9 @@ private func locateBun() -> String? {
       func missingRecords(_ ids: [String], from available: [HistoryRecord]) async throws -> [HistoryRecord] { [] }
       func segments(_ day: Date, device: String?) async throws -> (segments: [HistorySegment], conversations: [ConversationRef]) { ([], []) }
       func conversation(_ recordID: String) async throws -> ConversationDetail { throw HubError(message: "404", status: 404) }
-      func activeDays(inMonth month: String) async throws -> Set<String> { Set(diaries.keys.filter { $0.hasPrefix("\(month)-") }) }
+      func activeDays(inMonth month: String) async throws -> ActiveDaysResult {
+        ActiveDaysResult(dates: Set(diaries.keys.filter { $0.hasPrefix("\(month)-") }), authoritative: true)
+      }
     }
 
     let source = StaticDiarySource(diaries: ["2026-11-22": day1Diary], calendar: calendar)
@@ -1492,34 +1494,47 @@ private func locateBun() -> String? {
     _ = try await sync.pullToLatest()
     #expect(source.cachedActiveDays(inMonth: "2026-11") == ["2026-11-10", "2026-11-26"])
 
-    // 在线调用补齐仅有原始记录的 2026-11-02 与 90 天之外的历史月份。
-    #expect(try await source.activeDays(inMonth: "2026-11") == ["2026-11-02", "2026-11-10", "2026-11-26"])
-    #expect(try await source.activeDays(inMonth: "2025-09") == ["2025-09-15"])
+    // 在线调用补齐仅有原始记录的 2026-11-02 与 90 天之外的历史月份，且标为 authoritative。
+    #expect(try await source.activeDays(inMonth: "2026-11") == ActiveDaysResult(dates: ["2026-11-02", "2026-11-10", "2026-11-26"], authoritative: true))
+    #expect(try await source.activeDays(inMonth: "2025-09") == ActiveDaysResult(dates: ["2025-09-15"], authoritative: true))
 
-    // 离线时当月跳过内存 LRU，回退到已缓存的 .day 集合而不报错。
+    // 离线时当月跳过内存 LRU，回退到已缓存的 .day 集合并标为非 authoritative，方便恢复连接后重拉。
     offline.set(true)
-    #expect(try await source.activeDays(inMonth: "2026-11") == ["2026-11-10", "2026-11-26"])
-    // 历史月份命中内存 LRU，离线仍可读到先前接口结果。
-    #expect(try await source.activeDays(inMonth: "2025-09") == ["2025-09-15"])
+    #expect(try await source.activeDays(inMonth: "2026-11") == ActiveDaysResult(dates: ["2026-11-10", "2026-11-26"], authoritative: false))
+    // 历史月份命中内存 LRU 时仍可读到先前接口结果；未命中内存 LRU 的历史月回退为空且标为非 authoritative。
+    #expect(try await source.activeDays(inMonth: "2025-09") == ActiveDaysResult(dates: ["2025-09-15"], authoritative: true))
+    #expect(try await source.activeDays(inMonth: "2025-08") == ActiveDaysResult(dates: [], authoritative: false))
     #expect(seenOps.snapshot.contains("days.active"))
   }
 
-  @Test @MainActor func activeDaysCacheSeedsStoresAndInvalidatesOnRevision() {
-    let cache = ActiveDaysCache()
+  @Test @MainActor func activeDaysCacheDistinguishesFallbackExpiresTTLAndBoundsSize() {
+    let base = Date(timeIntervalSince1970: 1_764_000_000)
+    let cache = ActiveDaysCache(maxEntries: 2, pastMonthTTL: 300)
     #expect(cache.dates(for: "2026-11", fallback: ["2026-11-10"]) == ["2026-11-10"])
-    cache.seedIfEmpty(month: "2026-11", dates: ["2026-11-10"])
-    #expect(cache.needsLoad(month: "2026-11", revision: 1, isCurrentMonth: false) == true)
+    cache.seedIfEmpty(month: "2026-11", dates: ["2026-11-10"], now: base)
+    #expect(cache.needsLoad(month: "2026-11", revision: 1, isCurrentMonth: false, now: base) == true)
 
-    cache.store(month: "2026-10", dates: ["2026-10-03", "2026-10-18"], revision: 1)
+    // 离线回退结果不视为权威结果，重新打开时仍需重新读取。
+    cache.store(month: "2026-09", dates: [], revision: 1, authoritative: false, now: base)
+    #expect(cache.needsLoad(month: "2026-09", revision: 1, isCurrentMonth: false, now: base) == true)
+
+    // 在线权威结果在 TTL 内复用，revision 变化或超时后刷新；离线回退不能覆盖已有的在线结果。
+    cache.store(month: "2026-10", dates: ["2026-10-03", "2026-10-18"], revision: 1, authoritative: true, now: base)
     #expect(cache.dates(for: "2026-10", fallback: []) == ["2026-10-03", "2026-10-18"])
-    #expect(cache.needsLoad(month: "2026-10", revision: 1, isCurrentMonth: false) == false)
-    #expect(cache.needsLoad(month: "2026-10", revision: 2, isCurrentMonth: false) == true)
+    #expect(cache.needsLoad(month: "2026-10", revision: 1, isCurrentMonth: false, now: base.addingTimeInterval(60)) == false)
+    #expect(cache.needsLoad(month: "2026-10", revision: 1, isCurrentMonth: false, now: base.addingTimeInterval(300)) == true)
+    #expect(cache.needsLoad(month: "2026-10", revision: 2, isCurrentMonth: false, now: base) == true)
+    cache.store(month: "2026-10", dates: [], revision: 1, authoritative: false, now: base.addingTimeInterval(10))
+    #expect(cache.dates(for: "2026-10", fallback: []) == ["2026-10-03", "2026-10-18"])
 
-    cache.store(month: "2026-11", dates: ["2026-11-01", "2026-11-10"], revision: 1)
-    #expect(cache.needsLoad(month: "2026-11", revision: 1, isCurrentMonth: true) == true)
+    // 容量上限淘汰最久未访问月份。
+    cache.store(month: "2026-11", dates: ["2026-11-01", "2026-11-10"], revision: 1, authoritative: true, now: base.addingTimeInterval(20))
+    #expect(cache.count == 2)
+    #expect(cache.needsLoad(month: "2026-11", revision: 1, isCurrentMonth: true, now: base.addingTimeInterval(20)) == true)
 
     cache.clear()
+    #expect(cache.count == 0)
     #expect(cache.dates(for: "2026-10", fallback: []) == [])
-    #expect(cache.needsLoad(month: "2026-10", revision: 1, isCurrentMonth: false) == true)
+    #expect(cache.needsLoad(month: "2026-10", revision: 1, isCurrentMonth: false, now: base) == true)
   }
 }

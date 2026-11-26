@@ -1,6 +1,11 @@
 import Foundation
 import CollectorCore
 
+struct ActiveDaysResult: Equatable, Sendable {
+  let dates: Set<String>
+  let authoritative: Bool
+}
+
 /// 查看窗口与桌面小组件的统一读数据源抽象。
 /// 写操作及管理接口由 HubAPI 复用 AdaptiveViewerDataSource 的设备会话。
 protocol ViewerDataSource: Sendable {
@@ -19,7 +24,7 @@ protocol ViewerDataSource: Sendable {
   func missingRecords(_ ids: [String], from available: [HistoryRecord]) async throws -> [HistoryRecord]
   func segments(_ day: Date, device: String?) async throws -> (segments: [HistorySegment], conversations: [ConversationRef])
   func conversation(_ recordID: String) async throws -> ConversationDetail
-  func activeDays(inMonth month: String) async throws -> Set<String>
+  func activeDays(inMonth month: String) async throws -> ActiveDaysResult
   func cachedActiveDays(inMonth month: String) -> Set<String>
 }
 
@@ -65,7 +70,9 @@ final class HTTPViewerDataSource: ViewerDataSource, @unchecked Sendable {
     try await api.segments(day, device: device)
   }
   func conversation(_ recordID: String) async throws -> ConversationDetail { try await api.conversation(recordID) }
-  func activeDays(inMonth month: String) async throws -> Set<String> { Set(try await api.activeDays(inMonth: month).dates) }
+  func activeDays(inMonth month: String) async throws -> ActiveDaysResult {
+    ActiveDaysResult(dates: Set(try await api.activeDays(inMonth: month).dates), authoritative: true)
+  }
 }
 
 // MARK: - 下推缓存 + 设备协议按需读路径实现
@@ -350,7 +357,8 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
     let prefix = "\(month)-"
     guard let entities = try? sync.cache.list(kind: .day) else { return [] }
     let decoder = HubJSON.decoder()
-    let todayKey = TimelineDay.key(clock(), calendar: calendar)
+    let protoCalendar = TimelineCalendar.protocolCalendar(from: calendar)
+    let todayKey = TimelineDay.key(clock(), calendar: protoCalendar)
     var dates: Set<String> = []
     for entity in entities where entity.id.hasPrefix(prefix) {
       guard let diary = try? decoder.decode(DayDiary.self, from: entity.payloadData) else { continue }
@@ -361,21 +369,21 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
     return dates
   }
 
-  func activeDays(inMonth month: String) async throws -> Set<String> {
+  func activeDays(inMonth month: String) async throws -> ActiveDaysResult {
     try await ensureReady()
     let currentMonth = TimelineCalendar.Month(containing: clock(), calendar: calendar).key
     let useCache = month < currentMonth
     do {
       let payload = try await sync.activeDays(month: month, includePrivate: await privateReadAllowed(), useCache: useCache)
       let decoded = try HubJSON.decoder().decode(ActiveDaysResponse.self, from: payload.bodyData)
-      return Set(decoded.dates)
+      return ActiveDaysResult(dates: Set(decoded.dates), authoritative: true)
     } catch let error as DeviceClientError {
       if isRemovalOrForbidden(error) { throw error }
-      return cachedActiveDays(inMonth: month)
+      return ActiveDaysResult(dates: cachedActiveDays(inMonth: month), authoritative: false)
     } catch is CancellationError {
       throw CancellationError()
     } catch {
-      return cachedActiveDays(inMonth: month)
+      return ActiveDaysResult(dates: cachedActiveDays(inMonth: month), authoritative: false)
     }
   }
 
@@ -1037,7 +1045,7 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
     displayLock.withLock { displayedCached }?.cachedActiveDays(inMonth: month) ?? []
   }
 
-  func activeDays(inMonth month: String) async throws -> Set<String> {
+  func activeDays(inMonth month: String) async throws -> ActiveDaysResult {
     try await route({ try await $0.activeDays(inMonth: month) }, fallback: { try await $0.activeDays(inMonth: month) })
   }
 }
