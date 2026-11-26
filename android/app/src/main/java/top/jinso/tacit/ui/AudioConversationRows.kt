@@ -9,6 +9,11 @@ internal data class AudioConversationRow(
     val start: Long,
     val records: List<HistoryRecord>,
     val private: Boolean,
+    val end: Long = start,
+    val conversationId: String = key,
+    val audioAvailable: Boolean = false,
+    val userConfirmed: Boolean = false,
+    val transcribePending: Boolean = false,
 )
 
 internal fun audioConversationRows(
@@ -16,9 +21,31 @@ internal fun audioConversationRows(
     records: Map<String, HistoryRecord>,
 ): List<AudioConversationRow> = scenes.sortedByDescending { it.start }.flatMap { scene ->
     val text = scene.recordIds.mapNotNull { records[it] }.sortedBy { it.start }
-    if (text.isEmpty()) listOf(AudioConversationRow(scene.id, scene.start, emptyList(), false))
+    if (text.isEmpty()) listOf(
+        AudioConversationRow(
+            key = scene.id,
+            start = scene.start,
+            records = emptyList(),
+            private = false,
+            end = scene.end,
+            conversationId = scene.id,
+            audioAvailable = scene.audioAvailable,
+            userConfirmed = scene.userConfirmed,
+            transcribePending = scene.transcribePending,
+        ),
+    )
     else text.groupBy { it.sensitivity }.map { (sensitivity, group) ->
-        AudioConversationRow("${scene.id}:$sensitivity", group.first().start, group, sensitivity == "private")
+        AudioConversationRow(
+            key = "${scene.id}:$sensitivity",
+            start = group.first().start,
+            records = group,
+            private = sensitivity == "private",
+            end = group.maxOf { it.end ?: it.start },
+            conversationId = scene.id,
+            audioAvailable = scene.audioAvailable,
+            userConfirmed = scene.userConfirmed,
+            transcribePending = scene.transcribePending,
+        )
     }
 }
 

@@ -13,8 +13,16 @@ data class AudioClip(val id: String, val start: Long, val durationMs: Long, val 
 data class AudioSpeaker(val id: String, val isMe: Boolean, val ignored: Boolean,
     val segments: Int, val seconds: Double, val sampleAvailable: Boolean,
     val name: String? = null, val conversations: Int = 0, val lastSeen: Long? = null)
-data class AudioConversation(val id: String, val start: Long, val end: Long,
-    val clipIds: List<String>, val recordIds: List<String>)
+data class AudioConversation(
+    val id: String,
+    val start: Long,
+    val end: Long,
+    val clipIds: List<String>,
+    val recordIds: List<String>,
+    val audioAvailable: Boolean = false,
+    val userConfirmed: Boolean = false,
+    val transcribePending: Boolean = false,
+)
 
 /** Pure policy, independently testable without microphone/native libraries. */
 internal object AudioPolicy {
@@ -49,8 +57,12 @@ internal object AudioPolicy {
      */
     fun mePresent(meSeconds: Double) = meSeconds >= ME_PRESENT_SECONDS
     const val ME_PRESENT_SECONDS = 20.0
-    fun conversationAllowed(meMarked: Boolean, mePresentInRetainedAudio: Boolean,
-        allowed: Boolean) = allowed && meMarked && mePresentInRetainedAudio
+    fun conversationAllowed(
+        meMarked: Boolean,
+        mePresentInRetainedAudio: Boolean,
+        allowed: Boolean,
+        userConfirmed: Boolean = false,
+    ) = allowed && (userConfirmed || (meMarked && mePresentInRetainedAudio))
     fun unit(v: FloatArray): FloatArray {
         require(v.isNotEmpty() && v.all { it.isFinite() }) { "Invalid speaker embedding" }
         val norm = sqrt(v.sumOf { it.toDouble() * it })

@@ -141,9 +141,18 @@ import java.util.concurrent.CompletableFuture
     }
     val playingSpeaker by audio.playingSpeaker.collectAsState()
     val toggleSample = rememberSampleToggle(audio, notify)
+    val toggleConversationSample: (String) -> Unit = { conversationId ->
+        val loading = audio.playConversationSample(conversationId)
+        scope.launch {
+            try { withContext(Dispatchers.IO) { loading.get() } }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { notify(strings.text(R.string.preview_unavailable)) }
+        }
+    }
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
     // Each day has its own cards, so a sample playing for the old day would keep going with no stop button in sight.
-    LaunchedEffect(day) { audio.stopPlayback() }
+    var showUntranscribed by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(day) { audio.stopPlayback(); showUntranscribed = false }
     val candidate = myVoiceOverview(speakers, macVoice).candidate
     val today = LocalDate.now()
     val local = remember(rows, timeline.days, today) {
@@ -268,14 +277,27 @@ import java.util.concurrent.CompletableFuture
                 }
             }
         }
-        val untranscribed = scenes.count { it.records.isEmpty() }
-        if (untranscribed > 0) item(key = "untranscribed-$day") {
+        val untranscribed = scenes.filter { it.records.isEmpty() }
+        if (untranscribed.isNotEmpty()) item(key = "untranscribed-$day") {
             val caption = if (entries.isNotEmpty()) R.plurals.more_audio_without_voice else R.plurals.audio_without_voice
-                    Row(Modifier.itemMotion(this).padding(vertical = 12.dp)) {
-                Box(Modifier.width(format.timeColumnWidth.dp).padding(top = 9.dp)) {
+            Row(
+                Modifier
+                    .itemMotion(this)
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(role = Role.Button) { showUntranscribed = true }
+                    .padding(top = 12.dp, bottom = 12.dp, end = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(format.timeColumnWidth.dp)) {
                     Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
                 }
-                Caption(strings.quantity(caption, untranscribed, countLabel(untranscribed)))
+                Caption(
+                    strings.quantity(caption, untranscribed.size, countLabel(untranscribed.size)),
+                    Modifier.weight(1f),
+                )
+                Icon(Icons.Outlined.ChevronRight, null, Modifier.size(16.dp), tint = tacitColors.muted)
             }
         }
         timeline.staleSync(day)?.let { instant ->
@@ -287,6 +309,37 @@ import java.util.concurrent.CompletableFuture
         }
     }
         }
+    }
+    val untranscribedForDay = remember(local, day) { local[day].orEmpty().filter { it.records.isEmpty() } }
+    LaunchedEffect(untranscribedForDay.isEmpty()) {
+        if (untranscribedForDay.isEmpty() && showUntranscribed) {
+            audio.stopPlayback()
+            showUntranscribed = false
+        }
+    }
+    if (showUntranscribed && untranscribedForDay.isNotEmpty()) {
+        UntranscribedAudioSheet(
+            scenes = untranscribedForDay,
+            modelsReady = state.modelsReady,
+            busy = busy,
+            playingKey = playingSpeaker,
+            onTogglePlay = toggleConversationSample,
+            onTranscribe = { scene ->
+                audio.stopPlayback()
+                val message = strings.text(
+                    if (state.modelsReady) R.string.transcribe_queued else R.string.transcribe_queued_models_missing,
+                )
+                work({ audio.transcribeConversation(scene.conversationId) }, message)
+            },
+            onDelete = { scene ->
+                audio.stopPlayback()
+                work({ audio.deleteConversationAudio(scene.conversationId) }, strings.text(R.string.deleted))
+            },
+            onDismiss = {
+                audio.stopPlayback()
+                showUntranscribed = false
+            },
+        )
     }
     if (showDatePicker) {
         TimelineDatePickerSheet(

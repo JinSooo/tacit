@@ -86,6 +86,13 @@ class AudioController internal constructor(
     fun listConversations(): CompletableFuture<List<AudioConversation>> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.listConversations() }
     }
+    fun conversationAudioAvailable(conversationId: String): CompletableFuture<Boolean> = runtime.read {
+        synchronized(runtime.lock) { runtime.queries.conversationAudioAvailable(conversationId) }
+    }
+    fun transcribeConversation(conversationId: String): CompletableFuture<Unit> =
+        runtime.confirmConversation(conversationId)
+    fun deleteConversationAudio(conversationId: String): CompletableFuture<Unit> =
+        runtime.deleteConversationAudio(conversationId)
     fun renderTranscript(recordId: String, fallbackBody: String): CompletableFuture<String> = runtime.read {
         synchronized(runtime.lock) { runtime.ledger.render(recordId, fallbackBody, runtime.macVoiceprint()) }
     }
@@ -153,6 +160,18 @@ class AudioController internal constructor(
             try { runtime.play(request, pcm) } finally { pcm.fill(0f) }
         }.whenComplete { _, error -> if (error != null) runtime.playback.finish(request) }
     }
+    fun playConversationSample(conversationId: String): CompletableFuture<Unit> {
+        val key = conversationPlaybackKey(conversationId)
+        val request = runtime.playback.toggle(key) ?: return CompletableFuture.completedFuture(Unit)
+        return runtime.read {
+            val pcm = synchronized(runtime.lock) {
+                val span = requireNotNull(runtime.conversationSample(conversationId)) { "试听已过保留期" }
+                val all = runtime.store.pcm(span.first)
+                try { all.copyOfRange(span.second, span.third) } finally { all.fill(0f) }
+            }
+            try { runtime.play(request, pcm) } finally { pcm.fill(0f) }
+        }.whenComplete { _, error -> if (error != null) runtime.playback.finish(request) }
+    }
     fun stopPlayback() = runtime.playback.stop()
 }
 
@@ -194,6 +213,20 @@ internal class AudioRuntime private constructor(val context: Context) {
     fun deleteHistoryAudio(recordId: String): CompletableFuture<Unit> {
         playback.stop()
         return change { synchronized(lock) { store.deleteRecord(recordId) } }
+    }
+
+    fun deleteConversationAudio(conversationId: String): CompletableFuture<Unit> {
+        playback.stop()
+        invalidatePolicy()
+        return change { synchronized(lock) { store.deleteConversationAudio(conversationId) } }
+    }
+
+    fun confirmConversation(conversationId: String): CompletableFuture<Unit> {
+        invalidatePolicy()
+        return change {
+            synchronized(lock) { ledger.confirmConversation(conversationId) }
+            schedule()
+        }
     }
 
     val models = SpeechModels(context)
@@ -398,6 +431,8 @@ internal class AudioRuntime private constructor(val context: Context) {
         }
         return null
     }
+    fun conversationSample(conversationId: String): Triple<String, Int, Int>? =
+        pickConversationSample(store.clips(), conversationId, store::exists)
     fun play(request: SamplePlayback.Request, pcm: FloatArray) {
         val shorts = ShortArray(pcm.size) { (pcm[it].coerceIn(-1f, 1f) * 32767).toInt().toShort() }
         val track = try {

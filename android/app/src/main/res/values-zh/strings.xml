@@ -67,6 +67,8 @@
     <string name="delete_old_connection_title">删除旧连接？</string>
     <string name="delete_record_title">删除这条记录？</string>
     <string name="delete_retry">删除未完成，请重试</string>
+    <string name="delete_untranscribed_message">会永久删除这段本机原始音频，无法恢复。</string>
+    <string name="delete_untranscribed_title">删除这段录音？</string>
     <string name="deleted">已删除</string>
     <string name="deleted_record_corrections">已删除记录和关联修正</string>
     <string name="disconnect">断开连接</string>
@@ -265,9 +267,18 @@
     <string name="timeline_synced">已同步到 %1$s</string>
     <string name="today">今天</string>
     <string name="today_at">今天 %1$s</string>
+    <string name="transcribe_queued">已开始补转写</string>
+    <string name="transcribe_queued_models_missing">已加入补转写，准备好语音模型后会自动处理</string>
+    <string name="transcribe_this_clip">补转写这段</string>
     <string name="turn_on">开启</string>
     <string name="undo">撤销</string>
     <string name="undo_failed">暂时无法撤销，请稍后重试</string>
+    <string name="untranscribed_audio_hint">这些录音在本地未检测到足够时长的你的声音，因此未转写也未上传，保留期满会自动清除。</string>
+    <string name="untranscribed_audio_title">未转写录音</string>
+    <string name="untranscribed_expired">音频已过保留期</string>
+    <string name="untranscribed_no_speech">未识别到有效文字</string>
+    <string name="untranscribed_transcribing">正在补转写…</string>
+    <string name="untranscribed_waiting_models">等待准备语音模型</string>
     <string name="upload_rejected">未能接收</string>
     <string name="vault_locked">记录库暂时无法打开</string>
     <string name="vault_locked_hint">密钥或数据库不可用，原文件已保留，请勿卸载应用或清除数据。</string>

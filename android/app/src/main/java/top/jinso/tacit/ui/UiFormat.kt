@@ -48,6 +48,18 @@ internal class UiFormat(private val strings: UiStrings, val lang: AppLang, priva
         return "$startLabel$endLabel · ${durationLabel(end - start)}"
     }
 
+    fun timeRangeLabel(start: Long, end: Long): String {
+        val safeEnd = end.coerceAtLeast(start)
+        return when {
+            date(start, "yyyy-MM-dd HH:mm") == date(safeEnd, "yyyy-MM-dd HH:mm") -> clock(start)
+            date(start, "yyyy-MM-dd") != date(safeEnd, "yyyy-MM-dd") -> {
+                val includeYear = date(start, "yyyy") != date(safeEnd, "yyyy")
+                "${dateAndClock(start, includeYear)}–${dateAndClock(safeEnd, includeYear)}"
+            }
+            else -> "${clock(start)}–${clock(safeEnd)}"
+        }
+    }
+
     internal fun sourceName(source: String): String = strings.text(when (source) {
         "mac.audio" -> R.string.source_conversation
         "mac.screen" -> R.string.source_screen

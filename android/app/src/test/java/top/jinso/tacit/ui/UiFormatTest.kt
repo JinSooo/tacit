@@ -51,6 +51,11 @@ class UiFormatTest {
             chinese.detailTimeLabel(start, time("2026-11-25T23:59:45"), true))
         assertEquals("2026 年 11 月 25 日 23:59–2026 年 11 月 26 日 00:00 · 1 分钟",
             chinese.detailTimeLabel(start, time("2026-11-26T00:00:25"), true))
+        assertEquals("14:20–14:23", chinese.timeRangeLabel(time("2026-11-25T14:20:05"), time("2026-11-25T14:23:10")))
+        assertEquals("14:20", chinese.timeRangeLabel(time("2026-11-25T14:20:05"), time("2026-11-25T14:20:45")))
+        assertEquals("11 月 25 日 23:59–11 月 26 日 00:02", chinese.timeRangeLabel(start, time("2026-11-26T00:02:00")))
+        val english12 = UiFormat(TestStrings(AppLang.EN), AppLang.EN, use24Hour = false)
+        assertEquals("2:20 PM–2:23 PM", english12.timeRangeLabel(time("2026-11-25T14:20:05"), time("2026-11-25T14:23:10")))
         assertEquals("1,234", countLabel(1234))
     }
 

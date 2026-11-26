@@ -67,6 +67,8 @@
     <string name="delete_old_connection_title">Delete old connection?</string>
     <string name="delete_record_title">Delete this record?</string>
     <string name="delete_retry">Couldn\'t delete. Try again.</string>
+    <string name="delete_untranscribed_message">This permanently deletes the local audio for this clip. This can\'t be undone.</string>
+    <string name="delete_untranscribed_title">Delete this recording?</string>
     <string name="deleted">Deleted</string>
     <string name="deleted_record_corrections">Record and corrections deleted</string>
     <string name="disconnect">Disconnect</string>
@@ -265,9 +267,18 @@
     <string name="timeline_synced">Synced up to %1$s</string>
     <string name="today">Today</string>
     <string name="today_at">Today at %1$s</string>
+    <string name="transcribe_queued">Queued for transcription</string>
+    <string name="transcribe_queued_models_missing">Queued. Transcription will start once speech models are ready.</string>
+    <string name="transcribe_this_clip">Transcribe this</string>
     <string name="turn_on">Turn on</string>
     <string name="undo">Undo</string>
     <string name="undo_failed">Couldn\'t undo. Try again later.</string>
+    <string name="untranscribed_audio_hint">These recordings didn\'t detect enough of your voice on this phone, so they weren\'t transcribed or uploaded. They clear automatically after the retention period.</string>
+    <string name="untranscribed_audio_title">Untranscribed recordings</string>
+    <string name="untranscribed_expired">Audio expired</string>
+    <string name="untranscribed_no_speech">No speech recognized</string>
+    <string name="untranscribed_transcribing">Transcribing…</string>
+    <string name="untranscribed_waiting_models">Waiting for speech models</string>
     <string name="upload_rejected">Couldn\'t be received</string>
     <string name="vault_locked">Can\'t open the record library</string>
     <string name="vault_locked_hint">The key or database is unavailable. Keep Tacit and its app data to preserve your files.</string>
