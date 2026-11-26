@@ -146,7 +146,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                             TimelineDetails(app, shownItem, timeline.invalidation, ::back) { reading.conversation = it }
                         }
                         page.kind == PageKind.HOME -> AudioPage(
-                            app, resumed, ::notify, ::settings, { reading.conversation = it }, timeline,
+                            app, resumed, ::notify, ::offerUndo, ::settings, { reading.conversation = it }, timeline,
                             day, { dayEpoch = it.toEpochDay() }, { selectedItem = it.id },
                             macRemoved = mac?.status?.removed == true, health = health,
                         )

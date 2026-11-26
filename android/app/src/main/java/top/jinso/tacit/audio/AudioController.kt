@@ -69,6 +69,7 @@ class AudioController internal constructor(
     }
     /** Bumps whenever recordings, voices or status change; pages re-read on it instead of polling. */
     val changes: StateFlow<Long> get() = runtime.changes
+    val manualTranscriptions: StateFlow<Map<String, ManualTranscriptionStatus>> get() = runtime.manualTranscriptions
     internal fun state(): AudioState {
         val recording = runtime.recording
         return AudioState(recording, modelsReady(), recordingStatus(
@@ -91,8 +92,10 @@ class AudioController internal constructor(
     }
     fun transcribeConversation(conversationId: String): CompletableFuture<Unit> =
         runtime.confirmConversation(conversationId)
-    fun deleteConversationAudio(conversationId: String): CompletableFuture<Unit> =
+    fun deleteConversationAudio(conversationId: String): CompletableFuture<DeleteConversationAudioResult> =
         runtime.deleteConversationAudio(conversationId)
+    fun restoreIgnoredCandidates(): CompletableFuture<Int> =
+        runtime.restoreIgnoredCandidates()
     fun renderTranscript(recordId: String, fallbackBody: String): CompletableFuture<String> = runtime.read {
         synchronized(runtime.lock) { runtime.ledger.render(recordId, fallbackBody, runtime.macVoiceprint()) }
     }
@@ -215,18 +218,37 @@ internal class AudioRuntime private constructor(val context: Context) {
         return change { synchronized(lock) { store.deleteRecord(recordId) } }
     }
 
-    fun deleteConversationAudio(conversationId: String): CompletableFuture<Unit> {
+    fun deleteConversationAudio(conversationId: String): CompletableFuture<DeleteConversationAudioResult> {
         playback.stop()
+        pendingDeletes.add(conversationId)
         invalidatePolicy()
-        return change { synchronized(lock) { store.deleteConversationAudio(conversationId) } }
+        return change {
+            try {
+                synchronized(lock) {
+                    val result = store.deleteConversationAudio(conversationId)
+                    manualTranscriptions.update { it - conversationId }
+                    result
+                }
+            } finally {
+                pendingDeletes.remove(conversationId)
+            }
+        }
     }
 
     fun confirmConversation(conversationId: String): CompletableFuture<Unit> {
         invalidatePolicy()
         return change {
             synchronized(lock) { ledger.confirmConversation(conversationId) }
+            if (models.current() != null) {
+                manualTranscriptions.update { it + (conversationId to ManualTranscriptionStatus.QUEUED) }
+            }
             schedule()
         }
+    }
+
+    fun restoreIgnoredCandidates(): CompletableFuture<Int> {
+        invalidatePolicy()
+        return change { synchronized(lock) { ledger.restoreIgnoredCandidates() } }
     }
 
     val models = SpeechModels(context)
@@ -321,8 +343,10 @@ internal class AudioRuntime private constructor(val context: Context) {
     }, worker)
 
     private val queued = AtomicBoolean(false)
+    private val pendingDeletes = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile var requested = false
     val changes = MutableStateFlow(0L)
+    val manualTranscriptions = MutableStateFlow<Map<String, ManualTranscriptionStatus>>(emptyMap())
     fun changed() = changes.update { it + 1 }
     @Volatile var recording = false
         set(value) { field = value; changed() }
@@ -381,6 +405,14 @@ internal class AudioRuntime private constructor(val context: Context) {
                 drain()
                 completed = true
             } catch (error: Throwable) {
+                val pending = synchronized(lock) { ledger.pendingConfirmedConversationIds() }
+                manualTranscriptions.update { current ->
+                    val failedIds = pending + current.filterValues {
+                        it == ManualTranscriptionStatus.QUEUED || it == ManualTranscriptionStatus.RUNNING
+                    }.keys
+                    if (failedIds.isEmpty()) current
+                    else current + failedIds.associateWith { ManualTranscriptionStatus.FAILED }
+                }
                 reportProcessingProblem(token, R.string.audio_processing_failed)
                 throw error
             } finally {
@@ -405,10 +437,20 @@ internal class AudioRuntime private constructor(val context: Context) {
         val speech = engine ?: AcceleratedSpeechEngine(LocalSpeechEngine(dir), context, qnnModels.current()) { status ->
             accelerationFallback = status == QNN_UNAVAILABLE || status == QNN_INTERRUPTED
         }.also { engine = it }
-        AudioProcessor(store, lock, speech, voiceprint).drain({ allowed() && token == generation && policy == policyRevision }) { p ->
+        AudioProcessor(store, lock, speech, voiceprint).drain(
+            allowed = { allowed() && token == generation && policy == policyRevision },
+            skipConversation = { it in pendingDeletes },
+            onManualStatus = { id, status ->
+                manualTranscriptions.update { if (status == null) it - id else it + (id to status) }
+            },
+        ) { p ->
             app.vault.ingest(Draft(source = AUDIO_SOURCE, title = STORED_CONVERSATION_TITLE, body = p.body,
                 start = p.start, end = p.end,
                 sourceRef = "audio:${p.clipId}", method = "asr"), offset = p.offset)
+        }
+        val stillPending = synchronized(lock) { ledger.pendingConfirmedConversationIds() }
+        manualTranscriptions.update { current ->
+            current.filter { (id, status) -> status == ManualTranscriptionStatus.FAILED || id in stillPending }
         }
         reportProcessingProblem(token, null)
         changed()
@@ -432,7 +474,7 @@ internal class AudioRuntime private constructor(val context: Context) {
         return null
     }
     fun conversationSample(conversationId: String): Triple<String, Int, Int>? =
-        pickConversationSample(store.clips(), conversationId, store::exists)
+        pickConversationSample(store.clips(), conversationId, store::exists, untranscribedOnly = true)
     fun play(request: SamplePlayback.Request, pcm: FloatArray) {
         val shorts = ShortArray(pcm.size) { (pcm[it].coerceIn(-1f, 1f) * 32767).toInt().toShort() }
         val track = try {

@@ -27,6 +27,8 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.jinso.tacit.TacitApp
@@ -170,13 +172,17 @@ internal fun accelerationDisplay(
         }
     }
     Caption(strings.text(R.string.speech_models_hint))
-    SpeakerSettings(audio, resumed, notify, offerUndo)
+    SpeakerSettings(app, audio, resumed, notify, offerUndo)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SpeakerSettings(
-    audio: AudioController, resumed: Int, notify: (String) -> Unit, offerUndo: (String, suspend () -> Unit) -> Unit,
+    app: TacitApp,
+    audio: AudioController,
+    resumed: Int,
+    notify: (String) -> Unit,
+    offerUndo: (String, suspend () -> Unit) -> Unit,
 ) {
     val format = uiFormat()
     val strings = uiStrings()
@@ -187,31 +193,64 @@ private fun SpeakerSettings(
     var busy by remember { mutableStateOf(false) }
     var mineExpanded by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val owner = LocalActivity.current as? LifecycleOwner
 
-    LaunchedEffect(audio, resumed, refresh) {
-        loadFailed = false
-        try {
-            val loaded = withContext(Dispatchers.IO) {
-                audio.listSpeakers(includeIgnored = false).get() to audio.macVoiceKnown().get()
+    LaunchedEffect(app, audio, owner, resumed, refresh) {
+        val vault = withContext(Dispatchers.IO) { runCatching { app.vault }.getOrNull() }
+        suspend fun reload() {
+            loadFailed = false
+            try {
+                val loaded = withContext(Dispatchers.IO) {
+                    audio.listSpeakers(includeIgnored = true).get() to audio.macVoiceKnown().get()
+                }
+                speakers = loaded.first
+                macVoice = loaded.second
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                loadFailed = true
             }
-            speakers = loaded.first
-            macVoice = loaded.second
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            loadFailed = true
+        }
+        val stream = if (vault != null) merge(audio.changes, vault.changes, vault.syncChanges) else audio.changes
+        val lifecycle = owner?.lifecycle
+        if (lifecycle != null) {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { stream.collectLatest { reload() } }
+        } else {
+            reload()
         }
     }
     val playingSpeaker by audio.playingSpeaker.collectAsState()
     val toggleSample = rememberSampleToggle(audio, notify)
 
-    fun work(task: () -> CompletableFuture<Unit>, success: String?, update: Boolean = true) {
+    fun work(task: () -> CompletableFuture<*>, success: String?, update: Boolean = true) {
         scope.launch {
             busy = true
             try {
                 withContext(Dispatchers.IO) { task().get() }
                 if (update) refresh++
                 success?.let(notify)
+            } catch (_: Exception) {
+                notify(strings.text(R.string.operation_failed))
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun rejectCandidate(id: String) {
+        if (busy) return
+        audio.stopPlayback()
+        busy = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { audio.setIgnored(id, true).get() }
+                refresh++
+                offerUndo(strings.text(R.string.voice_try_another)) {
+                    withContext(Dispatchers.IO) { audio.setIgnored(id, false).get() }
+                    refresh++
+                }
+            } catch (error: CancellationException) {
+                throw error
             } catch (_: Exception) {
                 notify(strings.text(R.string.operation_failed))
             } finally {
@@ -308,11 +347,20 @@ private fun SpeakerSettings(
                                 work({ audio.markMe(candidate.id) }, strings.text(R.string.voice_marked_me))
                             }, enabled = !busy)
                             TonalButton(strings.text(R.string.voice_no), {
-                                audio.stopPlayback()
-                                work({ audio.setIgnored(candidate.id, true) }, strings.text(R.string.voice_try_another))
+                                rejectCandidate(candidate.id)
                             }, enabled = !busy)
                         }
                     }
+                }
+                overview.skippedCandidateCount > 0 -> SettingsRow(
+                    strings.text(R.string.voice_not_confirmed),
+                    status = strings.text(R.string.voice_skipped_recovery_hint),
+                ) {
+                    TextAction(
+                        strings.text(R.string.voice_review_skipped),
+                        { work({ audio.restoreIgnoredCandidates() }, strings.text(R.string.voice_skipped_restored)) },
+                        enabled = !busy,
+                    )
                 }
                 else -> SettingsRow(
                     strings.text(R.string.voice_not_confirmed),

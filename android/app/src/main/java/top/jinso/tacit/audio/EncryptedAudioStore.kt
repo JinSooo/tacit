@@ -39,7 +39,7 @@ internal interface AudioStore {
     fun commit(clips: Collection<JSONObject> = emptyList(), speakers: Collection<JSONObject> = emptyList())
     fun saveClip(clip: JSONObject)
     fun saveSpeakers(speakers: Collection<JSONObject>)
-    fun deleteConversationAudio(conversationId: String)
+    fun deleteConversationAudio(conversationId: String): DeleteConversationAudioResult
 }
 
 internal class EncryptedAudioStore(context: Context) : AudioStore {
@@ -217,20 +217,37 @@ internal class EncryptedAudioStore(context: Context) : AudioStore {
         }.forEach { check(it.delete()) { "Audio cleanup failed" } }
     }
 
-    /** Removes retained clips of an untranscribed conversation; never deletes published transcripts. */
-    override fun deleteConversationAudio(conversationId: String) {
+    /** Removes retained untranscribed clips of a conversation; never deletes published transcripts. */
+    override fun deleteConversationAudio(conversationId: String): DeleteConversationAudioResult {
         val hasTranscripts = transcripts().any { it.getString("conversationId") == conversationId }
         val selected = clips().filter { clip ->
             clip.optString("conversation") == conversationId &&
                 clip.getJSONArray("utterances").objects().none { it.optString("record").isNotEmpty() }
         }.map { it.getString("id") }.toSet()
-        if (selected.isEmpty()) return
+        if (selected.isEmpty()) {
+            return if (hasTranscripts) DeleteConversationAudioResult.ALREADY_TRANSCRIBED
+            else DeleteConversationAudioResult.NOT_FOUND
+        }
+        if (hasTranscripts) {
+            index.optJSONArray("conversations")?.objects()
+                ?.firstOrNull { it.getString("id") == conversationId }
+                ?.let { conv ->
+                    val confirmed = conv.optJSONArray("userConfirmedClips")
+                    if (confirmed != null) {
+                        val remaining = (0 until confirmed.length()).map { confirmed.getString(it) }
+                            .filterNot { it in selected }
+                        if (remaining.isEmpty()) conv.remove("userConfirmedClips")
+                        else conv.put("userConfirmedClips", JSONArray(remaining))
+                    }
+                }
+        }
         erase(
             clipIds = selected,
             removeConversation = { !hasTranscripts && it.getString("id") == conversationId },
             removeTranscript = { false },
         )
         dropUnusedSpeakers()
+        return DeleteConversationAudioResult.DELETED
     }
 
     private fun erase(

@@ -83,13 +83,29 @@ internal fun monthGrid(
             date = date,
             isToday = date == today,
             isSelected = date == selected,
-            hasContent = date in availableDays,
+            hasContent = enabled && date in availableDays,
             enabled = enabled,
         )
     }
     val trailing = (7 - cells.size % 7) % 7
     repeat(trailing) { cells += CalendarDayCell(date = null) }
     return cells
+}
+
+internal fun calendarDayAccessibilityLabel(
+    cell: CalendarDayCell,
+    lang: AppLang,
+    strings: UiStrings,
+): String? {
+    val date = cell.date ?: return null
+    val locale = if (lang == AppLang.ZH) Locale.SIMPLIFIED_CHINESE else Locale.ENGLISH
+    val dateText = date.format(DateTimeFormatter.ofPattern(strings.text(R.string.day_heading_year), locale))
+    val parts = ArrayList<String>(3)
+    parts += dateText
+    if (cell.isToday) parts += strings.text(R.string.today)
+    if (cell.hasContent) parts += strings.text(R.string.calendar_has_activity)
+    val separator = if (lang == AppLang.ZH) "，" else ", "
+    return parts.joinToString(separator)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -104,10 +120,6 @@ internal fun TimelineDatePickerSheet(
     val format = uiFormat()
     val strings = uiStrings()
     val lang = format.lang
-    val locale = if (lang == AppLang.ZH) Locale.SIMPLIFIED_CHINESE else Locale.ENGLISH
-    val dayDescFormatter = remember(lang, strings) {
-        DateTimeFormatter.ofPattern(strings.text(R.string.day_heading_year), locale)
-    }
     var visibleMonth by remember(selected) { mutableStateOf(YearMonth.from(selected)) }
     val nextEnabled = canGoToNextMonth(visibleMonth, today)
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -198,7 +210,7 @@ internal fun TimelineDatePickerSheet(
                             week.forEach { cell ->
                                 CalendarDaySlot(
                                     cell = cell,
-                                    dayDescription = cell.date?.format(dayDescFormatter),
+                                    dayDescription = calendarDayAccessibilityLabel(cell, lang, strings),
                                     onSelect = onSelect,
                                     modifier = Modifier.weight(1f),
                                 )

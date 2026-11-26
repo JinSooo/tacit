@@ -160,6 +160,7 @@ internal data class MyVoiceOverview(
     val confirmed: List<top.jinso.tacit.audio.AudioSpeaker>,
     val syncedFromMac: Boolean,
     val candidate: top.jinso.tacit.audio.AudioSpeaker?,
+    val skippedCandidateCount: Int = 0,
 )
 
 internal fun myVoiceOverview(
@@ -171,12 +172,17 @@ internal fun myVoiceOverview(
         compareByDescending<top.jinso.tacit.audio.AudioSpeaker> { it.lastSeen ?: Long.MIN_VALUE }
             .thenByDescending { it.seconds },
     )
+    // Prefer unnamed voices first, but still allow pre-upgrade named playable voices as fallback so the user is never locked out.
     val candidate = if (macVoiceKnown || confirmed.isNotEmpty()) null
     else visible.filter { it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
+        ?: visible.filter { it.sampleAvailable }.maxByOrNull { it.seconds }
+    val skippedCandidateCount = if (macVoiceKnown || confirmed.isNotEmpty() || candidate != null) 0
+    else speakers.count { it.ignored && it.sampleAvailable }
     return MyVoiceOverview(
         confirmed = confirmed,
         syncedFromMac = macVoiceKnown && confirmed.isEmpty(),
         candidate = candidate,
+        skippedCandidateCount = skippedCandidateCount,
     )
 }
 

@@ -13,6 +13,18 @@ data class AudioClip(val id: String, val start: Long, val durationMs: Long, val 
 data class AudioSpeaker(val id: String, val isMe: Boolean, val ignored: Boolean,
     val segments: Int, val seconds: Double, val sampleAvailable: Boolean,
     val name: String? = null, val conversations: Int = 0, val lastSeen: Long? = null)
+enum class DeleteConversationAudioResult {
+    DELETED,
+    ALREADY_TRANSCRIBED,
+    NOT_FOUND,
+}
+
+enum class ManualTranscriptionStatus {
+    QUEUED,
+    RUNNING,
+    FAILED,
+}
+
 data class AudioConversation(
     val id: String,
     val start: Long,
@@ -22,6 +34,8 @@ data class AudioConversation(
     val audioAvailable: Boolean = false,
     val userConfirmed: Boolean = false,
     val transcribePending: Boolean = false,
+    val hasUntranscribedClips: Boolean = false,
+    val untranscribedAudioAvailable: Boolean = false,
 )
 
 /** Pure policy, independently testable without microphone/native libraries. */

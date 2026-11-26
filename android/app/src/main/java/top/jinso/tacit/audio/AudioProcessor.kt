@@ -48,7 +48,12 @@ internal fun microphoneClip(clip: JSONObject): Boolean =
 internal class AudioProcessor(private val store: AudioStore, private val lock: Any,
     private val speech: SpeechEngine, private val macVoiceprint: MacVoiceprint? = null) {
     /** publish must return the existing record ID on a duplicate clipId; null means rejected/tombstoned. */
-    fun drain(allowed: () -> Boolean, publish: (AudioPublication) -> String?) {
+    fun drain(
+        allowed: () -> Boolean,
+        skipConversation: (String) -> Boolean = { false },
+        onManualStatus: (String, ManualTranscriptionStatus?) -> Unit = { _, _ -> },
+        publish: (AudioPublication) -> String?,
+    ) {
         val ledger = AudioLedger(store)
         val clips = synchronized(lock) {
             ledger.prepare()
@@ -56,7 +61,11 @@ internal class AudioProcessor(private val store: AudioStore, private val lock: A
         }
         val analyzed = try { analyze(clips, ledger, allowed) } finally { speech.finishAnalysis() }
         if (!analyzed) return
-        try { publishTranscripts(clips, ledger, allowed, publish) } finally { speech.finishTranscription() }
+        try {
+            publishTranscripts(clips, ledger, allowed, skipConversation, onManualStatus, publish)
+        } finally {
+            speech.finishTranscription()
+        }
     }
 
     private fun analyze(clips: List<JSONObject>, ledger: AudioLedger, allowed: () -> Boolean): Boolean {
@@ -97,18 +106,31 @@ internal class AudioProcessor(private val store: AudioStore, private val lock: A
         return true
     }
 
-    private fun publishTranscripts(clips: List<JSONObject>, ledger: AudioLedger, allowed: () -> Boolean,
-        publish: (AudioPublication) -> String?) {
-        // Without a "me" voice and without any user-confirmed conversation nothing is eligible; skip the pass.
-        val (voice, hasConfirmed) = synchronized(lock) { ledger.meVoice(macVoiceprint) to ledger.hasUserConfirmedConversation() }
+    private fun publishTranscripts(
+        clips: List<JSONObject>,
+        ledger: AudioLedger,
+        allowed: () -> Boolean,
+        skipConversation: (String) -> Boolean,
+        onManualStatus: (String, ManualTranscriptionStatus?) -> Unit,
+        publish: (AudioPublication) -> String?,
+    ) {
+        // Without a "me" voice and without any pending user-confirmed clips nothing is eligible; skip the pass.
+        val (voice, hasConfirmed) = synchronized(lock) { ledger.meVoice(macVoiceprint) to ledger.hasPendingConfirmedClips() }
         if (voice == null && !hasConfirmed) return
         val presence = mutableMapOf<String, Boolean>()
-        fun eligible(clip: JSONObject) = ledger.eligible(clip, allowed(), macVoiceprint, voice, presence)
+        fun eligible(clip: JSONObject): Boolean {
+            val conv = clip.optString("conversation")
+            if (conv.isNotEmpty() && skipConversation(conv)) return false
+            return ledger.eligible(clip, allowed(), macVoiceprint, voice, presence)
+        }
         for (clip in clips) {
             if (!allowed()) return
             val utterances = clip.getJSONArray("utterances").objects()
             if (utterances.all { it.optBoolean("done") }) continue
-            if (!synchronized(lock) { eligible(clip) }) continue
+            val convId = clip.optString("conversation")
+            val (canProcess, isManual) = synchronized(lock) { eligible(clip) to ledger.isClipConfirmed(clip) }
+            if (!canProcess) continue
+            if (isManual && convId.isNotEmpty()) onManualStatus(convId, ManualTranscriptionStatus.RUNNING)
             if (!clip.optBoolean("textPrepared")) {
                 val pcm = synchronized(lock) {
                     val id = clip.getString("id")
@@ -116,7 +138,7 @@ internal class AudioProcessor(private val store: AudioStore, private val lock: A
                 } ?: continue
                 val texts = try {
                     utterances.map { u ->
-                        if (!allowed()) return
+                        if (!allowed() || (convId.isNotEmpty() && skipConversation(convId))) return
                         val samples = pcm.copyOfRange(u.getInt("start"), u.getInt("start") + u.getInt("length"))
                         try { Secrets.redact(speech.transcribe(samples)).text } finally { samples.fill(0f) }
                     }
@@ -127,7 +149,7 @@ internal class AudioProcessor(private val store: AudioStore, private val lock: A
                     clip.put("textPrepared", true); store.saveClip(clip)
                 }
             }
-            synchronized(lock) {
+            val stillPendingManual = synchronized(lock) {
                 if (!eligible(clip)) return
                 val publication = audioPublication(clip, utterances, ZoneId.systemDefault()) { ledger.transcriptLabel(clip, it, macVoiceprint) }
                 val record = publication?.let(publish)
@@ -138,6 +160,10 @@ internal class AudioProcessor(private val store: AudioStore, private val lock: A
                     u.put("done", true)
                 }
                 store.save(clip)
+                isManual && convId.isNotEmpty() && convId in ledger.pendingConfirmedConversationIds()
+            }
+            if (isManual && convId.isNotEmpty() && !stillPendingManual) {
+                onManualStatus(convId, null)
             }
         }
     }

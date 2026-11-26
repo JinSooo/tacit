@@ -12,7 +12,7 @@ class TimelineDatePickerTest {
     @Test fun monthGridAlignsFirstWeekdayMarksContentAndDisablesFutureDays() {
         val today = LocalDate.of(2026, 11, 26)
         val selected = LocalDate.of(2026, 11, 24)
-        val available = setOf(LocalDate.of(2026, 11, 1), selected, today)
+        val available = setOf(LocalDate.of(2026, 11, 1), selected, today, LocalDate.of(2026, 11, 27))
         // 2026-11-01 is a Sunday: Monday-first has 6 leading empty slots.
         val zhCells = monthGrid(YearMonth.of(2026, 11), selected, today, available, DayOfWeek.MONDAY)
         assertEquals(0, zhCells.size % 7)
@@ -30,11 +30,26 @@ class TimelineDatePickerTest {
         val todayCell = zhCells.single { it.date == today }
         assertTrue(todayCell.isToday)
         assertFalse(todayCell.isSelected)
+        assertTrue(todayCell.hasContent)
         assertTrue(todayCell.enabled)
 
+        // Future dates are disabled and must never show an activity dot even if present in availableDays.
         val futureCell = zhCells.single { it.date == LocalDate.of(2026, 11, 27) }
         assertFalse(futureCell.enabled)
         assertFalse(futureCell.hasContent)
+
+        assertEquals(
+            "2026 年 11 月 26 日，今天，有记录",
+            calendarDayAccessibilityLabel(todayCell, AppLang.ZH, TestStrings(AppLang.ZH)),
+        )
+        assertEquals(
+            "November 26, 2026, Today, has activity",
+            calendarDayAccessibilityLabel(todayCell, AppLang.EN, TestStrings(AppLang.EN)),
+        )
+        assertEquals(
+            "November 27, 2026",
+            calendarDayAccessibilityLabel(futureCell, AppLang.EN, TestStrings(AppLang.EN)),
+        )
 
         // Sunday-first has 0 leading empty slots for 2026-11-01.
         val enCells = monthGrid(YearMonth.of(2026, 11), selected, today, available, DayOfWeek.SUNDAY)

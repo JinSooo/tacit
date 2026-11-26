@@ -14,6 +14,8 @@ internal data class AudioConversationRow(
     val audioAvailable: Boolean = false,
     val userConfirmed: Boolean = false,
     val transcribePending: Boolean = false,
+    val hasUntranscribedClips: Boolean = false,
+    val untranscribedAudioAvailable: Boolean = false,
 )
 
 internal fun audioConversationRows(
@@ -32,6 +34,8 @@ internal fun audioConversationRows(
             audioAvailable = scene.audioAvailable,
             userConfirmed = scene.userConfirmed,
             transcribePending = scene.transcribePending,
+            hasUntranscribedClips = scene.hasUntranscribedClips || scene.audioAvailable,
+            untranscribedAudioAvailable = scene.untranscribedAudioAvailable || scene.audioAvailable,
         ),
     )
     else text.groupBy { it.sensitivity }.map { (sensitivity, group) ->
@@ -45,6 +49,8 @@ internal fun audioConversationRows(
             audioAvailable = scene.audioAvailable,
             userConfirmed = scene.userConfirmed,
             transcribePending = scene.transcribePending,
+            hasUntranscribedClips = scene.hasUntranscribedClips,
+            untranscribedAudioAvailable = scene.untranscribedAudioAvailable,
         )
     }
 }

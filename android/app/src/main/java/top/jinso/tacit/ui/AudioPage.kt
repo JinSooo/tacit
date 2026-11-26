@@ -70,6 +70,7 @@ import java.util.concurrent.CompletableFuture
     app: TacitApp,
     resumed: Int,
     notify: (String) -> Unit,
+    offerUndo: (String, suspend () -> Unit) -> Unit,
     onOpenSettings: (String?) -> Unit,
     onConversation: (List<HistoryRecord>) -> Unit,
     timeline: TimelineSnapshot,
@@ -140,19 +141,25 @@ import java.util.concurrent.CompletableFuture
         } }
     }
     val playingSpeaker by audio.playingSpeaker.collectAsState()
+    val manualTranscriptions by audio.manualTranscriptions.collectAsState()
     val toggleSample = rememberSampleToggle(audio, notify)
+    var sheetMessage by remember { mutableStateOf<String?>(null) }
     val toggleConversationSample: (String) -> Unit = { conversationId ->
         val loading = audio.playConversationSample(conversationId)
         scope.launch {
             try { withContext(Dispatchers.IO) { loading.get() } }
             catch (error: CancellationException) { throw error }
-            catch (_: Exception) { notify(strings.text(R.string.preview_unavailable)) }
+            catch (_: Exception) {
+                val msg = strings.text(R.string.preview_unavailable)
+                sheetMessage = msg
+                notify(msg)
+            }
         }
     }
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
     // Each day has its own cards, so a sample playing for the old day would keep going with no stop button in sight.
     var showUntranscribed by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(day) { audio.stopPlayback(); showUntranscribed = false }
+    LaunchedEffect(day) { audio.stopPlayback(); showUntranscribed = false; sheetMessage = null }
     val candidate = myVoiceOverview(speakers, macVoice).candidate
     val today = LocalDate.now()
     val local = remember(rows, timeline.days, today) {
@@ -160,7 +167,12 @@ import java.util.concurrent.CompletableFuture
             .flatMap { it.recordIds }.toSet()
         undisplayedConversations(rows, projectedIds).groupBy { Instant.ofEpochMilli(it.start).atZone(ZoneId.systemDefault()).toLocalDate() }
     }
-    val availableDays = local.keys + timeline.days.filter { (date, value) ->
+    val untranscribedByDay = remember(rows) {
+        rows.filter { it.hasUntranscribedClips }
+            .distinctBy { it.conversationId }
+            .groupBy { Instant.ofEpochMilli(it.start).atZone(ZoneId.systemDefault()).toLocalDate() }
+    }
+    val availableDays = local.keys + untranscribedByDay.keys + timeline.days.filter { (date, value) ->
         !value.overview.isNullOrBlank() || value.entries(date == today).isNotEmpty()
     }.keys
     val earlier = availableDays.filter { it < day }.maxOrNull()
@@ -240,8 +252,21 @@ import java.util.concurrent.CompletableFuture
                     },
                     ignore = {
                         audio.stopPlayback()
-                        work({ audio.setIgnored(candidate.id, true) }, strings.text(R.string.voice_try_another)) {
-                            speakers = speakers.filterNot { it.id == candidate.id }
+                        scope.launch {
+                            busy = true
+                            try {
+                                withContext(Dispatchers.IO) { audio.setIgnored(candidate.id, true).get() }
+                                speakers = speakers.filterNot { it.id == candidate.id }
+                                offerUndo(strings.text(R.string.voice_try_another)) {
+                                    withContext(Dispatchers.IO) { audio.setIgnored(candidate.id, false).get() }
+                                }
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (_: Exception) {
+                                notify(strings.text(R.string.operation_failed))
+                            } finally {
+                                busy = false
+                            }
                         }
                     },
                 )
@@ -277,7 +302,7 @@ import java.util.concurrent.CompletableFuture
                 }
             }
         }
-        val untranscribed = scenes.filter { it.records.isEmpty() }
+        val untranscribed = untranscribedByDay[day].orEmpty()
         if (untranscribed.isNotEmpty()) item(key = "untranscribed-$day") {
             val caption = if (entries.isNotEmpty()) R.plurals.more_audio_without_voice else R.plurals.audio_without_voice
             Row(
@@ -286,7 +311,10 @@ import java.util.concurrent.CompletableFuture
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
                     .clip(MaterialTheme.shapes.small)
-                    .clickable(role = Role.Button) { showUntranscribed = true }
+                    .clickable(role = Role.Button) {
+                        sheetMessage = null
+                        showUntranscribed = true
+                    }
                     .padding(top = 12.dp, bottom = 12.dp, end = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -310,11 +338,18 @@ import java.util.concurrent.CompletableFuture
     }
         }
     }
-    val untranscribedForDay = remember(local, day) { local[day].orEmpty().filter { it.records.isEmpty() } }
-    LaunchedEffect(untranscribedForDay.isEmpty()) {
-        if (untranscribedForDay.isEmpty() && showUntranscribed) {
+    val untranscribedForDay = untranscribedByDay[day].orEmpty()
+    LaunchedEffect(untranscribedForDay, playingSpeaker, showUntranscribed) {
+        if (!showUntranscribed) return@LaunchedEffect
+        val activeKeys = untranscribedForDay.mapTo(HashSet()) { conversationPlaybackKey(it.conversationId) }
+        val activePlaying = playingSpeaker
+        if (activePlaying != null && activePlaying.startsWith("conversation:") && activePlaying !in activeKeys) {
+            audio.stopPlayback()
+        }
+        if (untranscribedForDay.isEmpty()) {
             audio.stopPlayback()
             showUntranscribed = false
+            sheetMessage = null
         }
     }
     if (showUntranscribed && untranscribedForDay.isNotEmpty()) {
@@ -323,21 +358,54 @@ import java.util.concurrent.CompletableFuture
             modelsReady = state.modelsReady,
             busy = busy,
             playingKey = playingSpeaker,
+            statuses = manualTranscriptions,
+            statusMessage = sheetMessage,
             onTogglePlay = toggleConversationSample,
             onTranscribe = { scene ->
                 audio.stopPlayback()
-                val message = strings.text(
-                    if (state.modelsReady) R.string.transcribe_queued else R.string.transcribe_queued_models_missing,
-                )
-                work({ audio.transcribeConversation(scene.conversationId) }, message)
+                scope.launch {
+                    busy = true
+                    try {
+                        withContext(Dispatchers.IO) { audio.transcribeConversation(scene.conversationId).get() }
+                        val msg = strings.text(
+                            if (state.modelsReady) R.string.transcribe_queued else R.string.transcribe_queued_models_missing,
+                        )
+                        sheetMessage = msg
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        sheetMessage = strings.text(R.string.operation_failed)
+                    } finally {
+                        busy = false
+                    }
+                }
             },
             onDelete = { scene ->
                 audio.stopPlayback()
-                work({ audio.deleteConversationAudio(scene.conversationId) }, strings.text(R.string.deleted))
+                scope.launch {
+                    busy = true
+                    try {
+                        val result = withContext(Dispatchers.IO) { audio.deleteConversationAudio(scene.conversationId).get() }
+                        val msg = when (result) {
+                            DeleteConversationAudioResult.DELETED -> strings.text(R.string.deleted)
+                            DeleteConversationAudioResult.ALREADY_TRANSCRIBED -> strings.text(R.string.untranscribed_already_transcribed)
+                            DeleteConversationAudioResult.NOT_FOUND -> strings.text(R.string.untranscribed_already_removed)
+                        }
+                        sheetMessage = msg
+                        notify(msg)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        sheetMessage = strings.text(R.string.delete_retry)
+                    } finally {
+                        busy = false
+                    }
+                }
             },
             onDismiss = {
                 audio.stopPlayback()
                 showUntranscribed = false
+                sheetMessage = null
             },
         )
     }

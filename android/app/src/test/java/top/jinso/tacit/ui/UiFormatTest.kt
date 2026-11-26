@@ -105,7 +105,27 @@ class UiFormatTest {
         assertTrue(unconfirmed.confirmed.isEmpty())
         assertFalse(unconfirmed.syncedFromMac)
         assertEquals("long", unconfirmed.candidate?.id)
+        assertEquals(0, unconfirmed.skippedCandidateCount)
         assertEquals("共 10 分钟", chinese.speakerStatus(voice("c", false, 600.0, null), now = day))
+
+        // 升级前已命名的可试听声音在无其他匿名候选时仍可作为回退候选，避免无法确认“我”。
+        val namedOnly = myVoiceOverview(
+            listOf(voice("named", false, 120.0, day, name = "小林")),
+            macVoiceKnown = false,
+        )
+        assertEquals("named", namedOnly.candidate?.id)
+        assertEquals(0, namedOnly.skippedCandidateCount)
+
+        // 全部可试听候选被误点“不是”跳过时，暴露 skippedCandidateCount 供设置页恢复。
+        val allSkipped = myVoiceOverview(
+            listOf(
+                voice("ignored-playable", false, 180.0, day, ignored = true, sampleAvailable = true),
+                voice("ignored-expired", false, 120.0, day, ignored = true, sampleAvailable = false),
+            ),
+            macVoiceKnown = false,
+        )
+        assertNull(allSkipped.candidate)
+        assertEquals(1, allSkipped.skippedCandidateCount)
     }
 
     @Test fun accelerationCopyExplainsNpuPurposeAndStatesInBothLanguages() {

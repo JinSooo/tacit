@@ -30,6 +30,7 @@
     <string name="background_restriction_hint">Recording may stop in the background</string>
     <string name="battery_optimization">Battery optimization</string>
     <string name="battery_optimization_hint">Recording may pause when the phone is idle</string>
+    <string name="calendar_has_activity">has activity</string>
     <string name="camera_ungranted">Camera access is off. You can paste an invite link.</string>
     <string name="cancel">Cancel</string>
     <string name="cancelling">Cancelling</string>
@@ -273,10 +274,14 @@
     <string name="turn_on">Turn on</string>
     <string name="undo">Undo</string>
     <string name="undo_failed">Couldn\'t undo. Try again later.</string>
+    <string name="untranscribed_already_removed">This recording was already removed</string>
+    <string name="untranscribed_already_transcribed">Already transcribed. Delete the record from the timeline instead.</string>
     <string name="untranscribed_audio_hint">These recordings didn\'t detect enough of your voice on this phone, so they weren\'t transcribed or uploaded. They clear automatically after the retention period.</string>
     <string name="untranscribed_audio_title">Untranscribed recordings</string>
     <string name="untranscribed_expired">Audio expired</string>
     <string name="untranscribed_no_speech">No speech recognized</string>
+    <string name="untranscribed_queued">Queued for transcription…</string>
+    <string name="untranscribed_transcribe_failed">Transcription failed. Check models or storage, then retry.</string>
     <string name="untranscribed_transcribing">Transcribing…</string>
     <string name="untranscribed_waiting_models">Waiting for speech models</string>
     <string name="upload_rejected">Couldn\'t be received</string>
@@ -293,6 +298,9 @@
     <string name="voice_not_me">This isn\'t me</string>
     <string name="voice_question">Is this your voice?</string>
     <string name="voice_question_hint">Confirm once so Tacit can recognize your voice</string>
+    <string name="voice_review_skipped">Check again</string>
+    <string name="voice_skipped_recovery_hint">All saved samples were skipped. Restore them to confirm your voice again.</string>
+    <string name="voice_skipped_restored">Skipped samples restored</string>
     <string name="voice_synced_from_mac">Synced from Mac</string>
     <string name="voice_try_another">Tacit will ask about another sample</string>
     <string name="voice_unmarked">Removed the Me label</string>

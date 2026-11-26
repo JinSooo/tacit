@@ -30,6 +30,7 @@
     <string name="background_restriction_hint">后台录音可能被系统停止</string>
     <string name="battery_optimization">电池优化</string>
     <string name="battery_optimization_hint">待机时录音可能被系统暂停</string>
+    <string name="calendar_has_activity">有记录</string>
     <string name="camera_ungranted">相机未授权，可以粘贴邀请链接</string>
     <string name="cancel">取消</string>
     <string name="cancelling">正在取消</string>
@@ -273,10 +274,14 @@
     <string name="turn_on">开启</string>
     <string name="undo">撤销</string>
     <string name="undo_failed">暂时无法撤销，请稍后重试</string>
+    <string name="untranscribed_already_removed">这段录音已不存在</string>
+    <string name="untranscribed_already_transcribed">这段录音已转成文字，请在时间线中删除记录</string>
     <string name="untranscribed_audio_hint">这些录音在本地未检测到足够时长的你的声音，因此未转写也未上传，保留期满会自动清除。</string>
     <string name="untranscribed_audio_title">未转写录音</string>
     <string name="untranscribed_expired">音频已过保留期</string>
     <string name="untranscribed_no_speech">未识别到有效文字</string>
+    <string name="untranscribed_queued">排队等待补转写…</string>
+    <string name="untranscribed_transcribe_failed">补转写失败，请检查模型或存储后重试</string>
     <string name="untranscribed_transcribing">正在补转写…</string>
     <string name="untranscribed_waiting_models">等待准备语音模型</string>
     <string name="upload_rejected">未能接收</string>
@@ -293,6 +298,9 @@
     <string name="voice_not_me">这不是我</string>
     <string name="voice_question">这是你的声音吗？</string>
     <string name="voice_question_hint">确认一次，之后自动认出你</string>
+    <string name="voice_review_skipped">重新核对</string>
+    <string name="voice_skipped_recovery_hint">已跳过全部候选声音，可恢复后重新试听确认。</string>
+    <string name="voice_skipped_restored">已恢复跳过的声音，可重新确认</string>
     <string name="voice_synced_from_mac">已同步 Mac 声纹</string>
     <string name="voice_try_another">好的，换一段再问</string>
     <string name="voice_unmarked">已取消“我”的标记</string>

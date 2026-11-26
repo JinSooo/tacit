@@ -79,13 +79,29 @@ class UntranscribedConversationTest {
             speakers.forEach { speakerMeta[it.getString("id")] = it.toString() }
         }
 
-        override fun deleteConversationAudio(conversationId: String) {
+        override fun deleteConversationAudio(conversationId: String): DeleteConversationAudioResult {
             val hasTranscripts = transcripts().any { it.getString("conversationId") == conversationId }
             val selected = clips().filter { clip ->
                 clip.optString("conversation") == conversationId &&
                     clip.getJSONArray("utterances").objects().none { it.optString("record").isNotEmpty() }
             }.map { it.getString("id") }.toSet()
-            if (selected.isEmpty()) return
+            if (selected.isEmpty()) {
+                return if (hasTranscripts) DeleteConversationAudioResult.ALREADY_TRANSCRIBED
+                else DeleteConversationAudioResult.NOT_FOUND
+            }
+            if (hasTranscripts) {
+                index.optJSONArray("conversations")?.objects()
+                    ?.firstOrNull { it.getString("id") == conversationId }
+                    ?.let { conv ->
+                        val confirmed = conv.optJSONArray("userConfirmedClips")
+                        if (confirmed != null) {
+                            val remaining = (0 until confirmed.length()).map { confirmed.getString(it) }
+                                .filterNot { it in selected }
+                            if (remaining.isEmpty()) conv.remove("userConfirmedClips")
+                            else conv.put("userConfirmedClips", JSONArray(remaining))
+                        }
+                    }
+            }
             selected.forEach { pcmData.remove(it); clipMeta.remove(it) }
             index.put("clips", JSONArray(clips().filterNot { it.getString("id") in selected }))
             if (!hasTranscripts) {
@@ -94,6 +110,7 @@ class UntranscribedConversationTest {
                 if (remaining != null) index.put("conversations", JSONArray(remaining))
             }
             save()
+            return DeleteConversationAudioResult.DELETED
         }
     }
 
@@ -251,11 +268,101 @@ class UntranscribedConversationTest {
         val convA = ledger.listConversations().single { clipA in it.clipIds }.id
         val convB = ledger.listConversations().single { clipB in it.clipIds }.id
 
-        store.deleteConversationAudio(convA)
+        val deleteResult = store.deleteConversationAudio(convA)
+        assertEquals(DeleteConversationAudioResult.DELETED, deleteResult)
+        assertEquals(DeleteConversationAudioResult.NOT_FOUND, store.deleteConversationAudio(convA))
         store.reload()
 
         assertFalse(store.exists(clipA))
         assertTrue(store.exists(clipB))
         assertEquals(listOf(convB), AudioLedger(store).listConversations().map { it.id })
+    }
+
+    @Test fun confirmingClipDoesNotAuthorizeLaterClipsAttachedToSameConversation() {
+        val store = FakeAudioStore()
+        val now = System.currentTimeMillis()
+        val firstClip = store.addClip(now - 300_000L, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        val speech = FakeSpeech()
+        val published = mutableListOf<AudioPublication>()
+
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+        val ledger = AudioLedger(store)
+        val convId = ledger.listConversations().single().id
+
+        // Confirm batch 1, transcribe, and reload index from disk.
+        ledger.confirmConversation(convId)
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+        assertEquals(listOf(firstClip), published.map { it.clipId })
+        assertTrue(store.speakers().none { it.optBoolean("me") })
+
+        store.reload()
+
+        // Add a second clip 1 minute later (within 10-minute adjacency window -> attaches to same conversation).
+        val laterClip = store.addClip(now - 240_000L, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+
+        val reloadedLedger = AudioLedger(store)
+        val conv = reloadedLedger.listConversations().single()
+        assertEquals(convId, conv.id)
+        assertTrue(laterClip in conv.clipIds)
+        // Later clip MUST NOT be transcribed without a new explicit confirmation or "me" voiceprint.
+        assertEquals(listOf(firstClip), published.map { it.clipId })
+        assertTrue(conv.hasUntranscribedClips)
+        assertTrue(conv.untranscribedAudioAvailable)
+        assertFalse(conv.userConfirmed)
+        assertFalse(conv.transcribePending)
+        assertTrue(store.speakers().none { it.optBoolean("me") })
+    }
+
+    @Test fun deleteRaceReportsAlreadyTranscribedAndSkipPreventsPublishWhenDeleteWins() {
+        // Order A: background drain publishes first -> subsequent delete reports ALREADY_TRANSCRIBED without claiming DELETED.
+        val storeA = FakeAudioStore()
+        val now = System.currentTimeMillis()
+        val clipA = storeA.addClip(now - 120_000L, FloatArray(SAMPLE_RATE * 3) { 0.2f })
+        val speechA = FakeSpeech()
+        val statuses = mutableListOf<Pair<String, ManualTranscriptionStatus?>>()
+        AudioProcessor(storeA, Any(), speechA).drain({ true }) { error("Unconfirmed") }
+        val ledgerA = AudioLedger(storeA)
+        val convA = ledgerA.listConversations().single().id
+        ledgerA.confirmConversation(convA)
+        AudioProcessor(storeA, Any(), speechA).drain(
+            allowed = { true },
+            onManualStatus = { id, status -> statuses += id to status },
+        ) { "rec:${it.clipId}" }
+        assertEquals(listOf(convA to ManualTranscriptionStatus.RUNNING, convA to null), statuses)
+        assertEquals(DeleteConversationAudioResult.ALREADY_TRANSCRIBED, storeA.deleteConversationAudio(convA))
+        assertEquals(listOf("rec:$clipA"), storeA.transcripts().map { it.getString("recordId") })
+
+        // Order B: pending delete beats queued drain -> skipConversation stops publish and delete removes audio.
+        val storeB = FakeAudioStore()
+        val clipB = storeB.addClip(now - 120_000L, FloatArray(SAMPLE_RATE * 3) { 0.2f })
+        val speechB = FakeSpeech()
+        val publishedB = mutableListOf<AudioPublication>()
+        AudioProcessor(storeB, Any(), speechB).drain({ true }) { error("Unconfirmed") }
+        val ledgerB = AudioLedger(storeB)
+        val convB = ledgerB.listConversations().single().id
+        ledgerB.confirmConversation(convB)
+        AudioProcessor(storeB, Any(), speechB).drain(
+            allowed = { true },
+            skipConversation = { it == convB },
+        ) { publishedB += it; "rec:${it.clipId}" }
+        assertTrue(publishedB.isEmpty())
+        assertEquals(0, speechB.transcribeCalls)
+        assertEquals(DeleteConversationAudioResult.DELETED, storeB.deleteConversationAudio(convB))
+        assertFalse(storeB.exists(clipB))
+    }
+
+    @Test fun restoreIgnoredCandidatesReEnablesSkippedPlayableVoices() {
+        val store = FakeAudioStore()
+        val clipId = store.addClip(System.currentTimeMillis() - 60_000L, FloatArray(SAMPLE_RATE * 3) { 0.2f })
+        AudioProcessor(store, Any(), FakeSpeech()).drain({ true }) { error("Unconfirmed") }
+        val ledger = AudioLedger(store)
+        val speakerId = store.speakers().single().getString("id")
+        ledger.ignore(speakerId, true)
+        assertTrue(store.speakers().single().optBoolean("ignored"))
+
+        assertEquals(1, ledger.restoreIgnoredCandidates())
+        assertFalse(store.speakers().single().optBoolean("ignored"))
+        assertTrue(store.exists(clipId))
     }
 }
