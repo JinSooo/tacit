@@ -143,16 +143,6 @@ html[data-platform="android"] .download-guide .download-mac {
   border-top: 1px solid var(--line);
 }
 
-.download-status {
-  margin-top: clamp(40px, 6vw, 72px);
-  padding-top: 20px;
-  border-top: 1px solid var(--line);
-}
-
-.download-status a {
-  display: inline-block;
-}
-
 @media (max-width: 760px) {
   .download-layout {
     grid-template-columns: minmax(0, 1fr);
