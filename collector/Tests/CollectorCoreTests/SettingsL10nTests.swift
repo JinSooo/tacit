@@ -9,6 +9,14 @@ import Testing
   }
   #expect(L10n.Settings.languageOption(.system, lang: .zh) == "跟随系统")
   #expect(L10n.Settings.languageOption(.system, lang: .en) == "Follow system")
+  AppLanguage.$scopedLanguage.withValue(.zh) {
+    #expect(L10n.Settings.language == "语言")
+    #expect(L10n.Settings.displayLanguage == "显示语言")
+  }
+  AppLanguage.$scopedLanguage.withValue(.en) {
+    #expect(L10n.Settings.language == "Language")
+    #expect(L10n.Settings.displayLanguage == "Display language")
+  }
 }
 
 @Test(arguments: AppLanguage.allCases)

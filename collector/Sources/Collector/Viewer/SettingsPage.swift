@@ -157,21 +157,28 @@ struct GeneralSettingsView: View {
     SettingsForm {
       LoginStartupSection()
       Section {
-        SettingsRow(L10n.Settings.language) {
-          Picker(L10n.Settings.language, selection: $language.preference) {
+        SettingsRow(L10n.Settings.displayLanguage) {
+          Picker(L10n.Settings.displayLanguage, selection: $language.preference) {
             ForEach(LanguagePreference.allCases, id: \.self) { preference in
               Text(L10n.Settings.languageOption(preference)).tag(preference)
             }
           }
+          .pickerStyle(.segmented)
           .labelsHidden()
-          .accessibilityLabel(L10n.Settings.language)
+          .fixedSize()
+          .accessibilityLabel(L10n.Settings.displayLanguage)
         }
-      } footer: { Note(L10n.Settings.languageNote) }
+      } header: {
+        Text(L10n.Settings.language)
+      } footer: {
+        Note(L10n.Settings.languageNote)
+      }
       Section(L10n.Settings.about) {
         SettingsRow("Tacit", value: L10n.Settings.appVersion(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? L10n.Settings.developmentBuild))
         SettingsRow(L10n.Settings.build, value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? L10n.Settings.localBuild)
       }
     }
+    .tint(Palette.accent)
   }
 }
 
