@@ -138,7 +138,9 @@
     <string name="models_not_ready">未准备</string>
     <string name="models_preparing">模型正在准备，请稍后重试</string>
     <string name="models_replace_folder">更换模型文件夹</string>
+    <string name="month_heading">yyyy 年 M 月</string>
     <string name="next_day">后一天</string>
+    <string name="next_month">下个月</string>
     <string name="not_connected">未连接</string>
     <string name="not_yet_synced">尚未同步</string>
     <string name="notifications_channel_disabled">通知已关闭</string>
@@ -161,6 +163,7 @@
     <string name="preview_stop">停止试听</string>
     <string name="preview_unavailable">暂时无法试听</string>
     <string name="previous_day">前一天</string>
+    <string name="previous_month">上个月</string>
     <string name="private_record">私密</string>
     <string name="record_no_content">这一段没有可显示的完整内容。</string>
     <string name="recording">录音</string>
@@ -195,12 +198,14 @@
     <string name="retention_range">请输入 1 至 %1$d 天</string>
     <string name="retention_updated">已更新保留期</string>
     <string name="retired_shortcut">Tacit 手机端只录音，不再补写</string>
+    <string name="return_to_today">回到今天</string>
     <string name="retry">重试</string>
     <string name="save">保存</string>
     <string name="save_address">保存地址</string>
     <string name="save_failed">保存失败，请重试。</string>
     <string name="saved">已保存</string>
     <string name="scan_mac_qr">扫描 Mac 上的二维码</string>
+    <string name="select_date">选择日期</string>
     <string name="service_address">服务地址</string>
     <string name="settings">设置</string>
     <string name="source_ai_note">AI 补写</string>

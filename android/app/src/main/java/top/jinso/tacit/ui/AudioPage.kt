@@ -23,8 +23,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -156,12 +159,24 @@ import java.util.concurrent.CompletableFuture
     val later = availableDays.filter { it > day }.minOrNull()
     val reduceMotion = LocalReduceMotion.current
     val (shiftIn, shiftOut) = with(LocalDensity.current) { 24.dp.roundToPx() to 16.dp.roundToPx() }
+    var showDatePicker by rememberSaveable { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         // The date bar stays put while the day below changes, so the arrows never move under a finger.
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 20.dp, bottom = 4.dp), verticalAlignment = Alignment.Top) {
-            Crossfade(day, Modifier.weight(1f).padding(top = 8.dp), Motion.quick(), label = "day-title") {
-                DayHeading(it, today, stacked = true)
+            Box(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(role = Role.Button, onClickLabel = strings.text(R.string.select_date)) {
+                        showDatePicker = true
+                    }
+                    .padding(top = 8.dp, end = 4.dp, bottom = 4.dp),
+            ) {
+                Crossfade(day, animationSpec = Motion.quick(), label = "day-title") {
+                    DayHeading(it, today, stacked = true, showPickerHint = true)
+                }
             }
             val earlierTint by animateColorAsState(if (earlier != null) tacitColors.muted else tacitColors.faint, Motion.quick(), label = "earlier")
             val laterTint by animateColorAsState(if (later != null) tacitColors.muted else tacitColors.faint, Motion.quick(), label = "later")
@@ -274,6 +289,18 @@ import java.util.concurrent.CompletableFuture
     }
         }
     }
+    if (showDatePicker) {
+        TimelineDatePickerSheet(
+            selected = day,
+            today = today,
+            availableDays = availableDays,
+            onSelect = { chosen ->
+                onDay(chosen)
+                showDatePicker = false
+            },
+            onDismiss = { showDatePicker = false },
+        )
+    }
 }
 
 /** One tap does both system prompts and the start, because capture may only begin from a visible page. */
@@ -360,7 +387,13 @@ private fun NoticeText(text: String) {
 
 /** Serif date as the day's anchor; today also carries the weekday under it. */
 @Composable
-private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Modifier, stacked: Boolean = false) {
+private fun DayHeading(
+    day: LocalDate,
+    today: LocalDate,
+    modifier: Modifier = Modifier,
+    stacked: Boolean = false,
+    showPickerHint: Boolean = false,
+) {
     val strings = uiStrings()
     val relative = when (day) { today -> strings.text(R.string.today); today.minusDays(1) -> strings.text(R.string.yesterday); else -> null }
     val lang = uiFormat().lang
@@ -369,11 +402,25 @@ private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Mo
     val title = day.format(DateTimeFormatter.ofPattern(titlePattern, locale))
     val weekday = day.format(DateTimeFormatter.ofPattern(strings.text(R.string.weekday_pattern), locale))
     val note = relative?.let { strings.text(R.string.day_heading_note, it, weekday) } ?: weekday
-    if (stacked) Column(modifier) {
+    @Composable fun titleWithHint() = Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
         Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)
+        if (showPickerHint) {
+            Icon(
+                Icons.Outlined.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tacitColors.muted,
+            )
+        }
+    }
+    if (stacked) Column(modifier) {
+        titleWithHint()
         if (note != null) Caption(note)
     } else Row(modifier, verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)
+        titleWithHint()
         if (note != null) Caption(note, Modifier.padding(bottom = 4.dp))
     }
 }
