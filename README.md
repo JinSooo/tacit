@@ -13,7 +13,6 @@
   <a href="https://github.com/JinSooo/tacit/releases"><img src="https://img.shields.io/badge/%E4%B8%8B%E8%BD%BD-Tacit-3b7468?style=flat-square" alt="下载"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B_(arm64)-211f1d?style=flat-square&logo=apple" alt="macOS 14+ arm64">
   <img src="https://img.shields.io/badge/Android-9%2B_(arm64)-211f1d?style=flat-square&logo=android" alt="Android 9+ arm64">
-  <img src="https://img.shields.io/badge/%E7%8A%B6%E6%80%81-%E5%BC%80%E5%8F%91%E9%A2%84%E8%A7%88-9d2933?style=flat-square" alt="开发预览">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-211f1d?style=flat-square" alt="MIT"></a>
 </p>
 
@@ -200,7 +199,7 @@ AI 只能读取和追加，不能修改或删除。AI 记错的地方，你可�
 
 ## 当前状态
 
-Tacit 目前处于**开发预览**阶段，以下几项仍在完善或尚未覆盖：
+以下几项仍在完善或尚未覆盖：
 
 - 全天资源占用和记录准确率仍在持续优化；总结可能遗漏或理解偏差，重要结论请点回原文核对。
 - 第三方插件安装和本地模型独立入口当前暂时收起。

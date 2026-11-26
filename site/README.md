@@ -29,7 +29,7 @@ open site/dist/index.html   # 不起服务也能直接打开看
 | 5 | `more` | 搜索、会议与聊天、桌面小组件 |
 | 6 | `privacy` | 数据与隐私，如实说清什么会离开本机 |
 | 7 | `faq` | 常见问题 |
-| 8 | `download` | 下载、系统要求、首次打开的放行步骤、开发预览说明 |
+| 8 | `download` | 下载、系统要求、首次打开的放行步骤与使用提示 |
 
 ## 视觉方向
 
@@ -49,7 +49,7 @@ open site/dist/index.html   # 不起服务也能直接打开看
 - 中文，短句，具体。说清它做什么、怎么做，不用“革命性”“智能”“赋能”“无缝”这类词，不用感叹号。
 - 不在标题上方加小标签（eyebrow），版式自己说明层级。能用布局说清楚的不写说明。
 - 界面用词按 `docs/ui.md` 第 1 节：事项、整理、自动带入、AI 工具、时间线、段、依据。不出现中枢、提炼、线程、注入、档位、OCR。
-- 如实：它是开发预览；支持 Apple 芯片 Mac（macOS 14 及以上）与 arm64 Android（Android 9 及以上）；用云端模型整理时相关文字会发给你配置的模型服务；不收集遥测。不承诺尚未支持的能力（如 Intel Mac、Windows、iOS 端尚未提供）。
+- 如实：支持 Apple 芯片 Mac（macOS 14 及以上）与 arm64 Android（Android 9 及以上）；用云端模型整理时相关文字会发给你配置的模型服务；不收集遥测。不承诺尚未支持的能力（Windows 仅写计划支持/敬请期待，Intel Mac 暂不支持，iOS 仍在调研中）。
 - 下载链接：Mac 指向 `https://github.com/JinSooo/tacit/releases/tag/mac-v<版本号>`，Android 指向 `https://github.com/JinSooo/tacit/releases/tag/android-v<版本号>`（预发布期间 `releases/latest` 是 404）。每次发版要同步更新 `src/sections/hero.html` 和 `src/sections/download.html` 里的下载链接。
 
 ## 虚构的一天（全站示例数据共用）
