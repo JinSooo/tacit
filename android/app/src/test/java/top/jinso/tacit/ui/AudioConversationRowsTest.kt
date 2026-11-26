@@ -12,10 +12,26 @@ class AudioConversationRowsTest {
         AudioConversation(id, start, start + 5000, listOf("clip-$id"), recordIds.toList())
 
     @Test fun savedAudioWithoutTranscriptionStillHasAVisibleRow() {
-        val rows = audioConversationRows(listOf(scene("pending", 1000)), emptyMap())
+        val scene = AudioConversation(
+            id = "pending",
+            start = 1000,
+            end = 181_000,
+            clipIds = listOf("clip-pending"),
+            recordIds = emptyList(),
+            audioAvailable = true,
+            userConfirmed = true,
+            transcribePending = true,
+        )
+        val rows = audioConversationRows(listOf(scene), emptyMap())
         assertEquals(1, rows.size)
-        assertEquals("pending", rows.single().key)
-        assertTrue(rows.single().records.isEmpty())
+        val row = rows.single()
+        assertEquals("pending", row.key)
+        assertEquals("pending", row.conversationId)
+        assertEquals(181_000L, row.end)
+        assertTrue(row.records.isEmpty())
+        assertTrue(row.audioAvailable)
+        assertTrue(row.userConfirmed)
+        assertTrue(row.transcribePending)
     }
 
     @Test fun privateTextNeverJoinsNormalConversationPreview() {

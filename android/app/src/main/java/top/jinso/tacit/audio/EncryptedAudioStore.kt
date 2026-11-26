@@ -26,7 +26,23 @@ import javax.crypto.spec.SecretKeySpec
  * (2026-11-23). Version 1 files (Keystore key directly) still read; small item files are rewritten as
  * version 2 when the index loads, PCM keeps its version until retention deletes it.
  */
-internal class EncryptedAudioStore(context: Context) {
+internal interface AudioStore {
+    val index: JSONObject
+    fun clips(): List<JSONObject>
+    fun speakers(): List<JSONObject>
+    fun transcripts(): List<JSONObject>
+    fun exists(id: String): Boolean
+    fun pcm(id: String): FloatArray
+    fun discard(clipId: String)
+    fun prune(days: Int)
+    fun save(vararg clips: JSONObject)
+    fun commit(clips: Collection<JSONObject> = emptyList(), speakers: Collection<JSONObject> = emptyList())
+    fun saveClip(clip: JSONObject)
+    fun saveSpeakers(speakers: Collection<JSONObject>)
+    fun deleteConversationAudio(conversationId: String)
+}
+
+internal class EncryptedAudioStore(context: Context) : AudioStore {
     private val dir = File(context.noBackupFilesDir, "audio").apply { mkdirs() }
     private val keystoreKey: SecretKey by lazy {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -66,7 +82,7 @@ internal class EncryptedAudioStore(context: Context) {
      * conversations and transcripts live in index.enc; each clip is `<id>.meta.enc` and each voice is
      * `<id>.speaker.enc`, so a save costs the same no matter how long recording has run.
      */
-    val index: JSONObject get() = loaded ?: load().also { loaded = it; dropUnusedSpeakers() }
+    override val index: JSONObject get() = loaded ?: load().also { loaded = it; dropUnusedSpeakers() }
     private fun load(): JSONObject {
         val head = if (indexFile.exists() || File(dir, "index.enc.bak").exists()) {
             val plain = read(indexFile, migrate = true)
@@ -93,14 +109,14 @@ internal class EncryptedAudioStore(context: Context) {
             try { JSONObject(String(plain, Charsets.UTF_8)) } finally { plain.fill(0) }
         }
     /** Persists the head plus the listed clips. Clips that did not change are never rewritten. */
-    fun save(vararg clips: JSONObject) = commit(clips.toList())
-    fun commit(clips: Collection<JSONObject> = emptyList(), speakers: Collection<JSONObject> = emptyList()) {
+    override fun save(vararg clips: JSONObject) = commit(clips.toList())
+    override fun commit(clips: Collection<JSONObject>, speakers: Collection<JSONObject>) {
         writeHead(index)
         clips.forEach { writeItem(META, it) }
         saveSpeakers(speakers)
     }
-    fun saveClip(clip: JSONObject) = writeItem(META, clip)
-    fun saveSpeakers(speakers: Collection<JSONObject>) = speakers.forEach { writeItem(SPEAKER, it) }
+    override fun saveClip(clip: JSONObject) = writeItem(META, clip)
+    override fun saveSpeakers(speakers: Collection<JSONObject>) = speakers.forEach { writeItem(SPEAKER, it) }
     private fun writeHead(source: JSONObject) {
         val names = source.keys().asSequence().filter { it != "clips" && it != "speakers" }.toList().toTypedArray()
         val plain = JSONObject(source, names).toString().toByteArray(Charsets.UTF_8)
@@ -112,9 +128,9 @@ internal class EncryptedAudioStore(context: Context) {
     }
     private fun compactClip(clip: JSONObject) = clip.optJSONArray("utterances")?.objects()?.forEach(::compactVector)
     private fun compactVector(row: JSONObject) { row.vectorOrNull("vector")?.let { row.putVector("vector", it) } }
-    fun clips(): List<JSONObject> = index.getJSONArray("clips").objects()
-    fun speakers(): List<JSONObject> = index.getJSONArray("speakers").objects()
-    fun transcripts(): List<JSONObject> = index.optJSONArray("transcripts")?.objects().orEmpty()
+    override fun clips(): List<JSONObject> = index.getJSONArray("clips").objects()
+    override fun speakers(): List<JSONObject> = index.getJSONArray("speakers").objects()
+    override fun transcripts(): List<JSONObject> = index.optJSONArray("transcripts")?.objects().orEmpty()
     fun add(samples: ShortArray, start: Long): String {
         require(samples.isNotEmpty() && samples.size <= SAMPLE_RATE * 30)
         val id = UUID.randomUUID().toString()
@@ -130,8 +146,8 @@ internal class EncryptedAudioStore(context: Context) {
         return id
     }
     /** A microphone clip without any voice has nothing to keep; remove its audio and metadata right away. */
-    fun discard(clipId: String) = erase(setOf(clipId)) { false }
-    fun pcm(id: String): FloatArray {
+    override fun discard(clipId: String) = erase(setOf(clipId)) { false }
+    override fun pcm(id: String): FloatArray {
         val bytes = read(file(id))
         try {
             require(bytes.size <= SAMPLE_RATE * 31 * 2 && bytes.size % 2 == 0)
@@ -139,9 +155,9 @@ internal class EncryptedAudioStore(context: Context) {
             return FloatArray(bytes.size / 2) { buf.short / 32768f }
         } finally { bytes.fill(0) }
     }
-    fun exists(id: String) = file(id).isFile
+    override fun exists(id: String) = file(id).isFile
     /** Cheap enough for every query: only touches the files of clips that just expired. */
-    fun prune(days: Int) {
+    override fun prune(days: Int) {
         val now = System.currentTimeMillis()
         // An unfinished legacy import has no committed recording.
         val (drop, keep) = clips().partition { it.optBoolean("pendingImport") || AudioPolicy.expired(it.getLong("start"), now, days) }
@@ -201,16 +217,42 @@ internal class EncryptedAudioStore(context: Context) {
         }.forEach { check(it.delete()) { "Audio cleanup failed" } }
     }
 
-    private fun erase(clipIds: Set<String>, removeTranscript: (JSONObject) -> Boolean) {
+    /** Removes retained clips of an untranscribed conversation; never deletes published transcripts. */
+    override fun deleteConversationAudio(conversationId: String) {
+        val hasTranscripts = transcripts().any { it.getString("conversationId") == conversationId }
+        val selected = clips().filter { clip ->
+            clip.optString("conversation") == conversationId &&
+                clip.getJSONArray("utterances").objects().none { it.optString("record").isNotEmpty() }
+        }.map { it.getString("id") }.toSet()
+        if (selected.isEmpty()) return
+        erase(
+            clipIds = selected,
+            removeConversation = { !hasTranscripts && it.getString("id") == conversationId },
+            removeTranscript = { false },
+        )
+        dropUnusedSpeakers()
+    }
+
+    private fun erase(
+        clipIds: Set<String>,
+        removeConversation: (JSONObject) -> Boolean = { false },
+        removeTranscript: (JSONObject) -> Boolean,
+    ) {
         val previous = index
         val retainedText = transcripts().filterNot(removeTranscript)
-        if (clipIds.isEmpty() && retainedText.size == transcripts().size) return
+        val existingConversations = previous.optJSONArray("conversations")?.objects()
+        val retainedConversations = existingConversations?.filterNot(removeConversation)
+        val conversationsChanged = existingConversations != null && retainedConversations != null &&
+            retainedConversations.size != existingConversations.size
+        if (clipIds.isEmpty() && retainedText.size == transcripts().size && !conversationsChanged) return
         clipIds.forEach(::removePcm)
         // Only top-level arrays are replaced, so a shallow copy is enough to roll back on a failed write.
         val names = previous.keys().asSequence().toList().toTypedArray()
-        loaded = JSONObject(previous, names)
+        val updated = JSONObject(previous, names)
             .put("clips", JSONArray(clips().filterNot { it.getString("id") in clipIds }))
             .put("transcripts", JSONArray(retainedText))
+        if (retainedConversations != null) updated.put("conversations", JSONArray(retainedConversations))
+        loaded = updated
         try { writeHead(index) } catch (error: Exception) {
             loaded = previous
             throw error

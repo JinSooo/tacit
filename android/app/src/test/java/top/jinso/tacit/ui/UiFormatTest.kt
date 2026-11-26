@@ -4,6 +4,9 @@ import top.jinso.tacit.i18n.AppLang
 import top.jinso.tacit.i18n.TestStrings
 import top.jinso.tacit.R
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -48,23 +51,98 @@ class UiFormatTest {
             chinese.detailTimeLabel(start, time("2026-11-25T23:59:45"), true))
         assertEquals("2026 年 11 月 25 日 23:59–2026 年 11 月 26 日 00:00 · 1 分钟",
             chinese.detailTimeLabel(start, time("2026-11-26T00:00:25"), true))
+        assertEquals("14:20–14:23", chinese.timeRangeLabel(time("2026-11-25T14:20:05"), time("2026-11-25T14:23:10")))
+        assertEquals("14:20", chinese.timeRangeLabel(time("2026-11-25T14:20:05"), time("2026-11-25T14:20:45")))
+        assertEquals("11 月 25 日 23:59–11 月 26 日 00:02", chinese.timeRangeLabel(start, time("2026-11-26T00:02:00")))
+        val english12 = UiFormat(TestStrings(AppLang.EN), AppLang.EN, use24Hour = false)
+        assertEquals("2:20 PM–2:23 PM", english12.timeRangeLabel(time("2026-11-25T14:20:05"), time("2026-11-25T14:23:10")))
         assertEquals("1,234", countLabel(1234))
     }
 
-    // 用户反馈：语音转写页连着十行“我”、一串“声音 N”，分不清哪个是哪个。
-    @Test fun speakersGroupMeAndShowWhenAndHowLong() {
-        fun voice(id: String, me: Boolean, seconds: Double, last: Long?, name: String? = null, ignored: Boolean = false) =
-            top.jinso.tacit.audio.AudioSpeaker(id, me, ignored, 1, seconds, true, name, 1, last)
+    // 精简声音列表：设置页只管理“我”的声音，不平铺陌生人列表。
+    @Test fun myVoiceOverviewShowsConfirmedMacSyncOrLongestPlayableCandidate() {
+        fun voice(
+            id: String,
+            me: Boolean,
+            seconds: Double,
+            last: Long?,
+            name: String? = null,
+            ignored: Boolean = false,
+            sampleAvailable: Boolean = true,
+        ) = top.jinso.tacit.audio.AudioSpeaker(id, me, ignored, 1, seconds, sampleAvailable, name, 1, last)
+
         val day = LocalDateTime.parse("2026-11-25T10:00:00").atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val (mine, others) = orderedSpeakers(listOf(
-            voice("a", true, 30.0, day - 86_400_000), voice("b", true, 90.0, day),
-            voice("c", false, 600.0, null), voice("d", false, 20.0, day),
-            voice("e", false, 5.0, day - 1, name = "小林"), voice("f", false, 40.0, day, ignored = true),
-        ))
-        assertEquals(listOf("b", "a"), mine.map { it.id })
-        assertEquals(listOf("e", "c", "d"), others.map { it.id })
-        assertEquals("今天 10:00 · 共 1 分钟", chinese.speakerStatus(mine[0], now = day + 3_600_000))
-        assertEquals("昨天 10:00 · 不到 1 分钟", chinese.speakerStatus(mine[1], now = day + 3_600_000))
-        assertEquals("共 10 分钟", chinese.speakerStatus(others[1], now = day))
+        val confirmed = myVoiceOverview(
+            listOf(
+                voice("a", true, 30.0, day - 86_400_000),
+                voice("b", true, 90.0, day),
+                voice("c", false, 600.0, null),
+                voice("d", false, 40.0, day, ignored = true),
+            ),
+            macVoiceKnown = false,
+        )
+        assertEquals(listOf("b", "a"), confirmed.confirmed.map { it.id })
+        assertFalse(confirmed.syncedFromMac)
+        assertNull(confirmed.candidate)
+        assertEquals("今天 10:00 · 共 1 分钟", chinese.speakerStatus(confirmed.confirmed[0], now = day + 3_600_000))
+        assertEquals("昨天 10:00 · 不到 1 分钟", chinese.speakerStatus(confirmed.confirmed[1], now = day + 3_600_000))
+
+        val macOnly = myVoiceOverview(listOf(voice("c", false, 600.0, day)), macVoiceKnown = true)
+        assertTrue(macOnly.confirmed.isEmpty())
+        assertTrue(macOnly.syncedFromMac)
+        assertNull(macOnly.candidate)
+
+        val unconfirmed = myVoiceOverview(
+            listOf(
+                voice("named", false, 300.0, day, name = "小林"),
+                voice("expired", false, 200.0, day, sampleAvailable = false),
+                voice("ignored", false, 180.0, day, ignored = true),
+                voice("short", false, 25.0, day),
+                voice("long", false, 90.0, day),
+            ),
+            macVoiceKnown = false,
+        )
+        assertTrue(unconfirmed.confirmed.isEmpty())
+        assertFalse(unconfirmed.syncedFromMac)
+        assertEquals("long", unconfirmed.candidate?.id)
+        assertEquals("共 10 分钟", chinese.speakerStatus(voice("c", false, 600.0, null), now = day))
+    }
+
+    @Test fun accelerationCopyExplainsNpuPurposeAndStatesInBothLanguages() {
+        val zh = TestStrings(AppLang.ZH)
+        val en = TestStrings(AppLang.EN)
+
+        assertEquals("芯片加速转写", zh.text(R.string.acceleration))
+        assertEquals("Hardware acceleration", en.text(R.string.acceleration))
+
+        val zhUnprepared = accelerationDisplay(ready = false, fallback = false, strings = zh)
+        assertEquals("用手机 NPU 加快本机转写并更省电（约 162 MB，可选）", zhUnprepared.status)
+        assertNull(zhUnprepared.value)
+        assertFalse(zhUnprepared.problem)
+
+        val zhEnabled = accelerationDisplay(ready = true, fallback = false, strings = zh)
+        assertNull(zhEnabled.status)
+        assertEquals("已启用", zhEnabled.value)
+        assertFalse(zhEnabled.problem)
+
+        val zhFallback = accelerationDisplay(ready = true, fallback = true, strings = zh)
+        assertEquals("暂时不可用，已自动改用普通转写", zhFallback.status)
+        assertNull(zhFallback.value)
+        assertTrue(zhFallback.problem)
+
+        val enUnprepared = accelerationDisplay(ready = false, fallback = false, strings = en)
+        assertEquals("Uses your phone's NPU for faster, lower-power transcription (~162 MB, optional)", enUnprepared.status)
+        assertNull(enUnprepared.value)
+        assertFalse(enUnprepared.problem)
+
+        val enEnabled = accelerationDisplay(ready = true, fallback = false, strings = en)
+        assertNull(enEnabled.status)
+        assertEquals("Enabled", enEnabled.value)
+        assertFalse(enEnabled.problem)
+
+        val enFallback = accelerationDisplay(ready = true, fallback = true, strings = en)
+        assertEquals("Temporarily unavailable; switched to standard transcription", enFallback.status)
+        assertNull(enFallback.value)
+        assertTrue(enFallback.problem)
     }
 }

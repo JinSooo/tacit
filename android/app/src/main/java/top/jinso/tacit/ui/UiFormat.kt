@@ -48,6 +48,18 @@ internal class UiFormat(private val strings: UiStrings, val lang: AppLang, priva
         return "$startLabel$endLabel · ${durationLabel(end - start)}"
     }
 
+    fun timeRangeLabel(start: Long, end: Long): String {
+        val safeEnd = end.coerceAtLeast(start)
+        return when {
+            date(start, "yyyy-MM-dd HH:mm") == date(safeEnd, "yyyy-MM-dd HH:mm") -> clock(start)
+            date(start, "yyyy-MM-dd") != date(safeEnd, "yyyy-MM-dd") -> {
+                val includeYear = date(start, "yyyy") != date(safeEnd, "yyyy")
+                "${dateAndClock(start, includeYear)}–${dateAndClock(safeEnd, includeYear)}"
+            }
+            else -> "${clock(start)}–${clock(safeEnd)}"
+        }
+    }
+
     internal fun sourceName(source: String): String = strings.text(when (source) {
         "mac.audio" -> R.string.source_conversation
         "mac.screen" -> R.string.source_screen
@@ -141,16 +153,31 @@ internal fun readingText(text: String, source: String): String {
 }
 
 /**
- * 声音列表分成“我”和其他人，避免一串分不清的同名行。“我”按最近出现排，方便核对新近认错的；
- * 其他人有称呼的在前，再按说话总时长排，常说话的人先被起称呼。
+ * 设置页只管理“我”的声音：已确认的按最近出现排，方便核对新近认错的；已同步 Mac 声纹但本机还没匹配到时
+ * 仅展示同步状态；尚未确认时，优先给出最长的可试听候选声音。
  */
-internal fun orderedSpeakers(speakers: List<top.jinso.tacit.audio.AudioSpeaker>):
-    Pair<List<top.jinso.tacit.audio.AudioSpeaker>, List<top.jinso.tacit.audio.AudioSpeaker>> {
+internal data class MyVoiceOverview(
+    val confirmed: List<top.jinso.tacit.audio.AudioSpeaker>,
+    val syncedFromMac: Boolean,
+    val candidate: top.jinso.tacit.audio.AudioSpeaker?,
+)
+
+internal fun myVoiceOverview(
+    speakers: List<top.jinso.tacit.audio.AudioSpeaker>,
+    macVoiceKnown: Boolean,
+): MyVoiceOverview {
     val visible = speakers.filterNot { it.ignored }
-    return visible.filter { it.isMe }.sortedWith(compareByDescending<top.jinso.tacit.audio.AudioSpeaker> {
-        it.lastSeen ?: Long.MIN_VALUE }.thenByDescending { it.seconds }) to
-        visible.filterNot { it.isMe }.sortedWith(compareByDescending<top.jinso.tacit.audio.AudioSpeaker> {
-            it.name != null }.thenByDescending { it.seconds })
+    val confirmed = visible.filter { it.isMe }.sortedWith(
+        compareByDescending<top.jinso.tacit.audio.AudioSpeaker> { it.lastSeen ?: Long.MIN_VALUE }
+            .thenByDescending { it.seconds },
+    )
+    val candidate = if (macVoiceKnown || confirmed.isNotEmpty()) null
+    else visible.filter { it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
+    return MyVoiceOverview(
+        confirmed = confirmed,
+        syncedFromMac = macVoiceKnown && confirmed.isEmpty(),
+        candidate = candidate,
+    )
 }
 
 internal fun conversationDuration(records: List<HistoryRecord>) =

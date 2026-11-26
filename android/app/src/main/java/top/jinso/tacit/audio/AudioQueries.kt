@@ -5,7 +5,7 @@ internal data class AudioStorageUsage(val clips: Int, val hasVoiceprints: Boolea
 }
 
 /** Query paths shared by AudioController and isolated storage tests; caller holds the runtime lock. */
-internal class AudioQueries(private val store: EncryptedAudioStore, private val ledger: AudioLedger,
+internal class AudioQueries(private val store: AudioStore, private val ledger: AudioLedger,
     private val retentionDays: () -> Int, private val sampledSpeakers: () -> Set<String>,
     private val macVoiceprint: () -> top.jinso.tacit.sync.MacVoiceprint? = { null }) {
     /** The Mac already confirmed the user's voice, so the phone never asks "is this you?" again. */
@@ -25,6 +25,10 @@ internal class AudioQueries(private val store: EncryptedAudioStore, private val 
     fun listConversations(): List<AudioConversation> {
         ledger.prepare()
         return ledger.listConversations()
+    }
+    fun conversationAudioAvailable(conversationId: String): Boolean {
+        store.prune(retentionDays())
+        return ledger.conversationAudioAvailable(conversationId)
     }
     fun listSpeakers(includeIgnored: Boolean = false): List<AudioSpeaker> {
         store.prune(retentionDays())

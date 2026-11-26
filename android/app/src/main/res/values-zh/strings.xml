@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="acceleration">本机加速</string>
-    <string name="acceleration_cpu_fallback">本机加速暂时不可用，将改用普通转写</string>
+    <string name="acceleration">芯片加速转写</string>
+    <string name="acceleration_cpu_fallback">暂时不可用，已自动改用普通转写</string>
     <string name="acceleration_downloading">正在下载加速模型</string>
-    <string name="acceleration_prepare_failed">暂时无法准备本机加速，请稍后重试</string>
-    <string name="acceleration_size">约 162 MB</string>
+    <string name="acceleration_enabled">已启用</string>
+    <string name="acceleration_prepare_failed">暂时无法准备芯片加速转写，请稍后重试</string>
+    <string name="acceleration_size">用手机 NPU 加快本机转写并更省电（约 162 MB，可选）</string>
     <string name="acceleration_storage">存储空间不足，请至少腾出 480 MB 后重试</string>
-    <string name="acceleration_validating">正在验证本机加速</string>
+    <string name="acceleration_validating">正在验证芯片加速转写</string>
     <string name="activity_notifications">运行通知</string>
     <string name="address_empty_hint">留空自动发现</string>
     <string name="ai_summaries">AI 总结</string>
@@ -66,6 +67,8 @@
     <string name="delete_old_connection_title">删除旧连接？</string>
     <string name="delete_record_title">删除这条记录？</string>
     <string name="delete_retry">删除未完成，请重试</string>
+    <string name="delete_untranscribed_message">会永久删除这段本机原始音频，无法恢复。</string>
+    <string name="delete_untranscribed_title">删除这段录音？</string>
     <string name="deleted">已删除</string>
     <string name="deleted_record_corrections">已删除记录和关联修正</string>
     <string name="disconnect">断开连接</string>
@@ -138,7 +141,11 @@
     <string name="models_not_ready">未准备</string>
     <string name="models_preparing">模型正在准备，请稍后重试</string>
     <string name="models_replace_folder">更换模型文件夹</string>
+    <string name="month_heading">yyyy 年 M 月</string>
+    <string name="my_voice">我的声音</string>
+    <string name="my_voice_hint">只需确认你的声音，其他说话人会自动标为对方。</string>
     <string name="next_day">后一天</string>
+    <string name="next_month">下个月</string>
     <string name="not_connected">未连接</string>
     <string name="not_yet_synced">尚未同步</string>
     <string name="notifications_channel_disabled">通知已关闭</string>
@@ -161,6 +168,7 @@
     <string name="preview_stop">停止试听</string>
     <string name="preview_unavailable">暂时无法试听</string>
     <string name="previous_day">前一天</string>
+    <string name="previous_month">上个月</string>
     <string name="private_record">私密</string>
     <string name="record_no_content">这一段没有可显示的完整内容。</string>
     <string name="recording">录音</string>
@@ -188,19 +196,20 @@
     <string name="rejection_too_long">单条内容过长</string>
     <string name="relay_disabled">中转信箱已停用，回到和 Mac 同一个网络后会自动同步。</string>
     <string name="removed">已移除</string>
-    <string name="restore">恢复</string>
     <string name="retention_days">保留天数</string>
     <string name="retention_hint">只清原始音频，转好的文字一直保留。</string>
     <string name="retention_period">保留期限</string>
     <string name="retention_range">请输入 1 至 %1$d 天</string>
     <string name="retention_updated">已更新保留期</string>
     <string name="retired_shortcut">Tacit 手机端只录音，不再补写</string>
+    <string name="return_to_today">回到今天</string>
     <string name="retry">重试</string>
     <string name="save">保存</string>
     <string name="save_address">保存地址</string>
     <string name="save_failed">保存失败，请重试。</string>
     <string name="saved">已保存</string>
     <string name="scan_mac_qr">扫描 Mac 上的二维码</string>
+    <string name="select_date">选择日期</string>
     <string name="service_address">服务地址</string>
     <string name="settings">设置</string>
     <string name="source_ai_note">AI 补写</string>
@@ -258,10 +267,18 @@
     <string name="timeline_synced">已同步到 %1$s</string>
     <string name="today">今天</string>
     <string name="today_at">今天 %1$s</string>
+    <string name="transcribe_queued">已开始补转写</string>
+    <string name="transcribe_queued_models_missing">已加入补转写，准备好语音模型后会自动处理</string>
+    <string name="transcribe_this_clip">补转写这段</string>
     <string name="turn_on">开启</string>
     <string name="undo">撤销</string>
     <string name="undo_failed">暂时无法撤销，请稍后重试</string>
-    <string name="unnamed_voice">声音 %1$d</string>
+    <string name="untranscribed_audio_hint">这些录音在本地未检测到足够时长的你的声音，因此未转写也未上传，保留期满会自动清除。</string>
+    <string name="untranscribed_audio_title">未转写录音</string>
+    <string name="untranscribed_expired">音频已过保留期</string>
+    <string name="untranscribed_no_speech">未识别到有效文字</string>
+    <string name="untranscribed_transcribing">正在补转写…</string>
+    <string name="untranscribed_waiting_models">等待准备语音模型</string>
     <string name="upload_rejected">未能接收</string>
     <string name="vault_locked">记录库暂时无法打开</string>
     <string name="vault_locked_hint">密钥或数据库不可用，原文件已保留，请勿卸载应用或清除数据。</string>
@@ -269,22 +286,17 @@
     <string name="view_original">查看原文</string>
     <string name="view_original_record">查看原记录</string>
     <string name="view_raw_transcript">查看转写原文</string>
+    <string name="voice_confirm_on_home_hint">录到对话后，会在首页提示试听确认一次。</string>
     <string name="voice_marked_me">已标记为我，将补转写保留期内的录音</string>
-    <string name="voice_name">如何称呼</string>
-    <string name="voice_name_add">起称呼</string>
-    <string name="voice_name_edit">改称呼</string>
-    <string name="voice_name_saved">称呼已更新</string>
     <string name="voice_no">不是</string>
+    <string name="voice_not_confirmed">尚未确认</string>
     <string name="voice_not_me">这不是我</string>
     <string name="voice_question">这是你的声音吗？</string>
     <string name="voice_question_hint">确认一次，之后自动认出你</string>
-    <string name="voice_restored">已恢复这个声音</string>
+    <string name="voice_synced_from_mac">已同步 Mac 声纹</string>
     <string name="voice_try_another">好的，换一段再问</string>
     <string name="voice_unmarked">已取消“我”的标记</string>
     <string name="voice_yes">是我</string>
-    <string name="voices">声音</string>
-    <string name="voices_empty">暂时没有可显示的声音</string>
-    <string name="voices_ignored">已忽略的声音</string>
     <string name="voices_unavailable">暂时无法读取声音列表</string>
     <string name="weekday_pattern">EEEE</string>
     <string name="yesterday">昨天</string>
@@ -303,9 +315,6 @@
     </plurals>
     <plurals name="duration_days">
         <item quantity="other">%1$s 天</item>
-    </plurals>
-    <plurals name="ignored_voice_count">
-        <item quantity="other">%1$s 个</item>
     </plurals>
     <plurals name="more_audio_without_voice">
         <item quantity="other">另有 %1$s 段没认出你的声音，未转写</item>

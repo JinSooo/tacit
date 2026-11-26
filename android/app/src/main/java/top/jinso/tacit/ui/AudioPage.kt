@@ -23,8 +23,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -138,11 +141,19 @@ import java.util.concurrent.CompletableFuture
     }
     val playingSpeaker by audio.playingSpeaker.collectAsState()
     val toggleSample = rememberSampleToggle(audio, notify)
+    val toggleConversationSample: (String) -> Unit = { conversationId ->
+        val loading = audio.playConversationSample(conversationId)
+        scope.launch {
+            try { withContext(Dispatchers.IO) { loading.get() } }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { notify(strings.text(R.string.preview_unavailable)) }
+        }
+    }
     DisposableEffect(Unit){onDispose{audio.stopPlayback()}}
     // Each day has its own cards, so a sample playing for the old day would keep going with no stop button in sight.
-    LaunchedEffect(day) { audio.stopPlayback() }
-    val candidate = if (macVoice || speakers.any { it.isMe }) null else speakers
-        .filter { !it.ignored && it.name == null && it.sampleAvailable }.maxByOrNull { it.seconds }
+    var showUntranscribed by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(day) { audio.stopPlayback(); showUntranscribed = false }
+    val candidate = myVoiceOverview(speakers, macVoice).candidate
     val today = LocalDate.now()
     val local = remember(rows, timeline.days, today) {
         val projectedIds = timeline.days.flatMap { (date, value) -> value.entries(date == today) }
@@ -156,12 +167,24 @@ import java.util.concurrent.CompletableFuture
     val later = availableDays.filter { it > day }.minOrNull()
     val reduceMotion = LocalReduceMotion.current
     val (shiftIn, shiftOut) = with(LocalDensity.current) { 24.dp.roundToPx() to 16.dp.roundToPx() }
+    var showDatePicker by rememberSaveable { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         // The date bar stays put while the day below changes, so the arrows never move under a finger.
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 20.dp, bottom = 4.dp), verticalAlignment = Alignment.Top) {
-            Crossfade(day, Modifier.weight(1f).padding(top = 8.dp), Motion.quick(), label = "day-title") {
-                DayHeading(it, today, stacked = true)
+            Box(
+                Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(role = Role.Button, onClickLabel = strings.text(R.string.select_date)) {
+                        showDatePicker = true
+                    }
+                    .padding(top = 8.dp, end = 4.dp, bottom = 4.dp),
+            ) {
+                Crossfade(day, animationSpec = Motion.quick(), label = "day-title") {
+                    DayHeading(it, today, stacked = true, showPickerHint = true)
+                }
             }
             val earlierTint by animateColorAsState(if (earlier != null) tacitColors.muted else tacitColors.faint, Motion.quick(), label = "earlier")
             val laterTint by animateColorAsState(if (later != null) tacitColors.muted else tacitColors.faint, Motion.quick(), label = "later")
@@ -254,14 +277,27 @@ import java.util.concurrent.CompletableFuture
                 }
             }
         }
-        val untranscribed = scenes.count { it.records.isEmpty() }
-        if (untranscribed > 0) item(key = "untranscribed-$day") {
+        val untranscribed = scenes.filter { it.records.isEmpty() }
+        if (untranscribed.isNotEmpty()) item(key = "untranscribed-$day") {
             val caption = if (entries.isNotEmpty()) R.plurals.more_audio_without_voice else R.plurals.audio_without_voice
-                    Row(Modifier.itemMotion(this).padding(vertical = 12.dp)) {
-                Box(Modifier.width(format.timeColumnWidth.dp).padding(top = 9.dp)) {
+            Row(
+                Modifier
+                    .itemMotion(this)
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(role = Role.Button) { showUntranscribed = true }
+                    .padding(top = 12.dp, bottom = 12.dp, end = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(format.timeColumnWidth.dp)) {
                     Box(Modifier.width(16.dp).height(1.dp).background(tacitColors.faint))
                 }
-                Caption(strings.quantity(caption, untranscribed, countLabel(untranscribed)))
+                Caption(
+                    strings.quantity(caption, untranscribed.size, countLabel(untranscribed.size)),
+                    Modifier.weight(1f),
+                )
+                Icon(Icons.Outlined.ChevronRight, null, Modifier.size(16.dp), tint = tacitColors.muted)
             }
         }
         timeline.staleSync(day)?.let { instant ->
@@ -273,6 +309,49 @@ import java.util.concurrent.CompletableFuture
         }
     }
         }
+    }
+    val untranscribedForDay = remember(local, day) { local[day].orEmpty().filter { it.records.isEmpty() } }
+    LaunchedEffect(untranscribedForDay.isEmpty()) {
+        if (untranscribedForDay.isEmpty() && showUntranscribed) {
+            audio.stopPlayback()
+            showUntranscribed = false
+        }
+    }
+    if (showUntranscribed && untranscribedForDay.isNotEmpty()) {
+        UntranscribedAudioSheet(
+            scenes = untranscribedForDay,
+            modelsReady = state.modelsReady,
+            busy = busy,
+            playingKey = playingSpeaker,
+            onTogglePlay = toggleConversationSample,
+            onTranscribe = { scene ->
+                audio.stopPlayback()
+                val message = strings.text(
+                    if (state.modelsReady) R.string.transcribe_queued else R.string.transcribe_queued_models_missing,
+                )
+                work({ audio.transcribeConversation(scene.conversationId) }, message)
+            },
+            onDelete = { scene ->
+                audio.stopPlayback()
+                work({ audio.deleteConversationAudio(scene.conversationId) }, strings.text(R.string.deleted))
+            },
+            onDismiss = {
+                audio.stopPlayback()
+                showUntranscribed = false
+            },
+        )
+    }
+    if (showDatePicker) {
+        TimelineDatePickerSheet(
+            selected = day,
+            today = today,
+            availableDays = availableDays,
+            onSelect = { chosen ->
+                onDay(chosen)
+                showDatePicker = false
+            },
+            onDismiss = { showDatePicker = false },
+        )
     }
 }
 
@@ -360,7 +439,13 @@ private fun NoticeText(text: String) {
 
 /** Serif date as the day's anchor; today also carries the weekday under it. */
 @Composable
-private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Modifier, stacked: Boolean = false) {
+private fun DayHeading(
+    day: LocalDate,
+    today: LocalDate,
+    modifier: Modifier = Modifier,
+    stacked: Boolean = false,
+    showPickerHint: Boolean = false,
+) {
     val strings = uiStrings()
     val relative = when (day) { today -> strings.text(R.string.today); today.minusDays(1) -> strings.text(R.string.yesterday); else -> null }
     val lang = uiFormat().lang
@@ -369,11 +454,25 @@ private fun DayHeading(day: LocalDate, today: LocalDate, modifier: Modifier = Mo
     val title = day.format(DateTimeFormatter.ofPattern(titlePattern, locale))
     val weekday = day.format(DateTimeFormatter.ofPattern(strings.text(R.string.weekday_pattern), locale))
     val note = relative?.let { strings.text(R.string.day_heading_note, it, weekday) } ?: weekday
-    if (stacked) Column(modifier) {
+    @Composable fun titleWithHint() = Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
         Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)
+        if (showPickerHint) {
+            Icon(
+                Icons.Outlined.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = tacitColors.muted,
+            )
+        }
+    }
+    if (stacked) Column(modifier) {
+        titleWithHint()
         if (note != null) Caption(note)
     } else Row(modifier, verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Serif)
+        titleWithHint()
         if (note != null) Caption(note, Modifier.padding(bottom = 4.dp))
     }
 }

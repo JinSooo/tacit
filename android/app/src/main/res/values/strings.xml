@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="acceleration">On-device acceleration</string>
-    <string name="acceleration_cpu_fallback">On-device acceleration is unavailable. Transcription will continue without it.</string>
+    <string name="acceleration">Hardware acceleration</string>
+    <string name="acceleration_cpu_fallback">Temporarily unavailable; switched to standard transcription</string>
     <string name="acceleration_downloading">Downloading acceleration models</string>
-    <string name="acceleration_prepare_failed">Couldn\'t prepare on-device acceleration. Try again later.</string>
-    <string name="acceleration_size">About 162 MB</string>
+    <string name="acceleration_enabled">Enabled</string>
+    <string name="acceleration_prepare_failed">Couldn\'t prepare hardware acceleration. Try again later.</string>
+    <string name="acceleration_size">Uses your phone\'s NPU for faster, lower-power transcription (~162 MB, optional)</string>
     <string name="acceleration_storage">Free at least 480 MB of storage and try again</string>
-    <string name="acceleration_validating">Checking on-device acceleration</string>
+    <string name="acceleration_validating">Checking hardware acceleration</string>
     <string name="activity_notifications">Background notifications</string>
     <string name="address_empty_hint">Leave blank for automatic discovery</string>
     <string name="ai_summaries">AI summaries</string>
@@ -66,6 +67,8 @@
     <string name="delete_old_connection_title">Delete old connection?</string>
     <string name="delete_record_title">Delete this record?</string>
     <string name="delete_retry">Couldn\'t delete. Try again.</string>
+    <string name="delete_untranscribed_message">This permanently deletes the local audio for this clip. This can\'t be undone.</string>
+    <string name="delete_untranscribed_title">Delete this recording?</string>
     <string name="deleted">Deleted</string>
     <string name="deleted_record_corrections">Record and corrections deleted</string>
     <string name="disconnect">Disconnect</string>
@@ -138,7 +141,11 @@
     <string name="models_not_ready">Needs setup</string>
     <string name="models_preparing">Speech models are being prepared. Try again later.</string>
     <string name="models_replace_folder">Change model folder</string>
+    <string name="month_heading">MMMM yyyy</string>
+    <string name="my_voice">My voice</string>
+    <string name="my_voice_hint">Only your voice needs confirmation. Other speakers are labeled automatically.</string>
     <string name="next_day">Next day</string>
+    <string name="next_month">Next month</string>
     <string name="not_connected">Not connected</string>
     <string name="not_yet_synced">Not yet synced</string>
     <string name="notifications_channel_disabled">Notifications are blocked</string>
@@ -161,6 +168,7 @@
     <string name="preview_stop">Stop preview</string>
     <string name="preview_unavailable">Couldn\'t play the sample</string>
     <string name="previous_day">Previous day</string>
+    <string name="previous_month">Previous month</string>
     <string name="private_record">Private</string>
     <string name="record_no_content">There is no complete text for this record.</string>
     <string name="recording">Recording</string>
@@ -188,19 +196,20 @@
     <string name="rejection_too_long">Record too long</string>
     <string name="relay_disabled">The relay mailbox is off. Sync resumes on the same network as your Mac.</string>
     <string name="removed">Removed</string>
-    <string name="restore">Restore</string>
     <string name="retention_days">Days to keep</string>
     <string name="retention_hint">Only audio expires. Transcripts stay available.</string>
     <string name="retention_period">Retention period</string>
     <string name="retention_range">Enter a number of days from 1 to %1$d</string>
     <string name="retention_updated">Retention period updated</string>
     <string name="retired_shortcut">The note shortcut has been removed</string>
+    <string name="return_to_today">Today</string>
     <string name="retry">Retry</string>
     <string name="save">Save</string>
     <string name="save_address">Save address</string>
     <string name="save_failed">Couldn\'t save. Try again.</string>
     <string name="saved">Saved</string>
     <string name="scan_mac_qr">Scan the QR code on your Mac</string>
+    <string name="select_date">Choose date</string>
     <string name="service_address">Service address</string>
     <string name="settings">Settings</string>
     <string name="source_ai_note">AI note</string>
@@ -258,10 +267,18 @@
     <string name="timeline_synced">Synced up to %1$s</string>
     <string name="today">Today</string>
     <string name="today_at">Today at %1$s</string>
+    <string name="transcribe_queued">Queued for transcription</string>
+    <string name="transcribe_queued_models_missing">Queued. Transcription will start once speech models are ready.</string>
+    <string name="transcribe_this_clip">Transcribe this</string>
     <string name="turn_on">Turn on</string>
     <string name="undo">Undo</string>
     <string name="undo_failed">Couldn\'t undo. Try again later.</string>
-    <string name="unnamed_voice">Voice %1$d</string>
+    <string name="untranscribed_audio_hint">These recordings didn\'t detect enough of your voice on this phone, so they weren\'t transcribed or uploaded. They clear automatically after the retention period.</string>
+    <string name="untranscribed_audio_title">Untranscribed recordings</string>
+    <string name="untranscribed_expired">Audio expired</string>
+    <string name="untranscribed_no_speech">No speech recognized</string>
+    <string name="untranscribed_transcribing">Transcribing…</string>
+    <string name="untranscribed_waiting_models">Waiting for speech models</string>
     <string name="upload_rejected">Couldn\'t be received</string>
     <string name="vault_locked">Can\'t open the record library</string>
     <string name="vault_locked_hint">The key or database is unavailable. Keep Tacit and its app data to preserve your files.</string>
@@ -269,22 +286,17 @@
     <string name="view_original">View original</string>
     <string name="view_original_record">View original record</string>
     <string name="view_raw_transcript">View original transcript</string>
+    <string name="voice_confirm_on_home_hint">After a conversation is recorded, Tacit will ask you to listen and confirm once on the home screen.</string>
     <string name="voice_marked_me">Marked as me. Tacit will transcribe saved recordings.</string>
-    <string name="voice_name">Name</string>
-    <string name="voice_name_add">Name voice</string>
-    <string name="voice_name_edit">Rename voice</string>
-    <string name="voice_name_saved">Name updated</string>
     <string name="voice_no">No</string>
+    <string name="voice_not_confirmed">Not confirmed yet</string>
     <string name="voice_not_me">This isn\'t me</string>
     <string name="voice_question">Is this your voice?</string>
     <string name="voice_question_hint">Confirm once so Tacit can recognize your voice</string>
-    <string name="voice_restored">Voice restored</string>
+    <string name="voice_synced_from_mac">Synced from Mac</string>
     <string name="voice_try_another">Tacit will ask about another sample</string>
     <string name="voice_unmarked">Removed the Me label</string>
     <string name="voice_yes">That\'s me</string>
-    <string name="voices">Voices</string>
-    <string name="voices_empty">No voices to show</string>
-    <string name="voices_ignored">Ignored voices</string>
     <string name="voices_unavailable">Couldn\'t read the voice list</string>
     <string name="weekday_pattern">EEEE</string>
     <string name="yesterday">Yesterday</string>
@@ -308,10 +320,6 @@
     <plurals name="duration_days">
         <item quantity="one">%1$s day</item>
         <item quantity="other">%1$s days</item>
-    </plurals>
-    <plurals name="ignored_voice_count">
-        <item quantity="one">%1$s voice</item>
-        <item quantity="other">%1$s voices</item>
     </plurals>
     <plurals name="more_audio_without_voice">
         <item quantity="one">%1$s more clip skipped because your voice wasn\'t recognized</item>

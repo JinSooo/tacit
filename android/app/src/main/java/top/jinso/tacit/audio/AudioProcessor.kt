@@ -45,7 +45,7 @@ internal fun microphoneClip(clip: JSONObject): Boolean =
     clip.optString("origin", "microphone") == "microphone"
 
 /** Two passes: find voices in ALL retained clips before authorizing ASR for any conversation. */
-internal class AudioProcessor(private val store: EncryptedAudioStore, private val lock: Any,
+internal class AudioProcessor(private val store: AudioStore, private val lock: Any,
     private val speech: SpeechEngine, private val macVoiceprint: MacVoiceprint? = null) {
     /** publish must return the existing record ID on a duplicate clipId; null means rejected/tombstoned. */
     fun drain(allowed: () -> Boolean, publish: (AudioPublication) -> String?) {
@@ -99,8 +99,9 @@ internal class AudioProcessor(private val store: EncryptedAudioStore, private va
 
     private fun publishTranscripts(clips: List<JSONObject>, ledger: AudioLedger, allowed: () -> Boolean,
         publish: (AudioPublication) -> String?) {
-        // Without a "me" voice nothing is eligible; skip the pass instead of checking every clip.
-        val voice = synchronized(lock) { ledger.meVoice(macVoiceprint) } ?: return
+        // Without a "me" voice and without any user-confirmed conversation nothing is eligible; skip the pass.
+        val (voice, hasConfirmed) = synchronized(lock) { ledger.meVoice(macVoiceprint) to ledger.hasUserConfirmedConversation() }
+        if (voice == null && !hasConfirmed) return
         val presence = mutableMapOf<String, Boolean>()
         fun eligible(clip: JSONObject) = ledger.eligible(clip, allowed(), macVoiceprint, voice, presence)
         for (clip in clips) {

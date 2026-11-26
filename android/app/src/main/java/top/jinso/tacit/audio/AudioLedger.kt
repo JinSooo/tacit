@@ -67,8 +67,40 @@ internal fun joinParticipant(participants: List<Participant>, center: FloatArray
         .maxByOrNull { it.second }?.first
 }
 
+internal fun conversationPlaybackKey(conversationId: String): String = "conversation:$conversationId"
+
+/**
+ * Pick the longest speech utterance in retained audio for [conversationId], capped at 10 s,
+ * so previewing an untranscribed conversation plays a clear voice snippet.
+ */
+internal fun pickConversationSample(
+    clips: List<JSONObject>,
+    conversationId: String,
+    exists: (String) -> Boolean,
+    maxSamples: Int = SAMPLE_RATE * 10,
+): Triple<String, Int, Int>? {
+    var best: Triple<String, Int, Int>? = null
+    var bestLength = 0
+    for (clip in clips) {
+        if (clip.optString("conversation") != conversationId) continue
+        val clipId = clip.getString("id")
+        if (!exists(clipId)) continue
+        val totalSamples = clip.getInt("samples")
+        for (u in clip.getJSONArray("utterances").objects()) {
+            val start = u.getInt("start").coerceIn(0, totalSamples)
+            val end = minOf(totalSamples, start + u.getInt("length"), start + maxSamples)
+            val length = end - start
+            if (length > bestLength) {
+                bestLength = length
+                best = Triple(clipId, start, end)
+            }
+        }
+    }
+    return best
+}
+
 /** Encrypted index operations. Caller holds AudioRuntime.lock; no content goes through Preferences. */
-internal class AudioLedger(private val store: EncryptedAudioStore) {
+internal class AudioLedger(private val store: AudioStore) {
     private val conversations: JSONArray get() = store.index.optJSONArray("conversations")
         ?: JSONArray().also { store.index.put("conversations", it) }
 
@@ -207,6 +239,29 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
     fun meVoice(mac: MacVoiceprint? = null): FloatArray? =
         mac?.vector ?: store.speakers().firstOrNull { it.optBoolean("me") && !it.optBoolean("ignored") }?.vectorAt("vector")
 
+    /** Whether the user explicitly confirmed this conversation for one-off transcription without changing "me" voiceprints. */
+    fun isConversationConfirmed(conversationId: String): Boolean =
+        conversationId.isNotEmpty() && conversation(conversationId)?.optBoolean("userConfirmed") == true
+
+    fun hasUserConfirmedConversation(): Boolean =
+        conversations.objects().any { it.optBoolean("userConfirmed") }
+
+    /** Mark a single conversation for transcription without altering any speaker's "me" label or voiceprint. */
+    fun confirmConversation(conversationId: String) {
+        val target = requireNotNull(conversation(conversationId)) { "对话已不存在" }
+        val hasAudio = store.clips().any {
+            it.optString("conversation") == conversationId && store.exists(it.getString("id"))
+        }
+        require(hasAudio) { "这段录音已过保留期" }
+        if (!target.optBoolean("userConfirmed")) {
+            target.put("userConfirmed", true)
+            store.save()
+        }
+    }
+
+    fun conversationAudioAvailable(conversationId: String): Boolean =
+        pickConversationSample(store.clips(), conversationId, store::exists) != null
+
     /**
      * [presence] caches, per conversation, whether "me" speaks in retained audio. Pass one map for a whole
      * drain: any change that could flip the answer (me, deletion, pause) also ends that drain.
@@ -214,10 +269,11 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
     fun eligible(clip: JSONObject, allowed: Boolean, mac: MacVoiceprint? = null,
         voice: FloatArray? = meVoice(mac), presence: MutableMap<String, Boolean> = mutableMapOf()): Boolean {
         val conversation = clip.optString("conversation")
+        val confirmed = isConversationConfirmed(conversation)
         // Judge whole voices, as the Mac does: comparing each short utterance with a low threshold let hours of
         // speaker playback through on a single chance match. Then require enough of "me" in this conversation:
         // short lines from someone else's game or video still join a me voice at the .6 clustering bar.
-        val present = voice != null && allowed && conversation.isNotEmpty() && presence.getOrPut(conversation) {
+        val present = !confirmed && voice != null && allowed && conversation.isNotEmpty() && presence.getOrPut(conversation) {
             val speakers = store.speakers().associateBy { it.getString("id") }
             AudioPolicy.mePresent(store.clips().filter { other ->
                 other.optString("conversation") == conversation && store.exists(other.getString("id"))
@@ -227,7 +283,7 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
             })
         }
         return store.exists(clip.getString("id")) && AudioPolicy.conversationAllowed(
-            voice != null, present, allowed)
+            voice != null, present, allowed, confirmed)
     }
 
     fun rename(id: String, name: String?) {
@@ -315,15 +371,36 @@ internal class AudioLedger(private val store: EncryptedAudioStore) {
     }
 
     fun listConversations(): List<AudioConversation> {
+        val confirmedIds = conversations.objects()
+            .filter { it.optBoolean("userConfirmed") }
+            .mapTo(HashSet()) { it.getString("id") }
+        val playableIds = HashSet<String>()
+        val pendingIds = HashSet<String>()
+        val clipRows = ArrayList<AudioConversation>()
+        for (clip in store.clips()) {
+            val id = clip.optString("conversation")
+            if (id.isEmpty()) continue
+            val clipId = clip.getString("id")
+            val exists = store.exists(clipId)
+            val rows = utterances(clip)
+            if (exists && rows.isNotEmpty()) playableIds += id
+            if (exists && id in confirmedIds && rows.any { !it.optBoolean("done") }) pendingIds += id
+            clipRows += AudioConversation(id, start(clip), end(clip), listOf(clipId), emptyList())
+        }
         val rows = store.transcripts().map { r -> AudioConversation(r.getString("conversationId"),
             r.getLong("start"), r.getLong("end"), listOf(r.getString("clipId")), listOf(r.getString("recordId"))) } +
-            store.clips().filter { it.optString("conversation").isNotEmpty() }.map { clip ->
-                AudioConversation(clip.getString("conversation"), start(clip), end(clip),
-                    listOf(clip.getString("id")), emptyList())
-            }
+            clipRows
         return rows.groupBy { it.id }.map { (id, parts) ->
-            AudioConversation(id, parts.minOf { it.start }, parts.maxOf { it.end },
-                parts.flatMap { it.clipIds }.distinct(), parts.flatMap { it.recordIds }.distinct())
+            AudioConversation(
+                id = id,
+                start = parts.minOf { it.start },
+                end = parts.maxOf { it.end },
+                clipIds = parts.flatMap { it.clipIds }.distinct(),
+                recordIds = parts.flatMap { it.recordIds }.distinct(),
+                audioAvailable = id in playableIds,
+                userConfirmed = id in confirmedIds,
+                transcribePending = id in pendingIds,
+            )
         }.sortedByDescending { it.start }
     }
 }
