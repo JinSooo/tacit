@@ -114,9 +114,11 @@ describe("site/build.ts 多页官网与文档站构建", () => {
     const versions = readReleaseVersions(repoRoot);
     for (const locale of ["en", "zh"] as const) {
       const html = readFileSync(join(distDir, `${locale}/download/index.html`), "utf8");
-      expect(html).toContain(versions.mac.url);
+      expect(html).toContain(`href="${versions.mac.download}"`);
+      expect(versions.mac.download).toBe(`https://github.com/JinSooo/tacit/releases/download/mac-v${versions.mac.version}/Tacit-${versions.mac.version}.dmg`);
       expect(html).toContain(`Tacit-${versions.mac.version}.dmg`);
-      expect(html).toContain(versions.android.url);
+      expect(html).toContain(`href="${versions.android.download}"`);
+      expect(html).not.toContain(`href="${versions.mac.url}"`);
       expect(html).toContain(`Tacit-${versions.android.version}.apk`);
       expect(html).toContain(`docker pull ghcr.io/jinsooo/tacit-hub:${versions.hub.version}`);
       expect(html).toContain("xattr -dr com.apple.quarantine /Applications/Tacit.app");
@@ -128,15 +130,18 @@ describe("site/build.ts 多页官网与文档站构建", () => {
   });
 
   test("两端版本号独立变更时 applyReleaseTokens 正确生成各自链接与摘要", () => {
-    const template = "{{RELEASE_SUMMARY}}|{{MAC_RELEASE_URL}}|Tacit-{{MAC_VERSION}}.dmg|{{ANDROID_RELEASE_URL}}|Tacit-{{ANDROID_VERSION}}.apk|{{HUB_VERSION}}";
+    const template = "{{RELEASE_SUMMARY}}|{{MAC_RELEASE_URL}}|{{MAC_DOWNLOAD_URL}}|{{ANDROID_RELEASE_URL}}|{{ANDROID_DOWNLOAD_URL}}|{{HUB_VERSION}}";
     const rendered = applyReleaseTokens(template, {
-      mac: { version: "0.8.0", tag: "mac-v0.8.0", url: "https://github.com/JinSooo/tacit/releases/tag/mac-v0.8.0" },
-      android: { version: "0.7.2", tag: "android-v0.7.2", url: "https://github.com/JinSooo/tacit/releases/tag/android-v0.7.2" },
+      mac: { version: "0.8.0", tag: "mac-v0.8.0", url: "https://github.com/JinSooo/tacit/releases/tag/mac-v0.8.0",
+        download: "https://github.com/JinSooo/tacit/releases/download/mac-v0.8.0/Tacit-0.8.0.dmg" },
+      android: { version: "0.7.2", tag: "android-v0.7.2", url: "https://github.com/JinSooo/tacit/releases/tag/android-v0.7.2",
+        download: "https://github.com/JinSooo/tacit/releases/download/android-v0.7.2/Tacit-0.7.2.apk" },
       hub: { version: "0.8.0" },
       summary: "Mac v0.8.0 · Android v0.7.2",
     });
     expect(rendered).toBe(
-      "Mac v0.8.0 · Android v0.7.2|https://github.com/JinSooo/tacit/releases/tag/mac-v0.8.0|Tacit-0.8.0.dmg|https://github.com/JinSooo/tacit/releases/tag/android-v0.7.2|Tacit-0.7.2.apk|0.8.0",
+      "Mac v0.8.0 · Android v0.7.2|https://github.com/JinSooo/tacit/releases/tag/mac-v0.8.0|https://github.com/JinSooo/tacit/releases/download/mac-v0.8.0/Tacit-0.8.0.dmg"
+        + "|https://github.com/JinSooo/tacit/releases/tag/android-v0.7.2|https://github.com/JinSooo/tacit/releases/download/android-v0.7.2/Tacit-0.7.2.apk|0.8.0",
     );
   });
 

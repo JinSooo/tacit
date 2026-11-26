@@ -31,16 +31,57 @@ export interface ReleaseVersions {
     version: string;
     tag: string;
     url: string;
+    /** 安装包文件本身：官网按钮点了直接下载，不再先跳到 GitHub 的发布页。 */
+    download: string;
   };
   android: {
     version: string;
     tag: string;
     url: string;
+    download: string;
   };
   hub: {
     version: string;
   };
   summary: string;
+}
+
+/** Mac 应用内更新（Sparkle）读的最新版本，由 scripts/publish-mac-update.ts 在安装包上传后写入。 */
+export interface AppcastEntry {
+  version: string;
+  length: number;
+  edSignature: string;
+}
+
+export function readAppcast(baseRepoRoot: string, versions: ReleaseVersions): AppcastEntry {
+  const entry = JSON.parse(readFileSync(join(baseRepoRoot, "site/src/appcast.json"), "utf8")) as Partial<AppcastEntry>;
+  if (typeof entry.version !== "string" || !Number.isSafeInteger(entry.length) || (entry.length ?? 0) <= 0
+      || typeof entry.edSignature !== "string" || !/^[A-Za-z0-9+/]{86}==$/.test(entry.edSignature)) {
+    throw new Error("site/src/appcast.json 格式不对：需要 version、length 和 Sparkle 的 edSignature");
+  }
+  // 两处不一致时，已装用户会看到“可以更新了”，点了却被告知已是最新。
+  if (entry.version !== versions.mac.version) {
+    throw new Error(`site/src/appcast.json 的版本 (${entry.version}) 与 latest.json 的 Mac 版本 (${versions.mac.version}) 不一致`);
+  }
+  return entry as AppcastEntry;
+}
+
+export function renderAppcast(entry: AppcastEntry, versions: ReleaseVersions): string {
+  // Tacit 的 CFBundleVersion 是提交号，应用里用自己的比较器按这里的 sparkle:version（短版本号）比新旧。
+  return `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Tacit</title>
+    <item>
+      <title>Tacit ${escapeHtml(entry.version)}</title>
+      <sparkle:version>${escapeHtml(entry.version)}</sparkle:version>
+      <sparkle:shortVersionString>${escapeHtml(entry.version)}</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="${escapeHtml(versions.mac.download)}" length="${entry.length}" type="application/octet-stream" sparkle:edSignature="${escapeHtml(entry.edSignature)}"/>
+    </item>
+  </channel>
+</rss>
+`;
 }
 
 export interface BuildResult {
@@ -56,6 +97,7 @@ export interface BuildResult {
 export const SITE_ORIGIN = "https://tacit.jinso.top";
 export const REPO_BLOB_BASE = "https://github.com/JinSooo/tacit/blob/main";
 const RELEASE_TAG_BASE = "https://github.com/JinSooo/tacit/releases/tag";
+const RELEASE_DOWNLOAD_BASE = "https://github.com/JinSooo/tacit/releases/download";
 
 export function readReleaseVersions(baseRepoRoot: string): ReleaseVersions {
   const latestPath = join(baseRepoRoot, "site/src/latest.json");
@@ -89,8 +131,8 @@ export function readReleaseVersions(baseRepoRoot: string): ReleaseVersions {
     macVersion === androidVersion ? `v${macVersion}` : `Mac v${macVersion} · Android v${androidVersion}`;
 
   return {
-    mac: { version: macVersion, tag: macTag, url: macUrl },
-    android: { version: androidVersion, tag: androidTag, url: androidUrl },
+    mac: { version: macVersion, tag: macTag, url: macUrl, download: `${RELEASE_DOWNLOAD_BASE}/${macTag}/Tacit-${macVersion}.dmg` },
+    android: { version: androidVersion, tag: androidTag, url: androidUrl, download: `${RELEASE_DOWNLOAD_BASE}/${androidTag}/Tacit-${androidVersion}.apk` },
     hub: { version: hubVersion },
     summary,
   };
@@ -101,9 +143,11 @@ export function applyReleaseTokens(html: string, versions: ReleaseVersions): str
     .replaceAll("{{MAC_VERSION}}", escapeHtml(versions.mac.version))
     .replaceAll("{{MAC_RELEASE_TAG}}", escapeHtml(versions.mac.tag))
     .replaceAll("{{MAC_RELEASE_URL}}", escapeHtml(versions.mac.url))
+    .replaceAll("{{MAC_DOWNLOAD_URL}}", escapeHtml(versions.mac.download))
     .replaceAll("{{ANDROID_VERSION}}", escapeHtml(versions.android.version))
     .replaceAll("{{ANDROID_RELEASE_TAG}}", escapeHtml(versions.android.tag))
     .replaceAll("{{ANDROID_RELEASE_URL}}", escapeHtml(versions.android.url))
+    .replaceAll("{{ANDROID_DOWNLOAD_URL}}", escapeHtml(versions.android.download))
     .replaceAll("{{HUB_VERSION}}", escapeHtml(versions.hub.version))
     .replaceAll("{{RELEASE_SUMMARY}}", escapeHtml(versions.summary));
 }
@@ -1130,6 +1174,7 @@ function assertParity(label: string, zh: string[], en: string[]) {
 
 export function build(): BuildResult {
   const versions = readReleaseVersions(repoRoot);
+  const appcast = readAppcast(repoRoot, versions);
 
   const zhSectionFiles = readdirSync(join(src, "zh/sections")).filter((name) => name.endsWith(".html")).sort();
   const enSectionFiles = readdirSync(join(src, "en/sections")).filter((name) => name.endsWith(".html")).sort();
@@ -1191,11 +1236,11 @@ export function build(): BuildResult {
     for (const entry of audit.downloads) {
       totalDownloadLinks += 1;
       const [target, href] = entry.split(" ");
-      if (target === "mac" && href !== versions.mac.url) {
-        throw new Error(`${pagePath} 的 Mac 下载链接 (${href}) 与 latest.json (${versions.mac.url}) 不一致`);
+      if (target === "mac" && href !== versions.mac.download) {
+        throw new Error(`${pagePath} 的 Mac 下载链接 (${href}) 与 latest.json (${versions.mac.download}) 不一致`);
       }
-      if (target === "android" && href !== versions.android.url) {
-        throw new Error(`${pagePath} 的 Android 下载链接 (${href}) 与 build.gradle.kts (${versions.android.url}) 不一致`);
+      if (target === "android" && href !== versions.android.download) {
+        throw new Error(`${pagePath} 的 Android 下载链接 (${href}) 与 build.gradle.kts (${versions.android.download}) 不一致`);
       }
     }
   }
@@ -1260,8 +1305,9 @@ export function build(): BuildResult {
   rmSync(dist, { recursive: true, force: true });
   mkdirSync(dist, { recursive: true });
   cpSync(join(src, "assets"), join(dist, "assets"), { recursive: true });
-  // Mac 应用每天读一次，判断有没有新版本（collector UpdateManifest）。
+  // Mac 应用每天读一次 latest.json 判断有没有新版本（collector UpdateManifest），点“更新”后 Sparkle 读 appcast.xml 下载安装。
   cpSync(join(src, "latest.json"), join(dist, "latest.json"));
+  writeFileSync(join(dist, "appcast.xml"), renderAppcast(appcast, versions));
 
   for (const [pagePath, html] of builtPages) {
     const outPath = join(dist, pagePath);
