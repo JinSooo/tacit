@@ -210,3 +210,68 @@ test("旧窗口占位不出现在当天、项目或搜索正文，原文仍在�
     }
   } finally { await ctx.cleanup(); }
 });
+
+test("按月查询活跃日期支持原始记录、整理段、跨月边界与非法参数校验", async () => {
+  const ctx = timelineFixture();
+  try {
+    const localMs = (year: number, month: number, dayNum: number, h = 0, m = 0, s = 0, ms = 0) =>
+      new Date(year, month - 1, dayNum, h, m, s, ms).getTime();
+
+    const mayEnd = fixture({ t_start: toLocalIso(localMs(2026, 5, 31, 23, 59, 59, 999)) });
+    const juneStart = fixture({ t_start: toLocalIso(localMs(2026, 6, 1, 0, 0, 0, 0)) });
+    const juneRawOnly = fixture({ t_start: toLocalIso(localMs(2026, 6, 5, 14, 30)) });
+    const juneDeleted = fixture({ t_start: toLocalIso(localMs(2026, 6, 7, 9, 0)) });
+    const juneEnd = fixture({ t_start: toLocalIso(localMs(2026, 6, 30, 23, 59, 59, 999)) });
+    const julyStart = fixture({ t_start: toLocalIso(localMs(2026, 7, 1, 0, 0, 0, 0)) });
+    const leapDay = fixture({ t_start: toLocalIso(localMs(2024, 2, 29, 12, 0)) });
+    expect(ctx.db.ingest([mayEnd, juneStart, juneRawOnly, juneDeleted, juneEnd, julyStart, leapDay]).accepted).toBe(7);
+    expect(ctx.db.delete(juneDeleted.id)).toBe(true);
+
+    // 仅有整理段、仅有 summary、以及只有采集占位（无记录时不应入活跃日期）
+    ctx.store.upsertDay({ date: "2026-06-10", detail: { items: [segment("seg-only", [], "trail", 10)] } });
+    ctx.store.upsertDay({ date: "2026-06-12", detail: { summary: "整理了虚构项目的文档结构。", items: [] } });
+    ctx.store.upsertDay({
+      date: "2026-06-14",
+      detail: { summary: "有前台窗口记录", items: [{ ...segment("capture-only", [], null, 10), description: "有前台窗口记录。" }] },
+    });
+    // 与 juneRawOnly 同一天也有整理段：结果应去重
+    ctx.store.upsertDay({ date: "2026-06-05", detail: { items: [segment("dup-day", [juneRawOnly.id], "trail", 10)] } });
+    // detail 为 NULL 的空记录天
+    ctx.store.upsertDay({ date: "2026-06-15", detail: null });
+
+    expect(await (await ctx.send("/v1/days/active?month=2026-05")).json()).toEqual({
+      month: "2026-05",
+      dates: ["2026-05-31"],
+    });
+    expect(await (await ctx.send("/v1/days/active?month=2026-06")).json()).toEqual({
+      month: "2026-06",
+      dates: ["2026-06-01", "2026-06-05", "2026-06-10", "2026-06-12", "2026-06-30"],
+    });
+    expect(await (await ctx.send("/v1/days/active?month=2026-07")).json()).toEqual({
+      month: "2026-07",
+      dates: ["2026-07-01"],
+    });
+    expect(await (await ctx.send("/v1/days/active?month=2026-08")).json()).toEqual({
+      month: "2026-08",
+      dates: [],
+    });
+    expect(await (await ctx.send("/v1/days/active?month=2024-02")).json()).toEqual({
+      month: "2024-02",
+      dates: ["2024-02-29"],
+    });
+
+    for (const bad of [
+      "/v1/days/active",
+      "/v1/days/active?month=",
+      "/v1/days/active?month=2026-00",
+      "/v1/days/active?month=2026-13",
+      "/v1/days/active?month=2026-6",
+      "/v1/days/active?month=2026-06-01",
+      "/v1/days/active?month=0000-01",
+      "/v1/days/active?month=not-a-month",
+    ]) {
+      expect((await ctx.send(bad)).status).toBe(400);
+    }
+    expect((await ctx.send("/v1/days/active?month=2026-06", "GET", undefined, ctx.config.agentToken)).status).toBe(403);
+  } finally { await ctx.cleanup(); }
+});

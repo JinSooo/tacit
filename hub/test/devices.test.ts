@@ -491,7 +491,7 @@ test("角色矩阵覆盖设备写入、投影、原文、AI、状态、编辑、
   const groups: [string[], DeviceRole[]][] = [
     [["ingest", "delete", "sync.ack", "audio.lines", "conversations.put", "collector.status", "relay"], ["collect", "view", "admin"]],
     [["projection.pull", "projection.ack", "events.subscribe"], ["view", "admin", "agent"]],
-    [["records.get", "records.list", "history.segments", "conversations.detail", "timeline.query"], ["view", "admin"]],
+    [["records.get", "records.list", "history.segments", "conversations.detail", "timeline.query", "days.active"], ["view", "admin"]],
     // 回归（2026-11-24）：查看设备经 agent.* 能读到私密原文。
     [["agent.now", "agent.get", "agent.search", "agent.append", "agent.audit_sync"], ["admin", "agent"]],
     [["status.get", "diagnostics.get"], ["view", "admin"]],
@@ -1158,6 +1158,74 @@ test("私密原文仅对直连管理设备显式开放，整理投影依旧隔�
     expect(JSON.stringify(pull.body)).not.toContain(marker);
     const cached = hub.db.db.prepare("SELECT payload FROM project_context_cache UNION ALL SELECT result FROM relay_receipts").all();
     expect(JSON.stringify(cached)).not.toContain(marker);
+  } finally { await hub.dispose(); }
+});
+
+test("设备操作 days.active 遵守私密边界与权限控制，并与本机 HTTP 口径一致", async () => {
+  const hub = await runningHub();
+  try {
+    const { admin: local } = await localClients(hub);
+    const remote = await hub.pair("admin");
+    const viewer = await hub.pair("view");
+    const collector = await hub.pair("collect");
+    const store = new DistillStore(hub.db);
+
+    const localIso = (dayNum: number, hour = 10) => new Date(2026, 7, dayNum, hour, 0, 0, 0).toISOString();
+    const pubRec = fixture({ source: "manual.note", t_start: localIso(3), title: "合成公开笔记", body: "核对灯塔巡检记录。" });
+    const privOnlyRec = fixture({ source: "manual.note", t_start: localIso(5), title: "合成私密笔记", body: "私密内容。", sensitivity: "private" });
+    const pubBaseRec = fixture({ source: "manual.note", t_start: localIso(7), title: "待修正记录", body: "初稿。" });
+    const privCorrRec = fixture({ source: "manual.correction", corrects: pubBaseRec.id, t_start: localIso(7, 11), body: "改为私密。", sensitivity: "private" });
+    const distilledPubRec = fixture({ source: "manual.note", t_start: localIso(9), title: "整理依据", body: "完成步道路线核对。" });
+    expect(hub.db.ingest([pubRec, privOnlyRec, pubBaseRec, privCorrRec, distilledPubRec]).accepted).toBe(5);
+
+    store.upsertDay({
+      date: "2026-08-05",
+      detail: {
+        summary: "私密总结",
+        record_ids: [privOnlyRec.id],
+        items: [{
+          id: "priv-seg", title: "私密段", description: "包含私密内容。", t_start: privOnlyRec.t_start, t_end: privOnlyRec.t_start,
+          active_seconds: 60, sources: ["manual.note"], apps: [{ source: "manual.note", app: null }],
+          record_ids: [privOnlyRec.id], project_id: null,
+          evidence: [{ id: privOnlyRec.id, at: privOnlyRec.t_start, source: "manual.note", title: privOnlyRec.title }],
+        }],
+      },
+    });
+    store.upsertDay({
+      date: "2026-08-09",
+      detail: {
+        summary: "完成了步道路线核对。",
+        record_ids: [distilledPubRec.id],
+        items: [{
+          id: "pub-seg", title: "核对步道路线", description: "完成了石桥到林场的核对。", t_start: distilledPubRec.t_start, t_end: distilledPubRec.t_start,
+          active_seconds: 120, sources: ["manual.note"], apps: [{ source: "manual.note", app: null }],
+          record_ids: [distilledPubRec.id], project_id: null,
+          evidence: [{ id: distilledPubRec.id, at: distilledPubRec.t_start, source: "manual.note", title: distilledPubRec.title }],
+        }],
+      },
+    });
+
+    // 普通查看态与未带 include_private 的远端管理态不泄露仅含私密记录（含私密修正）的日期
+    expect(await viewer.send("days.active", { month: "2026-08" })).toEqual({
+      status: 200,
+      body: { month: "2026-08", dates: ["2026-08-03", "2026-08-09"] },
+    });
+    expect(await remote.send("days.active", { month: "2026-08" })).toEqual({
+      status: 200,
+      body: { month: "2026-08", dates: ["2026-08-03", "2026-08-09"] },
+    });
+    expect((await viewer.send("days.active", { month: "2026-08", include_private: true })).status).toBe(403);
+    expect((await collector.send("days.active", { month: "2026-08" })).status).toBe(403);
+
+    // 直连管理设备（本机/远端）带 include_private: true 与本机 HTTP 一致
+    const httpBody = await (await hub.admin("/v1/days/active?month=2026-08")).json();
+    expect(httpBody).toEqual({ month: "2026-08", dates: ["2026-08-03", "2026-08-05", "2026-08-07", "2026-08-09"] });
+    expect(await local.send("days.active", { month: "2026-08", include_private: true })).toEqual({ status: 200, body: httpBody });
+    expect(await remote.send("days.active", { month: "2026-08", include_private: true })).toEqual({ status: 200, body: httpBody });
+
+    // 非法月份参数返回 400
+    expect((await viewer.send("days.active", { month: "2026-13" })).status).toBe(400);
+    expect((await viewer.send("days.active", {})).status).toBe(400);
   } finally { await hub.dispose(); }
 });
 

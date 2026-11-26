@@ -477,6 +477,7 @@ public extension L10n {
     // MARK: - Formatted labels
 
     public static var language: String { L10n.text(zh: "语言", en: "Language") }
+    public static var displayLanguage: String { L10n.text(zh: "显示语言", en: "Display language") }
     public static var languageNote: String {
       L10n.text(zh: "切换语言只影响之后的整理结果。", en: "Changing language applies only to future summaries.")
     }

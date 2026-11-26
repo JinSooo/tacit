@@ -14,7 +14,7 @@ const collectOps = new Set([
   "audio.skipped", "audio.samples", "audio.lines", "conversations", "conversations.put", "collector.status", "relay",
 ]);
 const projectionOps = new Set(["projection.pull", "projection.ack", "events.subscribe"]);
-export const projectionReads = new Set(["records.get", "records.list", "history.segments", "conversations.detail", "timeline.query", "timeline.locate"]);
+export const projectionReads = new Set(["records.get", "records.list", "history.segments", "conversations.detail", "timeline.query", "timeline.locate", "days.active"]);
 const agentOps = new Set(["agent.now", "agent.get", "agent.search", "agent.timeline", "agent.context", "agent.append", "agent.audit_sync"]);
 const statusOps = new Set(["status.get", "diagnostics.get"]);
 export const historyImportOps = new Set([

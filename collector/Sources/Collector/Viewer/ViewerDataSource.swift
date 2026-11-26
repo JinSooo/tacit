@@ -19,6 +19,8 @@ protocol ViewerDataSource: Sendable {
   func missingRecords(_ ids: [String], from available: [HistoryRecord]) async throws -> [HistoryRecord]
   func segments(_ day: Date, device: String?) async throws -> (segments: [HistorySegment], conversations: [ConversationRef])
   func conversation(_ recordID: String) async throws -> ConversationDetail
+  func activeDays(inMonth month: String) async throws -> Set<String>
+  func cachedActiveDays(inMonth month: String) -> Set<String>
 }
 
 extension ViewerDataSource {
@@ -29,6 +31,8 @@ extension ViewerDataSource {
   func segments(_ day: Date) async throws -> (segments: [HistorySegment], conversations: [ConversationRef]) {
     try await segments(day, device: nil)
   }
+
+  func cachedActiveDays(inMonth month: String) -> Set<String> { [] }
 }
 
 // MARK: - HTTP 读路径实现
@@ -61,6 +65,7 @@ final class HTTPViewerDataSource: ViewerDataSource, @unchecked Sendable {
     try await api.segments(day, device: device)
   }
   func conversation(_ recordID: String) async throws -> ConversationDetail { try await api.conversation(recordID) }
+  func activeDays(inMonth month: String) async throws -> Set<String> { Set(try await api.activeDays(inMonth: month).dates) }
 }
 
 // MARK: - 下推缓存 + 设备协议按需读路径实现
@@ -341,6 +346,46 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
     return try HubJSON.decoder().decode(ConversationDetail.self, from: payload.bodyData)
   }
 
+  func cachedActiveDays(inMonth month: String) -> Set<String> {
+    let prefix = "\(month)-"
+    guard let entities = try? sync.cache.list(kind: .day) else { return [] }
+    let decoder = HubJSON.decoder()
+    let todayKey = TimelineDay.key(clock(), calendar: calendar)
+    var dates: Set<String> = []
+    for entity in entities where entity.id.hasPrefix(prefix) {
+      guard let diary = try? decoder.decode(DayDiary.self, from: entity.payloadData) else { continue }
+      if Self.diaryHasContent(diary, todayKey: todayKey) {
+        dates.insert(entity.id)
+      }
+    }
+    return dates
+  }
+
+  func activeDays(inMonth month: String) async throws -> Set<String> {
+    try await ensureReady()
+    let currentMonth = TimelineCalendar.Month(containing: clock(), calendar: calendar).key
+    let useCache = month < currentMonth
+    do {
+      let payload = try await sync.activeDays(month: month, includePrivate: await privateReadAllowed(), useCache: useCache)
+      let decoded = try HubJSON.decoder().decode(ActiveDaysResponse.self, from: payload.bodyData)
+      return Set(decoded.dates)
+    } catch let error as DeviceClientError {
+      if isRemovalOrForbidden(error) { throw error }
+      return cachedActiveDays(inMonth: month)
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      return cachedActiveDays(inMonth: month)
+    }
+  }
+
+  static func diaryHasContent(_ diary: DayDiary, todayKey: String) -> Bool {
+    if let items = diary.detail?.items, !items.isEmpty { return true }
+    if let summary = diary.detail?.summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty { return true }
+    if diary.date == todayKey, let drafts = diary.drafts, !drafts.isEmpty { return true }
+    return false
+  }
+
   // MARK: - 内部辅助
 
   private func remoteTimeline(
@@ -452,6 +497,7 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
   private let refreshGate = NSLock()
   private var refreshQueued = false // Protected by refreshGate.
   private var displayedSync: ProjectionSync?
+  private var displayedCached: CachedViewerDataSource?
   private var active: Session?
   private var lastRoute: HubBinding.Route?
   private var bindingReady = false
@@ -466,7 +512,11 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
   var activeSync: ProjectionSync? { displayLock.withLock { displayedSync } }
 
   private func publishSync() {
-    displayLock.withLock { displayedSync = disabledReason == nil && bindingReady ? active?.sync : nil }
+    displayLock.withLock {
+      let ready = disabledReason == nil && bindingReady
+      displayedSync = ready ? active?.sync : nil
+      displayedCached = ready ? active?.cached : nil
+    }
   }
 
   private func onBindingQueue<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
@@ -981,5 +1031,13 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
 
   func conversation(_ recordID: String) async throws -> ConversationDetail {
     try await route({ try await $0.conversation(recordID) }, fallback: { try await $0.conversation(recordID) }, requiresDirect: true)
+  }
+
+  func cachedActiveDays(inMonth month: String) -> Set<String> {
+    displayLock.withLock { displayedCached }?.cachedActiveDays(inMonth: month) ?? []
+  }
+
+  func activeDays(inMonth month: String) async throws -> Set<String> {
+    try await route({ try await $0.activeDays(inMonth: month) }, fallback: { try await $0.activeDays(inMonth: month) })
   }
 }

@@ -1,8 +1,8 @@
 import { projectionWithdrawal } from "./devices/projection-store.ts";
 import { toLocalIso } from "../../packages/record/index.ts";
 import { HubDB, InputError } from "./db.ts";
-import { localDayStart } from "./distill/requests.ts";
-import type { ReviewItem } from "./distill/day-review.ts";
+import { localDayStart, localMonthBounds } from "./distill/requests.ts";
+import { isReadableReviewItem, type ReviewDetail, type ReviewItem } from "./distill/day-review.ts";
 import { applyTimelineCorrections, DistillStore, isTimelineItem, timelineCorrectionKey, type StoredReviewItem, type TimelineCorrections } from "./distill/store.ts";
 import { redactString } from "./redact.ts";
 
@@ -10,6 +10,65 @@ type DayRow = { date: string; detail: string; corrections: string | null };
 type TimelineDay = { date: string; items: ReviewItem[] };
 
 const normalized = (text: string) => text.normalize("NFKC").toLowerCase();
+
+export interface ActiveDaysOptions {
+  dayItem?: (date: string, item: ReviewItem) => boolean;
+  daySummaryVisible?: (date: string, detail: Partial<ReviewDetail>, visibleItems: ReviewItem[], readableItems: StoredReviewItem[]) => boolean;
+  recordFilter?: string;
+}
+
+export function activeDaysInMonth(hub: HubDB, month: string, options: ActiveDaysOptions = {}): { month: string; dates: string[] } {
+  const bounds = localMonthBounds(month);
+  if (!bounds) throw new InputError("month 必须是 YYYY-MM");
+
+  const active = new Set<string>();
+  const store = new DistillStore(hub);
+
+  const dayRows = hub.db.prepare<[string, string], DayRow>(`
+    SELECT d.date, d.detail, c.v AS corrections
+    FROM days d
+    LEFT JOIN distill_state c ON c.k = 'timeline_corrections:' || d.date
+    WHERE d.detail IS NOT NULL AND d.date BETWEEN ? AND ?
+    ORDER BY d.date ASC
+  `).all(bounds.firstDate, bounds.lastDate);
+
+  for (const row of dayRows) {
+    const detail = JSON.parse(row.detail) as Partial<ReviewDetail> & { items?: StoredReviewItem[] } | null;
+    if (!detail || typeof detail !== "object") continue;
+    const corrections = row.corrections ? JSON.parse(row.corrections) as TimelineCorrections : null;
+    const adjusted = Array.isArray(detail.items) ? applyTimelineCorrections(detail.items, corrections) : undefined;
+    const readable = adjusted ? store.readingItems(adjusted) : [];
+    const visibleItems = (options.dayItem
+      ? readable.filter(item => options.dayItem!(row.date, item as ReviewItem))
+      : readable) as ReviewItem[];
+    if (visibleItems.length > 0) {
+      active.add(row.date);
+      continue;
+    }
+    const rawSummary = typeof detail.summary === "string" ? detail.summary.trim() : "";
+    const hiddenHeading = !!adjusted?.some(item => !isReadableReviewItem(item) && detail.summary === item.title);
+    const heading = adjusted?.length && !readable.length ? "" : hiddenHeading ? "" : rawSummary;
+    if (heading.length > 0 && (!options.daySummaryVisible || options.daySummaryVisible(row.date, detail, visibleItems, readable))) {
+      active.add(row.date);
+    }
+  }
+
+  const filter = options.recordFilter ? ` AND ${options.recordFilter}` : "";
+  const hasRecordOnDay = hub.db.prepare<[number, number], { found: number }>(
+    `SELECT 1 AS found FROM records r WHERE r.t_start_ms >= ? AND r.t_start_ms < ?${filter} LIMIT 1`,
+  );
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const prefix = `${month}-`;
+  for (let dayNum = 1; dayNum <= bounds.daysInMonth; dayNum++) {
+    const date = `${prefix}${pad(dayNum)}`;
+    if (active.has(date)) continue;
+    const dayStart = new Date(bounds.year, bounds.month - 1, dayNum).getTime();
+    const dayEnd = new Date(bounds.year, bounds.month - 1, dayNum + 1).getTime();
+    if (hasRecordOnDay.get(dayStart, dayEnd)) active.add(date);
+  }
+
+  return { month, dates: [...active].sort() };
+}
 
 export function timelineDays(hub: HubDB, params: URLSearchParams, visible = (_date: string, _item: ReviewItem) => true) {
   const filters = ["project_id", "thread_id", "q"].filter(key => params.has(key));

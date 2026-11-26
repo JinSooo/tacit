@@ -7,7 +7,7 @@ import { localDateString } from "../distill/requests.ts";
 import { DistillStore, type Project, type Thread } from "../distill/store.ts";
 import { historySegments } from "../history.ts";
 import { currentNow, emptyNowBrief, nowSummary, pendingBrief } from "../now-status.ts";
-import { timelineDays, timelineRecord } from "../timeline.ts";
+import { activeDaysInMonth, timelineDays, timelineRecord } from "../timeline.ts";
 import { base64url, object, WireError } from "./envelope.ts";
 import { directProjectionBytes, projectionHead, type ChangeRow, type ProjectionKind } from "./projection-store.ts";
 
@@ -389,6 +389,18 @@ export class Projection {
         const located = (includePrivate || this.public(id)) && timelineRecord(this.hub, id, allowedItem);
         if (!located) throw new WireError(404, "内容不存在");
         result = located;
+        break;
+      }
+      case "days.active": {
+        if (typeof body.month !== "string") throw new InputError("month 必须是 YYYY-MM");
+        result = activeDaysInMonth(this.hub, body.month, includePrivate ? undefined : {
+          dayItem: allowedItem,
+          daySummaryVisible: (_date, detail, visibleItems, readableItems) =>
+            visibleItems.length === readableItems.length && this.publicEvidence(
+              detail.polished_segments?.flatMap(segment => segment.model_dependencies ?? segment.dependencies) ?? detail.record_ids ?? [],
+            ),
+          recordFilter: publicRecord,
+        });
         break;
       }
       default: throw new InputError("设备操作无效");

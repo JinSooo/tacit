@@ -533,6 +533,7 @@ private func locateBun() -> String? {
       func missingRecords(_ ids: [String], from available: [HistoryRecord]) async throws -> [HistoryRecord] { [] }
       func segments(_ day: Date, device: String?) async throws -> (segments: [HistorySegment], conversations: [ConversationRef]) { ([], []) }
       func conversation(_ recordID: String) async throws -> ConversationDetail { throw HubError(message: "404", status: 404) }
+      func activeDays(inMonth month: String) async throws -> Set<String> { Set(diaries.keys.filter { $0.hasPrefix("\(month)-") }) }
     }
 
     let source = StaticDiarySource(diaries: ["2026-11-22": day1Diary], calendar: calendar)
@@ -1414,5 +1415,111 @@ private func locateBun() -> String? {
     #expect(try files.collector()?.addrs == [origin.absoluteString])
     #expect(config.hubURL != origin)
     print("[PORT RESTART OK] device requests followed hub.json; collector-link.json addrs stayed at the original port")
+  }
+
+  @Test func activeDaysUsesProjectionCacheAndFallsBackWhenOffline() async throws {
+    let dir = try makeTempDir("tacit-active-days-")
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
+    let now = cal.date(from: DateComponents(year: 2026, month: 11, day: 26, hour: 15))!
+
+    let origin = URL(string: "http://127.0.0.1:47909")!
+    let hubKey = Curve25519.KeyAgreement.PrivateKey()
+    let macKey = Curve25519.KeyAgreement.PrivateKey()
+    let deviceID = "mac-abcd2345"
+
+    let offline = LockedValue(false)
+    let seenOps = LockedList<String>()
+
+    StubURLProtocol.handler = { request in
+      let body = try readBody(request)
+      let envelope = try JSONDecoder().decode(DeviceRequestEnvelope.self, from: body)
+      let opened = try DeviceEnvelope.openRequestEnvelope(envelope, recipientPrivateKey: hubKey, senderPublicKey: macKey.publicKey)
+      let req = try JSONDecoder().decode(DecodedDeviceRequest.self, from: opened)
+      seenOps.append(req.op)
+
+      switch req.op {
+      case "projection.pull":
+        let dayWithItem = #"{"date":"2026-11-10","detail":{"summary":"整理了航标清单","items":[{"id":"s1","title":"核对航标","description":"完成核对","t_start":"2026-11-10T10:00:00+08:00","t_end":"2026-11-10T10:30:00+08:00","active_seconds":1800,"sources":["manual.note"],"evidence":[],"record_ids":["01JAA000000000000000000010"]}]}}"#
+        let emptyDay = #"{"date":"2026-11-11","detail":{"summary":null,"items":[]}}"#
+        let todayDraft = #"{"date":"2026-11-26","detail":null,"drafts":[{"id":"d1","title":"一场对话","excerpt":"刚记下一条","t_start":"2026-11-26T14:00:00+08:00","t_end":"2026-11-26T14:05:00+08:00","active_seconds":300,"sources":["mac.audio"],"apps":[],"record_ids":["01JAA000000000000000000026"]}]}"#
+        let reply = """
+          {"epoch":1,"reset":false,"cursor":3,"more":false,"server_time":"2026-11-26T07:00:00Z","changes":[
+            {"seq":1,"rev":1,"op":"upsert","kind":"day","id":"2026-11-10","data":\(dayWithItem)},
+            {"seq":2,"rev":1,"op":"upsert","kind":"day","id":"2026-11-11","data":\(emptyDay)},
+            {"seq":3,"rev":1,"op":"upsert","kind":"day","id":"2026-11-26","data":\(todayDraft)}
+          ]}
+          """
+        return (200, try sealReply(bodyJSON: reply, nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
+      case "projection.ack":
+        return (200, try sealReply(bodyJSON: #"{"ok":true}"#, nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
+      case "days.active":
+        if offline.get() { throw URLError(.cannotConnectToHost) }
+        let month = req.body["month"]?.stringValue ?? ""
+        #expect(req.body["include_private"]?.boolValue == true)
+        if month == "2026-11" {
+          return (200, try sealReply(bodyJSON: #"{"month":"2026-11","dates":["2026-11-02","2026-11-10","2026-11-26"]}"#,
+                                     nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
+        }
+        return (200, try sealReply(bodyJSON: #"{"month":"\#(month)","dates":["2025-09-15"]}"#,
+                                   nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
+      default:
+        return (400, try sealReply(status: 400, bodyJSON: #"{"error":"unexpected op"}"#,
+                                   nonce: req.nonce, hubKey: hubKey, devicePublicKey: macKey.publicKey))
+      }
+    }
+    defer { StubURLProtocol.handler = nil }
+
+    let cache = try ProjectionCache(
+      dataDirectory: dir,
+      keyProvider: InMemoryProjectionCacheKeyProvider(),
+      clock: { now },
+      calendar: cal
+    )
+    let client = try DeviceClient(
+      hubPublicKeyBase64URL: DeviceEnvelope.publicKeyBase64URL(hubKey.publicKey),
+      deviceID: deviceID,
+      keyStore: InMemoryDeviceKeyStore(rawRepresentation: macKey.rawRepresentation),
+      transport: DirectDeviceTransport(origin: origin, session: makeStubSession()),
+      clock: { now }
+    )
+    let sync = ProjectionSync(client: client, cache: cache, eventStream: nil, clock: { now })
+    let source = CachedViewerDataSource(sync: sync, includePrivate: true, calendar: cal, clock: { now })
+
+    // 拉取 90 天投影后，cachedActiveDays 同步即刻返回有内容或今日草稿的日期，排除空日。
+    _ = try await sync.pullToLatest()
+    #expect(source.cachedActiveDays(inMonth: "2026-11") == ["2026-11-10", "2026-11-26"])
+
+    // 在线调用补齐仅有原始记录的 2026-11-02 与 90 天之外的历史月份。
+    #expect(try await source.activeDays(inMonth: "2026-11") == ["2026-11-02", "2026-11-10", "2026-11-26"])
+    #expect(try await source.activeDays(inMonth: "2025-09") == ["2025-09-15"])
+
+    // 离线时当月跳过内存 LRU，回退到已缓存的 .day 集合而不报错。
+    offline.set(true)
+    #expect(try await source.activeDays(inMonth: "2026-11") == ["2026-11-10", "2026-11-26"])
+    // 历史月份命中内存 LRU，离线仍可读到先前接口结果。
+    #expect(try await source.activeDays(inMonth: "2025-09") == ["2025-09-15"])
+    #expect(seenOps.snapshot.contains("days.active"))
+  }
+
+  @Test @MainActor func activeDaysCacheSeedsStoresAndInvalidatesOnRevision() {
+    let cache = ActiveDaysCache()
+    #expect(cache.dates(for: "2026-11", fallback: ["2026-11-10"]) == ["2026-11-10"])
+    cache.seedIfEmpty(month: "2026-11", dates: ["2026-11-10"])
+    #expect(cache.needsLoad(month: "2026-11", revision: 1, isCurrentMonth: false) == true)
+
+    cache.store(month: "2026-10", dates: ["2026-10-03", "2026-10-18"], revision: 1)
+    #expect(cache.dates(for: "2026-10", fallback: []) == ["2026-10-03", "2026-10-18"])
+    #expect(cache.needsLoad(month: "2026-10", revision: 1, isCurrentMonth: false) == false)
+    #expect(cache.needsLoad(month: "2026-10", revision: 2, isCurrentMonth: false) == true)
+
+    cache.store(month: "2026-11", dates: ["2026-11-01", "2026-11-10"], revision: 1)
+    #expect(cache.needsLoad(month: "2026-11", revision: 1, isCurrentMonth: true) == true)
+
+    cache.clear()
+    #expect(cache.dates(for: "2026-10", fallback: []) == [])
+    #expect(cache.needsLoad(month: "2026-10", revision: 1, isCurrentMonth: false) == true)
   }
 }

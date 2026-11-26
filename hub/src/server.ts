@@ -21,7 +21,7 @@ import { createSettings, type SettingsDeps } from "./settings.ts";
 import { DeviceService, type DeviceDeps } from "./devices/service.ts";
 import type { ViewerActor } from "./devices/viewer-operations.ts";
 import { RuntimeLog, backgroundLog } from "./runtime-log.ts";
-import { correctTimelineSegment, deleteTimelineSegment, timelineDays, timelineRecord } from "./timeline.ts";
+import { activeDaysInMonth, correctTimelineSegment, deleteTimelineSegment, timelineDays, timelineRecord } from "./timeline.ts";
 
 const defaultWebDir = fileURLToPath(new URL("../../web/dist/", import.meta.url));
 const csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'";
@@ -180,6 +180,7 @@ export function createHandler(options: { db: HubDB; token: string; agentToken?: 
       if (method === "DELETE" && entity?.[1] === "projects") {
         return store.removeProject(entity[2]!) ? Response.json({ removed: true }) : Response.json({ error: "项目不存在" }, { status: 404 });
       }
+      if (method === "GET" && url.pathname === "/v1/days/active") return Response.json(activeDaysInMonth(db, url.searchParams.get("month") ?? ""));
       const day = /^\/v1\/days\/(\d{4}-\d{2}-\d{2})$/.exec(url.pathname);
       if (method === "GET" && day) return respond(store.dayView(day[1]!));
       const segment = /^\/v1\/days\/(\d{4}-\d{2}-\d{2})\/segments\/([\w:%.-]{1,200})$/.exec(url.pathname);

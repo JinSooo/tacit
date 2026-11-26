@@ -104,6 +104,7 @@ enum Route: Hashable {
   var timelineSearch = ""
   var timelinePendingExpanded = false
   let update = UpdateNotice()
+  let activeDaysCache = ActiveDaysCache()
   /// 打开今天时间线时排的补整理：跨页面保留，避免来回切换重复请求。
   var catchUpRequest: DistillRequestInfo?
   @ObservationIgnored var catchUpRequestedAt: Date?
@@ -174,6 +175,7 @@ enum Route: Hashable {
     catchUpRequest = nil
     catchUpRequestedAt = nil
     historyFocus = nil
+    activeDaysCache.clear()
     suppressRevisionCallback = true
     revision += 1
     suppressRevisionCallback = false

@@ -28,6 +28,29 @@ export function localDayStart(date: string): number | null {
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   return d.getFullYear() === Number(m[1]) && d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[3]) ? d.getTime() : null;
 }
+/** 本地自然月 YYYY-MM 的起止边界：[start, end) 毫秒及首尾日期 YYYY-MM-DD；格式或月份不合法返回 null。 */
+export function localMonthBounds(month: string): {
+  year: number; month: number; start: number; end: number; firstDate: string; lastDate: string; daysInMonth: number;
+} | null {
+  const m = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!m) return null;
+  const year = Number(m[1]), monthNum = Number(m[2]);
+  if (monthNum < 1 || monthNum > 12) return null;
+  const startDate = new Date(year, monthNum - 1, 1);
+  if (startDate.getFullYear() !== year || startDate.getMonth() !== monthNum - 1 || startDate.getDate() !== 1) return null;
+  const endDate = new Date(year, monthNum, 1);
+  const daysInMonth = new Date(year, monthNum, 0).getDate();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    year,
+    month: monthNum,
+    start: startDate.getTime(),
+    end: endDate.getTime(),
+    firstDate: `${m[1]}-${m[2]}-01`,
+    lastDate: `${m[1]}-${m[2]}-${pad(daysInMonth)}`,
+    daysInMonth,
+  };
+}
 export function localDateString(ms: number): string {
   const d = new Date(ms), pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;

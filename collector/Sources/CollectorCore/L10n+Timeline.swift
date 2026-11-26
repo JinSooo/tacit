@@ -26,6 +26,9 @@ public extension L10n {
   static var previousDay: String { text(zh: "前一天", en: "Previous day") }
   static var today: String { text(zh: "今天", en: "Today") }
   static var nextDay: String { text(zh: "后一天", en: "Next day") }
+  static var previousMonth: String { text(zh: "上个月", en: "Previous month") }
+  static var nextMonth: String { text(zh: "下个月", en: "Next month") }
+  static var backToToday: String { text(zh: "回到今天", en: "Today") }
   static var simple: String { text(zh: "简约", en: "Simple") }
   static var detailed: String { text(zh: "详细", en: "Detailed") }
   static var lastSummaryFailed: String { text(zh: "最近一次整理失败", en: "Last summary failed") }
