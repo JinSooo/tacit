@@ -12,8 +12,8 @@ android {
         applicationId = "top.jinso.tacit"
         minSdk = 28
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.7.0"
+        versionCode = 17
+        versionName = "0.7.1"
         ndk { abiFilters += "arm64-v8a" }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
