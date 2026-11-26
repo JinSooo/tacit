@@ -877,7 +877,6 @@ function renderDocsShell(options: {
         <a href="${homeHref}#day" data-nav-anchor>${navLabels.timeline}</a>
         <a href="${homeHref}#ai" data-nav-anchor>${navLabels.ai}</a>
         <a href="${homeHref}#privacy" data-nav-anchor>${navLabels.privacy}</a>
-        <a href="${downloadHref}" data-nav-download>${navLabels.download}</a>
         <a href="${docsIndexHref}" aria-current="page">${navLabels.docs}</a>
       </nav>
       <div class="nav-actions">

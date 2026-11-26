@@ -262,8 +262,7 @@ main > section:nth-of-type(even) {
 @media (max-width: 860px) {
   .nav-inner { gap: 16px; }
   .nav-links { gap: 16px; }
-  .nav-links a[data-nav-anchor],
-  .nav-links a[data-nav-download] { display: none; }
+  .nav-links a[data-nav-anchor] { display: none; }
 }
 @media (max-width: 420px) {
   .nav-inner { gap: 10px; }
@@ -304,6 +303,16 @@ html[data-platform="other"] [data-platform-single] [data-platform-cta="other"] {
 }
 html[data-platform="windows"] .platform-note[data-platform-note="windows"],
 html[data-platform="ios"] .platform-note[data-platform-note="ios"] {
+  display: block;
+}
+[data-platform-req="android"],
+html[data-platform="android"] [data-platform-req="mac"],
+html[data-platform="windows"] [data-platform-req],
+html[data-platform="ios"] [data-platform-req],
+html[data-platform="other"] [data-platform-req] {
+  display: none;
+}
+html[data-platform="android"] [data-platform-req="android"] {
   display: block;
 }
 
