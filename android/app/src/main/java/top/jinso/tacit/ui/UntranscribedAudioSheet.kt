@@ -79,7 +79,9 @@ internal fun UntranscribedAudioSheet(
                 items(scenes, key = { it.conversationId }) { scene ->
                     val isPlaying = playingKey == conversationPlaybackKey(scene.conversationId)
                     val manualStatus = statuses[scene.conversationId]
-                    val playable = scene.untranscribedAudioAvailable || scene.audioAvailable
+                    val playable = scene.untranscribedAudioAvailable
+                    val canConfirm = playable && scene.untranscribedClipIds.isNotEmpty()
+                    val retryableFailure = manualStatus == ManualTranscriptionStatus.FAILED && scene.transcribePending
                     val clipStart = scene.untranscribedStart ?: scene.start
                     val clipEnd = scene.untranscribedEnd ?: scene.end
                     GroupCard {
@@ -121,7 +123,7 @@ internal fun UntranscribedAudioSheet(
                             ) {
                                 Box(Modifier.weight(1f)) {
                                     when {
-                                        manualStatus == ManualTranscriptionStatus.FAILED -> Column(
+                                        retryableFailure -> Column(
                                             verticalArrangement = Arrangement.spacedBy(6.dp),
                                         ) {
                                             Caption(
@@ -136,11 +138,11 @@ internal fun UntranscribedAudioSheet(
                                                 )
                                             }
                                         }
-                                        manualStatus == ManualTranscriptionStatus.RUNNING -> Caption(
+                                        manualStatus == ManualTranscriptionStatus.RUNNING && scene.transcribePending -> Caption(
                                             strings.text(R.string.untranscribed_transcribing),
                                             color = tacitColors.accent,
                                         )
-                                        manualStatus == ManualTranscriptionStatus.QUEUED -> Caption(
+                                        manualStatus == ManualTranscriptionStatus.QUEUED && scene.transcribePending -> Caption(
                                             strings.text(R.string.untranscribed_queued),
                                             color = tacitColors.accent,
                                         )
@@ -152,7 +154,7 @@ internal fun UntranscribedAudioSheet(
                                             color = tacitColors.accent,
                                         )
                                         scene.userConfirmed -> Caption(strings.text(R.string.untranscribed_no_speech))
-                                        playable -> TonalButton(
+                                        canConfirm -> TonalButton(
                                             strings.text(R.string.transcribe_this_clip),
                                             onClick = { onTranscribe(scene) },
                                             enabled = !busy,

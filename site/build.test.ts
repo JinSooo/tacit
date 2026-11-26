@@ -278,14 +278,17 @@ describe("Markdown 清洗、链接重写与渲染辅助函数", () => {
       '<a href="https://example.com/?a=1&amp;b=2">ok</a>',
     );
 
-    // 单遍 HTML 实体解码：命名实体保留原字符、字面实体不二次解码、越界数字实体不抛错
+    // 单遍 HTML 实体解码：命名实体大小写精确匹配、不命中原型属性、字面实体不二次解码、C1 与越界数字实体合规
     const entityMd = [
       "# Entities",
       "",
-      '<a href="https://example.com/?currency=&euro;&amp;literal=&amp;lt;&amp;bad=&#99999999;">link</a>',
+      '<a href="https://example.com/?currency=&euro;&amp;c1=&#128;&amp;acc=&eacute;&amp;literal=&amp;lt;&amp;unknown=&Euro;&amp;proto=&constructor;&amp;bad=&#99999999;">link</a>',
     ].join("\n");
     const entityRendered = renderDocMarkdown(entityMd, "docs/en/trial-guide.md", "en");
-    expect(entityRendered.html).toContain('href="https://example.com/?currency=€&amp;literal=&amp;lt;&amp;bad=\ufffd"');
+    expect(entityRendered.html).toContain(
+      'href="https://example.com/?currency=€&amp;c1=€&amp;acc=é&amp;literal=&amp;lt;&amp;unknown=&amp;Euro;&amp;proto=&amp;constructor;&amp;bad=\ufffd"',
+    );
+    expect(entityRendered.html).not.toContain("function Object");
     expect(entityRendered.html).not.toContain("&amp;euro;");
     expect(entityRendered.html).not.toContain("literal=<");
 

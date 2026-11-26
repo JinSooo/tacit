@@ -154,8 +154,8 @@ class UntranscribedConversationTest {
         val untouched = before.single { secondClip in it.clipIds }
         assertTrue(queries.conversationAudioAvailable(target.id))
 
-        // Confirm only the target conversation and reload from serialized JSON to verify persistence.
-        ledger.confirmConversation(target.id)
+        // Confirm only the target conversation's explicit clips and reload from serialized JSON to verify persistence.
+        ledger.confirmConversation(target.id, target.untranscribedClipIds.toSet())
         store.reload()
         val reloadedLedger = AudioLedger(store)
         val reloadedQueries = AudioQueries(store, reloadedLedger, { 7 }, { emptySet() })
@@ -193,8 +193,8 @@ class UntranscribedConversationTest {
         val speech = FakeSpeech()
         AudioProcessor(store, Any(), speech).drain({ true }) { error("Unconfirmed") }
         val ledger = AudioLedger(store)
-        val conversationId = ledger.listConversations().single().id
-        ledger.confirmConversation(conversationId)
+        val conv = ledger.listConversations().single()
+        ledger.confirmConversation(conv.id, conv.untranscribedClipIds.toSet())
 
         try {
             AudioProcessor(store, Any(), speech).drain({ true }) { error("Simulated publish crash") }
@@ -216,8 +216,8 @@ class UntranscribedConversationTest {
         val speech = FakeSpeech { "。。。" }
         AudioProcessor(store, Any(), speech).drain({ true }) { error("Unconfirmed") }
         val ledger = AudioLedger(store)
-        val id = ledger.listConversations().single().id
-        ledger.confirmConversation(id)
+        val conv = ledger.listConversations().single()
+        ledger.confirmConversation(conv.id, conv.untranscribedClipIds.toSet())
         AudioProcessor(store, Any(), speech).drain({ true }) { error("Punctuation must not publish") }
 
         val after = ledger.listConversations().single()
@@ -237,8 +237,12 @@ class UntranscribedConversationTest {
 
         assertFalse(ledger.conversationAudioAvailable(id))
         try {
-            ledger.confirmConversation(id)
+            ledger.confirmConversation(id, setOf(clipId))
             fail("Expired clip must not be confirmable")
+        } catch (_: IllegalArgumentException) { }
+        try {
+            ledger.confirmConversation(id, emptySet())
+            fail("Empty clip set must be rejected")
         } catch (_: IllegalArgumentException) { }
     }
 
@@ -290,7 +294,7 @@ class UntranscribedConversationTest {
         val convId = ledger.listConversations().single().id
 
         // Confirm batch 1, transcribe, and reload index from disk.
-        ledger.confirmConversation(convId)
+        ledger.confirmConversation(convId, setOf(firstClip))
         AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
         assertEquals(listOf(firstClip), published.map { it.clipId })
         assertTrue(store.speakers().none { it.optBoolean("me") })
@@ -324,7 +328,7 @@ class UntranscribedConversationTest {
         AudioProcessor(storeA, Any(), speechA).drain({ true }) { error("Unconfirmed") }
         val ledgerA = AudioLedger(storeA)
         val convA = ledgerA.listConversations().single().id
-        ledgerA.confirmConversation(convA)
+        ledgerA.confirmConversation(convA, setOf(clipA))
         AudioProcessor(storeA, Any(), speechA).drain(
             allowed = { true },
             onManualStatus = { id, status -> statuses += id to status },
@@ -341,7 +345,7 @@ class UntranscribedConversationTest {
         AudioProcessor(storeB, Any(), speechB).drain({ true }) { error("Unconfirmed") }
         val ledgerB = AudioLedger(storeB)
         val convB = ledgerB.listConversations().single().id
-        ledgerB.confirmConversation(convB)
+        ledgerB.confirmConversation(convB, setOf(clipB))
         AudioProcessor(storeB, Any(), speechB).drain(
             allowed = { true },
             skipConversation = { it == convB },
@@ -481,5 +485,46 @@ class UntranscribedConversationTest {
         assertEquals(DeleteConversationAudioResult.DELETED, store.deleteConversationAudio(convId))
         assertFalse(store.exists(clipB))
         assertEquals(listOf("rec:$clipA"), store.transcripts().map { it.getString("recordId") })
+    }
+
+    @Test fun expiredFailedClipClearsPendingStateSoRemainingNewClipCanBeConfirmed() {
+        val store = FakeAudioStore()
+        val now = System.currentTimeMillis()
+        val clip1 = store.addClip(now - 300_000L, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        var failAsr = true
+        val speech = FakeSpeech {
+            if (failAsr) throw IllegalStateException("ASR error")
+            "第二段新确认的转写"
+        }
+        AudioProcessor(store, Any(), speech).drain({ true }) { error("Unconfirmed") }
+        val ledger = AudioLedger(store)
+        val convId = ledger.listConversations().single().id
+        ledger.confirmConversation(convId, setOf(clip1))
+        try {
+            AudioProcessor(store, Any(), speech).drain({ true }) { error("Should fail ASR") }
+        } catch (_: IllegalStateException) { }
+
+        // A second clip attaches, then the old failed clip expires and its PCM disappears.
+        val clip2 = store.addClip(now - 240_000L, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        try {
+            AudioProcessor(store, Any(), speech).drain({ true }) { error("Should fail ASR on clip1") }
+        } catch (_: IllegalStateException) { }
+        store.dropPcm(clip1)
+        store.reload()
+
+        val afterExpiry = AudioLedger(store).listConversations().single()
+        assertEquals(convId, afterExpiry.id)
+        assertFalse(afterExpiry.transcribePending)
+        assertFalse(afterExpiry.userConfirmed)
+        assertTrue(afterExpiry.untranscribedAudioAvailable)
+        assertEquals(listOf(clip2), afterExpiry.untranscribedClipIds)
+        assertTrue(AudioLedger(store).pendingConfirmedConversationIds().isEmpty())
+
+        // User can explicitly confirm clip2 now that clip1 expired.
+        AudioLedger(store).confirmConversation(convId, afterExpiry.untranscribedClipIds.toSet())
+        failAsr = false
+        val published = mutableListOf<AudioPublication>()
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+        assertEquals(listOf(clip2), published.map { it.clipId })
     }
 }

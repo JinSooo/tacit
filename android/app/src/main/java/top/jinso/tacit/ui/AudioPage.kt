@@ -369,7 +369,7 @@ import java.util.concurrent.CompletableFuture
                     try {
                         val targetClips = scene.untranscribedClipIds.toSet()
                         withContext(Dispatchers.IO) {
-                            audio.transcribeConversation(scene.conversationId, targetClips.takeIf { it.isNotEmpty() }).get()
+                            audio.transcribeConversation(scene.conversationId, targetClips).get()
                         }
                         val msg = strings.text(
                             if (state.modelsReady) R.string.transcribe_queued else R.string.transcribe_queued_models_missing,

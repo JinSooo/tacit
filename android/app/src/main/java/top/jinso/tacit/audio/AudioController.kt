@@ -90,7 +90,7 @@ class AudioController internal constructor(
     fun conversationAudioAvailable(conversationId: String): CompletableFuture<Boolean> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.conversationAudioAvailable(conversationId) }
     }
-    fun transcribeConversation(conversationId: String, clipIds: Set<String>? = null): CompletableFuture<Unit> =
+    fun transcribeConversation(conversationId: String, clipIds: Set<String>): CompletableFuture<Unit> =
         runtime.confirmConversation(conversationId, clipIds)
     fun retryConversationTranscription(conversationId: String): CompletableFuture<Unit> =
         runtime.retryConversation(conversationId)
@@ -144,7 +144,11 @@ class AudioController internal constructor(
     fun importModels(tree: Uri): CompletableFuture<Unit> = runtime.importModels { runtime.models.import(tree) }
     fun installStagedModels(): CompletableFuture<Unit> = runtime.importModels { runtime.models.installStaged() }
     fun prune(): CompletableFuture<Unit> = runtime.change {
-        synchronized(runtime.lock) { runtime.store.prune(runtime.retentionDays()); runtime.store.sweep() }
+        synchronized(runtime.lock) {
+            runtime.store.prune(runtime.retentionDays())
+            runtime.store.sweep()
+            runtime.reconcileManualStatusesLocked()
+        }
     }
     /** Removes recordings and voiceprints; already saved History is managed by Vault/UI separately. */
     fun clearAudio(): CompletableFuture<Unit> {
@@ -237,7 +241,7 @@ internal class AudioRuntime private constructor(val context: Context) {
         }
     }
 
-    fun confirmConversation(conversationId: String, clipIds: Set<String>? = null): CompletableFuture<Unit> {
+    fun confirmConversation(conversationId: String, clipIds: Set<String>): CompletableFuture<Unit> {
         invalidatePolicy()
         return change {
             synchronized(lock) { ledger.confirmConversation(conversationId, clipIds) }
@@ -246,6 +250,12 @@ internal class AudioRuntime private constructor(val context: Context) {
             }
             schedule()
         }
+    }
+
+    /** Drop stale QUEUED/RUNNING/FAILED states once a conversation no longer has any pending confirmed clips. */
+    fun reconcileManualStatusesLocked() {
+        val stillPending = ledger.pendingConfirmedConversationIds()
+        manualTranscriptions.update { current -> current.filterKeys { it in stillPending } }
     }
 
     fun retryConversation(conversationId: String): CompletableFuture<Unit> {
@@ -443,6 +453,7 @@ internal class AudioRuntime private constructor(val context: Context) {
         val (policy, voiceprint) = synchronized(lock) {
             val mac = macPolicy()
             store.prune(mac?.getInt("retention_days") ?: app.prefs.retentionDays)
+            reconcileManualStatusesLocked()
             policyRevision to macVoiceprint()
         }
         if (!allowed()) return
@@ -461,10 +472,7 @@ internal class AudioRuntime private constructor(val context: Context) {
                 start = p.start, end = p.end,
                 sourceRef = "audio:${p.clipId}", method = "asr"), offset = p.offset)
         }
-        val stillPending = synchronized(lock) { ledger.pendingConfirmedConversationIds() }
-        manualTranscriptions.update { current ->
-            current.filter { (id, status) -> status == ManualTranscriptionStatus.FAILED || id in stillPending }
-        }
+        synchronized(lock) { reconcileManualStatusesLocked() }
         reportProcessingProblem(token, null)
         changed()
     }

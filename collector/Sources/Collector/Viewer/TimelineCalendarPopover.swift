@@ -45,6 +45,13 @@ import enum CollectorCore.TimelineCalendar
     return now.timeIntervalSince(loadedAt) >= pastMonthTTL
   }
 
+  /// 距离下一次刷新还需要等待的秒数；已到期或未权威加载时返回 0。
+  func nextRefreshDelay(month: String, revision: Int, isCurrentMonth: Bool, now: Date = Date()) -> TimeInterval {
+    if needsLoad(month: month, revision: revision, isCurrentMonth: isCurrentMonth, now: now) { return 0 }
+    guard let loadedAt = entries[month]?.loadedAt else { return 0 }
+    return max(0, pastMonthTTL - now.timeIntervalSince(loadedAt))
+  }
+
   func store(month: String, dates: Set<String>, revision: Int, authoritative: Bool = true, now: Date = Date()) {
     if !authoritative {
       // 离线回退不能覆盖已有的在线结果，也不标为 authoritative，确保恢复连接或重新打开时会重新请求。
@@ -188,22 +195,24 @@ struct TimelineCalendarPopover: View {
       let targetMonth = monthKey
       cache.seedIfEmpty(month: targetMonth, dates: dataSource.cachedActiveDays(inMonth: targetMonth))
       let currentMonth = TimelineCalendar.Month(containing: today, calendar: cal).key
+      let isCurrentMonth = targetMonth == currentMonth
       while !Task.isCancelled {
-        if cache.needsLoad(month: targetMonth, revision: revision, isCurrentMonth: targetMonth == currentMonth) {
-          // 到期、修订变化或离线重试时绕过底层滑窗 LRU，直接向中枢取最新结果。
-          if let fetched = try? await dataSource.activeDays(inMonth: targetMonth, bypassCache: true), !Task.isCancelled {
-            cache.store(month: targetMonth, dates: fetched.dates, revision: revision, authoritative: fetched.authoritative)
-            if fetched.authoritative {
-              if targetMonth != currentMonth { break }
-              try? await Task.sleep(for: .seconds(60))
-              continue
-            }
-          }
-          // 离线或请求失败时保持弹层可用，并在弹层持续打开期间短暂退避重试，连接恢复后自动更新。
-          try? await Task.sleep(for: .seconds(10))
-        } else {
-          break
+        let waitSeconds = cache.nextRefreshDelay(month: targetMonth, revision: revision, isCurrentMonth: isCurrentMonth)
+        if waitSeconds > 0 {
+          try? await Task.sleep(for: .seconds(max(1, waitSeconds)))
+          continue
         }
+        // 到期、修订变化或离线重试时绕过底层滑窗 LRU，直接向中枢取最新结果。
+        if let fetched = try? await dataSource.activeDays(inMonth: targetMonth, bypassCache: true), !Task.isCancelled {
+          cache.store(month: targetMonth, dates: fetched.dates, revision: revision, authoritative: fetched.authoritative)
+          if fetched.authoritative {
+            let interval = isCurrentMonth ? 60.0 : max(1, cache.pastMonthTTL)
+            try? await Task.sleep(for: .seconds(interval))
+            continue
+          }
+        }
+        // 离线或请求失败时保持弹层可用，并在弹层持续打开期间短暂退避重试，连接恢复后自动更新。
+        try? await Task.sleep(for: .seconds(10))
       }
     }
   }

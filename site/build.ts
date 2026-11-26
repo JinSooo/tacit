@@ -167,53 +167,103 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-const NAMED_HTML_ENTITIES: Record<string, string> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: "\u00a0",
-  euro: "\u20ac",
-  pound: "\u00a3",
-  yen: "\u00a5",
-  cent: "\u00a2",
-  copy: "\u00a9",
-  reg: "\u00ae",
-  trade: "\u2122",
-  mdash: "\u2014",
-  ndash: "\u2013",
-  hellip: "\u2026",
-  lsquo: "\u2018",
-  rsquo: "\u2019",
-  ldquo: "\u201c",
-  rdquo: "\u201d",
-  laquo: "\u00ab",
-  raquo: "\u00bb",
-  bull: "\u2022",
-  middot: "\u00b7",
-  times: "\u00d7",
-  divide: "\u00f7",
-  plusmn: "\u00b1",
-  deg: "\u00b0",
-  sect: "\u00a7",
-  para: "\u00b6",
-};
+// 使用 Map 避免原型链属性命中（如 &constructor;），并保持 HTML5 命名实体大小写精确匹配。
+const NAMED_HTML_ENTITIES = new Map<string, string>([
+  ["amp", "&"],
+  ["AMP", "&"],
+  ["lt", "<"],
+  ["LT", "<"],
+  ["gt", ">"],
+  ["GT", ">"],
+  ["quot", '"'],
+  ["QUOT", '"'],
+  ["apos", "'"],
+  ["nbsp", "\u00a0"],
+  ["euro", "\u20ac"],
+  ["pound", "\u00a3"],
+  ["yen", "\u00a5"],
+  ["cent", "\u00a2"],
+  ["copy", "\u00a9"],
+  ["COPY", "\u00a9"],
+  ["reg", "\u00ae"],
+  ["REG", "\u00ae"],
+  ["trade", "\u2122"],
+  ["mdash", "\u2014"],
+  ["ndash", "\u2013"],
+  ["hellip", "\u2026"],
+  ["lsquo", "\u2018"],
+  ["rsquo", "\u2019"],
+  ["ldquo", "\u201c"],
+  ["rdquo", "\u201d"],
+  ["laquo", "\u00ab"],
+  ["raquo", "\u00bb"],
+  ["bull", "\u2022"],
+  ["middot", "\u00b7"],
+  ["times", "\u00d7"],
+  ["divide", "\u00f7"],
+  ["plusmn", "\u00b1"],
+  ["deg", "\u00b0"],
+  ["sect", "\u00a7"],
+  ["para", "\u00b6"],
+  ["aacute", "\u00e1"],
+  ["agrave", "\u00e0"],
+  ["acirc", "\u00e2"],
+  ["auml", "\u00e4"],
+  ["atilde", "\u00e3"],
+  ["aring", "\u00e5"],
+  ["ccedil", "\u00e7"],
+  ["eacute", "\u00e9"],
+  ["egrave", "\u00e8"],
+  ["ecirc", "\u00ea"],
+  ["euml", "\u00eb"],
+  ["iacute", "\u00ed"],
+  ["igrave", "\u00ec"],
+  ["icirc", "\u00ee"],
+  ["iuml", "\u00ef"],
+  ["ntilde", "\u00f1"],
+  ["oacute", "\u00f3"],
+  ["ograve", "\u00f2"],
+  ["ocirc", "\u00f4"],
+  ["ouml", "\u00f6"],
+  ["otilde", "\u00f5"],
+  ["uacute", "\u00fa"],
+  ["ugrave", "\u00f9"],
+  ["ucirc", "\u00fb"],
+  ["uuml", "\u00fc"],
+  ["yacute", "\u00fd"],
+  ["yuml", "\u00ff"],
+  ["Eacute", "\u00c9"],
+  ["Aacute", "\u00c1"],
+  ["Ntilde", "\u00d1"],
+  ["Ouml", "\u00d6"],
+  ["Uuml", "\u00dc"],
+]);
+
+// WHATWG HTML5 数字字符引用 C1 控制区映射表（0x80–0x9F）
+const HTML5_C1_MAP = new Map<number, number>([
+  [0x80, 0x20ac], [0x82, 0x201a], [0x83, 0x0192], [0x84, 0x201e], [0x85, 0x2026],
+  [0x86, 0x2020], [0x87, 0x2021], [0x88, 0x02c6], [0x89, 0x2030], [0x8a, 0x0160],
+  [0x8b, 0x2039], [0x8c, 0x0152], [0x8e, 0x017d], [0x91, 0x2018], [0x92, 0x2019],
+  [0x93, 0x201c], [0x94, 0x201d], [0x95, 0x2022], [0x96, 0x2013], [0x97, 0x2014],
+  [0x98, 0x02dc], [0x99, 0x2122], [0x9a, 0x0161], [0x9b, 0x203a], [0x9c, 0x0153],
+  [0x9e, 0x017e], [0x9f, 0x0178],
+]);
 
 function decodeNumericEntity(codePoint: number): string {
   if (!Number.isSafeInteger(codePoint) || codePoint <= 0 || codePoint > 0x10ffff) return "\ufffd";
   if (codePoint >= 0xd800 && codePoint <= 0xdfff) return "\ufffd";
-  return String.fromCodePoint(codePoint);
+  const mapped = HTML5_C1_MAP.get(codePoint);
+  return String.fromCodePoint(mapped ?? codePoint);
 }
 
-/** 单遍解码 HTML 实体，避免 `&amp;lt;` 二次解码，并对越界数字实体安全回退到 U+FFFD。 */
+/** 单遍解码 HTML 实体，避免 `&amp;lt;` 二次解码、原型属性污染与越界数字实体抛错。 */
 export function decodeHtmlEntities(value: string): string {
   return value.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z][a-z0-9]+));/gi, (match, dec?: string, hex?: string, named?: string) => {
     if (dec !== undefined) return decodeNumericEntity(Number.parseInt(dec, 10));
     if (hex !== undefined) return decodeNumericEntity(Number.parseInt(hex, 16));
     if (named !== undefined) {
-      const exact = NAMED_HTML_ENTITIES[named] ?? NAMED_HTML_ENTITIES[named.toLowerCase()];
-      if (exact !== undefined) return exact;
+      const resolved = NAMED_HTML_ENTITIES.get(named);
+      if (resolved !== undefined) return resolved;
     }
     return match;
   });

@@ -277,16 +277,16 @@ internal class AudioLedger(private val store: AudioStore) {
     }
 
     /**
-     * Authorize ONLY the exact retained untranscribed [clipIds] selected by the user (or all currently retained
-     * untranscribed clips when [clipIds] is null, for direct callers/tests).
-     * Never sweeps in clips outside [clipIds] or later clips that attach to the same conversation.
+     * Authorize ONLY the exact retained untranscribed [clipIds] selected by the user.
+     * Rejects empty selections and never sweeps in clips outside [clipIds] or later clips attached to the same conversation.
      */
-    fun confirmConversation(conversationId: String, clipIds: Set<String>? = null): Set<String> {
+    fun confirmConversation(conversationId: String, clipIds: Set<String>): Set<String> {
         val target = requireNotNull(conversation(conversationId)) { "对话已不存在" }
+        require(clipIds.isNotEmpty()) { "这段录音已过保留期" }
         val eligibleClips = store.clips().filter { clip ->
             val id = clip.getString("id")
             clip.optString("conversation") == conversationId &&
-                (clipIds == null || id in clipIds) &&
+                id in clipIds &&
                 store.exists(id) &&
                 utterances(clip).none { it.optString("record").isNotEmpty() }
         }.map { it.getString("id") }
