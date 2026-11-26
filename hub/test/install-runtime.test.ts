@@ -82,4 +82,17 @@ test("打包运行目录独立启动真实数据库与 MCP，修改源码副本�
   expect(mcp.status).toBe(0); expect(mcp.stdout).toContain("history_append");
   expect(existsSync(join(runtime, "node_modules/vite"))).toBe(false);
   expect(existsSync(join(runtime, "web/dist/index.html"))).toBe(true);
+  const sqliteDir = join(runtime, "node_modules/better-sqlite3-multiple-ciphers");
+  expect(readdirSync(join(sqliteDir, "prebuilds"))).toEqual([`${process.platform}-${process.arch}.node`]);
+  expect(existsSync(join(sqliteDir, "deps"))).toBe(false);
+  expect(existsSync(join(sqliteDir, "src"))).toBe(false);
+  expect(existsSync(join(sqliteDir, "binding.gyp"))).toBe(false);
+}, 30_000);
+
+test("缺少当前平台 SQLite 原生模块时打包失败", () => {
+  const root = temp(), source = join(root, "source"), runtime = join(root, "runtime");
+  const repo = resolve(import.meta.dir, "../..");
+  stageRuntime(repo, source);
+  rmSync(join(source, "node_modules/better-sqlite3-multiple-ciphers/prebuilds", `${process.platform}-${process.arch}.node`));
+  expect(() => stageRuntime(source, runtime)).toThrow(/prebuilds/);
 }, 30_000);

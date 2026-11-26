@@ -1,5 +1,8 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, readdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+
+const SQLITE_PKG = "better-sqlite3-multiple-ciphers";
+const SQLITE_SKIP = new Set(["deps", "src", "binding.gyp"]);
 
 /** 安装快照仅含运行所需代码、契约、网页和生产依赖，不保留指向工作区的链接。 */
 export function stageRuntime(source: string, destination: string) {
@@ -22,8 +25,26 @@ export function stageRuntime(source: string, destination: string) {
     const target = join(into, "node_modules", name);
     if (copied.has(target)) return;
     copied.add(target);
-    cpSync(found, target, { recursive: true, dereference: true,
-      filter: p => !p.slice(found!.length + 1).split(/[\\/]/).includes("node_modules") });
+    let keepPrebuild: string | null = null;
+    if (name === SQLITE_PKG) {
+      keepPrebuild = `${process.platform}-${process.arch}.node`;
+      const prebuildPath = join(found, "prebuilds", keepPrebuild);
+      if (!existsSync(prebuildPath) || !statSync(prebuildPath).isFile()) {
+        throw new Error(`缺少当前平台的 SQLite 原生模块：${SQLITE_PKG}/prebuilds/${keepPrebuild}`);
+      }
+    }
+    cpSync(found, target, {
+      recursive: true, dereference: true,
+      filter: p => {
+        const parts = p === found ? [] : p.slice(found!.length + 1).split(/[\\/]/);
+        if (parts.includes("node_modules")) return false;
+        if (keepPrebuild) {
+          if (SQLITE_SKIP.has(parts[0]!)) return false;
+          if (parts[0] === "prebuilds" && parts.length > 1 && parts[1] !== keepPrebuild) return false;
+        }
+        return true;
+      },
+    });
     const manifest = JSON.parse(readFileSync(join(found, "package.json"), "utf8"));
     for (const dep of Object.keys(manifest.dependencies ?? {})) copyDependency(dep, found, target);
   };
