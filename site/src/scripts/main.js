@@ -1,38 +1,11 @@
-// Prioritize the current platform without hiding the other download.
-if (document.documentElement.getAttribute("data-platform") === "android") {
-  for (const group of document.querySelectorAll("[data-platform-actions]")) {
-    const mac = group.querySelector('[data-platform-target="mac"]');
-    const android = group.querySelector('[data-platform-target="android"]');
-    if (mac && android) {
-      group.insertBefore(android, mac);
-      android.classList.replace("btn-quiet", "btn-primary");
-      mac.classList.replace("btn-primary", "btn-quiet");
-    }
-  }
-  const guide = document.querySelector(".download-guide");
-  const macGuide = guide?.querySelector(".download-mac");
-  const androidGuide = guide?.querySelector(".download-android");
-  if (guide && macGuide && androidGuide) {
-    guide.insertBefore(androidGuide, macGuide);
-  }
-}
-
 const nav = document.getElementById("nav");
-const languageNotice = document.getElementById("language-notice");
-const pageLanguage = document.documentElement.lang.toLowerCase().split("-")[0];
-const preferredLanguages = navigator.languages?.length ? navigator.languages : [navigator.language].filter(Boolean);
-const noticeKey = `tacit-language-notice-${pageLanguage}`;
-let noticeDismissed = false;
-try { noticeDismissed = localStorage.getItem(noticeKey) === "dismissed"; } catch {}
-if (preferredLanguages.length && !noticeDismissed && !preferredLanguages.some(
-  (language) => language.toLowerCase().split("-")[0] === pageLanguage,
-)) {
-  languageNotice.hidden = false;
-  languageNotice.querySelector("button").addEventListener("click", () => {
-    languageNotice.hidden = true;
-    try { localStorage.setItem(noticeKey, "dismissed"); } catch {}
-    nav.querySelector(".nav-language").focus();
-    updateNav();
+
+for (const langLink of document.querySelectorAll("[data-lang-switch]")) {
+  langLink.addEventListener("click", () => {
+    const nextLang = langLink.getAttribute("data-lang-switch");
+    if (nextLang === "zh" || nextLang === "en") {
+      try { localStorage.setItem("tacit-lang", nextLang); } catch {}
+    }
   });
 }
 
@@ -41,8 +14,9 @@ const linkById = new Map(navLinks.map((link) => [link.getAttribute("href").slice
 const allSections = [...document.querySelectorAll("main > section[id]")];
 
 function updateNav() {
+  if (!nav) return;
   nav.toggleAttribute("data-scrolled", window.scrollY > 8);
-  if (!allSections.length) return;
+  if (!allSections.length || !navLinks.length) return;
   const probe = window.scrollY + nav.offsetHeight + window.innerHeight * 0.28;
   let activeId = null;
   for (const section of allSections) {
@@ -59,6 +33,31 @@ updateNav();
 window.addEventListener("scroll", updateNav, { passive: true });
 window.addEventListener("resize", updateNav, { passive: true });
 
+// Docs right-hand TOC scrollspy
+const tocLinks = [...document.querySelectorAll(".doc-toc a[href^='#']")];
+const tocTargets = tocLinks
+  .map((link) => ({ link, heading: document.getElementById(link.getAttribute("href").slice(1)) }))
+  .filter((item) => item.heading);
+
+function updateDocToc() {
+  if (!tocTargets.length) return;
+  const offset = (nav?.offsetHeight ?? 64) + 28;
+  let active = tocTargets[0];
+  for (const item of tocTargets) {
+    if (item.heading.getBoundingClientRect().top <= offset) active = item;
+  }
+  for (const item of tocTargets) {
+    if (item === active) item.link.setAttribute("aria-current", "location");
+    else item.link.removeAttribute("aria-current");
+  }
+}
+
+if (tocTargets.length) {
+  updateDocToc();
+  window.addEventListener("scroll", updateDocToc, { passive: true });
+}
+
+// Theme icon toggle
 const toggle = document.getElementById("theme-toggle");
 const darkQuery = matchMedia("(prefers-color-scheme: dark)");
 const widgetPicture = document.querySelector(".more-widgets");
@@ -70,8 +69,10 @@ const darkWidget = widgetSource?.getAttribute("srcset");
 function syncThemeUi(theme) {
   if (!toggle) return;
   const isDark = theme === "dark" || (!theme && darkQuery.matches);
-  toggle.textContent = isDark ? toggle.dataset.light : toggle.dataset.dark;
-  toggle.setAttribute("aria-label", isDark ? toggle.dataset.lightLabel : toggle.dataset.darkLabel);
+  const label = isDark ? toggle.dataset.lightLabel : toggle.dataset.darkLabel;
+  toggle.dataset.activeTheme = isDark ? "dark" : "light";
+  toggle.setAttribute("aria-label", label);
+  toggle.setAttribute("title", label);
   if (widgetSource && widgetImg) {
     if (theme === "dark") {
       widgetSource.media = "all";
@@ -109,6 +110,47 @@ if (toggle) {
   });
 }
 
+// Shared copy buttons (download page commands and docs code blocks)
+if (navigator.clipboard?.writeText) {
+  for (const button of document.querySelectorAll("[data-copy-target], [data-copy-code]")) {
+    button.hidden = false;
+    let resetTimer = null;
+    const defaultLabel = button.textContent.trim();
+
+    button.addEventListener("click", async () => {
+      let text = "";
+      const targetId = button.getAttribute("data-copy-target");
+      if (targetId) {
+        text = document.getElementById(targetId)?.textContent?.trim() ?? "";
+      } else {
+        const container = button.closest(".doc-code-block");
+        text = container?.querySelector("pre code")?.textContent?.trim() ?? "";
+      }
+      if (!text) return;
+
+      const statusId = button.getAttribute("data-copy-status-id");
+      const statusEl = statusId
+        ? document.getElementById(statusId)
+        : button.closest(".doc-code-block")?.querySelector("[data-copy-status]");
+
+      try {
+        await navigator.clipboard.writeText(text);
+        if (statusEl) statusEl.textContent = button.dataset.copied || defaultLabel;
+        if (button.dataset.copiedButton) button.textContent = button.dataset.copiedButton;
+        button.setAttribute("data-copied-state", "true");
+        clearTimeout(resetTimer);
+        resetTimer = setTimeout(() => {
+          button.textContent = defaultLabel;
+          button.removeAttribute("data-copied-state");
+        }, 1800);
+      } catch {
+        if (statusEl) statusEl.textContent = button.dataset.copyFailed || "";
+      }
+    });
+  }
+}
+
+// Scroll reveals
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const targets = document.querySelectorAll("[data-reveal], [data-reveal-group]");
 if (reduced || !("IntersectionObserver" in window)) {

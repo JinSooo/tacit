@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>下载 Tacit | Tacit</title>
+  <meta name="description" content="下载 Apple 芯片 Mac 版或 arm64 Android 版 Tacit，或使用 Docker 独立部署常驻后台服务。">
+  <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#181716" media="(prefers-color-scheme: dark)">
+  <meta property="og:title" content="下载 Tacit">
+  <meta property="og:description" content="在 Mac、Android 上安装 Tacit，或使用 Docker 独立部署后台服务。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://tacit.jinso.top/zh/download/">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:locale:alternate" content="en_US">
+  <link rel="canonical" href="https://tacit.jinso.top/zh/download/">
+  <link rel="alternate" hreflang="en" href="https://tacit.jinso.top/en/download/">
+  <link rel="alternate" hreflang="zh-CN" href="https://tacit.jinso.top/zh/download/">
+  <link rel="alternate" hreflang="x-default" href="https://tacit.jinso.top/en/download/">
+  <meta property="og:image" content="https://tacit.jinso.top/assets/og-cover.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://tacit.jinso.top/assets/og-cover.png">
+  <link rel="icon" href="assets/favicon.ico" sizes="any">
+  <link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <script type="module" src="scripts/platform.js"></script>
+  <link rel="stylesheet" href="styles/base.css">
+  <link rel="stylesheet" href="styles/download.css">
+</head>
+<body>
+  <header class="nav" id="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="../" aria-label="Tacit 首页"><img src="assets/mark.svg" alt="">Tacit</a>
+      <nav class="nav-links" aria-label="页面导航">
+        <a href="../#day" data-nav-anchor>时间线</a>
+        <a href="../#ai" data-nav-anchor>接续 AI</a>
+        <a href="../#privacy" data-nav-anchor>隐私</a>
+        <a href="./" data-nav-download aria-current="page">下载</a>
+        <a href="../docs/">文档</a>
+      </nav>
+      <div class="nav-actions">
+        <a class="icon-btn nav-lang" href="../../en/download/" hreflang="en" lang="en" data-lang-switch="en" aria-label="Switch to English" title="Switch to English">
+          <svg aria-hidden="true"><use href="assets/sources.svg#lang"/></svg>
+        </a>
+        <button class="icon-btn theme-toggle" type="button" id="theme-toggle" aria-label="切换深浅色外观" title="切换深浅色外观"
+          data-light-label="切换到浅色外观" data-dark-label="切换到深色外观" hidden>
+          <svg class="icon-sun" aria-hidden="true"><use href="assets/sources.svg#sun"/></svg>
+          <svg class="icon-moon" aria-hidden="true"><use href="assets/sources.svg#moon"/></svg>
+        </button>
+        <a class="btn btn-quiet" href="#download-platforms" aria-current="page">下载</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="top" class="download-page">
+    <section class="download-hero" id="download-hero" aria-labelledby="download-page-title">
+      <div class="wrap">
+        <div class="download-hero-inner">
+          <h1 class="display" id="download-page-title">下载 Tacit</h1>
+          <p class="lead">选择适合你设备的安装包，或使用 Docker 在自己的服务器上运行后台服务。应用免费开源，采用 MIT 许可证。</p>
+          <dl class="download-summary caption num">
+            <div>
+              <dt>Mac</dt>
+              <dd>Apple 芯片 · macOS 14+</dd>
+            </div>
+            <div>
+              <dt>Android</dt>
+              <dd>arm64 · Android 9+</dd>
+            </div>
+            <div>
+              <dt>Docker 服务端</dt>
+              <dd>linux/amd64 · linux/arm64</dd>
+            </div>
+            <div>
+              <dt>当前版本</dt>
+              <dd>v0.7.0</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section class="download-platforms" id="download-platforms" aria-label="各平台下载与安装说明">
+      <div class="wrap download-stack">
+        <article class="download-card" id="download-mac" data-device-card="mac">
+          <div class="download-card-head">
+            <div class="download-card-title-group">
+              <div class="download-card-title-row">
+                <svg class="download-card-icon" aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
+                <h2 class="title">Mac</h2>
+                <span class="device-badge" data-device-badge="mac">当前设备</span>
+              </div>
+              <p class="caption num">Apple 芯片 · macOS 14 或更新 · 发布版 mac-v0.7.0</p>
+            </div>
+            <a class="btn btn-primary" data-platform-target="mac" href="https://github.com/JinSooo/tacit/releases/tag/mac-v0.7.0">
+              <svg aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
+              下载 Tacit-0.7.0.dmg
+            </a>
+          </div>
+
+          <div class="download-card-body">
+            <h3 class="download-subhead">首次打开与系统放行</h3>
+            <ol class="download-steps" role="list">
+              <li>
+                <strong>拖进“应用程序”</strong>
+                <p>打开下载的 <code>Tacit-0.7.0.dmg</code>，把 Tacit 拖进“应用程序”文件夹。</p>
+              </li>
+              <li id="download-open">
+                <strong>首次打开 Tacit</strong>
+                <p>从“应用程序”打开 Tacit。安装包使用固定的自签名证书，未经过 Apple 公证，首次打开时系统会拦下。先点<strong>完成</strong>，再到<strong>系统设置 › 隐私与安全性</strong>，找到 Tacit，点<strong>仍要打开</strong>并输入开机密码。</p>
+                <p>如果没有看到这个按钮，在终端运行下面的命令，再打开 Tacit。</p>
+                <div class="download-command">
+                  <code id="download-command">xattr -dr com.apple.quarantine /Applications/Tacit.app</code>
+                  <button class="download-copy" type="button" aria-label="复制终端命令"
+                    data-copy-target="download-command" data-copy-status-id="download-command-status"
+                    data-copied="已复制命令" data-copied-button="已复制" data-copy-failed="无法自动复制，请选中命令手动复制。" hidden>复制</button>
+                </div>
+                <p class="download-copy-status caption" id="download-command-status" role="status"></p>
+              </li>
+              <li>
+                <strong>完成初始设置</strong>
+                <p>首次打开时主窗口会自动弹出，后台服务也会自动准备。按时间线顶部的清单完成权限授权、整理模型配置和连接 Claude Code / Codex；之后关掉窗口，Tacit 会留在菜单栏继续记录。</p>
+              </li>
+            </ol>
+            <p class="download-card-links caption">
+              <a class="link" href="../docs/trial-guide/">5 分钟试用说明</a>
+              <a class="link" href="../docs/troubleshooting/">常见问题排查</a>
+            </p>
+          </div>
+        </article>
+
+        <article class="download-card" id="download-android" data-device-card="android">
+          <div class="download-card-head">
+            <div class="download-card-title-group">
+              <div class="download-card-title-row">
+                <svg class="download-card-icon" aria-hidden="true"><use href="assets/sources.svg#smartphone"/></svg>
+                <h2 class="title">Android</h2>
+                <span class="device-badge" data-device-badge="android">当前设备</span>
+              </div>
+              <p class="caption num">arm64 · Android 9 或更新 · 发布版 android-v0.7.0</p>
+            </div>
+            <a class="btn btn-primary" data-platform-target="android" href="https://github.com/JinSooo/tacit/releases/tag/android-v0.7.0">
+              <svg aria-hidden="true"><use href="assets/sources.svg#download"/></svg>
+              下载 Tacit-0.7.0.apk
+            </a>
+          </div>
+
+          <div class="download-card-body download-split">
+            <div>
+              <h3 class="download-subhead">配合 Mac 扫码配对</h3>
+              <p>安装 <code>Tacit-0.7.0.apk</code> 并开启本机录音与转写。在 Mac 的<strong>设置 › 设备</strong>生成配对二维码，用手机扫码即可端到端加密同步，并在手机上查看完整时间线。</p>
+            </div>
+            <div>
+              <h3 class="download-subhead">独立使用</h3>
+              <p>没有 Mac 也可以单独使用 Android 端。录音在手机本机完成转写，也可在设置里按需开启手机端单场 AI 总结。</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="download-card" id="download-server" data-device-card="server">
+          <div class="download-card-head">
+            <div class="download-card-title-group">
+              <div class="download-card-title-row">
+                <svg class="download-card-icon" aria-hidden="true"><use href="assets/sources.svg#server"/></svg>
+                <h2 class="title">独立服务端（Docker）</h2>
+              </div>
+              <p class="caption num">Linux 与 Windows · linux/amd64 与 linux/arm64 · ghcr.io/jinsooo/tacit-hub</p>
+            </div>
+            <a class="btn btn-quiet" href="../docs/server-deployment/">
+              <svg aria-hidden="true"><use href="assets/sources.svg#book"/></svg>
+              服务端部署说明
+            </a>
+          </div>
+
+          <div class="download-card-body">
+            <p class="prose">后台服务默认在 Mac 本机运行，不需要额外服务器。如果希望多台设备共用一个 24 小时在线的加密后台，可在 Linux 服务器或装有 Docker Desktop 的 Windows 电脑上拉取官方镜像运行。</p>
+            <div class="download-command">
+              <code id="docker-pull-command">docker pull ghcr.io/jinsooo/tacit-hub:0.7.0</code>
+              <button class="download-copy" type="button" aria-label="复制 Docker 拉取命令"
+                data-copy-target="docker-pull-command" data-copy-status-id="docker-pull-status"
+                data-copied="已复制命令" data-copied-button="已复制" data-copy-failed="无法自动复制，请选中命令手动复制。" hidden>复制</button>
+            </div>
+            <p class="download-copy-status caption" id="docker-pull-status" role="status"></p>
+          </div>
+        </article>
+
+        <article class="download-card download-card-planned" id="download-planned">
+          <div class="download-card-body">
+            <h2 class="title">即将支持与历史版本</h2>
+            <dl class="planned-list">
+              <div data-device-card="windows">
+                <dt>Windows <span class="device-badge" data-device-badge="windows">当前设备</span></dt>
+                <dd>Windows 客户端计划支持，敬请期待；目前可先通过 Docker Desktop 在 Windows 上<a class="link" href="../docs/server-deployment/#7-windows-电脑docker-desktop">部署后台服务</a>。</dd>
+              </div>
+              <div data-device-card="ios">
+                <dt>iOS 与 Intel Mac <span class="device-badge" data-device-badge="ios">当前设备</span></dt>
+                <dd>iOS 端仍在调研中，暂未发布；Intel 芯片 Mac 暂不支持。</dd>
+              </div>
+              <div>
+                <dt>历史版本</dt>
+                <dd>前往 <a class="link" href="https://github.com/JinSooo/tacit/releases">GitHub Releases</a> 查看全部历史版本、校验和与更新记录，或阅读<a class="link" href="../docs/installation/">安装与发布说明</a>。</dd>
+              </div>
+            </dl>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner caption">
+      <a class="brand" href="../"><img src="assets/mark.svg" alt="">Tacit</a>
+      <span>把每天的对话与活动整理成时间线，让任意 AI 接上你的上下文。</span>
+      <nav class="footer-links" aria-label="页脚链接">
+        <a href="./">下载</a>
+        <a href="../docs/">文档</a>
+        <a href="https://github.com/JinSooo/tacit">GitHub</a>
+        <a href="https://github.com/JinSooo/tacit/releases">版本记录</a>
+        <a href="https://github.com/JinSooo/tacit/blob/main/LICENSE">许可证</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script type="module" src="scripts/main.js"></script>
+</body>
+</html>

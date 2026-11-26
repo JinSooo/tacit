@@ -1,106 +1,71 @@
 # Tacit 官网
 
-中英文静态站，没有依赖，用 Bun 自带能力构建。
+中英文多页静态站，无外部依赖，用 Bun 自带能力（含 `Bun.markdown.html`）构建。
 
 ```sh
 bun site/build.ts           # 构建到 site/dist
-bun site/build.ts --serve   # 在 http://localhost:4300 预览，刷新页面即重建
-open site/dist/index.html   # 直接打开中文版
-open site/dist/en/index.html # 直接打开英文版
+bun site/build.ts --serve   # 在 http://127.0.0.1:4300 预览（PORT 可覆盖），请求 HTML 时实时重建
+bun test site/              # 运行官网构建、路由与文档链接测试
 ```
 
-构建产物在 `site/dist/`。中文版是 `index.html`，英文版是 `en/index.html`，两页都内联样式、脚本和来源符号，共用 `assets/`，可通过 `file://` 打开。供 Mac 应用检查更新的 `latest.json` 只放在根目录。
+## 路由结构
 
-`src/zh/` 和 `src/en/` 各有页面骨架 `index.html`、区块 `sections/*.html` 和在多处使用的 `day-overview.html`。`<!-- include: 路径 -->` 在构建时替换，路径相对包含它的文件。两页共用 `src/styles/`、`src/scripts/`、`src/assets/`。主题和复制等交互的文案由各页的 HTML 提供。构建会核对区块文件、区块顺序、元素 ID 和下载链接。页面不请求外部资源，不放统计脚本。
+构建产物在 `site/dist/`，所有页面内联公共样式、脚本和来源符号，共用根目录 `assets/`。供 Mac 应用检查更新的 `latest.json` 保持在根目录。
+
+| 路径 | 产物文件 | 说明 |
+| --- | --- | --- |
+| `/` | `index.html` | 轻量语言分流入口：读取 `localStorage`（`tacit-lang`），否则按浏览器语言判断（`zh` 开头进 `/zh/`，其余默认进 `/en/`），提供无 JS 回落与 `hreflang` |
+| `/en/`、`/zh/` | `en/index.html`、`zh/index.html` | 产品首页；Hero 与末尾收尾区按设备仅展示一个主下载按钮，并附「全部平台下载」链接 |
+| `/en/download/`、`/zh/download/` | `en/download/index.html`、`zh/download/index.html` | 独立下载页：Mac（含 3 步首次放行与可复制命令）、Android、Docker 独立服务端与计划支持平台 |
+| `/en/docs/`、`/zh/docs/` | `en/docs/index.html`、`zh/docs/index.html` | 文档首页概览 |
+| `/en/docs/<slug>/`、`/zh/docs/<slug>/` | `en/docs/<slug>/index.html`、`zh/docs/<slug>/index.html` | 直接由仓库 `docs/` Markdown 构建的文档子页（`trial-guide`、`troubleshooting`、`server-deployment`、`installation`、`plugins`） |
+| `/latest.json` | `latest.json` | 从 `site/src/latest.json` 原样复制，供 Mac 客户端每日检查更新 |
+
+`site/src/en/` 和 `site/src/zh/` 各有首页骨架 `index.html`、首页区块 `sections/*.html`、独立下载页 `download.html` 以及共享片段 `day-overview.html`。`<!-- include: 路径 -->` 在构建时展开，路径相对包含它的文件。文档站由 `site/build.ts` 直接读取仓库 `docs/` 生成，同时兼容中文在 `docs/<slug>.md`（英文在 `docs/en/<slug>.md`）与英文优先在 `docs/<slug>.md`（中文在 `docs/zh/<slug>.md`）两种布局。页面不请求外部 CDN 资源，不放统计脚本。
 
 ## 部署
 
-线上中文页为 https://tacit.jinso.top/ ，英文页为 https://tacit.jinso.top/en/ 。运行 `bun site/build.ts` 后，将整个 `site/dist/` 上传到静态托管服务（如 Cloudflare Pages、GitHub Pages 或自建 Nginx）。语言入口在顶栏。浏览器语言列表不含当前语言时，页面显示一行可关闭的提示，始终由读者选择是否切换。
+线上入口为 https://tacit.jinso.top/ ，自动分流至 `/en/`（默认）或 `/zh/`。运行 `bun site/build.ts` 后，将整个 `site/dist/` 上传到静态托管服务（如 Cloudflare Pages、GitHub Pages 或自建 Nginx）。
 
 > 若使用 `wrangler pages deploy` 手动部署，建议先把 `site/dist` 复制到仓库外的临时目录再执行，避免 wrangler 在仓库根目录自动生成配置文件。
 
-## 区块
+## 首页区块
 
 | 顺序 | id | 内容 |
 | --- | --- | --- |
-| 1 | `hero` | 主张、下载按钮、一张会自己写下去的当天时间线 |
+| 1 | `hero` | 主张、按设备匹配的单一主下载按钮与全部下载入口、一张会自己写下去的当天时间线 |
 | 2 | `day` | 时间线与项目页：简约和详细两档、点开一段看原文、项目现在怎么样了 |
 | 3 | `ai` | 新会话自动带入、AI 主动查询并点回原文（终端为深色窗口） |
 | 4 | `how` | 工作方式：三层来源按离你意图的远近排，本机整理，两个出口 |
 | 5 | `more` | 搜索、会议与聊天、桌面小组件 |
 | 6 | `privacy` | 数据与隐私，如实说清什么会离开本机 |
 | 7 | `faq` | 常见问题 |
-| 8 | `download` | 下载、系统要求、首次打开的放行步骤与使用提示 |
+| 8 | `download` | 简洁收尾区：按设备匹配的单一主下载按钮，以及前往下载页和文档页的入口 |
 
 ## 视觉方向
 
 一张安静的纸，上面的字一直在往下写。主题来自应用图标「墨轴纪事」：左侧连续时间细轴串联三段由长到短的活动胶囊，顶部铜绿节点表示此刻仍在续写。
 
-- **纸与墨与按块分屏**：底色 `--paper` 与极轻微的交替纸层 `--band` 配合细分隔线划分各块，桌面端各块按视口高度独立成屏居中（首屏与各章节底部不漏下一块标题），移动端回落自然流式块。只有一个强调色铜绿 `--accent`，用于链接、当前位置、活动条和少量强调，不铺大面积。
-- **终端是唯一的深色块**：`ai` 区块的终端窗口用 `.band-night`，颜色与图标底板同一块暖炭灰。区块本身保持纸面，不做整条深色带（整条深色带在浅色主题下会被当成主题出错，2026-11-19 改）。
-- **宋体讲故事，无衬线做界面**：叙述性标题、当天概述、事项标题用 `.display` / `.heading` / `.title`（宋体）；正文、按钮、界面复刻里的列表用无衬线；命令、路径、代码用等宽。
-- **产品画面用 HTML 复刻，不用截图**：时间线、项目页、终端、小组件都用真实 DOM 画出来，深浅色都清晰、可选中文字。复刻遵循 `docs/ui.md` 的产品规范（时间列、细轴、圆点、来源图标、宋体概述）。现成的小组件图 `assets/widget-*.png` 可以用在 `more`。
-- **来源符号**：统一用 `assets/sources.svg` 里的单色符号（`ai terminal chat voice design browser screen note search lock download apple`），不用第三方应用的商标图标。
-- **留白多于装饰**：不加阴影、光晕、渐变背景、毛玻璃、卡片套卡片。真正浮起来的展示窗（产品画面）可以有一层很淡的阴影和 `--r-stage` 圆角。分隔用 `--line` 细线或留白。
-- **动效克制**：进入视口时淡入（给元素加 `data-reveal`，公共脚本负责）；产品画面可以有一段“写下去”的演示动画。悬停不放大；所有动画在 `prefers-reduced-motion: reduce` 下直接显示终态。
+- **纸与墨与按块分屏**：底色 `--paper` 与极轻微的交替纸层 `--band` 配合细分隔线划分各块，首页桌面端各块按视口高度独立成屏居中，移动端回落自然流式块。只有一个强调色铜绿 `--accent`，用于链接、当前位置、活动条和少量强调，不铺大面积。
+- **终端是唯一的深色块**：`ai` 区块的终端窗口用 `.band-night`，颜色与图标底板同一块暖炭灰。区块本身和文档代码块保持纸面。
+- **宋体讲故事，无衬线做界面**：叙述性标题、当天概述、事项标题、文档标题用 `.display` / `.heading` / `.title`（宋体）；正文、按钮、界面复刻里的列表用无衬线；命令、路径、代码用等宽。
+- **产品画面用 HTML 复刻，不用截图**：时间线、项目页、终端、小组件都用真实 DOM 画出来，深浅色都清晰、可选中文字。现成的小组件图 `assets/widget-*.png` 可以用在 `more`。
+- **统一符号集**：统一用 `assets/sources.svg` 里的 24×24 单色符号（1.6px 描边，`currentColor`），包括顶栏语言切换（`lang`）与深浅色切换（`sun` / `moon`）图标按钮。
+- **留白多于装饰**：不加阴影、光晕、渐变背景、毛玻璃、卡片套卡片。分隔用 `--line` 细线或留白。
+- **动效克制**：进入视口时淡入（`data-reveal`）；所有动画在 `prefers-reduced-motion: reduce` 下直接显示终态。
 - **字号**：只用 `base.css` 里的 6 级变量，一个区块最多 4 级。不用斜体、全大写和字间距。数字和时间加 `.num`（等宽数字）。
 
 ## 文案
 
 - 中英文都用短句，说清它做什么、怎么做，不用宣传用语或感叹号。英文用句首大写，叙述性标题和概述使用拉丁衬线字体优先。
-- 不在标题上方加小标签（eyebrow），版式自己说明层级。能用布局说清楚的不写说明。
 - 界面用词按 `docs/ui.md` 第 1 节：事项、整理、自动带入、AI 工具、时间线、段、依据。不出现中枢、提炼、线程、注入、档位、OCR。
 - 如实：支持 Apple 芯片 Mac（macOS 14 及以上）与 arm64 Android（Android 9 及以上）；用云端模型整理时相关文字会发给你配置的模型服务；不收集遥测。不承诺尚未支持的能力（Windows 仅写计划支持/敬请期待，Intel Mac 暂不支持，iOS 仍在调研中）。
-- 下载链接：Mac 指向 `https://github.com/JinSooo/tacit/releases/tag/mac-v<版本号>`，Android 指向 `https://github.com/JinSooo/tacit/releases/tag/android-v<版本号>`（预发布期间 `releases/latest` 是 404）。每次发版要同步更新 `src/zh/sections/` 和 `src/en/sections/` 下的 `hero.html`、`download.html`。
-
-## 虚构的一天
-
-英文页用共享预算应用 Sunledger 作演示，所有人物和记录均为虚构。各区块使用同一天的记录，微信只作为可选 Mac 来源说明。
-
-| 开始 | 来源 | 活动 |
-| --- | --- | --- |
-| 09:20 | Codex | 增加 CSV 日期格式检测，让英国银行导出的 03/04 按 4 月 3 日读取 |
-| 10:45 | 手机录音 | 与设计师 Sam 定下把四步引导改成一屏 |
-| 13:30 | Claude Code | 完成月度预算结转，已删除分类的处理仍待定 |
-| 15:10 | Mac 上的 Zoom 录音 | 测试用户 Nora 希望合租者能看到谁欠谁钱 |
-| 19:40 | 手机录音 | 与 Leo 约好周六徒步 |
-
-### 中文示例
-
-示例一律虚构。主角是一位独立开发者，在做记账 App「晴天记账」，和设计师小林、产品搭档阿杰合作。日期：11 月 19 日 星期四。所有入时间线的活动段都以主体来源（AI 会话、微信、录音）驱动，浏览器和屏幕只作附带时间骨架与可搜索原文。
-
-当天概述：上午在「晴天记账」修好月度报表的汇总错误，和小林定下首页卡片样式；下午和 Claude 定了导出格式，周会定下 12 月第一周提审；傍晚理清了 SwiftData 迁移方案。
-
-| 开始 | 来源 | 标题 | 描述 |
-| --- | --- | --- | --- |
-| 09:30 | `terminal` Claude Code | 修好月度报表的汇总错误 | 跨月账单按创建时间归月，改成按记账日期，补了回归用例 |
-| 14:00 | `chat` 微信 + `design` Figma（骨架） | 和小林确认首页卡片样式 | 对比三版间距后保留圆角卡片、去掉渐变，周五前出终稿 |
-| 15:10 | `ai` Claude | 设计导出功能的数据格式 | 定为 CSV 加一份 JSON 元数据，金额统一存分 |
-| 16:30 | `voice` 录音 | 和阿杰的周会 | 定下 12 月第一周提审，导出功能放进 1.2 |
-| 17:40 | `terminal` Codex + `browser` Safari（骨架） | 梳理 SwiftData 迁移方案 | 和 Codex 核对轻量迁移和自定义迁移的分界，记下拆分旧分类表的步骤 |
-
-项目「晴天记账」：一句话概况“iOS 记账 App，1.1 准备 12 月第一周提审，导出功能排进 1.2。”正在推进的事：
-
-- **导出功能**：定为 CSV 加一份 JSON 元数据，金额统一存分。还没定：要不要按账本分别导出；导入时怎么判断重复账单。
-- **首页改版**：保留圆角卡片、去掉渐变，小林周五前出终稿。还没定：深色模式下的卡片底色。
-- **1.1 提审准备**：月度报表的汇总错误已修好并补了回归用例。还没定：隐私说明里要不要写导出。
-
-新会话开头自动带入的内容（简略，不超过默认 800 token 预算）：
-
-```text
-Tacit 记录的近期上下文（截至 11 月 19 日 17:52）
-项目：晴天记账
-事项 导出功能（进行中）：定为 CSV 加一份 JSON 元数据，金额统一存分。未决：是否按账本分别导出
-事项 首页改版（进行中）：保留圆角卡片、去掉渐变，小林周五前出终稿。未决：深色模式卡片底色
-事项 1.1 提审准备（进行中）：月度报表汇总错误已修好。未决：隐私说明是否写导出
-```
+- 下载链接：Mac 指向 `https://github.com/JinSooo/tacit/releases/tag/mac-v<版本号>`，Android 指向 `https://github.com/JinSooo/tacit/releases/tag/android-v<版本号>`。每次发版要同步更新 `site/src/latest.json`、`site/src/{en,zh}/sections/{hero,download}.html` 与 `site/src/{en,zh}/download.html`。
 
 ## 验收
 
-- `bun site/build.ts` 通过，并打印中英文一致性检查结果。确认产物只含一个根目录 `latest.json`，页面不存在未展开的 include、模块脚本或外部来源符号引用。
-- 直接打开两个 HTML，点顶栏语言链接来回切换。再用 `--serve` 确认 `/`、`/en`、`/en/` 均可打开，刷新时都重建。
-- 检查规范网址与 `zh-CN`、`en`、`x-default` 互链，资源路径分别是 `assets/`、`../assets/`。英文产物中的中文只出现在语言入口和提示链接。检查分享图是否使用对应语言。
-- 分别用含 `zh` 和含 `en` 的浏览器首选语言打开两个页面，确认只有语言不匹配时显示提示。关闭后刷新，提示保持隐藏。
-- 两页在 1440、1024、390 三种宽度下，浅色和深色各看一遍：没有横向滚动、截断、重叠；390 宽时两侧留白 16px。
-- 键盘能走到每个可交互元素，焦点可见；装饰性图形 `aria-hidden="true"`。
-- `prefers-reduced-motion: reduce` 下所有内容直接可读。
+- `bun site/build.ts` 通过，确认中英文路由集合一致、无重复 ID、无未展开引用、下载链接与 `latest.json` 一致、所有站内相对链接与锚点均有效。
+- `bun test site/ scripts/release-version.test.ts` 全部通过。
+- 使用 `PORT=4312 bun site/build.ts --serve` 验证 `/`、`/en`、`/en/`、`/zh`、`/zh/`、`/en/download`、`/zh/download/`、`/en/docs/`、`/zh/docs/troubleshooting/` 与 `/latest.json` 均可访问，刷新即重建。
+- 在 1440、1024、390 三种宽度下，浅色和深色各看一遍：没有横向滚动、截断、重叠；390 宽时顶栏与文档页可正常折叠浏览。
+- 键盘能走到每个可交互元素，焦点可见；装饰性图形 `aria-hidden="true"`；`prefers-reduced-motion: reduce` 下所有内容直接可读。

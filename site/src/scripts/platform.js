@@ -1,5 +1,12 @@
 document.documentElement.classList.add("has-js");
 (() => {
+  try {
+    const savedTheme = localStorage.getItem("tacit-theme");
+    if (savedTheme === "light" || savedTheme === "dark") {
+      document.documentElement.setAttribute("data-theme", savedTheme);
+    }
+  } catch {}
+
   const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
   const ua = navigator.userAgent || "";
   let os = "other";

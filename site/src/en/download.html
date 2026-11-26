@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Download Tacit | Tacit</title>
+  <meta name="description" content="Download Tacit for Apple silicon Mac, Android arm64, or deploy the self-hosted Docker background service.">
+  <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#181716" media="(prefers-color-scheme: dark)">
+  <meta property="og:title" content="Download Tacit">
+  <meta property="og:description" content="Install Tacit on Mac or Android, or run the self-hosted Docker background service.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://tacit.jinso.top/en/download/">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:locale:alternate" content="zh_CN">
+  <link rel="canonical" href="https://tacit.jinso.top/en/download/">
+  <link rel="alternate" hreflang="en" href="https://tacit.jinso.top/en/download/">
+  <link rel="alternate" hreflang="zh-CN" href="https://tacit.jinso.top/zh/download/">
+  <link rel="alternate" hreflang="x-default" href="https://tacit.jinso.top/en/download/">
+  <meta property="og:image" content="https://tacit.jinso.top/assets/og-cover-en.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://tacit.jinso.top/assets/og-cover-en.png">
+  <link rel="icon" href="assets/favicon.ico" sizes="any">
+  <link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <script type="module" src="scripts/platform.js"></script>
+  <link rel="stylesheet" href="styles/base.css">
+  <link rel="stylesheet" href="styles/download.css">
+</head>
+<body>
+  <header class="nav" id="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="../" aria-label="Tacit home"><img src="assets/mark.svg" alt="">Tacit</a>
+      <nav class="nav-links" aria-label="Page navigation">
+        <a href="../#day" data-nav-anchor>Timeline</a>
+        <a href="../#ai" data-nav-anchor>Session context</a>
+        <a href="../#privacy" data-nav-anchor>Privacy</a>
+        <a href="./" data-nav-download aria-current="page">Download</a>
+        <a href="../docs/">Docs</a>
+      </nav>
+      <div class="nav-actions">
+        <a class="icon-btn nav-lang" href="../../zh/download/" hreflang="zh-CN" lang="zh-CN" data-lang-switch="zh" aria-label="切换到中文" title="切换到中文">
+          <svg aria-hidden="true"><use href="assets/sources.svg#lang"/></svg>
+        </a>
+        <button class="icon-btn theme-toggle" type="button" id="theme-toggle" aria-label="Switch color theme" title="Switch color theme"
+          data-light-label="Switch to light theme" data-dark-label="Switch to dark theme" hidden>
+          <svg class="icon-sun" aria-hidden="true"><use href="assets/sources.svg#sun"/></svg>
+          <svg class="icon-moon" aria-hidden="true"><use href="assets/sources.svg#moon"/></svg>
+        </button>
+        <a class="btn btn-quiet" href="#download-platforms" aria-current="page">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="top" class="download-page">
+    <section class="download-hero" id="download-hero" aria-labelledby="download-page-title">
+      <div class="wrap">
+        <div class="download-hero-inner">
+          <h1 class="display" id="download-page-title">Download Tacit</h1>
+          <p class="lead">Choose the installer for your device, or run the background service yourself with Docker. Tacit is free and open source under the MIT license.</p>
+          <dl class="download-summary caption num">
+            <div>
+              <dt>Mac</dt>
+              <dd>Apple silicon · macOS 14+</dd>
+            </div>
+            <div>
+              <dt>Android</dt>
+              <dd>arm64 · Android 9+</dd>
+            </div>
+            <div>
+              <dt>Docker server</dt>
+              <dd>linux/amd64 · linux/arm64</dd>
+            </div>
+            <div>
+              <dt>Current release</dt>
+              <dd>v0.7.0</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section class="download-platforms" id="download-platforms" aria-label="Download options">
+      <div class="wrap download-stack">
+        <article class="download-card" id="download-mac" data-device-card="mac">
+          <div class="download-card-head">
+            <div class="download-card-title-group">
+              <div class="download-card-title-row">
+                <svg class="download-card-icon" aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
+                <h2 class="title">Mac</h2>
+                <span class="device-badge" data-device-badge="mac">Recommended for this device</span>
+              </div>
+              <p class="caption num">Apple silicon · macOS 14 or later · Release mac-v0.7.0</p>
+            </div>
+            <a class="btn btn-primary" data-platform-target="mac" href="https://github.com/JinSooo/tacit/releases/tag/mac-v0.7.0">
+              <svg aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
+              Download Tacit-0.7.0.dmg
+            </a>
+          </div>
+
+          <div class="download-card-body">
+            <h3 class="download-subhead">First-time setup on Mac</h3>
+            <ol class="download-steps" role="list">
+              <li>
+                <strong>Drag Tacit into Applications</strong>
+                <p>Open <code>Tacit-0.7.0.dmg</code> and drag Tacit into the Applications folder.</p>
+              </li>
+              <li id="download-open">
+                <strong>Allow Tacit to open once</strong>
+                <p>Open Tacit from Applications. Because the app uses a self-signed certificate without Apple notarization, macOS will block the first launch. Click <strong>Done</strong>, open <strong>System Settings › Privacy &amp; Security</strong>, find Tacit, click <strong>Open Anyway</strong>, and enter your password.</p>
+                <p>If that button does not appear, run this command in Terminal and open Tacit again.</p>
+                <div class="download-command">
+                  <code id="download-command">xattr -dr com.apple.quarantine /Applications/Tacit.app</code>
+                  <button class="download-copy" type="button" aria-label="Copy Terminal command"
+                    data-copy-target="download-command" data-copy-status-id="download-command-status"
+                    data-copied="Command copied." data-copied-button="Copied" data-copy-failed="Select the command and copy it manually." hidden>Copy</button>
+                </div>
+                <p class="download-copy-status caption" id="download-command-status" role="status"></p>
+              </li>
+              <li>
+                <strong>Complete the setup checklist</strong>
+                <p>The main window opens and starts the local background service automatically. Follow the checklist at the top of the timeline to grant permissions, pick a summary model, and connect Claude Code or Codex. Closing the window leaves Tacit recording quietly from the menu bar.</p>
+              </li>
+            </ol>
+            <p class="download-card-links caption">
+              <a class="link" href="../docs/trial-guide/">5-minute getting started guide</a>
+              <a class="link" href="../docs/troubleshooting/">Troubleshooting</a>
+            </p>
+          </div>
+        </article>
+
+        <article class="download-card" id="download-android" data-device-card="android">
+          <div class="download-card-head">
+            <div class="download-card-title-group">
+              <div class="download-card-title-row">
+                <svg class="download-card-icon" aria-hidden="true"><use href="assets/sources.svg#smartphone"/></svg>
+                <h2 class="title">Android</h2>
+                <span class="device-badge" data-device-badge="android">Recommended for this device</span>
+              </div>
+              <p class="caption num">arm64 · Android 9 or later · Release android-v0.7.0</p>
+            </div>
+            <a class="btn btn-primary" data-platform-target="android" href="https://github.com/JinSooo/tacit/releases/tag/android-v0.7.0">
+              <svg aria-hidden="true"><use href="assets/sources.svg#download"/></svg>
+              Download Tacit-0.7.0.apk
+            </a>
+          </div>
+
+          <div class="download-card-body download-split">
+            <div>
+              <h3 class="download-subhead">Pair with your Mac</h3>
+              <p>Install <code>Tacit-0.7.0.apk</code> and enable on-device recording and transcription. On your Mac, open <strong>Settings › Devices</strong> and scan the pairing QR code with your phone for end-to-end encrypted sync and full timeline viewing.</p>
+            </div>
+            <div>
+              <h3 class="download-subhead">Use on its own</h3>
+              <p>You can also use the Android app without a Mac. Recordings stay transcribed on your phone, and you can optionally enable per-conversation AI summaries in settings.</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="download-card" id="download-server" data-device-card="server">
+          <div class="download-card-head">
+            <div class="download-card-title-group">
+              <div class="download-card-title-row">
+                <svg class="download-card-icon" aria-hidden="true"><use href="assets/sources.svg#server"/></svg>
+                <h2 class="title">Self-hosted server (Docker)</h2>
+              </div>
+              <p class="caption num">Linux &amp; Windows · linux/amd64 &amp; linux/arm64 · ghcr.io/jinsooo/tacit-hub</p>
+            </div>
+            <a class="btn btn-quiet" href="../docs/server-deployment/">
+              <svg aria-hidden="true"><use href="assets/sources.svg#book"/></svg>
+              Server deployment guide
+            </a>
+          </div>
+
+          <div class="download-card-body">
+            <p class="prose">The background service runs locally on your Mac by default, so no server is required. To keep an always-on encrypted background service shared across devices, pull the official container image on a Linux server or a Windows PC with Docker Desktop.</p>
+            <div class="download-command">
+              <code id="docker-pull-command">docker pull ghcr.io/jinsooo/tacit-hub:0.7.0</code>
+              <button class="download-copy" type="button" aria-label="Copy Docker pull command"
+                data-copy-target="docker-pull-command" data-copy-status-id="docker-pull-status"
+                data-copied="Command copied." data-copied-button="Copied" data-copy-failed="Select the command and copy it manually." hidden>Copy</button>
+            </div>
+            <p class="download-copy-status caption" id="docker-pull-status" role="status"></p>
+          </div>
+        </article>
+
+        <article class="download-card download-card-planned" id="download-planned">
+          <div class="download-card-body">
+            <h2 class="title">Planned platforms &amp; releases</h2>
+            <dl class="planned-list">
+              <div data-device-card="windows">
+                <dt>Windows <span class="device-badge" data-device-badge="windows">Current device</span></dt>
+                <dd>A native Windows client is planned. You can already <a class="link" href="../docs/server-deployment/#7-windows-with-docker-desktop">run the background service on Windows</a> with Docker Desktop.</dd>
+              </div>
+              <div data-device-card="ios">
+                <dt>iOS &amp; Intel Mac <span class="device-badge" data-device-badge="ios">Current device</span></dt>
+                <dd>An iOS app is still being explored. Intel Macs are unsupported.</dd>
+              </div>
+              <div>
+                <dt>Release history</dt>
+                <dd>View all releases, checksums and release notes on <a class="link" href="https://github.com/JinSooo/tacit/releases">GitHub Releases</a>, or read <a class="link" href="../docs/installation/">installation &amp; release details</a>.</dd>
+              </div>
+            </dl>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-inner caption">
+      <a class="brand" href="../"><img src="assets/mark.svg" alt="">Tacit</a>
+      <span>A timeline for your day. Context for your AI tools.</span>
+      <nav class="footer-links" aria-label="Footer links">
+        <a href="./">Download</a>
+        <a href="../docs/">Docs</a>
+        <a href="https://github.com/JinSooo/tacit">GitHub</a>
+        <a href="https://github.com/JinSooo/tacit/releases">Releases</a>
+        <a href="https://github.com/JinSooo/tacit/blob/main/LICENSE">License</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script type="module" src="scripts/main.js"></script>
+</body>
+</html>
