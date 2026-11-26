@@ -514,7 +514,7 @@ macOS 的权限按签名身份授权。目前安装包未经过 Apple 公证：
 
 ### v3：Android 与星形同步（已实现，持续完善中）
 
-第 4.3 节与 `docs/contracts.md` 第 6 节：Android 本机录音转写、可选手机端单场 AI 总结、HPKE 加密配对、局域网与中转信箱同步、查看权限时间线下推、双向删除与修正，以及独立服务端中枢（`docs/server-deployment.md`）。
+第 4.3 节与 `docs/contracts.md` 第 6 节：Android 本机录音转写、可选手机端单场 AI 总结、HPKE 加密配对、局域网与中转信箱同步、查看权限时间线下推、双向删除与修正，以及独立服务端中枢（`docs/zh/server-deployment.md`）。
 
 ### 后续方向
 

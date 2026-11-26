@@ -1040,7 +1040,7 @@ CREATE TABLE project_context_cache (
     - 无 `models.json` 时不再回退到 `claude-cli`：`GET /v1/settings/models` 返回 `tiers: null` 与非空 `config_error`；`createLLM` 与 `distill` 按同一规则返回 `config_error` 并暂停模型整理（切片草稿照常运行），状态接口在 `distill.config_error` 与 `distill.paused_reason` 中写明原因，配好 API 模型后自动恢复。
     - 本地/局域网模型（如服务器上同机跑 Ollama）仍可通过 `openai-compatible` 接入；`POST /v1/settings/models/local` 仍限制为中枢本机 loopback 地址以防 SSRF。
 - **部署、CLI 引导与时区（2026-11-23 已实现）**：
-  - 仓库提供 `hub/Dockerfile`（基于 `oven/bun:1.4.4-alpine`，非 root `bun` 用户运行，含 `tzdata`）与 `.dockerignore`，部署说明见 `docs/server-deployment.md`。
+  - 仓库提供 `hub/Dockerfile`（基于 `oven/bun:1.4.4-alpine`，非 root `bun` 用户运行，含 `tzdata`）与 `.dockerignore`，部署说明见 `docs/zh/server-deployment.md`。
   - CLI `bun hub/src/cli.ts run [--local-status-port <port>]` 启动前先做密钥与数据库硬校验，再同时拉起并托管 `serve` 与 `distill` 两个子进程，转发 `SIGTERM`/`SIGINT` 并等待退出，任一子进程异常退出按退避重启（1s 起步、翻倍、上限 60s）。
   - CLI `bun hub/src/cli.ts pair --role <collect|view|admin> [--relay <url>]` 复用 `DeviceService.createPairing` 在数据库中持久化一次性邀请（`admin` 5 分钟、`collect`/`view` 10 分钟），供运行中的 `serve` 直接核验；与原文差异：仓库未引入终端二维码依赖，当前仅向 stdout 输出 `tacit://pair?d=...` 链接，不新增额外依赖。
   - 独立部署须显式设置时区（`TZ` 环境变量或 `hub.json` 的 `timezone` 字段，读取时校验为合法 IANA 时区名）；两者都未设置且检测到进程时区为 UTC 时，启动时向 stderr 输出一行告警，状态接口在 `timezone.warning` 给出提示（Mac 设置页展示待接入）。
@@ -1063,7 +1063,7 @@ CREATE TABLE project_context_cache (
 
 #### 6.11.5 独立部署注意事项
 
-- 单机 Mac 用户继续使用钥匙串与本机自动启动中枢；独立部署到 Linux/Docker 服务器时，按 [docs/server-deployment.md](server-deployment.md) 准备数据目录之外的只读根密钥文件（`RA_MASTER_KEY_FILE`），并与数据目录分开备份。
+- 单机 Mac 用户继续使用钥匙串与本机自动启动中枢；独立部署到 Linux/Docker 服务器时，按 [服务端部署说明](zh/server-deployment.md) 准备数据目录之外的只读根密钥文件（`RA_MASTER_KEY_FILE`），并与数据目录分开备份。
 - 中枢启动时校验根密钥路径不得位于 `RA_DATA_DIR` 内；丢失全部 `admin` 设备时可在服务器本机通过 `bun hub/src/cli.ts pair --role admin` 重新签发管理邀请。
 - 公网环境建议前置 Tailscale / WireGuard / HTTPS 反向代理或使用中转信箱，避免直接暴露设备端口的访问时序元数据。
 
@@ -1096,7 +1096,7 @@ Mac 可在「设置 › 后台服务」粘贴服务器签发的配对链接。�
 
 #### 6.12.3 已有记录的导入、备份和切回
 
-1. **范围**：导入旧库中这台 Mac 及其本机 AI 工具的非私密原始记录、补写和关联修正。保留原 ID、`source_ref`、`t_start` 和原始 `device`（包括历史 `device="mac"`），新记录使用远端分配的 `mac-…`。其它设备的历史、录音文件、声纹、旧整理产物、项目手工确认、设备/API 凭据和私密记录链留在备份；需要整套搬迁时按 `docs/server-deployment.md` 处理。导入不带媒体文件或本机路径型附件，对不存在、私密或已删除目标的修正不单独导入。
+1. **范围**：导入旧库中这台 Mac 及其本机 AI 工具的非私密原始记录、补写和关联修正。保留原 ID、`source_ref`、`t_start` 和原始 `device`（包括历史 `device="mac"`），新记录使用远端分配的 `mac-…`。其它设备的历史、录音文件、声纹、旧整理产物、项目手工确认、设备/API 凭据和私密记录链留在备份；需要整套搬迁时按 `docs/zh/server-deployment.md` 处理。导入不带媒体文件或本机路径型附件，对不存在、私密或已删除目标的修正不单独导入。
 2. **接口**：在本机运行时对冻结库只读分页导出（不导出明文文件或数据库密钥），远端提供管理 Mac 专用的 `history.import.begin/batch/status/finish` 设备 op。导入会话绑定发起 Mac、目的 `hub_id`、来源快照标识和允许导入的来源/历史身份；服务端复验范围、私密、源身份及修正依据，禁止借导入冒充目标后台已配对的设备。回执和审计仅记 ID、计数及错误类别。
 3. **去重和续传**：固定截止快照，用稳定键分页，先原记录后修正。每批最多 200 条，经信箱另受 6.12.4 限制。收据以导入会话 + 批编号 + 内容指纹持久化，与写入同事务；相同批重放返回同一回执，批编号重用但内容变化返回 409。逐项区分新增、同记录已存在、已删除、冲突和拒收，绝不复活、覆盖或静默合并不同内容。
 4. **整理**：新采集优先发，历史从冻结库分页读取，不挤占实时待发送队列。导入已确认的日期由远端按远端时区登记待整理范围，遵守每日模型用量上限。
