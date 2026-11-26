@@ -52,7 +52,10 @@ class AudioPipelineDeviceTest {
         assumeTrue(directory != null && fixture.isFile)
         val bytes = fixture.readBytes()
         val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-        val pcm = ShortArray(bytes.size / 2) { buffer.short }
+        val raw = ShortArray(bytes.size / 2) { buffer.short }
+        // Two clips together must reach AudioPolicy.ME_PRESENT_SECONDS (20 s) of speech to trigger transcription.
+        val minSamples = SAMPLE_RATE * ((ME_PRESENT / 2) + 4)
+        val pcm = if (raw.size >= minSamples) raw else ShortArray(minSamples) { raw[it % raw.size] }
         val t = System.currentTimeMillis() - 90_000
         LocalSpeechEngine(checkNotNull(directory)).use { engine ->
             val ledger = AudioLedger(store)
