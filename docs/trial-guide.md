@@ -1,43 +1,43 @@
-[English](en/trial-guide.md)
+English | [简体中文](zh/trial-guide.md)
 
-# 试用说明
+# Trying Tacit
 
-这份说明发给来试用 Tacit 的朋友，装之前读一遍就行，5 分钟。
+This guide takes about five minutes to read before you install.
 
-## 它会做什么
+## What Tacit does
 
-Tacit 在后台记下你和 AI 的对话、开会和聊天的录音、屏幕上在用什么应用，每小时整理成一条“今天做了什么”的时间线。Claude Code、Codex 新开会话时能直接读到这些背景，不用你再讲一遍。
+Tacit records your AI sessions, meetings and conversations, and which apps are active. It updates the Day overview hourly by default. New Claude Code and Codex sessions can read relevant Project context without asking you to explain it again.
 
-## 安装
+## Install on Mac
 
-需要 Apple 芯片的 Mac，系统 macOS 14 或更新。
+You'll need an Apple silicon Mac running macOS 14 or later.
 
-1. 从 [Releases](https://github.com/JinSooo/tacit/releases) 下载最新的 `Tacit-<版本号>.dmg`，打开后把 Tacit 拖进“应用程序”。
-2. 从“应用程序”双击打开。系统会说“无法验证开发者”：点“完成”，打开 **系统设置 › 隐私与安全性**，拉到下面，在 Tacit 旁边点 **仍要打开**，输入开机密码。只需要这一次，以后升级不会再问。
-3. Tacit 的主窗口会自己打开，顶部有一行“还差几步”。点开它，按顺序做完：
-   - **打开系统权限**：辅助功能（看你在用哪个窗口）、麦克风（录音）。
-   - **让 AI 整理你的记录**：默认借用这台 Mac 上已经登录的 Claude Code。没装 Claude Code 的话，到 **设置 › AI 模型** 改成 Codex，或者填一个 API 地址和密钥，点“测试连接”。
-   - **连接你使用的 AI 工具**：一键连上 Claude Code、Codex。
+1. Download the latest `Tacit-<version>.dmg` from [Releases](https://github.com/JinSooo/tacit/releases). Open it and drag Tacit to Applications.
+2. Double-click Tacit in Applications. If macOS says it can't verify the developer, click **Done**. Open **System Settings › Privacy & Security**, scroll down, click **Open Anyway** next to Tacit, and enter your Mac password. You only need to do this on the first launch.
+3. Tacit opens its main window. Open the Setup checklist at the top and work through the remaining steps.
+   - **Grant system permissions.** Accessibility lets Tacit see which window is active. Microphone access lets it record.
+   - **Set up a Summary model.** Tacit uses Claude Code signed in on this Mac by default. If you don't have it, open **Settings › AI models** to choose Codex or enter an API endpoint and key. Click **Test connection**.
+   - **Connect your AI tools.** Connect Claude Code and Codex from Settings.
 
-关掉主窗口以后，Tacit 还在菜单栏继续记录。再从“应用程序”双击一次，主窗口就回来了。
+When you close the main window, Tacit stays in the menu bar and keeps recording. Open Tacit from Applications to bring the window back.
 
-## 先知道这几件事
+## Before you start recording
 
-- **录音默认开着。** 第一次会下载约 270MB 的语音模型。没有你说话的声音不会转写；开会时会转写对方的话。和别人当面聊天前，请先告诉对方你在录音。不想录就到 **设置 › 数据源 › 录音** 关掉。
-- **整理会用掉你的模型额度。** 用 Claude Code 账号就算在你的 Claude 用量里，用 API 就按 API 计费。在 **设置 › AI 模型** 可以设每天的用量上限。
-- **数据只在你自己的 Mac 上**，加密保存。整理时，相关的文字会发给你选的模型服务。
-- **有新版本时**，时间线顶部会出现“可以更新了”。先在菜单栏图标上右键退出 Tacit，再把新的 dmg 拖进“应用程序”覆盖，数据和权限都会保留。
+- **Recording is on by default.** It downloads about 270 MB of speech models on first use. Tacit transcribes recordings that contain your voice and can transcribe others during meetings. Tell people before recording in-person conversations. You can turn it off under **Settings › Sources › Recording**.
+- **Summaries use your model allowance.** Calls through Claude Code count toward your Claude usage. An API provider bills API calls. Set a daily usage limit under **Settings › AI models**.
+- **Records are encrypted on your Mac.** Tacit sends the text needed for summaries to the model service you choose.
+- **Update available** appears at the top of the Timeline when a new version is ready. Quit Tacit from its menu bar icon's right-click menu, then replace the app in Applications with the one from the new DMG. Your records and permissions carry over.
 
-## 遇到问题
+## If something goes wrong
 
-1. 打开 **设置 › 维护 › 复制诊断信息**，点“预览”，再点“复制”。里面只有版本号、各部分状态和错误类别，没有你的记录内容。
-2. 把复制的内容，连同你看到了什么、大概几点发生的，发给我或提交到 [GitHub Issues](https://github.com/JinSooo/tacit/issues)。
+1. Open **Settings › Maintenance › Copy diagnostics**, then click **Preview** and **Copy**. Diagnostics include versions, component status, and error categories. They exclude record contents.
+2. Send the diagnostics to the person who invited you to try Tacit, or file a [GitHub issue](https://github.com/JinSooo/tacit/issues). Include what you saw and roughly when it happened.
 
-请不要发整个数据文件夹、密钥备份或截图里的私人内容。常见情况的自查办法见[常见问题](troubleshooting.md)。
+Keep your data folder, key backup, and screenshots with private content to yourself. See [troubleshooting](troubleshooting.md) for common issues.
 
-## 卸载
+## Uninstall
 
-在终端运行下面这行，它会问你要不要一并删除数据：
+Run this in Terminal. The script asks whether to delete your data as well.
 
 ```sh
 sh /Applications/Tacit.app/Contents/Resources/uninstall.sh

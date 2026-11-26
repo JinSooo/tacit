@@ -1,31 +1,31 @@
-[English](en/troubleshooting.md)
+English | [简体中文](zh/troubleshooting.md)
 
-# Tacit 常见问题
+# Troubleshooting Tacit
 
-反馈时请附上**现象、发生时间和诊断信息**。在 Tacit 打开 **设置 › 维护 › 复制诊断信息**，点“预览”，确认后点“复制”。应用打不开时，可以先提供现象和发生时间。
+When reporting a problem, include what happened, when it happened, and your diagnostics. Open **Settings › Maintenance › Copy diagnostics** in Tacit. Click **Preview**, review the contents, and click **Copy**. If the app won't open, start with what happened and when.
 
-请勿分享整个数据目录、密钥备份或带访问令牌的链接（包括从 Tacit 打开的后台服务状态页链接）。
+Keep your data directory, key backup, and links with access tokens private. This includes the Background service status URL opened from Tacit.
 
-## 打不开或被系统拦截
+## Tacit won't open or macOS blocks it
 
-把 Tacit 从安装盘拖进“应用程序”，从那里打开。若首次打开时系统提示无法验证开发者，确认安装包来自项目发布页后，打开 **系统设置 › 隐私与安全性**，在“安全性”下点“仍要打开”，按系统提示确认。反馈时附上系统提示和 Tacit 版本。 [Apple 的打开方式说明](https://support.apple.com/en-us/102445)
+Drag Tacit from the disk image to Applications and open it from there. If macOS says it can't verify the developer, confirm that you downloaded the installer from the project release page. Then open **System Settings › Privacy & Security**, click **Open Anyway** under Security, and follow the prompts. Include the macOS message and Tacit version in your report. [Apple's instructions for opening the app](https://support.apple.com/en-us/102445)
 
-## 后台服务起不来
+## The Background service won't start
 
-看 Tacit **时间线顶部**的提示。提示旁的“打开日志文件夹”可以在访达中打开日志。反馈时附上这行提示，日志原文先留在本机。
+Check the message at the top of the Timeline. Use **Open log folder** next to the message to find the logs in Finder. Include the Timeline message in your report and keep the full logs on your Mac.
 
-## 没有记录或某个来源缺失
+## Records or a source are missing
 
-打开 **设置 › 数据源**，选中缺失的来源，查看开关、权限、状态和上次运行时间。也可以从时间线切到“详细”，检查对应时段是否有原始记录。反馈时写明来源名称和显示的状态。
+Open **Settings › Sources** and select the missing source. Check whether it's on, what permissions it has, its status, and when it last ran. You can also switch the Timeline to **Detailed** and check whether there are records for that time. Include the source name and its status in your report.
 
-## 整理一直没更新
+## Summaries aren't updating
 
-先看时间线顶部的“还差几步”，那里会写明整理为什么没成功、下一步做什么，例如没装 Claude Code、密钥不对或额度用完。再打开 **设置 › 后台服务 › 详细状态**，点“在浏览器中打开”。在状态页的“整理”里看最近响应、最近一轮及模型错误，也可以在 **设置 › AI 模型** 测试连接。反馈时写明最近一次整理时间和模型错误类别。
+Check the Setup checklist at the top of the Timeline. It shows what needs attention, such as a missing Claude Code installation, an invalid key, or a usage limit. Then open **Settings › Background & connection › Detailed status** and click **Open in browser**. Check the summary section for the last response, run, and model error. You can test the connection under **Settings › AI models**. Include the last summary time and the model error category in your report.
 
-## 录音没转写
+## A recording hasn't been transcribed
 
-打开 **设置 › 数据源 › 录音**，检查麦克风权限、选中的麦克风和待转写状态。若时间线顶部提示确认“我”的声音，先完成确认。反馈时写明录音时段、是否在开会及待转写状态。
+Open **Settings › Sources › Recording**. Check microphone access, the selected microphone, and the transcription queue. If the Timeline asks you to confirm your voice, do that first. Include the recording time, whether you were in a meeting, and the queue status in your report.
 
-## 闪退
+## Tacit crashes
 
-打开 macOS 的**控制台**，在侧栏选择“崩溃报告”，按发生时间找 Tacit 进程的 `.ips` 文件。反馈时写明闪退前的操作。需要提供崩溃报告时，先检查其中的个人路径和其他私人信息。 [Apple 的崩溃报告说明](https://support.apple.com/zh-cn/guide/console/cnsl664be99a/mac)
+Open **Console** on macOS, select **Crash Reports** in the sidebar, and find the Tacit `.ips` file by time. Describe what you did just before the crash. If you need to share the report, check it for personal paths and other private details first. [Apple's guide to crash reports](https://support.apple.com/guide/console/cnsl664be99a/mac)

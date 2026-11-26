@@ -2,22 +2,37 @@
 // Broken relative links and invalid source headers always fail.
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DOCS } from "../site/build";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const strict = process.argv.includes("--strict");
 
-const englishDocs = [
-  "README.md",
-  ...readdirSync(join(root, "docs/en"), { withFileTypes: true })
-    .filter(entry => entry.isFile() && entry.name.endsWith(".md"))
-    .map(entry => `docs/en/${entry.name}`),
-  ...readdirSync(root, { withFileTypes: true })
-    .filter(entry => entry.isDirectory())
-    .map(entry => `${entry.name}/README.en.md`)
-    .filter(file => existsSync(join(root, file))),
-].sort();
+const topLevelDirectories = readdirSync(root, { withFileTypes: true })
+  .filter(entry => entry.isDirectory())
+  .map(entry => entry.name);
+const zhDirectory = join(root, "docs/zh");
+const docNames = new Set(DOCS.map(({ slug }) => `${slug}.md`));
+if (existsSync(zhDirectory)) {
+  for (const entry of readdirSync(zhDirectory, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith(".md")) docNames.add(entry.name);
+  }
+}
+
+const docPairs = [
+  { source: "README.md", translation: "README.zh-CN.md" },
+  ...Array.from(docNames, name => ({
+    source: `docs/${name}`,
+    translation: `docs/zh/${name}`,
+  })),
+  ...topLevelDirectories.map(dir => ({
+    source: `${dir}/README.md`,
+    translation: `${dir}/README.zh-CN.md`,
+  })).filter(({ source, translation }) =>
+    existsSync(join(root, source)) || existsSync(join(root, translation)),
+  ),
+];
 
 function relativeTargets(markdown: string): Set<string> {
   const targets = new Set<string>();
@@ -65,37 +80,25 @@ let staleCount = 0;
 let sourceErrors = 0;
 let brokenLinks = 0;
 
-for (const doc of [...englishDocs, "README.zh-CN.md"]) {
-  const markdown = readFileSync(join(root, doc), "utf8");
-
-  if (doc !== "README.zh-CN.md") {
-    const header = /^<!-- source: (.+) @ ([a-f0-9]{40}|[a-f0-9]{64}) -->\r?(?:\n|$)/.exec(markdown);
-    if (!header) {
-      console.error(`Invalid or missing source header in ${doc}.`);
-      sourceErrors++;
-    } else {
-      const [, source, recorded] = header;
-      const sourcePath = relative(root, resolve(root, source));
-      try {
-        if (!sourcePath || isAbsolute(source) || sourcePath === ".." || sourcePath.startsWith(`..${sep}`)) {
-          throw new Error("Expected a repository-relative source path");
-        }
-        const current = execFileSync("git", ["hash-object", "--", sourcePath], {
-          cwd: root,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
-        if (current !== recorded) {
-          console.warn(`Stale translation: ${doc} (source ${source} changed from ${recorded} to ${current}).`);
-          staleCount++;
-        }
-      } catch {
-        console.error(`Cannot hash source ${source} for ${doc}. Use an existing repository-relative file.`);
-        sourceErrors++;
-      }
-    }
+const legacyPaths = ["docs/en", ...topLevelDirectories.map(dir => `${dir}/README.en.md`)];
+for (const path of legacyPaths) {
+  if (existsSync(join(root, path))) {
+    console.error(`Legacy documentation path: ${path}`);
+    sourceErrors++;
   }
+}
 
+function readDocument(doc: string): string | undefined {
+  try {
+    return readFileSync(join(root, doc), "utf8");
+  } catch {
+    console.error(`Cannot read documentation file: ${doc}`);
+    sourceErrors++;
+    return undefined;
+  }
+}
+
+function checkLinks(doc: string, markdown: string): void {
   for (const target of relativeTargets(markdown)) {
     if (!linkExists(doc, target)) {
       console.error(`Broken relative link in ${doc}: ${target}`);
@@ -104,8 +107,41 @@ for (const doc of [...englishDocs, "README.zh-CN.md"]) {
   }
 }
 
+for (const { source, translation } of docPairs) {
+  const english = readDocument(source);
+  const chinese = readDocument(translation);
+
+  if (english !== undefined) {
+    if (/^\s*<!--\s*source\s*:/i.test(english)) {
+      console.error(`English source must omit the source header: ${source}`);
+      sourceErrors++;
+    }
+    checkLinks(source, english);
+  }
+  if (chinese === undefined) continue;
+
+  checkLinks(translation, chinese);
+  const header = /^<!-- source: (.+) @ ([a-f0-9]{40}|[a-f0-9]{64}) -->\r?(?:\n|$)/.exec(chinese);
+  if (!header || header[1] !== source) {
+    console.error(`Invalid or missing source header in ${translation}. Expected ${source} and its Git blob hash.`);
+    sourceErrors++;
+    continue;
+  }
+  if (english === undefined) continue;
+
+  const recorded = header[2];
+  const current = execFileSync("git", ["hash-object", "--", source], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  if (current !== recorded) {
+    console.warn(`Stale translation: ${translation} (source ${source} changed from ${recorded} to ${current}).`);
+    staleCount++;
+  }
+}
+
 console.log(
-  `Checked ${englishDocs.length} English docs and ${englishDocs.length + 1} link sets: ` +
+  `Checked ${docPairs.length} English docs and ${docPairs.length} Chinese translations: ` +
   `${staleCount} stale, ${sourceErrors} source errors, ${brokenLinks} broken relative links.`,
 );
 if (sourceErrors || brokenLinks || (strict && staleCount)) process.exitCode = 1;

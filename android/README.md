@@ -1,26 +1,28 @@
-[English](README.en.md) | 简体中文
+English | [简体中文](README.zh-CN.md)
 
 # Tacit for Android
 
-Tacit Android 端用于在离开电脑时录下包含你声音的对话，在本机完成语音转写，并与 Mac（或独立部署的 Tacit 中枢）通过端到端加密协议同步。配对为“查看”权限时，首页可直接同步查看中枢整理的各来源时间线；也可以在设置中可选开启手机端单场 AI 总结。使用录音功能请自行遵守当地法律法规并提前告知对话方。
+Tacit records conversations that contain your voice when you're away from the computer. It transcribes them on the phone and syncs text to the Mac or a standalone Tacit Background service over an end-to-end encrypted connection. Pair with View permission to read the Timeline from all sources on the home screen. You can also enable AI summaries for individual conversations in Settings. Follow local recording laws and tell people before recording.
 
-录音在设备上加密暂存，只有在相同场次的保留素材中识别到已确认的“我”，才会在本机转写并写入历史。应用只有一页，按天列出时间线或本机对话，点开可阅读、复制或删除。
+Tacit keeps temporary audio in encrypted storage on the phone. It writes a transcript to your records only if it recognizes the voice you confirmed as Me in the retained audio for that conversation. The home screen lists the Timeline or local conversations by day. Open an entry to read, copy, or delete it.
 
-第一次打开时点“开启”授权并开始录音，之后打开 Tacit 就会自动接上；在设置第一行或通知栏可以关掉。首次使用时试听并确认“这是我”。语音模型在录音设置中下载或从已校验的本地模型目录导入。转写使用 SenseVoice CPU 模型，支持的骁龙 8 Gen 3 设备可选 QNN 加速并回退到 CPU。部分定制系统（如 HyperOS）的自启动和电量管理入口见“设置 → 后台运行”。
+On first launch, enable recording and grant microphone access. Recording resumes when you open Tacit again. You can turn it off from the first row in Settings or from the notification. Listen to a sample and confirm your voice once. Download speech models in recording settings or import them from a verified local model directory. Transcription uses SenseVoice on the CPU. Supported Snapdragon 8 Gen 3 phones can use optional QNN acceleration with CPU fallback. For systems such as HyperOS, see **Settings › Background operation** for autostart and battery management.
 
-历史保存在 SQLCipher 数据库中，密钥由 Android Keystore 保护，写入前会脱敏。录音和声音文件用一把随机数据密钥加密，数据密钥由 Android Keystore 包裹。未连接中枢时，记录保存在手机本地；若在设置中开启“AI 总结”，非私密对话的转写文本会发送给你配置的 OpenAI 兼容模型服务（默认关闭）。安装包 `Tacit-<版本>.apk` 随 GitHub Releases 提供，只支持 arm64 手机（Android 9 或更新）；覆盖安装需沿用同一正式签名和 `top.jinso.tacit` 包名，见 [安装说明](../docs/installation.md#发布安装包)。内置第三方组件及模型（`sherpa-onnx`、ONNX Runtime、FunASR、Qualcomm QNN、Phosphor）的许可证见 `app/src/main/assets/licenses/`。
+Tacit stores records in a SQLCipher database and protects the key with Android Keystore. It strips sensitive material before writing records. Recordings and voice files use a random data key wrapped by Android Keystore. While unpaired, the records stay on the phone. If you enable **AI summaries**, Tacit sends transcripts of conversations that aren't Private to the OpenAI-compatible service you configure. The feature is off by default.
 
-## 连接 Mac / 中枢
+Download `Tacit-<version>.apk` from [GitHub Releases](https://github.com/JinSooo/tacit/releases). It requires an arm64 phone running Android 9 or later. Upgrades require the same release signature and package name, `top.jinso.tacit`. See [Build and publish releases](../docs/installation.md#build-and-publish-releases). Licenses for bundled components and models, including `sherpa-onnx`, ONNX Runtime, FunASR, Qualcomm QNN, and Phosphor, are in `app/src/main/assets/licenses/`.
 
-1. 在 Mac 的 Tacit 设置里生成配对邀请（默认查看权限，可在采集与查看间切换）。邀请 10 分钟有效，只能用一次。
-2. 在手机上打开“设置 → 连接 Mac”，扫描二维码或粘贴邀请链接。手机找不到 Mac 时，可以在同一页填写地址或配置中转信箱。
-3. 连接后，这台手机的文字记录（及可选的手机端单场总结）会同步到中枢，删除和修正双向同步；查看权限下还会下推中枢整理的时间线。相机只在点击“扫码”时申请权限。
+## Connect to a Mac or a server
 
-录音仍保存在手机。Mac 上确认过“我”的声音时，手机会优先用该声纹判断是否有“我”；Mac 尚无声纹时，继续用手机上已确认的标记。录音保留期随中枢的设置更新。“断开连接”会清除手机上的配对资料。
+1. Create an invitation in Tacit Settings on the Mac. View is the default permission. You can switch between Collect and View. The invitation is single-use and expires after 10 minutes.
+2. On the phone, open **Settings › Connect to Mac**. Scan the QR code or paste the Invite link. If the phone cannot find the Mac, enter its address or configure a Relay mailbox on the same page.
+3. Once connected, the phone syncs its transcripts and any optional conversation summaries. Deletions and corrections sync in both directions. View permission also brings the Background service's Timeline to the phone. The camera permission prompt appears only when you choose to scan.
 
-## 构建
+Audio stays on the phone. If the Mac has a confirmed voiceprint for Me, the phone uses it to recognize your voice. Otherwise it uses the voice you confirmed on the phone. The phone uses the Background service's audio retention setting. **Disconnect** clears pairing details from the phone.
 
-Android SDK 35、JDK 17、已缓存的 Gradle 依赖，以及 `app/libs/` 下的两份 sherpa-onnx AAR。应用打包 arm64-v8a 的 QNN 兼容 AAR。CPU AAR 是生成它时使用的上游依赖。
+## Build and verify
+
+You'll need Android SDK 35, JDK 17, cached Gradle dependencies, and both sherpa-onnx AARs in `app/libs/`. The app packages the QNN-compatible `arm64-v8a` AAR. The CPU AAR is the upstream dependency used to produce it.
 
 ```sh
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17
@@ -28,4 +30,4 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 ./scripts/verify.sh
 ```
 
-两份 AAR 已在本地时，上述验证不联网。缺少 AAR 时，`scripts/prepare-speech.sh` 从固定的上游产物准备并校验依赖，这一步需要网络或已填充的产物缓存。语音模型在应用内单独准备。
+Verification runs offline when both AARs are present. If either is missing, `scripts/prepare-speech.sh` prepares and verifies the pinned upstream artifacts. That step needs a network connection or a populated artifact cache. The app prepares the speech models separately.

@@ -1,11 +1,7 @@
-<!-- source: README.zh-CN.md @ f3255aebce20412f9799971a2a3523d451862875 -->
-
-English | [简体中文](README.zh-CN.md)
-
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-dark.png">
-    <img src="assets/readme/hero-light.png" alt="Tacit on Mac and Android" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-en-dark.png">
+    <img src="assets/readme/hero-en-light.png" alt="Tacit Timeline and Claude Code using Sunledger session context" width="100%">
   </picture>
 </p>
 
@@ -28,6 +24,10 @@ English | [简体中文](README.zh-CN.md)
   <a href="#data-and-privacy">Data and privacy</a> ·
   <a href="#common-questions">Common questions</a> ·
   <a href="#development">Development</a>
+</p>
+
+<p align="center">
+  <b>English</b> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 ---
@@ -104,7 +104,7 @@ The Setup checklist at the top of the Timeline shows what's left to do.
 - Choose what to record under **Settings › Sources**. Enabling recording for the first time downloads about 270 MB of speech models.
 - Connect Claude Code or Codex under **Settings › AI tools**. Save a key backup under **Maintenance › Key backup**.
 
-See the [trial guide](docs/en/trial-guide.md) for a first-run walkthrough or [troubleshooting](docs/en/troubleshooting.md) if Tacit has trouble opening, recording, or transcribing.
+See the [trial guide](docs/trial-guide.md) for a first-run walkthrough or [troubleshooting](docs/troubleshooting.md) if Tacit has trouble opening, recording, or transcribing.
 
 To add a desktop widget, right-click the desktop, choose **Edit Widgets**, and search for Tacit.
 
@@ -115,12 +115,12 @@ Tacit requires an arm64 phone running Android 9 or later.
 1. Download `Tacit-<version>.apk` from the latest `Tacit v<version> - Android` entry in [Releases](https://github.com/JinSooo/tacit/releases) and install it.
 2. On first launch, enable recording and grant microphone access. Download the speech models in **Settings › Transcription**, then listen to a sample and confirm your voice once.
 3. **With a Mac.** Create an invite QR code in **Settings › Devices** on the Mac. Scan it under **Settings › Connect to Mac** on the phone. With View permission, the phone can sync transcripts and display the full Timeline. A Relay mailbox can carry encrypted updates while you're away.
-4. **On its own.** Recordings and transcripts stay in encrypted storage on the phone. You can configure an OpenAI-compatible endpoint under **Settings › AI summaries** to summarize individual conversations. See [Tacit for Android](android/README.en.md).
+4. **On its own.** Recordings and transcripts stay in encrypted storage on the phone. You can configure an OpenAI-compatible endpoint under **Settings › AI summaries** to summarize individual conversations. See [Tacit for Android](android/README.md).
 
 <details>
 <summary><b>Run the Background service on a server with Docker</b></summary>
 
-The Mac app runs its Background service locally by default. If you want it to run on a Linux server or a Windows PC with Docker, use the public `ghcr.io/jinsooo/tacit-hub` image for `linux/amd64` or `linux/arm64`. After starting the container, generate an admin Invite link on the server and paste it under **Settings › Background & connection › Connect to a remote service** on the Mac. See the [server deployment guide](docs/en/server-deployment.md).
+The Mac app runs its Background service locally by default. If you want it to run on a Linux server or a Windows PC with Docker, use the public `ghcr.io/jinsooo/tacit-hub` image for `linux/amd64` or `linux/arm64`. After starting the container, generate an admin Invite link on the server and paste it under **Settings › Background & connection › Connect to a remote service** on the Mac. See the [server deployment guide](docs/server-deployment.md).
 
 </details>
 
@@ -169,7 +169,7 @@ Choose your Summary model separately from the AI tools you connect. Tacit suppor
 - App exclusions are built in. Custom exclusions are currently unavailable.
 - In local mode, management, Web view, and MCP listen on localhost. Pairing a device opens a separate encrypted device port.
 - Manage Collect, View, and Admin permissions under **Settings › Devices**. Phones start with View and can switch between View and Collect. AI tools use restricted credentials for reading and appending. Large batches of remote deletions must be done on the Mac.
-- Set a self-hosted [Relay mailbox](relay/README.en.md) in **Settings › Background & connection › Relay mailbox** to sync when your phone is on a different network or your Mac is asleep. The mailbox can see message times and sizes. Message content stays end-to-end encrypted.
+- Set a self-hosted [Relay mailbox](relay/README.md) in **Settings › Background & connection › Relay mailbox** to sync when your phone is on a different network or your Mac is asleep. The mailbox can see message times and sizes. Message content stays end-to-end encrypted.
 - Installation of third-party Sources is currently unavailable from Settings. The plugin design limits access to approved paths, blocks network access, writes, and subprocesses, and requires a working sandbox.
 - Data is stored in `~/Library/Application Support/record-anything/`, outside the checkout. Keep record text, keys, audio, and other people's private material out of GitHub issues.
 
@@ -201,7 +201,7 @@ For summaries, choose any OpenAI-compatible endpoint, including a self-hosted on
 <details>
 <summary><b>Which devices are supported?</b></summary>
 
-There are installers for Apple silicon Macs running macOS 14 or later and [arm64 Android phones](android/README.en.md) running Android 9 or later. A Windows client is planned. For now, Windows can host the Background service through Docker. Intel Macs are unsupported and iOS is still being explored.
+There are installers for Apple silicon Macs running macOS 14 or later and [arm64 Android phones](android/README.md) running Android 9 or later. A Windows client is planned. For now, Windows can host the Background service through Docker. Intel Macs are unsupported and iOS is still being explored.
 
 </details>
 
@@ -217,7 +217,7 @@ AI tools have read and append access. You can correct a mistake in a Project or 
 - Capture accuracy and all-day resource use are still being improved. Summaries may miss details or misread what happened. Open the records behind important conclusions to check them.
 - Third-party plugin installation and the dedicated local model controls are currently unavailable.
 - File access permissions, including Safari history, and the first-launch approval flow need further verification on fresh Macs with System Integrity Protection enabled.
-- The Android client is released separately as an arm64 APK. The Background service also has an optional [standalone Docker deployment](docs/en/server-deployment.md).
+- The Android client is released separately as an arm64 APK. The Background service also has an optional [standalone Docker deployment](docs/server-deployment.md).
 
 ## Update or uninstall
 
@@ -234,10 +234,10 @@ sh /Applications/Tacit.app/Contents/Resources/uninstall.sh
 | Directory | Contents |
 | --- | --- |
 | `collector/` | Swift and SwiftUI menu bar app, capture, recording, on-device transcription, and widgets |
-| [`hub/`](hub/README.en.md) | Bun Background service, encrypted database, summary jobs, and MCP |
-| [`android/`](android/README.en.md) | Kotlin client for recording, transcription, optional conversation summaries, HPKE sync, and Timeline viewing |
-| [`relay/`](relay/README.en.md) | Relay mailbox for Cloudflare Workers or Docker |
-| `web/` | Web view for service status |
+| [`hub/`](hub/README.md) | Bun Background service, encrypted database, summary jobs, and MCP |
+| [`android/`](android/README.md) | Kotlin client for recording, transcription, optional conversation summaries, HPKE sync, and Timeline viewing |
+| [`relay/`](relay/README.md) | Relay mailbox for Cloudflare Workers or Docker |
+| [`web/`](web/README.md) | Web view for service status |
 | [`site/`](site/README.md) | Static [website](https://tacit.jinso.top/en/) with no dependencies |
 | `packages/`, `plugins/`, `schema/` | Shared record types, built-in Sources, and cross-platform fixtures |
 
@@ -277,8 +277,8 @@ Tests use synthetic records and temporary data directories. `./install.sh` chang
 
 </details>
 
-- [Installation and releases](docs/en/installation.md)
-- [Source plugins](docs/en/plugins.md)
+- [Installation and releases](docs/installation.md)
+- [Source plugins](docs/plugins.md)
 - Chinese reference docs for [design](docs/design.md), [API contracts](docs/contracts.md), [UI](docs/ui.md), and [performance sampling](scripts/performance-sampling.md)
 
 ## License

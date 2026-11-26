@@ -1,75 +1,96 @@
-[English](en/installation.md)
+English | [简体中文](zh/installation.md)
 
-# 安装、后台服务与发布
+# Installation, the Background service, and releases
 
-新用户先看根目录的 [README](../README.md)。这里写安装后应用自己做了什么、怎么发布安装包，方便排查。
+Start with the [README](../README.md) if you're new to Tacit. This guide covers what the app sets up after installation and how installers are built and released.
 
-## 应用包里有什么
+## Inside the app bundle
 
-`Tacit.app` 自带后台需要的一切，运行不依赖源码目录，也不需要用户自己装 Bun：
+`Tacit.app` includes everything the Background service needs, including Bun. It runs independently of the source checkout.
 
-| 位置 | 内容 |
+| Path | Contents |
 | --- | --- |
-| `Contents/MacOS/Tacit` | 菜单栏应用（采集端） |
-| `Contents/MacOS/ra-audio-worker` | 本机转写进程 |
-| `Contents/Helpers/Tacit` | 后台运行时（Bun），来源须为 Bun 官方签名版本，拷入后改名并用本应用证书重签，沿用原有权限；系统“后台运行”提示因此显示 Tacit |
-| `Contents/PlugIns/TacitWidget.appex` | 中号和大号桌面小组件，与主应用使用同一张证书签名 |
-| `Contents/Resources/runtime/` | 后台服务、整理、内置数据源和网页的固定快照 |
-| `Contents/Resources/uninstall.sh` | 卸载脚本 |
+| `Contents/MacOS/Tacit` | Menu bar app and capture |
+| `Contents/MacOS/ra-audio-worker` | On-device transcription process |
+| `Contents/Helpers/Tacit` | Background runtime (Bun). The build uses an official signed Bun distribution, renames it, and re-signs it with Tacit's certificate while keeping its entitlements. macOS therefore names Tacit in background item alerts. |
+| `Contents/PlugIns/TacitWidget.appex` | Medium and large desktop widgets, signed with the app's certificate |
+| `Contents/Resources/runtime/` | A snapshot of the Background service, summary jobs, built-in Sources, and Web view |
+| `Contents/Resources/uninstall.sh` | Uninstaller |
 
-## 首次打开与升级后打开
+## First launch and upgrades
 
-应用必须从“应用程序”（`/Applications` 或 `~/Applications`）打开。从安装盘或被系统临时挪动的位置打开时，只提示用户拖进“应用程序”并退出，不注册任何后台服务。
+Open Tacit from Applications (`/Applications` or `~/Applications`). If launched from the disk image or from a temporary location assigned by macOS, Tacit asks you to drag it into Applications and quits before registering the Background service.
 
-每次从“应用程序”打开，应用都在后台运行一次 `bun runtime/hub/src/cli.ts setup --app <应用路径>`，输出写到 `logs/setup.log`（`hub/src/setup.ts`）：
+Each time the app opens from Applications it runs `bun runtime/hub/src/cli.ts setup --app <app-path>` in the background, with output in `logs/setup.log`. See `hub/src/setup.ts`.
 
-- 应用路径或构建号与 `app-setup.json` 记录的不同（首次打开、升级）时完整准备：创建数据目录，在钥匙串里创建或读取数据库密钥并试开数据库，更新 `collector.json`，并将已连接的 Claude Code、Codex 迁到新路径。
-- 写三个 LaunchAgent：`dev.record-anything.hub`、`dev.record-anything.distill` 和 `dev.record-anything.collector`。内容有变化或刚完整准备过时，重启后台服务和整理，等后台健康检查通过；没有变化时什么都不做。
-- 后台服务和整理的 PATH 先取用户登录 shell 的 PATH，再补常见位置，用来找到本机已登录的 `codex`、`claude`。优先用稳定的同名入口，CLI 升级只改链接目标时不用重新准备。后来才装 CLI 的，重新打开 Tacit 即可。
-- 关闭登录启动时，启动项保存在数据目录的 `launch-agents/`，升级沿用这个选择。
+- If the app path or build number differs from `app-setup.json`, setup creates the data directory, creates or reads the database key in Keychain, and checks that the database opens. It also updates `collector.json` and moves existing Claude Code and Codex connections to the new path.
+- Setup writes three LaunchAgents, `dev.record-anything.hub`, `dev.record-anything.distill`, and `dev.record-anything.collector`. If their definitions change or full setup just ran, it restarts the Background service and the summary process and waits for the service health check.
+- The Background service and summary process start with the login shell's `PATH` and add common install locations so they can find the signed-in `codex` and `claude` commands. Stable command paths take priority, so CLI upgrades that only change a symlink target need no setup. If you install a CLI later, reopen Tacit.
+- With launch at login turned off, the LaunchAgent files stay in `launch-agents/` in the data directory. Upgrades keep that preference.
 
-整理每 15 分钟处理一轮，异常退出后由 launchd 重新拉起，重启间隔至少 60 秒，以后台、低优先级 I/O 和 Nice 10 运行。日志在 `~/Library/Application Support/record-anything/logs/`。模型配置位于数据目录的 `models.json`；文件不存在时默认使用本机已登录的 Claude CLI（minute 用 haiku，hour、day 用 sonnet）。CLI 的登录由各自管理，Tacit 不读取它们的令牌。
+The summary process checks for work every 15 minutes. If it exits unexpectedly, launchd restarts it at least 60 seconds after the previous launch. It runs in the background with low I/O priority and a nice value of 10. Logs are in `~/Library/Application Support/record-anything/logs/`. The summary configuration is in `models.json` in the data directory. Without this file, Tacit uses the local Claude CLI sign-in, with Haiku for Live and Sonnet for Hourly roundup and Daily timeline. Each CLI manages its own credentials.
 
-后台服务在开始监听前失败时，数据目录里的 `hub-startup-error.json` 会记录失败时间、错误码和说明，监听成功后删除。准备日志 `logs/setup.log` 达到 5 MiB 时轮转，保留最近两份副本。
+If the Background service fails before it starts listening, `hub-startup-error.json` records the time, error code, and description in the data directory. A successful start clears the file. `logs/setup.log` rotates at 5 MiB and keeps the two most recent copies.
 
-## 语音模型
+## Speech models
 
-第一次开启录音时，应用调用 `cli.ts audio-models` 把约 270MB 的模型下载到数据目录的 `models/`，逐个校验 sha256 后再放进去（`hub/src/audio-models.ts`）。SenseVoice 优先从 Hugging Face 单独下载，失败时改从 GitHub 下载约 1GB 的整包取出。下载失败的，录音状态里会显示原因，60 秒后随下一次启动录音重试。
+The first time you enable recording, Tacit uses `cli.ts audio-models` to download about 270 MB of models into `models/` in the data directory. It verifies each file's SHA-256 before moving it into place. See `hub/src/audio-models.ts`. Tacit first tries to download SenseVoice separately from Hugging Face. If that fails, it extracts the model from a bundle of about 1 GB on GitHub. The recording status shows the reason for a failed download. Tacit retries when recording next starts, after a 60-second wait.
 
-## 从源码安装
+## Install from source
 
-`./install.sh` 准备推理库（`scripts/fetch-audio-lib.sh`）、构建网页、构建并签名应用、装进“应用程序”，然后运行同一个 `setup`，并额外启动菜单栏应用。升级前会校验签名并在数据目录的 `install-rollback` 暂存原应用包、启动项和采集端配置。
+`./install.sh` prepares the inference libraries using `scripts/fetch-audio-lib.sh`, builds the Web view, builds and signs the app, installs it in Applications, and runs the same `setup` command. It also opens the menu bar app. Before an upgrade, the script checks the signature and saves the existing bundle, LaunchAgents, and capture configuration in `install-rollback` in the data directory.
 
-升级时暂存已有的 Tacit 应用包。切换或后台准备失败时恢复原应用和启动项，并尝试重新加载原先运行的任务。
+If the upgrade or Background service setup fails, the script restores the previous app and LaunchAgents and tries to reload the previously running jobs.
 
-不希望整理自动运行时执行 `RA_NO_DISTILL=1 ./install.sh`：停用整理并记住这个选择，之后打开应用也不会加回来。再运行一次不带这个变量的 `./install.sh` 即可恢复。
+Run `RA_NO_DISTILL=1 ./install.sh` to disable automatic summaries. Tacit keeps this setting when you reopen the app. Run `./install.sh` without the variable to resume automatic summaries.
 
-## 桌面小组件
+## Desktop widgets
 
-从“应用程序”打开 Tacit 后，在桌面空白处右键选择“编辑小组件”，搜索 Tacit 并添加“Tacit 时间线”。点击小组件应打开当日时间线。主程序在启动、唤醒、记录变更和每 10 分钟检查一次当天整理结果，变化时刷新小组件。
+After opening Tacit from Applications, right-click the desktop, choose **Edit Widgets**, search for Tacit, and add the Tacit Timeline widget. Clicking the widget opens today's Timeline. The app checks today's summaries at startup, on wake, when records change, and every 10 minutes. Changes trigger a widget refresh.
 
-主程序把中号和大号小组件所需的当天概述、活动时段和最近几段（大号展示四至五段）写到 `~/Library/Application Support/record-anything/widget/today.json`。该目录只给小组件沙盒授予只读访问。跨天后小组件切到新的一天，主程序在零点或重新运行时移除旧文件。卸载时即使保留历史记录也会清理该目录。
+Tacit writes today's Day overview, activity periods, and recent activities to `~/Library/Application Support/record-anything/widget/today.json` for the medium and large widgets. The large widget displays four or five activities. The widget sandbox has read-only access to the directory. At midnight or when the app runs again, Tacit removes the snapshot from the previous day. Uninstalling clears the widget directory even if you keep your records.
 
-在开启 SIP 的全新机器上验证小组件时，建议首次打开后生成当天整理再从图库添加小组件，确认首次添加与后续刷新均不弹出“访问其他 App 的数据”授权，显示的内容与当天时间线一致，并核对点击跳转和跨天清理。
+To verify widgets on a fresh Mac with System Integrity Protection enabled, generate today's summary after first launch and then add a widget from the gallery. Check that adding and refreshing it works without a prompt to access other apps' data. Compare the content with today's Timeline and verify that clicking the widget opens the correct day and that the previous day's snapshot is cleared.
 
-## 发布安装包
+## Build and publish releases
 
-Mac 和 Android 各自发版、版本号各自递增，哪端有改动就只发哪端。Mac 安装包里带着后台服务（含服务端 Docker 形态），两者算一端。两端靠设备协议（`docs/contracts.md` 第 6 节的 `v`）兼容，应用版本号不必对齐；协议有不兼容的改动时，在 Release 说明里写明需要的对端最低版本。
+Mac and Android have separate releases and version numbers. Release whichever platform changed. The Mac installer and the Docker image contain the same Background service and share a version. Cross-platform compatibility depends on the device protocol version `v` in section 6 of the [API contracts](contracts.md) (Chinese). If a protocol change breaks compatibility, give the minimum compatible version for the other platform in the release notes.
 
-Mac：
+Update the relevant version source and run `bun site/build.ts` for each release. The build fills in the versions and download links on both languages' homepages and download pages from these sources:
 
-1. 改版本号：`package.json`、`collector/build.sh` 的 `CFBundleShortVersionString`、`hub/src/agent-cli/mcp.ts` 的 serverInfo（以及对应测试）、`site/src/latest.json`；`scripts/release-version.test.ts` 检查这几处一致。若改动了官网源码 `site/src/`，顺手运行 `bun site/build.ts` 同步 `site/dist/`。提交并打 `mac-v<版本号>` tag。
-2. 在已配置代码签名证书、装了 [uv](https://docs.astral.sh/uv/) 的 Mac 上运行 `scripts/release-dmg.sh`（安装盘窗口布局由 `uvx` 临时拉取固定版本的 dmgbuild 写入）。它只在干净工作区、tag 指向当前提交时构建，输出 `dist/Tacit-<版本号>.dmg` 和 `.sha256`，并从挂载的安装包里校验签名和自带运行时。
-3. 推送 tag，建 Release 并上传这两个文件：`gh release create mac-v<版本号> dist/Tacit-<版本号>.dmg dist/Tacit-<版本号>.dmg.sha256 --prerelease --title "Tacit v<版本号> - Mac" --notes-file <说明>`。
-   推送 `mac-v<版本号>` tag 会触发 `.github/workflows/hub-image.yml`，把同一份后台代码的服务端镜像推到 `ghcr.io/jinsooo/tacit-hub:<版本号>` 和 `:latest`；在 Actions 里确认它跑通。
-4. Release 上传完成后部署官网（步骤见 `site/README.md`）。第 1 步要同时把 `site/src/latest.json` 改成新版本号和这次 Release 的页面地址，并把中英文官网下载按钮（`site/src/zh/sections/hero.html`、`site/src/zh/sections/download.html`、`site/src/en/sections/hero.html`、`site/src/en/sections/download.html`）的链接换成新 tag；已安装的 Tacit 每天读一次 `https://tacit.jinso.top/latest.json`，比自己新就在时间线顶部提示“可以更新了”。请求不带 Cookie 和本机信息，失败时不提示。先部署官网再传安装包，用户会点到还没有安装包的页面。
+| Platform | Source |
+| --- | --- |
+| Mac | `site/src/latest.json` supplies `mac.version` and the `mac.url` release page. Keep `mac` as the only top-level field. |
+| Android | `versionName` in `android/app/build.gradle.kts` determines the Android release tag and link. |
+| Docker | `version` in `package.json` determines the Background service image tag and versioned pull command. |
 
-Android：
+The build fills the download templates in `hero.html` and `download.html` automatically.
 
-1. 改 `android/app/build.gradle.kts` 的 `versionName`，`versionCode` 加 1。提交并打 `android-v<版本号>` tag。
-2. 在已配置 Android 正式签名钥匙的环境下运行 `scripts/release-apk.sh`，前提条件同上，输出 `dist/Tacit-<版本号>.apk` 和 `.sha256`，只打 arm64-v8a。
-3. 推送 tag，建 Release 并上传这两个文件：`gh release create android-v<版本号> dist/Tacit-<版本号>.apk dist/Tacit-<版本号>.apk.sha256 --prerelease --latest=false --title "Tacit v<版本号> - Android" --notes-file <说明>`。`--latest=false` 免得 Android 版被标成最新。注意 GitHub 的 `releases/latest` 不认预发布版，两端都是预发布时这个地址是 404，所以 README 的下载链接指向 `releases` 列表页，官网下载按钮指向各端的新 tag 页面（发版后同步更新 `site/src/zh/sections/` 与 `site/src/en/sections/` 里的 `hero.html`、`download.html` 并重新构建部署）。
+### Mac
 
-Release 标题只用 `Tacit v<版本号> - Mac` 和 `Tacit v<版本号> - Android` 两种，“开发预览”由 GitHub 的 Pre-release 标记表达，不写进标题。
+1. Update the version in `package.json`, `CFBundleShortVersionString` in `collector/build.sh`, `serverInfo` in `hub/src/agent-cli/mcp.ts` and its test, and `site/src/latest.json`. The consistency test is `scripts/release-version.test.ts`. Set `mac.url` to the new release tag page and rebuild the site. Commit and tag `mac-v<version>`.
+2. On a Mac with the signing certificate configured and [uv](https://docs.astral.sh/uv/) installed, run `scripts/release-dmg.sh`. It requires a clean working tree and the tag on the current commit. It uses `uvx` to run a pinned version of dmgbuild for the disk image layout. It writes `dist/Tacit-<version>.dmg` and its `.sha256` file and verifies the signature and bundled runtime from the mounted image.
+3. Push the tag and upload both files to the release.
 
-> 签名一致性说明：macOS 用户授予的辅助功能、录屏、麦克风等系统权限绑定在固定的自签名代码签名证书上；Android 覆盖升级同样依赖同一把正式签名钥匙。证书和签名钥匙需妥善离线备份，缺失时发布脚本会直接失败而不会自动新建。未配置正式 Android 钥匙的机器，调试构建会自动退回 Android 默认调试钥匙。
+   ```sh
+   gh release create mac-v<version> dist/Tacit-<version>.dmg dist/Tacit-<version>.dmg.sha256 --prerelease --title "Tacit v<version> - Mac" --notes-file <notes-file>
+   ```
+
+   Pushing `mac-v<version>` triggers `.github/workflows/hub-image.yml` to publish the image to `ghcr.io/jinsooo/tacit-hub:<version>` and `:latest`. Check the workflow result in Actions.
+4. Deploy the website once the installer is available. See the [site README](../site/README.md). Tacit checks `https://tacit.jinso.top/latest.json` daily and shows Update available on the Timeline if the published version is newer. The request includes no cookies or device details. Failed checks stay quiet.
+
+### Android
+
+1. Update `versionName` in `android/app/build.gradle.kts` and increment `versionCode`. Commit and tag `android-v<version>`.
+2. Run `scripts/release-apk.sh` with the release signing key configured, a clean working tree, and the tag on the current commit. It writes `dist/Tacit-<version>.apk` and its `.sha256` file. The APK targets `arm64-v8a`.
+3. Push the tag and upload both files to the release.
+
+   ```sh
+   gh release create android-v<version> dist/Tacit-<version>.apk dist/Tacit-<version>.apk.sha256 --prerelease --latest=false --title "Tacit v<version> - Android" --notes-file <notes-file>
+   ```
+
+   `--latest=false` keeps GitHub from marking Android as the latest release. GitHub's `releases/latest` returns 404 while all releases are prereleases. The README links to the release list. The site links to the individual release tags. Rebuild and deploy it after the APK is available.
+
+Use `Tacit v<version> - Mac` or `Tacit v<version> - Android` as the release title. GitHub's Pre-release label indicates preview status.
+
+macOS accessibility, screen recording, and microphone permissions are tied to Tacit's self-signed certificate. Android upgrades likewise require the same release signing key. Back up both offline. The release scripts fail if the signing material is missing. Android debug builds fall back to the default debug key when the release key is unavailable.

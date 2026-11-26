@@ -1,38 +1,47 @@
-[English](README.en.md) | 简体中文
+English | [简体中文](README.zh-CN.md)
 
-# Tacit 中转信箱
+# Tacit Relay mailbox
 
-手机和 Mac 不在同一网络、或 Mac 合盖时，手机把加密信封投进信箱，Mac 醒来再取。信箱只经手端到端加密的密文，看得到消息的时间和大小，看不到内容。协议见 `docs/contracts.md` 6.8。
+When the phone and Mac are on different networks or the Mac is asleep, the phone drops encrypted messages in the mailbox. The Mac retrieves them when it wakes. The mailbox can see when messages arrive and how large they are. The contents stay end-to-end encrypted. See section 6.8 of the [API contracts](../docs/contracts.md) (Chinese).
 
-一套代码，两种部署：
+The same code runs on Cloudflare Workers or in Docker.
 
-## Cloudflare（Workers 免费档）
+## Cloudflare Workers free plan
 
-需要一个 Cloudflare 账号和一个托管在 Cloudflare 的域名（`workers.dev` 默认地址在一些网络里连不上，配置里已关闭）。在 `relay/` 目录里：
+You'll need a Cloudflare account and a domain hosted on Cloudflare. The default `workers.dev` hostname is disabled because some networks cannot reach it. Run this from `relay/`:
 
 ```sh
-npx wrangler@4 deploy --route 'relay.example.com/*' --var TACIT_RELAY_CREATE_CODE:<自己定的开通码>
+npx wrangler@4 deploy --route 'relay.example.com/*' --var TACIT_RELAY_CREATE_CODE:<creation-code>
 ```
 
-不设开通码就是公共信箱：任何人都能开通空间，只受每天开通次数和限额约束。
+Without a creation code, anyone can create a mailbox space within the daily creation and usage limits.
 
 ## Docker
 
 ```sh
 docker build -t tacit-relay relay
 docker run -d --name tacit-relay -p 8787:8787 -v tacit-relay:/data \
-  -e TACIT_RELAY_CREATE_CODE=<自己定的开通码> tacit-relay
+  -e TACIT_RELAY_CREATE_CODE=<creation-code> tacit-relay
 ```
 
-信箱只认 HTTPS，放在 Caddy、Nginx 之类的反向代理后面，并设 `TACIT_RELAY_IP_HEADER=X-Forwarded-For` 让开通限流拿到真实 IP。
+Mailbox connections require HTTPS. Use a reverse proxy such as Caddy or Nginx and set `TACIT_RELAY_IP_HEADER=X-Forwarded-For` so the creation rate limit can use the client's IP.
 
-## 限额
+## Limits
 
-环境变量（括号里是公共信箱的默认值）：`TACIT_RELAY_MESSAGE_BYTES`（1 MiB）、`TACIT_RELAY_SPACE_BYTES`（100 MiB）、`TACIT_RELAY_RETENTION_DAYS`（30）、`TACIT_RELAY_IDLE_DAYS`（90）、`TACIT_RELAY_DAILY_REQUESTS`（20000）、`TACIT_RELAY_SPACES_PER_IP`（3）。
+| Environment variable | Public mailbox default |
+| --- | --- |
+| `TACIT_RELAY_MESSAGE_BYTES` | 1 MiB |
+| `TACIT_RELAY_SPACE_BYTES` | 100 MiB |
+| `TACIT_RELAY_RETENTION_DAYS` | 30 days |
+| `TACIT_RELAY_IDLE_DAYS` | 90 days |
+| `TACIT_RELAY_DAILY_REQUESTS` | 20,000 |
+| `TACIT_RELAY_SPACES_PER_IP` | 3 |
 
-## 开发
+## Development
 
 ```sh
 bun test relay/
-bun relay/src/bun.ts   # 本机起一个，默认 :8787，库在 /data/relay.db，可用 TACIT_RELAY_DB 改
+bun relay/src/bun.ts
 ```
+
+The local server defaults to port 8787 and writes its database to `/data/relay.db`. Set `TACIT_RELAY_DB` to use a different path.

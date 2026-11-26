@@ -1,4 +1,4 @@
-[English](README.md) | 简体中文
+<!-- source: README.md @ 66176efa2050a9a9a8476449276e2330de9441b7 -->
 
 <p align="center">
   <picture>
@@ -19,13 +19,17 @@
 </p>
 
 <p align="center">
-  <a href="https://tacit.jinso.top">官网</a> ·
+  <a href="https://tacit.jinso.top/zh/">官网</a> ·
   <a href="#开始使用">开始使用</a> ·
   <a href="#它能做什么">功能</a> ·
   <a href="#连接-ai">连接 AI</a> ·
   <a href="#数据与隐私">数据与隐私</a> ·
   <a href="#常见问题">常见问题</a> ·
   <a href="#开发">开发</a>
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> · <b>简体中文</b>
 </p>
 
 ---
@@ -94,7 +98,7 @@ Mac 提供中号和大号两种小组件，抬眼就能看到今天做了哪些�
 - **记录来源**：在 **设置 › 数据源** 选择要记录什么。第一次开启录音时，会下载约 270MB 的本机语音模型。
 - **连接 AI 工具**：在 **设置 › AI 工具** 一键连接 Claude Code、Codex，再到 **维护 › 密钥备份** 保存一份密钥备份。
 
-遇到启动、记录或转写问题时，见[常见问题](docs/troubleshooting.md)。
+首次使用可看[试用说明](docs/zh/trial-guide.md)。遇到启动、记录或转写问题时，见[常见问题](docs/zh/troubleshooting.md)。
 
 想加桌面小组件：在桌面空白处右键，选“编辑小组件”，搜索 Tacit。
 
@@ -105,12 +109,12 @@ Mac 提供中号和大号两种小组件，抬眼就能看到今天做了哪些�
 1. 从 [Releases](https://github.com/JinSooo/tacit/releases) 里最新的“Tacit v<版本号> - Android”下载 `Tacit-<版本号>.apk` 并安装。
 2. 首次打开点“开启”授权麦克风并开始录音；在 **设置 › 语音转写** 下载本机语音模型，并试听确认一次“这是我”。
 3. **配合 Mac 使用**：在 Mac 的 **设置 › 设备** 生成配对二维码，在手机 **设置 › 连接 Mac** 扫码配对，即可加密同步录音并在手机上查看全天时间线（离家时也可经中转信箱同步）。
-4. **单独使用**：不连接 Mac 时，录音和转写保存在手机加密库中，也可在 **设置 › AI 总结** 可选配置 OpenAI 兼容接口为单场对话生成总结。更多说明见 [android/README.md](android/README.md)。
+4. **单独使用**：不连接 Mac 时，录音和转写保存在手机加密库中，也可在 **设置 › AI 总结** 可选配置 OpenAI 兼容接口为单场对话生成总结。更多说明见 [android/README.zh-CN.md](android/README.zh-CN.md)。
 
 <details>
 <summary><b>进阶：独立部署后台服务（Docker，可选）</b></summary>
 
-后台默认随 Mac 应用在本机运行，不需要服务器。若希望在 Linux 服务器或装有 Docker 的 Windows 电脑上单独运行后台，可直接拉取随 Mac 版本同步发布的公开镜像 `ghcr.io/jinsooo/tacit-hub`（支持 `linux/amd64` 与 `linux/arm64`）。启动后在服务器上生成一次管理邀请链接，再到 Mac **设置 › 后台与连接 › 连接远端后台** 粘贴即可切换。完整步骤见 [docs/server-deployment.md](docs/server-deployment.md)。
+后台默认随 Mac 应用在本机运行，不需要服务器。若希望在 Linux 服务器或装有 Docker 的 Windows 电脑上单独运行后台，可直接拉取随 Mac 版本同步发布的公开镜像 `ghcr.io/jinsooo/tacit-hub`（支持 `linux/amd64` 与 `linux/arm64`）。启动后在服务器上生成一次管理邀请链接，再到 Mac **设置 › 后台与连接 › 连接远端后台** 粘贴即可切换。完整步骤见 [docs/zh/server-deployment.md](docs/zh/server-deployment.md)。
 
 </details>
 
@@ -191,7 +195,7 @@ Tacit 不保存截图，也不做画面回放。它关心的是“你做了什�
 <details>
 <summary><b>支持 Intel Mac、Windows 或手机吗？</b></summary>
 
-目前提供 Apple 芯片 Mac 版（macOS 14 或更新），以及 arm64 Android 客户端（本机录音转写、可选手机端 AI 总结、与 Mac 加密同步及查看时间线，见 [android/README.md](android/README.md)），arm64 安装包在 Releases 里单独发布（标题带“Android”）。Windows 客户端计划支持（敬请期待），目前可先通过 Docker 在 Windows 上独立部署后台服务；Intel Mac 暂不支持，iOS 仍在调研中。
+目前提供 Apple 芯片 Mac 版（macOS 14 或更新），以及 arm64 Android 客户端（本机录音转写、可选手机端 AI 总结、与 Mac 加密同步及查看时间线，见 [android/README.zh-CN.md](android/README.zh-CN.md)），arm64 安装包在 Releases 里单独发布（标题带“Android”）。Windows 客户端计划支持（敬请期待），目前可先通过 Docker 在 Windows 上独立部署后台服务；Intel Mac 暂不支持，iOS 仍在调研中。
 
 </details>
 
@@ -210,7 +214,7 @@ AI 只能读取和追加，不能修改或删除。AI 记错的地方，你可�
 - 第三方插件安装和本地模型独立入口当前暂时收起。
 - 文件类系统权限（如 Safari 历史）与首次打开的系统放行流程，尚需在更多开启 SIP 的全新 Mac 环境中进一步覆盖验证。
 - Android 客户端（含 HPKE 加密配对、局域网与中转信箱同步、可选单场 AI 总结与查看时间线）安装包 `Tacit-<版本>.apk` 在 Releases 里单独发布，只支持 arm64 手机。
-- 后台服务也可单独部署到 Linux 服务器或装了 Docker 的 Windows 电脑（公开镜像 `ghcr.io/jinsooo/tacit-hub`，步骤见 [docs/server-deployment.md](docs/server-deployment.md)），这是可选形态：在服务器上用一行命令生成管理邀请链接，再到 Mac 设置的“后台与连接”里点“连接远端后台”粘贴即可切换。
+- 后台服务也可单独部署到 Linux 服务器或装了 Docker 的 Windows 电脑（公开镜像 `ghcr.io/jinsooo/tacit-hub`，步骤见 [docs/zh/server-deployment.md](docs/zh/server-deployment.md)），这是可选形态：在服务器上用一行命令生成管理邀请链接，再到 Mac 设置的“后台与连接”里点“连接远端后台”粘贴即可切换。
 
 ## 更新与卸载
 
@@ -227,11 +231,11 @@ sh /Applications/Tacit.app/Contents/Resources/uninstall.sh
 | 目录 | 内容 |
 | --- | --- |
 | `collector/` | Swift / SwiftUI 菜单栏应用、采集、录音、本地转写和桌面小组件 |
-| `hub/` | Bun 后台服务、加密数据库、整理任务和 AI 接口（MCP） |
+| [`hub/`](hub/README.zh-CN.md) | Bun 后台服务、加密数据库、整理任务和 AI 接口（MCP） |
 | `android/` | Kotlin Android 客户端（本机录音转写、可选单场 AI 总结、HPKE 加密同步与时间线查看） |
-| `relay/` | 中转信箱服务，只经手端到端加密密文，支持 Cloudflare Workers 或 Docker（部署见 `relay/README.md`） |
-| `web/` | 网页状态页 |
-| `site/` | 官网 [tacit.jinso.top](https://tacit.jinso.top)，零依赖静态页，部署见 `site/README.md` |
+| `relay/` | 中转信箱服务，只经手端到端加密密文，支持 Cloudflare Workers 或 Docker（见[部署说明](relay/README.zh-CN.md)） |
+| [`web/`](web/README.zh-CN.md) | 网页状态页 |
+| `site/` | 官网 [tacit.jinso.top](https://tacit.jinso.top/zh/)，零依赖静态页，见[部署说明](site/README.zh-CN.md) |
 | `packages/`、`plugins/`、`schema/` | 共享记录类型、内置数据源与跨端测试样例 |
 
 <details>
@@ -269,7 +273,7 @@ python3 scripts/guarded-run.py --memory-mb 8192 --seconds 900 -- collector/swift
 
 </details>
 
-更多文档：[设计与验收](docs/design.md) · [安装与发布](docs/installation.md) · [接口契约](docs/contracts.md) · [界面规范](docs/ui.md) · [插件开发](docs/plugins.md) · [性能采样](scripts/performance-sampling.md)
+更多文档：[设计与验收](docs/design.md) · [安装与发布](docs/zh/installation.md) · [接口契约](docs/contracts.md) · [界面规范](docs/ui.md) · [插件开发](docs/zh/plugins.md) · [性能采样](scripts/performance-sampling.md)
 
 ## 许可证
 

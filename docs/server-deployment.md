@@ -1,23 +1,21 @@
-[English](en/server-deployment.md)
+English | [简体中文](zh/server-deployment.md)
 
-# Tacit 中枢服务端独立部署指南
+# Run the Tacit Background service on a server
 
-本文档说明如何把 Tacit 中枢（Hub）单独部署在自己的 Linux 服务器或装了 Docker 的电脑上（24 小时在线），再由 Mac、Android 等设备经加密协议连接。Windows 电脑见[第 7 节](#7-windows-电脑docker-desktop)。
+You can run the Tacit Background service on an always-on Linux server or a computer with Docker. Mac and Android devices connect over an encrypted protocol. For Windows, see [section 7](#7-windows-with-docker-desktop).
 
-独立部署模式下（`RA_HUB_MODE=server`，非 macOS 系统默认启用）：
+Server mode uses `RA_HUB_MODE=server` and is the default on systems other than macOS.
 
-- 仅常开加密设备端口（默认 `0.0.0.0:47824`，可通过 `RA_LAN_PORT` 修改），只提供 `/v1/device/hello`、`/v1/device`、`/v1/device/events`。
-- 默认关闭 `127.0.0.1` 的明文管理端口与网页端，绝不在 `0.0.0.0` 上暴露任何 Bearer token 管理接口。
-- 仅支持 API 模型（`anthropic` 与 `openai-compatible`），不支持 `claude-cli` / `codex-cli`；未配置 `models.json` 时整理会保持暂停并在状态中注明原因。
-- 所有密钥（数据库密钥、设备密钥、模型 API Key、中转信箱令牌）统一用外部只读根密钥加密后存放在数据目录的 `secrets.enc` 中。
+- The encrypted device port stays open. It defaults to `0.0.0.0:47824` and can be changed with `RA_LAN_PORT`. It serves only `/v1/device/hello`, `/v1/device`, and `/v1/device/events`.
+- The unencrypted localhost management port and Web view are off by default. Bearer token management endpoints are never exposed on `0.0.0.0`.
+- Summary models use API providers only (`anthropic` or `openai-compatible`). Without `models.json`, summaries stay paused and status shows why.
+- The service encrypts database and device keys, model API keys, and Relay mailbox tokens using an external, read-only master key. It stores the encrypted values in `secrets.enc` in the data directory.
 
----
+## 1. Create and back up the master key
 
-## 1. 生成根密钥文件（务必与数据目录分开备份）
+Create the master key yourself. It is a random 32-byte value written as 64 hexadecimal characters. Tacit requires you to supply it.
 
-根密钥是 32 字节（64 位十六进制）随机数，**永远由你创建并提供，中枢绝不会自动生成**。
-
-在数据目录**之外**的位置生成根密钥文件，并限制权限为 `0400`（容器内运行用户为 `bun`，UID/GID 为 `1000`）：
+Generate the file outside the data directory and set its permissions to `0400`. Inside the container the service runs as `bun`, with UID and GID `1000`.
 
 ```bash
 mkdir -p /etc/tacit /srv/tacit-data
@@ -27,32 +25,28 @@ chmod 0400 /etc/tacit/master.key
 chmod 0700 /srv/tacit-data
 ```
 
-> **重要备份原则**
-> - **根密钥文件和数据目录必须分开备份、存放在不同地方**（例如根密钥存进密码管理器或离线介质，数据目录按常规备份）。
-> - **不要把根密钥文件放进 `/srv/tacit-data`（`RA_DATA_DIR`）内**——中枢启动时会主动校验并拒绝启动。
-> - **根密钥一旦丢失，加密的 `secrets.enc` 和 `history.db` 无法恢复**。
-> - 根密钥缺失、权限过宽或与现有 `secrets.enc` 不匹配时，中枢会直接拒绝启动，绝不会新建密钥覆盖数据。
+Back up the master key separately from the data directory. For example, keep the key in a password manager or on offline media and back up the data directory as usual. Losing the key makes the encrypted `secrets.enc` and `history.db` unrecoverable.
 
----
+The service refuses to start if the key is under `/srv/tacit-data` (`RA_DATA_DIR`), missing, too broadly readable, or incompatible with an existing `secrets.enc`.
 
-## 2. 获取镜像并启动容器
+## 2. Get the image and start the container
 
-每个 Mac 版本发布时，同一份后台代码的镜像也会推到 GitHub Container Registry（`linux/amd64`、`linux/arm64`），版本号和 Mac 版一致：
+Each Mac release publishes the same Background service code to GitHub Container Registry for `linux/amd64` and `linux/arm64`. The image tag matches the Mac version.
 
 ```bash
-docker pull ghcr.io/jinsooo/tacit-hub:<版本号>
-docker tag ghcr.io/jinsooo/tacit-hub:<版本号> tacit-hub:local
+docker pull ghcr.io/jinsooo/tacit-hub:<version>
+docker tag ghcr.io/jinsooo/tacit-hub:<version> tacit-hub:local
 ```
 
-也可以在仓库根目录自己构建：
+You can also build the image from the repository root.
 
 ```bash
 docker build -f hub/Dockerfile -t tacit-hub:local .
 ```
 
-服务器和 Mac 上的 Tacit 最好用同一个版本；两边靠设备协议兼容，版本不同时以 Release 说明为准。
+Use the same version on the server and Mac when possible. Compatibility depends on the device protocol. If versions differ, check the release notes.
 
-### 方式一：`docker run`
+### With `docker run`
 
 ```bash
 docker run -d \
@@ -66,11 +60,11 @@ docker run -d \
   tacit-hub:local
 ```
 
-`--hostname` 是设备上显示的后台名字，不设就是一串容器编号。
+`--hostname` gives the Background service a name to display on your devices. Docker supplies a container ID by default.
 
-单容器入口为 `bun hub/src/cli.ts run`，会同时托管 `serve`（网络服务）与 `distill`（后台整理）两个子进程，转发 `SIGTERM`/`SIGINT` 并在异常退出时按退避自动重启。
+The container entry point is `bun hub/src/cli.ts run`. It supervises `serve` for network requests and `distill` for summaries, forwards `SIGTERM` and `SIGINT`, and restarts failed processes with a backoff.
 
-### 方式二：Docker Compose 示例
+### With Docker Compose
 
 ```yaml
 services:
@@ -85,7 +79,7 @@ services:
       TZ: Asia/Shanghai
       RA_LAN_PORT: "47824"
     ports:
-      # 建议仅绑定 Tailscale 或内网网卡 IP，不建议直接暴露在公网
+      # Bind to a private network or Tailscale IP.
       - "100.64.0.10:47824:47824"
     volumes:
       - /srv/tacit-data:/data
@@ -101,43 +95,40 @@ secrets:
     file: /etc/tacit/master.key
 ```
 
----
+## 3. Set the time zone
 
-## 3. 时区设置
+Tacit uses local calendar days for the Timeline, daily model usage, and daily summaries. Set the time zone explicitly on the server. In order of precedence, use either of these settings.
 
-中枢按本地自然日切分时间线、统计当日模型用量和触发每日整理，服务端**必须显式设置时区**，支持以下任一方式（优先级从高到低）：
+1. Set `TZ`, for example with `-e TZ=Asia/Shanghai`. This is the recommended option.
+2. Set `timezone` in `/data/hub.json` to a valid IANA time zone.
 
-1. **环境变量 `TZ`**（推荐）：例如 `-e TZ=Asia/Shanghai`。
-2. **`/data/hub.json` 的 `timezone` 字段**：写入合法的 IANA 时区名，例如：
    ```json
    {
      "timezone": "Asia/Shanghai"
    }
    ```
 
-如果两处都没有配置，且容器进程时区为 UTC，中枢启动时会向标准错误输出一条告警，并在状态接口的 `timezone.warning` 字段给出提示。
+If neither is set and the container's process time zone is UTC, Tacit writes a warning to stderr on startup and exposes it as `timezone.warning` in the status response.
 
----
+## 4. Pair the first Admin device
 
-## 4. 配对首台管理设备（`admin`）
-
-在正在运行的容器里执行 `pair --role admin`，`--address` 填设备能访问到的服务器地址和端口（内网 IP、Tailscale IP 或反向代理后的 https 地址）：
+In the running container, run `pair --role admin`. Use `--address` to supply an address and port the Mac can reach, such as a private IP, a Tailscale IP, or an HTTPS reverse proxy URL.
 
 ```bash
 docker exec -it tacit-hub bun hub/src/cli.ts pair --role admin --address http://192.168.1.20:47824
 ```
 
-不加 `--address` 时，邀请里只有容器自己看到的地址（如 `172.17.0.3`），设备连不上。
+Without `--address`, the Invite link contains the address seen inside the container, such as `172.17.0.3`. Devices outside the container cannot reach that address.
 
-命令会输出一条一次性的 `tacit://pair?d=...` 配对链接（`admin` 邀请 **5 分钟**内有效；`collect` 和 `view` 邀请 10 分钟内有效）。在 Mac 的 Tacit 设置 › 后台与连接 › 连接远端后台里粘贴这条链接，按向导完成切换，这台 Mac 即成为管理设备。
+The command prints a single-use Invite link that starts with `tacit://pair?d=...`. An `admin` invitation expires after 5 minutes. `collect` and `view` invitations expire after 10 minutes. On the Mac, paste the link under **Settings › Background & connection › Connect to a remote service**, then follow the setup prompts. That Mac becomes an Admin device.
 
-如果希望配对时同时开通或附带中转信箱，可加 `--relay` 参数：
+To set up or include a Relay mailbox in the invitation, add `--relay`.
 
 ```bash
 docker exec -it tacit-hub bun hub/src/cli.ts pair --role admin --address http://192.168.1.20:47824 --relay https://relay.example.com
 ```
 
-其他常用的本机设备运维命令（直接操作数据库）：
+These local maintenance commands operate directly on the server database.
 
 ```bash
 docker exec -it tacit-hub bun hub/src/cli.ts devices list
@@ -145,58 +136,53 @@ docker exec -it tacit-hub bun hub/src/cli.ts devices set-role <device_id> <colle
 docker exec -it tacit-hub bun hub/src/cli.ts devices remove <device_id> [--force]
 ```
 
-> 仅在需要通过 SSH 隧道排障时，才可在启动命令后附加 `--local-status-port <port>`，让 `127.0.0.1:<port>` 在容器内短暂开放本机排障接口；日常运行无需开启。
+For temporary troubleshooting over an SSH tunnel, append `--local-status-port <port>` to the startup command to open a local diagnostics endpoint at `127.0.0.1:<port>` inside the container.
 
----
+## 5. Network access
 
-## 5. 网络接入建议
+Use a private network such as Tailscale or WireGuard, or sync through a [Relay mailbox](../relay/README.md). Keep port 47824 off the public internet when possible. The device protocol uses end-to-end HPKE encryption and mutual X25519 authentication. A proxy cannot read plaintext or forge requests, but a public connection still exposes the server's IP and request timing. If you need public access, put an HTTPS reverse proxy such as Caddy, Nginx, or Cloudflare Tunnel in front of the device port.
 
-- **推荐放在 Tailscale / WireGuard 等私网之后，或通过中转信箱（Relay）同步**。
-- **不建议直接把 47824 端口暴露到公网**：虽然设备协议已自带应用层 HPKE 端到端加密与 X25519 双向认证，反向代理无法窥探明文也无法伪造请求，但公网直连仍会暴露服务器 IP 和访问时序元数据。若确需公网访问，请在前方套一层 HTTPS 反向代理（如 Caddy、Nginx 或 Cloudflare Tunnel）并转发到设备端口。
+## 6. Move an existing Mac database to the server
 
----
+To keep all existing records and summaries, perform these steps in order.
 
-## 6. 从旧 Mac 中枢迁移到服务器
+1. Export the database key on the old Mac. Keep the 64-character hexadecimal `db-key` value from the output private.
 
-如果想保留原有 Mac 上的全部记录和整理结果，按以下顺序操作（顺序不可颠倒）：
-
-1. **导出旧 Mac 的数据库密钥**（在旧 Mac 终端执行，记住输出中 `db-key` 的 64 位十六进制值）：
    ```bash
    bun hub/src/cli.ts keys export
    ```
-2. **停止旧 Mac 中枢**，避免拷贝期间写入导致数据库不一致：
-   - 在旧 Mac 上退出 Tacit 或停止对应后台服务（确认已没有 `hub` / `distill` 进程在读写 `history.db`）。
-3. **拷贝 `history.db` 到服务器数据目录**：
-   - 将旧 Mac 的 `~/Library/Application Support/record-anything/history.db` 拷贝到服务器的 `/srv/tacit-data/history.db`，并确保权限为 `0600`、属主为 `1000:1000`。
-   - 如果此前已在 Mac 上配置过 API 模型，也可以按需把 `models.json` 拷过去（确保其中只使用 `anthropic` 或 `openai-compatible`，不含 `claude-cli`/`codex-cli`）。
-4. **把原 `db-key` 导入服务器 `secrets.enc`**（经标准输入传入，不落命令行参数，也不会回显）：
+
+2. Quit Tacit on the old Mac or stop the Background service. Check that no `hub` or `distill` process is using `history.db` before copying it.
+3. Copy `~/Library/Application Support/record-anything/history.db` from the old Mac to `/srv/tacit-data/history.db` on the server. Set permissions to `0600` and ownership to `1000:1000`. If you use API models on the Mac, you can also copy `models.json` as long as all providers are `anthropic` or `openai-compatible`.
+4. Import the original database key into the server's `secrets.enc`. In Bash, paste the exported key at the hidden prompt. The import reads it from stdin.
+
    ```bash
-   printf '%s' '<旧 Mac 导出的 db-key 十六进制值>' | \
+   read -rs -p 'Database key: ' tacit_db_key
+   printf '\n'
+   printf '%s' "$tacit_db_key" | \
      docker run --rm -i \
        -v /srv/tacit-data:/data \
        -v /etc/tacit/master.key:/run/secrets/tacit_master_key:ro \
        tacit-hub:local \
        bun hub/src/cli.ts keys import-db-key
+   unset tacit_db_key
    ```
-   命令会先用该密钥只读校验 `/data/history.db` 能否解开，验证通过后才写入 `/data/secrets.enc`。
-5. **启动服务器容器并配对首台 `admin` Mac**：
-   - 按第 2 节启动容器，再按第 4 节执行 `pair --role admin` 配对你的 Mac。
-6. **配置 API 模型与 API Key**：
-   - 服务端不自动回退到 CLI 模型；确保 `/data/models.json` 已配置 `anthropic` 或 `openai-compatible`，并设置对应的模型 API Key 后，后台整理会自动恢复。
-7. **验证数据完整后，停用旧 Mac 上的本机中枢自启**。
 
----
+   The command opens `/data/history.db` read-only to verify the key before writing `/data/secrets.enc`.
+5. Start the container as in [section 2](#2-get-the-image-and-start-the-container), then pair an Admin Mac as in [section 4](#4-pair-the-first-admin-device).
+6. Configure `anthropic` or `openai-compatible` in `/data/models.json` and set the corresponding model API key. The server resumes summaries once the configuration is ready.
+7. Check that the migrated data is intact, then disable launch at login for the old local Background service.
 
-## 7. Windows 电脑（Docker Desktop）
+## 7. Windows with Docker Desktop
 
-Windows 10/11 可以用 Docker Desktop（WSL 2 后端）运行同一个镜像。和 Linux 有三处不同，下面的命令都在 PowerShell 里执行：
+Windows 10 and 11 can run the same Linux image in Docker Desktop with the WSL 2 backend. Run the commands below in PowerShell.
 
-- **根密钥和数据都放进 Docker 卷，不要挂 Windows 目录。** 从 Windows 目录挂进容器的文件在容器里一律显示为 root 所有、权限 `0777`，中枢会以“根密钥权限过宽”拒绝启动；SQLite 放在 Windows 目录上也慢且不可靠。
-- **要有人登录着这台电脑。** Docker Desktop 只在用户登录后运行；在 Docker Desktop 设置里勾选“登录 Windows 时启动 Docker Desktop”，容器用 `--restart unless-stopped` 会随它自动起来。用 SSH 远程启动的 Docker Desktop 在 SSH 断开后会停，也拉不了镜像（读不到 Windows 凭据），不要这样当常驻服务。
-- 局域网里的设备连不上时，检查 Windows 防火墙是否放行了 47824 端口。
+- **Use Docker volumes for the key and data.** Windows directory mounts can appear as root-owned with mode `0777` inside the container. Tacit rejects a broadly readable master key, and Windows directory mounts are slow and unreliable for SQLite.
+- **Keep a user signed in.** Docker Desktop runs after sign-in. In Docker Desktop, enable startup at Windows sign-in. The container starts with it when you use `--restart unless-stopped`. Starting Docker Desktop over SSH can stop the service when SSH disconnects and prevent image pulls because Windows credentials are unavailable.
+- **Check the firewall.** If devices on the local network cannot connect, check that Windows Firewall allows port 47824.
 
-1. 安装 Docker Desktop，确认 `docker info` 能输出版本，并按第 2 节拉取或构建镜像 `tacit-hub:local`。
-2. 在 Docker 卷里生成根密钥，再启动容器：
+1. Install Docker Desktop, confirm that `docker info` returns version information, and pull or build `tacit-hub:local` as in [section 2](#2-get-the-image-and-start-the-container).
+2. Generate the master key in a Docker volume and start the container.
 
    ```powershell
    docker volume create tacit-key
@@ -211,16 +197,16 @@ Windows 10/11 可以用 Docker Desktop（WSL 2 后端）运行同一个镜像。
      tacit-hub:local
    ```
 
-3. 把根密钥抄进密码管理器（它只在 `tacit-key` 卷里，删卷或重装 Docker 就没了）：
+3. Back up the master key in a password manager. The key lives in the `tacit-key` volume and can be lost if you delete the volume or reinstall Docker.
 
    ```powershell
    docker run --rm -v tacit-key:/key:ro --entrypoint cat tacit-hub:local /key/master.key
    ```
 
-4. 用这台电脑的局域网或 Tailscale 地址生成管理邀请，到 Mac 上粘贴（同第 4 节）：
+4. Use the Windows PC's local network or Tailscale IP to generate an Admin Invite link. Paste it on your Mac as in [section 4](#4-pair-the-first-admin-device).
 
    ```powershell
    docker exec tacit-hub bun hub/src/cli.ts pair --role admin --address http://192.168.1.20:47824
    ```
 
-5. 连上后在 Mac 设置的“AI 模型”里配置 API 模型和 Key，写入的是这台服务器。
+5. Once connected, configure your API model and key in **Settings › AI models** on the Mac. Tacit saves the settings to the server.
