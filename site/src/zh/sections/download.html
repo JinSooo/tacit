@@ -1,60 +1,32 @@
 <section class="section" id="download" aria-labelledby="download-heading">
   <div class="wrap">
-    <div class="download-layout">
-      <header class="section-head" data-reveal>
-        <h2 class="display" id="download-heading">下载 Tacit</h2>
-        <div>
-          <div class="download-actions" data-platform-actions>
-            <a class="btn btn-primary" data-platform-target="mac" href="https://github.com/JinSooo/tacit/releases/tag/mac-v0.7.0">
-              <svg aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
-              下载 Mac 版
-            </a>
-            <a class="btn btn-quiet" data-platform-target="android" href="https://github.com/JinSooo/tacit/releases/tag/android-v0.7.0">
-              <svg aria-hidden="true"><use href="assets/sources.svg#download"/></svg>
-              下载 Android 版
-            </a>
+    <div class="closing-cta" data-reveal>
+      <div class="closing-cta-copy">
+        <h2 class="heading" id="download-heading">开始记录你的一天</h2>
+        <p class="lead">按设备获取客户端，或查看 Mac、Android 与独立后台服务的安装说明和文档。</p>
+      </div>
+      <div class="closing-cta-body">
+        <div class="closing-cta-actions" data-platform-single>
+          <a class="btn btn-primary" data-platform-cta="mac" data-platform-target="mac" href="https://github.com/JinSooo/tacit/releases/tag/mac-v0.7.0">
+            <svg aria-hidden="true"><use href="assets/sources.svg#apple"/></svg>
+            下载 Mac 版
+          </a>
+          <a class="btn btn-primary" data-platform-cta="android" data-platform-target="android" href="https://github.com/JinSooo/tacit/releases/tag/android-v0.7.0">
+            <svg aria-hidden="true"><use href="assets/sources.svg#download"/></svg>
+            下载 Android 版
+          </a>
+          <a class="btn btn-primary" data-platform-cta="other" href="download/">
+            <svg aria-hidden="true"><use href="assets/sources.svg#download"/></svg>
+            获取 Tacit
+          </a>
+          <div class="closing-cta-links">
+            <a class="link" href="download/">全部平台下载</a>
+            <a class="link" href="docs/">阅读文档</a>
           </div>
-          <p class="platform-note caption" data-platform-note="windows">Windows 客户端计划支持，敬请期待；目前可先通过 Docker 在 Windows 上<a class="link" href="https://github.com/JinSooo/tacit/blob/main/docs/server-deployment.md">独立部署后台服务</a>。</p>
-          <p class="platform-note caption" data-platform-note="ios">iOS 端仍在调研中，暂未发布；可先在 Apple 芯片 Mac 或 Android 手机上使用。</p>
-          <p class="download-requirements caption num">Apple 芯片 Mac（macOS 14+）、Android（arm64，Android 9+），Windows 敬请期待</p>
         </div>
-      </header>
-
-      <div class="download-guide" data-reveal-group>
-        <div class="download-mac">
-          <h3 class="title">Mac 端开始使用</h3>
-          <ol class="download-steps" role="list">
-            <li>
-              <strong>拖进“应用程序”</strong>
-              <p>打开下载的 <code>Tacit-&lt;版本号&gt;.dmg</code>，把 Tacit 拖进“应用程序”。</p>
-            </li>
-            <li id="download-open">
-              <strong>首次打开 Tacit</strong>
-              <p>从“应用程序”打开 Tacit。如果系统拦下，先点“完成”，再到<strong>系统设置 › 隐私与安全性</strong>，找到 Tacit，点<strong>仍要打开</strong>并输入密码。</p>
-              <p>如果没有这个按钮，在终端运行下面的命令，再打开 Tacit。</p>
-              <div class="download-command">
-                <code id="download-command">xattr -dr com.apple.quarantine /Applications/Tacit.app</code>
-                <button class="download-copy" type="button" aria-label="复制终端命令"
-                  data-copied="已复制命令" data-copy-failed="无法自动复制，请选中命令手动复制。" hidden>复制</button>
-              </div>
-              <p class="download-copy-status caption" role="status"></p>
-            </li>
-            <li>
-              <strong>完成初始设置</strong>
-              <p>首次打开时主窗口会自动弹出，后台服务也会自动准备。按时间线顶部的清单完成授权与配置；之后关掉窗口，Tacit 会留在菜单栏继续记录。</p>
-            </li>
-          </ol>
-        </div>
-
-        <div class="download-android">
-          <h3 class="title">Android 端</h3>
-          <p>安装 <code>Tacit-&lt;版本号&gt;.apk</code>（arm64，Android 9 或更新），开启本机录音与转写。在 Mac 的<strong>设置 › 设备</strong>生成配对二维码，扫码即可端到端加密同步并在手机上查看时间线；也可以单独使用，在设置里可选开启手机端单场 AI 总结。</p>
-        </div>
-
-        <div class="download-server">
-          <h3 class="title">独立部署后台服务（可选）</h3>
-          <p>后台默认在 Mac 本机运行，不需要服务器。若希望多台设备共用独立后台，可在 Linux 服务器或装有 Docker 的 Windows 电脑上拉取 <code>ghcr.io/jinsooo/tacit-hub</code> 镜像运行，详见 <a class="link" href="https://github.com/JinSooo/tacit/blob/main/docs/server-deployment.md">服务端部署说明</a>。</p>
-        </div>
+        <p class="platform-note caption" data-platform-note="windows">Windows 客户端计划支持，敬请期待；目前可先通过 Docker 在 Windows 上<a class="link" href="docs/server-deployment/">独立部署后台服务</a>。</p>
+        <p class="platform-note caption" data-platform-note="ios">iOS 端仍在调研中，暂未发布；可先在 Apple 芯片 Mac 或 Android 手机上使用。</p>
+        <p class="download-requirements caption num">Apple 芯片 Mac（macOS 14+）、Android（arm64，Android 9+），Windows 敬请期待</p>
       </div>
     </div>
   </div>
