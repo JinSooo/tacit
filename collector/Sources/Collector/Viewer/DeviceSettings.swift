@@ -8,6 +8,22 @@ private func deviceMessage(_ error: Error, fallback: String) -> String {
   (error as? HubError)?.actionMessage.map { L10n.Settings.serviceMessage($0, fallback: fallback) } ?? fallback
 }
 
+/// 设置页读取失败：能让用户处理的照原话说，其他的在原句后补一句原因，并在诊断信息里记下固定类别。
+func settingsReadFailure(_ error: Error, fallback: String, section: DiagnosticLog.SettingsSection) -> String {
+  let hubError = error as? HubError
+  DiagnosticLog.shared.record(.settingsReadFailed(section, reason: (hubError?.reason ?? .other).rawValue))
+  if let action = hubError?.actionMessage { return L10n.Settings.serviceMessage(action, fallback: fallback) }
+  let reason: String? = switch hubError?.reason {
+  case .unreachable: L10n.Settings.reasonUnreachable
+  case .timedOut: L10n.Settings.reasonTimedOut
+  case .deviceLink: L10n.Settings.reasonDeviceLink
+  case .badResponse: L10n.Settings.reasonBadResponse
+  case .server: L10n.Settings.reasonServer
+  case .other, nil: nil
+  }
+  return reason.map { L10n.Settings.unavailable(fallback, because: $0) } ?? fallback
+}
+
 struct DeviceSettingsSection: View {
   private struct Session: Identifiable {
     let id = UUID()
@@ -193,7 +209,7 @@ struct DeviceSettingsSection: View {
     } catch is CancellationError {
     } catch {
       settings = nil
-      self.error = deviceMessage(error, fallback: L10n.Settings.devicesUnavailable)
+      self.error = settingsReadFailure(error, fallback: L10n.Settings.devicesUnavailable, section: .devices)
     }
   }
 

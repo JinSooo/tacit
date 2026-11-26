@@ -157,9 +157,7 @@ struct RelaySettingsSection: View {
     } catch is CancellationError {
     } catch {
       guard !Task.isCancelled, revision == configurationRevision else { return }
-      refreshError = (error as? HubError)?.actionMessage.map {
-        L10n.Settings.serviceMessage($0, fallback: L10n.Settings.relaySettingsUnavailable)
-      } ?? L10n.Settings.relaySettingsUnavailable
+      refreshError = settingsReadFailure(error, fallback: L10n.Settings.relaySettingsUnavailable, section: .relay)
     }
   }
 

@@ -283,6 +283,16 @@ public extension L10n {
     public static var activationCode: String { L10n.text(zh: "开通码", en: "Activation code") }
     public static var optionalField: String { L10n.text(zh: "可留空", en: "Optional") }
     public static var relaySettingsUnavailable: String { L10n.text(zh: "暂时无法读取信箱设置。", en: "Can't read relay mailbox settings right now.") }
+    /// 读取失败时在原句后面补一句原因，例如“暂时无法读取设备：连不上后台服务。”
+    public static func unavailable(_ sentence: String, because reason: String) -> String {
+      let base = sentence.trimmingCharacters(in: CharacterSet(charactersIn: "。."))
+      return L10n.text(zh: "\(base)：\(reason)。", en: "\(base): \(reason).")
+    }
+    public static var reasonUnreachable: String { L10n.text(zh: "连不上后台服务", en: "can't reach the background service") }
+    public static var reasonTimedOut: String { L10n.text(zh: "后台服务没有响应，可能正忙", en: "the background service didn't respond and may be busy") }
+    public static var reasonDeviceLink: String { L10n.text(zh: "这台 Mac 和后台之间的加密连接还没建好", en: "this Mac's secure link to the background service isn't ready") }
+    public static var reasonBadResponse: String { L10n.text(zh: "后台返回的内容读不出来，可能版本不一致", en: "the background service sent a reply this version can't read") }
+    public static var reasonServer: String { L10n.text(zh: "后台服务出错了", en: "the background service ran into an error") }
 
     // MARK: - Devices and invitations
 

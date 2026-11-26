@@ -21,6 +21,7 @@ public struct DiagnosticBuild: Sendable {
 public final class DiagnosticLog: @unchecked Sendable {
   public enum LaunchSource: String { case launchd, finder, unknown }
   public enum ExitReason: String { case exit, signal }
+  public enum SettingsSection: String { case devices, relay }
   public enum Event {
     case started(DiagnosticBuild, LaunchSource)
     case uncaughtException(NSExceptionName)
@@ -34,6 +35,8 @@ public final class DiagnosticLog: @unchecked Sendable {
     case setupLogOpenFailed
     case setupStatusWriteFailed
     case setupFinished(exitCode: Int32)
+    /// 设置页读设备或信箱失败；reason 是固定类别（如 device_link、timed_out），不含错误原文。
+    case settingsReadFailed(SettingsSection, reason: String)
 
     fileprivate var fields: (component: String, code: String, values: [String: Any], limited: Bool) {
       switch self {
@@ -52,6 +55,10 @@ public final class DiagnosticLog: @unchecked Sendable {
       case .setupLogOpenFailed: return ("setup", "setup_log_open_failed", [:], false)
       case .setupStatusWriteFailed: return ("setup", "setup_status_write_failed", [:], false)
       case let .setupFinished(code): return ("setup", "setup_finished", ["exit_code": code], false)
+      case let .settingsReadFailed(section, reason):
+        let safe = reason.range(of: #"^[a-z_]{1,32}$"#, options: .regularExpression) != nil ? reason : "other"
+        // 诊断摘要只保留 code、component、name 和数字字段，所以分区放进 code、类别放进 name。
+        return ("viewer", "\(section.rawValue)_read_failed", ["name": safe], true)
       }
     }
 

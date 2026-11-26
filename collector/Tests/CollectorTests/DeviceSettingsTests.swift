@@ -1,5 +1,5 @@
 import AppKit
-import CollectorCore
+@testable import CollectorCore
 import SwiftUI
 import Testing
 @testable import Collector
@@ -146,4 +146,27 @@ private func fixture() -> DeviceSettings {
 @Test(ChineseUITrait(), arguments: [(-5, "剩余 0 秒"), (45, "剩余 45 秒"), (60, "剩余 1 分钟"), (300, "剩余 5 分钟"), (305, "剩余 5 分 5 秒")])
 func deviceInvitationCountdown(_ seconds: Int, _ expected: String) {
   #expect(DeviceInvitationChoices.countdown(seconds) == expected)
+}
+
+// 回归：朋友装好后“设备”“中转信箱”只显示“暂时无法读取”，看不出是连不上、超时还是加密连接没建好。
+@Test func settingsReadFailureNamesTheReasonButKeepsActionableMessages() {
+  AppLanguage.$scopedLanguage.withValue(.zh) {
+    let link = HubError(message: L10n.deviceConnectionUnavailable, status: 0, kind: .deviceLink)
+    #expect(settingsReadFailure(link, fallback: L10n.Settings.devicesUnavailable, section: .devices)
+      == "暂时无法读取设备：这台 Mac 和后台之间的加密连接还没建好。")
+    let slow = HubError(message: L10n.serviceTimedOut, status: 0, kind: .timedOut)
+    #expect(settingsReadFailure(slow, fallback: L10n.Settings.relaySettingsUnavailable, section: .relay)
+      == "暂时无法读取信箱设置：后台服务没有响应，可能正忙。")
+    #expect(settingsReadFailure(HubError(message: "请求失败（500）", status: 500), fallback: L10n.Settings.devicesUnavailable, section: .devices)
+      == "暂时无法读取设备：后台服务出错了。")
+    #expect(settingsReadFailure(HubError(message: "当前设备权限不足", status: 403), fallback: L10n.Settings.devicesUnavailable, section: .devices)
+      == "当前设备权限不足")
+    #expect(settingsReadFailure(CancellationError(), fallback: L10n.Settings.devicesUnavailable, section: .devices)
+      == "暂时无法读取设备。")
+  }
+  AppLanguage.$scopedLanguage.withValue(.en) {
+    let down = HubError(message: L10n.cantReachBackgroundService, status: 0, kind: .unreachable)
+    #expect(settingsReadFailure(down, fallback: L10n.Settings.devicesUnavailable, section: .devices)
+      == "Can't read devices right now: can't reach the background service.")
+  }
 }

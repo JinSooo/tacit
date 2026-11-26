@@ -135,3 +135,21 @@ private func logLines(_ url: URL) throws -> [[String: Any]] {
     try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
   }
 }
+
+@Test func settingsReadFailuresKeepOnlyFixedSectionAndReason() throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let log = root.appendingPathComponent("collector.log")
+  let fd = try DiagnosticLog.openFile(log)
+  defer { close(fd) }
+  let diagnostics = DiagnosticLog()
+  diagnostics.record(.settingsReadFailed(.devices, reason: "device_link"), to: fd, uptime: 100)
+  diagnostics.record(.settingsReadFailed(.relay, reason: "连不上 /Users/someone"), to: fd, uptime: 100)
+  let lines = try logLines(log)
+  try #require(lines.count == 2)
+  #expect(lines[0]["component"] as? String == "viewer")
+  #expect(lines[0]["code"] as? String == "devices_read_failed")
+  #expect(lines[0]["name"] as? String == "device_link")
+  #expect(lines[1]["code"] as? String == "relay_read_failed")
+  #expect(lines[1]["name"] as? String == "other")
+}

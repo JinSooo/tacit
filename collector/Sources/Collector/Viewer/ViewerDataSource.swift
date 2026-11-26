@@ -869,9 +869,9 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
         }
         if try unavailable.get() { return nil }
       } catch {
-        throw HubError(message: L10n.unreadableDeviceConnection, status: 0)
+        throw HubError(message: L10n.unreadableDeviceConnection, status: 0, kind: .deviceLink)
       }
-      throw HubError(message: L10n.deviceConnectionUnavailable, status: 0)
+      throw HubError(message: L10n.deviceConnectionUnavailable, status: 0, kind: .deviceLink)
     }
     do {
       let reply = try await session.sync.client.send(op: op, body: body, timeout: timeout)
@@ -961,7 +961,7 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
   static func mapDeviceError(_ error: DeviceClientError) -> HubError {
     switch error {
     case .transportError(let msg):
-      return HubError(message: L10n.unreachableService(msg), status: 0)
+      return HubError(message: L10n.unreachableService(msg), status: 0, kind: .unreachable)
     case .hubBusy(let msg):
       return HubError(message: msg ?? L10n.databaseBusyTryAgainShortly, status: 503)
     case .operationError(_, 403, let msg), .plaintextError(403, let msg):
@@ -973,7 +973,7 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
     case .deviceRemoved(let msg):
       return HubError(message: msg ?? L10n.requestFailed401, status: 401)
     default:
-      return HubError(message: L10n.unreadableResponse, status: 0)
+      return HubError(message: L10n.unreadableResponse, status: 0, kind: .badResponse)
     }
   }
 
