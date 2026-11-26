@@ -16,6 +16,9 @@ internal data class AudioConversationRow(
     val transcribePending: Boolean = false,
     val hasUntranscribedClips: Boolean = false,
     val untranscribedAudioAvailable: Boolean = false,
+    val untranscribedStart: Long? = null,
+    val untranscribedEnd: Long? = null,
+    val untranscribedClipIds: List<String> = emptyList(),
 )
 
 internal fun audioConversationRows(
@@ -36,6 +39,9 @@ internal fun audioConversationRows(
             transcribePending = scene.transcribePending,
             hasUntranscribedClips = scene.hasUntranscribedClips || scene.audioAvailable,
             untranscribedAudioAvailable = scene.untranscribedAudioAvailable || scene.audioAvailable,
+            untranscribedStart = scene.untranscribedStart ?: scene.start,
+            untranscribedEnd = scene.untranscribedEnd ?: scene.end,
+            untranscribedClipIds = scene.untranscribedClipIds,
         ),
     )
     else text.groupBy { it.sensitivity }.map { (sensitivity, group) ->
@@ -51,6 +57,9 @@ internal fun audioConversationRows(
             transcribePending = scene.transcribePending,
             hasUntranscribedClips = scene.hasUntranscribedClips,
             untranscribedAudioAvailable = scene.untranscribedAudioAvailable,
+            untranscribedStart = scene.untranscribedStart,
+            untranscribedEnd = scene.untranscribedEnd,
+            untranscribedClipIds = scene.untranscribedClipIds,
         )
     }
 }

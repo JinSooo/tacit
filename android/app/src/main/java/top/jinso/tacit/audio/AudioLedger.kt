@@ -277,14 +277,17 @@ internal class AudioLedger(private val store: AudioStore) {
     }
 
     /**
-     * Authorize ONLY the retained untranscribed clips currently in [conversationId] at the moment of confirmation.
-     * Any later clip that attaches to the same conversation must pass normal voice-presence checks.
+     * Authorize ONLY the exact retained untranscribed [clipIds] selected by the user (or all currently retained
+     * untranscribed clips when [clipIds] is null, for direct callers/tests).
+     * Never sweeps in clips outside [clipIds] or later clips that attach to the same conversation.
      */
-    fun confirmConversation(conversationId: String): Set<String> {
+    fun confirmConversation(conversationId: String, clipIds: Set<String>? = null): Set<String> {
         val target = requireNotNull(conversation(conversationId)) { "对话已不存在" }
         val eligibleClips = store.clips().filter { clip ->
+            val id = clip.getString("id")
             clip.optString("conversation") == conversationId &&
-                store.exists(clip.getString("id")) &&
+                (clipIds == null || id in clipIds) &&
+                store.exists(id) &&
                 utterances(clip).none { it.optString("record").isNotEmpty() }
         }.map { it.getString("id") }
         require(eligibleClips.isNotEmpty()) { "这段录音已过保留期" }
@@ -296,6 +299,24 @@ internal class AudioLedger(private val store: AudioStore) {
             store.save()
         }
         return eligibleClips.toSet()
+    }
+
+    /**
+     * Retry manual transcription using ONLY the previously authorized clip IDs already persisted on [conversationId].
+     * Never expands authorization to later clips that attached to the same conversation after the failure.
+     */
+    fun retryConfirmedClips(conversationId: String): Set<String> {
+        val target = requireNotNull(conversation(conversationId)) { "对话已不存在" }
+        val confirmed = confirmedClipIds(target)
+        val pending = store.clips().filter { clip ->
+            val id = clip.getString("id")
+            clip.optString("conversation") == conversationId &&
+                id in confirmed &&
+                store.exists(id) &&
+                utterances(clip).any { !it.optBoolean("done") }
+        }.map { it.getString("id") }.toSet()
+        require(pending.isNotEmpty()) { "这段录音已过保留期" }
+        return pending
     }
 
     fun conversationAudioAvailable(conversationId: String): Boolean =
@@ -428,6 +449,8 @@ internal class AudioLedger(private val store: AudioStore) {
         }
         val playableIds = HashSet<String>()
         val untranscribedClipIdsByConv = HashMap<String, MutableList<String>>()
+        val untranscribedStartByConv = HashMap<String, Long>()
+        val untranscribedEndByConv = HashMap<String, Long>()
         val untranscribedPlayableIds = HashSet<String>()
         val pendingIds = HashSet<String>()
         val clipRows = ArrayList<AudioConversation>()
@@ -437,15 +460,19 @@ internal class AudioLedger(private val store: AudioStore) {
             val clipId = clip.getString("id")
             val exists = store.exists(clipId)
             val rows = utterances(clip)
+            val clipStart = start(clip)
+            val clipEnd = end(clip)
             val hasRecord = rows.any { it.optString("record").isNotEmpty() }
             if (exists && rows.isNotEmpty()) playableIds += id
             if (exists && !hasRecord) {
                 untranscribedClipIdsByConv.getOrPut(id) { ArrayList() }.add(clipId)
+                untranscribedStartByConv.merge(id, clipStart, ::minOf)
+                untranscribedEndByConv.merge(id, clipEnd, ::maxOf)
                 if (rows.isNotEmpty()) untranscribedPlayableIds += id
             }
             val confirmedClips = confirmedByConv[id].orEmpty()
             if (exists && clipId in confirmedClips && rows.any { !it.optBoolean("done") }) pendingIds += id
-            clipRows += AudioConversation(id, start(clip), end(clip), listOf(clipId), emptyList())
+            clipRows += AudioConversation(id, clipStart, clipEnd, listOf(clipId), emptyList())
         }
         val rows = store.transcripts().map { r -> AudioConversation(r.getString("conversationId"),
             r.getLong("start"), r.getLong("end"), listOf(r.getString("clipId")), listOf(r.getString("recordId"))) } +
@@ -469,6 +496,9 @@ internal class AudioLedger(private val store: AudioStore) {
                 transcribePending = id in pendingIds,
                 hasUntranscribedClips = untranscribedClips.isNotEmpty(),
                 untranscribedAudioAvailable = id in untranscribedPlayableIds,
+                untranscribedStart = untranscribedStartByConv[id],
+                untranscribedEnd = untranscribedEndByConv[id],
+                untranscribedClipIds = untranscribedClips.distinct(),
             )
         }.sortedByDescending { it.start }
     }

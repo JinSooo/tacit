@@ -66,7 +66,12 @@ import enum CollectorCore.TimelineCalendar
 
   private func evictIfNeeded() {
     while entries.count > maxEntries {
-      guard let oldestKey = entries.min(by: { $0.value.lastAccessed < $1.value.lastAccessed })?.key else { break }
+      guard let oldestKey = entries.min(by: {
+        if $0.value.lastAccessed != $1.value.lastAccessed {
+          return $0.value.lastAccessed < $1.value.lastAccessed
+        }
+        return $0.key < $1.key
+      })?.key else { break }
       entries.removeValue(forKey: oldestKey)
     }
   }
@@ -183,9 +188,23 @@ struct TimelineCalendarPopover: View {
       let targetMonth = monthKey
       cache.seedIfEmpty(month: targetMonth, dates: dataSource.cachedActiveDays(inMonth: targetMonth))
       let currentMonth = TimelineCalendar.Month(containing: today, calendar: cal).key
-      guard cache.needsLoad(month: targetMonth, revision: revision, isCurrentMonth: targetMonth == currentMonth) else { return }
-      guard let fetched = try? await dataSource.activeDays(inMonth: targetMonth), !Task.isCancelled else { return }
-      cache.store(month: targetMonth, dates: fetched.dates, revision: revision, authoritative: fetched.authoritative)
+      while !Task.isCancelled {
+        if cache.needsLoad(month: targetMonth, revision: revision, isCurrentMonth: targetMonth == currentMonth) {
+          // 到期、修订变化或离线重试时绕过底层滑窗 LRU，直接向中枢取最新结果。
+          if let fetched = try? await dataSource.activeDays(inMonth: targetMonth, bypassCache: true), !Task.isCancelled {
+            cache.store(month: targetMonth, dates: fetched.dates, revision: revision, authoritative: fetched.authoritative)
+            if fetched.authoritative {
+              if targetMonth != currentMonth { break }
+              try? await Task.sleep(for: .seconds(60))
+              continue
+            }
+          }
+          // 离线或请求失败时保持弹层可用，并在弹层持续打开期间短暂退避重试，连接恢复后自动更新。
+          try? await Task.sleep(for: .seconds(10))
+        } else {
+          break
+        }
+      }
     }
   }
 

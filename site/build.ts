@@ -167,16 +167,56 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replaceAll("&amp;", "&")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#39;", "'")
-    .replaceAll("&#x27;", "'")
-    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)));
+const NAMED_HTML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: "\u00a0",
+  euro: "\u20ac",
+  pound: "\u00a3",
+  yen: "\u00a5",
+  cent: "\u00a2",
+  copy: "\u00a9",
+  reg: "\u00ae",
+  trade: "\u2122",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  hellip: "\u2026",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  ldquo: "\u201c",
+  rdquo: "\u201d",
+  laquo: "\u00ab",
+  raquo: "\u00bb",
+  bull: "\u2022",
+  middot: "\u00b7",
+  times: "\u00d7",
+  divide: "\u00f7",
+  plusmn: "\u00b1",
+  deg: "\u00b0",
+  sect: "\u00a7",
+  para: "\u00b6",
+};
+
+function decodeNumericEntity(codePoint: number): string {
+  if (!Number.isSafeInteger(codePoint) || codePoint <= 0 || codePoint > 0x10ffff) return "\ufffd";
+  if (codePoint >= 0xd800 && codePoint <= 0xdfff) return "\ufffd";
+  return String.fromCodePoint(codePoint);
+}
+
+/** 单遍解码 HTML 实体，避免 `&amp;lt;` 二次解码，并对越界数字实体安全回退到 U+FFFD。 */
+export function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z][a-z0-9]+));/gi, (match, dec?: string, hex?: string, named?: string) => {
+    if (dec !== undefined) return decodeNumericEntity(Number.parseInt(dec, 10));
+    if (hex !== undefined) return decodeNumericEntity(Number.parseInt(hex, 16));
+    if (named !== undefined) {
+      const exact = NAMED_HTML_ENTITIES[named] ?? NAMED_HTML_ENTITIES[named.toLowerCase()];
+      if (exact !== undefined) return exact;
+    }
+    return match;
+  });
 }
 
 function expand(file: string, seen: string[] = []): string {

@@ -90,8 +90,10 @@ class AudioController internal constructor(
     fun conversationAudioAvailable(conversationId: String): CompletableFuture<Boolean> = runtime.read {
         synchronized(runtime.lock) { runtime.queries.conversationAudioAvailable(conversationId) }
     }
-    fun transcribeConversation(conversationId: String): CompletableFuture<Unit> =
-        runtime.confirmConversation(conversationId)
+    fun transcribeConversation(conversationId: String, clipIds: Set<String>? = null): CompletableFuture<Unit> =
+        runtime.confirmConversation(conversationId, clipIds)
+    fun retryConversationTranscription(conversationId: String): CompletableFuture<Unit> =
+        runtime.retryConversation(conversationId)
     fun deleteConversationAudio(conversationId: String): CompletableFuture<DeleteConversationAudioResult> =
         runtime.deleteConversationAudio(conversationId)
     fun restoreIgnoredCandidates(): CompletableFuture<Int> =
@@ -235,10 +237,21 @@ internal class AudioRuntime private constructor(val context: Context) {
         }
     }
 
-    fun confirmConversation(conversationId: String): CompletableFuture<Unit> {
+    fun confirmConversation(conversationId: String, clipIds: Set<String>? = null): CompletableFuture<Unit> {
         invalidatePolicy()
         return change {
-            synchronized(lock) { ledger.confirmConversation(conversationId) }
+            synchronized(lock) { ledger.confirmConversation(conversationId, clipIds) }
+            if (models.current() != null) {
+                manualTranscriptions.update { it + (conversationId to ManualTranscriptionStatus.QUEUED) }
+            }
+            schedule()
+        }
+    }
+
+    fun retryConversation(conversationId: String): CompletableFuture<Unit> {
+        invalidatePolicy()
+        return change {
+            synchronized(lock) { ledger.retryConfirmedClips(conversationId) }
             if (models.current() != null) {
                 manualTranscriptions.update { it + (conversationId to ManualTranscriptionStatus.QUEUED) }
             }

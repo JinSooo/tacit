@@ -365,4 +365,121 @@ class UntranscribedConversationTest {
         assertFalse(store.speakers().single().optBoolean("ignored"))
         assertTrue(store.exists(clipId))
     }
+
+    @Test fun retryAfterFailureDoesNotExpandAuthorizationToLaterClips() {
+        val store = FakeAudioStore()
+        val now = System.currentTimeMillis()
+        val firstClip = store.addClip(now - 300_000L, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        var shouldFailAsr = false
+        val speech = FakeSpeech {
+            if (shouldFailAsr) throw IllegalStateException("Injected ASR failure")
+            "失败后重试的首批转写"
+        }
+        val published = mutableListOf<AudioPublication>()
+
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+        val ledger = AudioLedger(store)
+        val conv = ledger.listConversations().single()
+        assertEquals(listOf(firstClip), conv.untranscribedClipIds)
+
+        // Confirm first clip, inject ASR failure, reload index.
+        ledger.confirmConversation(conv.id, conv.untranscribedClipIds.toSet())
+        shouldFailAsr = true
+        try {
+            AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+            fail("Expected ASR failure")
+        } catch (_: IllegalStateException) { }
+        store.reload()
+
+        // A second clip arrives 1 minute later and attaches to the same conversation without "me" voice.
+        val laterClip = store.addClip(now - 240_000L, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        shouldFailAsr = true
+        try {
+            AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+        } catch (_: IllegalStateException) { }
+
+        // User taps Retry -> must ONLY re-queue previously confirmed clip, NEVER authorize laterClip!
+        val reloaded = AudioLedger(store)
+        val retriedIds = reloaded.retryConfirmedClips(conv.id)
+        assertEquals(setOf(firstClip), retriedIds)
+        store.reload()
+
+        shouldFailAsr = false
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+        assertEquals(listOf(firstClip), published.map { it.clipId })
+        assertTrue(store.speakers().none { it.optBoolean("me") })
+
+        val after = AudioLedger(store).listConversations().single()
+        assertEquals(conv.id, after.id)
+        assertEquals(listOf(laterClip), after.untranscribedClipIds)
+        assertTrue(after.hasUntranscribedClips)
+        assertFalse(after.userConfirmed)
+        assertFalse(after.transcribePending)
+    }
+
+    @Test fun confirmingExplicitClipSetDoesNotSweepInInterleavedAttachedClip() {
+        val store = FakeAudioStore()
+        val now = System.currentTimeMillis()
+        val firstClip = store.addClip(now - 300_000L, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        val speech = FakeSpeech()
+        val published = mutableListOf<AudioPublication>()
+
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+        val ledger = AudioLedger(store)
+        val uiSnapshot = ledger.listConversations().single()
+        val selectedClipIds = uiSnapshot.untranscribedClipIds.toSet()
+        assertEquals(setOf(firstClip), selectedClipIds)
+
+        // Before the user's confirm executes on worker, a second clip gets analyzed and attached to the same conversation.
+        val interleavedClip = store.addClip(now - 240_000L, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+
+        // Confirming with the UI snapshot's explicit clipIds only authorizes firstClip.
+        val authorized = ledger.confirmConversation(uiSnapshot.id, selectedClipIds)
+        assertEquals(setOf(firstClip), authorized)
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+        assertEquals(listOf(firstClip), published.map { it.clipId })
+
+        val after = ledger.listConversations().single()
+        assertEquals(listOf(interleavedClip), after.untranscribedClipIds)
+        assertTrue(after.hasUntranscribedClips)
+        assertFalse(after.userConfirmed)
+    }
+
+    @Test fun partiallyTranscribedConversationTracksUntranscribedTimeRangeAcrossMidnight() {
+        val store = FakeAudioStore()
+        val zone = java.time.ZoneId.systemDefault()
+        val clipAStart = java.time.LocalDateTime.of(2026, 11, 25, 23, 55, 0).atZone(zone).toInstant().toEpochMilli()
+        val clipBStart = java.time.LocalDateTime.of(2026, 11, 26, 0, 2, 0).atZone(zone).toInstant().toEpochMilli()
+        val clipA = store.addClip(clipAStart, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        val speech = FakeSpeech()
+        val published = mutableListOf<AudioPublication>()
+
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+        val ledger = AudioLedger(store)
+        val convId = ledger.listConversations().single().id
+        ledger.confirmConversation(convId, setOf(clipA))
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+
+        // Clip B attaches across midnight (7 min later) and stays untranscribed.
+        val clipB = store.addClip(clipBStart, FloatArray(SAMPLE_RATE * 5) { 0.2f })
+        AudioProcessor(store, Any(), speech).drain({ true }) { published += it; "rec:${it.clipId}" }
+
+        val conv = ledger.listConversations().single()
+        assertEquals(convId, conv.id)
+        assertEquals(listOf(clipB), conv.untranscribedClipIds)
+        assertEquals(clipBStart, conv.untranscribedStart)
+        assertEquals(clipBStart + 5_000L, conv.untranscribedEnd)
+        assertEquals(
+            java.time.LocalDate.of(2026, 11, 26),
+            java.time.Instant.ofEpochMilli(conv.untranscribedStart!!).atZone(zone).toLocalDate(),
+        )
+
+        // Sample preview and deletion target clip B (Day 2), leaving clip A's published transcript intact.
+        val sample = pickConversationSample(store.clips(), convId, store::exists, untranscribedOnly = true)
+        assertEquals(clipB, sample?.first)
+        assertEquals(DeleteConversationAudioResult.DELETED, store.deleteConversationAudio(convId))
+        assertFalse(store.exists(clipB))
+        assertEquals(listOf("rec:$clipA"), store.transcripts().map { it.getString("recordId") })
+    }
 }

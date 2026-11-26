@@ -277,6 +277,18 @@ describe("Markdown 清洗、链接重写与渲染辅助函数", () => {
     expect(sanitizeDocHtml('<a href="https://example.com/?a=1&amp;b=2" style="color:red">ok</a>')).toBe(
       '<a href="https://example.com/?a=1&amp;b=2">ok</a>',
     );
+
+    // 单遍 HTML 实体解码：命名实体保留原字符、字面实体不二次解码、越界数字实体不抛错
+    const entityMd = [
+      "# Entities",
+      "",
+      '<a href="https://example.com/?currency=&euro;&amp;literal=&amp;lt;&amp;bad=&#99999999;">link</a>',
+    ].join("\n");
+    const entityRendered = renderDocMarkdown(entityMd, "docs/en/trial-guide.md", "en");
+    expect(entityRendered.html).toContain('href="https://example.com/?currency=€&amp;literal=&amp;lt;&amp;bad=\ufffd"');
+    expect(entityRendered.html).not.toContain("&amp;euro;");
+    expect(entityRendered.html).not.toContain("literal=<");
+
     expect(() =>
       auditHtmlPage("en/docs/test/index.html", '<div class="doc-prose"><script>1</script></div>'),
     ).toThrow(/禁止的标签/);

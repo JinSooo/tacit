@@ -170,7 +170,8 @@ import java.util.concurrent.CompletableFuture
     val untranscribedByDay = remember(rows) {
         rows.filter { it.hasUntranscribedClips }
             .distinctBy { it.conversationId }
-            .groupBy { Instant.ofEpochMilli(it.start).atZone(ZoneId.systemDefault()).toLocalDate() }
+            .groupBy { Instant.ofEpochMilli(it.untranscribedStart ?: it.start).atZone(ZoneId.systemDefault()).toLocalDate() }
+            .mapValues { (_, list) -> list.sortedByDescending { it.untranscribedStart ?: it.start } }
     }
     val availableDays = local.keys + untranscribedByDay.keys + timeline.days.filter { (date, value) ->
         !value.overview.isNullOrBlank() || value.entries(date == today).isNotEmpty()
@@ -366,7 +367,31 @@ import java.util.concurrent.CompletableFuture
                 scope.launch {
                     busy = true
                     try {
-                        withContext(Dispatchers.IO) { audio.transcribeConversation(scene.conversationId).get() }
+                        val targetClips = scene.untranscribedClipIds.toSet()
+                        withContext(Dispatchers.IO) {
+                            audio.transcribeConversation(scene.conversationId, targetClips.takeIf { it.isNotEmpty() }).get()
+                        }
+                        val msg = strings.text(
+                            if (state.modelsReady) R.string.transcribe_queued else R.string.transcribe_queued_models_missing,
+                        )
+                        sheetMessage = msg
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        sheetMessage = strings.text(R.string.operation_failed)
+                    } finally {
+                        busy = false
+                    }
+                }
+            },
+            onRetry = { scene ->
+                audio.stopPlayback()
+                scope.launch {
+                    busy = true
+                    try {
+                        withContext(Dispatchers.IO) {
+                            audio.retryConversationTranscription(scene.conversationId).get()
+                        }
                         val msg = strings.text(
                             if (state.modelsReady) R.string.transcribe_queued else R.string.transcribe_queued_models_missing,
                         )

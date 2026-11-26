@@ -24,7 +24,7 @@ protocol ViewerDataSource: Sendable {
   func missingRecords(_ ids: [String], from available: [HistoryRecord]) async throws -> [HistoryRecord]
   func segments(_ day: Date, device: String?) async throws -> (segments: [HistorySegment], conversations: [ConversationRef])
   func conversation(_ recordID: String) async throws -> ConversationDetail
-  func activeDays(inMonth month: String) async throws -> ActiveDaysResult
+  func activeDays(inMonth month: String, bypassCache: Bool) async throws -> ActiveDaysResult
   func cachedActiveDays(inMonth month: String) -> Set<String>
 }
 
@@ -35,6 +35,10 @@ extension ViewerDataSource {
 
   func segments(_ day: Date) async throws -> (segments: [HistorySegment], conversations: [ConversationRef]) {
     try await segments(day, device: nil)
+  }
+
+  func activeDays(inMonth month: String) async throws -> ActiveDaysResult {
+    try await activeDays(inMonth: month, bypassCache: false)
   }
 
   func cachedActiveDays(inMonth month: String) -> Set<String> { [] }
@@ -70,7 +74,7 @@ final class HTTPViewerDataSource: ViewerDataSource, @unchecked Sendable {
     try await api.segments(day, device: device)
   }
   func conversation(_ recordID: String) async throws -> ConversationDetail { try await api.conversation(recordID) }
-  func activeDays(inMonth month: String) async throws -> ActiveDaysResult {
+  func activeDays(inMonth month: String, bypassCache: Bool) async throws -> ActiveDaysResult {
     ActiveDaysResult(dates: Set(try await api.activeDays(inMonth: month).dates), authoritative: true)
   }
 }
@@ -369,10 +373,10 @@ final class CachedViewerDataSource: ViewerDataSource, @unchecked Sendable {
     return dates
   }
 
-  func activeDays(inMonth month: String) async throws -> ActiveDaysResult {
+  func activeDays(inMonth month: String, bypassCache: Bool) async throws -> ActiveDaysResult {
     try await ensureReady()
     let currentMonth = TimelineCalendar.Month(containing: clock(), calendar: calendar).key
-    let useCache = month < currentMonth
+    let useCache = !bypassCache && month < currentMonth
     do {
       let payload = try await sync.activeDays(month: month, includePrivate: await privateReadAllowed(), useCache: useCache)
       let decoded = try HubJSON.decoder().decode(ActiveDaysResponse.self, from: payload.bodyData)
@@ -1045,7 +1049,10 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
     displayLock.withLock { displayedCached }?.cachedActiveDays(inMonth: month) ?? []
   }
 
-  func activeDays(inMonth month: String) async throws -> ActiveDaysResult {
-    try await route({ try await $0.activeDays(inMonth: month) }, fallback: { try await $0.activeDays(inMonth: month) })
+  func activeDays(inMonth month: String, bypassCache: Bool) async throws -> ActiveDaysResult {
+    try await route(
+      { try await $0.activeDays(inMonth: month, bypassCache: bypassCache) },
+      fallback: { try await $0.activeDays(inMonth: month, bypassCache: bypassCache) }
+    )
   }
 }

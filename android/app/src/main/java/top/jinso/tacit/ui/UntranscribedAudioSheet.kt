@@ -33,6 +33,7 @@ internal fun UntranscribedAudioSheet(
     statusMessage: String?,
     onTogglePlay: (String) -> Unit,
     onTranscribe: (AudioConversationRow) -> Unit,
+    onRetry: (AudioConversationRow) -> Unit,
     onDelete: (AudioConversationRow) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -79,6 +80,8 @@ internal fun UntranscribedAudioSheet(
                     val isPlaying = playingKey == conversationPlaybackKey(scene.conversationId)
                     val manualStatus = statuses[scene.conversationId]
                     val playable = scene.untranscribedAudioAvailable || scene.audioAvailable
+                    val clipStart = scene.untranscribedStart ?: scene.start
+                    val clipEnd = scene.untranscribedEnd ?: scene.end
                     GroupCard {
                         Column(
                             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
@@ -91,12 +94,12 @@ internal fun UntranscribedAudioSheet(
                             ) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(
-                                        format.timeRangeLabel(scene.start, scene.end),
+                                        format.timeRangeLabel(clipStart, clipEnd),
                                         style = MaterialTheme.typography.bodyLarge,
                                         fontWeight = FontWeight.Medium,
                                         color = tacitColors.ink,
                                     )
-                                    Caption(format.durationLabel((scene.end - scene.start).coerceAtLeast(0L)))
+                                    Caption(format.durationLabel((clipEnd - clipStart).coerceAtLeast(0L)))
                                 }
                                 if (playable || isPlaying) {
                                     IconButton(
@@ -128,7 +131,7 @@ internal fun UntranscribedAudioSheet(
                                             if (playable) {
                                                 TonalButton(
                                                     strings.text(R.string.retry),
-                                                    onClick = { onTranscribe(scene) },
+                                                    onClick = { onRetry(scene) },
                                                     enabled = !busy,
                                                 )
                                             }

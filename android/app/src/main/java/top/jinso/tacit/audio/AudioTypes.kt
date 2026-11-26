@@ -36,6 +36,9 @@ data class AudioConversation(
     val transcribePending: Boolean = false,
     val hasUntranscribedClips: Boolean = false,
     val untranscribedAudioAvailable: Boolean = false,
+    val untranscribedStart: Long? = null,
+    val untranscribedEnd: Long? = null,
+    val untranscribedClipIds: List<String> = emptyList(),
 )
 
 /** Pure policy, independently testable without microphone/native libraries. */
