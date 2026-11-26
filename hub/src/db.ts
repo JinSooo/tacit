@@ -14,6 +14,7 @@ import { ulid, validateRecord, type RecordV1 } from "../../packages/record/index
 import { redactRecord } from "./redact.ts";
 import { recordDeviceFilter, SKELETON_SOURCES, sourceList } from "./record-sources.ts";
 import { registerAgentAudit, stopAgentAudit } from "./agent-audit.ts";
+import { chatAliases } from "./chat-aliases.ts";
 import { relaySchema } from "./devices/relay-store.ts";
 import { projectionSchema, projectionWithdrawal, scheduleProjectionDraft } from "./devices/projection-store.ts";
 import { deviceRoleSchema, pruneSecurityAudit, securityEventsSchema } from "./security-audit.ts";
@@ -352,14 +353,19 @@ export class HubDB {
       where.push(`r.t_start_ms ${op} ?`); args.push(time);
     }
     const q = params.get("q")?.trim();
-    for (const term of q?.split(/\s+/).filter(Boolean) ?? []) {
+    const terms = q?.split(/\s+/).filter(Boolean) ?? [];
+    // 搜某个微信聊天名时，同时找这个聊天被识字读成的其他写法（见 chat-aliases）。
+    const aliases = terms.length ? chatAliases(this) : null;
+    for (const term of terms) {
       if (/^[\u3400-\u9fff\uf900-\ufaff]$/.test(term)) {
         where.push("(r.title LIKE ? ESCAPE '\\' OR r.body LIKE ? ESCAPE '\\')");
         const escaped = term.replace(/[\\%_]/g, "\\$&"); args.push(`%${escaped}%`, `%${escaped}%`);
       } else {
         // 词内保持短语，词间 AND；引用输入避免 FTS 语法注入。
-        const phrase = bigram(term).trim().replace(/\s+/g, " ").replaceAll('"', '""');
-        where.push("r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)"); args.push(`"${phrase}"`);
+        const phrase = (word: string) => `"${bigram(word).trim().replace(/\s+/g, " ").replaceAll('"', '""')}"`;
+        const variants = aliases!.variants(term).filter(v => Array.from(v).length > 1);
+        where.push("r.rowid IN (SELECT rowid FROM records_fts WHERE records_fts MATCH ?)");
+        args.push([term, ...variants].map(phrase).join(" OR "));
       }
     }
     const limit = Number(params.get("limit") ?? 50);

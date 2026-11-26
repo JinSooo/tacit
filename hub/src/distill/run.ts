@@ -5,6 +5,7 @@ import { contentRevision, appliedCall, discardedCall } from "../runtime-log.ts";
 // 日志只写计数，不写任何记录内容或标题。
 import type { HubDB, StoredRecord } from "../db.ts";
 import { chatApp, chatKey, recordChat } from "../chat.ts";
+import { chatAliases } from "../chat-aliases.ts";
 import { ulid, toLocalIso } from "../../../packages/record/index.ts";
 import { classifyModelError, type ModelErrorCode } from "../llm/error-category.ts";
 import { inspectModelConfig } from "../llm/config.ts";
@@ -197,9 +198,10 @@ export function touchThread(store: DistillStore, threadId: string, frame: Frame)
 /** 比较用规整键，给模型的名称仍取组内最新记录的原文。 */
 function displayFrameKey(store: DistillStore, f: Frame): string {
   if (!f.key.startsWith("chat:")) return f.key;
+  const aliases = chatAliases(store.hub);
   const latest = f.record_ids.map(id => store.hub.get(id)).filter(r => r !== null).filter(r => !!recordChat(r))
     .sort((a, b) => Date.parse(b.t_start) - Date.parse(a.t_start) || b.id.localeCompare(a.id))
-    .map(r => `chat:${chatApp(r)}:${recordChat(r)}`)
+    .flatMap(r => [`chat:${chatApp(r)}:${aliases.name(chatApp(r), recordChat(r)!)}`, `chat:${chatApp(r)}:${recordChat(r)}`])
     .find(key => chatKey(key) === chatKey(f.key));
   return latest ?? f.key;
 }

@@ -1,4 +1,5 @@
 import { chatApp, chatKey, recordChat } from "../chat.ts";
+import { chatAliases, type ChatAliases } from "../chat-aliases.ts";
 import type { RecordV1 } from "../../../packages/record/index.ts";
 import { ulid } from "../../../packages/record/index.ts";
 import type { HubDB } from "../db.ts";
@@ -6,7 +7,8 @@ import { DistillStore, type Frame } from "./store.ts";
 import { AUDIO_SOURCES } from "../record-sources.ts";
 
 const gap = 10 * 60_000, maxDuration = 2 * 60 * 60_000;
-export function frameKey(record: RecordV1): string {
+/** aliases：同一微信聊天被识字读成的几种名字按一种分组。 */
+export function frameKey(record: RecordV1, aliases?: ChatAliases): string {
   if (AUDIO_SOURCES.has(record.source)) return `audio:${record.source_ref ?? record.id}`;
   const c = record.context;
   // 仓库只是项目线索；并行会话即使工作目录相同，也不是同一件事。
@@ -15,7 +17,7 @@ export function frameKey(record: RecordV1): string {
     return session ? `session:${record.source}:${session}` : `record:${record.id}`;
   }
   const chat = recordChat(record);
-  if (chat) return `chat:${chatApp(record)}:${chatKey(chat)}`;
+  if (chat) return `chat:${chatApp(record)}:${chatKey(aliases?.name(chatApp(record), chat) ?? chat)}`;
   if (c?.url) { try {
     const url = new URL(c.url);
     // Electron 内部 app://-/index.html 不是网页身份；同域网站的不同页面也必须分开。
@@ -33,7 +35,7 @@ export function frameKey(record: RecordV1): string {
 
 interface Group { key: string; records: RecordV1[]; start: number; end: number; last: number }
 /** 不生成随机 ID，纯函数输出可直接用于边界测试。 */
-export function sliceFrames(records: RecordV1[], cursor_ms: number, now = Date.now()): { frames: Omit<Frame,"id">[]; cursor_ms: number } {
+export function sliceFrames(records: RecordV1[], cursor_ms: number, now = Date.now(), aliases?: ChatAliases): { frames: Omit<Frame,"id">[]; cursor_ms: number } {
   const sorted = records.filter(r => r.source !== "manual.correction").sort((a,b) => Date.parse(a.t_start)-Date.parse(b.t_start) || a.id.localeCompare(b.id));
   const groups: Group[] = [], current = new Map<string,Group>();
   const add = (r: RecordV1, key: string) => {
@@ -45,7 +47,7 @@ export function sliceFrames(records: RecordV1[], cursor_ms: number, now = Date.n
     }
     g.records.push(r); g.end = Math.min(Math.max(g.end,end),g.start+maxDuration); g.last = end;
   };
-  for (const r of sorted) add(r,frameKey(r));
+  for (const r of sorted) add(r,frameKey(r, aliases));
   const open = groups.filter(g => now-g.last < gap);
   const next = Math.max(cursor_ms, open.length ? Math.min(...open.map(g => g.start))-1 : Math.max(cursor_ms,...sorted.map(r => Date.parse(r.t_start))));
   return {
@@ -65,7 +67,7 @@ export function persistFrames(db: HubDB, cursor: number, now = Date.now(), befor
     const rows = (before !== undefined
       ? db.db.prepare(`SELECT id FROM records r WHERE t_start_ms>? AND t_start_ms<? AND NOT EXISTS(SELECT 1 FROM frame_records fr WHERE fr.record_id=r.id) ORDER BY t_start_ms,id`).all(cursor,before)
       : db.db.prepare(`SELECT id FROM records r WHERE (r.rowid>? OR t_start_ms>?) AND (t_start_ms>=? OR source GLOB 'manual.*') AND NOT EXISTS(SELECT 1 FROM frame_records fr WHERE fr.record_id=r.id) ORDER BY t_start_ms,id`).all(lastRowid,Math.max(enabled-1,now-48*3600000),enabled)) as { id: string }[];
-    const result = sliceFrames(rows.map(r => db.get(r.id)!),cursor,now);
+    const result = sliceFrames(rows.map(r => db.get(r.id)!),cursor,now,chatAliases(db));
     const frames = result.frames.map(f => ({ ...f,id: ulid() }));
     for (const frame of frames) store.createFrame(frame);
     if (before === undefined) {

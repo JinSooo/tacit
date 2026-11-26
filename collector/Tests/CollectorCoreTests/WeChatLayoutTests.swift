@@ -110,11 +110,20 @@ private let sidebar: [OCRLine] = [
     let lines = [line(name, 304, 400, 19, h: 18), line("真实会话", 500, 600, 19, h: 18), line("正文", 370, 470, 100)]
     #expect(WeChatLayout.parse(lines, width: W, height: H) == nil)
   }
-  for name in ["File Transfer", "中交三航局星云测试", "C王家琪", "図", "群"] {
+  for name in ["File Transfer", "中交三航局星云测试", "C王家琪"] {
     #expect(ChatNames.isValid(name))
     let view = try #require(WeChatLayout.parse([line(name, 304, 500, 19, h: 18), line("正文", 370, 470, 100)], width: W, height: H))
     #expect(view.chat == name)
     #expect(view.messages.count == 1)
+  }
+  // 单字标题多半是图标被认成了字：会话列表里也有同名一行才算聊天（2026-11-26）。
+  for name in ["図", "群"] {
+    #expect(ChatNames.isValid(name))
+    #expect(WeChatLayout.parse([line(name, 304, 500, 19, h: 18), line("正文", 370, 470, 100)], width: W, height: H) == nil)
+    #expect(WeChatLayout.parse(sidebar + [line(name, 304, 500, 19, h: 18), line("正文", 370, 470, 100)], width: W, height: H) == nil)
+    let listed = sidebar + [line(name, 118, 140, 433), line("12:01", 251, 279, 434, h: 10)]
+    let view = try #require(WeChatLayout.parse(listed + [line(name, 304, 500, 19, h: 18), line("正文", 370, 470, 100)], width: W, height: H))
+    #expect(view.chat == name)
   }
   let view = try #require(WeChatLayout.parse([line("C 王家琪（19）", 304, 600, 19, h: 18)], width: W, height: H))
   #expect(view.chat == "C王家琪")
@@ -130,4 +139,50 @@ private let sidebar: [OCRLine] = [
   for name in ["File Transfer", "中交三航局星云测试", "C王家琪", "pdf讨论群", "文档.pdf讨论"] {
     #expect(!ChatNames.isFilePreview(name))
   }
+}
+
+@Test func weChatReadsTheMainWindowAndSkipsViewers() {
+  #expect(WeChatLayout.windowRank("Weixin") == 0)
+  #expect(WeChatLayout.windowRank("微信") == 0)
+  #expect(WeChatLayout.windowRank("Photos and Videos") == nil)
+  #expect(WeChatLayout.windowRank("报告.pdf") == nil)
+  #expect(WeChatLayout.windowRank("合成会话甲") == 1)
+}
+
+private func view(_ chat: String, _ texts: [String], time: String = "17:00", group: Bool = false) -> WeChatView {
+  WeChatView(chat: chat, isGroup: group, messages: texts.map { WeChatMessage(sender: group ? "合成甲" : chat, fromMe: false, text: $0, shownTime: time) })
+}
+
+@Test func misreadChatNamesSharingAMessageBecomeOneChat() {
+  var names = ChatNameResolver()
+  // 2026-11-26 真实情况的合成版：同一屏消息先后被读成三种名字。
+  let first = names.resolve(view("C合成文科", ["展板明天上午送到", "好的"]))
+  #expect(first.chat == "C合成文科")
+  let misread = names.resolve(view("C合戊文科", ["展板明天上午送到", "好的"]))
+  #expect(misread == first)
+  _ = names.resolve(view("C合成文科", ["展板明天上午送到"]))
+  #expect(names.resolve(view("C合戊文料", ["展板明天上午送到"])) == first)
+  // 多数读法换了时，编号不变，名字跟着多数走。
+  for _ in 0..<5 { _ = names.resolve(view("C合戊文科", ["展板明天上午送到"])) }
+  #expect(names.resolve(view("C合成文科", ["展板明天上午送到"])) == ("C合戊文科", first.cluster))
+}
+
+@Test func differentChatsAreNotMergedOnNamesOrShortMessagesAlone() {
+  var names = ChatNameResolver()
+  let a = names.resolve(view("合成张伟群", ["收到"]))
+  // 名字只差一个字，但只共有一条很短的消息：不能认定是同一个聊天。
+  let b = names.resolve(view("合成张玮群", ["收到"]))
+  #expect(a.cluster != b.cluster)
+  // 共有一条实在的消息，但名字差得远：也不合并。
+  let c = names.resolve(view("合成项目甲", ["展板明天上午送到"]))
+  let d = names.resolve(view("另一个讨论组", ["展板明天上午送到"]))
+  #expect(c.cluster != d.cluster)
+  #expect(!ChatNameResolver.near("図", "国"))
+  #expect(!ChatNameResolver.near("合成项目1群", "合成项目10群"))
+  // 没有时间分隔的同一句话不算证据。
+  let e = names.resolve(view("合成甲组", ["展板明天上午送到"], time: ""))
+  let f = names.resolve(view("合成乙组", ["展板明天上午送到"], time: ""))
+  #expect(e.cluster != f.cluster)
+  #expect(ChatNameResolver.near("AlTeam", "AITeam"))
+  #expect(ChatNameResolver.near("定制开发—桥梁健康检测系统", "定制开发一桥梁健康检测系统"))
 }

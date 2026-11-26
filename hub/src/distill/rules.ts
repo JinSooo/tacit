@@ -1,4 +1,5 @@
 import { chatApp, chatKey, recordChat } from "../chat.ts";
+import { chatAliases } from "../chat-aliases.ts";
 import { basename, resolve } from "node:path";
 import { ulid, type RecordV1 } from "../../../packages/record/index.ts";
 import { DistillStore, type Frame, type Project, type ProjectKeys } from "./store.ts";
@@ -82,13 +83,15 @@ export class DistillRules {
     if (frame.key.startsWith("repo:") && ignoredRepo(frame.key.slice(5), ignored.repos)) return true;
     if (frame.key.startsWith("chat:") && ignoredChat(frame.key.slice(5), ignored.chats)) return true;
     if (frame.key.startsWith("host:") && ignoredHost(frame.key.slice(5), ignored.hosts)) return true;
+    const aliases = chatAliases(this.store.hub);
     return this.publicRecords(frame).some(record => {
       const path = recordRepo(record), context = record.context;
-      const name = recordChat(record);
+      const read = recordChat(record), name = read && aliases.name(chatApp(record), read);
       const chat = name && `${chatApp(record)}:${name}`;
       const host = context?.url ? URL.parse(context.url)?.hostname : undefined;
       return (!!path && ignoredRepo(path, ignored.repos)) || ignoredChat(chat, ignored.chats)
-        || ignoredChat(name, ignored.chats) || ignoredHost(host, ignored.hosts);
+        || ignoredChat(name, ignored.chats) || ignoredChat(read && `${chatApp(record)}:${read}`, ignored.chats)
+        || ignoredChat(read, ignored.chats) || ignoredHost(host, ignored.hosts);
     });
   }
 }

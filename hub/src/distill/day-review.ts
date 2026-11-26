@@ -1,5 +1,6 @@
 import { toLocalIso } from "../../../packages/record/index.ts";
 import { chatKey, recordChat } from "../chat.ts";
+import { chatAliases } from "../chat-aliases.ts";
 import { groupConversations } from "../conversations.ts";
 import { readGeneral } from "../general-settings.ts";
 import { speechUnits, summaryLength, type Lang } from "../i18n/index.ts";
@@ -98,10 +99,20 @@ function loadRecords(hub: HubDB, start: number, end: number, lang: Lang, draft?:
     ORDER BY r.t_start_ms,r.id`).iterate(end, queryStart - LONGEST_RECORD, queryStart, new Date(queryStart).toISOString());
   const records: ReviewRecord[] = [];
   const excluded = new Set<string>();
+  const aliases = chatAliases(hub);
+  // 同一条微信消息在聊天名被读成几种写法时存了几遍：只留第一条当原文，其余挂在它下面（2026-11-26）。
+  const firstCopy = new Map<string, { record: ReviewRecord; read: string }>();
   const windowStart = Math.max(start, cutoff ?? start);
   const evidenceStart = cutoff === undefined ? start : Math.max(start, cutoff + 1);
   for (const row of rows) {
-    const context = row.context ? JSON.parse(row.context) as Parameters<typeof frameKey>[0]["context"] : undefined;
+    let context = row.context ? JSON.parse(row.context) as Parameters<typeof frameKey>[0]["context"] : undefined;
+    let copyKey: string | undefined, readChat: string | undefined;
+    if (row.source === "mac.wechat" && context?.chat) {
+      const read = readChat = context.chat, chat = aliases.name(context.app ?? row.source, read), extra = context.extra;
+      const sender = extra?.group === 0 && extra.sender === read ? chat : extra?.sender;
+      if (chat !== read) context = { ...context, chat, ...(extra ? { extra: { ...extra, sender } } : {}) };
+      copyKey = [context.app ?? row.source, chatKey(chat), extra?.from_me, (row.body ?? "").replace(/[^\p{L}\p{N}]/gu, ""), extra?.shown_time ?? ""].join("\u0000");
+    }
     const original = { ...row, context };
     const isSession = SESSION_SOURCES.has(row.source);
     const session = isSession && row.source_ref
@@ -112,7 +123,7 @@ function loadRecords(hub: HubDB, start: number, end: number, lang: Lang, draft?:
       (row.t_start_ms >= cutoff && draft?.covered.has(row.id)))) continue;
     const key = row.key ?? frameKey({
       id: row.id, source: row.source, source_ref: row.source_ref ?? undefined, title: row.title, context,
-    } as Parameters<typeof frameKey>[0]);
+    } as Parameters<typeof frameKey>[0], aliases);
     const title = terse(redactString(row.title).text, 120) || (lang === "en" ? "Source record" : "原始记录");
     const reference = { id: row.id, source: row.source, title, at: row.t_start };
     const evidence = readDayEvidence(reference, original,
@@ -120,14 +131,19 @@ function loadRecords(hub: HubDB, start: number, end: number, lang: Lang, draft?:
     if (!evidence) continue;
     if (draft && !SKELETON_SOURCES.has(row.source) &&
       (!evidence.length || (isSession && !draft.includeRelated && !evidence.some(entry => entry.role === "user")))) continue;
-    records.push({
+    const record: ReviewRecord = {
       ...reference,
       start: Math.max(windowStart, row.t_start_ms), end: Math.min(end, finish),
       key, lastActivity: Math.min(end, finish), thread: row.thread_id, projectId: row.project_id, projectName: row.project_name, session, evidence,
       replyOnly: isSession && !/^\[我\] /m.test(row.body ?? ""),
       app: context?.app ? redactString(context.app).text : null, chat: redactString(recordChat(original) ?? "").text || null,
       chatApp: row.source, device: row.device,
-    });
+    };
+    // 只合并因聊天名读法不同而重复存下的；同一写法下的两条一样的话照旧各算一条。
+    const first = copyKey === undefined ? undefined : firstCopy.get(copyKey);
+    if (first && first.read !== readChat) { (first.record.related ??= []).push({ ...record, evidence: [] }); continue; }
+    if (copyKey !== undefined && !first) firstCopy.set(copyKey, { record, read: readChat! });
+    records.push(record);
   }
   // 草稿只读截止之后的记录；评测或发布检查的标记可能只在截止前的批次里，只为截止后出现的会话补查。
   if (queryStart > start) {

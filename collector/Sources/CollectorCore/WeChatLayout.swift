@@ -54,6 +54,15 @@ public enum WeChatLayout {
     return false
   }
 
+  /// 挑哪个微信窗口来读：主窗口优先；图片查看器和文件预览不读，它们的工具栏图标会被认成“品”“凹”这类单字，
+  /// 图里的文字会被当成聊天消息（2026-11-26 真实数据 14 天 87 条）。其他窗口（独立聊天窗口等）排在主窗口后面。
+  public static func windowRank(_ title: String) -> Int? {
+    let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    if ["Weixin", "WeChat", "微信"].contains(t) { return 0 }
+    if ["Photos and Videos", "图片和视频", "图片与视频", "图片", "视频"].contains(t) || ChatNames.isFilePreview(t) { return nil }
+    return 1
+  }
+
   /// 聊天区标题：窗口顶部、横向最靠左但在会话列表右边的一行。没有会话列表（窄窗口）时就是顶部最左的一行。
   static func title(_ lines: [OCRLine], width: Double) -> OCRLine? {
     let top = lines.filter { $0.y < titleMaxY && $0.height >= 12 && !looksLikeTime($0.text) && $0.maxX < width - 60 }
@@ -89,6 +98,12 @@ public enum WeChatLayout {
     if let r = chat.range(of: #"\s*[（(]\d+[）)]$"#, options: .regularExpression) { chat.removeSubrange(r); isGroup = true }
     chat = ChatNames.normalize(chat)
     guard ChatNames.isValid(chat) else { return nil }
+    // 只有一个字的标题多半是图标被认成了字（“品”“凹”“区”）。会话列表里也有同名的一行才算聊天。
+    if ChatNames.key(chat).count == 1 {
+      guard let right = sidebarRight(lines, width: width),
+            lines.contains(where: { $0.maxX <= right + 4 && $0.y > titleMaxY && ChatNames.key($0.text) == ChatNames.key(chat) })
+      else { return nil }
+    }
     let chatCenter = (left - 15 + width) / 2
     let sendRow = lines.filter { $0.minX > width - 100 && $0.y > height * 0.7 }.map(\.y).min()
     let body = lines

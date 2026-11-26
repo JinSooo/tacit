@@ -1,6 +1,7 @@
 import { ulid } from '../../../packages/record/index.ts';
 import type { DistillStore, Frame } from './store.ts';
 import { sliceFrames } from './frames.ts';
+import { chatAliases } from '../chat-aliases.ts';
 
 /** 对已审核的旧片段重建边界；只改派生关系，原记录、修正和用户事实不动。
  * 后续先重建返回的源事项，再让新片段归属，最后更新项目/日记。
@@ -20,7 +21,7 @@ export function repairFrameBoundaries(store: DistillStore, frameIds: string[]) {
       if (assignment?.method === 'user' || userFact) { result.protected.push(id); continue; }
       const originals = ids.map(rid => store.hub.get(rid));
       if (originals.some(r => !r)) throw new Error('重分组引用的记录不存在');
-      const next = sliceFrames(originals.map(r => r!), 0, Number.MAX_SAFE_INTEGER).frames;
+      const next = sliceFrames(originals.map(r => r!), 0, Number.MAX_SAFE_INTEGER, chatAliases(store.hub)).frames;
       if (next.length <= 1) continue;
       const coverage = next.flatMap(f => f.record_ids).sort();
       if (JSON.stringify(coverage) !== JSON.stringify([...ids].sort())) throw new Error('重分组不能增删原始记录');

@@ -20,6 +20,8 @@ final class WeChatCollector {
   private var seenSet: Set<String> = []
   /// 最近记下的消息，按（会话、发送人、时间分隔）分组，指纹没对上时比内容是否只差一两个字。
   private var recent: [String: [String]] = [:]
+  /// 同一个聊天名的几种读法合成一个（见 ChatNameResolver）。
+  private var names = ChatNameResolver()
   private var running = false
   private var lastRun = Date.distantPast
   // 只在主线程读写，给"上次运行"用。
@@ -35,7 +37,7 @@ final class WeChatCollector {
     queue.async { [self] in
       guard !running, Date().timeIntervalSince(lastRun) >= Self.interval, ocr.granted else { return }
       running = true; lastRun = Date()
-      ocr.recognizeLines(pid: pid, frame: frame, skipFilePreviews: true) { [self] lines, size, _ in
+      ocr.recognizeLines(pid: pid, frame: frame, windowRank: WeChatLayout.windowRank) { [self] lines, size, _ in
         queue.async { [self] in
           defer { running = false }
           let now = Date()
@@ -56,13 +58,22 @@ final class WeChatCollector {
   }
 
   /// 只在 queue 上调用。
-  private func records(_ view: WeChatView, now: Date) -> [Record] {
+  private func records(_ read: WeChatView, now: Date) -> [Record] {
+    let (chat, cluster) = names.resolve(read)
+    var view = read
+    if chat != read.chat {
+      // 单聊里对方就是会话名，跟着一起改。
+      if !view.isGroup { view.messages = view.messages.map { m in var m = m; if m.sender == read.chat { m.sender = chat }; return m } }
+      view.chat = chat
+    }
     var out: [Record] = []
     for m in view.messages {
+      // 本地去重按聊天编号：多数读法中途换了，同一条消息也不再发第二遍。
+      let local = WeChatLayout.fingerprint(chat: "#\(cluster)", message: m)
+      guard !seenSet.contains(local) else { continue }
+      remember(local)
       let fp = WeChatLayout.fingerprint(chat: view.chat, message: m)
-      guard !seenSet.contains(fp) else { continue }
-      remember(fp)
-      let group = [ChatNames.key(view.chat), m.fromMe ? "\u{1}me" : (m.sender ?? ""), m.shownTime].joined(separator: "\u{0}")
+      let group = ["#\(cluster)", m.fromMe ? "\u{1}me" : (m.sender ?? ""), m.shownTime].joined(separator: "\u{0}")
       if recent[group, default: []].contains(where: { WeChatLayout.sameText($0, m.text) }) { continue }
       recent[group, default: []].append(m.text)
       if recent.count > 2000 { recent.removeAll() }

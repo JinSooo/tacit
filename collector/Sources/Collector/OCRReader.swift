@@ -18,7 +18,8 @@ final class OCRReader {
   }
 
   /// 同上，带每行在窗口里的位置（点，左上为原点）和窗口尺寸，给按版面拆分的读取用（微信）。
-  func recognizeLines(pid: pid_t, frame: CGRect?, skipFilePreviews: Bool = false, completion: @escaping (_ lines: [OCRLine], _ window: CGSize, _ ms: Int) -> Void) {
+  /// windowRank 按窗口标题挑窗口：返回 nil 的不读，数字小的优先，同级再按位置或大小挑。
+  func recognizeLines(pid: pid_t, frame: CGRect?, windowRank: ((String) -> Int?)? = nil, completion: @escaping (_ lines: [OCRLine], _ window: CGSize, _ ms: Int) -> Void) {
     let started = Date()
     Task.detached(priority: .utility) {
       do {
@@ -29,8 +30,10 @@ final class OCRReader {
           guard let f = frame else { return -w.frame.width * w.frame.height }
           return abs(w.frame.minX - f.minX) + abs(w.frame.minY - f.minY) + abs(w.frame.width - f.width) + abs(w.frame.height - f.height)
         }
-        guard let win = candidates.min(by: { distance($0) < distance($1) }) else { completion([], .zero, 0); return }
-        if skipFilePreviews, ChatNames.isFilePreview(win.title ?? "") { completion([], .zero, 0); return }
+        let ranked = candidates.compactMap { w in (windowRank ?? { _ in 0 })(w.title ?? "").map { (window: w, rank: $0) } }
+        guard let win = ranked.min(by: { ($0.rank, distance($0.window)) < ($1.rank, distance($1.window)) })?.window else {
+          completion([], .zero, 0); return
+        }
         let filter = SCContentFilter(desktopIndependentWindow: win)
         let cfg = SCStreamConfiguration()
         let scale = min(self.maxScale, 3000 / max(win.frame.width, 1))
