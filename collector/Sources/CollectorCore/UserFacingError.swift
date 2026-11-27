@@ -50,6 +50,8 @@ public struct HubError: LocalizedError {
 public enum UserFacingError {
   public static func message(for error: Error, fallback: String) -> String {
     if error is DecodingError { return L10n.unreadableResponse }
+    if let startup = error as? LoginStartup.StartupError { return startup.errorDescription ?? fallback }
+    if let paused = error as? RemoteSwitchWriteGate.Paused { return paused.errorDescription ?? fallback }
     if let hub = error as? HubError {
       if let message = hub.localizedMessage { return message }
       return hub.displayableServiceMessage ?? hubMessage(status: hub.status, reason: hub.reason, fallback: fallback)

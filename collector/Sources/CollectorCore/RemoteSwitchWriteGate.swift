@@ -4,7 +4,9 @@ import Foundation
 /// enqueue records while the backend is paused. The coordinator holds the pause through publication.
 public final class RemoteSwitchWriteGate: @unchecked Sendable {
   public struct Paused: LocalizedError {
-    public var errorDescription: String? { "正在切换后台，新的写入暂缓。" }
+    public var errorDescription: String? {
+      L10n.text(zh: "正在切换后台，新的写入暂缓。", en: "Saving is paused while the background service switches.")
+    }
   }
 
   public init() {}

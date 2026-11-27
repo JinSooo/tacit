@@ -102,3 +102,22 @@ func supportedServiceInstructionsRemainVisible(_ language: AppLanguage) {
     }
   }
 }
+
+@Test(arguments: AppLanguage.allCases)
+func loginStartupAndBackendSwitchErrorsKeepTheirRecoveryGuidance(_ language: AppLanguage) {
+  AppLanguage.$scopedLanguage.withValue(language) {
+    let cases: [(Error, String, String)] = [
+      (LoginStartup.StartupError.notInstalled, "启动配置不完整，请重新安装应用后再试。",
+       "Startup settings are incomplete. Reinstall Tacit and try again."),
+      (LoginStartup.StartupError.duplicate, "发现重复的启动配置，未作更改。请重新安装应用后再试。",
+       "Duplicate startup settings were found, so the change was skipped. Reinstall Tacit and try again."),
+      (LoginStartup.StartupError.switching, "后台正在切换，登录启动暂时无法更改。",
+       "Wait for the background service to finish switching before changing login startup."),
+      (RemoteSwitchWriteGate.Paused(), "正在切换后台，新的写入暂缓。",
+       "Saving is paused while the background service switches."),
+    ]
+    for (error, zh, en) in cases {
+      #expect(UserFacingError.message(for: error, fallback: "fallback") == (language == .zh ? zh : en))
+    }
+  }
+}
