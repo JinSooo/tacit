@@ -45,7 +45,7 @@ private struct ReviewDayContent: View {
   @State private var picking = false
   @State private var hoveringDateTitle = false
   @Namespace private var densityPill
-  @State private var setup: (health: DistillHealth, tools: [AgentToolState], minuteModel: ModelTierConfig?)?
+  @State private var setup: (readiness: SetupReadiness, minuteModel: ModelTierConfig?)?
   @State private var backendSetup: AppSetup.ChecklistStep?
   @State private var backendChecked = false
   @State private var securityEvents = TimelineSecurityEventState()
@@ -212,8 +212,10 @@ private struct ReviewDayContent: View {
         }
         if !store.pending.isEmpty { TimelinePendingLine().transition(.notice) }
       }
-      SetupChecklist(backend: localSetup, backendChecked: backendChecked || store.isRemoteBackend, health: localSetup == nil ? setup?.health : nil,
-                     tools: localSetup == nil ? setup?.tools : nil, minuteModel: setup?.minuteModel)
+      SetupChecklist(backend: localSetup, backendChecked: backendChecked || store.isRemoteBackend,
+                     health: localSetup == nil ? setup?.readiness.health : nil,
+                     tools: localSetup == nil && !store.isRemoteBackend ? setup?.readiness.tools : nil,
+                     minuteModel: setup?.minuteModel)
         .transition(.notice)
     }
   }
@@ -377,15 +379,17 @@ private struct ReviewDayContent: View {
   }
 
   private func loadSetup() async {
+    let remote = store.isRemoteBackend
     do {
-      async let health = store.api.distillHealth()
-      async let tools = store.api.agentTools()
-      let (status, installed) = try await (health, tools)
-      let config = status.state == .working ? nil : try? await store.api.modelSettings().tiers["minute"]
+      let readiness = try await store.api.setupReadiness(includeLocalTools: !remote)
+      let config = readiness.health.state == .working ? nil : try? await store.api.modelSettings().tiers["minute"]
       try Task.checkCancellation()
-      setup = (status, installed, config)
+      guard remote == store.isRemoteBackend else { return }
+      setup = (readiness, config)
     } catch is CancellationError {
-    } catch { setup = nil }
+    } catch {
+      if remote == store.isRemoteBackend { setup = nil }
+    }
   }
 
   /// 打开今天的时间线时按需补整理（规则见 TimelineCatchUp）。返回 true 表示补整理刚结束，需要马上重新读取。

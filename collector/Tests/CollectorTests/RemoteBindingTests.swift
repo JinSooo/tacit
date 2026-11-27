@@ -63,6 +63,23 @@ private func identity(_ hub: Curve25519.KeyAgreement.PrivateKey) throws -> HubBi
             hubPublicKey: DeviceEnvelope.publicKeyBase64URL(hub.publicKey))
 }
 
+@Test func remoteSetupReadinessKeepsModelHealthWithoutLocalAgentTools() async throws {
+  let dir = try syntheticDirectory()
+  defer { try? FileManager.default.removeItem(at: dir) }
+  let binding = try commit(dir, identity(.init()))
+  let api = HubAPI(base: { localAddress }, token: { nil }, deviceAction: { op, _, _, route in
+    #expect(op == "status.get")
+    #expect(route == binding.route)
+    return .init(status: 200, body: [:], bodyData: Data(#"{"distill":{}}"#.utf8))
+  }, hubRoute: { binding.route })
+
+  // The local-only endpoint really fails on this binding.
+  await #expect(throws: HubError.self) { try await api.agentTools() }
+  let readiness = try await api.setupReadiness(includeLocalTools: false)
+  #expect(readiness.health.state == .waiting)
+  #expect(readiness.tools == nil)
+}
+
 private func writeRemote(_ dir: URL, _ identity: HubBinding.Remote) throws -> URL {
   let sub = dir.appendingPathComponent(identity.dir)
   try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: false)

@@ -30,7 +30,18 @@ struct AgentConfigSnippet: Decodable, Equatable {
   }
 }
 
+struct SetupReadiness {
+  let health: DistillHealth
+  let tools: [AgentToolState]?
+}
+
 extension HubAPI {
+  func setupReadiness(includeLocalTools: Bool) async throws -> SetupReadiness {
+    async let health = distillHealth()
+    async let tools = includeLocalTools ? agentTools() : nil
+    return try await SetupReadiness(health: health, tools: tools)
+  }
+
   func agentTools() async throws -> [AgentToolState] {
     struct R: Decodable { let tools: [AgentToolState] }
     return try await get(R.self, "/v1/settings/agents").tools
