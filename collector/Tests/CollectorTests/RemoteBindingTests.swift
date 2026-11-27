@@ -84,9 +84,13 @@ private func identity(_ hub: Curve25519.KeyAgreement.PrivateKey) throws -> HubBi
 @Test func firstPreparationStampIsReadFromTheActiveDataDirectory() throws {
   let dir = try syntheticDirectory()
   defer { try? FileManager.default.removeItem(at: dir) }
-  #expect(!AppSetup.hasCompletedPreparation(in: dir))
-  try Data(#"{"version":"fixture"}"#.utf8).write(to: dir.appendingPathComponent("app-setup.json"))
-  #expect(AppSetup.hasCompletedPreparation(in: dir))
+  #expect(AppSetup.firstPreparationDate(in: dir) == nil)
+  let stamp = dir.appendingPathComponent("app-setup.json")
+  try Data(#"{"version":"fixture"}"#.utf8).write(to: stamp)
+  let created = try #require(AppSetup.firstPreparationDate(in: dir))
+  let later = created.addingTimeInterval(600)
+  try FileManager.default.setAttributes([.modificationDate: later], ofItemAtPath: stamp.path)
+  #expect(AppSetup.firstPreparationDate(in: dir) == created)
 }
 
 private func writeRemote(_ dir: URL, _ identity: HubBinding.Remote) throws -> URL {
