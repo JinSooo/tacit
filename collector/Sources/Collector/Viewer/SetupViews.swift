@@ -130,6 +130,7 @@ struct AgentToolRows: View {
       DisclosureGroup(L10n.Settings.otherAgentTools) {
         ForEach(others, content: row)
       }
+      .disclosureGroupStyle(SettingsDisclosureStyle())
     }
   }
 
@@ -287,7 +288,9 @@ struct SetupChecklist: View {
               Text(L10n.Settings.setupChecklist)
               Spacer()
               DisclosureChevron(expanded: expanded, sideways: true)
-            }.padding(.vertical, 4)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
           }
           .disabled(!backendChecked)
           .buttonStyle(.accentLink).font(.system(size: TextSize.body))

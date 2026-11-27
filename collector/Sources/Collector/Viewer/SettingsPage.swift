@@ -90,6 +90,28 @@ struct SettingsPage: View {
   }
 }
 
+struct SettingsDisclosureStyle: DisclosureGroupStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Button {
+        Motion.animate { configuration.isExpanded.toggle() }
+      } label: {
+        HStack(spacing: 8) {
+          DisclosureChevron(expanded: configuration.isExpanded, sideways: true)
+            .foregroundStyle(Palette.muted)
+          configuration.label
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityValue(configuration.isExpanded ? L10n.Settings.expanded : L10n.Settings.collapsed)
+      if configuration.isExpanded { configuration.content }
+    }
+  }
+}
+
 /// 设置页里统一的表单外观。
 struct SettingsForm<Content: View>: View {
   @ViewBuilder var content: Content
