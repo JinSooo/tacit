@@ -1,7 +1,7 @@
 import { toLocalIso, type RecordV1 } from "../../../packages/record/index.ts";
 import { parseTranscript } from "../conversations.ts";
 import { recordChat } from "../chat.ts";
-import { AUDIO_SOURCES } from "../record-sources.ts";
+import { AGENT_SESSION_SOURCES, AUDIO_SOURCES } from "../record-sources.ts";
 import { redactString } from "../redact.ts";
 import { materialBody } from "./material.ts";
 import { excerpt } from "./prompts.ts";
@@ -29,7 +29,7 @@ export function dayDisplayName(value: unknown, maxChars = 80): string | undefine
 
 function spoken(record: Pick<RecordV1, "source" | "body" | "context">, original: DayRecord, end: number): Spoken[] | null {
   const at = original.t_start;
-  if (record.source === "codex.session" || record.source === "claude_code.session") {
+  if (AGENT_SESSION_SOURCES.has(record.source)) {
     const finish = original.t_end ?? at;
     const messages = [...record.body.matchAll(/(?:^|\n\n)\[(我|AI)\] ([\s\S]*?)(?=\n\n\[(?:我|AI)\] |$)/g)];
 

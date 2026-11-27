@@ -349,10 +349,10 @@ public enum SegmentFold {
 public enum Lane: Int, CaseIterable, Sendable {
   case screen, browser, agent, terminal, voice, other
   public static func of(_ source: String) -> Lane {
+    if AgentTools.session(source: source) != nil { return .agent }
     switch source {
     case "mac.screen", "mac.app", "android.usage": return .screen
     case "mac.browser": return .browser
-    case "claude_code.session", "codex.session": return .agent
     case "mac.shell", "mac.git": return .terminal
     case "mac.audio", "android.audio", "mac.calendar", "mac.wechat", "android.notification": return .voice
     default: return .other

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from packages/record/agent-tools.ts. Regenerate with bun packages/record/generate-agent-tools.ts. -->
+<resources>
+    <string name="source_claude_code">Claude Code</string>
+    <string name="source_codex">Codex</string>
+    <string name="source_antigravity">Antigravity</string>
+    <string name="source_opencode">OpenCode</string>
+    <string name="source_codebuddy">CodeBuddy</string>
+    <string name="source_workbuddy">WorkBuddy</string>
+    <string name="source_copilot_cli">Copilot CLI</string>
+    <string name="source_droid">Droid</string>
+    <string name="source_qwen_code">Qwen Code</string>
+    <string name="source_gemini_cli">Gemini CLI</string>
+    <string name="source_kimi_cli">Kimi CLI</string>
+</resources>
