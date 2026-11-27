@@ -8,7 +8,7 @@ import type { HubDB } from "../db.ts";
 import { unionSeconds } from "../durations.ts";
 import { redactString } from "../redact.ts";
 import { dayDisplayName, readDayEvidence, sampleDayEvidence, type DayReference, type UnnumberedEvidence } from "./day-evidence.ts";
-import { AUDIO_SOURCES, SKELETON_SOURCES, audioDeviceGroup, sourceList } from "../record-sources.ts";
+import { AGENT_SESSION_SOURCES, AUDIO_SOURCES, SKELETON_SOURCES, audioDeviceGroup, sourceList } from "../record-sources.ts";
 import { excludedSession, requestOnly } from "./session-purpose.ts";
 import { frameKey } from "./frames.ts";
 import { daySchema, fitSummary, MAX_DAY_SUMMARY_CHARS, MAX_REVIEW_CANDIDATES, MAX_REVIEW_SEGMENTS, summarySentences, type DayOutput } from "./prompts.ts";
@@ -17,7 +17,6 @@ import { DAY_DESCRIPTION_WORDS } from "./prompts/en.ts";
 const MINUTE = 60_000;
 const MISC_SECONDS = 5 * 60;
 const EVIDENCE_WINDOW = 2 * MINUTE;
-const SESSION_SOURCES = new Set(["codex.session", "claude_code.session"]);
 // 跨进窗口的记录最早从窗口前多久开始：录音、AI 会话批次都不超过 24 小时，留一倍余量；否则按结束时间找跨界记录要扫全部历史。
 const LONGEST_RECORD = 48 * 60 * MINUTE;
 const terse = (text: string, max: number) => Array.from(text.replace(/\s+/g, " ").trim()).slice(0, max).join("");
@@ -94,7 +93,7 @@ function loadRecords(hub: HubDB, start: number, end: number, lang: Lang, draft?:
       ORDER BY cc.t_start_ms DESC,cc.id DESC LIMIT 1)
     WHERE r.t_start_ms<? AND r.t_start_ms>=? AND (r.t_start_ms>=? OR (r.t_end IS NOT NULL AND julianday(r.t_end)>julianday(?)))
       AND r.sensitivity<>'private' AND COALESCE(c.sensitivity,'normal')<>'private'
-      AND (r.source IN (${sourceList(SKELETON_SOURCES)},${sourceList(AUDIO_SOURCES)},'codex.session','claude_code.session','mac.wechat','manual.note')
+      AND (r.source IN (${sourceList(SKELETON_SOURCES)},${sourceList(AUDIO_SOURCES)},${sourceList(AGENT_SESSION_SOURCES)},'mac.wechat','manual.note')
         OR (r.source NOT IN ('mac.shell','mac.git','mac.file','mac.clipboard','android.notification','manual.agent','manual.correction')
           AND json_type(r.context,'$.chat')='text' AND json_extract(r.context,'$.extra.from_me') IN (0,1)))
     ORDER BY r.t_start_ms,r.id`).iterate(end, queryStart - LONGEST_RECORD, queryStart, new Date(queryStart).toISOString());
@@ -115,7 +114,7 @@ function loadRecords(hub: HubDB, start: number, end: number, lang: Lang, draft?:
       copyKey = [context.app ?? row.source, chatKey(chat), extra?.from_me, (row.body ?? "").replace(/[^\p{L}\p{N}]/gu, ""), extra?.shown_time ?? ""].join("\u0000");
     }
     const original = { ...row, context };
-    const isSession = SESSION_SOURCES.has(row.source);
+    const isSession = AGENT_SESSION_SOURCES.has(row.source);
     const session = isSession && row.source_ref
       ? JSON.stringify([row.source, row.source_ref.split("#", 1)[0]]) : null;
     if (isSession && excludedSession(row.body ?? "", context)) excluded.add(session ?? row.id);
@@ -169,7 +168,7 @@ function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: numb
   // 每个在场区间还能延到哪：区间内每条输入最多 30 分钟。只有 AI 回复的后续批次是上一条输入那一轮的回复，在这之内接着计时。
   const reach = new Map<ReviewRecord, number>();
   for (const record of records) {
-    if (!SESSION_SOURCES.has(record.source)) {
+    if (!AGENT_SESSION_SOURCES.has(record.source)) {
       // 聊天点先扩为在场窗口，统一用于裁决、覆盖率、排序与最终计时。
       const point = record.chat && !SKELETON_SOURCES.has(record.source) && !AUDIO_SOURCES.has(record.source) && record.start === record.end;
       result.push(point ? { ...record, start: Math.max(dayStart, record.start - EVIDENCE_WINDOW),
@@ -178,7 +177,7 @@ function presenceRecords(records: ReviewRecord[], dayStart: number, dayEnd: numb
     }
     const users = record.evidence.filter(e => e.role === "user");
     if (!users.length) {
-      const initiator = result.findLast(r => SESSION_SOURCES.has(r.source) &&
+      const initiator = result.findLast(r => AGENT_SESSION_SOURCES.has(r.source) &&
         r.evidence.some(e => e.role === "user") &&
         (r.session && r.session === record.session || r.thread && r.thread === record.thread));
       if (initiator) {
@@ -221,7 +220,7 @@ function groupRecords(rows: ReviewRecord[], gap: number, normalizeDevice?: (devi
   const groups: Activity[] = [], open = new Map<string, Activity>();
   for (const row of rows) {
     const voice = voices.get(row.id), thread = voice ? voice.thread : row.thread;
-    const kind = thread ? "thread" : voice ? "speech" : SESSION_SOURCES.has(row.source) ? "session"
+    const kind = thread ? "thread" : voice ? "speech" : AGENT_SESSION_SOURCES.has(row.source) ? "session"
       : row.chat && !SKELETON_SOURCES.has(row.source) ? "chat" : "misc";
     const key = row.key.startsWith("autonomous:") ? row.key : thread ? `thread:${thread}` : voice ? `speech:${voice.id}`
       : kind === "chat" ? `${row.chatApp}:${chatKey(row.chat!)}`
@@ -292,7 +291,7 @@ const byImportance = (a: { seconds: number; start: number }, b: { seconds: numbe
 
 function rankWindows(r: ReviewRecord, activity: Activity): { span: Span; rank: number }[] {
   if (SKELETON_SOURCES.has(r.source)) return [{ span: [r.start, r.end], rank: 0 }];
-  if (SESSION_SOURCES.has(r.source)) {
+  if (AGENT_SESSION_SOURCES.has(r.source)) {
     // r 已裁成用户在场窗口；机器产出只提供文字依据。
     const windows: { span: Span; rank: number }[] = [
       { span: [r.start, r.end], rank: r.evidence.some(e => e.role === "assistant") ? 1 : 0 },
@@ -507,7 +506,7 @@ function limitCandidates<T extends Candidate>(candidates: T[], leadingActivity: 
 
 function evidenceInPiece(entry: UnnumberedEvidence, record: ReviewRecord, segment: Candidate) {
   const at = Date.parse(entry.at), { start, end } = segment;
-  if (SESSION_SOURCES.has(record.source)) return true;
+  if (AGENT_SESSION_SOURCES.has(record.source)) return true;
   if (entry.position === "within_batch" && (record.start < start || record.end > end)) return false;
   // 末消息正好等于切分点时只归给结束在该处的一段，下一段使用自己的开始依据。
   if (entry.position === "last" && record.start !== record.end) return at > start && at <= end;
@@ -529,7 +528,7 @@ function longerConversationBudget(segments: Candidate[]) {
 }
 
 function cutCandidates(rows: ReviewRecord[], gap: number, accepts = eligible, normalizeDevice?: (device: string | undefined) => string | undefined) {
-  const sessionThreads = new Set(rows.filter(r => SESSION_SOURCES.has(r.source)).flatMap(r => r.thread ?? []));
+  const sessionThreads = new Set(rows.filter(r => AGENT_SESSION_SOURCES.has(r.source)).flatMap(r => r.thread ?? []));
   return splitOverlaps(groupRecords(rows.filter(r =>
     !SKELETON_SOURCES.has(r.source) || !r.thread || !sessionThreads.has(r.thread)), gap, normalizeDevice), accepts);
 }
@@ -650,13 +649,13 @@ function draftItem(a: Candidate, id: string, recordIds: string[]): DraftItem {
   const threads = new Set(speaking.flatMap(({ record }) => record.thread ?? []));
   const conversation = AUDIO_SOURCES.has(primary.source);
   const title = conversation ? "一场对话"
-    : primary.chat || (SESSION_SOURCES.has(primary.source) ? sessionTopic(primary.title) : primary.app || primary.title);
+    : primary.chat || (AGENT_SESSION_SOURCES.has(primary.source) ? sessionTopic(primary.title) : primary.app || primary.title);
   // 标题已经是某句原话（AI 会话标题就是首条输入）时换一句，没有别的就不重复。
   const usable = (list: UnnumberedEvidence[]) => list.map(e => terse(firstSentence(e.text), 60))
     .filter(q => comparable(q) && !repeats(comparable(q), comparable(title)));
   const mine = usable(entries.filter(e => e.role === "user")), others = usable(entries.filter(e => e.role !== "user"));
   // AI 会话按输入顺序取：最长的常是贴进去的日志或工具自动插入的提示，不是用户的意思。
-  const excerpt = (SESSION_SOURCES.has(primary.source) ? undefined : informative(mine) ?? informative(others))
+  const excerpt = (AGENT_SESSION_SOURCES.has(primary.source) ? undefined : informative(mine) ?? informative(others))
     ?? mine[0] ?? others[0] ?? "";
   return {
     id, t_start: toLocalIso(a.start), t_end: toLocalIso(a.end), active_seconds: a.seconds,

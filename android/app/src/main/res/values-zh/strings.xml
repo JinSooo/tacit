@@ -217,9 +217,7 @@
     <string name="source_app">应用</string>
     <string name="source_browser">浏览器</string>
     <string name="source_calendar">日历</string>
-    <string name="source_claude_code">Claude Code</string>
     <string name="source_clipboard">剪贴板</string>
-    <string name="source_codex">Codex</string>
     <string name="source_conversation">对话</string>
     <string name="source_correction">修正</string>
     <string name="source_file">文件</string>

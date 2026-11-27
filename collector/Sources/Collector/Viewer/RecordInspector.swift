@@ -258,7 +258,7 @@ private struct RecordBodyText: View {
     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       Text(L10n.thisRecordHasNoText).font(.system(size: TextSize.body)).foregroundStyle(Palette.muted)
     } else {
-      let transcript = AudioSource.isAudio(source) || ["claude_code.session", "codex.session"].contains(source)
+      let transcript = AudioSource.isAudio(source) || AgentTools.session(source: source) != nil
       let lines = RecordReadingLines.display(transcript ? L10n.transcript(text) : text, source: source)
       let previewLimit = 40
       VStack(alignment: .leading, spacing: 8) {

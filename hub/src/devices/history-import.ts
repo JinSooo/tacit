@@ -1,3 +1,4 @@
+import { AGENT_SESSION_SOURCES, requiresSourceRef } from "../record-sources.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { validateRecord, type RecordV1 } from "../../../packages/record/index.ts";
 import type { HubDB } from "../db.ts";
@@ -70,7 +71,7 @@ export function historicalSource(kind: HistoricalIdentity["kind"], source: strin
   if (source.length > 128) return false;
   if (kind === "agent") return source === "manual.agent" || source === correctionSource;
   if (source === "manual.agent") return device === "mac";
-  return source === "manual.note" || source === correctionSource || source === "codex.session" || source === "claude_code.session" ||
+  return source === "manual.note" || source === correctionSource || AGENT_SESSION_SOURCES.has(source) ||
     /^(?:mac|plugin\.ext_[a-z0-9_]+)\.[a-z0-9_]+(?:\.[a-z0-9_]+)*$/.test(source) ||
     /^plugin\.ext_[a-z0-9_]+$/.test(source);
 }
@@ -257,7 +258,7 @@ class HistoryImport {
       if (privateIDs.has(record.id) || (record.corrects && privateIDs.has(record.corrects))) return reject("private_record");
       if (record.media != null || record.context?.url?.trim().match(/^file:/i)) return reject("media_not_allowed");
       if (localDayStart(localDateString(Date.parse(record.t_start))) === null ||
-          (["mac.browser", "claude_code.session", "codex.session"].includes(record.source) && !record.source_ref)) return reject("invalid_record");
+          (requiresSourceRef(record.source) && !record.source_ref)) return reject("invalid_record");
       const previous = mapped.get(session.id, record.id);
       const removed = tombstone.get(record.id, record.source, record.source_ref ?? null);
       if (removed) {

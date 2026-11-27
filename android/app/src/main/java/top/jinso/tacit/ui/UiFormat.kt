@@ -60,7 +60,7 @@ internal class UiFormat(private val strings: UiStrings, val lang: AppLang, priva
         }
     }
 
-    internal fun sourceName(source: String): String = strings.text(when (source) {
+    internal fun sourceName(source: String): String = strings.text(agentSessionTools[source]?.label ?: when (source) {
         "mac.audio" -> R.string.source_conversation
         "mac.screen" -> R.string.source_screen
         "mac.app" -> R.string.source_app
@@ -71,8 +71,6 @@ internal class UiFormat(private val strings: UiStrings, val lang: AppLang, priva
         "mac.shell" -> R.string.source_terminal
         "mac.git" -> R.string.source_git
         "mac.browser" -> R.string.source_browser
-        "claude_code.session" -> R.string.source_claude_code
-        "codex.session" -> R.string.source_codex
         Sources.AUDIO -> R.string.source_phone_recording
         Sources.NOTIFICATION -> R.string.source_phone_chat
         Sources.USAGE -> R.string.source_phone_app
@@ -119,10 +117,8 @@ internal class UiFormat(private val strings: UiStrings, val lang: AppLang, priva
         else strings.quantity(R.plurals.duration_days, days, countLabel(days))
 }
 
-internal fun hasSpeakerMarkers(source: String): Boolean = when (source) {
-    "mac.audio", Sources.AUDIO, "codex.session", "claude_code.session" -> true
-    else -> false
-}
+internal fun hasSpeakerMarkers(source: String): Boolean =
+    source == "mac.audio" || source == Sources.AUDIO || source in agentSessionTools
 
 // Same lanes the Mac folds when a segment opens: screen, browser and app usage are only the time skeleton.
 private val backdropSources = setOf("mac.screen", "mac.app", "mac.browser", Sources.USAGE)

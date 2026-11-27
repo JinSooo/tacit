@@ -319,7 +319,7 @@ public enum PluginProxy {
     }
     switch pluginName {
     case "browser": return ["mac.browser"]
-    case "agent-sessions": return ["claude_code.session", "codex.session"]
+    case "agent-sessions": return Set(AgentTools.sessionSources)
     default: return nil
     }
   }

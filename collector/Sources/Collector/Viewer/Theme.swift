@@ -13,7 +13,7 @@ enum SourceInfo {
   private static let names: [String: String] = [
     "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板",
     "mac.file": "文件", "mac.calendar": "日历", "mac.wechat": "微信", "mac.shell": "终端", "mac.git": "Git",
-    "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex", "android.audio": "手机录音",
+    "mac.browser": "浏览器", "android.audio": "手机录音",
     "android.notification": "手机聊天", "android.usage": "手机应用", "manual.note": "补写",
     "manual.correction": "修正", "manual.agent": "AI 补写",
   ]
@@ -23,19 +23,20 @@ enum SourceInfo {
     "mac.browser": "Browser", "android.audio": "Phone recording", "android.notification": "Phone chats",
     "android.usage": "Phone apps", "manual.note": "Note", "manual.correction": "Correction", "manual.agent": "AI note",
   ]
-  static let order = ["mac.screen", "mac.browser", "claude_code.session", "codex.session", "mac.shell", "mac.git",
+  static let order = ["mac.screen", "mac.browser"] + AgentTools.sessionSources + [
+                      "mac.shell", "mac.git",
                       "mac.audio", "android.audio", "mac.calendar", "mac.wechat", "android.notification",
                       "android.usage", "mac.clipboard", "mac.file", "manual.note", "manual.agent"]
   static func name(_ s: String) -> String {
-    L10n.text(zh: names[s] ?? s, en: englishNames[s] ?? names[s] ?? s)
+    if let tool = AgentTools.session(source: s) { return tool.label }
+    return L10n.text(zh: names[s] ?? s, en: englishNames[s] ?? names[s] ?? s)
   }
   /// Phosphor 图标名（见 PhosphorGlyphs）。
   static func symbol(_ s: String) -> String {
+    if let tool = AgentTools.session(source: s) { return tool.symbol }
     switch s {
     case "mac.screen", "mac.app": return "browser"
     case "mac.browser": return "globe"
-    case "claude_code.session": return "asterisk"
-    case "codex.session": return "open-ai-logo"
     case "mac.shell": return "terminal-window"
     case "mac.git": return "git-branch"
     case "mac.clipboard": return "clipboard-text"
@@ -91,17 +92,19 @@ struct SourceGlyph: View {
   var app: String? = nil
   var size: CGFloat = 22
   var showsTile = false
+  var symbol: String? = nil
   var body: some View {
-    if let image = AppIcons.icon(app) {
+    let bundle = AgentTools.session(source: source) == nil ? app : SourceApplication.bundle(app: app, source: source)
+    if let image = AppIcons.icon(bundle) {
       Image(nsImage: image).resizable().interpolation(.high).frame(width: size + 4, height: size + 4).padding(-2)
     } else if showsTile || size >= 20 {
       // 没有应用图标时画来源符号：底色只用暖灰，和真实应用图标一样大。
       RoundedRectangle(cornerRadius: min(Radius.control, size * 0.3), style: .continuous)
         .fill(Palette.fill)
-        .overlay(PhIcon(SourceInfo.symbol(source), size: (size * 0.62).rounded()).foregroundStyle(Palette.muted))
+        .overlay(PhIcon(symbol ?? SourceInfo.symbol(source), size: (size * 0.62).rounded()).foregroundStyle(Palette.muted))
         .frame(width: size, height: size)
     } else {
-      PhIcon(SourceInfo.symbol(source), size: size).foregroundStyle(Palette.muted)
+      PhIcon(symbol ?? SourceInfo.symbol(source), size: size).foregroundStyle(Palette.muted)
     }
   }
 }

@@ -76,7 +76,7 @@ public enum ReviewActivity {
   public static func visibleRecords(_ records: [HistoryRecord], sources: [DataSourceStatus]) -> [HistoryRecord] {
     let enabled = Set(sources.lazy.filter(\.enabled).map(\.id))
     return records.filter { record in
-      if let id = collectorID[record.source] {
+      if let id = AgentTools.session(source: record.source) == nil ? collectorID[record.source] : "agent-sessions" {
         return DataSourceCatalog.isVisible(id) && enabled.contains(id)
       }
       // 已安装的插件与旧记录用 plugin.ext_... 命名，开关用 ext-...。
@@ -88,10 +88,9 @@ public enum ReviewActivity {
     }
   }
 
-  // 来源名是记录协议，开关是采集器 ID。截图识字与辅助功能共用屏幕记录，两种 AI 会话共用一个开关。
+  // 来源名是记录协议，开关是采集器 ID。截图识字与辅助功能共用屏幕记录，所有 AI 会话共用一个开关。
   private static let collectorID = [
     "mac.screen": "screen", "mac.app": "screen", "mac.browser": "browser",
-    "claude_code.session": "agent-sessions", "codex.session": "agent-sessions",
     "mac.audio": "audio", "mac.wechat": "wechat",
     // 已撤下的来源：开关不再存在，旧记录不进活动条，仍可搜索。
     "mac.calendar": "calendar", "mac.shell": "shell", "mac.git": "git", "mac.file": "files", "mac.clipboard": "clipboard",
