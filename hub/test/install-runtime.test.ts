@@ -51,15 +51,45 @@ test("迁移后的连接在设置页显示为已连接（路径不含需要引�
   write(join(home, ".codex/config.toml"), `[mcp_servers.tacit]\ncommand = "/old/bun"\nargs = ["${old}", "mcp", "--tool", "codex"]\n`);
   relocateInstall(runtime, bun, home);
   const states = agentStatus({ home, repo: runtime, bun, which: c => `/fake/${c}`, appExists: () => false });
-  expect(states.filter(s => s.id !== "claude-desktop").map(s => [s.id, s.connected, s.partial])).toEqual([["claude-code", true, false], ["codex", true, false]]);
+  expect(states.filter(s => s.id === "claude-code" || s.id === "codex").map(s => [s.id, s.connected, s.partial])).toEqual([["claude-code", true, false], ["codex", true, false]]);
 });
 
-test("配置预检失败时不迁移任何文件；不覆盖同名非本应用 MCP", () => {
+test("升级迁移 Antigravity 的 MCP 和会话开始命令，其他配置原样保留", () => {
+  const home = temp(), runtime = join(home, "Tacit runtime's"), bun = join(home, "bin/bun");
+  const mcp = join(home, ".gemini/config/mcp_config.json"), hooks = join(home, ".gemini/config/hooks.json");
+  const original = { type: "command", command: "/old/bun /old/runtime/hub/src/cli.ts hook session-start --tool antigravity", timeout: 5 };
+  const unrelated = { SessionStart: [{ command: "echo other" }] };
+  write(mcp, { mcpServers: { tacit: { command: "/old/bun", args: ["/old/runtime/hub/src/cli.ts", "mcp", "--tool", "antigravity"] }, other: { command: "other" } } });
+  write(hooks, { tacit: { SessionStart: [original] }, other: unrelated });
+  expect(relocateInstall(runtime, bun, home)).toEqual([mcp, hooks]);
+  expect(JSON.parse(readFileSync(mcp, "utf8")).mcpServers).toEqual({
+    tacit: { command: bun, args: [join(runtime, "hub/src/cli.ts"), "mcp", "--tool", "antigravity"] },
+    other: { command: "other" },
+  });
+  expect(JSON.parse(readFileSync(hooks, "utf8")).other).toEqual(unrelated);
+  expect(agentStatus({ home, repo: runtime, bun, which: () => null, appExists: () => true }).find(t => t.id === "antigravity"))
+    .toMatchObject({ connected: true, partial: false });
+  expect(relocateInstall(runtime, bun, home)).toEqual([]);
+});
+
+test("迁移跳过损坏文件与非本应用条目，其他文件继续迁移", () => {
   const home = temp(), file = join(home, ".claude/settings.json");
   write(file, { hooks: { SessionStart: [{ hooks: [{ command: "/bun /old/hub/src/cli.ts hook session-start --tool claude-code" }] }] } });
-  const before = readFileSync(file, "utf8");
-  write(join(home, ".codex/config.toml"), "broken = [");
-  expect(() => relocateInstall("/runtime", "/bun", home)).toThrow(); expect(readFileSync(file, "utf8")).toBe(before);
+  const codex = join(home, ".codex/config.toml"), hooks = join(home, ".gemini/config/hooks.json");
+  const agMcp = join(home, ".gemini/config/mcp_config.json");
+  const desktop = join(home, "Library/Application Support/Claude/claude_desktop_config.json");
+  const entry = (tool: string) => ({ command: "/old/bun", args: ["/old/hub/src/cli.ts", "mcp", "--tool", tool] });
+  write(codex, "synthetic-private-value = [");
+  write(hooks, "{synthetic-private-value");
+  write(agMcp, { mcpServers: { tacit: { command: "synthetic unrelated MCP" } } });
+  write(desktop, { mcpServers: { tacit: entry("claude-desktop") } });
+  const before = [codex, hooks, agMcp].map(path => readFileSync(path, "utf8"));
+  const messages: string[] = [];
+  expect(relocateInstall("/runtime", "/bun", home, message => messages.push(message))).toEqual([file, desktop]);
+  expect([codex, hooks, agMcp].map(path => readFileSync(path, "utf8"))).toEqual(before);
+  expect(readFileSync(file, "utf8")).toContain("/runtime/hub/src/cli.ts");
+  expect(readFileSync(desktop, "utf8")).toContain("/runtime/hub/src/cli.ts");
+  expect(messages).toEqual(["agent_config_no_tacit_entry", "agent_config_invalid_json", "agent_config_invalid_toml"]);
   write(join(home, ".codex/config.toml"), '[mcp_servers.record-anything]\ncommand="other"\nargs=["custom"]\n');
   write(join(home, ".claude.json"), { mcpServers: { "record-anything": { command: "other" } } });
   relocateInstall("/runtime", "/bun", home);
@@ -96,3 +126,18 @@ test("缺少当前平台 SQLite 原生模块时打包失败", () => {
   rmSync(join(source, "node_modules/better-sqlite3-multiple-ciphers/prebuilds", `${process.platform}-${process.arch}.node`));
   expect(() => stageRuntime(source, runtime)).toThrow(/prebuilds/);
 }, 30_000);
+
+// 回归（第 2 轮审查）：按文件隔离失败时，.claude/settings.json 的权限已改名为 tacit，.claude.json 却因名字被占用没迁，权限错给了别人的 tacit 服务。
+test("同一工具的配置有一份迁移失败时，这个工具的配置都不动，其他工具照常迁移", () => {
+  const home = temp(), settings = join(home, ".claude/settings.json"), claude = join(home, ".claude.json");
+  const desktop = join(home, "Library/Application Support/Claude/claude_desktop_config.json");
+  const entry = (tool: string) => ({ command: "/old/bun", args: ["/old/hub/src/cli.ts", "mcp", "--tool", tool] });
+  write(settings, { permissions: { allow: ["mcp__record-anything__search"] }, hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/old/bun /old/hub/src/cli.ts hook session-start --tool claude-code" }] }] } });
+  write(claude, { mcpServers: { "record-anything": entry("claude-code"), tacit: { command: "synthetic third party" } } });
+  write(desktop, { mcpServers: { tacit: entry("claude-desktop") } });
+  const before = [settings, claude].map(path => readFileSync(path, "utf8"));
+  const messages: string[] = [];
+  expect(relocateInstall("/runtime", "/bun", home, message => messages.push(message))).toEqual([desktop]);
+  expect([settings, claude].map(path => readFileSync(path, "utf8"))).toEqual(before);
+  expect(messages).toContain("agent_config_migration_failed");
+});

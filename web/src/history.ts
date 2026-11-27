@@ -1,3 +1,4 @@
+import { AGENT_SESSION_NAMES, AGENT_SESSION_SOURCES } from "../../packages/record/agent-tools.ts";
 import type { RecordV1 } from "../../packages/record/index.ts";
 import { toLocalIso, ulid } from "./record-helpers.ts";
 export type HistoryRow = Omit<RecordV1, "body">;
@@ -76,7 +77,7 @@ export function safeUrl(value: string): string | undefined {
 }
 export const sourceNames: Record<string, string> = {
   "mac.audio": "对话", "mac.screen": "屏幕", "mac.app": "应用", "mac.clipboard": "剪贴板", "mac.file": "文件", "mac.calendar": "日历", "mac.wechat": "微信",
-  "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", "claude_code.session": "Claude Code", "codex.session": "Codex",
+  "mac.shell": "终端", "mac.git": "Git", "mac.browser": "浏览器", ...AGENT_SESSION_NAMES,
   "manual.note": "补写", "manual.correction": "修正", "manual.agent": "AI 补写",
   "android.audio": "手机录音", "android.notification": "手机聊天", "android.usage": "手机应用", "claude_desktop.session": "Claude Desktop",
 };
@@ -113,7 +114,7 @@ export type LaneKey = typeof lanes[number]["key"];
 export function laneOf(source: string): LaneKey {
   if (source === "mac.screen" || source === "mac.app") return "screen";
   if (source === "mac.browser") return "browser";
-  if (source === "claude_code.session" || source === "codex.session") return "agent";
+  if (AGENT_SESSION_SOURCES.has(source)) return "agent";
   if (source === "mac.shell" || source === "mac.git") return "terminal";
   if (source === "mac.audio" || source === "mac.calendar" || source === "mac.wechat") return "voice";
   return "other";

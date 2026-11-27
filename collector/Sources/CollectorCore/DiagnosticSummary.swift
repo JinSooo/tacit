@@ -19,8 +19,8 @@ public enum DiagnosticSummary {
   private static let namedLogs = Set(eventLogs + ["setup.log"])
   private static let namedSources: Set<String> = [
     "mac.screen", "mac.app", "mac.clipboard", "mac.file", "mac.calendar", "mac.wechat",
-    "mac.shell", "mac.git", "mac.browser", "mac.audio", "claude_code.session", "claude_desktop.session",
-    "codex.session", "manual.note", "manual.correction", "manual.agent",
+    "mac.shell", "mac.git", "mac.browser", "mac.audio", "claude_desktop.session",
+    "manual.note", "manual.correction", "manual.agent",
   ]
 
   /// 本次准备得到的原因优先，避免把上一次后台的错误当作本次失败。
@@ -70,7 +70,7 @@ public enum DiagnosticSummary {
       for source in sources {
         guard let count = number(source["count"]) else { continue }
         let name: String
-        if let id = source["source"] as? String, namedSources.contains(id) {
+        if let id = source["source"] as? String, namedSources.contains(id) || AgentTools.session(source: id) != nil {
           name = id
         } else {
           otherSources += 1

@@ -608,6 +608,9 @@ final class PluginScheduler {
     }
     var env = ProcessInfo.processInfo.environment
     env["RA_DATA_DIR"] = config.dataDir.path
+    if name == "agent-sessions" {
+      env["LC_ALL"] = AppLanguage.current == .zh ? "zh_CN.UTF-8" : "en_US.UTF-8"
+    }
     p.environment = env
     let out = Pipe()
     let input = connection == nil ? nil : Pipe()

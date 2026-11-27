@@ -1,3 +1,4 @@
+import { AGENT_TOOLS } from "../../packages/record/agent-tools.ts";
 import type { Api, Project, Thread } from "./distillation.ts";
 import { recordTitle } from "./history.ts";
 export interface AuditRead { id: string; at: string; tool: string; kind: string; args: Record<string, string | number>; result_ids: string[]; bytes: number; ok: number | boolean }
@@ -13,7 +14,7 @@ export function auditPath(tool: string, cursor: string | null) {
 const appendResults: Record<string, string> = { created: "已添加", unchanged: "已经有了，没有重复添加", corrected: "内容有变化，已添加修正", deleted: "之前删除过，没有添加" };
 const levels: Record<string, string> = { brief: "简略版", detail: "详细版", evidence: "依据" };
 /** AI 工具的显示名；没列出的原样显示。 */
-export const toolNames: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", "claude-desktop": "Claude Desktop" };
+export const toolNames: Record<string, string> = Object.fromEntries(AGENT_TOOLS.map(({ id, label }) => [id, label]));
 /** 这次读取做了什么。 */
 export function auditAction(kind: string, args: AuditRead["args"]): string {
   switch (kind) {

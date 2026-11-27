@@ -1,3 +1,4 @@
+import { AGENT_SESSION_NAMES } from "../../packages/record/agent-tools.ts";
 import type { Api } from "./distillation.ts";
 import { englishLocale, type Lang } from "./i18n.ts";
 import { durationText } from "./history.ts";
@@ -63,7 +64,7 @@ export const englishStatusNames = {
   cooldown: { rate_limited: "too many requests", quota: "model quota reached", network: "model service is unreachable" },
   source: {
     "mac.audio": "Conversation", "mac.screen": "Screen", "mac.app": "App", "mac.clipboard": "Clipboard", "mac.file": "File", "mac.calendar": "Calendar", "mac.wechat": "WeChat",
-    "mac.shell": "Terminal", "mac.git": "Git", "mac.browser": "Browser", "claude_code.session": "Claude Code", "codex.session": "Codex",
+    "mac.shell": "Terminal", "mac.git": "Git", "mac.browser": "Browser", ...AGENT_SESSION_NAMES,
     "manual.note": "Note", "manual.correction": "Correction", "manual.agent": "AI note",
     "android.audio": "Phone recording", "android.notification": "Phone chat", "android.usage": "Phone app", "claude_desktop.session": "Claude Desktop",
   },

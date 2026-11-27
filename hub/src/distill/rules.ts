@@ -1,3 +1,4 @@
+import { AGENT_SESSION_SOURCES } from "../record-sources.ts";
 import { chatApp, chatKey, recordChat } from "../chat.ts";
 import { chatAliases } from "../chat-aliases.ts";
 import { basename, resolve } from "node:path";
@@ -7,7 +8,7 @@ import { DistillStore, type Frame, type Project, type ProjectKeys } from "./stor
 import { projectForRemote, repoContainsPath, repositoryRemote, resolveRepository } from "./repos.ts";
 
 function recordRepo(record: RecordV1) {
-  return record.context?.repo ?? ((record.source === "codex.session" || record.source === "claude_code.session") ? record.context?.cwd : null);
+  return record.context?.repo ?? (AGENT_SESSION_SOURCES.has(record.source) ? record.context?.cwd : null);
 }
 
 export function ignoredRepo(path: string, repos: string[], repository = repos.length ? resolveRepository(path, []) : null) {

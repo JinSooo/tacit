@@ -5,6 +5,7 @@ import CollectorCore
 struct AuditPage: View {
   @Environment(ViewerStore.self) private var store
   @State private var tool = ""
+  @State private var observedTools: Set<String> = []
   @State private var reads: [AuditRead] = []
   @State private var cursor: String?
   @State private var error: String?
@@ -56,11 +57,16 @@ struct AuditPage: View {
     .background(Palette.paper)
     .navigationTitle(L10n.runLog)
     .toolbar {
-      ToolbarItem(placement: .principal) {
-        Picker(L10n.tool, selection: $tool) {
-          Text(L10n.all).tag(""); Text("Claude Code").tag("claude-code"); Text("Codex").tag("codex")
+      if observedTools.count > 1 {
+        ToolbarItem(placement: .principal) {
+          Picker(L10n.tool, selection: $tool) {
+            Text(L10n.all).tag("")
+            ForEach(observedTools.map(AgentTools.auditTool).sorted { $0.label < $1.label }, id: \.id) { entry in
+              Text(entry.label).tag(entry.id)
+            }
+          }
+          .pickerStyle(.menu).labelsHidden()
         }
-        .pickerStyle(.segmented).labelsHidden()
       }
     }
     .task(id: tool) { await load(reset: true) }
@@ -79,16 +85,26 @@ struct AuditPage: View {
 
   func load(reset: Bool) async {
     if loading && !reset { return }
-    loading = true; defer { loading = false }
+    let requestedTool = tool
+    loading = true; defer { if tool == requestedTool { loading = false } }
     do {
-      let page = try await store.api.audit(tool: tool.isEmpty ? nil : tool, cursor: reset ? nil : cursor)
+      let page = try await store.api.audit(tool: requestedTool.isEmpty ? nil : requestedTool, cursor: reset ? nil : cursor)
+      guard !Task.isCancelled, tool == requestedTool else { return }
+      if requestedTool.isEmpty {
+        if reset { observedTools = [] }
+        observedTools.formUnion(page.reads.map(\.tool))
+      }
       reads = reset ? page.reads : reads + page.reads.filter { r in !reads.contains { $0.id == r.id } }
       cursor = page.next; error = nil
       // 副标题要显示读的是哪个线程或项目。
       let ids = page.reads.compactMap { $0.args["id"]?.text }
       Task { await resolve(ids) }
     } catch is CancellationError {
-    } catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed); if reset { reads = [] } }
+    } catch {
+      guard !Task.isCancelled, tool == requestedTool else { return }
+      self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
+      if reset { reads = [] }
+    }
   }
 
   func resolve(_ ids: [String]) async {
@@ -115,8 +131,9 @@ struct AuditRow: View {
       Button(action: toggle) {
         HStack(spacing: 12) {
           if !nested {
-            SourceGlyph(source: read.tool == "codex" ? "codex.session" : "claude_code.session", size: 28)
-              .help(["claude-desktop": "Claude Desktop", "claude-code": "Claude Code", "codex": "Codex"][read.tool] ?? read.tool)
+            let entry = AgentTools.auditTool(id: read.tool)
+            SourceGlyph(source: entry.source ?? "", app: entry.bundle, size: 28, symbol: entry.symbol)
+              .help(entry.label)
           }
           VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {

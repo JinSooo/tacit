@@ -1,16 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { LEGACY_SERVER, SERVER, quote, saveConnectionPlan, words } from "./agents-install.ts";
-
-const owns = (entry: any, tool: string) => entry && typeof entry.command === "string" && Array.isArray(entry.args)
-  && entry.args.length === 4 && typeof entry.args[0] === "string" && entry.args[0].endsWith("/hub/src/cli.ts")
-  && entry.args.slice(1).join("\n") === `mcp\n--tool\n${tool}`;
+import { join, resolve } from "node:path";
+import { antigravityConfig, antigravityHooks, LEGACY_SERVER, SERVER, ownsMcpEntry as owns, saveConnectionPlan, sessionStartCommand, sessionStartCommandPaths } from "./agents-install.ts";
 
 const tomlKey = (key: string) => /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
 /** 把 Codex 配置里 [mcp_servers.record-anything…] 各段的表头改成 tacit，其余文本原样保留；多行字符串里的同形文字不动。 */
-export function renameCodexServer(text: string): string {
-  const parsed = Bun.TOML.parse(text) as any;
+function renameCodexServer(text: string, parsed: any): string {
   const legacy = parsed.mcp_servers?.[LEGACY_SERVER];
   // 只改本应用登记的条目；同名的其他服务原样保留。
   if (!owns(legacy, "codex")) return text;
@@ -40,54 +35,93 @@ export function renameCodexServer(text: string): string {
   return out;
 }
 
-/** 仅迁移本应用已有的 AI 连接。升级时停用终端记录。全部预检后才写入。 */
-export function relocateInstall(runtime: string, bun: string, home = homedir()) {
-  const cli = join(resolve(runtime), "hub/src/cli.ts"), plans: Parameters<typeof saveConnectionPlan>[0][] = [];
-  const add = (file: string, before: string, after: string) => { if (before !== after) plans.push({ file, existed: true, before, after }); };
+function updateHook(hook: any, tool: string, cli: string, bun: string): boolean {
+  const tokens = sessionStartCommandPaths(hook?.command, tool);
+  if (!tokens || tokens[0] === bun && tokens[1] === cli) return false;
+  hook.command = sessionStartCommand(bun, cli, tool);
+  // 新路径的命令由宿主重新确认，不伪造旧 trusted_hash。
+  delete hook.trusted_hash;
+  return true;
+}
+
+type MigrationCategory = "agent_config_read_failed" | "agent_config_invalid_json" | "agent_config_invalid_toml"
+  | "agent_config_migration_failed" | "agent_config_write_failed" | "agent_config_no_tacit_entry";
+
+function parseToml(text: string) {
+  return Bun.TOML.parse(text) as any;
+}
+
+/** 仅迁移本应用已有的 AI 连接。同一工具的几份配置要么全部迁移、要么都不动（避免半迁移，例如权限规则已改名而 MCP 登记还是旧名）；工具之间互不影响。 */
+export function relocateInstall(
+  runtime: string, bun: string, home = homedir(), log: (category: MigrationCategory) => void = console.warn,
+) {
+  const cli = join(resolve(runtime), "hub/src/cli.ts"), updated: string[] = [];
+  const plans = new Map<string, { file: string; before: string; after: string }[]>(), failed = new Set<string>();
+  const migrate = (group: string, relative: string, parse: (text: string) => any, update: (data: any, before: string) => string | undefined) => {
+    const file = join(home, relative);
+    const fail = (category: MigrationCategory) => { log(category); failed.add(group); };
+    let before: string, data: any, after: string | undefined;
+    try { before = readFileSync(file, "utf8"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") fail("agent_config_read_failed");
+      return;
+    }
+    try { data = parse(before); }
+    catch { return fail(parse === parseToml ? "agent_config_invalid_toml" : "agent_config_invalid_json"); }
+    try { after = update(data, before); }
+    catch { return fail("agent_config_migration_failed"); }
+    if (after === undefined) { log("agent_config_no_tacit_entry"); return; }
+    if (before === after) return;
+    if (!plans.has(group)) plans.set(group, []);
+    plans.get(group)!.push({ file, before, after });
+  };
   for (const [relative, tool, mcp] of [
     [".claude/settings.json", "claude-code", false], [".codex/hooks.json", "codex", false],
-    [".claude.json", "claude-code", true], ["Library/Application Support/Claude/claude_desktop_config.json", "claude-desktop", true],
+    [".claude.json", "claude-code", true], [antigravityConfig, "antigravity", true], ["Library/Application Support/Claude/claude_desktop_config.json", "claude-desktop", true],
   ] as const) {
-    const file = join(home, relative); if (!existsSync(file)) continue;
-    const before = readFileSync(file, "utf8"), data = JSON.parse(before); let changed = false;
-    if (mcp) {
-      // 旧服务名 record-anything 改成 tacit，保留在原来的位置。
-      if (owns(data?.mcpServers?.[LEGACY_SERVER], tool)) {
-        if (Object.hasOwn(data.mcpServers, SERVER)) throw new Error(`${file} 里已有名为 ${SERVER} 的其他服务，未迁移`);
-        data.mcpServers = Object.fromEntries(Object.entries(data.mcpServers).map(([k, v]) => [k === LEGACY_SERVER ? SERVER : k, v]));
-        changed = true;
-      }
-      const entry = data?.mcpServers?.[SERVER];
-      if (owns(entry, tool) && (entry.args[0] !== cli || entry.command !== bun)) {
-        entry.args[0] = cli; entry.command = bun; changed = true;
-      }
-    } else {
-      // Claude Code 里按工具名允许过的规则跟着改名，不必重新允许。
-      for (const kind of ["allow", "deny", "ask"]) {
-        const rules = data?.permissions?.[kind];
-        if (!Array.isArray(rules)) continue;
-        const legacy = `mcp__${LEGACY_SERVER}`;
-        const renamed = rules.map((r: unknown) => typeof r === "string" && (r === legacy || r.startsWith(`${legacy}__`)) ? `mcp__${SERVER}${r.slice(legacy.length)}` : r);
-        if (renamed.some((r: unknown, i: number) => r !== rules[i])) { data.permissions[kind] = [...new Set(renamed)]; changed = true; }
-      }
-      for (const row of data?.hooks?.SessionStart ?? []) for (const hook of row.hooks ?? []) {
-        if (typeof hook.command !== "string") continue;
-        const tokens = words(hook.command);
-        if (tokens?.length === 6 && tokens[1]?.endsWith("/hub/src/cli.ts") && tokens.slice(2).join("\n") === `hook\nsession-start\n--tool\n${tool}`) {
-          if (tokens[0] === bun && tokens[1] === cli) continue;
-          hook.command = `${quote(bun)} ${quote(cli)} hook session-start --tool ${tool}`;
-          // 新路径的命令由宿主重新确认，不伪造旧 trusted_hash。
-          delete hook.trusted_hash; changed = true;
+    migrate(tool, relative, JSON.parse, (data, before) => {
+      let changed = false;
+      if (mcp) {
+        // 旧服务名 record-anything 改成 tacit，保留在原来的位置。
+        if (owns(data?.mcpServers?.[LEGACY_SERVER], tool)) {
+          if (Object.hasOwn(data.mcpServers, SERVER)) throw new Error("Tacit MCP name already in use");
+          data.mcpServers = Object.fromEntries(Object.entries(data.mcpServers).map(([k, v]) => [k === LEGACY_SERVER ? SERVER : k, v]));
+          changed = true;
+        }
+        const entry = data?.mcpServers?.[SERVER];
+        if (owns(entry, tool)) {
+          if (entry.args[0] !== cli || entry.command !== bun) {
+            entry.args[0] = cli; entry.command = bun; changed = true;
+          }
+        } else if (tool === "antigravity") return undefined;
+      } else {
+        // Claude Code 里按工具名允许过的规则跟着改名，不必重新允许。
+        for (const kind of ["allow", "deny", "ask"]) {
+          const rules = data?.permissions?.[kind];
+          if (!Array.isArray(rules)) continue;
+          const legacy = `mcp__${LEGACY_SERVER}`;
+          const renamed = rules.map((r: unknown) => typeof r === "string" && (r === legacy || r.startsWith(`${legacy}__`)) ? `mcp__${SERVER}${r.slice(legacy.length)}` : r);
+          if (renamed.some((r: unknown, i: number) => r !== rules[i])) { data.permissions[kind] = [...new Set(renamed)]; changed = true; }
+        }
+        for (const row of data?.hooks?.SessionStart ?? []) for (const hook of row.hooks ?? []) {
+          if (updateHook(hook, tool, cli, bun)) changed = true;
         }
       }
-    }
-    if (changed) add(file, before, JSON.stringify(data, null, 2) + "\n");
+      return changed ? JSON.stringify(data, null, 2) + "\n" : before;
+    });
   }
-  const file = join(home, ".codex/config.toml");
-  if (existsSync(file)) {
-    const original = readFileSync(file, "utf8");
-    const before = renameCodexServer(original), data = Bun.TOML.parse(before) as any;
-    let final = before;
+  migrate("antigravity", antigravityHooks, JSON.parse, (data, before) => {
+    const hooks = data?.[SERVER]?.SessionStart;
+    let found = false, changed = false;
+    if (Array.isArray(hooks)) for (const hook of hooks) {
+      if (!sessionStartCommandPaths(hook?.command, "antigravity")) continue;
+      found = true;
+      if (updateHook(hook, "antigravity", cli, bun)) changed = true;
+    }
+    return changed ? JSON.stringify(data, null, 2) + "\n" : found ? before : undefined;
+  });
+  migrate("codex", ".codex/config.toml", parseToml, (existing, original) => {
+    const before = renameCodexServer(original, existing), data = before === original ? existing : parseToml(before);
     const entry = data.mcp_servers?.[SERVER];
     if (owns(entry, "codex") && (entry.args[0] !== cli || entry.command !== bun)) {
       const sections = [...before.matchAll(/^[ \t]*(\[(?!\[)[^\n]+\])[ \t]*(?:#.*)?$/gm)];
@@ -102,12 +136,19 @@ export function relocateInstall(runtime: string, bun: string, home = homedir()) 
       const after = before.slice(0, start) + block + before.slice(end);
       entry.command = bun; entry.args[0] = cli;
       if (changes !== 2 || JSON.stringify(Bun.TOML.parse(after)) !== JSON.stringify(data)) throw new Error("Codex 连接配置校验失败，未迁移");
-      final = after;
+      return after;
     }
-    add(file, original, final);
+    return before;
+  });
+  for (const [group, files] of plans) {
+    if (failed.has(group)) continue;
+    for (const plan of files) {
+      try { saveConnectionPlan({ ...plan, existed: true }); }
+      catch { log("agent_config_write_failed"); break; }
+      updated.push(plan.file);
+    }
   }
-  for (const plan of plans) saveConnectionPlan(plan);
-  return plans.map(p => p.file);
+  return updated;
 }
 if (import.meta.main) {
   if (process.argv.length !== 4) throw new Error("用法：relocate-install <固定运行目录> <bun>");

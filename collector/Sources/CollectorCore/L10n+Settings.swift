@@ -101,7 +101,7 @@ public extension L10n {
     public static var screenTextSourceNote: String { L10n.text(zh: "读不到文字的应用在本机截图识别，截图只在内存里，识别完就丢掉。", en: "Recognizes on-screen text locally and discards each screenshot after use.") }
     public static var audioSourceNote: String { L10n.text(zh: "有你说话的对话在本机转成文字，原始音频加密留在本机。", en: "Transcribes conversations you took part in locally and keeps the encrypted audio on this Mac.") }
     public static var wechatSourceNote: String { L10n.text(zh: "微信在最前面时按会话记下看得到的消息；打开后“截图识字”不再重复读微信。", en: "Records visible messages by conversation when WeChat is active and excludes them from Screen text when enabled.") }
-    public static var aiSessionSourceNote: String { L10n.text(zh: "Claude Code 和 Codex 的会话，只记你说的话和它最后的回答。", en: "Records your messages and final replies in Claude Code and Codex.") }
+    public static var aiSessionSourceNote: String { L10n.text(zh: "记录 AI 会话里你说的话和 AI 工具的最终回复。", en: "Records your messages and the AI tool’s final replies.") }
     public static var browserSourceNote: String { L10n.text(zh: "Chrome、Arc、Safari 等浏览器的访问记录。", en: "Records visits in Chrome, Arc, Safari, and other supported browsers.") }
     public static var grantPermission: String { L10n.text(zh: "授权…", en: "Grant permission…") }
     public static var lastRun: String { L10n.text(zh: "上次运行", en: "Last run") }
@@ -131,9 +131,44 @@ public extension L10n {
     public static var connecting: String { L10n.text(zh: "正在连接…", en: "Connecting…") }
     public static var disconnect: String { L10n.text(zh: "断开", en: "Disconnect") }
     public static var connect: String { L10n.text(zh: "连接", en: "Connect") }
-    public static var toolsNote: String { L10n.text(zh: "连接后，新会话会带入当前项目进展，AI 也能查你的历史记录；每次读取都记在运行记录里。", en: "Connected AI tools get project context in new sessions and can search your history, with each read listed in the Run log.") }
+    public static var toolsNote: String { L10n.text(zh: "接入后，AI 工具可以查询你的历史记录，每次读取都记在运行记录里。", en: "Connected AI tools can search your history, with each read listed in the Run log.") }
     public static var toolNotInstalled: String { L10n.text(zh: "这台 Mac 上没有安装", en: "Not installed on this Mac") }
     public static var toolPartiallyConnected: String { L10n.text(zh: "连接不完整，请重新连接。", en: "Reconnect to finish setting up this AI tool.") }
+    public static var toolConnected: String { L10n.text(zh: "已接入", en: "Connected") }
+    public static var otherAgentTools: String { L10n.text(zh: "其他工具", en: "Other tools") }
+    public static var manualToolPartial: String { L10n.text(zh: "接入未完成", en: "Setup incomplete") }
+    public static var agentInstructions: String { L10n.text(zh: "接入方法", en: "How to connect") }
+    public static func agentInstructionsFor(_ tool: String) -> String {
+      L10n.text(zh: "在 \(tool) 里接入 Tacit", en: "Connect Tacit in \(tool)")
+    }
+    public static func reopenAgent(_ tool: String) -> String {
+      L10n.text(zh: "改完重开 \(tool) 生效。", en: "Reopen \(tool) to apply the changes.")
+    }
+    public static func agentConfigInstruction(_ file: String, section: String?, action: String, sessionStart: Bool) -> String {
+      let zh: String
+      let en: String
+      switch (action, section) {
+      case ("create", _):
+        zh = "新建 \(file) 并填入以下内容"
+        en = "Create \(file) with the configuration below"
+      case ("replace", let section?):
+        zh = "在 \(file) 中替换 \(section)"
+        en = "Replace \(section) in \(file)"
+      case ("add", let section?):
+        zh = "加到 \(file) 的 \(section) 里"
+        en = "Add this to \(section) in \(file)"
+      case ("merge", _):
+        zh = "将以下设置合并到 \(file)"
+        en = "Merge these settings into \(file)"
+      default:
+        zh = "加到 \(file) 的最外层"
+        en = "Add this at the top level of \(file)"
+      }
+      return L10n.text(
+        zh: zh + (sessionStart ? "，新会话开头会自动带上项目近况。" : "。"),
+        en: en + (sessionStart ? " to include project context at the start of new sessions." : ".")
+      )
+    }
     public static var setupChecklist: String { L10n.text(zh: "还差几步", en: "Setup checklist") }
     public static var expanded: String { L10n.text(zh: "已展开", en: "Expanded") }
     public static var collapsed: String { L10n.text(zh: "已折叠", en: "Collapsed") }
@@ -143,7 +178,7 @@ public extension L10n {
     public static var setupTools: String { L10n.text(zh: "连接你使用的 AI 工具", en: "Connect your AI tools") }
     public static var connectEllipsis: String { L10n.text(zh: "连接…", en: "Connect…") }
     public static var toolSearchNote: String { L10n.text(zh: "连接后，可以让 AI 查询你最近在做什么。", en: "Connected AI tools can look up what you've been working on.") }
-    public static var setupToolInstallNote: String { L10n.text(zh: "这台 Mac 上没找到 Claude Code 或 Codex，装好并登录后再回来连接。", en: "Install Claude Code or Codex on this Mac and sign in before connecting it.") }
+    public static var setupToolInstallNote: String { L10n.text(zh: "在这台 Mac 上安装并登录支持的 AI 工具后，就可以连接。", en: "Install a supported AI tool on this Mac and sign in to connect it.") }
     public static var firstSummaryNote: String { L10n.text(zh: "第一次整理会在 15 分钟内完成。", en: "The first summary will be ready within 15 minutes.") }
 
     // MARK: - Diagnostics
@@ -811,7 +846,17 @@ public extension L10n {
       if note == "第一次在 Codex 里开新会话时，它会请你批准一次，批准后才会自动带入。" {
         return L10n.text(zh: note, en: "The first new Codex session will ask you to approve access before session context is added.")
       }
-      return serviceMessage(note, fallback: "")
+      switch note {
+      case "重开 Antigravity 后生效，它会在首次调用 Tacit 查询时请你批准。":
+        return L10n.text(zh: note, en: "Reopen Antigravity, then approve its first Tacit query when prompted.")
+      case "重开 Antigravity 后生效。":
+        return reopenAgent("Antigravity")
+      case "完全退出并重新打开 Claude Desktop 后生效。连接后可以问它“我昨天下午在做什么”。",
+           "完全退出并重新打开 Claude Desktop 后生效。重启后将停止提供历史记录查询。":
+        return L10n.text(zh: note, en: "Quit and reopen Claude Desktop to apply the change.")
+      default:
+        return serviceMessage(note, fallback: "")
+      }
     }
 
     public static func modelFailure(_ problem: String, fallback: String) -> String {

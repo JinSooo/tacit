@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { auditAction, auditPath, auditResults, auditSummary, auditTargets, auditVisible, type AuditTarget, type AuditTargetCache } from "../src/audit.ts";
+import { auditAction, auditPath, auditResults, auditSummary, auditTargets, auditVisible, toolNames, type AuditTarget, type AuditTargetCache } from "../src/audit.ts";
 import type { Api } from "../src/distillation.ts";
 test("审计筛选和不透明游标正确编码；摘要写成人话，只显示已有参数", () => {
   const url = new URL(auditPath("claude-code", "opaque+/="), "http://localhost");
@@ -116,4 +116,9 @@ test("共享缓存复用进行中的同 ID 请求", async () => {
   const results = await Promise.all([auditTargets(api, ["thread-one"], undefined, cache), auditTargets(api, ["thread-one"], undefined, cache)]);
   expect(calls).toBe(1);
   expect(results[0].get("thread-one")).toEqual(results[1].get("thread-one"));
+});
+
+
+test("审计筛选和结果显示新增 AI 工具的名称", () => {
+  expect(toolNames).toMatchObject({ antigravity: "Antigravity", "copilot-cli": "Copilot CLI", "kimi-cli": "Kimi CLI" });
 });

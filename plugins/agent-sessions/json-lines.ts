@@ -4,12 +4,17 @@ import { StringDecoder } from "node:string_decoder";
 import { createZstdDecompress } from "node:zlib";
 
 type Json = { [key: string]: any };
-type Context = "root" | "message" | "origin" | "blocks" | "block" | "ignored";
+type Context = "root" | "message" | "origin" | "data" | "workspace" | "providerData" | "blocks" | "block" | "parts" | "part" | "directories" | "strings" | "presence" | "ignored";
 interface Frame { kind: "object" | "array"; context: Context; value: any; state: string; key: string; hasInvalidBlock?: boolean }
 const fields: { [context: string]: Set<string> } = {
   root: new Set(["type", "sessionId", "timestamp", "cwd", "isSidechain", "isMeta", "isCompactSummary", "promptSource", "turnOrigin", "origin", "message", "payload"]),
   message: new Set(["type", "id", "cwd", "role", "channel", "recipient", "content"]),
+  data: new Set(["context", "content", "isAutopilotContinuation", "parentAgentTaskId", "parentToolCallId",
+    "causalDependencies", "detachedFromSpawningParentSessionId", "apiCallId", "chunkIndex", "chunkCount"]),
+  workspace: new Set(["cwd"]),
+  providerData: new Set(["isMeta", "interactionType"]),
   origin: new Set(["kind"]), block: new Set(["type", "text"]),
+  part: new Set(["text", "thought", "functionCall", "functionResponse", "inlineData", "fileData"]),
 };
 const STRING_LIMIT = 150_064;
 const ESCAPES: { [key: string]: string } = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
@@ -33,9 +38,22 @@ export class EventParser {
   private nonempty = false;
   private result: Json | null = null;
 
+  constructor(
+    private readonly additionalRootFields?: ReadonlySet<string>,
+    private readonly additionalMessageFields?: ReadonlySet<string>,
+    private readonly genaiParts?: "content" | "parts",
+  ) {}
+
   private keep(): boolean {
     const top = this.stack.at(-1);
-    return !!top && top.kind === "object" && !!fields[top.context]?.has(top.key);
+    if (!top) return false;
+    if (top.context === "strings") return true;
+    if (top.kind === "array") return top.context === "parts" || (top.context === "directories" && !top.value.length);
+    return !!fields[top.context]?.has(top.key)
+      || (top.context === "root" && !!this.additionalRootFields?.has(top.key))
+      || (top.context === "message" && !!this.additionalMessageFields?.has(top.key))
+      || (top.context === "providerData" && /initiator$/i.test(top.key))
+      || (this.genaiParts === "parts" && top.context === "message" && top.key === "parts");
   }
   private append(value: string) {
     if (this.capture && this.token.length + value.length > (this.keyToken ? 512 : STRING_LIMIT)) this.truncated = true;
@@ -51,6 +69,8 @@ export class EventParser {
       if (this.keep()) top.value[top.key] = value;
     } else {
       if (!["value", "first"].includes(top.state)) throw Error();
+      if (top.context === "strings" && typeof value === "string") top.value.push(value);
+      if (top.context === "presence" && top.value.length === 0) top.value.push(true);
       if (top.context === "blocks") {
         if (value && typeof value === "object") top.value.push(value);
         else if (!top.hasInvalidBlock) {
@@ -58,6 +78,7 @@ export class EventParser {
           top.hasInvalidBlock = true;
         }
       }
+      if (top.context === "parts" || (top.context === "directories" && !top.value.length)) top.value.push(value);
     }
     top.state = "comma";
   }
@@ -68,10 +89,22 @@ export class EventParser {
     else if (parent.context === "root" && kind === "object") {
       if (["message", "payload"].includes(parent.key)) context = "message";
       if (parent.key === "origin") context = "origin";
-    } else if (parent.context === "message" && parent.key === "content" && kind === "array") context = "blocks";
+      if (parent.key === "data" && this.keep()) context = "data";
+      if (parent.key === "providerData" && this.keep()) context = "providerData";
+      if (this.genaiParts === "content" && parent.key === "content") context = "part";
+    } else if (parent.context === "root" && kind === "array" && this.genaiParts === "content" && (parent.key === "content" || parent.key === "directories")) {
+      context = parent.key === "content" ? "parts" : "directories";
+    } else if (parent.context === "root" && parent.key === "tags" && kind === "array" && this.keep()) context = "strings";
+    else if (parent.context === "data" && parent.key === "context" && kind === "object") context = "workspace";
+    else if (parent.context === "data" && parent.key === "causalDependencies" && kind === "array") context = "presence";
+    else if ((parent.context === "message" || parent.context === "root") && parent.key === "content" && kind === "array" && this.keep()) context = "blocks";
+    else if (parent.context === "message" && parent.key === "parts" && kind === "array" && this.genaiParts === "parts") context = "parts";
     else if (parent.context === "blocks" && kind === "object") context = "block";
+    else if (parent.context === "parts" && kind === "object") context = "part";
     const value = context === "ignored" ? null : kind === "object" ? Object.create(null) : [];
-    this.accept(value);
+    // Qwen 只需知道 backgroundTurn 的对象或数组为真，无需保存其中的数据。
+    const background = parent?.context === "root" && parent.key === "backgroundTurn";
+    this.accept(background ? true : value);
     if (context === "root") this.result = value;
     this.stack.push({ kind, context, value, state: kind === "object" ? "first-key" : "first", key: "" });
   }
@@ -198,14 +231,14 @@ export class EventParser {
 }
 
 /** 普通日志只读新增字节；压缩归档逐块解压。offset 均以解压后的完整行字节计。 */
-export async function* readEvents(file: string, offset: number, size: number) {
+export async function* readEvents(file: string, offset: number, size: number, additionalRootFields?: ReadonlySet<string>, additionalMessageFields?: ReadonlySet<string>, genaiParts?: "content" | "parts") {
   const compressed = file.endsWith(".zst");
   if (!compressed && offset >= size) return;
   const input = fs.createReadStream(file, { highWaterMark: 64 * 1024, ...(compressed ? {} : { start: offset, end: size - 1 }) });
   const stream = compressed ? input.pipe(createZstdDecompress({ chunkSize: 64 * 1024 })) : input;
   // pipe 默认不会把源的错误传给目标。
   if (compressed) input.on("error", error => stream.destroy(error));
-  let parser = new EventParser(); let decoder = new StringDecoder("utf8");
+  let parser = new EventParser(additionalRootFields, additionalMessageFields, genaiParts); let decoder = new StringDecoder("utf8");
   let position = compressed ? 0 : offset;
   let lineStart = position;
   try {
@@ -222,7 +255,7 @@ export async function* readEvents(file: string, offset: number, size: number) {
         if (newline < 0) break;
         position++;
         if (position > offset) { parser.push(decoder.end()); yield { ...parser.finish(), end: position }; }
-        parser = new EventParser(); decoder = new StringDecoder("utf8"); lineStart = position; start = end + 1;
+        parser = new EventParser(additionalRootFields, additionalMessageFields, genaiParts); decoder = new StringDecoder("utf8"); lineStart = position; start = end + 1;
       }
     }
     // 归档是完整文件，允许最后一行无换行；活动日志半行留给下次。

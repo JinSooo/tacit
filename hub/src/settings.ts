@@ -13,7 +13,7 @@ import { GENERAL_DEFAULTS, GENERAL_RANGES, readGeneral, updateGeneral } from "./
 import { readModelUsage } from "./model-usage.ts";
 import { RuntimeLog, appliedCall } from "./runtime-log.ts";
 import { isLoopback, localModels } from "./llm/local.ts";
-import { AgentCommandError, agentStatus, connectAgent, type AgentTool, type InstallEnvironment } from "./agents-install.ts";
+import { AGENT_TOOLS, AgentCommandError, AgentConfigError, agentStatus, connectAgent, type AgentTool, type InstallEnvironment } from "./agents-install.ts";
 
 export interface SettingsDeps {
   dataDir: string;
@@ -220,7 +220,7 @@ export function createSettings(deps: SettingsDeps) {
     const agent = /^\/v1\/settings\/agents\/([^/]+)$/.exec(pathname);
     if (agent && method === "PUT") {
       const id = agent[1] as AgentTool;
-      if (id !== "claude-code" && id !== "codex" && id !== "claude-desktop") throw new InputError("只能接入 claude-code、codex 或 claude-desktop");
+      if (!AGENT_TOOLS.includes(id)) throw new InputError("此工具不支持自动连接或断开");
       const body = object(await ctx.readJSON());
       if (Object.keys(body).some(k => k !== "connected") || typeof body.connected !== "boolean") throw new InputError("只接受 connected（true 或 false）");
       const tool = agentStatus(deps.agents).find(t => t.id === id)!;
@@ -232,6 +232,7 @@ export function createSettings(deps: SettingsDeps) {
         const verb = body.connected ? "连接" : "断开";
         return fail(500, error instanceof AgentCommandError
           ? `没能${verb} ${tool.label}，请确认它能正常启动后重试。`
+          : error instanceof AgentConfigError && error.code === "agent_config_conflict" ? error.message
           : `没能更新 ${tool.label} 的配置文件，请检查它是否损坏后重试。`);
       }
     }

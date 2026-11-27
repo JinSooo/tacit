@@ -11,8 +11,9 @@ import { spawnSync } from "node:child_process";
 import { dataDirOf, resolveLanBinding, resolvePort, writeHubPort } from "./hub-json.ts";
 import { initializeCodexConfig } from "./llm/config.ts";
 import { SHELL_ENV } from "./llm/process.ts";
+import { AGENT_CONFIG_PATH_VARS, AGENT_TOOLS } from "../../packages/record/agent-tools.ts";
+import { agentBinDirectories, SYSTEM_BIN_DIRS } from "./agent-path.ts";
 
-const SYSTEM = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 /** 已撤下的采集来源（2026-11-22）：升级时清掉它们在采集端留下的开关和配置。 */
 const REMOVED_SETTINGS = ["git", "shell", "files", "clipboard", "calendar"].map(s => `source.${s}.enabled`).concat("files.directories");
 export const JOBS = ["hub", "distill", "collector"] as const;
@@ -44,7 +45,7 @@ export function toolDirectory(name: string, candidates: string[]): string | null
   return null;
 }
 
-function toolLocations(home: string, search: string[], system = SYSTEM) {
+function toolLocations(home: string, search: string[], system = SYSTEM_BIN_DIRS) {
   const nvm = join(home, ".nvm/versions/node");
   let latestNvm: string | undefined;
   try {
@@ -52,18 +53,18 @@ function toolLocations(home: string, search: string[], system = SYSTEM) {
       .filter(version => /^v\d+\.\d+\.\d+$/.test(version) && executable(join(nvm, version, "bin/node")))
       .sort((a, b) => b.localeCompare(a, "en", { numeric: true }))[0];
   } catch {}
-  const fallback = [".local/share/mise/shims", ".local/bin", ".bun/bin", ".npm-global/bin",
-    ".fnm/aliases/default/bin", ".volta/bin", ".asdf/shims"].map(p => join(home, p));
-  if (latestNvm) fallback.push(join(nvm, latestNvm, "bin"));
-  const candidates = [...search, ...fallback, ...system];
-  return {
-    codex: toolDirectory("codex", candidates),
-    claude: toolDirectory("claude", candidates),
-    node: toolDirectory("node", candidates),
-  };
+  // 版本管理器装的 codex、claude 和它们 #!/usr/bin/env node 要找的 node。
+  const managers = [".fnm/aliases/default/bin", ".volta/bin", ".asdf/shims"].map(p => join(home, p));
+  if (latestNvm) managers.push(join(nvm, latestNvm, "bin"));
+  const candidates = [...search, ...agentBinDirectories(home).filter(dir => !SYSTEM_BIN_DIRS.includes(dir)), ...managers, ...system];
+  const found = new Map<string, string | null>();
+  for (const name of new Set([...AGENT_TOOLS.flatMap(tool => tool.executables ?? []), "codex", "claude", "node"])) {
+    found.set(name, toolDirectory(name, candidates));
+  }
+  return { codex: found.get("codex") ?? null, claude: found.get("claude") ?? null, dirs: [...found.values()].filter((dir): dir is string => dir !== null) };
 }
 
-/** 后台服务的 PATH：整理工具与它们通过 env 调用的 node 都要能找到。 */
+/** 后台服务的 PATH：识别已安装的 AI 工具，整理用的 codex、claude 及它们调用的 node 都要能找到。 */
 export function servicePath(bun: string, home: string, search: string[], warn: (message: string) => void = () => {}, lang: Lang = "zh"): string {
   return pathForTools(bun, toolLocations(home, search), warn, lang);
 }
@@ -72,10 +73,10 @@ function pathForTools(bun: string, tools: ReturnType<typeof toolLocations>, warn
   for (const name of ["codex", "claude"] as const) {
     if (!tools[name]) warn(cliText(`没找到 ${name}；装好并登录后重新打开 Tacit 即可使用。`, `Could not find ${name}. Install it, sign in, and reopen Tacit.`, lang));
   }
-  return [...new Set([...Object.values(tools).filter(dir => dir !== null), dirname(bun), ...SYSTEM])].join(":");
+  return [...new Set([...tools.dirs, dirname(bun), ...SYSTEM_BIN_DIRS])].join(":");
 }
 
-/** 从 Finder 或 launchd 启动时没有终端的环境，读一次用户登录 shell 的 PATH、代理和 CODEX_HOME（不读其他变量，密钥不落进启动配置）。 */
+/** 从 Finder 或 launchd 启动时没有终端的环境，读一次用户登录 shell 的 PATH、代理和 AI 工具配置路径（密钥不落进启动配置）。 */
 export function loginShellEnv(): Record<string, string> {
   let shell = "/bin/zsh";
   try { shell = userInfo().shell || shell; } catch {}
@@ -93,17 +94,17 @@ export function parseShellEnv(stdout: string, marker = "__TACIT_ENV__"): Record<
     const i = line.indexOf("=");
     if (i <= 0) continue;
     const key = line.slice(0, i), value = line.slice(i + 1);
-    if ((key === "PATH" || SHELL_ENV.test(key)) && value) out[key] = value;
+    if ((key === "PATH" || SHELL_ENV.test(key) || AGENT_CONFIG_PATH_VARS.has(key)) && value) out[key] = value;
   }
   return out;
 }
 
-export interface ServiceLayout { app: string; runtime: string; bun: string; data: string; path: string; cliEnv?: Record<string, string>; hubEnv?: Record<string, string> }
+export interface ServiceLayout { app: string; runtime: string; bun: string; data: string; path: string; cliEnv?: Record<string, string>; agentConfigEnv?: Record<string, string>; hubEnv?: Record<string, string> }
 
 export function plist(job: Job, l: ServiceLayout): string {
   const cli = join(l.runtime, "hub/src/cli.ts");
   const program = job === "collector" ? [join(l.app, "Contents/MacOS/Tacit")] : [l.bun, cli, job === "hub" ? "serve" : "distill"];
-  const path = job === "collector" ? [dirname(l.bun), ...SYSTEM].join(":") : l.path;
+  const path = job === "collector" ? [dirname(l.bun), ...SYSTEM_BIN_DIRS].join(":") : l.path;
   const body: string[] = [
     `  <key>Label</key><string>${label(job)}</string>`,
     `  <key>ProgramArguments</key><array>${program.map(p => `<string>${xml(p)}</string>`).join("")}</array>`,
@@ -112,7 +113,10 @@ export function plist(job: Job, l: ServiceLayout): string {
   const extra = job !== "collector" && l.cliEnv && Object.keys(l.cliEnv).length ? `<key>TACIT_CLI_ENV</key><string>${xml(JSON.stringify(l.cliEnv))}</string>` : "";
   const hubEnv = job === "collector" ? "" : Object.entries(l.hubEnv ?? {})
     .map(([key, value]) => `<key>${xml(key)}</key><string>${xml(value)}</string>`).join("");
-  body.push(`  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(path)}</string>${extra}${hubEnv}</dict>`, `  <key>RunAtLoad</key><true/>`);
+  // hub 判断"已接入"、采集端读会话都要按同一套工具配置目录找文件。
+  const configPaths = job !== "distill" ? Object.entries(l.agentConfigEnv ?? {})
+    .map(([key, value]) => `<key>${xml(key)}</key><string>${xml(value)}</string>`).join("") : "";
+  body.push(`  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(path)}</string>${extra}${configPaths}${hubEnv}</dict>`, `  <key>RunAtLoad</key><true/>`);
   if (job === "hub") body.push(`  <key>KeepAlive</key><true/>`, `  <key>ThrottleInterval</key><integer>10</integer>`, `  <key>ProcessType</key><string>Background</string>`);
   if (job === "distill") body.push(`  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>`, `  <key>ThrottleInterval</key><integer>60</integer>`,
     `  <key>ProcessType</key><string>Background</string>`, `  <key>LowPriorityIO</key><true/>`, `  <key>Nice</key><integer>10</integer>`);
@@ -147,7 +151,7 @@ export interface SetupOptions {
   shellEnv?: () => Record<string, string>;
   systemPath?: string[];
   initialize?: () => Promise<void>;
-  relocate?: (runtime: string, bun: string, home: string) => string[];
+  relocate?: (runtime: string, bun: string, home: string, log: (category: string) => void) => string[];
   dropRemovedSettings?: () => void;
   version?: (app: string) => string;
   log?: (message: string) => void;
@@ -236,7 +240,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     const relocate = o.relocate ?? (await import("./relocate-install.ts")).relocateInstall;
     // 连接迁移失败不能挡住后台启动；用户可以在设置里重新连接。
     try {
-      const count = relocate(runtime, bun, home).length;
+      const count = relocate(runtime, bun, home, log).length;
       log(t(`已更新 ${count} 份 AI 工具连接配置。`, `Updated ${count} AI tool ${count === 1 ? "connection" : "connections"}.`));
     }
     catch { log(t("AI 工具连接没有迁移，请在 设置 › AI 工具 里重新连接。", "AI tool connections could not be moved. Reconnect them in Settings → AI tools.")); }
@@ -258,11 +262,17 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     await initializeCodexConfig(data);
   }
   // 终端里的代理和 CODEX_HOME 交给后台调用的 codex、claude，不然终端里能用、Tacit 里连不上。
+  const cliEnv = Object.fromEntries(Object.entries(shellVars).filter(([key]) => SHELL_ENV.test(key)));
+  const agentConfigEnv: Record<string, string> = {};
+  for (const key of AGENT_CONFIG_PATH_VARS) {
+    const value = shellVars[key] || env[key];
+    if (value) agentConfigEnv[key] = value;
+  }
   const hubEnv: Record<string, string> = { RA_DATA_DIR: data };
   for (const key of ["RA_PORT", "RA_LAN_PORT"]) {
     if (env[key] !== undefined) hubEnv[key] = env[key];
   }
-  const layout: ServiceLayout = { app: o.app, runtime, bun, data, path, cliEnv: shellVars, hubEnv };
+  const layout: ServiceLayout = { app: o.app, runtime, bun, data, path, cliEnv, agentConfigEnv, hubEnv };
   const changed = new Set<Job>();
   for (const job of remote ? ["collector"] as const : JOBS) {
     const file = join(agents, `${label(job)}.plist`);

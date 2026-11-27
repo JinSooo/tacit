@@ -1,3 +1,5 @@
+import { framing } from "../../hub/src/agent-cli/context-language.ts";
+
 /** 只匹配消息开头的协议标记，避免误删用户在正文中讨论这些标记的文字。 */
 export const injectionRules = [
   { name: "command", pattern: /^<(?:command-[\w-]+|local-command-[\w-]+|bash-input|bash-stdout|bash-stderr)(?:\s|>)/, reason: "命令展开及本机 shell 输出不是用户亲自输入的对话。" },
@@ -36,7 +38,7 @@ export const textTransformRules = {
 };
 
 /** 客户端包装的澄清回答只保留 answer，剥去 AI 问题和内部标识。 */
-export function cleanUserText(text: string): string {
+export function cleanLegacyUserText(text: string): string {
   let value = text.trim();
   // 桌面附件清单不是问题正文。只识别完整客户端包装，保留 My request 后的实际输入。
   if (value.startsWith("# Files mentioned by the user:")) {
@@ -71,4 +73,27 @@ export function cleanUserText(text: string): string {
     value = value.replace(textTransformRules.image.pattern, "").trim();
   } while (value !== previous);
   return injectionRules.some(rule => rule.pattern.test(value)) ? "" : value;
+}
+
+const cacheNotice = /^(?:\(Offline cache, synced at [^\n]*\)|（离线缓存，同步于 [^\n]*）)\s*/;
+const openingTag = /^(?:<|&lt;)([A-Za-z][\w:-]*)(?:\s(?:(?!&gt;)[^<>])*)?(?:>|&gt;)\s*/;
+
+export function cleanUserText(text: string): string {
+  let value = cleanLegacyUserText(text);
+  while (value) {
+    const tag = openingTag.exec(value);
+    const context = value.slice(tag?.[0].length ?? 0).replace(cacheNotice, "");
+    const language = Object.values(framing).find(({ intro }) => context.startsWith(intro));
+    if (!language) return value;
+    const hint = context.indexOf(language.hint, language.intro.length);
+    if (hint < 0) return "";
+    value = context.slice(hint + language.hint.length).trimStart();
+    if (tag) {
+      for (const close of [`</${tag[1]}>`, `&lt;/${tag[1]}&gt;`]) {
+        if (value.startsWith(close)) value = value.slice(close.length);
+      }
+    }
+    value = cleanLegacyUserText(value);
+  }
+  return value;
 }
