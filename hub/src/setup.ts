@@ -324,7 +324,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     const probe = o.probePort ?? probePort;
     const occupied = () => new SetupError("port_in_use", t(
       "后台服务的端口被占用了。请在设置 › 后台与连接里更换端口。",
-      "The background service port is in use. Change it in Settings → Background & connection.",
+      "The background service port is in use. Change it in Settings → Background service and connection.",
     ));
     const startHub = async (movePort: boolean) => {
       const lan = resolveLanBinding(data, env);

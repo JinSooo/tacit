@@ -1,4 +1,4 @@
-<!-- source: docs/server-deployment.md @ 1b3d0a25f6aaaba10968f11cc986f5b94594c71e -->
+<!-- source: docs/server-deployment.md @ 4b8025c0929d0486b01816e00591fe60b5604b71 -->
 
 [English](../server-deployment.md) | 简体中文
 
@@ -131,7 +131,7 @@ docker exec -it tacit-hub bun hub/src/cli.ts pair --role admin --address http://
 
 不加 `--address` 时，邀请里只有容器自己看到的地址（如 `172.17.0.3`），设备连不上。
 
-命令会输出一条一次性的 `tacit://pair?d=...` 配对链接（`admin` 邀请 **5 分钟**内有效；`collect` 和 `view` 邀请 10 分钟内有效）。在 Mac 的 Tacit 设置 › 后台与连接 › 连接远端后台里粘贴这条链接，按向导完成切换，这台 Mac 即成为管理设备。
+命令会输出一条一次性的 `tacit://pair?d=...` 配对链接（`admin` 邀请 **5 分钟**内有效；`collect` 和 `view` 邀请 10 分钟内有效）。在 Mac 上打开 Tacit，在 **设置 › 后台与连接 › 连接远端后台** 中粘贴这条链接，按向导完成切换，这台 Mac 即成为管理设备。
 
 如果希望配对时同时开通或附带中转信箱，可加 `--relay` 参数：
 

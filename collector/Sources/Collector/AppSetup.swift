@@ -51,14 +51,18 @@ enum AppSetup {
   }
 
   static func checklistStep(in dataDir: URL, reachable: Bool) -> ChecklistStep? {
-    let state = activity
-    if state == .running { return .preparing }
-    if case .finished(let reason?) = state {
+    checklistStep(activity: activity, reachable: reachable, inStartupGrace: HubAPI.inStartupGrace(),
+                  startupMessage: DiagnosticSummary.startupMessage(in: dataDir))
+  }
+
+  static func checklistStep(activity: Activity, reachable: Bool, inStartupGrace: Bool,
+                            startupMessage: @autoclosure () -> String?) -> ChecklistStep? {
+    if case .finished(let reason?) = activity {
       return .failed(L10n.Settings.setupFailure(reason))
     }
     if reachable { return nil }
-    if HubAPI.inStartupGrace() { return .preparing }
-    return .failed(DiagnosticSummary.startupMessage(in: dataDir) ?? L10n.Settings.setupFailure(.unknown))
+    if activity == .running || inStartupGrace { return .preparing }
+    return .failed(startupMessage() ?? L10n.Settings.setupFailure(.unknown))
   }
 
   /// 用户手动打开时，准备完成后让 launchd 起一份待命实例；launchd 拉起的自己就是那份。

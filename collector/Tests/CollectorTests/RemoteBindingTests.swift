@@ -1247,3 +1247,18 @@ func finalReviewInvalidRetainedIdentityCanPairAgain(scenario: String) async thro
   #expect(throws: HubError.self) { try config.writeHubPort(52635) }
   #expect(config.hubURL.port == 52633)
 }
+
+@Test @MainActor func timelineShowsPreparationOnlyAfterCheckingThatTheBackendIsUnreachable() {
+  let ready = AppSetup.checklistStep(activity: .running, reachable: true, inStartupGrace: true, startupMessage: nil)
+  #expect(ready == nil)
+  #expect(ReviewPage.allowsDayRecords(backendSetup: ready))
+
+  let preparing = AppSetup.checklistStep(activity: .running, reachable: false, inStartupGrace: true, startupMessage: nil)
+  #expect(preparing == .preparing)
+  #expect(!ReviewPage.allowsDayRecords(backendSetup: preparing))
+
+  let failed = AppSetup.checklistStep(activity: .finished(.backgroundBlocked), reachable: true,
+                                      inStartupGrace: true, startupMessage: nil)
+  #expect(failed == .failed(L10n.Settings.setupFailure(.backgroundBlocked)))
+  #expect(!ReviewPage.allowsDayRecords(backendSetup: failed))
+}

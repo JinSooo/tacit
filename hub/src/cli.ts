@@ -24,7 +24,7 @@ const startupMessages = {
   db_key_unreadable: cliText("无法读取或保存钥匙串里的数据库密钥。请检查钥匙串是否解锁。", "The database key could not be read or saved. Check that the Keychain is unlocked."),
   db_open_failed: cliText("无法打开记录库，或记录库完整性检查失败。请确认数据库密钥与记录库匹配。", "The database could not be opened or failed its integrity check. Check that the key matches the database."),
   db_migration_failed: cliText("记录库升级失败。请保留现有记录库和迁移备份。", "The database upgrade failed. Keep the current database and its migration backup."),
-  port_in_use: cliText("后台服务的端口已被占用。请在设置 › 后台与连接里更换端口。", "The background service port is in use. Change it in Settings → Background & connection."),
+  port_in_use: cliText("后台服务的端口已被占用。请在设置 › 后台与连接里更换端口。", "The background service port is in use. Change it in Settings → Background service and connection."),
   unknown: cliText("后台服务没能启动。点「重新准备」再试。仍然失败时，可在设置里复制诊断信息。", "The background service could not start. Click Prepare again. If it still fails, copy diagnostics from Settings."),
 };
 type StartupCode = keyof typeof startupMessages;

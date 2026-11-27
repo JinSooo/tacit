@@ -44,7 +44,7 @@ private struct ReviewDayContent: View {
   @State private var hoveringDateTitle = false
   @Namespace private var densityPill
   @State private var setup: (health: DistillHealth, tools: [AgentToolState], minuteModel: ModelTierConfig?)?
-  @State private var backendSetup: AppSetup.ChecklistStep? = .preparing
+  @State private var backendSetup: AppSetup.ChecklistStep?
   @State private var backendChecked = false
   @State private var securityEvents = TimelineSecurityEventState()
   /// 日期栏上选中的那天；切过去后先把那天读好，再整块滑进来，期间仍显示正在看的这一天。
@@ -77,6 +77,9 @@ private struct ReviewDayContent: View {
   }
 
   private var localSetup: AppSetup.ChecklistStep? { store.isRemoteBackend ? nil : backendSetup }
+
+  static func allowsDayRecords(backendSetup: AppSetup.ChecklistStep?) -> Bool { backendSetup == nil }
+  private var allowsDayRecords: Bool { Self.allowsDayRecords(backendSetup: localSetup) }
   private var density: TimelineDensity { store.timelineDensity }
   private var current: Bool { loadedRevision == store.revision }
   /// 重新读取时继续显示上一版，新内容到了再原位换上，不先清空闪一下。
@@ -98,7 +101,7 @@ private struct ReviewDayContent: View {
 
   var body: some View {
     Group {
-      if density == .compact || localSetup != nil {
+      if density == .compact || !allowsDayRecords {
         compactList
       } else {
         HistoryPage(day: day, diary: current ? review : nil, dayRecords: current ? records.value : nil,
@@ -136,7 +139,7 @@ private struct ReviewDayContent: View {
       guard !store.isRemoteBackend else { return }
       let dataDir = Config.load().dataDir
       while !Task.isCancelled {
-        let reachable = AppSetup.activity == .running ? false : await AppSetup.isReachable(store.api.base)
+        let reachable = await AppSetup.isReachable(store.api.base)
         guard !Task.isCancelled else { return }
         backendSetup = AppSetup.checklistStep(in: dataDir, reachable: reachable)
         backendChecked = true
@@ -361,7 +364,9 @@ private struct ReviewDayContent: View {
           .rollingNumber(at)
       }
       Spacer(minLength: 0)
-      Button(L10n.allRecordsForThisDay) { store.showDayRecords(day) }.buttonStyle(.accentLink)
+      if allowsDayRecords {
+        Button(L10n.allRecordsForThisDay) { store.showDayRecords(day) }.buttonStyle(.accentLink)
+      }
     }
     .font(.system(size: TextSize.caption))
   }

@@ -120,7 +120,7 @@ docker exec -it tacit-hub bun hub/src/cli.ts pair --role admin --address http://
 
 Without `--address`, the Invite link contains the address seen inside the container, such as `172.17.0.3`. Devices outside the container cannot reach that address.
 
-The command prints a single-use Invite link that starts with `tacit://pair?d=...`. An `admin` invitation expires after 5 minutes. `collect` and `view` invitations expire after 10 minutes. On the Mac, paste the link under **Settings › Background & connection › Connect to a remote service**, then follow the setup prompts. That Mac becomes an Admin device.
+The command prints a single-use Invite link that starts with `tacit://pair?d=...`. An `admin` invitation expires after 5 minutes. `collect` and `view` invitations expire after 10 minutes. On the Mac, paste the link under **Settings › Background service and connection › Connect to a remote service**, then follow the setup prompts. That Mac becomes an Admin device.
 
 To set up or include a Relay mailbox in the invitation, add `--relay`.
 
