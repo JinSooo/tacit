@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { AUDIO_MODELS, MIRROR, audioModelsErrorCategory, ensureAudioModels, type Model } from "../src/audio-models.ts";
+import { AUDIO_MODELS, MIRROR, audioModelsErrorCategory, ensureAudioModels, rankDownloadSources, type Model } from "../src/audio-models.ts";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -75,7 +75,10 @@ test("认可的任一版本都能装上，已装的旧版不重下，其他内�
     const model: Model = { file: "speaker.onnx", sha256: [sha("old"), sha("new")], urls: ["https://mirror/speaker", "https://upstream/speaker"] };
     const requested: string[] = [];
     let served = "new";
-    const fetcher = (async (url: string) => {
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      if (new Headers(init?.headers).has("Range")) {
+        return url === "https://mirror/speaker" ? new Response("probe") : new Response(null, { status: 404 });
+      }
       requested.push(url);
       return url === "https://mirror/speaker" ? new Response("", { status: 404 }) : new Response(served);
     }) as unknown as typeof fetch;
@@ -95,13 +98,74 @@ test("认可的任一版本都能装上，已装的旧版不重下，其他内�
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("每个模型先从我们的 Release 副本下载，校验值和契约文档一致", () => {
+test("SenseVoice 有 ModelScope、Release 和 Hugging Face 候选，校验值与契约一致", () => {
   const contract = readFileSync(join(import.meta.dir, "../../docs/contracts.md"), "utf8");
   for (const model of AUDIO_MODELS) {
-    expect(model.urls[0]!.startsWith(`${MIRROR}/`)).toBe(true);
-    expect(model.urls.length).toBeGreaterThan(1);
+    if (model.file.startsWith("sense-voice/")) {
+      const file = model.file.slice("sense-voice/".length);
+      expect(model.urls).toEqual([
+        `https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master/${file}`,
+        `${MIRROR}/sense-voice-${file}`,
+        `https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/${file}`,
+      ]);
+    } else {
+      expect(model.urls[0]!.startsWith(`${MIRROR}/`)).toBe(true);
+      expect(model.urls.length).toBeGreaterThan(1);
+    }
     for (const hash of model.sha256) expect(contract).toContain(hash);
   }
+});
+
+test("下载源并行探测，按吞吐排序，保留探测失败的候选兜底", async () => {
+  const slow = "https://slow.example.invalid/model", fast = "https://fast.example.invalid/model";
+  const broken = "https://broken.example.invalid/model", unavailable = "https://unavailable.example.invalid/model";
+  const started: string[] = [];
+  const ranked = rankDownloadSources([broken, slow, unavailable, fast], async (url, init) => {
+    const address = String(url);
+    started.push(address);
+    expect(new Headers(init?.headers).get("Range")).toBe("bytes=0-1048575");
+    if (address === broken) throw new Error("connection failed");
+    if (address === unavailable) return new Response(null, { status: 503 });
+    if (address === slow) await Bun.sleep(40);
+    return new Response(new Uint8Array(1024 * 1024), { status: 206 });
+  });
+  expect(started).toEqual([broken, slow, unavailable, fast]);
+  const sources = await ranked;
+  expect(sources.map(({ url }) => url)).toEqual([fast, slow, broken, unavailable]);
+  expect(sources[0]!.bytesPerSecond!).toBeGreaterThan(sources[1]!.bytesPerSecond!);
+  expect(sources.slice(2)).toEqual([{ url: broken }, { url: unavailable }]);
+});
+
+test("只有一个候选源时直接下载，无需测速", async () => {
+  const url = "https://only.example.invalid/model";
+  let probes = 0;
+  const ranked = await rankDownloadSources([url], async () => {
+    probes++;
+    return new Response("probe");
+  });
+  expect(probes).toBe(0);
+  expect(ranked).toEqual([{ url }]);
+});
+
+test("ModelScope 内容校验失败时尝试 GitHub 副本", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ra-models-"));
+  try {
+    const model = AUDIO_MODELS.find(item => item.file === "sense-voice/model.int8.onnx")!;
+    const requested: string[] = [];
+    const logs: string[] = [];
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      if (new Headers(init?.headers).has("Range")) {
+        return url === model.urls[0] ? new Response("probe") : new Response(null, { status: 404 });
+      }
+      requested.push(url);
+      return new Response(url === `${MIRROR}/sense-voice-model.int8.onnx` ? "valid" : "tampered");
+    }) as unknown as typeof fetch;
+    await ensureAudioModels(dir, { fetcher, log: message => logs.push(message), models: [{ ...model, sha256: [sha("valid")] }] });
+    expect(requested).toEqual([model.urls[0]!, model.urls[1]!]);
+    expect(logs).toEqual([expect.stringMatching(/^下载 www\.modelscope\.cn \d+ KiB\/s$/), "下载 github.com"]);
+    expect(readFileSync(join(dir, model.file), "utf8")).toBe("valid");
+    expect(readdirSync(dir)).toEqual(["sense-voice"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("下载等响应或等下一块数据超时都会重试，已收到的块从 Range 续传", async () => {
