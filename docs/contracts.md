@@ -23,8 +23,11 @@
 | `mac.wechat` | Mac 采集端"微信对话"数据源（默认关闭）：读微信窗口聊天区，一条消息一条记录，格式见下 |
 | `mac.browser` | plugins/browser |
 | `claude_code.session`、`codex.session` | plugins/agent-sessions |
+| `antigravity.session`、`opencode.session`、`codebuddy.session`、`workbuddy.session`、`copilot_cli.session`、`droid.session`、`qwen_code.session`、`gemini_cli.session`、`kimi_cli.session` | plugins/agent-sessions |
 | `manual.note`、`manual.correction` | 网页手动补写 / 修正 |
 | `manual.agent` | 用户让 Agent 代存的内容（MCP `history_append`，见 4.6）；`context.app` 是写入的 Agent，内容变化时的修正仍用 `manual.correction` |
+
+AI 会话来源以 `packages/record/agent-tools.ts` 为准。每个工具使用自己的来源名，并按上面的 `source_ref` 规则去重。Cursor 暂无会话来源。
 
 ### 1.1 微信消息记录
 
@@ -855,7 +858,7 @@ CREATE TABLE project_context_cache (
 - v17 增加 `devices.local_only INTEGER NOT NULL DEFAULT 0` 和可空的 `bootstrap_agent_id TEXT`。已有设备默认保留远程连接能力。双身份登记时，Mac 行关联同一次登记的 Agent ID。
 - `ingest` 按已登记的平台检查来源：
   - `android` 允许 `android.*`、`manual.note`、`manual.correction`（仅指向本设备记录）。
-  - `mac` 允许 `mac.*`、`claude_code.session`、`codex.session`、`plugin.ext_*`、`manual.note`、`manual.correction`。采集和查看角色的修正只可指向自己的记录，管理设备也可以修正其他记录。
+  - `mac` 允许 `mac.*`、第 1 节登记的所有 AI 会话来源、`plugin.ext_*`、`manual.note`、`manual.correction`。采集和查看角色的修正只可指向自己的记录，管理设备也可以修正其他记录。
   - `agent` 的写入走 `agent.append`，调用 `ingest` 返回加密 403。创建的 `manual.agent` 及其后续修正都用调用方 `device_id`。旧 HTTP 接口仍写历史身份 `"mac"`。
 - 历史 `device = "mac"` 的记录照常展示、搜索与整理。今后走设备协议采集的 Mac 记录使用 `mac-<8 位 base32>`。Mac 管理设备可删除和修正历史 `device = "mac"` 的记录。历史记录和活动段的读取筛选 `device=mac` 包含旧 `mac` 和新 `mac-<id>`；指定完整设备 ID 时仍精确匹配。归属、鉴权和同步继续校验完整设备 ID；唯一例外是本机登记的 Mac（`platform=mac`、`local_only=1`）在音频模块与历史 `device = "mac"` 视为同一音频身份，以保证已确认声纹、命名说话人、相邻 10 分钟内的对话分场、试听样本请求、补转写/重认及保留期清理连续不断，不改写已有记录。
 

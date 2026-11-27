@@ -4,7 +4,7 @@ import type { RecordV1 } from "../../../packages/record/index.ts";
 import { ulid } from "../../../packages/record/index.ts";
 import type { HubDB } from "../db.ts";
 import { DistillStore, type Frame } from "./store.ts";
-import { AUDIO_SOURCES } from "../record-sources.ts";
+import { AGENT_SESSION_SOURCES, AUDIO_SOURCES } from "../record-sources.ts";
 
 const gap = 10 * 60_000, maxDuration = 2 * 60 * 60_000;
 /** aliases：同一微信聊天被识字读成的几种名字按一种分组。 */
@@ -12,7 +12,7 @@ export function frameKey(record: RecordV1, aliases?: ChatAliases): string {
   if (AUDIO_SOURCES.has(record.source)) return `audio:${record.source_ref ?? record.id}`;
   const c = record.context;
   // 仓库只是项目线索；并行会话即使工作目录相同，也不是同一件事。
-  if (record.source === "codex.session" || record.source === "claude_code.session") {
+  if (AGENT_SESSION_SOURCES.has(record.source)) {
     const session = record.source_ref?.split("#")[0];
     return session ? `session:${record.source}:${session}` : `record:${record.id}`;
   }

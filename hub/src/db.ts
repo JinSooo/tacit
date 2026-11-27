@@ -12,7 +12,7 @@ import { DistillStore } from "./distill/store.ts";
 import { createHash } from "node:crypto";
 import { ulid, validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { redactRecord } from "./redact.ts";
-import { recordDeviceFilter, SKELETON_SOURCES, sourceList } from "./record-sources.ts";
+import { AGENT_SESSION_SOURCES, requiresSourceRef, recordDeviceFilter, SKELETON_SOURCES, sourceList } from "./record-sources.ts";
 import { registerAgentAudit, stopAgentAudit } from "./agent-audit.ts";
 import { chatAliases } from "./chat-aliases.ts";
 import { relaySchema } from "./devices/relay-store.ts";
@@ -272,14 +272,14 @@ export class HubDB {
           if (r.source === "manual.correction") {
             if (!crossDeviceCorrections && (!r.corrects || !owner.get(r.corrects, device))) errors.push("/corrects 必须指向本设备的记录");
           } else if (r.source !== "manual.note" && !(platform === "mac"
-            ? r.source.startsWith("mac.") || r.source.startsWith("plugin.ext_") || ["claude_code.session", "codex.session"].includes(r.source)
+            ? r.source.startsWith("mac.") || r.source.startsWith("plugin.ext_") || AGENT_SESSION_SOURCES.has(r.source)
             : platform === "android" && r.source.startsWith("android."))) {
             errors.push("/source 不支持此设备来源");
           }
           if (errors.length) { result.rejected.push({ index: i, errors }); return; }
         }
         // schema 不表达来源特有的约束，按契约在入库边界补充校验。
-        if (["mac.browser", "claude_code.session", "codex.session"].includes(r.source) && !r.source_ref) {
+        if (requiresSourceRef(r.source) && !r.source_ref) {
           result.rejected.push({ index: i, errors: ["/source_ref 重读外部存储的来源必须提供稳定键"] }); return;
         }
         if (r.source === "manual.correction" && r.source_ref?.startsWith("history-private:")) {

@@ -1,3 +1,4 @@
+import { cliLanguage, cliText } from "./agent-cli/locale.ts";
 import { sandboxLaunch, type PluginSandbox } from "./plugin-sandbox.ts";
 import { logFailure } from "./diagnostics.ts";
 import { mkdirSync, renameSync, rmSync, writeFileSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
@@ -180,7 +181,13 @@ export async function runPlugin(options: {
           if (options.name === "agent-sessions" && !options.sandbox) {
             const { unrecognized, damaged } = message.sessionWarnings ?? {};
             const warnings: string[] = [];
-            if (Number.isSafeInteger(unrecognized) && unrecognized >= 20) warnings.push(`Claude Code / Codex 会话格式可能已变化，有 ${unrecognized} 行没有识别`);
+            if (Number.isSafeInteger(unrecognized) && unrecognized >= 20) {
+              warnings.push(cliText(
+                `AI 会话格式可能已变化，有 ${unrecognized} 行没有识别`,
+                `The AI session format may have changed. Skipped ${unrecognized} unrecognized lines.`,
+                cliLanguage(options.env),
+              ));
+            }
             if (Number.isSafeInteger(damaged) && damaged > 0) warnings.push(`跳过 ${damaged} 行损坏数据`);
             summary.warnings = warnings.length ? warnings : undefined;
           }

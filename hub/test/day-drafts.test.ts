@@ -219,3 +219,22 @@ test("AI 会话草稿仍按输入顺序取，不挑最长的一句（贴进去�
     expect(drafts(store)[0]?.excerpt).toBe("把花苗移到东边。");
   } finally { ctx.cleanup(); }
 });
+
+test("OpenCode follows the same import and draft rules as other AI sessions", () => {
+  const ctx = setup();
+  try {
+    const record = fixture({
+      source: "opencode.session", source_ref: "nursery-layout#1", context: { app: "opencode" },
+      title: "温室布局", kind: "span", t_start: at(480), t_end: at(525),
+      body: "[我] 把花苗移到东边。\n\n[AI] 花苗已移到东边的育苗架，标签也已经贴好。",
+    });
+    expect(ctx.db.ingest([record], "mac", "android").rejected).toHaveLength(1);
+    expect(ctx.db.ingest([{ ...record, source_ref: undefined }], "mac", "mac").rejected[0]?.errors[0]).toContain("/source_ref");
+    expect(ctx.db.ingest([record], "mac", "mac").accepted).toBe(1);
+    expect(ctx.db.ingest([record], "mac", "mac").duplicates).toBe(1);
+    expect(drafts(new DistillStore(ctx.db))).toMatchObject([{
+      sources: ["opencode.session"], record_ids: [record.id],
+      active_seconds: 1800, excerpt: "把花苗移到东边。",
+    }]);
+  } finally { ctx.cleanup(); }
+});
