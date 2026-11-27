@@ -83,7 +83,8 @@ export function tierConfig(item: { provider: Provider; model: string; base_url: 
 
 // The web settings surface only exposes the automatic connect/disconnect controls.
 function automaticTools<T extends { tools: AgentToolState[] }>(response: T): T {
-  return { ...response, tools: response.tools.filter(tool => !tool.manual) };
+  const tools = response.tools?.filter(tool => !tool.manual);
+  return tools ? { ...response, tools } : response;
 }
 
 export function createSettingsApi(api: Api) {
