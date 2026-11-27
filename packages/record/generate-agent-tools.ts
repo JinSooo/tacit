@@ -49,6 +49,13 @@ ${AGENT_SESSIONS.map(({ source, androidPackage, symbol }) => `    ${kotlinValue(
 
 if (import.meta.main) {
   for (const [path, source] of Object.entries(nativeAgentTools)) {
-    await Bun.write(new URL(`../../${path}`, import.meta.url), source);
+    const file = new URL(`../../${path}`, import.meta.url);
+    if (process.argv.includes("--check")) {
+      const current = Bun.file(file);
+      if (!await current.exists() || await current.text() !== source) {
+        console.error(`${path} is out of date. Run ${command}.`);
+        process.exitCode = 1;
+      }
+    } else await Bun.write(file, source);
   }
 }

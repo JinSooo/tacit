@@ -152,32 +152,28 @@ test("各工具的会话参数和 stdout 符合各自协议", async () => {
     const cases = [
       { tool: "antigravity", input: { cwd: "/synthetic", workspacePaths: ["/ignored"], conversationId: "ag" }, session: "ag", event: "startup" },
       { tool: "antigravity", input: { workspacePaths: ["/synthetic"], conversationId: "ag" }, session: "ag", event: "startup" },
-      { tool: "cursor", input: { workspace_roots: ["/synthetic", "/ignored"], session_id: "cur", conversation_id: "ignored" }, session: "cur", event: "startup" },
-      { tool: "cursor", input: { workspace_roots: ["/synthetic"], conversation_id: "cur" }, session: "cur", event: "startup" },
       { tool: "gemini-cli", input: { cwd: "/synthetic", session_id: "gem", source: "clear" }, session: "gem", event: "clear" },
       { tool: "qwen-code", input: { cwd: "/synthetic", session_id: "qwen", source: "compact", hook_event_name: "SessionStart" }, session: "qwen", event: "compact" },
       { tool: "codebuddy", input: { cwd: "/synthetic", session_id: "buddy", source: "resume", hook_event_name: "SessionStart" }, session: "buddy", event: "resume" },
-      { tool: "copilot-cli", input: { cwd: "/synthetic", sessionId: "cop-resume", source: "resume", timestamp: 1795659000000 }, session: "cop-resume", event: "resume" },
-      { tool: "copilot-cli", input: { cwd: "/synthetic", sessionId: "cop-new", source: "new", timestamp: "2026-11-27T09:00:00Z", initialPrompt: "合成提问" }, session: "cop-new", event: "startup" },
     ];
     for (const { tool, input, session, event } of cases) {
       const text = new URLSearchParams({ cwd: "/synthetic", event, tool, session }).toString();
       const outputs = {
         antigravity: { injectSteps: [{ systemMessage: { systemMessage: text } }] },
-        cursor: { additional_context: text },
         "gemini-cli": { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
         "qwen-code": { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
         codebuddy: { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
-        "copilot-cli": { additionalContext: text },
       };
       const result = await run(ctx.dir, ["hook", "session-start", "--tool", tool], JSON.stringify(input), {}, mock);
       expect(result.code).toBe(0);
       expect(result.stderr).toBe("");
       expect(result.stdout).toBe(JSON.stringify(outputs[tool as keyof typeof outputs]) + "\n");
     }
-    const unknown = await run(ctx.dir, ["hook", "session-start", "--tool", "unknown"], '{"cwd":"/synthetic"}', {}, mock);
-    expect(unknown.stdout).toBe("");
-    expect(unknown.stderr).toContain("does not support SessionStart");
+    for (const tool of ["unknown", "cursor", "copilot-cli"]) {
+      const unsupported = await run(ctx.dir, ["hook", "session-start", "--tool", tool], '{"cwd":"/synthetic"}', {}, mock);
+      expect(unsupported.stdout).toBe("");
+      expect(unsupported.stderr).toContain("does not support SessionStart");
+    }
   } finally { ctx.cleanup(); }
 });
 

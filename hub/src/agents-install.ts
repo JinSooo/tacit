@@ -1,5 +1,4 @@
 import { cliText } from "./agent-cli/locale.ts";
-import { AGENT_TOOLS as TOOL_CATALOG } from "../../packages/record/agent-tools.ts";
 import type { Lang } from "./i18n/language.ts";
 import { chmodSync, copyFileSync, readdirSync, lstatSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -76,6 +75,16 @@ const antigravityInstalled = (home: string, env: InstallEnvironment) =>
   !!findAgentExecutable("agy", home, env) || appInstalled("Antigravity", home, env);
 
 const mcpEntry = (cli: string, bun: string, tool: string) => ({ command: bun, args: [cli, "mcp", "--tool", tool] });
+function agentRuntime(env: InstallEnvironment) {
+  const repo = resolve(env.repo ?? fileURLToPath(new URL("../../", import.meta.url)));
+  return { bun: resolve(env.bun ?? process.execPath), cli: resolve(repo, "hub/src/cli.ts") };
+}
+
+export function otherMcpConfig(env: InstallEnvironment = {}) {
+  const { cli, bun } = agentRuntime(env);
+  return mcpEntry(cli, bun, "mcp");
+}
+
 export function ownsMcpEntry(value: unknown, tool: string): value is Json {
   return object(value) && typeof value.command === "string" && Array.isArray(value.args) && value.args.length === 4
     && typeof value.args[0] === "string" && value.args[0].endsWith("/hub/src/cli.ts")
@@ -312,8 +321,8 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
     else if (flags[i] === "--tool" && !selected && AGENT_TOOLS.includes(flags[i + 1] as AgentTool)) selected = flags[++i] as AgentTool;
     else throw new Error(t("agents 参数无效", "Invalid agents arguments"));
   }
-  const home = resolve(env.home ?? homedir()), repo = resolve(env.repo ?? fileURLToPath(new URL("../../", import.meta.url)));
-  const bun = resolve(env.bun ?? process.execPath), cli = resolve(repo, "hub/src/cli.ts");
+  const home = resolve(env.home ?? homedir());
+  const { bun, cli } = agentRuntime(env);
   const print = env.print ?? console.log;
   // 只有目标不是真实家目录（测试用临时 HOME）时才覆盖环境变量：对真实用户设置 CLAUDE_CONFIG_DIR
   // 会让 claude 把全局配置写到 ~/.claude/.claude.json，而不是平时用的 ~/.claude.json。
@@ -424,162 +433,20 @@ export interface AgentState {
   label: string;
   /** 本机找得到应用或命令行工具。 */
   installed: boolean;
-  /** MCP 和接入方法中提供的会话开始钩子均已登记。 */
+  /** MCP 和工具所需的会话开始钩子均已登记。 */
   connected: boolean;
   /** 只登记了一半（例如手动删过其中一个），需要重新连接。 */
   partial: boolean;
-  manual?: ManualSnippet[];
-}
-
-export interface ManualSnippet {
-  file: string;
-  kind: "mcp" | "session-start";
-  action: "create" | "add" | "replace" | "merge";
-  section?: string;
-  code: string;
 }
 
 const LABELS: Record<AgentTool, string> = { "claude-code": "Claude Code", codex: "Codex", "claude-desktop": "Claude Desktop", antigravity: "Antigravity" };
 
-function manualSnippet(
-  file: string, kind: ManualSnippet["kind"], data: Json | null, path: string[], value: Json,
-  options: { create: boolean; replace?: string; replacement?: Json; version?: number },
-): ManualSnippet {
-  const make = (action: ManualSnippet["action"], code: string, section?: string) =>
-    ({ file, kind, action, section, code });
-  const wrap = (keys: string[], child: unknown) =>
-    keys.reduceRight<unknown>((nested, key) => ({ [key]: nested }), child);
-  const full = () => JSON.stringify({
-    ...(options.version === undefined ? {} : { version: options.version }),
-    ...wrap(path, value) as Json,
-  }, null, 2);
-  if (options.create) return make("create", full());
-  if (options.version !== undefined && options.version !== data?.version) return make("merge", full());
-  if (options.replace) {
-    const replacement = options.replacement ?? (Array.isArray(value) ? value[0] : value);
-    return make("replace", JSON.stringify(replacement, null, 2), options.replace);
-  }
-  let depth = 0, node = data;
-  for (const key of path) {
-    const child: unknown = node?.[key];
-    if (object(child) || Array.isArray(child) && depth === path.length - 1) {
-      node = child;
-      depth++;
-    } else break;
-  }
-  const section = path.slice(0, depth).join(".") || undefined;
-  if (Array.isArray(value) && depth === path.length) return make("add", JSON.stringify(value[0], null, 2), section);
-  // 已有文件中插入属性，缺的父级随片段一起生成。
-  const code = JSON.stringify(wrap(path.slice(depth), value), null, 2);
-  return make("add", code.slice(2, -2).split("\n").map(line => line.slice(2)).join("\n"), section);
-}
-
-function manualAgentStatus(home: string, cli: string, bun: string, env: InstallEnvironment): AgentState[] {
-  const variables = env.variables ?? process.env;
-  const absolute = (file: string) => resolve(home, file.replace(/^~\//, ""));
-  const config = (file: string, jsonc = false) => {
-    try {
-      const content = readFileSync(absolute(file), "utf8");
-      const data: unknown = jsonc ? Bun.JSONC.parse(content) : JSON.parse(content);
-      return { file, data: object(data) ? data : {}, exists: true };
-    } catch (error) {
-      return { file, data: {}, exists: (error as NodeJS.ErrnoException).code !== "ENOENT" };
-    }
-  };
-  const overridePath = (key: string | undefined) => {
-    const value = key && variables[key]?.trim();
-    return value ? absolute(value === "~" ? "~/" : value) : undefined;
-  };
-  const openCodeConfigs = () => {
-    const explicit = overridePath("OPENCODE_CONFIG");
-    const extra = overridePath("OPENCODE_CONFIG_DIR");
-    const xdg = overridePath("XDG_CONFIG_HOME");
-    const global = xdg ? join(xdg, "opencode") : "~/.config/opencode";
-    const filesIn = (directory: string) => ["opencode.jsonc", "opencode.json", "config.json"].map(name => config(join(directory, name), true));
-    const groups = [...(extra ? [filesIn(extra)] : []), filesIn(global)];
-    const candidates = [...(explicit ? [config(explicit, true)] : []), ...groups.flat()];
-    return candidates.find(candidate => Object.hasOwn(candidate.data.mcp ?? {}, SERVER))
-      ?? (explicit ? candidates[0]! : groups[0]!.find(candidate => candidate.exists) ?? groups[0]![1]!);
-  };
-  return TOOL_CATALOG.flatMap(({ id, label, executables, sessionStart, manualConnection: setup }) => {
-    if (!setup) return [];
-    const installed = !!executables?.some(command => !!findAgentExecutable(command, home, env)) || !!setup.macApp && appInstalled(setup.macApp, home, env);
-    const opencode = setup.mcpFormat === "opencode";
-    const copilot = setup.mcpFormat === "copilot";
-    const configHome = overridePath(setup.configHomeEnv), dir = overridePath(setup.configDirEnv);
-    const configPath = (file: string) => configHome ? join(configHome, file)
-      : dir ? join(dir, copilot ? file.slice(".copilot/".length) : basename(file)) : `~/${file}`;
-    const section = opencode ? "mcp" : "mcpServers";
-    const mcpConfig = opencode ? openCodeConfigs() : config(configPath(setup.mcpFile));
-    const current = mcpConfig.data[section]?.[SERVER];
-    const stdio = mcpEntry(cli, bun, id);
-    const commandLine = [bun, ...stdio.args];
-    const entry = opencode ? { type: "local", command: commandLine, enabled: true }
-      : copilot ? { type: "local", ...stdio, tools: ["*"] }
-      : { ...(setup.mcpType && { type: setup.mcpType }), ...stdio };
-    const mcp = opencode
-      ? current?.type === "local" && current.enabled !== false && Array.isArray(current.command)
-        && current.command.length === commandLine.length && commandLine.every((part, index) => part === current.command[index])
-      : ownsMcpEntry(current, id) && current.command === bun && current.args[0] === cli && current.disabled !== true
-        && (copilot ? (current.type === "local" || current.type === "stdio") && Array.isArray(current.tools) && current.tools.length > 0
-          : current.type === undefined || current.type === "stdio");
-    const manual = [manualSnippet(mcpConfig.file, "mcp", mcpConfig.data, [section, SERVER], entry, {
-      create: !mcpConfig.exists,
-      replace: Object.hasOwn(mcpConfig.data[section] ?? {}, SERVER) ? `${section}.${SERVER}` : undefined,
-    })];
-    let hook = true, hookPresent = false;
-    if (setup.hook) {
-      const { file, event, version, timeout, matcher } = setup.hook;
-      const sameFile = file === setup.mcpFile, hookFile = configPath(file);
-      const handlers = (row: Json) => matcher ? (Array.isArray(row?.hooks) ? row.hooks : []) : [row];
-      const paths = (handler: Json) => sessionStartCommandPaths(copilot ? handler?.bash ?? handler?.command : handler?.command, id);
-      const ours = (handler: Json) => paths(handler) !== null;
-      const valid = (handler: Json) => {
-        const tokens = paths(handler);
-        return ((!copilot && sessionStart !== "claude") || handler?.type === "command") && tokens?.[0] === bun && tokens[1] === cli;
-      };
-      const configs = [sameFile ? mcpConfig : config(hookFile)];
-      if (copilot) {
-        const folder = dirname(hookFile);
-        try {
-          for (const name of readdirSync(absolute(folder)).sort()) {
-            if (name.endsWith(".json") && name !== basename(hookFile)) configs.push(config(join(folder, name)));
-          }
-        } catch {}
-      }
-      const candidates = configs.map(config => {
-        const rows: unknown = config.data.hooks?.[event];
-        const start = Array.isArray(rows) ? rows.findIndex((row: Json) => handlers(row).some(ours)) : -1;
-        const handlerIndex = Array.isArray(rows) && start >= 0 ? handlers(rows[start]).findIndex(ours) : -1;
-        const active = (version === undefined || config.data.version === version) && Array.isArray(rows)
-          && rows.some((row: Json) => handlers(row).some(valid));
-        return { config, start, handlerIndex, active };
-      });
-      const { config: hookConfig, start, handlerIndex, active } =
-        candidates.find(candidate => candidate.active) ?? candidates.find(candidate => candidate.start >= 0) ?? candidates[0]!;
-      hookPresent = start >= 0;
-      hook = active;
-      const command = sessionStartCommand(bun, cli, id);
-      const handler = sessionStart === "copilot" ? { type: "command", bash: command, timeoutSec: timeout }
-        : matcher ? { ...(id === "gemini-cli" && { name: "tacit-session-start" }), type: "command", command, timeout }
-        : { command, timeout };
-      const replace = hookPresent ? `hooks.${event}[${start}]${matcher ? `.hooks[${handlerIndex}]` : ""}` : undefined;
-      const value = matcher ? { matcher, hooks: [handler] } : handler;
-      manual.push(manualSnippet(hookConfig.file, "session-start", hookConfig.data, ["hooks", event], [value], {
-        create: !sameFile && !hookConfig.exists, replace, replacement: handler, version,
-      }));
-    }
-    const connected = mcp && hook;
-    return [{ id, label, installed, connected, partial: !connected && (current !== undefined || hookPresent), manual }];
-  });
-}
-
 /** 只读配置文件判断是否已接入，不调用外部命令：设置页每次打开都会查，不能卡住中枢。 */
 export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
-  const home = resolve(env.home ?? homedir()), repo = resolve(env.repo ?? fileURLToPath(new URL("../../", import.meta.url)));
-  const bun = resolve(env.bun ?? process.execPath), cli = resolve(repo, "hub/src/cli.ts");
+  const home = resolve(env.home ?? homedir());
+  const { bun, cli } = agentRuntime(env);
   const read = (file: string) => { try { return readFileSync(file, "utf8"); } catch { return null; } };
-  const automatic = AGENT_TOOLS.map(id => {
+  return AGENT_TOOLS.map(id => {
     if (id === "claude-desktop") {
       let connected = false, partial = false;
       try {
@@ -627,7 +494,6 @@ export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
     } catch {}
     return { id, label: LABELS[id], installed: !!findAgentExecutable(id === "codex" ? "codex" : "claude", home, env), connected: hook && mcp, partial: hook !== mcp };
   });
-  return [...automatic, ...manualAgentStatus(home, cli, bun, env)];
 }
 
 /** 设置页的"连接 / 断开"：等同 `agents install|uninstall --tool <id> --yes`，返回执行后的状态。 */

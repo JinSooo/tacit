@@ -7,7 +7,7 @@ test.each(Object.entries(nativeAgentTools))("the native tool catalog is current 
 });
 
 test("Kimi CLI 只接查询，OpenCode 使用 macOS 应用图标", () => {
-  expect(AGENT_TOOLS.find(t => t.id === "kimi-cli")).toMatchObject({ manualConnection: { mcpFile: ".kimi-code/mcp.json" } });
+  expect(AGENT_TOOLS.find(t => t.id === "kimi-cli")).toMatchObject({ label: "Kimi CLI" });
   expect([...AGENT_SESSION_SOURCES].some(source => source.startsWith("kimi"))).toBe(false);
   expect(AGENT_TOOLS.find(t => t.id === "opencode")?.macBundle).toBe("ai.opencode.desktop");
 });
