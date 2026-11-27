@@ -86,7 +86,6 @@ struct AgentSettingsView: View {
       } footer: {
         Note(L10n.Settings.toolsNote)
       }
-      GeneralPreferencesSection(context: true)
     }
     .task { await load() }
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in

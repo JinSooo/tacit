@@ -27,7 +27,7 @@ struct ProjectPage: View {
           ongoingWork
         }
         .padding(.horizontal, TimelineReadingLayout.edge)
-        // “正在推进”就是新会话会带入的事项，随整理变化，和下面两块一样自己重读。
+        // “正在推进”就是 AI 查项目进展时看到的事项，随整理变化，和下面两块一样自己重读。
         .task(id: store.revision) {
           while !Task.isCancelled { await loadContext(); await WindowVisibility.pause(.seconds(180)) }
         }

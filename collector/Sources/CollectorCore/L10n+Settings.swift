@@ -23,14 +23,10 @@ public extension L10n {
     public static var startupIncomplete: String { L10n.text(zh: "启动配置不完整，请重新安装应用。", en: "Reinstall Tacit to complete the startup configuration.") }
     public static var startup: String { L10n.text(zh: "启动与运行", en: "Startup") }
     public static var startupNote: String { L10n.text(zh: "登录这台 Mac 后在菜单栏运行，并启动保存与整理服务。关闭后本次继续运行，下次需手动打开应用。关闭主窗口不会停止记录。", en: "Tacit starts recording and summarizing when you log in if this is on, and keeps recording when you close the main window.") }
-    public static var sessionContextLimit: String { L10n.text(zh: "自动带入的长度上限", en: "Session context limit") }
-    public static var restoreDefaults: String { L10n.text(zh: "恢复默认", en: "Restore defaults") }
     public static var revertChanges: String { L10n.text(zh: "撤销修改", en: "Revert changes") }
     public static var saving: String { L10n.text(zh: "正在保存…", en: "Saving…") }
     public static var save: String { L10n.text(zh: "保存", en: "Save") }
     public static var retry: String { L10n.text(zh: "重试", en: "Retry") }
-    public static var sessionContext: String { L10n.text(zh: "自动带入项目进展", en: "Session context") }
-    public static var sessionContextNote: String { L10n.text(zh: "新会话按这个长度带入当前项目的进展，超出时先舍弃较旧的事项；更早、更细的内容 AI 会自己查。", en: "New sessions get the latest project progress within this limit, and AI tools can look up older details.") }
     public static var localPortNote: String { L10n.text(zh: "端口只在冲突时改，保存后后台服务会自动重启，记录会接着保存。", en: "Change the port if it conflicts with another service. Recording continues while the background service restarts.") }
     public static var currentBackend: String { L10n.text(zh: "当前后台", en: "Current background service") }
     public static var thisMac: String { L10n.text(zh: "这台 Mac", en: "This Mac") }
@@ -58,7 +54,7 @@ public extension L10n {
     public static var passwordsAndKeys: String { L10n.text(zh: "密码和密钥", en: "Passwords and keys") }
     public static var redactionRule: String { L10n.text(zh: "保存前换成 [已脱敏]，原文不写进磁盘", en: "Replaced with [redacted] before saving") }
     public static var privateContent: String { L10n.text(zh: "标为私密的内容", en: "Private content") }
-    public static var privateDefaultRule: String { L10n.text(zh: "不交给 AI 整理，也不自动带入", en: "Excluded from AI summaries and session context") }
+    public static var privateDefaultRule: String { L10n.text(zh: "不交给 AI 整理，也不出现在项目进展里", en: "Excluded from AI summaries and project progress") }
     public static var deletedRecords: String { L10n.text(zh: "删除的记录", en: "Deleted records") }
     public static var deletionRule: String { L10n.text(zh: "在线的设备马上清掉，离线的下次连上时清掉", en: "Removed from online devices now and offline devices when they reconnect") }
     public static var handlingRules: String { L10n.text(zh: "处理规则", en: "Data handling") }
@@ -90,8 +86,6 @@ public extension L10n {
     public static var inProgress: String { L10n.text(zh: "进行中…", en: "In progress…") }
     public static var reinstallTacit: String { L10n.text(zh: "安装不完整，请重新安装 Tacit 再试。", en: "Reinstall Tacit and try again.") }
     public static var keyBackupFailed: String { L10n.text(zh: "有密钥没读到，备份不完整，所以没有复制；可以复制上面的诊断信息排查。", en: "Some keys couldn't be read, so the backup was cancelled. Copy diagnostics above to investigate.") }
-    public static var contextSaved: String { L10n.text(zh: "已保存，下次带入项目进展时生效。", en: "Saved. Applies the next time session context is added.") }
-    public static var summarySettingsSaved: String { L10n.text(zh: "已保存，下次整理时生效。", en: "Saved. Applies to the next summary.") }
 
     // MARK: - Sources and recording
 
@@ -554,11 +548,6 @@ public extension L10n {
       L10n.text(zh: "整理：\(status)", en: "Summary: \(status)")
     }
 
-    public static func integerInRange(_ lower: Int, _ upper: Int) -> String {
-      L10n.text(zh: "请输入 \(lower)–\(upper) 之间的整数。",
-                en: "Enter a whole number from \(L10n.number(lower)) to \(L10n.number(upper)).")
-    }
-
     public static var listSeparator: String { L10n.text(zh: "，", en: ", ") }
 
     public static func lastRunAt(_ time: String) -> String {
@@ -779,9 +768,6 @@ public extension L10n {
     }
 
     public static func agentNote(_ note: String) -> String {
-      if note == "第一次在 Codex 里开新会话时，它会请你批准一次，批准后才会自动带入。" {
-        return L10n.text(zh: note, en: "The first new Codex session will ask you to approve access before session context is added.")
-      }
       switch note {
       case "重开 Antigravity 后生效，它会在首次调用 Tacit 查询时请你批准。":
         return L10n.text(zh: note, en: "Reopen Antigravity, then approve its first Tacit query when prompted.")

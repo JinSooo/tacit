@@ -738,21 +738,11 @@ private func waitFor(_ condition: () async -> Bool) async throws {
 @Test @MainActor func viewerBindingResetIsolatesSettingsDrafts() throws {
   let api = HubAPI(base: { localAddress }, token: { nil })
   let store = ViewerStore(api: api, dataSource: HTTPViewerDataSource(api: api), device: "mac", controls: nil)
-  let old = store.preferences
-  let settings = try JSONDecoder().decode(GeneralSettingsInfo.self, from: Data("""
-    {"injectTokens":800,"askDoneDays":0,"archiveDays":7,"timelinePolish":"hourly",
-     "timelineOverview":"hourly","modelUsage":{"daysWithUsage":0,"todayTokens":0},"ranges":{}}
-    """.utf8))
-  old.saved = settings
-  old.draft = settings
-  old.draft?.injectTokens = 1234
-  old.busy = true
+  let old = store.extensions
   store.extensions.message = "旧后台"
   store.resetForBindingChange()
-  old.error = "迟到的旧后台响应"
-  #expect(store.preferences !== old)
-  #expect(store.preferences.saved == nil && store.preferences.draft == nil)
-  #expect(!store.preferences.busy && store.preferences.error == nil)
+  old.message = "迟到的旧后台响应"
+  #expect(store.extensions !== old)
   #expect(store.extensions.message == nil)
 }
 

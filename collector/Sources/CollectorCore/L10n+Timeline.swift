@@ -5,7 +5,7 @@ public extension L10n {
   static var showSidebar: String { text(zh: "显示侧栏", en: "Show sidebar") }
   static var remove: String { text(zh: "移除", en: "Remove") }
   static var cancel: String { text(zh: "取消", en: "Cancel") }
-  static var projectRemovalExplanation: String { text(zh: "原始记录不会删除。这个目录以后不再自动识别为项目，新会话也不再带入它的内容。", en: "Original records are kept. This folder will no longer be recognized as a project or included in new sessions.") }
+  static var projectRemovalExplanation: String { text(zh: "原始记录不会删除。这个目录以后不再自动识别为项目，AI 工具也查不到它的进展。", en: "Original records are kept. This folder will no longer be recognized as a project, and AI tools won't see its progress.") }
   static var expanded: String { text(zh: "已展开", en: "Expanded") }
   static var collapsed: String { text(zh: "已折叠", en: "Collapsed") }
   static var timeline: String { text(zh: "时间线", en: "Timeline") }
@@ -92,7 +92,7 @@ public extension L10n {
   static var recentProgress: String { text(zh: "最近的进展", en: "Recent progress") }
   static var more: String { text(zh: "更多", en: "More") }
   static var noTasksInProgress: String { text(zh: "现在没有正在推进的事。", en: "No tasks in progress.") }
-  static var newSessionsGetContextForTheseTasks: String { text(zh: "新会话会带入这几件事。", en: "New sessions get context for these tasks.") }
+  static var newSessionsGetContextForTheseTasks: String { text(zh: "AI 工具查项目进展时会看到这几件事。", en: "AI tools see these tasks when they check project progress.") }
   static var loadingTasksInProgress: String { text(zh: "正在读取正在推进的事", en: "Loading tasks in progress…") }
   static var noSummaryToShowForThisProject: String { text(zh: "这个项目还没有可展示的整理结果。", en: "No summary to show for this project.") }
   static var loadEarlierDays: String { text(zh: "加载更早的日期", en: "Load earlier days") }
@@ -233,23 +233,24 @@ public extension L10n {
   static var couldntPlayTheSample: String { text(zh: "播放失败", en: "Couldn't play the sample") }
   static var skipThisVersion: String { text(zh: "跳过这个版本", en: "Skip this version") }
   static var installUpdate: String { text(zh: "更新", en: "Update") }
-  static var auditExplanation: String { text(zh: "内容链接查看的是当前记录；自动带入可查看当时保存的正文。", en: "Record links show current content. Session context shows what was saved at the time.") }
+  static var auditExplanation: String { text(zh: "内容链接查看的是当前记录；项目进展可查看当时给出的正文。", en: "Record links show current content. Project progress shows what was returned at the time.") }
   static var aiToolsHaventReadAnythingYet: String { text(zh: "AI 工具还没有读取过", en: "AI tools haven't read anything yet") }
   static var runLog: String { text(zh: "运行记录", en: "Run log") }
   static var tool: String { text(zh: "工具", en: "Tool") }
   static var all: String { text(zh: "全部", en: "All") }
   static var failed: String { text(zh: "失败", en: "Failed") }
-  static var contextResultCountHelp: String { text(zh: "带入了几个项目和事项", en: "Number of projects and tasks included") }
+  static var contextResultCountHelp: String { text(zh: "给出了几个项目和事项", en: "Number of projects and tasks returned") }
   static var readResultCountHelp: String { text(zh: "读到了几个项目、事项、事实或记录", en: "Number of projects, tasks, facts or records read") }
   static var nothingWasReturned: String { text(zh: "这次没有读到内容", en: "Nothing was returned") }
-  static var hideSavedSessionContext: String { text(zh: "收起当时带入", en: "Hide saved session context") }
-  static var showSavedSessionContext: String { text(zh: "查看当时带入", en: "Show saved session context") }
+  static var hideSavedSessionContext: String { text(zh: "收起当时的内容", en: "Hide saved content") }
+  static var showSavedSessionContext: String { text(zh: "查看当时的内容", en: "Show saved content") }
   static var loadingAccessibility: String { text(zh: "正在读取", en: "Loading…") }
   static var loading: String { text(zh: "正在读取…", en: "Loading…") }
   static var thisItemWasDeleted: String { text(zh: "这一项已经删除", en: "This item was deleted") }
   static var record: String { text(zh: "记录", en: "Record") }
   static var contextAfterCompaction: String { text(zh: "对话压缩后重新带入", en: "Session context restored after compaction") }
   static var contextAtSessionStart: String { text(zh: "新会话开始时带入", en: "Session context provided at start") }
+  static var contextOnRequest: String { text(zh: "查看项目进展", en: "Checked project progress") }
   static var viewNow: String { text(zh: "查看此刻", en: "View Now") }
   static var searchRecords: String { text(zh: "搜索历史记录", en: "Search records") }
   static var viewTimeline: String { text(zh: "查看时间线", en: "View timeline") }
@@ -269,7 +270,7 @@ public extension L10n {
   static var closed: String { text(zh: "已收起", en: "Collapsed") }
   static var commandLineSnapshotExplanation: String { text(zh: "这是交给命令行工具的内容；工具内部附加的说明和网络请求不可见。", en: "This is what Tacit sent to the command-line tool. Instructions and requests added by that tool are hidden.") }
   static var apiSnapshotExplanation: String { text(zh: "这是交给模型服务的请求正文，认证凭据不在其中。", en: "This is the request body sent to the model service, with credentials excluded.") }
-  static var savedSessionContext: String { text(zh: "当时自动带入的内容", en: "Saved session context") }
+  static var savedSessionContext: String { text(zh: "当时给出的内容", en: "Saved content") }
   static var request: String { text(zh: "发送内容", en: "Request") }
   static var response: String { text(zh: "返回内容", en: "Response") }
   static var noResponseToShowYet: String { text(zh: "尚无可展示的返回内容。", en: "No response to show yet.") }
