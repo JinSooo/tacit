@@ -29,16 +29,17 @@ internal data class SpeechModelResource(
 
 /** The four artifacts and hashes specified in docs/contracts.md; no archive or extra fp32 model download. */
 internal object SpeechModelCatalog {
+    private const val modelScope = "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master"
     private const val sense = "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07"
     private const val release = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
     /** Unmodified copies on our own release, tried first so an upstream re-upload cannot block new installs. */
     const val mirror = "https://github.com/JinSooo/tacit/releases/download/models-v1"
     private const val speaker = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
     val resources = listOf(
-        SpeechModelResource("sense-voice/model.int8.onnx", "$mirror/sense-voice-model.int8.onnx", 239233841,
-            "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51", listOf("$sense/model.int8.onnx")),
-        SpeechModelResource("sense-voice/tokens.txt", "$mirror/sense-voice-tokens.txt", 315894,
-            "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc", listOf("$sense/tokens.txt")),
+        SpeechModelResource("sense-voice/model.int8.onnx", "$modelScope/model.int8.onnx", 239233841,
+            "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51", listOf("$mirror/sense-voice-model.int8.onnx", "$sense/model.int8.onnx")),
+        SpeechModelResource("sense-voice/tokens.txt", "$modelScope/tokens.txt", 315894,
+            "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc", listOf("$mirror/sense-voice-tokens.txt", "$sense/tokens.txt")),
         SpeechModelResource("silero_vad.onnx", "$mirror/silero_vad.onnx", 643854,
             "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6", listOf("$release/asr-models/silero_vad.onnx")),
         // Upstream re-exported this file on 2026-11-19; both versions give identical embeddings (cosine 1.000000).

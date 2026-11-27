@@ -45,7 +45,15 @@ class SpeechModelDownloadTest {
                 assertTrue("Hash drift: ${resource.path}", contract.lineSequence().any { line -> line.contains(resource.path) && line.contains(hash) })
             }
         }
-        (SpeechModelCatalog.resources + SpeechModelCatalog.taggingArchive + QnnCatalog.archive).forEach {
+        SpeechModelCatalog.resources.take(2).forEach {
+            val name = File(it.path).name
+            assertEquals(listOf(
+                "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master/$name",
+                "${SpeechModelCatalog.mirror}/sense-voice-$name",
+                "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/$name",
+            ), listOf(it.url) + it.fallbackUrls)
+        }
+        (SpeechModelCatalog.resources.drop(2) + SpeechModelCatalog.taggingArchive + QnnCatalog.archive).forEach {
             assertTrue("Mirror first: ${it.path}", it.url.startsWith(SpeechModelCatalog.mirror + "/") && it.fallbackUrls.isNotEmpty())
         }
         assertEquals(SpeechModels.tagging, SpeechModelCatalog.tagging.map { it.path })
