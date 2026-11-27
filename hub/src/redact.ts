@@ -13,6 +13,7 @@ export function redactString(input: string): { text: string; count: number } {
   let text = input;
   const patterns: [string, RegExp][] = [
     ["私钥", /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g],
+    ["Basic", /(?<=\b(?:Proxy-)?Authorization:[ \t]*Basic[ \t]+)[A-Za-z0-9+/]+=*|(?<=\bBasic[ \t]+)[A-Za-z0-9+/]{12,}=*/gi],
     ["AWS", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g],
     ["GitHub", /\b(?:gh[pors]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g],
     ["Anthropic", /\bsk-ant-[A-Za-z0-9_-]{16,}/g],
@@ -32,6 +33,8 @@ export function redactString(input: string): { text: string; count: number } {
     (_, prefix: string) => prefix + replace("地图密钥"));
   text = text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+:)([^\s/@]+)(@)/gi,
     (_, prefix, _password, suffix) => prefix + replace("URL密码") + suffix);
+  text = text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s\/@:?#]+(@)(?=[^\s\/@?#])/gi,
+    (_, prefix, suffix) => prefix + replace("URL凭据") + suffix);
   text = text.replace(/((?:["']?)(?:password|passwd|pwd|token|access_token|refresh_token|api[_-]?key|secret|client_secret)["']?\s*[:=]\s*)(["']?)([A-Za-z0-9_+\/.=~%!@#$^&*?:-]{16,})\2/gi,
     (whole, prefix: string, quote: string, value: string) => {
       const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(r => r.test(value)).length;
