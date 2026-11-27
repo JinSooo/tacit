@@ -199,7 +199,7 @@ struct RelaySettingsSection: View {
     } catch {
       let hubError = error as? HubError
       let fallback = L10n.Settings.relayFailure(hubError?.status)
-      actionError = hubError?.actionMessage.map { L10n.Settings.serviceMessage($0, fallback: fallback) } ?? fallback
+      actionError = UserFacingError.message(for: error, fallback: fallback)
     }
   }
 }

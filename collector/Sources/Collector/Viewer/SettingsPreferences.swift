@@ -1,5 +1,6 @@
 import SwiftUI
 import enum CollectorCore.L10n
+import enum CollectorCore.UserFacingError
 
 /// 草稿属于窗口，不随分组切换丢失；只提交当前分组修改的字段。
 @MainActor @Observable final class SettingsPreferences {
@@ -31,7 +32,7 @@ import enum CollectorCore.L10n
   func load(api: HubAPI) async {
     guard draft == saved, !busy else { return }
     do { let g = try await api.generalSettings(); saved = g; draft = g; error = nil }
-    catch is CancellationError {} catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    catch is CancellationError {} catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
   func save(api: HubAPI, context: Bool) async {
     guard let d = draft else { return }
@@ -51,6 +52,6 @@ import enum CollectorCore.L10n
       if !context && changed(context: true) { next.injectTokens = d.injectTokens }
       saved = g; draft = next
       message = context ? L10n.Settings.contextSaved : L10n.Settings.summarySettingsSaved
-    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    } catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }

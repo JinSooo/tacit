@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import enum CollectorCore.L10n
+import enum CollectorCore.UserFacingError
 
 // 与 docs/plugins.md 的清单和本机管理 CLI 一致。
 enum PluginValue: Codable, Equatable {
@@ -68,6 +69,6 @@ struct PluginFailure: LocalizedError { let message: String; var errorDescription
       if request.action == "discard" { preview = nil }
       store.capture = controls.captureSnapshot()
       return result
-    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.pluginOperationFailed); return nil }
+    } catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.pluginOperationFailed); return nil }
   }
 }

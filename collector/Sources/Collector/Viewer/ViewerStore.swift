@@ -10,6 +10,8 @@ import struct CollectorCore.Speaker
 import struct CollectorCore.DataSourceStatus
 import enum CollectorCore.MaintenanceTask
 import struct CollectorCore.MicrophoneChoice
+import enum CollectorCore.UserFacingError
+import enum CollectorCore.L10n
 
 /// 采集端自己的运行状态，由 AppDelegate 提供给窗口显示。只含计数和开关，不含内容。
 struct CaptureSnapshot: Equatable {
@@ -194,7 +196,7 @@ enum Route: Hashable {
       return
     } catch {
       guard request == sharedRequest else { return }
-      projectError = error.localizedDescription
+      projectError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
     }
     do {
       async let q = api.pending()
@@ -209,7 +211,7 @@ enum Route: Hashable {
     } catch is CancellationError {
     } catch {
       guard request == sharedRequest else { return }
-      sharedError = projectError ?? error.localizedDescription
+      sharedError = projectError ?? UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
     }
   }
 
@@ -230,7 +232,7 @@ enum Route: Hashable {
     projectRemovalError = nil
     removingProject = true
     defer { removingProject = false }
-    do { try await removeProject(project.id) } catch { projectRemovalError = error.localizedDescription }
+    do { try await removeProject(project.id) } catch { projectRemovalError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 
   func removeProject(_ id: String) async throws {

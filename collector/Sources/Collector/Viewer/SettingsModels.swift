@@ -369,7 +369,7 @@ struct ModelSettingsView: View {
       try Task.checkCancellation()
       localModels[url] = models
     } catch is CancellationError {} catch {
-      if !Task.isCancelled { localModelErrors[url] = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+      if !Task.isCancelled { localModelErrors[url] = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
     }
   }
 
@@ -414,7 +414,7 @@ struct ModelSettingsView: View {
       error = nil
     }
     catch is CancellationError {}
-    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 
   func loadHealth() async {
@@ -452,7 +452,7 @@ struct ModelSettingsView: View {
       if timelineDraft == timelineSaved { applyTimeline(settings) }
       else { timelineSettings = settings; timelineError = nil }
     }
-    catch is CancellationError {} catch { timelineError = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    catch is CancellationError {} catch { timelineError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 
   private var canSaveModels: Bool {
@@ -493,7 +493,7 @@ struct ModelSettingsView: View {
         timelineDraft = TimelineDraft(settings)
         applyTimeline(settings)
       }
-    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    } catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 
   func test(_ tier: String) async {
@@ -520,7 +520,7 @@ struct ModelSettingsView: View {
   func removeKey(_ provider: String) async {
     guard store.canManageBackend else { return }
     do { try await store.api.deleteKey(provider: provider); await load() }
-    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 
@@ -582,6 +582,6 @@ private struct KeyEntrySheet: View {
       key = ""
       await done()
       dismiss()
-    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    } catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }

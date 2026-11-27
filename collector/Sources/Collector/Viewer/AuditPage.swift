@@ -88,7 +88,7 @@ struct AuditPage: View {
       let ids = page.reads.compactMap { $0.args["id"]?.text }
       Task { await resolve(ids) }
     } catch is CancellationError {
-    } catch { self.error = error.localizedDescription; if reset { reads = [] } }
+    } catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed); if reset { reads = [] } }
   }
 
   func resolve(_ ids: [String]) async {

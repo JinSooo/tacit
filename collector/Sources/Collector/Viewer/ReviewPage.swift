@@ -423,7 +423,7 @@ private struct ReviewDayContent: View {
       _ = await readiness
       return
     } catch {
-      diaryError = error.localizedDescription
+      diaryError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
     }
     let hasDiaryItems = nextDiary?.detail?.items?.allSatisfy { $0.recordIds != nil } == true
     let hasDiaryDrafts = target == today && !(nextDiary?.drafts ?? []).isEmpty
@@ -439,7 +439,7 @@ private struct ReviewDayContent: View {
         _ = await readiness
         return
       } catch {
-        recordsError = error.localizedDescription
+        recordsError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
       }
     }
     _ = await readiness

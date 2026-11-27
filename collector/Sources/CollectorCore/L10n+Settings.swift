@@ -703,7 +703,7 @@ public extension L10n {
     }
 
     public static func pairingError(_ failure: RemotePairing.Failure) -> String {
-      guard AppLanguage.current == .en else { return failure.localizedDescription }
+      guard AppLanguage.current == .en else { return failure.errorDescription ?? connectionFailed }
       switch failure {
       case .adminInvitationRequired: return "Use an invite link that grants management access."
       case .remoteUnavailable: return "Can't find the remote background service."
@@ -782,14 +782,15 @@ public extension L10n {
     }
 
     public static func serviceMessage(_ message: String, fallback: String) -> String {
+      guard UserFacingError.canDisplayServiceMessage(message) else { return fallback }
       guard AppLanguage.current == .en else { return message }
       switch message {
       case "不能移除最后一台管理设备": return "Keep at least one device with management access."
       case "手机只能使用采集权限": return "This phone supports collection access only."
       case "API key 格式不对：应为 8–1024 个英文字母、数字或符号，不能有空格、双引号或反斜杠。":
         return "Use 8–1,024 letters, numbers, or symbols for the API key. Omit spaces, double quotes, and backslashes."
-      default:
-        return hasChineseText(message) ? fallback : message
+      case "上一次测试还没结束": return "A test is already running."
+      default: return fallback
       }
     }
 
@@ -813,7 +814,8 @@ public extension L10n {
     }
 
     public static func modelFailure(_ problem: String, fallback: String) -> String {
-      serviceMessage(ModelErrorText.plain(problem), fallback: fallback)
+      if ModelErrorText.isCode(problem) { return ModelErrorText.plain(problem) }
+      return serviceMessage(problem, fallback: fallback)
     }
 
     public static var summaryFailure: String {

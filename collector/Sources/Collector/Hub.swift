@@ -261,7 +261,7 @@ final class HubClient: @unchecked Sendable {
       } catch DeviceClientError.hubBusy, DeviceClientError.operationError(_, 503, _), DeviceClientError.plaintextError(503, _) {
         finish(on: route, error: nil, done: nil, status: 503)
       } catch DeviceClientError.operationError(_, let status, _), DeviceClientError.plaintextError(let status, _) {
-        finish(on: route, error: "后台服务拒绝了记录（\(status)）", done: nil)
+        finish(on: route, error: UserFacingError.message(for: HubError(status: status), fallback: L10n.recordSaveFailed), done: nil)
       } catch RemoteDeviceAccess.Failure.frozen, DeviceClientError.deviceRemoved, DeviceClientError.invalidKey, DeviceClientError.keyStoreError, LocalDeviceLink.Failure.keyUnavailable {
         let backend = route.remote == nil ? "本机后台" : "远端后台"
         finish(on: route, error: "\(backend)连接凭据不可用，待发送记录已保留。", done: nil)
@@ -319,7 +319,7 @@ final class HubClient: @unchecked Sendable {
         }
         if let status = delivery.rejectedStatus {
           if let nonce = delivery.nonce { try await session.releaseRejectedCapture(nonce: nonce, status: status) }
-          finish(on: route, error: "后台服务拒绝了记录（\(status)）", done: nil)
+          finish(on: route, error: UserFacingError.message(for: HubError(status: status), fallback: L10n.recordSaveFailed), done: nil)
           return
         }
         guard let receipt = DeliveryReceipt.decode(delivery.body, batchCount: delivery.ids.count) else {
@@ -332,7 +332,7 @@ final class HubClient: @unchecked Sendable {
       } catch RemoteDeviceSession.Failure.awaitingReceipt, is RemoteSwitchWriteGate.Paused {
         finish(on: route, error: nil, done: nil)
       } catch DeviceClientError.operationError(_, let status, _), DeviceClientError.plaintextError(let status, _) {
-        finish(on: route, error: "后台服务拒绝了记录（\(status)）", done: nil)
+        finish(on: route, error: UserFacingError.message(for: HubError(status: status), fallback: L10n.recordSaveFailed), done: nil)
       } catch {
         finish(on: route, error: "远端后台暂不可用，待发送记录已保留。", done: nil)
       }

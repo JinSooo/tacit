@@ -196,7 +196,7 @@ private struct LoginStartupSection: View {
       Toggle(L10n.Settings.startAtLogin, isOn: Binding(get: { enabled }, set: { value in
         busy = true; error = nil
         Task {
-          do { try startup?.setEnabled(value) } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+          do { try startup?.setEnabled(value) } catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
           refresh(); busy = false
         }
       })).toggleStyle(.switch).disabled(!installed || busy)
@@ -394,7 +394,7 @@ struct HubSettingsView: View {
       error = nil
     } catch is CancellationError {
     } catch {
-      self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed)
+      self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
     }
   }
 
@@ -428,7 +428,7 @@ struct HubSettingsView: View {
       }
       message = nil
       error = L10n.Settings.backendRestartTimeout
-    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    } catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 
@@ -598,14 +598,14 @@ struct MaintenanceSettingsView: View {
     guard store.canManageBackend, !Task.isCancelled else { return }
     do { requests = try await store.api.distillRequests(); requestError = nil }
     catch is CancellationError {}
-    catch { requestError = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    catch { requestError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
   func requestBackfill() async {
     guard store.canManageBackend else { return }
     do {
       try await store.api.requestDistill(kind: "backfill", range: DistillDateRange(start: backfillFrom, end: backfillTo))
       await loadRequests()
-    } catch { requestError = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    } catch { requestError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 

@@ -354,17 +354,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     terminationSignal = TerminationSignal { NSApp.terminate(nil) }
     Task { @MainActor [weak self] in
       guard let self, AppSetup.checkPlacement() else { return }
+      var recoveryMessage: String?
       do { try await self.remoteSwitch.recover() }
-      catch { NSLog("record-anything: %@", error.localizedDescription) }
+      catch {
+        NSLog("record-anything: %@", error.localizedDescription)
+        recoveryMessage = RemoteBackendSettingsModel.message(for: error, fallback: L10n.Settings.recoverSwitchFailed)
+      }
       guard !self.terminating else { return }
-      self.finishLaunchingAfterRecovery()
+      self.finishLaunchingAfterRecovery(recoveryMessage: recoveryMessage)
     }
   }
 
-  @MainActor private func finishLaunchingAfterRecovery() {
+  @MainActor private func finishLaunchingAfterRecovery(recoveryMessage: String?) {
     AppSetup.start(config: config, startup: loginStartup, writeGate: switchWriteGate, standby: launchSource != .launchd)
     viewer.store.remoteBackend?.refreshContext()
-    if let failure = remoteSwitch.lastFailure { viewer.store.remoteBackend?.error = failure }
+    if let recoveryMessage { viewer.store.remoteBackend?.error = recoveryMessage }
     MainActor.assumeIsolated {
       WindowVisibility.onChange = { [weak self] _ in self?.updateSyncForeground() }
     }
@@ -812,7 +816,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if task == .syncAll {
           // 整理进度由下一行的整理请求状态表达，这里不写“正在整理”，免得完成后还挂着。
           do { try await api.requestDistill(kind: "round") }
-          catch { text += "，整理没能开始：\(error.localizedDescription)" }
+          catch {
+            let fallback = L10n.text(zh: "整理没能开始，请稍后重试。", en: "Summarizing couldn't start. Try again shortly.")
+            text += L10n.text(zh: "，", en: " ") + UserFacingError.message(for: error, fallback: fallback)
+          }
         }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let done = "\(f.string(from: Date())) 完成，" + text

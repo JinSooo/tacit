@@ -1,21 +1,6 @@
 import Foundation
 import CollectorCore
 
-struct HubError: LocalizedError {
-  /// 固定的失败类别：界面据此说出原因，诊断信息只记这个值，不记原文。
-  enum Reason: String { case unreachable, timedOut = "timed_out", deviceLink = "device_link", badResponse = "bad_response", server, other }
-  let message: String
-  let status: Int
-  var kind: Reason = .other
-  var errorDescription: String? { message }
-  var reason: Reason { kind == .other && status >= 500 ? .server : kind }
-  static var needsLocalHub: HubError { HubError(message: L10n.localServiceRequired, status: 0) }
-  static var invalidBinding: HubError { HubError(message: L10n.unreadableConnectionSettings, status: 0) }
-  static var remoteUnavailable: HubError { HubError(message: L10n.remoteServiceUnavailable, status: 0) }
-  static var needsDirectHub: HubError { HubError(message: L10n.directServiceRequired, status: 0) }
-  var actionMessage: String? { [403, 409, 429].contains(status) ? message : nil }
-}
-
 final class HubAPI: @unchecked Sendable {
   typealias DeviceAction = (String, [String: DeviceJSON], TimeInterval?, HubBinding.Route?) async throws -> DeviceResponsePayload?
 
@@ -114,8 +99,8 @@ final class HubAPI: @unchecked Sendable {
       let response: URLResponse
       do { (data, response) = try await dataWaitingForStartup(r) }
       catch let e as URLError where e.code == .cancelled { throw CancellationError() }
-      catch let e as URLError where e.code == .timedOut { throw HubError(message: L10n.serviceTimedOut, status: 0, kind: .timedOut) }
-      catch { throw HubError(message: L10n.cantReachBackgroundService, status: 0, kind: .unreachable) }
+      catch let e as URLError { throw HubError(networkCode: e.code) }
+      catch { throw HubError(status: 0, kind: .unreachable) }
       try checkBinding()
       status = (response as? HTTPURLResponse)?.statusCode ?? 0
       guard status == 503, let wait else { break }
@@ -123,7 +108,7 @@ final class HubAPI: @unchecked Sendable {
     }
     guard (200..<300).contains(status) else {
       let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
-      throw HubError(message: msg ?? L10n.requestFailed(status), status: status)
+      throw HubError(serviceMessage: msg, status: status)
     }
     return data
   }
@@ -161,7 +146,7 @@ final class HubAPI: @unchecked Sendable {
 
   private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
     do { return try HubJSON.decoder().decode(T.self, from: data) }
-    catch { throw HubError(message: L10n.unreadableResponse(String(describing: error)), status: 0, kind: .badResponse) }
+    catch { throw HubError(status: 0, kind: .badResponse) }
   }
 
   func get<T: Decodable>(_ type: T.Type, _ path: String, _ query: [String: String?] = [:], device: DeviceOperation? = nil) async throws -> T {
@@ -246,7 +231,8 @@ final class HubAPI: @unchecked Sendable {
     let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     if (j?["accepted"] as? Int) != 1 {
       let errors = ((j?["rejected"] as? [[String: Any]]) ?? []).flatMap { ($0["errors"] as? [String]) ?? [] }
-      throw HubError(message: errors.isEmpty ? L10n.recordSaveFailed : errors.joined(separator: L10n.errorSeparator), status: 0)
+      let detail = L10n.Settings.serviceMessage(errors.joined(separator: L10n.errorSeparator), fallback: L10n.recordSaveFailed)
+      throw HubError(message: detail, status: 0)
     }
   }
 
@@ -285,7 +271,7 @@ final class HubAPI: @unchecked Sendable {
       }
       return try HubJSON.decoder().decode(DayDiary.self, from: payload)
     } catch {
-      throw HubError(message: L10n.unreadableResponse(String(describing: error)), status: 0, kind: .badResponse)
+      throw HubError(status: 0, kind: .badResponse)
     }
   }
 
