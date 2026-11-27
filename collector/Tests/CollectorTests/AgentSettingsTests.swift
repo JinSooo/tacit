@@ -24,6 +24,60 @@ import Testing
     }
     """),
   ])
+  let opencode = AgentToolState(id: "opencode", label: "OpenCode", installed: false, connected: false, partial: false, manual: [
+    .init(file: "~/.config/opencode/opencode.json", kind: .mcp, action: .create, section: nil, code: """
+    {
+      "mcp": {
+        "tacit": {
+          "type": "local",
+          "command": [
+            "/opt/homebrew/bin/bun",
+            "/Users/sample/Tacit/runtime/hub/src/cli.ts",
+            "mcp",
+            "--tool",
+            "opencode"
+          ],
+          "enabled": true
+        }
+      }
+    }
+    """),
+  ])
+  let copilot = AgentToolState(id: "copilot-cli", label: "Copilot CLI", installed: false, connected: false, partial: false, manual: [
+    .init(file: "~/.copilot/mcp-config.json", kind: .mcp, action: .create, section: nil, code: """
+    {
+      "mcpServers": {
+        "tacit": {
+          "type": "local",
+          "command": "/opt/homebrew/bin/bun",
+          "args": [
+            "/Users/sample/Tacit/runtime/hub/src/cli.ts",
+            "mcp",
+            "--tool",
+            "copilot-cli"
+          ],
+          "tools": [
+            "*"
+          ]
+        }
+      }
+    }
+    """),
+    .init(file: "~/.copilot/hooks/tacit.json", kind: .sessionStart, action: .create, section: nil, code: """
+    {
+      "version": 1,
+      "hooks": {
+        "sessionStart": [
+          {
+            "type": "command",
+            "bash": "/opt/homebrew/bin/bun /Users/sample/Tacit/runtime/hub/src/cli.ts hook session-start --tool copilot-cli",
+            "timeoutSec": 5
+          }
+        ]
+      }
+    }
+    """),
+  ])
   let tools: [AgentToolState] = [
     .init(id: "claude-code", label: "Claude Code", installed: true, connected: true, partial: false, manual: nil),
     .init(id: "codex", label: "Codex", installed: true, connected: true, partial: false, manual: nil),
@@ -64,6 +118,25 @@ import Testing
         .background(Palette.paper).tint(Palette.accent))
 
         try render("agent-instructions", AgentConnectionInstructions(tool: cursor).background(Palette.paperRaised))
+        if language == .zh && scheme == .light {
+          try render("agent-instructions-opencode", AgentConnectionInstructions(tool: opencode).background(Palette.paperRaised))
+
+          // SwiftUI 的 ImageRenderer 不会绘制 AppKit 承载的滚动内容。
+          let appearance = try #require(NSAppearance(named: .aqua))
+          let host = NSHostingView(rootView: AgentConnectionInstructions(tool: copilot)
+            .background(Palette.paperRaised).environment(\.colorScheme, scheme))
+          host.appearance = appearance
+          host.frame = CGRect(origin: .zero, size: host.fittingSize)
+          let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+          window.appearance = appearance
+          window.contentView = host
+          host.layoutSubtreeIfNeeded()
+          let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+          appearance.performAsCurrentDrawingAppearance { host.cacheDisplay(in: host.bounds, to: bitmap) }
+          window.contentView = nil
+          let data = try #require(bitmap.representation(using: .png, properties: [:]))
+          try data.write(to: output.appendingPathComponent("agent-instructions-copilot-cli-\(variant).png"))
+        }
       }
     }
   }
