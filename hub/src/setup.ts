@@ -344,13 +344,13 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     };
     if (needsLoad) await startHub(port !== 0 && await probe(port, "127.0.0.1") === null);
     const healthy = o.healthy ?? (async (p: number) => {
-      for (let i = 0; i < 15; i++) {
-        const started = Date.now();
+      for (let i = 0; i < 60; i++) {
+        const started = performance.now();
         try {
           const response = await fetch(`http://127.0.0.1:${p}/v1/health`, { signal: AbortSignal.timeout(1000) });
           if (response.ok && (await response.json() as { ok?: boolean }).ok === true) return true;
         } catch {}
-        await wait(Math.max(0, 1000 - (Date.now() - started)));
+        await wait(Math.max(0, 1000 - (performance.now() - started)));
       }
       return false;
     });

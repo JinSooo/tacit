@@ -44,9 +44,39 @@ enum AppSetup {
     }
   }
 
+  enum Trigger {
+    case initial, manualRetry, recovered
+  }
+
+  struct Progress {
+    private(set) var activity = Activity.idle
+    private var attemptedRecovery = false
+
+    var canResume: Bool { activity == .finished(.serviceUnhealthy) && !attemptedRecovery }
+
+    mutating func begin(_ trigger: Trigger) -> Bool {
+      guard activity != .running else { return false }
+      switch trigger {
+      case .initial:
+        guard activity == .idle else { return false }
+      case .manualRetry:
+        break
+      case .recovered:
+        guard canResume else { return false }
+        attemptedRecovery = true
+      }
+      activity = .running
+      return true
+    }
+
+    mutating func finish(_ reason: SetupStatus.Reason?) {
+      activity = .finished(reason)
+    }
+  }
+
   private static let lock = NSLock()
-  private static var currentActivity = Activity.idle
-  static var activity: Activity { lock.withLock { currentActivity } }
+  private static var progress = Progress()
+  static var activity: Activity { lock.withLock { progress.activity } }
 
   enum ChecklistStep: Equatable {
     case preparing
@@ -79,14 +109,18 @@ enum AppSetup {
     return .failed(startupMessage() ?? L10n.Settings.setupFailure(.unknown))
   }
 
+  @MainActor static func resumeAfterRecovery(config: Config, startup: LoginStartup, writeGate: RemoteSwitchWriteGate,
+                                             standby: Bool) async {
+    guard lock.withLock({ progress.canResume }), config.allowsLocalHub, !writeGate.isPaused,
+          await isReachable(config.hubURL), !Task.isCancelled else { return }
+    start(config: config, startup: startup, writeGate: writeGate, standby: standby,
+          trigger: .recovered)
+  }
+
   /// 用户手动打开时，准备完成后让 launchd 起一份待命实例；launchd 拉起的自己就是那份。
   static func start(config: Config, startup: LoginStartup, writeGate: RemoteSwitchWriteGate? = nil, standby: Bool = false,
-                    retry: Bool = false, port: Int? = nil, completion: ((Result<Void, Error>) -> Void)? = nil) {
-    guard lock.withLock({
-      guard currentActivity != .running, retry || currentActivity == .idle else { return false }
-      currentActivity = .running
-      return true
-    }) else {
+                    trigger: Trigger = .initial, port: Int? = nil, completion: ((Result<Void, Error>) -> Void)? = nil) {
+    guard lock.withLock({ progress.begin(trigger) }) else {
       completion?(.failure(HubError(message: L10n.Settings.preparingBackend, status: 0)))
       return
     }
@@ -95,13 +129,13 @@ enum AppSetup {
       var reason: SetupStatus.Reason?
       var result: Result<Void, Error> = .success(())
       defer {
-        lock.withLock { currentActivity = .finished(reason) }
+        lock.withLock { progress.finish(reason) }
         completion?(result)
       }
       do {
         try writeGate?.begin()
         defer { writeGate?.end() }
-        guard shouldRunBundledSetup(in: config.dataDir), !retry || config.allowsLocalHub else {
+        guard shouldRunBundledSetup(in: config.dataDir), trigger == .initial || config.allowsLocalHub else {
           throw HubError.invalidBinding
         }
         if let port {
@@ -111,7 +145,7 @@ enum AppSetup {
         let bundle = Bundle.main.bundlePath
         if AppPlacement.of(bundlePath: bundle, home: FileManager.default.homeDirectoryForCurrentUser.path) == .installed {
           if let bundled = Bundled.current {
-            reason = run(config: config, app: bundle, bundled: bundled, retry: retry).reason
+            reason = run(config: config, app: bundle, bundled: bundled, retry: trigger == .manualRetry).reason
           } else {
             reason = .bundleIncomplete
           }

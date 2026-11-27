@@ -1292,3 +1292,42 @@ func finalReviewInvalidRetainedIdentityCanPairAgain(scenario: String) async thro
   #expect(failed == .failed(L10n.Settings.setupFailure(.backgroundBlocked)))
   #expect(!ReviewPage.allowsDayRecords(backendSetup: failed))
 }
+
+@Test func onlyServiceUnhealthyCanResumeAfterRecovery() {
+  for reason in [SetupStatus.Reason.bundleIncomplete, .backgroundBlocked, .database, .portInUse, .unknown] {
+    var progress = AppSetup.Progress()
+    let idleRecoveryStarted = progress.begin(.recovered)
+    #expect(!idleRecoveryStarted)
+    let initialStarted = progress.begin(.initial)
+    #expect(initialStarted)
+    progress.finish(reason)
+    let recoveryStarted = progress.begin(.recovered)
+    #expect(!recoveryStarted)
+    #expect(progress.activity == .finished(reason))
+    let manualRetryStarted = progress.begin(.manualRetry)
+    #expect(manualRetryStarted)
+  }
+}
+
+@Test func recoveredSetupRunsOnceEvenIfItFailsAndSuccessClearsTheFailure() {
+  for result in [SetupStatus.Reason.serviceUnhealthy, nil] {
+    var progress = AppSetup.Progress()
+    let initialStarted = progress.begin(.initial)
+    #expect(initialStarted)
+    progress.finish(.serviceUnhealthy)
+    #expect(progress.canResume)
+    let recoveryStarted = progress.begin(.recovered)
+    #expect(recoveryStarted)
+    let concurrentRecoveryStarted = progress.begin(.recovered)
+    let concurrentManualRetryStarted = progress.begin(.manualRetry)
+    #expect(!concurrentRecoveryStarted)
+    #expect(!concurrentManualRetryStarted)
+    progress.finish(result)
+    #expect(progress.activity.failure == result)
+    #expect(!progress.canResume)
+    let secondRecoveryStarted = progress.begin(.recovered)
+    #expect(!secondRecoveryStarted)
+    let manualRetryStarted = progress.begin(.manualRetry)
+    #expect(manualRetryStarted)
+  }
+}

@@ -215,6 +215,45 @@ test("setup reports a fixed reason at each failure point", async () => {
   } finally { f.cleanup(); }
 });
 
+test.each([22, null])("setup probes each second for at most 60 seconds when health returns at attempt %s", async (readyAt) => {
+  const f = fixture();
+  let attempts = 0;
+  const waits: number[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch() {
+      attempts++;
+      return new Response(JSON.stringify({ ok: readyAt !== null && attempts >= readyAt }));
+    },
+  });
+  try {
+    const run = f.run({
+      env: { RA_DATA_DIR: f.data, RA_PORT: String(server.port) },
+      healthy: undefined,
+      wait: async ms => { waits.push(ms); },
+    });
+    const stamp = join(f.data, "app-setup.json");
+    const distillLoaded = () => f.calls.some(c => c.startsWith("bootstrap ") && c.endsWith(".distill.plist"));
+    if (readyAt === null) {
+      await expect(run).rejects.toMatchObject({ reason: "service_unhealthy" });
+      expect(attempts).toBe(60);
+      expect(waits).toHaveLength(60);
+      expect(distillLoaded()).toBe(false);
+      expect(existsSync(stamp)).toBe(false);
+    } else {
+      await run;
+      expect(attempts).toBe(readyAt);
+      expect(waits).toHaveLength(readyAt - 1);
+      expect(distillLoaded()).toBe(true);
+      expect(existsSync(stamp)).toBe(true);
+    }
+    expect(waits.every(ms => ms >= 0 && ms <= 1000)).toBe(true);
+  } finally {
+    await server.stop(true);
+    f.cleanup();
+  }
+});
+
 test("startup detects a bound random port and allocates a free port with the OS", async () => {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
   try {

@@ -412,6 +412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
         Task { await source.refreshBinding() }
         self?.hub.flush()
+        Task { @MainActor [weak self] in
+          guard let self, !self.terminating else { return }
+          await AppSetup.resumeAfterRecovery(config: self.config, startup: self.loginStartup, writeGate: self.switchWriteGate,
+                                             standby: launchSource != .launchd)
+        }
         Task { @MainActor [weak self] in await self?.historyImporter.tick() }
       },
       Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.writeStatus() },
@@ -750,7 +755,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @MainActor func prepareBackendAgain(port: Int? = nil) async throws {
     let result: Result<Void, Error> = await withCheckedContinuation { continuation in
       AppSetup.start(config: config, startup: loginStartup, writeGate: switchWriteGate,
-                     standby: launchSource != .launchd, retry: true, port: port) {
+                     standby: launchSource != .launchd, trigger: .manualRetry, port: port) {
         continuation.resume(returning: $0)
       }
     }
