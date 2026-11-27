@@ -186,7 +186,7 @@ public enum ModelErrorText {
     case "cli_network": return L10n.text(zh: "命令行工具连不上模型服务，请检查网络或代理。", en: "The command-line tool couldn't reach the model service. Check your network or proxy.", lang: lang)
     case "cli_runtime_missing": return L10n.text(zh: "找不到命令行工具需要的 Node.js，请重新安装该工具或 Node.js。", en: "The command-line tool couldn't find Node.js. Reinstall the tool or Node.js.", lang: lang)
     case "cli_failed": return L10n.text(zh: "命令行工具没能完成请求，可以展开查看原因或重新测试。", en: "The command-line tool couldn't complete the request. View the reason or test again.", lang: lang)
-    case "network": return L10n.text(zh: "连不上模型服务，请检查网络和地址。", en: "Can't reach the model service. Check your network and the service address.", lang: lang)
+    case "network": return L10n.text(zh: "连不上模型服务，请检查地址、网络或代理。", en: "Can't reach the model service. Check the service address, network, or proxy.", lang: lang)
     case "rate_limited": return L10n.text(zh: "请求太频繁，模型服务暂时限流，稍后会自动重试。", en: "The model service is limiting requests. Tacit will retry automatically.", lang: lang)
     case "timeout": return L10n.text(zh: "模型服务一直没有回应，请检查网络或稍后再试。", en: "The model service didn't respond. Check your network or try again later.", lang: lang)
     case "server_error": return L10n.text(zh: "模型服务暂时出错，稍后会自动重试。", en: "The model service encountered an error. Tacit will retry automatically.", lang: lang)

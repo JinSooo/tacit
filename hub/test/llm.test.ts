@@ -9,6 +9,7 @@ import { loadConfig } from "../src/llm/config.ts";
 import { codexCLI, resetCodexProbes } from "../src/llm/codex-cli.ts";
 import { classifyModelError } from "../src/llm/error-category.ts";
 import type { BackendContext } from "../src/llm/types.ts";
+import { httpComplete } from "../src/llm/http.ts";
 import { cliEnv } from "../src/llm/process.ts";
 import { systemProxyEnv } from "../src/net/system-proxy.ts";
 import { DAY_SCHEMA, DAY_SYSTEM, normalizeDayOutput } from "../src/distill/prompts.ts";
@@ -613,4 +614,28 @@ test("HTTP 输出校验前按 schema 修补小偏差，不改文字内容", asyn
   expect(result.ok && result.data).toEqual({ items: [{ thread_id: null, title: "合成" }, { thread_id: "t1", title: "合成二" }] });
   expect(sent).toBe(1);
   expect(repairToSchema({ title: "超过四个字的标题" }, { type: "object", properties: { title: { type: "string", maxLength: 4 } } })).toEqual({ title: "超过四个字的标题" });
+});
+
+test("API connection failures identify the selected proxy or direct target without credentials", async () => {
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const address = listener.url.host;
+  await listener.stop(true);
+  const proxy = `http://synthetic-user:synthetic-pass@${address}`;
+  const saved = process.env.https_proxy;
+  process.env.https_proxy = proxy;
+  try {
+    const details: string[] = [];
+    const call = (base_url: string) => httpComplete({
+      cwd: "", req: request, config: { provider: "openai-compatible", model: "synthetic-model", base_url },
+      timeoutMs: 1_000, metrics: { inputTokens: null, outputTokens: null, outputChars: 0 },
+      spawn: nodeSpawn, observer: { request: () => {}, response: () => {}, failure: detail => details.push(detail) },
+    }, () => "synthetic-key");
+    await expect(call("https://model.example.invalid/v1")).rejects.toMatchObject({ code: "network" });
+    await expect(call(`http://${address}/v1`)).rejects.toMatchObject({ code: "network" });
+    expect(details).toEqual([
+      `Could not connect to proxy ${address}.`, `Could not connect to model service at ${address}.`,
+    ]);
+  } finally {
+    if (saved === undefined) delete process.env.https_proxy; else process.env.https_proxy = saved;
+  }
 });

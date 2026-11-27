@@ -158,8 +158,8 @@ export function proxyFor(url: string | URL, source = process.env, system = readS
   if (proxy && /^https?:\/\//i.test(proxy) && URL.canParse(proxy)) return proxy;
 }
 
-export function proxiedFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
-  const proxy = proxyFor(input instanceof Request ? input.url : input);
+export function proxiedFetch(input: string | URL | Request, init?: RequestInit,
+  proxy: string | false | undefined = proxyFor(input instanceof Request ? input.url : input)): Promise<Response> {
   // false 才能保证直连；undefined 会再次让 Bun 从环境变量选代理。
   return fetch(input, { ...init, proxy: proxy ? { url: proxy, respectNoProxy: false } : false });
 }
