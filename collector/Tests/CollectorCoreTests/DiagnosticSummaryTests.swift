@@ -1,4 +1,4 @@
-import CollectorCore
+@testable import CollectorCore
 import Foundation
 import Testing
 
