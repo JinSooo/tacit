@@ -36,7 +36,7 @@ If the Background service fails before it starts listening, `hub-startup-error.j
 
 ## Speech models
 
-The first time you enable recording, Tacit uses `cli.ts audio-models` to download about 270 MB of models into `models/` in the data directory. It verifies each file's SHA-256 before moving it into place. See `hub/src/audio-models.ts`. Downloads first try Tacit's own GitHub Release mirror (`models-v1`) and fall back to upstream sources (`sherpa-onnx` on GitHub for the VAD and speaker models; Hugging Face for SenseVoice, and finally the ~1 GB `sherpa-onnx` archive on GitHub if single-file downloads fail). The recording status shows the reason for a failed download. Tacit retries when recording next starts, after a 60-second wait.
+The first time you enable recording, Tacit uses `cli.ts audio-models` to download about 270 MB of models into `models/` in the data directory. It verifies each file's SHA-256 before moving it into place. See `hub/src/audio-models.ts`. The VAD and speaker models come from Tacit's own GitHub Release mirror (`models-v1`), falling back to `sherpa-onnx` on GitHub. The two SenseVoice files have three identical sources: ModelScope, Tacit's mirror, and Hugging Face. Tacit first fetches a small piece from each, then downloads from the fastest and moves to the next if one fails or its checksum doesn't match. The ~1 GB `sherpa-onnx` archive on GitHub is the last resort. The recording status shows the reason for a failed download. Tacit retries when recording next starts, after a 60-second wait.
 
 ## Install from source
 
