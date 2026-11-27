@@ -101,7 +101,7 @@ public extension L10n {
     public static var screenTextSourceNote: String { L10n.text(zh: "读不到文字的应用在本机截图识别，截图只在内存里，识别完就丢掉。", en: "Recognizes on-screen text locally and discards each screenshot after use.") }
     public static var audioSourceNote: String { L10n.text(zh: "有你说话的对话在本机转成文字，原始音频加密留在本机。", en: "Transcribes conversations you took part in locally and keeps the encrypted audio on this Mac.") }
     public static var wechatSourceNote: String { L10n.text(zh: "微信在最前面时按会话记下看得到的消息；打开后“截图识字”不再重复读微信。", en: "Records visible messages by conversation when WeChat is active and excludes them from Screen text when enabled.") }
-    public static var aiSessionSourceNote: String { L10n.text(zh: "Claude Code 和 Codex 的会话，只记你说的话和它最后的回答。", en: "Records your messages and final replies in Claude Code and Codex.") }
+    public static var aiSessionSourceNote: String { L10n.text(zh: "记录 AI 会话里你说的话和 AI 工具的最终回复。", en: "Records your messages and the AI tool’s final replies.") }
     public static var browserSourceNote: String { L10n.text(zh: "Chrome、Arc、Safari 等浏览器的访问记录。", en: "Records visits in Chrome, Arc, Safari, and other supported browsers.") }
     public static var grantPermission: String { L10n.text(zh: "授权…", en: "Grant permission…") }
     public static var lastRun: String { L10n.text(zh: "上次运行", en: "Last run") }
@@ -178,7 +178,7 @@ public extension L10n {
     public static var setupTools: String { L10n.text(zh: "连接你使用的 AI 工具", en: "Connect your AI tools") }
     public static var connectEllipsis: String { L10n.text(zh: "连接…", en: "Connect…") }
     public static var toolSearchNote: String { L10n.text(zh: "连接后，可以让 AI 查询你最近在做什么。", en: "Connected AI tools can look up what you've been working on.") }
-    public static var setupToolInstallNote: String { L10n.text(zh: "这台 Mac 上没找到 Claude Code 或 Codex，装好并登录后再回来连接。", en: "Install Claude Code or Codex on this Mac and sign in before connecting it.") }
+    public static var setupToolInstallNote: String { L10n.text(zh: "在这台 Mac 上安装并登录支持的 AI 工具后，就可以连接。", en: "Install a supported AI tool on this Mac and sign in to connect it.") }
     public static var firstSummaryNote: String { L10n.text(zh: "第一次整理会在 15 分钟内完成。", en: "The first summary will be ready within 15 minutes.") }
 
     // MARK: - Diagnostics

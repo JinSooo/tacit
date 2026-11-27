@@ -11,6 +11,8 @@ struct AgentToolState: Decodable, Identifiable, Equatable {
   let connected: Bool
   let partial: Bool
   let manual: [AgentConfigSnippet]?
+
+  var shouldConnect: Bool { installed && !connected }
 }
 
 struct AgentConfigSnippet: Decodable, Equatable {
@@ -60,7 +62,7 @@ struct AgentSettingsView: View {
       Section {
         if let tools {
           AgentToolRows(tools: tools, busy: busy, connect: { tool in
-            Task { await set(tool, !tool.connected) }
+            Task { await set(tool, tool.shouldConnect) }
           }, showInstructions: { instructions = $0 })
         } else if error == nil {
           ProgressView().frame(maxWidth: .infinity)
@@ -143,8 +145,8 @@ struct AgentToolRows: View {
   }
 
   private func connectionAction(_ tool: AgentToolState) -> String {
-    if busy == tool.id { return tool.connected ? L10n.Settings.disconnecting : L10n.Settings.connecting }
-    return tool.connected ? L10n.Settings.disconnect : L10n.Settings.connect
+    if busy == tool.id { return tool.shouldConnect ? L10n.Settings.connecting : L10n.Settings.disconnecting }
+    return tool.shouldConnect ? L10n.Settings.connect : L10n.Settings.disconnect
   }
 }
 

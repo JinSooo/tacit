@@ -141,3 +141,12 @@ import Testing
     }
   }
 }
+
+@Test func automaticAgentConnectionActionCanCleanUpAnUninstalledTool() {
+  let partial = AgentToolState(id: "antigravity", label: "Antigravity", installed: false, connected: false, partial: true, manual: nil)
+  let installed = AgentToolState(id: "antigravity", label: "Antigravity", installed: true, connected: false, partial: true, manual: nil)
+  let connected = AgentToolState(id: "antigravity", label: "Antigravity", installed: true, connected: true, partial: false, manual: nil)
+  #expect(!partial.shouldConnect)
+  #expect(installed.shouldConnect)
+  #expect(!connected.shouldConnect)
+}
