@@ -1,7 +1,14 @@
 package top.jinso.tacit.sync
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.resume
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -34,6 +41,18 @@ internal class RelayStatus(val status: Int) : IOException() {
 }
 
 internal class RelayWaiting : IOException()
+internal class RelayPairTimedOut : IOException()
+
+// The network operation is bounded by the HTTP timeouts. Cancel or timeout can release the UI and
+// pairing mutex immediately, even if HttpURLConnection is still unwinding a blocked read.
+private suspend fun <T> relayPairingIo(block: () -> T): T = suspendCancellableCoroutine { continuation ->
+    Dispatchers.IO.dispatch(continuation.context, Runnable {
+        if (continuation.isActive) {
+            try { continuation.resume(block()) }
+            catch (error: Exception) { continuation.resumeWithException(error) }
+        }
+    })
+}
 internal typealias RelayHttp = (String, String, String?, ByteArray?, Int, Int) -> DeviceHttpReply
 
 internal class RelayMailbox(
@@ -89,7 +108,7 @@ internal class RelayMailbox(
         while (true) {
             val remaining = until - now()
             if (remaining <= 0) return null
-            get(id, remaining.coerceAtMost(5_000).toInt())?.let { return it }
+            relayPairingIo { get(id, remaining.coerceAtMost(5_000).toInt()) }?.let { return it }
             delay(minOf(interval, (until - now()).coerceAtLeast(0)))
             interval = (interval * 2).coerceAtMost(2_000)
         }
@@ -154,33 +173,52 @@ internal suspend fun pairWithAvailableTransport(
     invite: Invitation, keys: AsymmetricCipherKeyPair, phoneName: String,
     findMac: suspend () -> String,
     rateLimit: RelayRateLimit = RelayRateLimit(),
+    pendingRelay: RelayPairRequest? = null,
+    relayRequest: () -> RelayPairRequest = { RelayPairRequest(invite, keys, phoneName) },
+    onRelayWaiting: suspend () -> Unit = {},
     persist: (PairedDevice, String?) -> Unit,
 ) {
-    val origin = try { findMac() } catch (error: MacUnavailable) {
+    val origin = try { if (pendingRelay == null) findMac() else null } catch (error: MacUnavailable) {
         if (invite.relay == null) throw error
         null
     }
     if (origin == null) {
         val mailbox = RelayMailbox(requireNotNull(invite.relay), rateLimit = rateLimit)
-        pairThroughRelay(invite, keys, phoneName, mailbox) { persist(it, null) }
+        (pendingRelay ?: relayRequest()).pair(mailbox, onRelayWaiting = onRelayWaiting) { persist(it, null) }
     } else {
         val client = DeviceClient(invite.publicKey, keys, { deviceHttp(origin, it) })
         persist(pairDevice(invite, keys, phoneName, client::send), origin)
     }
 }
 
-internal suspend fun pairThroughRelay(
-    invite: Invitation, keys: AsymmetricCipherKeyPair, phoneName: String,
-    mailbox: RelayMailbox = RelayMailbox(requireNotNull(invite.relay)),
-    persist: (PairedDevice) -> Unit,
-) {
-    val protocol = DeviceMessages(invite.publicKey, keys)
-    if (!invite.expiresAt.isAfter(java.time.Instant.now())) throw InviteExpired()
-    val request = protocol.request("pair", pairBody(invite, keys, phoneName))
-    mailbox.put(request)
-    val wire = mailbox.await(request.nonce, invite.expiresAt.toEpochMilli()) ?: throw InviteExpired()
-    val message = protocol.open(wire, request.nonce)
-    val body = protocol.response("pair", message)
-    persist(pairedDevice(invite, body))
-    try { mailbox.delete(request.nonce) } catch (_: IOException) { /* Temporary mail expires with the invitation. */ }
+/** Retain the nonce and keys for the life of the invitation so a retry can read the original receipt. */
+internal class RelayPairRequest(private val invite: Invitation, keys: AsymmetricCipherKeyPair, phoneName: String) {
+    private val protocol = DeviceMessages(invite.publicKey, keys)
+    private val request = protocol.request("pair", pairBody(invite, keys, phoneName))
+    private var submitted = false
+
+    suspend fun pair(
+        mailbox: RelayMailbox,
+        waitMillis: Long = 90_000,
+        onRelayWaiting: suspend () -> Unit = {},
+        persist: (PairedDevice) -> Unit,
+    ) {
+        if (!invite.expiresAt.isAfter(java.time.Instant.now())) throw InviteExpired()
+        if (!submitted) {
+            relayPairingIo { mailbox.put(request) }
+            submitted = true
+        }
+        onRelayWaiting()
+        val expires = invite.expiresAt.toEpochMilli()
+        val remaining = expires - System.currentTimeMillis()
+        if (remaining <= 0) throw InviteExpired()
+        val wire = withTimeoutOrNull(minOf(waitMillis, remaining)) { mailbox.await(request.nonce, expires) }
+            ?: if (System.currentTimeMillis() >= expires) throw InviteExpired() else throw RelayPairTimedOut()
+        val message = protocol.open(wire, request.nonce)
+        val body = protocol.response("pair", message)
+        currentCoroutineContext().ensureActive()
+        persist(pairedDevice(invite, body))
+        try { relayPairingIo { mailbox.delete(request.nonce) } }
+        catch (_: IOException) { /* Temporary mail expires with the invitation. */ }
+    }
 }

@@ -25,6 +25,8 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
@@ -45,6 +47,12 @@ import top.jinso.tacit.ui.components.*
     var invite by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var connecting by remember { mutableStateOf(false) }
+    var relayWaiting by remember { mutableStateOf(false) }
+    var longWait by remember { mutableStateOf(false) }
+    var actionJob by remember { mutableStateOf<Job?>(null) }
+    LaunchedEffect(relayWaiting) {
+        if (relayWaiting) { delay(30_000); longWait = true }
+    }
     var expanded by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     LaunchedEffect(app, expanded) {
@@ -64,7 +72,7 @@ import top.jinso.tacit.ui.components.*
         message = null
         busy = true
         connecting = pairing
-        scope.launch {
+        actionJob = scope.launch {
             try { block() }
             catch (error: CancellationException) { throw error }
             catch (error: Exception) {
@@ -73,11 +81,14 @@ import top.jinso.tacit.ui.components.*
             } finally {
                 busy = false
                 connecting = false
+                relayWaiting = false
+                longWait = false
             }
         }
     }
     fun pair(value: String) = action(pairing = true) {
-        app.sync.pair(value, displayAddress)
+        invite = value
+        app.sync.pair(value, displayAddress) { withContext(Dispatchers.Main) { relayWaiting = true } }
         invite = ""
         address = null
     }
@@ -173,7 +184,8 @@ import top.jinso.tacit.ui.components.*
     }
     if (busy || (current == null && message == null)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (connecting) Caption(strings.text(R.string.connecting_mac))
+            if (connecting) Caption(strings.text(if (longWait) R.string.confirm_mac_online else R.string.connecting_mac))
+            if (relayWaiting) TextAction(strings.text(R.string.cancel), { actionJob?.cancel() })
             ProgressLine()
         }
     }

@@ -358,4 +358,6 @@
     <string name="models_import_folder_hint">请选择包含这些文件的文件夹：%1$s。</string>
     <string name="model_folder_duplicate">文件夹里有多个同名项：%1$s。</string>
     <string name="go_to_system_settings">去系统设置</string>
+    <string name="confirm_mac_online">请确认 Mac 开着并联网。</string>
+    <string name="sync_pair_timed_out">暂时没收到 Mac 的回复，可以用同一个邀请链接重试。</string>
 </resources>
