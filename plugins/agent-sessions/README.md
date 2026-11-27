@@ -11,8 +11,11 @@ stdout 按契约输出 record，最后输出 checkpoint。state 文件只读，�
 | Claude Code | `~/.claude/projects/` | `RA_CLAUDE_DIR`（默认 `~/.claude`） | `claude_code.session` |
 | Codex | `~/.codex/sessions/`、`~/.codex/archived_sessions/` | `RA_CODEX_DIR`（默认 `~/.codex`） | `codex.session` |
 | Antigravity 桌面、CLI、IDE | `~/.gemini/antigravity/`、`~/.gemini/antigravity-cli/`、`~/.gemini/antigravity-ide/` | `RA_ANTIGRAVITY_DIR`（默认 `~/.gemini`） | `antigravity.session` |
+| Gemini CLI | `~/.gemini/tmp/<项目>/chats/session-*.jsonl` | `RA_GEMINI_DIR`；`GEMINI_CLI_HOME` 覆盖主目录 | `gemini_cli.session` |
 
 Claude Code 和 Codex 读取 JSONL 及 Zstandard 压缩归档。Antigravity 在每个数据目录下读取 `brain/<会话 ID>/.system_generated/logs/transcript_full.jsonl`，缺少完整转录时读取同目录的 `transcript.jsonl`。工作目录和子会话关系来自同一数据目录下的 `conversation_summaries.db`。索引无法读取时仍采集转录，工作目录留空。采集范围限于表中列出的三个 Antigravity 数据目录及这两种转录文件。
+
+Gemini CLI 按上游源码实现、未真机验证。工作目录优先取 `~/.gemini/projects.json`，再取项目的 `.project_root` 或会话首行的 `directories[0]`。Seatbelt 沙盒的会话从 `~/.cache/.gemini/tmp/` 读取。只采 `chats/` 下的主会话，元数据更新、补丁和回退事件按非消息跳过。
 
 - `filters.ts` 集中列出丢弃规则及原因。只读取双方可见文字；澄清回答只保留用户答案。消息内部保留真实换行，消息之间空一行，各以 `[我] ` 或 `[AI] ` 开头。
 - 首次默认按文件 mtime 和消息时间回溯七天。已有 checkpoint 时再传 `--since` 表示重新导入：该时刻之后改过的文件从头重读，只取该时刻之后的消息；八天窗口内已输出的消息靠 seen 哈希跳过，更早的会以相同 `source_ref` 再输出一次由 hub 去重；checkpoint 的 since 和重放下界不倒退。普通 JSONL 按完整行字节偏移续读，末尾未换行的半行下次再读。完整行 JSON 损坏则跳过，结束时仅向 stderr 汇总“跳过 N 行损坏数据”，不回显路径或正文。
