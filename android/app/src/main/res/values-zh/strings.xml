@@ -361,4 +361,7 @@
     <string name="confirm_mac_online">请确认 Mac 开着并联网。</string>
     <string name="sync_pair_timed_out">暂时没收到 Mac 的回复，可以用同一个邀请链接重试。</string>
     <string name="invite_format_hint">请粘贴以 tacit://pair?d= 开头的完整邀请链接。</string>
+    <string name="summary_address_format">请输入以 https:// 开头的完整服务地址，局域网或本机服务可用 http://。</string>
+    <string name="summary_address_https">公网服务地址必须以 https:// 开头。</string>
+    <string name="summary_address_components">请去掉服务地址里的账号密码、查询参数或 # 后的内容。</string>
 </resources>

@@ -373,4 +373,7 @@
     <string name="confirm_mac_online">Check that your Mac is on and connected to the internet.</string>
     <string name="sync_pair_timed_out">No reply yet. Try connecting again with the same invite link.</string>
     <string name="invite_format_hint">Paste the full link starting with tacit://pair?d=.</string>
+    <string name="summary_address_format">Enter a full service address starting with https:// (or http:// for a local service).</string>
+    <string name="summary_address_https">A public service address must start with https://.</string>
+    <string name="summary_address_components">Remove credentials, query parameters or the # fragment from the service address.</string>
 </resources>

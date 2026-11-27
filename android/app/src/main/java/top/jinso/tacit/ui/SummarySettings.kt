@@ -14,6 +14,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -26,7 +27,7 @@ import top.jinso.tacit.summary.SummaryModel
 import top.jinso.tacit.summary.SummaryWorker
 import top.jinso.tacit.summary.clearSummaryFailure
 import top.jinso.tacit.summary.summaryModelConfig
-import top.jinso.tacit.summary.summaryModelJson
+import top.jinso.tacit.summary.savedSummaryModel
 import top.jinso.tacit.summary.summaryProblem
 import top.jinso.tacit.ui.components.*
 
@@ -65,6 +66,7 @@ internal fun visibleSummaryProblem(saved: JSONObject?): String? {
     var key by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
+    var task by remember { mutableStateOf<Job?>(null) }
     var testPassed by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var confirmDeleteKey by rememberSaveable { mutableStateOf(false) }
@@ -79,7 +81,7 @@ internal fun visibleSummaryProblem(saved: JSONObject?): String? {
         testing = test
         testPassed = false
         message = null
-        scope.launch {
+        task = scope.launch {
             try {
                 block()
                 testPassed = test
@@ -96,22 +98,19 @@ internal fun visibleSummaryProblem(saved: JSONObject?): String? {
         }
     }
 
-    suspend fun store(on: Boolean) {
+    suspend fun store(turnOn: Boolean) {
         val draft = current()
-        if (on && (draft.base.isBlank() || draft.model.isBlank())) {
+        if (draft.base.isBlank() || draft.model.isBlank()) {
             message = strings.text(R.string.summary_required_fields)
             return
         }
-        if (draft.base.isNotBlank()) SummaryClient.endpointOf(draft.base)
+        SummaryClient.endpointOf(draft.base)
         withContext(Dispatchers.IO) {
             val vault = app.vault
-            synchronized(vault) {
-                val previous = vault.summaryModel()
-                val state = previous?.takeIf { it.summaryModelConfig() == draft }?.put("enabled", on)
-                    ?: summaryModelJson(on, draft)
-                vault.saveSummaryModel(state)
+            val state = synchronized(vault) {
+                savedSummaryModel(vault.summaryModel(), draft, turnOn).also(vault::saveSummaryModel)
             }
-            SummaryWorker.apply(app, on)
+            SummaryWorker.apply(app, state.getBoolean("enabled"))
         }
         base = draft.base
         model = draft.model
@@ -155,17 +154,16 @@ internal fun visibleSummaryProblem(saved: JSONObject?): String? {
                 TonalButton(if (testing) strings.text(R.string.testing_connection) else strings.text(R.string.test_connection), {
                     act(test = true) {
                         val draft = current()
-                        withContext(Dispatchers.IO) {
-                            SummaryClient(draft, lang).test()
-                            app.vault.clearSummaryFailure(draft)
-                        }
+                        SummaryClient.testConnection(draft, lang)
+                        withContext(Dispatchers.IO) { app.vault.clearSummaryFailure(draft) }
                     }
                 }, enabled = !busy && base.isNotBlank() && model.isNotBlank())
+                if (testing) TextAction(strings.text(R.string.cancel), { task?.cancel() })
                 val changed = base != savedModel?.base.orEmpty() || model != savedModel?.model.orEmpty() || key.isNotBlank()
-                FadeVisibility(changed) {
+                FadeVisibility(changed && !testing) {
                     TonalButton(strings.text(R.string.save), {
                         act {
-                            store(enabled)
+                            store(turnOn = false)
                             if (message == null) notify(strings.text(R.string.saved))
                         }
                     }, enabled = !busy)

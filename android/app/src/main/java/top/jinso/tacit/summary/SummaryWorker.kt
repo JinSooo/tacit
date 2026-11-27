@@ -139,6 +139,14 @@ internal fun summaryModelJson(enabled: Boolean, model: SummaryModel): JSONObject
     JSONObject().put("enabled", enabled).put("base", model.base.trim()).put("model", model.model.trim()).put("key", model.key.trim())
 
 
+internal fun savedSummaryModel(previous: JSONObject?, draft: SummaryModel, turnOn: Boolean): JSONObject {
+    val previousModel = previous?.summaryModelConfig()
+    val hadValidConfig = previousModel != null && previousModel.model.isNotBlank() &&
+        runCatching { SummaryClient.endpointOf(previousModel.base) }.isSuccess
+    val enabled = turnOn || !hadValidConfig || previous?.optBoolean("enabled") == true
+    return previous?.takeIf { previousModel == draft }?.put("enabled", enabled) ?: summaryModelJson(enabled, draft)
+}
+
 internal fun JSONObject.summaryModelConfig(): SummaryModel =
     SummaryModel(optString("base"), optString("model"), optString("key"))
 
