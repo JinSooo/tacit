@@ -66,16 +66,24 @@ class SpeechModelDownloadTest {
         assertEquals(SpeechModels.tagging, SpeechModelCatalog.tagging.map { it.path })
     }
     @Test fun sortsByMeasuredSpeedAndRetainsFailedSourcesInCatalogOrder() {
-        val sources = listOf("slow", "unreachable", "fast", "timeout")
-        assertEquals(listOf("fast", "slow", "unreachable", "timeout"), rankModelSources(sources) {
+        val slow = "https://slow.example/model"
+        val fast = "https://fast.example/model"
+        val unreachable = "https://offline.example/model"
+        val timeout = "https://timeout.example/model"
+        val sources = listOf(slow, unreachable, fast, timeout)
+        assertEquals(listOf(fast, slow, unreachable, timeout), rankModelSources(sources) {
             assertEquals(sources, it)
-            mapOf("fast" to 17.0, "slow" to 1.0)
+            mapOf(fast to 17.0, slow to 1.0)
         })
         assertEquals(sources, rankModelSources(sources) { emptyMap() })
     }
 
-    @Test fun skipsProbingSingleSource() {
-        assertEquals(listOf("only"), rankModelSources(listOf("only")) { error("No probe needed") })
+    @Test fun skipsProbingWhenCandidatesShareAHostnameAndKeepsMirrorFirst() {
+        val model = SpeechModelCatalog.taggingArchive
+        val sources = listOf(model.url) + model.fallbackUrls + "https://GITHUB.COM:444/another/model"
+        for (candidates in listOf(sources.take(1), sources)) {
+            assertEquals(candidates, rankModelSources(candidates) { error("No probe needed") })
+        }
     }
 
     @Test fun usesMeasuredOrderAndStillFallsBackWhenFastestHashDoesNotMatch() {

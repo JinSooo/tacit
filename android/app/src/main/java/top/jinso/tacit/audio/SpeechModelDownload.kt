@@ -9,6 +9,7 @@ import java.io.InputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.security.MessageDigest
 import java.util.UUID
@@ -155,7 +156,8 @@ internal class ModelDownloadCancellation {
 }
 
 internal fun rankModelSources(sources: List<String>, probeAll: (List<String>) -> Map<String, Double>): List<String> {
-    if (sources.size < 2) return sources
+    val hosts = sources.mapNotNull { runCatching { URI(it).host?.lowercase() }.getOrNull() }.toSet()
+    if (hosts.size < 2) return sources
     val speeds = probeAll(sources)
     return sources.sortedByDescending { speeds[it]?.takeIf { speed -> speed.isFinite() && speed > 0 } ?: 0.0 }
 }

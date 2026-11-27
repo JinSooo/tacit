@@ -17,7 +17,7 @@ export interface Model {
   file: string;
   /** 认可的 sha256；上游重新导出、效果一致的版本一并列上。 */
   sha256: string[];
-  /** 候选下载地址，多个地址会先测速。 */
+  /** 候选下载地址，分属至少两个主机名时才测速。 */
   urls: string[];
   /** 从压缩包取文件时的包内路径；压缩包地址排在 urls 之后，其他地址失败才用。 */
   archive?: { url: string; member: string };
@@ -115,7 +115,8 @@ async function probeSource(url: string, fetcher: typeof proxiedFetch): Promise<D
 }
 
 export async function rankDownloadSources(urls: readonly string[], fetcher: typeof proxiedFetch): Promise<DownloadSource[]> {
-  if (urls.length < 2) return urls.map(url => ({ url }));
+  const hosts = new Set(urls.map(url => URL.parse(url)?.hostname).filter(Boolean));
+  if (hosts.size < 2) return urls.map(url => ({ url }));
   const sources = await Promise.all(urls.map(url => probeSource(url, fetcher)));
   return sources.sort((left, right) => (right.bytesPerSecond ?? 0) - (left.bytesPerSecond ?? 0));
 }

@@ -163,15 +163,18 @@ test("下载源并行探测，按吞吐排序，保留探测失败的候选兜�
   expect(sources.slice(2)).toEqual([{ url: broken }, { url: unavailable }]);
 });
 
-test("只有一个候选源时直接下载，无需测速", async () => {
-  const url = "https://only.example.invalid/model";
-  let probes = 0;
-  const ranked = await rankDownloadSources([url], async () => {
-    probes++;
-    return new Response("probe");
-  });
-  expect(probes).toBe(0);
-  expect(ranked).toEqual([{ url }]);
+test("候选只有一个主机时跳过测速并保留候选顺序", async () => {
+  const vad = AUDIO_MODELS.find(item => item.file === "silero_vad.onnx")!;
+  const urls = [...vad.urls, "https://GITHUB.COM:444/another/model"];
+  for (const candidates of [urls.slice(0, 1), urls]) {
+    const probes: string[] = [];
+    const ranked = await rankDownloadSources(candidates, async url => {
+      probes.push(String(url));
+      return new Response("probe");
+    });
+    expect(probes).toEqual([]);
+    expect(ranked).toEqual(candidates.map(url => ({ url })));
+  }
 });
 
 test("ModelScope 内容校验失败时尝试 GitHub 副本", async () => {
