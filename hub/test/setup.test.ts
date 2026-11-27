@@ -225,17 +225,20 @@ test("升级把注册的其他 CLI 目录写进已有 hub 和 distill 启动配�
 });
 
 
-test("只把允许的 AI 工具配置路径从登录 shell 传给 hub", async () => {
+// 回归（第 2 轮审查）：只传给 hub 时，设置页显示已接入，采集端却按默认目录找不到会话。
+test("只把允许的 AI 工具配置路径从登录 shell 传给 hub 和采集端", async () => {
   const f = fixture();
   try {
     const output = "\n__TACIT_ENV__\nGEMINI_CLI_HOME=/demo/gemini&config\nOPENCODE_CONFIG_DIR=/demo/opencode\nFACTORY_HOME_OVERRIDE=/demo/factory\nGEMINI_API_KEY=synthetic\n\n__TACIT_ENV__\n";
     await f.run({ shellEnv: () => parseShellEnv(output) });
     const readPlist = (job: string) => readFileSync(join(f.agents, `dev.record-anything.${job}.plist`), "utf8");
-    const hub = readPlist("hub");
-    expect(hub).toContain("<key>GEMINI_CLI_HOME</key><string>/demo/gemini&amp;config</string>");
-    expect(hub).toContain("<key>OPENCODE_CONFIG_DIR</key><string>/demo/opencode</string>");
-    expect(hub).toContain("<key>FACTORY_HOME_OVERRIDE</key><string>/demo/factory</string>");
-    expect(hub).not.toContain("GEMINI_API_KEY");
-    for (const job of ["collector", "distill"]) expect(readPlist(job)).not.toContain("GEMINI_CLI_HOME");
+    for (const job of ["hub", "collector"]) {
+      const text = readPlist(job);
+      expect(text).toContain("<key>GEMINI_CLI_HOME</key><string>/demo/gemini&amp;config</string>");
+      expect(text).toContain("<key>OPENCODE_CONFIG_DIR</key><string>/demo/opencode</string>");
+      expect(text).toContain("<key>FACTORY_HOME_OVERRIDE</key><string>/demo/factory</string>");
+      expect(text).not.toContain("GEMINI_API_KEY");
+    }
+    expect(readPlist("distill")).not.toContain("GEMINI_CLI_HOME");
   } finally { f.cleanup(); }
 });

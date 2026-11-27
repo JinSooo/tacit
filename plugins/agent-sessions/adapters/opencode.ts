@@ -131,7 +131,8 @@ export const opencode: DatabaseSessionAdapter = {
         if (row.updated === updated) boundary.add(row.id);
         rows.push({ sessionId: row.session_id, cwd: row.directory, mtime: Math.max(row.session_updated, row.updated), result });
       }
-      const progress = !blocked && old && old.updated > updated
+      // 重扫（--since）时游标从更早处开始，任何情况下都不让增量游标倒退。
+      const progress = old && old.updated > updated
         ? old : { identity, updated, boundary: [...boundary] };
       return { progress, rows };
     } catch {

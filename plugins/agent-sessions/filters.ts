@@ -76,7 +76,7 @@ export function cleanLegacyUserText(text: string): string {
 }
 
 const cacheNotice = /^(?:\(Offline cache, synced at [^\n]*\)|（离线缓存，同步于 [^\n]*）)\s*/;
-const openingTag = /^(?:<|&lt;)([A-Za-z][\w:-]*)(?:>|&gt;)\s*/;
+const openingTag = /^(?:<|&lt;)([A-Za-z][\w:-]*)(?:\s(?:(?!&gt;)[^<>])*)?(?:>|&gt;)\s*/;
 
 export function cleanUserText(text: string): string {
   let value = cleanLegacyUserText(text);

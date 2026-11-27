@@ -464,5 +464,9 @@ test("剥离中英文会话开场及转义包装，保留后面的用户原话",
     expect([cleanUserText(injected), cleanUserText(escaped)]).toEqual(["", ""]);
     expect(cleanUserText(`${escaped}\n核对 &lt;fixture&gt; 的标题`)).toBe("核对 &lt;fixture&gt; 的标题");
     expect(cleanUserText(`${injected}\n核对标题`)).toBe("核对标题");
+    // 带属性的包装标签（宿主自定义或转义后）同样要剥离。
+    const attributed = `&lt;hook-additional-context source="tacit"&gt;\n${injected.replaceAll("<", "&lt;").replaceAll(">", "&gt;")}\n&lt;/hook-additional-context&gt;`;
+    expect(cleanUserText(`${attributed}\n核对标题`)).toBe("核对标题");
+    expect(cleanUserText(`<context source="tacit">\n${injected}\n</context>\n核对标题`)).toBe("核对标题");
   }
 });

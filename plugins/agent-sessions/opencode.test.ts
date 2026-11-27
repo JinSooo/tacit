@@ -177,3 +177,28 @@ test("OpenCode 未完成消息挡住游标，稍后提交的早时间戳消息�
     fs.rmSync(s.root, { recursive: true, force: true });
   }
 });
+
+test("OpenCode 用 --since 重扫遇到历史未完成消息时，增量游标不倒退", async () => {
+  const s = setup();
+  let db: Database | undefined;
+  try {
+    db = s.database(true);
+    message(db, "msg-first", 1, "user");
+    part(db, "prt-first", "msg-first", { type: "text", text: "合成首条" }, at(1));
+    message(db, "msg-later", 20, "user");
+    part(db, "prt-later", "msg-later", { type: "text", text: "合成后续" }, at(20));
+    const first = await s.run();
+    expect(first.state.databases?.[s.file]?.updated).toBe(at(20));
+    // 晚提交、时间戳更早且一直没写完的回复，只有从更早处重扫时才会遇到。
+    message(db, "msg-crashed", 2, "assistant");
+    const records: RecordV1[] = [];
+    const rescanned = await collect({
+      device: "test", now: at(32), state: first.state, since: at(0), opencodeDir: s.root, claudeDir: s.claudeDir, codexDir: s.root,
+      antigravityDir: s.root, geminiDir: s.root, qwenDir: s.root, onRecord: record => { records.push(record); }, onWarning: () => {},
+    });
+    expect(rescanned.databases?.[s.file]?.updated).toBe(at(20));
+  } finally {
+    db?.close();
+    fs.rmSync(s.root, { recursive: true, force: true });
+  }
+});

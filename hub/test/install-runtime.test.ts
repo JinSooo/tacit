@@ -126,3 +126,18 @@ test("缺少当前平台 SQLite 原生模块时打包失败", () => {
   rmSync(join(source, "node_modules/better-sqlite3-multiple-ciphers/prebuilds", `${process.platform}-${process.arch}.node`));
   expect(() => stageRuntime(source, runtime)).toThrow(/prebuilds/);
 }, 30_000);
+
+// 回归（第 2 轮审查）：按文件隔离失败时，.claude/settings.json 的权限已改名为 tacit，.claude.json 却因名字被占用没迁，权限错给了别人的 tacit 服务。
+test("同一工具的配置有一份迁移失败时，这个工具的配置都不动，其他工具照常迁移", () => {
+  const home = temp(), settings = join(home, ".claude/settings.json"), claude = join(home, ".claude.json");
+  const desktop = join(home, "Library/Application Support/Claude/claude_desktop_config.json");
+  const entry = (tool: string) => ({ command: "/old/bun", args: ["/old/hub/src/cli.ts", "mcp", "--tool", tool] });
+  write(settings, { permissions: { allow: ["mcp__record-anything__search"] }, hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/old/bun /old/hub/src/cli.ts hook session-start --tool claude-code" }] }] } });
+  write(claude, { mcpServers: { "record-anything": entry("claude-code"), tacit: { command: "synthetic third party" } } });
+  write(desktop, { mcpServers: { tacit: entry("claude-desktop") } });
+  const before = [settings, claude].map(path => readFileSync(path, "utf8"));
+  const messages: string[] = [];
+  expect(relocateInstall("/runtime", "/bun", home, message => messages.push(message))).toEqual([desktop]);
+  expect([settings, claude].map(path => readFileSync(path, "utf8"))).toEqual(before);
+  expect(messages).toContain("agent_config_migration_failed");
+});

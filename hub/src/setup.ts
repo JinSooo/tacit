@@ -90,7 +90,8 @@ export function plist(job: Job, l: ServiceLayout): string {
   ];
   if (job !== "collector") body.push(`  <key>WorkingDirectory</key><string>${xml(l.runtime)}</string>`);
   const extra = job !== "collector" && l.cliEnv && Object.keys(l.cliEnv).length ? `<key>TACIT_CLI_ENV</key><string>${xml(JSON.stringify(l.cliEnv))}</string>` : "";
-  const configPaths = job === "hub" ? Object.entries(l.agentConfigEnv ?? {})
+  // hub 判断"已接入"、采集端读会话都要按同一套工具配置目录找文件。
+  const configPaths = job !== "distill" ? Object.entries(l.agentConfigEnv ?? {})
     .map(([key, value]) => `<key>${xml(key)}</key><string>${xml(value)}</string>`).join("") : "";
   body.push(`  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(path)}</string>${extra}${configPaths}</dict>`, `  <key>RunAtLoad</key><true/>`);
   if (job === "hub") body.push(`  <key>KeepAlive</key><true/>`, `  <key>ThrottleInterval</key><integer>10</integer>`, `  <key>ProcessType</key><string>Background</string>`);

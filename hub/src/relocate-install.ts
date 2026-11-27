@@ -51,40 +51,35 @@ function parseToml(text: string) {
   return Bun.TOML.parse(text) as any;
 }
 
-/** 仅迁移本应用已有的 AI 连接。单个配置失败不影响其他文件。 */
+/** 仅迁移本应用已有的 AI 连接。同一工具的几份配置要么全部迁移、要么都不动（避免半迁移，例如权限规则已改名而 MCP 登记还是旧名）；工具之间互不影响。 */
 export function relocateInstall(
   runtime: string, bun: string, home = homedir(), log: (category: MigrationCategory) => void = console.warn,
 ) {
   const cli = join(resolve(runtime), "hub/src/cli.ts"), updated: string[] = [];
-  const migrate = (relative: string, parse: (text: string) => any, update: (data: any, before: string) => string | undefined) => {
+  const plans = new Map<string, { file: string; before: string; after: string }[]>(), failed = new Set<string>();
+  const migrate = (group: string, relative: string, parse: (text: string) => any, update: (data: any, before: string) => string | undefined) => {
     const file = join(home, relative);
+    const fail = (category: MigrationCategory) => { log(category); failed.add(group); };
     let before: string, data: any, after: string | undefined;
     try { before = readFileSync(file, "utf8"); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") log("agent_config_read_failed");
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") fail("agent_config_read_failed");
       return;
     }
     try { data = parse(before); }
-    catch {
-      log(parse === parseToml ? "agent_config_invalid_toml" : "agent_config_invalid_json");
-      return;
-    }
+    catch { return fail(parse === parseToml ? "agent_config_invalid_toml" : "agent_config_invalid_json"); }
     try { after = update(data, before); }
-    catch {
-      log("agent_config_migration_failed");
-      return;
-    }
+    catch { return fail("agent_config_migration_failed"); }
     if (after === undefined) { log("agent_config_no_tacit_entry"); return; }
     if (before === after) return;
-    try { saveConnectionPlan({ file, existed: true, before, after }); }
-    catch { log("agent_config_write_failed"); return; }
-    updated.push(file);
+    if (!plans.has(group)) plans.set(group, []);
+    plans.get(group)!.push({ file, before, after });
   };
   for (const [relative, tool, mcp] of [
     [".claude/settings.json", "claude-code", false], [".codex/hooks.json", "codex", false],
     [".claude.json", "claude-code", true], [antigravityConfig, "antigravity", true], ["Library/Application Support/Claude/claude_desktop_config.json", "claude-desktop", true],
   ] as const) {
-    migrate(relative, JSON.parse, (data, before) => {
+    migrate(tool, relative, JSON.parse, (data, before) => {
       let changed = false;
       if (mcp) {
         // 旧服务名 record-anything 改成 tacit，保留在原来的位置。
@@ -115,7 +110,7 @@ export function relocateInstall(
       return changed ? JSON.stringify(data, null, 2) + "\n" : before;
     });
   }
-  migrate(antigravityHooks, JSON.parse, (data, before) => {
+  migrate("antigravity", antigravityHooks, JSON.parse, (data, before) => {
     const hooks = data?.[SERVER]?.SessionStart;
     let found = false, changed = false;
     if (Array.isArray(hooks)) for (const hook of hooks) {
@@ -125,7 +120,7 @@ export function relocateInstall(
     }
     return changed ? JSON.stringify(data, null, 2) + "\n" : found ? before : undefined;
   });
-  migrate(".codex/config.toml", parseToml, (existing, original) => {
+  migrate("codex", ".codex/config.toml", parseToml, (existing, original) => {
     const before = renameCodexServer(original, existing), data = before === original ? existing : parseToml(before);
     const entry = data.mcp_servers?.[SERVER];
     if (owns(entry, "codex") && (entry.args[0] !== cli || entry.command !== bun)) {
@@ -145,6 +140,14 @@ export function relocateInstall(
     }
     return before;
   });
+  for (const [group, files] of plans) {
+    if (failed.has(group)) continue;
+    for (const plan of files) {
+      try { saveConnectionPlan({ ...plan, existed: true }); }
+      catch { log("agent_config_write_failed"); break; }
+      updated.push(plan.file);
+    }
+  }
   return updated;
 }
 if (import.meta.main) {

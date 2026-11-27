@@ -28,7 +28,8 @@ function readSummaries(root: string): Map<string, Summary> | null {
     const header = Buffer.alloc(20);
     const fd = fs.openSync(file, "r");
     try { fs.readSync(fd, header, 0, header.length, 0); } finally { fs.closeSync(fd); }
-    const immutable = !activeWal && (header[18] === 2 || header[19] === 2);
+    // 有 -shm 说明写入端可能还开着库，只能走带锁的 mode=ro；immutable 只给已完全关闭的库。
+    const immutable = !activeWal && !fs.existsSync(file + "-shm") && (header[18] === 2 || header[19] === 2);
     const uri = pathToFileURL(path.resolve(file));
     uri.search = immutable ? "mode=ro&immutable=1" : "mode=ro";
     db = new Database(uri.href, { readonly: true });
