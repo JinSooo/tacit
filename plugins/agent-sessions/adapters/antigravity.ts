@@ -56,6 +56,12 @@ function workspaceCwd(workspaceUris: string | null | undefined): string | null {
   return null;
 }
 
+// 桌面版把用户原话包在 <USER_REQUEST> 里，后面附带当前时间、设置变更等系统信息（2026-11-27 真机样本），只取原话。
+function userRequest(content: string): string {
+  const match = content.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/);
+  return match ? match[1]! : content;
+}
+
 function parseAntigravityEvent(event: Json | null, hasSession: boolean): Parsed {
   if (!event || typeof event.type !== "string" || !event.type) return unknown;
   if (event.type === "GENERIC") return ignored;
@@ -67,7 +73,7 @@ function parseAntigravityEvent(event: Json | null, hasSession: boolean): Parsed 
   if (role === "assistant" && event.content === undefined) return ignored;
   const time = typeof event.created_at === "string" ? Date.parse(event.created_at) : NaN;
   if (!hasSession || !Number.isFinite(time) || typeof event.content !== "string") return unknown;
-  const text = role === "user" ? cleanUserText(event.content) : event.content.trim();
+  const text = role === "user" ? cleanUserText(userRequest(event.content)) : event.content.trim();
   return text ? { recognized: true, message: { role, time, text } } : ignored;
 }
 

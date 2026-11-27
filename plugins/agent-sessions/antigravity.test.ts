@@ -179,3 +179,16 @@ test("旧版 Claude Code 和 Codex checkpoint 与 Antigravity 一起续用，不
   ]);
   expect((await s.run(next.state)).records).toEqual([]);
 });
+
+test("Antigravity 用户消息只取 USER_REQUEST 里的原话，系统附加信息和注入的系统消息不进记录", async () => {
+  const s = setup();
+  s.write(path.join(s.logs("wrapped"), "transcript_full.jsonl"), [
+    step("USER_INPUT", "<USER_REQUEST>\n核对合成展板\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nThe current local time is: 2026-11-07T18:01:00+08:00.\n</ADDITIONAL_METADATA>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection`.\n</USER_SETTINGS_CHANGE>"),
+    { ...step("SYSTEM_MESSAGE", "合成的会话开场上下文"), source: "SYSTEM_SDK" },
+    step("PLANNER_RESPONSE", "展板已核对", 2),
+  ]);
+  const { records, warnings } = await s.run();
+  expect(records.map(record => record.body)).toEqual(["[我] 核对合成展板\n\n[AI] 展板已核对"]);
+  expect(records[0]!.title).toBe("Antigravity · 未知项目 · 核对合成展板");
+  expect(warnings).toEqual([]);
+});
