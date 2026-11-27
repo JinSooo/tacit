@@ -70,7 +70,7 @@ export function servicePath(bun: string, home: string, search: string[], warn: (
 
 function pathForTools(bun: string, tools: ReturnType<typeof toolLocations>, warn: (message: string) => void, lang: Lang): string {
   for (const name of ["codex", "claude"] as const) {
-    if (!tools[name]) warn(cliText(`没找到 ${name}；装好并登录后点“重新准备”即可使用。`, `Could not find ${name}. Install it, sign in, and click Prepare again.`, lang));
+    if (!tools[name]) warn(cliText(`没找到 ${name}；装好并登录后重新打开 Tacit 即可使用。`, `Could not find ${name}. Install it, sign in, and reopen Tacit.`, lang));
   }
   return [...new Set([...Object.values(tools).filter(dir => dir !== null), dirname(bun), ...SYSTEM])].join(":");
 }
@@ -297,14 +297,15 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
   if (restart) for (const job of ["distill", "hub"] as const) await unload(job);
   if (!remote) {
     const startupMarker = join(data, "hub-startup-error.json");
-    if (restart || !loaded("hub")) rmSync(startupMarker, { force: true });
+    const needsLoad = restart || !loaded("hub");
+    if (needsLoad) rmSync(startupMarker, { force: true });
     let { port, source } = resolvePort(env, data);
     const probe = o.probePort ?? probePort;
     const occupied = () => new SetupError("port_in_use", t(
       "后台服务的端口被占用了。请在设置 › 后台与连接里更换端口。",
       "The background service port is in use. Change it in Settings → Background & connection.",
     ));
-    if (restart || !loaded("hub")) {
+    if (needsLoad) {
       if (port !== 0 && await probe(port, "127.0.0.1") === null) {
         if (source !== "default") throw occupied();
         const free = await probe(0, "127.0.0.1");

@@ -299,18 +299,26 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "setup") {
-    const { setup, SetupError } = await import("./setup.ts");
+    let SetupError: typeof import("./setup.ts").SetupError | undefined;
     try {
+      const runtime = await import("./setup.ts");
+      SetupError = runtime.SetupError;
       const app = argv[argv.indexOf("--app") + 1];
       const flags = argv.slice(1).filter((a, i, all) => a !== "--app" && all[i - 1] !== "--app");
       if (!argv.includes("--app") || !app || flags.some(f => !["--install", "--no-distill", "--retry"].includes(f))) {
         console.error(cliText("用法：bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]", "Usage: bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]"));
         throw new Error();
       }
-      await setup({ app, lang: cliLanguage(), retry: flags.includes("--retry"), install: flags.includes("--install"), distill: flags.includes("--no-distill") ? false : flags.includes("--install") ? true : undefined });
+      await runtime.setup({ app, lang: cliLanguage(), retry: flags.includes("--retry"), install: flags.includes("--install"), distill: flags.includes("--no-distill") ? false : flags.includes("--install") ? true : undefined });
     } catch (error) {
-      console.error(error instanceof SetupError ? error.message : startupMessages.unknown);
-      console.error(`setup_error:${error instanceof SetupError ? error.reason : "unknown"}`);
+      if (SetupError && error instanceof SetupError) {
+        console.error(error.message);
+        console.error(`setup_error:${error.reason}`);
+      } else {
+        console.error(startupMessages.unknown);
+        console.error(cliErrorDetail(error));
+        console.error("setup_error:unknown");
+      }
       process.exitCode = 1;
     }
     return;
