@@ -8,6 +8,7 @@ export interface SessionDirectories {
   antigravityDir?: string;
   geminiDir?: string;
   qwenDir?: string;
+  opencodeDir?: string;
 }
 
 export interface SessionFile {
@@ -27,6 +28,22 @@ export interface SessionAdapter {
   cwd?(event: Json, file: SessionFile): unknown;
   isSubagent?(event: Json): boolean;
   parse(event: Json | null, hasSession: boolean): Parsed;
+}
+
+export interface DatabaseProgress {
+  identity: string;
+  updated: number;
+  boundary: string[];
+}
+
+export interface DatabaseSessionAdapter {
+  id: string;
+  checkpointKey?: string;
+  database(directories: SessionDirectories): string | null;
+  readDatabase(file: string, previous: DatabaseProgress | undefined, floor: number, rescan: boolean): {
+    progress: DatabaseProgress;
+    rows: { sessionId: string; cwd: string | null; mtime: number; result: Parsed }[];
+  } | null;
 }
 
 export function* directoriesIn(root: string): Generator<string> {
