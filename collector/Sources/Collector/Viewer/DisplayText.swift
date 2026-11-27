@@ -62,12 +62,12 @@ enum ConversationText {
 }
 
 extension Lane {
-  /// 时间轴泳道名（CollectorCore 里的 Lane.title 仍写 "Agent"，界面统一叫L10n.text(zh: "AI 工具", en: "AI tools")）。
+  /// 时间轴泳道名。
   var name: String {
     switch self {
     case .screen: return L10n.text(zh: "屏幕", en: "Screen")
     case .browser: return L10n.text(zh: "浏览器", en: "Browser")
-    case .agent: return L10n.text(zh: "AI 工具", en: "AI tools")
+    case .agent: return title
     case .terminal: return L10n.text(zh: "终端", en: "Terminal")
     case .voice: return L10n.text(zh: "对话", en: "Conversation")
     case .other: return L10n.text(zh: "其他", en: "Other")

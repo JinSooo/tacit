@@ -210,6 +210,13 @@ func menuBarSummaryHidesBackgroundPlaceholders(_ brief: String) throws {
   #expect(actual.activitySummary == "确认了潮位观测时间。")
 }
 
+@Test(arguments: AppLanguage.allCases)
+func aiToolLaneUsesTheDisplayLanguage(_ language: AppLanguage) {
+  AppLanguage.$scopedLanguage.withValue(language) {
+    #expect(Lane.agent.title == (language == .zh ? "AI 工具" : "AI tools"))
+  }
+}
+
 @Test func decodesHubRecordWithNestedContextAndMixedBooleans() throws {
   let r = try decode(HistoryRecord.self, """
     {"id":"01M6Z55ER9BPCTVCYA6ZANFBVM","schema":1,"device":"mac","source":"mac.git","kind":"event",
