@@ -46,6 +46,33 @@ test("内容和校验值不符时报错，不留下半成品", async () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("HTTPS 下载的每一跳都要求 HTTPS；初始 HTTP 的测试源仍可重定向", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ra-models-"));
+  const seen: string[] = [];
+  const origin = "https://models.example.invalid";
+  const cleartext = "http://models.example.invalid";
+  const fetcher: Parameters<typeof rankDownloadSources>[1] = async input => {
+    const url = String(input);
+    seen.push(url);
+    if (url.endsWith("/start")) return new Response(null, { status: 302, headers: { Location: "/next" } });
+    if (url.endsWith("/next")) return new Response(null, { status: 307, headers: { Location: cleartext + "/artifact" } });
+    return new Response("fixture model");
+  };
+  const download = (base: string) => ensureAudioModels(dir, {
+    fetcher, wait: async () => {},
+    models: [{ file: "fixture.bin", sha256: [sha("fixture model")], urls: [base + "/start"] }],
+  });
+  try {
+    expect(await download(origin).catch(audioModelsErrorCategory)).toBe("network");
+    expect(seen.length).toBeGreaterThan(0);
+    expect(new Set(seen)).toEqual(new Set([origin + "/start", origin + "/next"]));
+    seen.length = 0;
+    await download(cleartext);
+    expect(seen).toEqual(["/start", "/next", "/artifact"].map(path => cleartext + path));
+    expect(readFileSync(join(dir, "fixture.bin"), "utf8")).toBe("fixture model");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // 回归：约 240MB 的模型下到一半连接被重置就整个失败（2026-11-19 实测 23 分钟后 ECONNRESET）。
 test("下载中途断线时从断点续传", async () => {
   const root = mkdtempSync(join(tmpdir(), "ra-models-")), dir = join(root, "models");

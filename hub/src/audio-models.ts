@@ -60,6 +60,7 @@ export function audioModelsErrorCategory(error: unknown): AudioModelsErrorCatego
 }
 
 async function fetchModel(url: string, init: RequestInit, fetcher: typeof proxiedFetch): Promise<Response> {
+  const allowsHttp = URL.parse(url)?.protocol === "http:";
   for (let redirects = 0; ; redirects++) {
     // 逐跳重新选代理，免得重定向到内网时沿用外网代理。
     const response = await fetcher(url, { ...init, redirect: "manual" });
@@ -67,7 +68,8 @@ async function fetchModel(url: string, init: RequestInit, fetcher: typeof proxie
     if (!location || ![301, 302, 303, 307, 308].includes(response.status)) return response;
     void response.body?.cancel().catch(() => {});
     const next = URL.parse(location, url);
-    if (redirects === 20 || !next || !["http:", "https:"].includes(next.protocol) || next.username || next.password) {
+    if (redirects === 20 || !next || next.username || next.password ||
+        !(next.protocol === "https:" || allowsHttp && next.protocol === "http:")) {
       throw new AudioModelsError("network");
     }
     url = next.href;
