@@ -137,27 +137,57 @@ public enum CollectorStatus {
   }
 }
 
-public struct SetupStatus: Encodable {
+public struct SetupStatus: Codable {
+  public enum Reason: String, Codable {
+    case bundleIncomplete = "bundle_incomplete"
+    case database
+    case backgroundBlocked = "background_blocked"
+    case serviceUnhealthy = "service_unhealthy"
+    case portInUse = "port_in_use"
+    case unknown
+
+    public static func fromStandardError(_ text: String) -> Self {
+      let prefix = "setup_error:"
+      guard let line = text.split(whereSeparator: \.isNewline).last, line.hasPrefix(prefix) else { return .unknown }
+      return Self(rawValue: String(line.dropFirst(prefix.count))) ?? .unknown
+    }
+  }
+
   public let at: String
   public let version: String
   public let build: String
   public let exit_code: Int32
   public let ok: Bool
+  public let reason: Reason?
 
-  private init(build: DiagnosticBuild, exitCode: Int32, ok: Bool, at: Date = Date()) {
-    self.at = LocalTime.iso(at)
+  private enum CodingKeys: String, CodingKey { case at, version, build, exit_code, ok, reason }
+
+  public init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    at = try values.decode(String.self, forKey: .at)
+    version = try values.decode(String.self, forKey: .version)
+    build = try values.decode(String.self, forKey: .build)
+    exit_code = try values.decode(Int32.self, forKey: .exit_code)
+    ok = try values.decode(Bool.self, forKey: .ok)
+    reason = ok ? nil : (try? values.decode(Reason.self, forKey: .reason)) ?? .unknown
+  }
+
+  private init(build: DiagnosticBuild, exitCode: Int32, ok: Bool, reason: Reason?) {
+    at = LocalTime.iso(Date())
     version = build.version
     self.build = build.build
     exit_code = exitCode
     self.ok = ok
+    self.reason = reason
   }
 
   private func write(to url: URL) throws {
     try PrivateFile.write(JSONEncoder().encode(self), to: url)
   }
 
+  @discardableResult
   public static func run(_ process: Process, dataDirectory: URL, build: DiagnosticBuild = DiagnosticBuild(),
-                         log: DiagnosticLog = .shared, diagnosticDescriptor: Int32 = STDERR_FILENO) {
+                         log: DiagnosticLog = .shared, diagnosticDescriptor: Int32 = STDERR_FILENO) -> SetupStatus {
     let setupLog: Int32?
     do { setupLog = try DiagnosticLog.openFile(dataDirectory.appendingPathComponent("logs/setup.log")) }
     catch { setupLog = nil; log.record(.setupLogOpenFailed, to: diagnosticDescriptor) }
@@ -168,13 +198,18 @@ public struct SetupStatus: Encodable {
     let output = setupLog.map { FileHandle(fileDescriptor: $0, closeOnDealloc: false) } ?? FileHandle.nullDevice
     if let setupLog { log.record(.setupStarted, to: setupLog) }
     process.standardOutput = output
-    process.standardError = output
+    let stderr = Pipe()
+    process.standardError = stderr
     process.standardInput = FileHandle.nullDevice
     let exitCode: Int32
     let ok: Bool
+    var reason: Reason = .unknown
     do {
       try process.run()
+      let errors = stderr.fileHandleForReading.readDataToEndOfFile()
       process.waitUntilExit()
+      try? output.write(contentsOf: errors)
+      reason = Reason.fromStandardError(String(decoding: errors, as: UTF8.self))
       exitCode = process.terminationStatus
       ok = process.terminationReason == .exit && exitCode == 0
     } catch {
@@ -182,13 +217,20 @@ public struct SetupStatus: Encodable {
       ok = false
     }
 
+    let status = SetupStatus(build: build, exitCode: exitCode, ok: ok, reason: ok ? nil : reason)
     do {
-      try SetupStatus(build: build, exitCode: exitCode, ok: ok)
-        .write(to: dataDirectory.appendingPathComponent("setup-status.json"))
+      try status.write(to: dataDirectory.appendingPathComponent("setup-status.json"))
     } catch {
       log.record(.setupStatusWriteFailed, to: diagnosticDescriptor)
     }
     log.record(.setupFinished(exitCode: exitCode), to: diagnosticDescriptor)
     if let setupLog { log.record(.setupFinished(exitCode: exitCode), to: setupLog) }
+    return status
+  }
+}
+
+public enum LocalBackendPreparation {
+  public static func deliveryError(_ error: String, preparing: Bool, inStartupGrace: Bool) -> String? {
+    preparing || inStartupGrace ? nil : error
   }
 }

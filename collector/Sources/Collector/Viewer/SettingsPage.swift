@@ -268,6 +268,8 @@ struct HubSettingsView: View {
   @Environment(ViewerStore.self) private var store
   @Environment(\.openURL) private var openURL
   @State private var info: HubPortSettings?
+  @State private var offline = false
+  @State private var baselinePort = ""
   @State private var port = ""
   @State private var busy = false
   @State private var message: String?
@@ -298,7 +300,7 @@ struct HubSettingsView: View {
       while !Task.isCancelled {
         model?.refreshContext()
         await model?.restoreReplacement()
-        if !store.isRemoteBackend, !busy, info == nil || port == String(info?.port ?? 0) { await load() }
+        if !store.isRemoteBackend, !busy { await load() }
         await WindowVisibility.pause(.seconds(5))
       }
     }
@@ -323,23 +325,26 @@ struct HubSettingsView: View {
     SettingsRow(L10n.Settings.address) {
       Text(store.api.base.host ?? "").font(.mono(TextSize.body)).textSelection(.enabled)
     }
-    let edited = info.map { !$0.locked && port != String($0.port) } ?? false
+    let config = (store.controls as? AppDelegate)?.config
+    let localEditable = config?.allowsLocalHub == true && config?.fixedPort == nil && ProcessInfo.processInfo.environment["RA_PORT"] == nil
+    let editable = !store.isRemoteBackend && (info?.locked == false || (offline && localEditable && AppSetup.activity != .running))
+    let edited = editable && port != baselinePort
     let validPort = Int(port).flatMap { (1024...65535).contains($0) ? $0 : nil }
     SettingsRow(L10n.Settings.port) {
       HStack(spacing: 8) {
         TextField(L10n.Settings.port, text: $port).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 90)
-          .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(info?.locked != false || busy)
-        if edited, let info {
+          .font(.mono(TextSize.body)).multilineTextAlignment(.trailing).disabled(!editable || busy)
+        if edited {
           Button(L10n.Settings.revertChanges) {
-            port = String(info.port)
+            port = baselinePort
             message = nil
             error = nil
           }
           .disabled(busy)
-          Button(busy ? L10n.Settings.restarting : L10n.Settings.saveAndRestart) {
+          Button(busy ? L10n.Settings.restarting : offline ? L10n.Settings.prepareAgain : L10n.Settings.saveAndRestart) {
             if let validPort { Task { await apply(validPort) } }
           }
-          .disabled(busy || validPort == nil || validPort == info.port)
+          .disabled(busy || validPort == nil)
         }
       }
     }
@@ -353,26 +358,49 @@ struct HubSettingsView: View {
     }
     if c.queue > 0 { SettingsRow(L10n.Settings.waitingToSave, value: L10n.Settings.recordCount(c.queue)) }
     // 连得上就不占一行，只有检查中或出问题时才说。
-    if let problem = store.sharedError ?? c.hubError {
+    if !offline, let problem = store.sharedError ?? c.hubError {
       SettingsRow(L10n.Settings.status) { Text(L10n.Settings.backgroundIssue(problem)).foregroundStyle(Palette.attention) }
+    } else if offline, let config {
+      switch AppSetup.checklistStep(in: config.dataDir, reachable: false) {
+      case .preparing: SettingsRow(L10n.Settings.status, value: L10n.Settings.preparingBackend)
+      case .failed(let status): SettingsRow(L10n.Settings.status, value: status)
+      case nil: EmptyView()
+      }
     } else if info == nil {
       SettingsRow(L10n.Settings.status, value: L10n.Settings.checking)
     }
-    if info?.locked == true { SettingsMessage(text: L10n.Settings.portLocked, warning: false) }
+    if info?.locked == true || (offline && !localEditable) { SettingsMessage(text: L10n.Settings.portLocked, warning: false) }
     if let message { SettingsMessage(text: message, warning: false) }
     if let error { SettingsMessage(text: error) }
   }
 
   func load() async {
-    let previousPort = port
+    if !store.isRemoteBackend, let delegate = store.controls as? AppDelegate, delegate.config.allowsLocalHub {
+      let config = delegate.config
+      let reachable = AppSetup.activity == .running ? false : await AppSetup.isReachable(config.hubURL)
+      guard !Task.isCancelled else { return }
+      if !reachable {
+        offline = true
+        info = nil
+        updateBaseline(config.hubURL.port.map(String.init) ?? "47823")
+        return
+      }
+    }
     do {
       let h = try await store.api.hubSettings()
+      offline = false
       info = h
-      if port == previousPort { port = String(h.port) }
+      updateBaseline(String(h.port))
       error = nil
+    } catch is CancellationError {
+    } catch {
+      self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed)
     }
-    catch is CancellationError {}
-    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+  }
+
+  private func updateBaseline(_ value: String) {
+    if port == baselinePort { port = value }
+    baselinePort = value
   }
 
   /// 中枢写入 hub.json 后退出，launchd 用新端口拉起；采集端每次请求都现读 hub.json，跟着换过去。
@@ -380,13 +408,20 @@ struct HubSettingsView: View {
     busy = true; message = nil; error = nil
     defer { busy = false }
     do {
+      if offline, let delegate = store.controls as? AppDelegate {
+        try await delegate.prepareBackendAgain(port: p)
+        port = String(p)
+        await load()
+        if info?.port == p { message = L10n.Settings.portUpdated }
+        return
+      }
       let restarting = try await store.api.setHubPort(p)
       guard restarting else { await load(); return }
       message = L10n.Settings.backendRestarting
       for _ in 0..<30 {
         try? await Task.sleep(for: .seconds(1))
         if let h = try? await store.api.hubSettings(), h.port == p {
-          info = h; port = String(p); message = L10n.Settings.portUpdated
+          info = h; baselinePort = String(p); port = baselinePort; message = L10n.Settings.portUpdated
           await store.refreshShared()
           return
         }

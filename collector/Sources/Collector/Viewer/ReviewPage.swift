@@ -43,8 +43,9 @@ private struct ReviewDayContent: View {
   @State private var picking = false
   @State private var hoveringDateTitle = false
   @Namespace private var densityPill
-  @State private var setup: (health: DistillHealth, tools: [AgentToolState])?
-  @State private var startupMessage: String?
+  @State private var setup: (health: DistillHealth, tools: [AgentToolState], minuteModel: ModelTierConfig?)?
+  @State private var backendSetup: AppSetup.ChecklistStep? = .preparing
+  @State private var backendChecked = false
   @State private var securityEvents = TimelineSecurityEventState()
   /// 日期栏上选中的那天；切过去后先把那天读好，再整块滑进来，期间仍显示正在看的这一天。
   @Binding var selectedDay: Date
@@ -72,14 +73,10 @@ private struct ReviewDayContent: View {
     let refresh: Int
     let revision: Int
     let density: TimelineDensity
+    let backendReady: Bool
   }
 
-  private var showsSetup: Bool {
-    TimelineSetup.shouldShow(
-      permissionsReady: !store.capture.sources.contains { DataSourceCatalog.isVisible($0.id) && $0.needsPermission },
-      modelReady: setup.map { $0.health.state == .working },
-      agentReady: setup.map { $0.tools.contains(where: \.connected) })
-  }
+  private var localSetup: AppSetup.ChecklistStep? { store.isRemoteBackend ? nil : backendSetup }
   private var density: TimelineDensity { store.timelineDensity }
   private var current: Bool { loadedRevision == store.revision }
   /// 重新读取时继续显示上一版，新内容到了再原位换上，不先清空闪一下。
@@ -101,7 +98,7 @@ private struct ReviewDayContent: View {
 
   var body: some View {
     Group {
-      if density == .compact {
+      if density == .compact || localSetup != nil {
         compactList
       } else {
         HistoryPage(day: day, diary: current ? review : nil, dayRecords: current ? records.value : nil,
@@ -114,12 +111,11 @@ private struct ReviewDayContent: View {
     // 页首的提示行进出时，下面的时间线一起顺滑让位，不整块跳（挂在整页上，下面的列表也在同一次动画里）。
     .animation(Motion.standard, value: securityEvents.events.first?.id)
     .animation(Motion.standard, value: securityEvents.error)
-    .animation(Motion.standard, value: showsSetup && setup != nil)
     .animation(Motion.standard, value: store.pending.isEmpty)
-    .animation(Motion.standard, value: startupMessage)
+    .animation(Motion.standard, value: localSetup)
     .onChange(of: selectedDay) { old, new in dateEdge = new < old ? .leading : .trailing }
     .onDisappear { staleTimer?.cancel() }
-    .task(id: LoadKey(day: selectedDay, refresh: refresh, revision: store.revision, density: density)) {
+    .task(id: LoadKey(day: selectedDay, refresh: refresh, revision: store.revision, density: density, backendReady: localSetup == nil)) {
       repeat {
         await load()
         if selectedDay != today || day != today {
@@ -136,14 +132,15 @@ private struct ReviewDayContent: View {
         await WindowVisibility.pause(.seconds(15))
       }
     }
-    .task(id: refresh) {
+    .task(id: store.isRemoteBackend) {
+      guard !store.isRemoteBackend else { return }
       let dataDir = Config.load().dataDir
       while !Task.isCancelled {
-        let message = DiagnosticSummary.startupMessage(in: dataDir)
-        let reachable = message == nil ? true : await store.api.isReachable()
+        let reachable = AppSetup.activity == .running ? false : await AppSetup.isReachable(store.api.base)
         guard !Task.isCancelled else { return }
-        startupMessage = reachable ? nil : message
-        await WindowVisibility.pause(.seconds(5))
+        backendSetup = AppSetup.checklistStep(in: dataDir, reachable: reachable)
+        backendChecked = true
+        await WindowVisibility.pause(.seconds(backendSetup == nil ? 5 : 1))
       }
     }
   }
@@ -190,21 +187,13 @@ private struct ReviewDayContent: View {
       if let stats {
         stats.frame(maxWidth: .infinity, alignment: .trailing)
       }
-      if startupMessage == nil || hasSegments {
+      if localSetup == nil || hasSegments {
         headline
           .id(day)
           .transition(.dayChange)
           .opacity(stale ? 0.45 : 1)
       }
-      if let startupMessage {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-          Text(startupMessage).foregroundStyle(Palette.attention)
-            .fixedSize(horizontal: false, vertical: true)
-          Spacer(minLength: 0)
-          OpenLogsButton().buttonStyle(.accentLink).fixedSize()
-        }
-        .font(.system(size: TextSize.body))
-      } else {
+      if localSetup == nil {
         if let event = securityEvents.events.first {
           TimelineSecurityEventLine(event: event) {
             Task { await securityEvents.acknowledge(event, using: store.api) }
@@ -214,12 +203,14 @@ private struct ReviewDayContent: View {
           .transition(.notice)
           if let error = securityEvents.error { SettingsMessage(text: error).transition(.notice) }
         }
-        if showsSetup, let setup { SetupChecklist(health: setup.health, tools: setup.tools).transition(.notice) }
         if let update = store.update.available {
           TimelineUpdateLine(notice: store.update, update: update).id(update.version).transition(.notice)
         }
         if !store.pending.isEmpty { TimelinePendingLine().transition(.notice) }
       }
+      SetupChecklist(backend: localSetup, backendChecked: backendChecked || store.isRemoteBackend, health: localSetup == nil ? setup?.health : nil,
+                     tools: localSetup == nil ? setup?.tools : nil, minuteModel: setup?.minuteModel)
+        .transition(.notice)
     }
   }
 
@@ -335,7 +326,7 @@ private struct ReviewDayContent: View {
 
   @ViewBuilder private var compactStatus: some View {
     let hasContent = hasSegments || !drafts.isEmpty
-    if current, let error = diary.error ?? (hasContent ? nil : records.error) {
+    if current, localSetup == nil, let error = diary.error ?? (hasContent ? nil : records.error) {
       Placeholder(kind: .error(error) { Task { await load() } })
     } else if failed && !hasSegments {
       status(L10n.lastSummaryFailed, color: Palette.attention)
@@ -383,9 +374,11 @@ private struct ReviewDayContent: View {
     do {
       async let health = store.api.distillHealth()
       async let tools = store.api.agentTools()
-      let value = try await (health, tools)
+      let (status, installed) = try await (health, tools)
+      let config = status.state == .working ? nil : try? await store.api.modelSettings().tiers["minute"]
       try Task.checkCancellation()
-      setup = value
+      setup = (status, installed, config)
+    } catch is CancellationError {
     } catch { setup = nil }
   }
 

@@ -743,7 +743,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
   func disabled(_ title: String) -> NSMenuItem { let i = NSMenuItem(title: title, action: nil, keyEquivalent: ""); i.isEnabled = false; return i }
 
+  @MainActor func prepareBackendAgain(port: Int? = nil) async throws {
+    let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+      AppSetup.start(config: config, startup: loginStartup, writeGate: switchWriteGate,
+                     standby: launchSource != .launchd, retry: true, port: port) {
+        continuation.resume(returning: $0)
+      }
+    }
+    hub.flush()
+    try result.get()
+    await viewer.store.refreshShared()
+  }
+
   @objc func requestAX() {
+    guard !AXIsProcessTrusted() else { return }
+    let key = "accessibilityPermissionRequested"
+    if UserDefaults.standard.bool(forKey: key) {
+      SystemPermissions.openPrivacyPane("Privacy_Accessibility")
+      return
+    }
+    UserDefaults.standard.set(true, forKey: key)
     AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
   }
   @objc func pauseHour() { pause(until: Date().addingTimeInterval(3600)) }

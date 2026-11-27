@@ -27,7 +27,7 @@ struct Config {
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { file = j }
     // 应用包自带运行目录和 bun 时始终用自带的，首次打开还没写 collector.json 也能运行。
     let bundled = Bundled.current
-    var c = Config(dataDir: dataDir, fixedPort: arg("--port") ?? (file["port"] as? Int).map(String.init),
+    var c = Config(dataDir: dataDir, fixedPort: arg("--port") ?? Self.environmentPort ?? (file["port"] as? Int).map(String.init),
                    repo: arg("--repo") ?? bundled?.runtime ?? file["repo"] as? String,
                    bun: arg("--bun") ?? bundled?.bun ?? file["bun"] as? String ?? home.appendingPathComponent(".bun/bin/bun").path)
     if let d = arg("--device") ?? file["device"] as? String { c.device = d }
@@ -40,6 +40,31 @@ struct Config {
           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
           let p = j["port"] as? Int, (1024...65535).contains(p) else { return nil }
     return String(p)
+  }
+
+  private static var environmentPort: String? {
+    guard let raw = ProcessInfo.processInfo.environment["RA_PORT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+          let port = Int(raw), (1...65535).contains(port) else { return nil }
+    return String(port)
+  }
+
+  func writeHubPort(_ port: Int) throws {
+    guard allowsLocalHub, fixedPort == nil, ProcessInfo.processInfo.environment["RA_PORT"] == nil,
+          (1024...65535).contains(port) else { throw HubError.needsLocalHub }
+    let file = dataDir.appendingPathComponent("hub.json")
+    var fields: [String: Any]
+    do {
+      let data = try Data(contentsOf: file)
+      guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw CocoaError(.fileReadCorruptFile)
+      }
+      fields = object
+    } catch CocoaError.fileReadNoSuchFile {
+      fields = [:]
+    }
+    fields["port"] = port
+    try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try PrivateFile.write(JSONSerialization.data(withJSONObject: fields, options: [.prettyPrinted, .sortedKeys]), to: file)
   }
 
   func hubRoute() throws -> HubBinding.Route { try HubBinding.read(from: dataDir).route }
@@ -241,13 +266,17 @@ final class HubClient: @unchecked Sendable {
         let backend = route.remote == nil ? "本机后台" : "远端后台"
         finish(on: route, error: "\(backend)连接凭据不可用，待发送记录已保留。", done: nil)
       } catch CollectorUpload.Failure.noToken {
-        finish(on: route, error: "找不到后台服务的访问凭证，请重启 Tacit", done: nil)
+        finish(on: route, error: startupDeliveryError("找不到后台服务的访问凭证，请重启 Tacit"), done: nil)
       } catch CollectorUpload.Failure.batchTooLarge, DeviceClientError.envelopeTooLarge {
         finish(on: route, error: "待发送记录超过上传大小限制。", done: nil)
       } catch {
-        finish(on: route, error: "连不上后台服务", done: nil)
+        finish(on: route, error: startupDeliveryError("连不上后台服务"), done: nil)
       }
     }
+  }
+
+  private func startupDeliveryError(_ error: String) -> String? {
+    LocalBackendPreparation.deliveryError(error, preparing: AppSetup.activity == .running, inStartupGrace: HubAPI.inStartupGrace())
   }
 
   private func sendRemote(on route: HubBinding.Route, queued: Int) {

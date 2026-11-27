@@ -714,6 +714,51 @@ public extension L10n {
       }
     }
 
+    public static var preparingBackend: String { L10n.text(zh: "正在准备后台服务…", en: "Preparing the background service…") }
+    public static var prepareAgain: String { L10n.text(zh: "重新准备", en: "Prepare again") }
+    public static var goToModelSettings: String { L10n.text(zh: "去设置", en: "Open settings") }
+    public static var noAvailableLocalModel: String {
+      L10n.text(zh: "这台 Mac 上没有可用的 AI 模型。装好并登录 Claude Code 或 Codex，或在设置里填 API。",
+                en: "No AI model is available on this Mac. Install and sign in to Claude Code or Codex, or configure an API in Settings.")
+    }
+    public static var offlinePortSaveFailed: String {
+      L10n.text(zh: "端口没能保存，请检查数据文件夹的访问权限。",
+                en: "The port couldn't be saved. Check access to the data folder.")
+    }
+    public static func setupFailure(_ reason: SetupStatus.Reason, lang: AppLanguage = .current) -> String {
+      switch reason {
+      case .bundleIncomplete:
+        return L10n.text(zh: "Tacit 安装不完整。请从安装包重新安装。", en: "The Tacit installation is incomplete. Reinstall it from the installer.", lang: lang)
+      case .database:
+        return L10n.text(zh: "记录库打开失败。请确认钥匙串已解锁，已有记录库缺少密钥时请用密钥备份恢复。",
+                         en: "The database could not be opened. Unlock the Keychain, or restore the key from backup if an existing database is missing its key.", lang: lang)
+      case .backgroundBlocked:
+        return L10n.text(zh: "系统没能启动后台服务。请在系统设置 › 通用 › 登录项与扩展里允许 Tacit 在后台运行，再点「重新准备」。",
+                         en: "macOS couldn't start the background service. Allow Tacit in System Settings → General → Login Items & Extensions, then click Prepare again.", lang: lang)
+      case .portInUse:
+        return L10n.text(zh: "后台服务的端口被占用了。请在设置 › 后台与连接里更换端口。",
+                         en: "The background service port is in use. Change it in Settings → Background service and connection.", lang: lang)
+      case .serviceUnhealthy, .unknown:
+        return L10n.text(zh: "后台服务没能启动。点「重新准备」再试。仍然失败时，可在设置 › 维护里复制诊断信息。",
+                         en: "The background service couldn't start. Click Prepare again. If it still fails, copy diagnostics in Settings → Maintenance.", lang: lang)
+      }
+    }
+
+    public static func speechModelDownloadMessage(stderr: String, lang: AppLanguage = .current) -> String {
+      switch stderr.split(whereSeparator: \.isNewline).last {
+      case "audio_models_error:network":
+        return L10n.text(zh: "连不上下载地址，检查网络或代理后会自动重试", en: "Can't reach the download. Check your network or proxy. Tacit will retry automatically.", lang: lang)
+      case "audio_models_error:checksum":
+        return L10n.text(zh: "下载的文件不完整，会自动重新下载", en: "The downloaded file is incomplete. Tacit will download it again.", lang: lang)
+      case "audio_models_error:disk":
+        return L10n.text(zh: "磁盘空间不够，清理后会自动重试", en: "Free up disk space and Tacit will retry automatically.", lang: lang)
+      case "audio_models_error:extract":
+        return L10n.text(zh: "模型文件解压失败，会自动重试", en: "Couldn't unpack the model. Tacit will retry automatically.", lang: lang)
+      default:
+        return L10n.text(zh: "语音模型没能下载，稍后会自动重试", en: "Couldn't download the speech model. Tacit will retry shortly.", lang: lang)
+      }
+    }
+
     public static func speechModelInstallationMissing(lang: AppLanguage = .current) -> String {
       L10n.text(zh: "安装不完整，无法下载语音模型，请重新安装 Tacit",
                 en: "Reinstall Tacit to download the speech model", lang: lang)

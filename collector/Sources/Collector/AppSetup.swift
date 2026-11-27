@@ -26,23 +26,87 @@ enum AppSetup {
     return false
   }
 
-  /// `standby`：用户手动打开的这份要在准备完成后让 launchd 起一份待命实例；launchd 拉起的自己就是那份。
-  static func start(config: Config, startup: LoginStartup, writeGate: RemoteSwitchWriteGate? = nil, standby: Bool = false) {
-    let bundle = Bundle.main.bundlePath
-    switch AppPlacement.of(bundlePath: bundle, home: FileManager.default.homeDirectoryForCurrentUser.path) {
-    case .installed where Bundled.current != nil:
-      DispatchQueue.global(qos: .utility).async {
-        do { try writeGate?.begin() } catch { return }
-        defer { writeGate?.end() }
-        guard shouldRunBundledSetup(in: config.dataDir) else { return }
-        run(config: config, app: bundle)
-        if standby { startup.ensureCollectorStandby() }
+  enum Activity: Equatable {
+    case idle, running, finished(SetupStatus.Reason?)
+  }
+
+  private static let lock = NSLock()
+  private static var currentActivity = Activity.idle
+  static var activity: Activity { lock.withLock { currentActivity } }
+
+  enum ChecklistStep: Equatable {
+    case preparing
+    case failed(String)
+  }
+
+  /// The ordinary viewer requests wait through startup. The checklist needs a single short probe
+  /// so a known failure can be shown immediately and offline port settings stay available.
+  static func isReachable(_ base: URL) async -> Bool {
+    struct Health: Decodable { let ok: Bool }
+    let request = URLRequest(url: base.appendingPathComponent("v1/health"),
+                             cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2)
+    guard let reply = try? await LocalDeviceLink.request(request, session: .shared), reply.statusCode == 200,
+          let health = try? JSONDecoder().decode(Health.self, from: reply.body) else { return false }
+    return health.ok
+  }
+
+  static func checklistStep(in dataDir: URL, reachable: Bool) -> ChecklistStep? {
+    let state = activity
+    if state == .running { return .preparing }
+    if case .finished(let reason?) = state, !reachable || reason == .backgroundBlocked || reason == .bundleIncomplete {
+      return .failed(DiagnosticSummary.startupMessage(in: dataDir, reason: reason) ?? L10n.Settings.setupFailure(reason))
+    }
+    if reachable { return nil }
+    if HubAPI.inStartupGrace() { return .preparing }
+    return .failed(DiagnosticSummary.startupMessage(in: dataDir) ?? L10n.Settings.setupFailure(.unknown))
+  }
+
+  /// 用户手动打开时，准备完成后让 launchd 起一份待命实例；launchd 拉起的自己就是那份。
+  static func start(config: Config, startup: LoginStartup, writeGate: RemoteSwitchWriteGate? = nil, standby: Bool = false,
+                    retry: Bool = false, port: Int? = nil, completion: ((Result<Void, Error>) -> Void)? = nil) {
+    guard lock.withLock({
+      guard currentActivity != .running, retry || currentActivity == .idle else { return false }
+      currentActivity = .running
+      return true
+    }) else {
+      completion?(.failure(HubError(message: L10n.Settings.preparingBackend, status: 0)))
+      return
+    }
+
+    DispatchQueue.global(qos: .utility).async {
+      var reason: SetupStatus.Reason?
+      var result: Result<Void, Error> = .success(())
+      defer {
+        lock.withLock { currentActivity = .finished(reason) }
+        completion?(result)
       }
-    default:
-      DispatchQueue.global(qos: .utility).async {
-        do { try writeGate?.begin() } catch { return }
+      do {
+        try writeGate?.begin()
         defer { writeGate?.end() }
-        startup.startServices()
+        guard shouldRunBundledSetup(in: config.dataDir), !retry || config.allowsLocalHub else {
+          throw HubError.invalidBinding
+        }
+        if let port {
+          do { try config.writeHubPort(port) }
+          catch { throw HubError(message: L10n.Settings.offlinePortSaveFailed, status: 0) }
+        }
+        let bundle = Bundle.main.bundlePath
+        if AppPlacement.of(bundlePath: bundle, home: FileManager.default.homeDirectoryForCurrentUser.path) == .installed {
+          if let bundled = Bundled.current {
+            reason = run(config: config, app: bundle, bundled: bundled, retry: retry).reason
+          } else {
+            reason = .bundleIncomplete
+          }
+          if let reason {
+            throw HubError(message: DiagnosticSummary.startupMessage(in: config.dataDir, reason: reason)
+                           ?? L10n.Settings.setupFailure(reason), status: 0)
+          }
+          if standby { startup.ensureCollectorStandby() }
+        } else {
+          startup.startServices()
+        }
+      } catch {
+        result = .failure(error)
       }
     }
   }
@@ -54,16 +118,15 @@ enum AppSetup {
     return binding.phase == .committed || LocalServiceStartupPolicy.allowsBackground(in: directory)
   }
 
-  private static func run(config: Config, app: String) {
-    guard let bundled = Bundled.current else { return }
+  private static func run(config: Config, app: String, bundled: Bundled, retry: Bool) -> SetupStatus {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: bundled.bun)
-    p.arguments = [bundled.runtime + "/hub/src/cli.ts", "setup", "--app", app]
+    p.arguments = [bundled.runtime + "/hub/src/cli.ts", "setup", "--app", app] + (retry ? ["--retry"] : [])
     p.currentDirectoryURL = URL(fileURLWithPath: bundled.runtime)
     var environment = ProcessInfo.processInfo.environment
     environment["RA_DATA_DIR"] = config.dataDir.path
     p.environment = environment
-    SetupStatus.run(p, dataDirectory: config.dataDir)
+    return SetupStatus.run(p, dataDirectory: config.dataDir)
   }
 
   @MainActor private static func askToMove() {
@@ -109,7 +172,7 @@ final class AudioModelDownload {
     lock.lock()
     if running { lock.unlock(); return }
     guard let repo = config.repo, FileManager.default.isExecutableFile(atPath: config.bun) else {
-      lastFailure = L10n.Settings.speechModelInstallationMissing(lang: .zh); lock.unlock(); completion(false); return
+      lastFailure = L10n.Settings.speechModelInstallationMissing(); lock.unlock(); completion(false); return
     }
     running = true; lastFailure = nil; lock.unlock()
     DispatchQueue.global(qos: .utility).async { [self] in
@@ -123,10 +186,10 @@ final class AudioModelDownload {
         try p.run()
         let data = err.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
         ok = p.terminationStatus == 0
-        reason = String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
-      } catch { reason = error.localizedDescription }
+        reason = String(decoding: data, as: UTF8.self)
+      } catch { /* No category was emitted. */ }
       lock.lock(); running = false
-      if !ok { lastFailure = L10n.Settings.speechModelDownloadFailed(reason, lang: .zh) }
+      if !ok { lastFailure = L10n.Settings.speechModelDownloadMessage(stderr: reason) }
       lock.unlock()
       completion(ok)
     }
