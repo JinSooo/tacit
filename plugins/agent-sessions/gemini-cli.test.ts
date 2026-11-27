@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { RecordV1 } from "../../packages/record/index.ts";
 import { collect, type State } from "./main.ts";
+import { geminiCli } from "./adapters/gemini-cli.ts";
 
 const base = Date.parse("2026-11-27T02:00:00Z");
 const date = (minute: number) => new Date(base + minute * 60_000).toISOString();
@@ -68,6 +69,37 @@ test("Gemini CLI 只读主会话，续用旧 checkpoint 并按字节导入新增
     ]);
     expect((await run(second.state, 35)).records).toEqual([]);
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Gemini CLI 无覆盖时兼读普通和沙盒目录，相同 realpath 只扫描一次", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ra-gemini-paths-"));
+  const oldVariables = { ...process.env };
+  try {
+    process.env.GEMINI_CLI_HOME = root;
+    delete process.env.RA_GEMINI_DIR;
+    const normal = path.join(root, ".gemini/tmp");
+    const sandbox = path.join(root, ".cache/.gemini/tmp");
+    for (const runtime of [normal, sandbox]) {
+      const chats = path.join(runtime, "demo/chats");
+      fs.mkdirSync(chats, { recursive: true });
+      fs.writeFileSync(path.join(chats, "session-synthetic-a1.jsonl"), "");
+    }
+    const files = () => Array.from(geminiCli.files({}), file => file.path);
+    for (const value of ["sandbox-exec", ""]) {
+      process.env.SANDBOX = value;
+      expect(files()).toEqual([normal, sandbox].map(runtime => path.join(runtime, "demo/chats/session-synthetic-a1.jsonl")));
+    }
+    fs.rmSync(sandbox, { recursive: true });
+    fs.symlinkSync(normal, sandbox);
+    expect(files()).toEqual([path.join(normal, "demo/chats/session-synthetic-a1.jsonl")]);
+    expect(Array.from(geminiCli.files({ geminiDir: path.join(root, "override") }))).toEqual([]);
+  } finally {
+    for (const key of ["GEMINI_CLI_HOME", "RA_GEMINI_DIR", "SANDBOX"]) {
+      if (oldVariables[key] === undefined) delete process.env[key];
+      else process.env[key] = oldVariables[key];
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
