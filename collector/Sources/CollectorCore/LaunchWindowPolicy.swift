@@ -3,12 +3,14 @@ import Foundation
 
 /// 启动时要不要把主窗口拿出来。
 /// macOS 开机“重新打开窗口”恢复 Tacit 时，和用户在访达里双击走同一条 LaunchServices 路径，启动事件也一样
-/// （2026-11-25 在 SIP 开着的虚拟机里实测），只能按离登录多久来分：恢复发生在登录后几十秒内。
+/// （2026-11-25 在 SIP 开着的虚拟机里实测）。准备完的 Mac 用登录时间区分；仍需准备时让用户看到清单。
 public enum LaunchWindowPolicy {
   public static let loginQuietPeriod: TimeInterval = 90
 
-  public static func opensWindow(source: DiagnosticLog.LaunchSource, loginAt: Date?, now: Date = Date()) -> Bool {
+  public static func opensWindow(source: DiagnosticLog.LaunchSource, loginAt: Date?,
+                                 setupIncomplete: Bool = false, now: Date = Date()) -> Bool {
     guard source == .finder else { return false }
+    if setupIncomplete { return true }
     guard let loginAt else { return true }
     return now.timeIntervalSince(loginAt) >= loginQuietPeriod
   }

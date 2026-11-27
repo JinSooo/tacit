@@ -353,7 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func applicationDidFinishLaunching(_ n: Notification) {
     terminationSignal = TerminationSignal { NSApp.terminate(nil) }
     Task { @MainActor [weak self] in
-      guard let self, AppSetup.checkPlacement() else { return }
+      guard let self else { return }
       var recoveryMessage: String?
       do { try await self.remoteSwitch.recover() }
       catch {
@@ -366,6 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   @MainActor private func finishLaunchingAfterRecovery(recoveryMessage: String?) {
+    let hadCompletedPreparation = AppSetup.hasCompletedPreparation(in: config.dataDir)
     AppSetup.start(config: config, startup: loginStartup, writeGate: switchWriteGate, standby: launchSource != .launchd)
     viewer.store.remoteBackend?.refreshContext()
     if let recoveryMessage { viewer.store.remoteBackend?.error = recoveryMessage }
@@ -440,10 +441,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if let day = pendingTimelineDay {
       pendingTimelineDay = nil
       MainActor.assumeIsolated { viewer.show(.timelineDay(day)) }
-    } else if LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate()) {
-      // 用户自己打开（首次安装、升级、退出后再开）就把主窗口拿出来：只有菜单栏图标时，新用户看不到准备清单，
-      // 刘海屏上图标还可能被挤掉，像是什么都没发生。登录自启和开机“重新打开窗口”恢复都不弹窗。
-      MainActor.assumeIsolated { viewer.show() }
+    } else if launchSource == .finder {
+      if LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate(),
+                                        setupIncomplete: !hadCompletedPreparation) {
+        viewer.show()
+      } else {
+        openWindowForUnfinishedSetup()
+      }
     }
     ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.updateAudio() }
     ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.tick() }
@@ -457,8 +461,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       self?.closeSegment()
       self?.viewerDataSource.clearMemory()
     }
-    DistributedNotificationCenter.default().addObserver(forName: .init(Self.showWindowNotification), object: nil, queue: .main) { [weak self] _ in
-      self?.openHistory()
+    DistributedNotificationCenter.default().addObserver(forName: .init(Self.showWindowNotification), object: nil, queue: .main) { [weak self] event in
+      let checkSetup = event.userInfo?["checkSetup"] as? Bool == true
+      MainActor.assumeIsolated {
+        if checkSetup { self?.openWindowForUnfinishedSetup() }
+        else { self?.viewer.show() }
+      }
+    }
+  }
+
+  /// 登录后短时间内的访达启动可能是系统恢复。只有清单仍有事项时才弹窗。
+  @MainActor private func openWindowForUnfinishedSetup() {
+    guard !terminating, !WindowVisibility.visible else { return }
+    let remote = viewer.store.isRemoteBackend
+    if !AppSetup.hasCompletedPreparation(in: config.dataDir)
+      || !TimelineSetup.missingPermissions(in: sources.statuses()).required.isEmpty
+      || (!remote && AppSetup.activity.failure != nil) {
+      viewer.show()
+      return
+    }
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      let readiness = try? await api.setupReadiness(includeLocalTools: !remote)
+      var backendFailed = !remote && AppSetup.activity.failure != nil
+      if !remote, readiness == nil, !backendFailed, !HubAPI.inStartupGrace() {
+        let reachable = await AppSetup.isReachable(api.base)
+        if case .failed = AppSetup.checklistStep(activity: AppSetup.activity, reachable: reachable,
+                                               inStartupGrace: false, startupMessage: nil) {
+          backendFailed = true
+        }
+      }
+      guard !terminating, !WindowVisibility.visible, remote == viewer.store.isRemoteBackend else { return }
+      if backendFailed || !SetupReadiness.unfinishedItems(health: readiness?.health, tools: readiness?.tools).isEmpty {
+        viewer.show()
+      }
     }
   }
 
@@ -931,6 +967,7 @@ if CommandLine.arguments.contains("--initialize-language") {
   MainActor.assumeIsolated { initializeAppLanguage(config) }
   exit(0)
 }
+guard MainActor.assumeIsolated({ AppSetup.checkPlacement() }) else { exit(0) }
 let logFile = config.dataDir.appendingPathComponent("logs/collector.log")
 let launchedByAgent = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"]?.hasPrefix("dev.record-anything.") == true
 let launchSource: DiagnosticLog.LaunchSource = launchedByAgent || DiagnosticLog.isFile(logFile, on: STDERR_FILENO)
@@ -939,14 +976,17 @@ do { try DiagnosticLog.redirectIfNeeded(to: logFile) }
 catch { DiagnosticLog.shared.record(.collectorLogOpenFailed) }
 DiagnosticLog.installUncaughtExceptionHandler()
 
-// 已经有一个采集端在跑时：用户打开的请它拿出窗口、自己退出（登录后 90 秒内是系统恢复，不弹窗）；
+// 已经有一个采集端在跑时：访达打开的请它拿出窗口，登录后 90 秒内先检查准备清单。
 // launchd 拉起的留下待命，正在跑的那份崩溃时接手，正常退出时跟着退出（退出码 0，launchd 不再拉起）。
 let lockPath = config.dataDir.appendingPathComponent("collector.lock").path
 var instanceLock = InstanceLock.acquire(path: lockPath)
 if case .held = instanceLock {
   guard launchedByAgent else {
-    if LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate()) {
-      DistributedNotificationCenter.default().postNotificationName(.init(AppDelegate.showWindowNotification), object: nil, deliverImmediately: true)
+    if launchSource == .finder {
+      let opens = LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate(),
+                                                 setupIncomplete: !AppSetup.hasCompletedPreparation(in: config.dataDir))
+      DistributedNotificationCenter.default().postNotificationName(.init(AppDelegate.showWindowNotification), object: nil,
+                                                                    userInfo: ["checkSetup": !opens], deliverImmediately: true)
     }
     exit(0)
   }

@@ -173,6 +173,11 @@ public extension L10n {
     public static var expanded: String { L10n.text(zh: "已展开", en: "Expanded") }
     public static var collapsed: String { L10n.text(zh: "已折叠", en: "Collapsed") }
     public static var grantSystemPermissions: String { L10n.text(zh: "打开系统权限", en: "Grant system permissions") }
+    public static var optionalFullDiskAccess: String { L10n.text(zh: "完全磁盘访问（可选）", en: "Full Disk Access (optional)") }
+    public static var safariPermissionNote: String {
+      L10n.text(zh: "只用于读取 Safari 浏览记录。打开后，系统会让 Tacit 重新打开。",
+                en: "Only used to read Safari history. macOS will ask to reopen Tacit after you grant access.")
+    }
     public static var setupModels: String { L10n.text(zh: "让 AI 整理你的记录", en: "Set up summaries for your records") }
     public static var checkModels: String { L10n.text(zh: "检查 AI 模型…", en: "Check AI models…") }
     public static var setupTools: String { L10n.text(zh: "连接你使用的 AI 工具", en: "Connect your AI tools") }

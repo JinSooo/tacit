@@ -18,9 +18,14 @@ struct Bundled {
 
 /// 启动时的安装准备：首次打开或升级后初始化数据与密钥、写后台服务配置并启动；之后每次打开只核对有无变化。
 enum AppSetup {
+  static func hasCompletedPreparation(in dataDir: URL) -> Bool {
+    FileManager.default.fileExists(atPath: dataDir.appendingPathComponent("app-setup.json").path)
+  }
+
   @MainActor static func checkPlacement() -> Bool {
     let placement = AppPlacement.of(bundlePath: Bundle.main.bundlePath,
-                                    home: FileManager.default.homeDirectoryForCurrentUser.path)
+                                    home: FileManager.default.homeDirectoryForCurrentUser.path,
+                                    hasBundledRuntime: Bundled.current != nil)
     guard placement == .mustMove else { return true }
     askToMove()
     return false
@@ -138,8 +143,9 @@ enum AppSetup {
   }
 
   @MainActor private static func askToMove() {
-    NSApp.setActivationPolicy(.regular)
-    NSApp.activate(ignoringOtherApps: true)
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    app.activate(ignoringOtherApps: true)
     let alert = NSAlert()
     if Bundle.main.bundlePath.contains("/AppTranslocation/") {
       // 已经在“应用程序”里，但不是用访达拖进去的（例如命令行复制），macOS 会挪到临时位置运行（2026-11-25 虚拟机实测）。
@@ -154,7 +160,6 @@ enum AppSetup {
     if alert.runModal() == .alertFirstButtonReturn {
       NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications"))
     }
-    NSApp.terminate(nil)
   }
 }
 

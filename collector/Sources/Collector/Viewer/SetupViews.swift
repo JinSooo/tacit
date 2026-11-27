@@ -30,7 +30,25 @@ struct AgentConfigSnippet: Decodable, Equatable {
   }
 }
 
+struct SetupReadiness {
+  let health: DistillHealth
+  let tools: [AgentToolState]?
+
+  static func unfinishedItems(health: DistillHealth?, tools: [AgentToolState]?) -> Set<String> {
+    var items = Set<String>()
+    if let health, health.state != .working { items.insert("models") }
+    if let tools, !tools.contains(where: \.connected) { items.insert("tools") }
+    return items
+  }
+}
+
 extension HubAPI {
+  func setupReadiness(includeLocalTools: Bool) async throws -> SetupReadiness {
+    async let health = distillHealth()
+    async let tools = includeLocalTools ? agentTools() : nil
+    return try await SetupReadiness(health: health, tools: tools)
+  }
+
   func agentTools() async throws -> [AgentToolState] {
     struct R: Decodable { let tools: [AgentToolState] }
     return try await get(R.self, "/v1/settings/agents").tools
@@ -119,6 +137,7 @@ struct AgentToolRows: View {
       DisclosureGroup(L10n.Settings.otherAgentTools) {
         ForEach(others, content: row)
       }
+      .disclosureGroupStyle(SettingsDisclosureStyle())
     }
   }
 
@@ -233,18 +252,14 @@ struct SetupChecklist: View {
   @State private var testing = false
   @State private var testResult: String?
 
-  private var missing: [DataSourceStatus] {
-    var names = Set<String>()
-    return store.capture.sources.filter {
-      DataSourceCatalog.isVisible($0.id) && $0.needsPermission && names.insert($0.permissionName ?? $0.id).inserted
-    }
+  private var permissions: (required: [DataSourceStatus], optionalSafari: DataSourceStatus?) {
+    TimelineSetup.missingPermissions(in: store.capture.sources)
   }
 
   private var unfinished: Set<String> {
-    var items = Set(missing.map { "permission." + ($0.permissionName ?? $0.id) })
+    var items = Set(permissions.required.map { "permission." + ($0.permissionName ?? $0.id) })
     if backend != nil, backendChecked { items.insert("backend") }
-    if let health, health.state != .working { items.insert("models") }
-    if let tools, !tools.contains(where: \.connected) { items.insert("tools") }
+    items.formUnion(SetupReadiness.unfinishedItems(health: health, tools: tools))
     return items
   }
 
@@ -279,7 +294,9 @@ struct SetupChecklist: View {
               Text(L10n.Settings.setupChecklist)
               Spacer()
               DisclosureChevron(expanded: expanded, sideways: true)
-            }.padding(.vertical, 4)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
           }
           .disabled(!backendChecked)
           .buttonStyle(.accentLink).font(.system(size: TextSize.body))
@@ -297,6 +314,7 @@ struct SetupChecklist: View {
   }
 
   @ViewBuilder private var steps: some View {
+    let permissions = permissions
     if let backend {
       switch backend {
       case .preparing:
@@ -315,13 +333,18 @@ struct SetupChecklist: View {
       }
       Divider()
     }
-    if missing.isEmpty {
+    if permissions.required.isEmpty {
       step(done: true, title: L10n.Settings.grantSystemPermissions, detail: nil) { EmptyView() }
     } else {
-      ForEach(missing, id: \.id) { source in
+      ForEach(permissions.required, id: \.id) { source in
         step(done: false, title: L10n.permission(source.permissionName ?? source.title), detail: nil) {
           Button(L10n.Settings.grantPermission) { store.perform(.requestPermission(source.id)) }
         }
+      }
+    }
+    if let safari = permissions.optionalSafari {
+      step(done: false, title: L10n.Settings.optionalFullDiskAccess, detail: L10n.Settings.safariPermissionNote) {
+        Button(L10n.Settings.grantPermission) { store.perform(.requestPermission(safari.id)) }
       }
     }
     if let health {

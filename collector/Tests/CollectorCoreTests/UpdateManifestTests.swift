@@ -33,3 +33,11 @@ private func manifest(_ version: String, _ url: String = "https://example.com/re
   #expect(!LaunchWindowPolicy.opensWindow(source: .launchd, loginAt: login, now: login.addingTimeInterval(600)))
   #expect(LoginSession.consoleLoginDate().map { $0 <= Date() } ?? true)
 }
+
+@Test func finderLaunchOpensDuringLoginQuietPeriodWhileSetupIsIncomplete() {
+  let login = Date(timeIntervalSince1970: 1_000_000)
+  let now = login.addingTimeInterval(20)
+  #expect(LaunchWindowPolicy.opensWindow(source: .finder, loginAt: login, setupIncomplete: true, now: now))
+  #expect(!LaunchWindowPolicy.opensWindow(source: .finder, loginAt: login, setupIncomplete: false, now: now))
+  #expect(!LaunchWindowPolicy.opensWindow(source: .launchd, loginAt: login, setupIncomplete: true, now: now))
+}
