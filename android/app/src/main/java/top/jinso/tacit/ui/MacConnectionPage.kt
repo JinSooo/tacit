@@ -90,8 +90,9 @@ import top.jinso.tacit.ui.components.*
             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             .setPrompt(strings.text(R.string.scan_mac_qr)).setBeepEnabled(false).setBarcodeImageEnabled(false))
     }
+    val recoverPermission = rememberPermissionRecovery { message = it to true }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) scan() else message = strings.text(R.string.camera_ungranted) to true
+        if (granted) scan() else recoverPermission(Manifest.permission.CAMERA, strings.text(R.string.camera_ungranted))
     }
 
     var manualOpen by remember { mutableStateOf(false) }

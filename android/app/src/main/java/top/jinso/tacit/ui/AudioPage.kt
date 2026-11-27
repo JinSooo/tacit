@@ -475,6 +475,7 @@ internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, not
         }
         after()
     }
+    val recoverPermission = rememberPermissionRecovery(notify)
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result[Manifest.permission.RECORD_AUDIO] == true ||
             activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -482,7 +483,7 @@ internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, not
             // The result arrives before the page is resumed, and capture may only start from a visible page:
             // starting here failed the first time ("无法开始录音") right after the permission dialogs.
             scope.launch { owner?.lifecycle?.withResumed { start() } ?: start() }
-        } else notify(strings.text(R.string.microphone_ungranted_recording))
+        } else recoverPermission(Manifest.permission.RECORD_AUDIO, strings.text(R.string.microphone_ungranted_recording))
     }
     return {
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)

@@ -369,4 +369,5 @@
     <string name="acceleration_cleanup_failed">Couldn\'t clear the previous acceleration download.</string>
     <string name="models_import_folder_hint">Choose the folder that contains these files: %1$s.</string>
     <string name="model_folder_duplicate">More than one file or folder is named %1$s.</string>
+    <string name="go_to_system_settings">Go to system settings</string>
 </resources>
