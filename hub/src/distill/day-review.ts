@@ -291,23 +291,26 @@ const byImportance = (a: { seconds: number; start: number }, b: { seconds: numbe
 
 function rankWindows(r: ReviewRecord, activity: Activity): { span: Span; rank: number }[] {
   if (SKELETON_SOURCES.has(r.source)) return [{ span: [r.start, r.end], rank: 0 }];
+  // 用户参与的活动在其有效记录跨度内保底为 2：不被后台收到的未回复聊天（rank 1）切碎，但长 AI 会话中部仍让位给现场录音里对方说话（rank 3）。
+  const bodyRank = concurrentActivity(activity) ? 2 : 0;
   if (AGENT_SESSION_SOURCES.has(r.source)) {
     // r 已裁成用户在场窗口；机器产出只提供文字依据。
     const windows: { span: Span; rank: number }[] = [
-      { span: [r.start, r.end], rank: r.evidence.some(e => e.role === "assistant") ? 1 : 0 },
+      { span: [r.start, r.end], rank: Math.max(bodyRank, r.evidence.some(e => e.role === "assistant") ? 1 : 0) },
     ];
     if (r.evidence.some(e => e.role === "user")) windows.push(
-      { span: [r.start, Math.min(r.end, r.start + EVIDENCE_WINDOW)], rank: 3 },
-      { span: [Math.max(r.start, r.end - EVIDENCE_WINDOW), r.end], rank: 3 },
+      { span: [r.start, Math.min(r.end, r.start + EVIDENCE_WINDOW)], rank: 4 },
+      { span: [Math.max(r.start, r.end - EVIDENCE_WINDOW), r.end], rank: 4 },
     );
     return windows;
   }
   const start = r.start === r.end ? activity.start : r.start;
   const end = r.start === r.end ? activity.end : r.end;
-  return [{ span: [r.start, r.end], rank: 0 }, ...r.evidence.map(e => {
+  const otherRank = AUDIO_SOURCES.has(r.source) ? 3 : 1;
+  return [{ span: [r.start, r.end], rank: bodyRank }, ...r.evidence.map(e => {
     const at = Date.parse(e.at);
     const span: Span = [Math.max(start, at - EVIDENCE_WINDOW), Math.min(end, at + EVIDENCE_WINDOW)];
-    return { span, rank: e.role === "user" ? 3 : 2 };
+    return { span, rank: e.role === "user" ? 4 : otherRank };
   })];
 }
 
@@ -344,7 +347,7 @@ function splitOverlaps(activities: Activity[], accepts = eligible): Candidate[] 
     if (end === undefined) break;
     const { starts, ends, coverage } = events.get(start)!;
     for (const a of ends) active.delete(a);
-    for (const a of starts) active.set(a, [0, 0, 0, 0]);
+    for (const a of starts) active.set(a, [0, 0, 0, 0, 0]);
     for (const c of coverage) {
       const counts = active.get(c.activity);
       if (counts) counts[c.rank] = counts[c.rank]! + c.delta;
