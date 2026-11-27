@@ -39,7 +39,7 @@
     <string name="connect_mac">连接 Mac</string>
     <string name="connect_scan">扫码连接</string>
     <string name="connecting_mac">正在连接 Mac…</string>
-    <string name="connection_hint">在 Mac 的 Tacit 设置里添加设备，获取二维码或邀请链接。</string>
+    <string name="connection_hint">在 Mac 上打开 Tacit 的设置 › 后台与连接 › 设备，获取二维码或邀请链接。</string>
     <string name="connection_test_passed">连接正常。</string>
     <string name="connection_unavailable">无法读取连接状态，请检查本机记录库</string>
     <string name="conversation_no_transcript">这场对话没有可显示的完整转写。</string>
@@ -360,4 +360,5 @@
     <string name="go_to_system_settings">去系统设置</string>
     <string name="confirm_mac_online">请确认 Mac 开着并联网。</string>
     <string name="sync_pair_timed_out">暂时没收到 Mac 的回复，可以用同一个邀请链接重试。</string>
+    <string name="invite_format_hint">请粘贴以 tacit://pair?d= 开头的完整邀请链接。</string>
 </resources>

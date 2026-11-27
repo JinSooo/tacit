@@ -19,7 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -159,11 +159,16 @@ import top.jinso.tacit.ui.components.*
                     if (activity.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scan()
                     else permission.launch(Manifest.permission.CAMERA)
                 }, enabled = !busy)
+                val link = invite.trim()
+                val linkValid = link.startsWith("tacit://pair?d=") && link.length > "tacit://pair?d=".length
+                val linkInvalid = link.isNotEmpty() && !linkValid
                 OutlinedTextField(invite, { invite = it.take(16_400) }, Modifier.fillMaxWidth(),
                     enabled = !busy, label = { Text(strings.text(R.string.invite_link)) }, placeholder = { Text(strings.text(R.string.invite_paste)) },
-                    singleLine = true, visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
-                TonalButton(strings.text(R.string.connect), { pair(invite) }, enabled = invite.isNotBlank() && !busy)
+                    singleLine = true, isError = linkInvalid,
+                    supportingText = if (linkInvalid) {{ Text(strings.text(R.string.invite_format_hint)) }} else null,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done,
+                        autoCorrectEnabled = false))
+                TonalButton(strings.text(R.string.connect), { pair(link) }, enabled = linkValid && !busy)
             }
             GroupDivider()
             SettingsRow(strings.text(R.string.mac_address), expanded = manualOpen, onClick = { manualOpen = !manualOpen })

@@ -39,7 +39,7 @@
     <string name="connect_mac">Connect to Mac</string>
     <string name="connect_scan">Scan to connect</string>
     <string name="connecting_mac">Connecting to Mac…</string>
-    <string name="connection_hint">Add a device in Tacit settings on your Mac to get a QR code or invite link.</string>
+    <string name="connection_hint">On your Mac, go to Settings › Background service and connection › Devices in Tacit to get a QR code or invite link.</string>
     <string name="connection_test_passed">Connection works.</string>
     <string name="connection_unavailable">Couldn\'t read the connection status. Check the local record library.</string>
     <string name="conversation_no_transcript">There is no complete transcript for this conversation.</string>
@@ -372,4 +372,5 @@
     <string name="go_to_system_settings">Go to system settings</string>
     <string name="confirm_mac_online">Check that your Mac is on and connected to the internet.</string>
     <string name="sync_pair_timed_out">No reply yet. Try connecting again with the same invite link.</string>
+    <string name="invite_format_hint">Paste the full link starting with tacit://pair?d=.</string>
 </resources>
