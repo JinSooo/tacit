@@ -635,7 +635,7 @@ private func B2RegressionAudioPreservesRetentionAndPendingOnRemote(days: Int?) t
   }
 }
 
-@Test private func remoteSwitchLoginChangesAreBlockedBeforeCheckpointExists() throws {
+@Test(ChineseUITrait()) private func remoteSwitchLoginChangesAreBlockedBeforeCheckpointExists() throws {
   try withTempSwitchDirectory { directory in
     let gate = RemoteSwitchWriteGate()
     let startup = LoginStartup(home: directory, dataDir: directory, beginWrite: gate.begin, endWrite: gate.end)
