@@ -30,3 +30,13 @@ private func segment(_ id: String, project: String?) throws -> DayDiary.Item {
   #expect(SourceApplication.bundle(app: "org.example.unknown", source: "codex.session") == "org.example.unknown")
   #expect(SourceApplication.bundle(app: nil, source: "mac.audio") == nil)
 }
+
+@Test func auditDoesNotBorrowAnotherToolsIcon() {
+  let unknown = AgentTools.auditTool(id: "synthetic-unknown-tool")
+  #expect(unknown.label == "synthetic-unknown-tool")
+  #expect(unknown.bundle == nil)
+  #expect(unknown.symbol == "circle-dashed")
+
+  #expect(SourceApplication.bundle(app: nil, source: "antigravity.session") == "com.google.antigravity")
+  #expect(SourceApplication.bundle(app: "synthetic-unknown-tool", source: "antigravity.session") == "synthetic-unknown-tool")
+}
