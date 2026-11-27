@@ -13,7 +13,7 @@ Mac 客户端、中枢网页状态页与 Android（见 `android/DESIGN.md`）沿
 | 项目 / 正在推进 / 最近的进展 | Project / In progress / Recent progress | project | |
 | 整理 / 更新 / 正在整理… | Summarize / Updated 6 min ago / Summarizing… | 提炼、distill | "6 分钟前更新"；维护页的"整理启用前的历史" |
 | 后台服务 / 网页版 | Background service / Web view | 中枢、hub | 设置分组、状态页 |
-| 自动带入 / 新会话会带入的内容 | Session context / What new sessions get | 注入、inject | "新会话开始时带入" |
+| 项目进展（AI 用 `project` 主动查） | Project progress | 注入、inject、自动带入 | "查看项目进展" |
 | AI 工具 | AI tools | Agent | Claude Code、Codex 等 |
 | 实时整理 / 每小时汇总 / 每日时间线 / 整理模型 | Live / Hourly roundup / Daily timeline / Summary model | 分钟档 / 小时档 / 天档 | Mac 模型界面的整理任务（三档一致时合为一组“整理模型”） |
 | 时间线 / 简约 / 详细 | Timeline / Simple / Detailed | 日记、days | Mac 主窗口默认页与视图切换 |
@@ -26,7 +26,7 @@ Mac 客户端、中枢网页状态页与 Android（见 `android/DESIGN.md`）沿
 | 此刻 | Now | now | 菜单栏面板 |
 | 待确认 / 准备清单 | To confirm / Setup checklist | pending / setup | 时间线顶部提示行 |
 | 中转信箱 / 邀请链接 | Relay mailbox / Invite link | relay / pairing | 设备同步与连接 |
-| 未决 / 还没定的事 | Open questions | open facts | 自动带入前缀 `Open:` |
+| 未决 / 还没定的事 | Open questions | open facts | 项目进展前缀 `Open:` |
 | AI 记住的要点 / 这条不对 / 不属于这里 | What AI remembers / This is wrong / Doesn't belong here | facts correction | 事实纠错 |
 | 未入时间线 / 内容截至 / 已整理到 | Not on timeline / Up to / Summarized up to | omitted / cutoff | 时间线页脚与详细档标记 |
 | 未在记录 / 已暂停到… / 可以更新了 | Not recording / Paused until… / Update available | capture status / update | 状态与更新提示 |

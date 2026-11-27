@@ -2,7 +2,7 @@
   <div class="wrap">
     <header class="section-head" data-reveal>
       <h2 class="heading" id="ai-title">让 AI 接着做</h2>
-      <p class="lead">每次开新会话，Tacit 都会带上当前项目正在推进的事，省去重讲背景的时间。</p>
+      <p class="lead">AI 开始干活前先查一下当前项目正在推进的事，省去你重讲背景的时间。</p>
     </header>
 
     <div class="ai-layout">
@@ -14,8 +14,10 @@
         </header>
 
         <section class="ai-scene" aria-labelledby="ai-start-title">
-          <h3 id="ai-start-title">新会话自动带入</h3>
+          <h3 id="ai-start-title">先查项目进展</h3>
           <p class="ai-command"><span aria-hidden="true">$ </span><code>cd 晴天记账 &amp;&amp; claude</code></p>
+          <p class="ai-turn"><b>你</b><span>把导出功能做完。</span></p>
+          <p class="ai-tool"><svg aria-hidden="true" width="16" height="16"><use href="assets/sources.svg#search"/></svg><span>MCP <code>tacit.project</code></span></p>
           <div class="ai-context">
             <p>Tacit 记录的近期上下文（截至 <span class="num">11 月 19 日 17:52</span>）</p>
             <p>项目：晴天记账</p>
@@ -45,8 +47,8 @@
 
       <div class="ai-notes prose" data-reveal data-reveal-group style="--reveal-delay: 90ms">
         <ul class="ai-rules">
-          <li><strong>一键连接，也提供标准 MCP</strong>Claude Code 和 Codex 可一键连接并在新会话自动带入；其他支持 MCP 的 AI 工具也能直接接入查询历史。</li>
-          <li><strong>只带入当前项目</strong>带入有长度上限，生活类内容不带入。</li>
+          <li><strong>一键连接，也提供标准 MCP</strong>Claude Code、Codex、Claude Desktop 和 Antigravity 可一键连接；其他支持 MCP 的 AI 工具复制标准配置即可接入。</li>
+          <li><strong>只给当前项目</strong>项目进展有长度上限，不含生活类内容。</li>
           <li><strong>AI 以读取为主</strong>每次读取都留审计记录。只有你明确要求时才追加，已有记录不会被修改或删除。</li>
         </ul>
 

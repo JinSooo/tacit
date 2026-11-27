@@ -1,8 +1,8 @@
 <section class="section" id="ai" aria-labelledby="ai-title">
   <div class="wrap">
     <header class="section-head" data-reveal>
-      <h2 class="heading" id="ai-title">Give new sessions a head start</h2>
-      <p class="lead">Tacit brings your current project’s active tasks into new sessions. You can start with the next step.</p>
+      <h2 class="heading" id="ai-title">Give your AI a head start</h2>
+      <p class="lead">Before it starts, your AI checks the current project’s active tasks. You can start with the next step.</p>
     </header>
 
     <div class="ai-layout">
@@ -14,8 +14,10 @@
         </header>
 
         <section class="ai-scene" aria-labelledby="ai-start-title">
-          <h3 id="ai-start-title">Session context</h3>
+          <h3 id="ai-start-title">Project progress</h3>
           <p class="ai-command"><span aria-hidden="true">$ </span><code>cd sunledger &amp;&amp; claude</code></p>
+          <p class="ai-turn"><b>You</b><span>Finish the budget rollover.</span></p>
+          <p class="ai-tool"><svg aria-hidden="true" width="16" height="16"><use href="assets/sources.svg#search"/></svg><span>MCP <code>tacit.project</code></span></p>
           <div class="ai-context">
             <p>Recent context from Tacit, up to <span class="num">Nov 19, 15:32</span></p>
             <p>Project: Sunledger</p>
@@ -45,8 +47,8 @@
 
       <div class="ai-notes prose" data-reveal data-reveal-group style="--reveal-delay: 90ms">
         <ul class="ai-rules">
-          <li><strong>Connect your AI tools</strong>Connect Claude Code or Codex in settings for session context. Other tools can search records through MCP.</li>
-          <li><strong>Current project only</strong>Session context has a length limit and leaves out personal activities.</li>
+          <li><strong>Connect your AI tools</strong>Connect Claude Code, Codex, Claude Desktop, or Antigravity in settings. Other MCP-compatible tools can use the standard configuration.</li>
+          <li><strong>Current project only</strong>Project progress has a length limit and leaves out personal activities.</li>
           <li><strong>Reads are logged</strong>AI tools can add a record when you ask. They cannot change or delete existing records.</li>
         </ul>
 
