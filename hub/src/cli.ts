@@ -24,8 +24,8 @@ const startupMessages = {
   db_key_unreadable: cliText("无法读取或保存钥匙串里的数据库密钥。请检查钥匙串是否解锁。", "The database key could not be read or saved. Check that the Keychain is unlocked."),
   db_open_failed: cliText("无法打开记录库，或记录库完整性检查失败。请确认数据库密钥与记录库匹配。", "The database could not be opened or failed its integrity check. Check that the key matches the database."),
   db_migration_failed: cliText("记录库升级失败。请保留现有记录库和迁移备份。", "The database upgrade failed. Keep the current database and its migration backup."),
-  port_in_use: cliText("后台服务的端口已被占用。请在设置里更换端口。", "The background service port is in use. Choose a different port in Settings."),
-  unknown: cliText("后台服务没能启动。请查看运行记录。", "The background service could not start. Check the run log."),
+  port_in_use: cliText("后台服务的端口已被占用。请在设置 › 后台与连接里更换端口。", "The background service port is in use. Change it in Settings → Background & connection."),
+  unknown: cliText("后台服务没能启动。点「重新准备」再试。仍然失败时，可在设置里复制诊断信息。", "The background service could not start. Click Prepare again. If it still fails, copy diagnostics from Settings."),
 };
 type StartupCode = keyof typeof startupMessages;
 const errorCode = (error: unknown) => (error as { code?: unknown } | null)?.code;
@@ -299,15 +299,18 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "setup") {
-    const app = argv[argv.indexOf("--app") + 1];
-    const flags = argv.slice(1).filter((a, i, all) => a !== "--app" && all[i - 1] !== "--app");
-    if (!argv.includes("--app") || !app || flags.some(f => !["--install", "--no-distill"].includes(f))) throw new Error(cliText("用法：bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]", "Usage: bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]"));
     const { setup, SetupError } = await import("./setup.ts");
     try {
-      await setup({ app, lang: cliLanguage(), install: flags.includes("--install"), distill: flags.includes("--no-distill") ? false : flags.includes("--install") ? true : undefined });
+      const app = argv[argv.indexOf("--app") + 1];
+      const flags = argv.slice(1).filter((a, i, all) => a !== "--app" && all[i - 1] !== "--app");
+      if (!argv.includes("--app") || !app || flags.some(f => !["--install", "--no-distill", "--retry"].includes(f))) {
+        console.error(cliText("用法：bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]", "Usage: bun hub/src/cli.ts setup --app <Tacit.app> [--install] [--no-distill]"));
+        throw new Error();
+      }
+      await setup({ app, lang: cliLanguage(), retry: flags.includes("--retry"), install: flags.includes("--install"), distill: flags.includes("--no-distill") ? false : flags.includes("--install") ? true : undefined });
     } catch (error) {
-      if (!(error instanceof SetupError)) throw error;
-      console.error(error.message);
+      console.error(error instanceof SetupError ? error.message : startupMessages.unknown);
+      console.error(`setup_error:${error instanceof SetupError ? error.reason : "unknown"}`);
       process.exitCode = 1;
     }
     return;

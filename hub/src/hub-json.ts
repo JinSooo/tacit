@@ -56,17 +56,21 @@ export function resolvePort(env: NodeJS.ProcessEnv = process.env, dataDir = data
 
 /** 优先级：环境变量 RA_LAN_PORT > 数据目录 hub.json 的 lan_port > 47824。RA_LAN_PORT 允许 0（测试用随机端口）。 */
 export function resolveLanPort(dataDir: string, env: NodeJS.ProcessEnv = process.env): number {
+  return resolveLanBinding(dataDir, env).port;
+}
+
+export function resolveLanBinding(dataDir: string, env: NodeJS.ProcessEnv = process.env): { port: number; source: PortSource } {
   if (env.RA_LAN_PORT !== undefined) {
     const port = Number(env.RA_LAN_PORT);
     if (!env.RA_LAN_PORT.trim() || !Number.isInteger(port) || port < 0 || port > 65535) throw new Error("RA_LAN_PORT 必须是 0–65535 的整数");
-    return port;
+    return { port, source: "env" };
   }
   const port = readHubFile(dataDir)?.lan_port;
-  if (port === undefined) return DEFAULT_LAN_PORT;
+  if (port === undefined) return { port: DEFAULT_LAN_PORT, source: "default" };
   if (typeof port !== "number" || !Number.isInteger(port) || port < PORT_MIN || port > PORT_MAX) {
     throw new Error(`hub.json 的 lan_port 必须是 ${PORT_MIN}–${PORT_MAX} 的整数`);
   }
-  return port;
+  return { port, source: "file" };
 }
 
 const IANA_TIMEZONE = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/;
@@ -127,12 +131,12 @@ export function timezoneStatus(options: { env?: NodeJS.ProcessEnv; dataDir?: str
 }
 
 /** 原子写入 hub.json 的 port，保留文件里的其他字段。 */
-export function writeHubPort(dataDir: string, port: number): void {
+export function writeHubPort(dataDir: string, port: number, field: "port" | "lan_port" = "port"): void {
   if (!Number.isInteger(port) || port < PORT_MIN || port > PORT_MAX) throw new Error(`端口必须是 ${PORT_MIN}–${PORT_MAX} 的整数`);
   const current = readHubFile(dataDir) ?? {};
   const file = join(dataDir, "hub.json"), temp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    writeFileSync(temp, JSON.stringify({ ...current, port }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+    writeFileSync(temp, JSON.stringify({ ...current, [field]: port }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
     renameSync(temp, file);
   } catch (error) { rmSync(temp, { force: true }); throw error; }
 }

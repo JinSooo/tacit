@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { join } from "node:path";
@@ -133,6 +133,16 @@ export async function saveConfig(dataDir: string, tiers: unknown, opts?: ModelMo
     await rename(temp, file);
   } catch (error) { await rm(temp, { force: true }); throw error; }
   return valid;
+}
+
+/** 发布初始配置时保留已经存在或同时保存的用户配置。 */
+export async function initializeCodexConfig(dataDir: string): Promise<void> {
+  const file = join(dataDir, "models.json"), temp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+  const tiers = Object.fromEntries(TIERS.map(tier => [tier, { provider: "codex-cli", model: "gpt-6-luna" }]));
+  await writeFile(temp, JSON.stringify({ tiers }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+  try { await link(temp, file); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  finally { await rm(temp, { force: true }); }
 }
 
 export function readKey(provider: Provider): Promise<string> {
