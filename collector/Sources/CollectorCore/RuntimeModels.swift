@@ -4,8 +4,20 @@ import Foundation
 public struct DistillHealth: Decodable, Equatable, Sendable {
   private struct LastError: Decodable, Equatable, Sendable {
     let error: String; let tier: String?; let recovered: Bool
-    /// 出错那一档自己的最近成功；旧后台不给时用全局的 lastOkAt。
+    /// 出错那一档自己的最近成功；旧后台缺字段时用全局时间。
     let tierLastOkAt: String?
+    let hasTierLastOkAt: Bool
+
+    private enum CodingKeys: String, CodingKey { case error, tier, recovered, tierLastOkAt }
+
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      error = try values.decode(String.self, forKey: .error)
+      tier = try values.decodeIfPresent(String.self, forKey: .tier)
+      recovered = try values.decode(Bool.self, forKey: .recovered)
+      tierLastOkAt = try values.decodeIfPresent(String.self, forKey: .tierLastOkAt)
+      hasTierLastOkAt = values.contains(.tierLastOkAt)
+    }
   }
   public let lastOkAt: String?
   private let lastError: LastError?
@@ -18,7 +30,7 @@ public struct DistillHealth: Decodable, Equatable, Sendable {
 
   public func state(at now: Date) -> State {
     if let error = lastError, !error.recovered,
-       let message = Self.problem(error.error, lastOk: (error.tierLastOkAt ?? lastOkAt).flatMap(ViewerTime.parse), now: now) { return .failing(message) }
+       let message = Self.problem(error.error, lastOk: (error.hasTierLastOkAt ? error.tierLastOkAt : lastOkAt).flatMap(ViewerTime.parse), now: now) { return .failing(message) }
     return lastOkAt == nil ? .waiting : .working
   }
 
@@ -148,7 +160,8 @@ public enum ModelErrorText {
 
   /// 要用户动手才能好的错误；其余的下一轮会自己重试。
   public static func needsUser(_ code: String) -> Bool {
-    ["auth", "quota", "bad_request", "config_error", "cli_missing", "cli_failed"].contains(category(code))
+    ["auth", "quota", "bad_request", "config_error", "cli_missing", "cli_failed",
+     "cli_not_logged_in", "cli_outdated", "cli_model_unavailable", "cli_runtime_missing"].contains(category(code))
   }
 
   public static func isCode(_ text: String) -> Bool {
@@ -166,8 +179,13 @@ public enum ModelErrorText {
     case "bad_request": return L10n.text(zh: "模型服务拒绝了请求，请检查模型名、地址和思考强度。", en: "The model service rejected the request. Check the model name, address, and reasoning effort.", lang: lang)
     case "config_error": return L10n.text(zh: "模型设置有问题，请检查后重新保存。", en: "Check your model settings and save them again.", lang: lang)
     // 默认模型借用本机的 Claude Code；朋友的 Mac 上常常没装（2026-11-25 虚拟机实测）。
-    case "cli_missing": return L10n.text(zh: "这台 Mac 上没找到 Claude Code 或 Codex。装好并登录，或改填 API。", en: "Install and sign in to Claude Code or Codex, or configure an API provider.", lang: lang)
-    case "cli_failed": return L10n.text(zh: "命令行工具调用失败，请确认已安装并登录。", en: "The command failed. Check that the tool is installed and signed in.", lang: lang)
+    case "cli_missing": return L10n.text(zh: "没找到所选的命令行工具，请安装并登录，或改用 API。", en: "Install and sign in to the selected command-line tool, or switch to an API provider.", lang: lang)
+    case "cli_not_logged_in": return L10n.text(zh: "所选的命令行工具没登录，请在终端登录后再测试。", en: "Sign in to the selected command-line tool in Terminal, then test again.", lang: lang)
+    case "cli_outdated": return L10n.text(zh: "命令行工具不支持所需的参数，请升级后再试。", en: "The command-line tool doesn't support a required option. Update it and try again.", lang: lang)
+    case "cli_model_unavailable": return L10n.text(zh: "当前账号用不了所选的模型，请换个模型名再试。", en: "The selected model is unavailable to your account. Try a different model name.", lang: lang)
+    case "cli_network": return L10n.text(zh: "命令行工具连不上模型服务，请检查网络或代理。", en: "The command-line tool couldn't reach the model service. Check your network or proxy.", lang: lang)
+    case "cli_runtime_missing": return L10n.text(zh: "找不到命令行工具需要的 Node.js，请重新安装该工具或 Node.js。", en: "The command-line tool couldn't find Node.js. Reinstall the tool or Node.js.", lang: lang)
+    case "cli_failed": return L10n.text(zh: "命令行工具没能完成请求，可以展开查看原因或重新测试。", en: "The command-line tool couldn't complete the request. View the reason or test again.", lang: lang)
     case "network": return L10n.text(zh: "连不上模型服务，请检查网络和地址。", en: "Can't reach the model service. Check your network and the service address.", lang: lang)
     case "rate_limited": return L10n.text(zh: "请求太频繁，模型服务暂时限流，稍后会自动重试。", en: "The model service is limiting requests. Tacit will retry automatically.", lang: lang)
     case "timeout": return L10n.text(zh: "模型服务一直没有回应，请检查网络或稍后再试。", en: "The model service didn't respond. Check your network or try again later.", lang: lang)

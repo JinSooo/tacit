@@ -232,6 +232,39 @@ test("运行日志错误字段跟随过期和真删，迟到结果也不回填",
   expect(log.detail(deleted)).toMatchObject({ content_state: "deleted", request: null, response: null, error: null });
 });
 
+test("失败原因先脱敏再截断，只供设置读取，随快照过期和真删", () => {
+  const record = fixture(); ctx.db.ingest([record]);
+  const secret = "sk-SyntheticExample0123456789abcdef";
+  const reason = `CLI failed: ${"x".repeat(260)} ${secret} ${"尾".repeat(350)}`;
+  const ids = [ulid(), ulid()];
+  const observers = ids.map((id, index) => {
+    const observer = log.begin(id, req, config);
+    observer.request("cli", {});
+    if (index === 0) observer.response("existing stdout");
+    observer.failure!(reason);
+    log.finish({ ...usage(id), ok: 0, error: "cli_failed" }, false);
+    return observer;
+  });
+  const stored = (id: string) => (ctx.db.db.prepare("SELECT response_text FROM runtime_calls WHERE id=?").get(id) as { response_text: string | null }).response_text;
+  expect(stored(ids[0]!)?.startsWith("existing stdout\n--- failure detail ---\n")).toBe(true);
+  expect(stored(ids[0]!)?.split("\n").at(-1)).toHaveLength(500);
+  expect(stored(ids[1]!)).not.toContain(secret);
+  expect(log.failureDetail(ids[0]!)).toHaveLength(300);
+  expect(log.failureDetail(ids[0]!)).toContain("[已脱敏:OpenAI]");
+  expect(log.detail(ids[0]!)?.response).toBe("existing stdout");
+  expect(log.detail(ids[1]!)?.response).toBeNull();
+  expect(JSON.stringify(log.models(new URLSearchParams()))).not.toContain("CLI failed");
+
+  ctx.db.db.prepare("UPDATE runtime_calls SET at_ms=? WHERE id=?").run(Date.now() - 7 * 86400_000, ids[0]!);
+  expect(log.failureDetail(ids[0]!)).toBeNull();
+  ctx.db.delete(record.id);
+  for (const [index, id] of ids.entries()) {
+    observers[index]!.failure!("late failure");
+    expect(stored(id)).toBeNull();
+    expect(log.failureDetail(id)).toBeNull();
+  }
+});
+
 test("HTTP 200 业务错误的短正文只进入加密快照，元数据和用量只留类别", async () => {
   const key = "sk-Synth123", text = `preview client text ${key}`;
   const fetch = spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ base_resp: { status_code: 9999, status_msg: text } }));
@@ -245,6 +278,7 @@ test("HTTP 200 业务错误的短正文只进入加密快照，元数据和用�
     expect(rows[0]?.error).toBe("unknown:200");
     expect(log.models(new URLSearchParams()).calls[0]?.error).toBe("unknown:200");
     expect(log.detail(result.call_id!)!.response).toContain("preview client text [已脱敏:API key]");
+    expect(log.failureDetail(result.call_id)).toBe("preview client text [已脱敏:API key]");
     expect(log.detail(result.call_id!)!.response).not.toContain(key);
     expect(readFileSync(ctx.file).includes(Buffer.from("preview client text"))).toBe(false);
   } finally { fetch.mockRestore(); }

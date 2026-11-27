@@ -169,6 +169,24 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   // 三档分开时按出错那一档自己的最近成功判断。
   let dayStuck = try decode(DistillHealth.self, #"{"last_ok_at":"2026-11-25T14:33:08+08:00","last_error":{"tier":"day","error":"timeout","recovered":false,"tier_last_ok_at":"2026-11-25T10:00:00+08:00"}}"#)
   #expect(dayStuck.state(at: now) != .working)
+  let firstDayFailure = try decode(DistillHealth.self, #"{"last_ok_at":"2026-11-25T14:33:08+08:00","last_error":{"tier":"day","error":"cli_network","recovered":false,"tier_last_ok_at":null}}"#)
+  #expect(firstDayFailure.state(at: now) == .failing("整理没能完成：命令行工具连不上模型服务，请检查网络或代理。"))
+  #expect(try health("cli_network", lastOk: "2026-11-25T14:33:08+08:00").state(at: now) == .working)
+}
+
+@Test func cliModelErrorsDescribeTheNextStep() {
+  let cases = [
+    ("cli_not_logged_in:401", true, "登录", "Sign in"),
+    ("cli_outdated", true, "升级", "Update"),
+    ("cli_model_unavailable", true, "模型名", "model name"),
+    ("cli_network", false, "代理", "proxy"),
+    ("cli_runtime_missing", true, "重新安装", "Reinstall"),
+  ]
+  for (code, needsUser, zh, en) in cases {
+    #expect(ModelErrorText.needsUser(code) == needsUser)
+    #expect(ModelErrorText.plain(code, lang: .zh).contains(zh))
+    #expect(ModelErrorText.plain(code, lang: .en).contains(en))
+  }
 }
 
 @Test func reviewDisplaysStaleAndFailedStatesWithoutAPlaceholderSummary() throws {

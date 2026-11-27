@@ -237,6 +237,11 @@ public enum DiagnosticSummary {
       "auth": L10n.text(zh: "密钥无效", en: "Invalid API key"), "bad_request": L10n.text(zh: "请求被拒绝", en: "Request rejected"), "server_error": L10n.text(zh: "服务出错", en: "Service error"),
       "invalid_json": L10n.text(zh: "返回不是 JSON", en: "Response is not JSON"), "schema_mismatch": L10n.text(zh: "返回格式不对", en: "Unexpected response format"), "cli_missing": L10n.text(zh: "没找到命令行工具", en: "Command-line tool missing"),
       "cli_failed": L10n.text(zh: "命令行调用失败", en: "Command failed"), "usage_record_failed": L10n.text(zh: "用量记录失败", en: "Usage logging failed"), "config_error": L10n.text(zh: "模型配置无效", en: "Invalid model settings"), "unknown": L10n.text(zh: "未知错误", en: "Unknown error"),
+      "cli_not_logged_in": L10n.text(zh: "命令行工具未登录", en: "Command-line tool signed out"),
+      "cli_outdated": L10n.text(zh: "命令行工具版本不兼容", en: "Incompatible command-line tool version"),
+      "cli_model_unavailable": L10n.text(zh: "命令行模型不可用", en: "Command-line model unavailable"),
+      "cli_network": L10n.text(zh: "命令行工具连不上模型服务", en: "Command-line tool can't reach the model service"),
+      "cli_runtime_missing": L10n.text(zh: "找不到 Node.js", en: "Node.js missing"),
     ]
     guard let raw = value as? String, ModelErrorText.isCode(raw),
           let category = raw.split(separator: ":").first, let label = labels[String(category)] else { return L10n.text(zh: "未知错误", en: "Unknown error") }
