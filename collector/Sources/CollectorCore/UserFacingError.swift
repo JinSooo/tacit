@@ -70,7 +70,7 @@ public enum UserFacingError {
       }
     }
     let nsError = error as NSError
-    if nsError.domain == NSURLErrorDomain { return networkMessage(URLError.Code(rawValue: nsError.code) ?? .unknown) }
+    if nsError.domain == NSURLErrorDomain { return networkMessage(URLError.Code(rawValue: nsError.code)) }
     return fallback
   }
 
