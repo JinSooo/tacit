@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title description">
   <title id="title">How Tacit works</title>
-  <desc id="description">AI sessions, WeChat chats, recordings, and screen and browser activity feed Tacit. It builds a Timeline, Day overview, and Tasks. You can read them in the app and widgets. AI tools can search records and get Session context.</desc>
+  <desc id="description">AI sessions, WeChat chats, recordings, and screen and browser activity feed Tacit. It builds a Timeline, Day overview, and Tasks. You can read them in the app and widgets. AI tools can search records and check Project progress.</desc>
   <style>
     .bg { fill: #fbfaf7; }
     .card { fill: #ffffff; stroke: #e7e3dc; }
@@ -87,6 +87,6 @@
   <rect class="card" x="852" y="238" width="300" height="152" rx="12"/>
   <text class="h" x="876" y="272">For AI tools</text>
   <text class="t" x="876" y="304">Search records and Project progress</text>
-  <text class="t" x="876" y="332">Session context for this Project</text>
+  <text class="t" x="876" y="332">Checks progress before starting</text>
   <text class="s" x="876" y="360">Claude Code and Codex via MCP</text>
 </svg>

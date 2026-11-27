@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title description">
   <title id="title">Tacit 的工作方式</title>
-  <desc id="description">左边是记录来源：AI 会话、微信对话、录音、屏幕与浏览器。中间是在本机整理成时间线、当天概述和事项。右边是两个出口：给你看的时间线、项目页和桌面小组件，给 AI 工具查询和新会话带入。</desc>
+  <desc id="description">左边是记录来源：AI 会话、微信对话、录音、屏幕与浏览器。中间是在本机整理成时间线、当天概述和事项。右边是两个出口：给你看的时间线、项目页和桌面小组件，给 AI 工具查询历史和项目进展。</desc>
   <style>
     .bg { fill: #fbfaf7; }
     .card { fill: #ffffff; stroke: #e7e3dc; }
@@ -87,6 +87,6 @@
   <rect class="card" x="852" y="238" width="300" height="152" rx="12"/>
   <text class="h" x="876" y="272">给 AI</text>
   <text class="t" x="876" y="304">主动查询历史和项目进展</text>
-  <text class="t" x="876" y="332">新会话自动带入当前项目</text>
+  <text class="t" x="876" y="332">开始干活前先看项目进展</text>
   <text class="s" x="876" y="360">Claude Code、Codex，通过 MCP</text>
 </svg>

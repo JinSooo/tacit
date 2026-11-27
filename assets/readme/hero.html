@@ -1,0 +1,182 @@
+<!doctype html>
+<!--
+  README 首页大图的源文件。渲染（在仓库根目录）：bun scripts/render-readme-hero.ts
+  参数：?lang=zh|en&theme=light|dark。画布 1080×606，按 2 倍输出 2160×1212。
+  内容全部虚构（晴天记账 / Sunledger）。
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #f6f4ef; --panel: #ffffff; --panel-bar: #f1ede6; --line: #e6e1d8; --ink: #1c1b1a; --muted: #6f6a62; --faint: #a39d93;
+    --accent: #3b7468; --accent-soft: rgb(59 116 104 / 0.10); --chip: #f1ede6; --evidence: #f5f2ec;
+    --term: #1e1d1b; --term-bar: #1e1d1b; --term-ink: #f2efea; --term-muted: #a8a29a; --term-accent: #7db8a9; --term-card: #233532; --term-card-line: #355a52;
+    --dot: #3b7468; --dot-old: #a39d93; --shadow: 0 18px 40px rgb(40 32 20 / 0.10), 0 2px 6px rgb(40 32 20 / 0.06);
+    --serif: "Songti SC", "STSong", Georgia, serif;
+    --serif-latin: ui-serif, "New York", Georgia, "Songti SC", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  :root[data-theme="dark"] {
+    --bg: #181716; --panel: #1f1e1c; --panel-bar: #252321; --line: #34312d; --ink: #f2efea; --muted: #a8a29a; --faint: #7a746c;
+    --accent: #7db8a9; --accent-soft: rgb(125 184 169 / 0.12); --chip: #2b2926; --evidence: #24221f;
+    --term: #1f1e1c; --term-bar: #1f1e1c; --term-card: #22302d; --term-card-line: #35524b;
+    --dot: #7db8a9; --dot-old: #7a746c; --shadow: 0 18px 40px rgb(0 0 0 / 0.35);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1080px; height: 606px; overflow: hidden; }
+  body { border-radius: 18px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; position: relative; }
+  :root[lang="en"] .serif { font-family: var(--serif-latin); }
+  .serif { font-family: var(--serif); }
+
+  header { position: absolute; left: 38px; right: 38px; top: 38px; display: flex; justify-content: space-between; }
+  .brand { display: flex; gap: 14px; align-items: center; }
+  .brand img { width: 50px; height: 50px; border-radius: 11px; box-shadow: 0 3px 8px rgb(0 0 0 / 0.18); }
+  .brand h1 { font-family: Georgia, var(--serif); font-size: 33px; line-height: 1; font-weight: 700; letter-spacing: 0.2px; }
+  .brand p { margin-top: 7px; font-size: 12.5px; color: var(--muted); }
+  .tagline { text-align: right; }
+  .tagline h2 { font-size: 25px; font-weight: 600; line-height: 1.1; margin-top: 2px; }
+  .tagline p { margin-top: 9px; font-size: 12.5px; color: var(--muted); }
+
+  .window { position: absolute; top: 116px; height: 407px; border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  .bar { height: 34px; display: flex; align-items: center; justify-content: center; position: relative; font-size: 11px; }
+  .bar i { position: absolute; left: 14px; top: 13px; display: flex; gap: 6px; }
+  .bar i b { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: 0.25; }
+
+  .timeline { left: 38px; width: 496px; background: var(--panel); border: 1px solid var(--line); }
+  .timeline .bar { background: var(--panel-bar); border-bottom: 1px solid var(--line); color: var(--muted); }
+  .tl { padding: 20px 22px 0 22px; }
+  .tl-head { display: flex; justify-content: space-between; align-items: flex-start; }
+  .tl-head h3 { font-size: 21px; font-weight: 700; letter-spacing: 0.3px; }
+  .chip { font-size: 10.5px; color: var(--muted); background: var(--chip); border-radius: 6px; padding: 3px 8px; margin-top: 3px; }
+  .overview { margin-top: 10px; font-size: 13.4px; line-height: 1.72; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .items { position: relative; margin-top: 14px; }
+  .items::before { content: ""; position: absolute; left: 63.5px; top: 8px; bottom: 26px; width: 1px; background: var(--line); }
+  .item { display: grid; grid-template-columns: 52px 18px 1fr; column-gap: 4px; margin-bottom: 12px; }
+  .item time { font-size: 11.5px; color: var(--muted); padding-top: 2px; font-variant-numeric: tabular-nums; }
+  .item .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dot); margin: 6px 0 0 4px; position: relative; }
+  .item.old .dot { background: var(--dot-old); }
+  .item h4 { font-size: 13.4px; font-weight: 600; }
+  .item p { font-size: 11.6px; color: var(--muted); margin-top: 4px; }
+  .evidence { margin: 10px 0 2px; background: var(--evidence); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  .evidence small { display: block; font-size: 10.5px; color: var(--accent); font-weight: 600; }
+  .evidence span { display: block; margin-top: 4px; font-size: 11.6px; color: var(--ink); }
+
+  .bridge { position: absolute; left: 553px; top: 236px; width: 26px; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--accent); }
+  .bridge .arrow { font-size: 20px; line-height: 1; }
+  .bridge .pill { writing-mode: vertical-rl; font-size: 10.5px; font-weight: 600; letter-spacing: 1px; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); border-radius: 14px; padding: 12px 5px; }
+
+  .term { left: 598px; width: 444px; background: var(--term); color: var(--term-ink); border: 1px solid #2e2c29; }
+  .term .bar { background: var(--term-bar); color: var(--term-muted); border-bottom: 1px solid #2e2c29; }
+  .tm { padding: 18px 20px 0 20px; }
+  .ask { font-size: 12.6px; display: flex; gap: 9px; }
+  .ask::before { content: "›"; color: var(--term-accent); }
+  .call { margin-top: 12px; font-family: var(--mono); font-size: 10.6px; color: var(--term-muted); display: flex; gap: 8px; align-items: center; }
+  .call::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--term-accent); }
+  .call code { color: var(--term-accent); }
+  .card { margin-top: 8px; border: 1px solid var(--term-card-line); background: var(--term-card); border-radius: 10px; padding: 11px 14px 12px; }
+  .card-head { display: flex; justify-content: space-between; font-size: 11.4px; font-weight: 600; color: var(--term-accent); }
+  .card ul { margin-top: 6px; padding-left: 15px; font-size: 11.6px; line-height: 1.85; }
+  .answer { margin-top: 15px; border-left: 2px solid var(--term-accent); padding: 2px 0 2px 13px; font-size: 12.4px; line-height: 1.75; }
+  .answer b { font-weight: 700; }
+  .answer small { display: block; margin-top: 8px; font-family: var(--mono); font-size: 10.4px; color: var(--term-muted); }
+
+  footer { position: absolute; left: 38px; right: 38px; top: 544px; border-top: 1px solid var(--line); padding-top: 15px; display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  footer b { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <img src="../icons/generated/macos/AppIcon.iconset/icon_512x512.png" alt="">
+    <div><h1>Tacit</h1><p data-t="sub"></p></div>
+  </div>
+  <div class="tagline"><h2 class="serif" data-t="headline"></h2><p data-t="subline"></p></div>
+</header>
+
+<section class="window timeline">
+  <div class="bar"><i><b></b><b></b><b></b></i><span data-t="tlTitle"></span></div>
+  <div class="tl">
+    <div class="tl-head"><h3 class="serif" data-t="date"></h3><span class="chip" data-t="modes"></span></div>
+    <p class="overview serif" data-t="overview"></p>
+    <div class="items">
+      <div class="item"><time>15:10</time><span class="dot"></span><div><h4 data-t="i1"></h4><p data-t="i1d"></p></div></div>
+      <div class="item"><time>14:00</time><span class="dot"></span><div><h4 data-t="i2"></h4><p data-t="i2d"></p>
+        <div class="evidence"><small data-t="evTitle"></small><span data-t="ev"></span></div></div></div>
+      <div class="item old"><time>11:20</time><span class="dot"></span><div><h4 data-t="i3"></h4><p data-t="i3d"></p></div></div>
+    </div>
+  </div>
+</section>
+
+<div class="bridge"><span class="arrow">→</span><span class="pill" data-t="pill"></span></div>
+
+<section class="window term">
+  <div class="bar"><i><b></b><b></b><b></b></i><span data-t="termTitle"></span></div>
+  <div class="tm">
+    <p class="ask" data-t="ask"></p>
+    <p class="call" data-h="call"></p>
+    <div class="card">
+      <div class="card-head"><span data-t="cardTitle"></span><span>580 tokens</span></div>
+      <ul><li data-t="b1"></li><li data-t="b2"></li><li data-t="b3"></li></ul>
+    </div>
+    <div class="answer"><p data-h="answer"></p><small data-t="basis"></small></div>
+  </div>
+</section>
+
+<footer><span data-h="f1"></span><span data-h="f2"></span><span data-h="f3"></span></footer>
+
+<script>
+const copy = {
+  zh: {
+    sub: "让 AI 接上你的上下文 · 本地加密 · MIT 开源",
+    headline: "把每天做的事理成时间线，也让 AI 接着做。",
+    subline: "记录 AI 对话、聊天与录音，每条结论都能点回原文。",
+    tlTitle: "Tacit · 时间线", date: "11 月 19 日 星期四", modes: "简约 · 详细",
+    overview: "上午在「晴天记账」修好月度报表汇总错误，和小林定下首页卡片样式；下午和 Claude 定了导出格式，傍晚梳理 SwiftData 迁移方案。",
+    i1: "设计导出功能的数据格式", i1d: "定为 CSV 加一份 JSON 元数据，金额统一存分",
+    i2: "和小林确认首页卡片样式", i2d: "对比三版间距后保留圆角卡片、去掉渐变，周五前出终稿",
+    evTitle: "展开依据 · 微信对话 · 14:02 – 14:18", ev: "小林：三版里还是留白大的那版稳，渐变去掉看着干净。",
+    i3: "修复月度报表汇总误差", i3d: "改用整数分累计后重跑对账用例通过",
+    pill: "MCP · 项目进展", termTitle: "Claude Code · 新会话",
+    ask: "按昨天定的方案改首页卡片，顺便实现导出接口",
+    call: "先查项目进展 <code>tacit.project</code>",
+    cardTitle: "「晴天记账」正在推进的事",
+    b1: "首页卡片样式：已定保留圆角、去掉渐变（待周五终稿）",
+    b2: "导出格式：已定 CSV + JSON 元数据，金额统一存分",
+    b3: "SwiftData 迁移：拆分旧分类表步骤待验证",
+    answer: "按昨天 14:00 和小林定的方案：<b>保留圆角、移除卡片渐变、加大留白</b>；导出接口按 15:10 敲定的 <b>CSV + JSON 元数据（金额单位：分）</b> 实现，无需重讲背景。",
+    basis: "↳ 已引用 2 条本机记录 · 0 条私密内容",
+    f1: "<b>不存截图</b> · 仅本机识字与转写", f2: "<b>双出口</b> · 给你回看，也让 AI 直接查", f3: "<b>可点回原文</b> · 每条结论都有依据",
+  },
+  en: {
+    sub: "Context for you and your AI · Local encryption · MIT",
+    headline: "A Timeline you and your AI can use.",
+    subline: "AI sessions, chats, and recordings with a link back to the source.",
+    tlTitle: "Tacit · Timeline", date: "Thursday, November 19", modes: "Simple · Detailed",
+    overview: "Worked on Sunledger: fixed CSV dates for UK banks and shipped budget rollover. Sam agreed to simplify onboarding to one screen.",
+    i1: "Shipped monthly budget rollover", i1d: "Unused budget now carries over for active categories.",
+    i2: "Agreed on one-screen onboarding", i2d: "Sam agreed to cut the tour to one screen.",
+    evTitle: "Expanded evidence · Phone recording · 14:02–14:18", ev: "Sam: One screen with the first step is enough.",
+    i3: "Fixed CSV date parsing for UK banks", i3d: "Day-first dates now import correctly.",
+    pill: "MCP · Project progress", termTitle: "Claude Code · New session",
+    ask: "Update onboarding and cover rollover in a test.",
+    call: "Checking project progress <code>tacit.project</code>",
+    cardTitle: "Sunledger · Project progress",
+    b1: "Budget rollover shipped. Deleted categories are still open.",
+    b2: "Sam agreed to cut onboarding to one screen.",
+    b3: "UK bank CSV imports now accept day-first dates.",
+    answer: "I'll use the <b>first-step screen</b> you agreed on with Sam. Then I'll add a test for active categories and flag the <b>open question about deleted categories</b>.",
+    basis: "↳ Based on 2 local records · 0 private records",
+    f1: "<b>No screenshots saved</b> · Text and transcripts", f2: "<b>Two ways to read</b> · Your Timeline and your AI", f3: "<b>Back to the source</b> · Open the evidence",
+  },
+};
+const params = new URLSearchParams(location.search);
+const lang = params.get("lang") === "en" ? "en" : "zh";
+document.documentElement.lang = lang;
+document.documentElement.dataset.theme = params.get("theme") === "dark" ? "dark" : "light";
+for (const el of document.querySelectorAll("[data-t]")) el.textContent = copy[lang][el.dataset.t];
+for (const el of document.querySelectorAll("[data-h]")) el.innerHTML = copy[lang][el.dataset.h];
+</script>
+</body>
+</html>
