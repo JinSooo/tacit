@@ -63,6 +63,36 @@ private func identity(_ hub: Curve25519.KeyAgreement.PrivateKey) throws -> HubBi
             hubPublicKey: DeviceEnvelope.publicKeyBase64URL(hub.publicKey))
 }
 
+@Test func remoteSetupReadinessKeepsModelHealthWithoutLocalAgentTools() async throws {
+  let dir = try syntheticDirectory()
+  defer { try? FileManager.default.removeItem(at: dir) }
+  let binding = try commit(dir, identity(.init()))
+  let api = HubAPI(base: { localAddress }, token: { nil }, deviceAction: { op, _, _, route in
+    #expect(op == "status.get")
+    #expect(route == binding.route)
+    return .init(status: 200, body: [:], bodyData: Data(#"{"distill":{}}"#.utf8))
+  }, hubRoute: { binding.route })
+
+  // The local-only endpoint really fails on this binding.
+  await #expect(throws: HubError.self) { try await api.agentTools() }
+  let readiness = try await api.setupReadiness(includeLocalTools: false)
+  #expect(readiness.health.state == .waiting)
+  #expect(readiness.tools == nil)
+  #expect(SetupReadiness.unfinishedItems(health: readiness.health, tools: readiness.tools) == ["models"])
+}
+
+@Test func firstPreparationStampIsReadFromTheActiveDataDirectory() throws {
+  let dir = try syntheticDirectory()
+  defer { try? FileManager.default.removeItem(at: dir) }
+  #expect(AppSetup.firstPreparationDate(in: dir) == nil)
+  let stamp = dir.appendingPathComponent("app-setup.json")
+  try Data(#"{"version":"fixture"}"#.utf8).write(to: stamp)
+  let created = try #require(AppSetup.firstPreparationDate(in: dir))
+  let later = created.addingTimeInterval(600)
+  try FileManager.default.setAttributes([.modificationDate: later], ofItemAtPath: stamp.path)
+  #expect(AppSetup.firstPreparationDate(in: dir) == created)
+}
+
 private func writeRemote(_ dir: URL, _ identity: HubBinding.Remote) throws -> URL {
   let sub = dir.appendingPathComponent(identity.dir)
   try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: false)
@@ -1212,4 +1242,82 @@ func finalReviewInvalidRetainedIdentityCanPairAgain(scenario: String) async thro
   #expect(try flow.remotesRequiringRePairingCleanup().isEmpty)
   #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(newRemote.dir)
     .appendingPathComponent("retained-preparation").path))
+}
+
+
+// Settings must be able to save a local port even when no service has created hub.json yet.
+@Test func offlinePortUpdatesLiveOriginAndPreservesOtherSettings() throws {
+  let dir = try syntheticDirectory()
+  defer { try? FileManager.default.removeItem(at: dir) }
+  let config = Config(dataDir: dir, bun: "")
+  let file = dir.appendingPathComponent("hub.json")
+  try config.writeHubPort(52631)
+  #expect(config.hubURL.port == 52631)
+  try PrivateFile.write(Data(#"{"port":52631,"lan_port":52632,"timezone":"Asia/Taipei"}"#.utf8), to: file)
+  try config.writeHubPort(52633)
+  #expect(config.hubURL.port == 52633)
+  let fields = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+  #expect(fields["lan_port"] as? Int == 52632)
+  #expect(fields["timezone"] as? String == "Asia/Taipei")
+  #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int == 0o600)
+  let fixed = Config(dataDir: dir, fixedPort: "52634", bun: "")
+  #expect(throws: HubError.self) { try fixed.writeHubPort(52635) }
+  #expect(config.hubURL.port == 52633)
+  _ = try commit(dir, identity(Curve25519.KeyAgreement.PrivateKey()))
+  #expect(throws: HubError.self) { try config.writeHubPort(52635) }
+  #expect(config.hubURL.port == 52633)
+}
+
+@Test @MainActor func timelineShowsPreparationOnlyAfterCheckingThatTheBackendIsUnreachable() {
+  let ready = AppSetup.checklistStep(activity: .running, reachable: true, inStartupGrace: true, startupMessage: nil)
+  #expect(ready == nil)
+  #expect(ReviewPage.allowsDayRecords(backendSetup: ready))
+
+  let preparing = AppSetup.checklistStep(activity: .running, reachable: false, inStartupGrace: true, startupMessage: nil)
+  #expect(preparing == .preparing)
+  #expect(!ReviewPage.allowsDayRecords(backendSetup: preparing))
+
+  let failed = AppSetup.checklistStep(activity: .finished(.backgroundBlocked), reachable: true,
+                                      inStartupGrace: true, startupMessage: nil)
+  #expect(failed == .failed(L10n.Settings.setupFailure(.backgroundBlocked)))
+  #expect(!ReviewPage.allowsDayRecords(backendSetup: failed))
+}
+
+@Test func onlyServiceUnhealthyCanResumeAfterRecovery() {
+  for reason in [SetupStatus.Reason.bundleIncomplete, .backgroundBlocked, .database, .portInUse, .unknown] {
+    var progress = AppSetup.Progress()
+    let idleRecoveryStarted = progress.begin(.recovered)
+    #expect(!idleRecoveryStarted)
+    let initialStarted = progress.begin(.initial)
+    #expect(initialStarted)
+    progress.finish(reason)
+    let recoveryStarted = progress.begin(.recovered)
+    #expect(!recoveryStarted)
+    #expect(progress.activity == .finished(reason))
+    let manualRetryStarted = progress.begin(.manualRetry)
+    #expect(manualRetryStarted)
+  }
+}
+
+@Test func recoveredSetupRunsOnceEvenIfItFailsAndSuccessClearsTheFailure() {
+  for result in [SetupStatus.Reason.serviceUnhealthy, nil] {
+    var progress = AppSetup.Progress()
+    let initialStarted = progress.begin(.initial)
+    #expect(initialStarted)
+    progress.finish(.serviceUnhealthy)
+    #expect(progress.canResume)
+    let recoveryStarted = progress.begin(.recovered)
+    #expect(recoveryStarted)
+    let concurrentRecoveryStarted = progress.begin(.recovered)
+    let concurrentManualRetryStarted = progress.begin(.manualRetry)
+    #expect(!concurrentRecoveryStarted)
+    #expect(!concurrentManualRetryStarted)
+    progress.finish(result)
+    #expect(progress.activity.failure == result)
+    #expect(!progress.canResume)
+    let secondRecoveryStarted = progress.begin(.recovered)
+    #expect(!secondRecoveryStarted)
+    let manualRetryStarted = progress.begin(.manualRetry)
+    #expect(manualRetryStarted)
+  }
 }

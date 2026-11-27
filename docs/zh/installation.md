@@ -1,4 +1,4 @@
-<!-- source: docs/installation.md @ 54ee0472af1fea14084206aaef738028661064c3 -->
+<!-- source: docs/installation.md @ b51b5287ef3c9b66a81ae86addc7a910bd877d93 -->
 
 [English](../installation.md) | 简体中文
 
@@ -30,13 +30,15 @@
 - 后台服务和整理的 PATH 先取用户登录 shell 的 PATH，再补常见位置，用来找到本机已登录的 `codex`、`claude`。优先用稳定的同名入口，CLI 升级只改链接目标时不用重新准备。后来才装 CLI 的，重新打开 Tacit 即可。
 - 关闭登录启动时，启动项保存在数据目录的 `launch-agents/`，升级沿用这个选择。
 
-整理每 15 分钟处理一轮，异常退出后由 launchd 重新拉起，重启间隔至少 60 秒，以后台、低优先级 I/O 和 Nice 10 运行。日志在 `~/Library/Application Support/record-anything/logs/`。模型配置位于数据目录的 `models.json`；文件不存在时默认使用本机已登录的 Claude CLI（minute 用 haiku，hour、day 用 sonnet）。CLI 的登录由各自管理，Tacit 不读取它们的令牌。
+整理每 15 分钟处理一轮，异常退出后由 launchd 重新拉起，重启间隔至少 60 秒，以后台、低优先级 I/O 和 Nice 10 运行。日志在 `~/Library/Application Support/record-anything/logs/`。模型配置位于数据目录的 `models.json`；文件不存在时默认使用本机已登录的 Claude CLI（minute 用 haiku，hour、day 用 sonnet）；如果这台 Mac 上只装了 Codex 没有装 Claude Code，准备阶段会自动改用 Codex。CLI 的登录由各自管理，Tacit 不读取它们的令牌。
+
+后台联网（调用模型、下载语音模型、中转同步）会自动使用 macOS 的 HTTP/HTTPS 系统代理，不需要在终端里另设代理。PAC 自动代理暂不支持，遇到时请在代理软件里改用“系统代理/全局”或 TUN 模式。
 
 后台服务在开始监听前失败时，数据目录里的 `hub-startup-error.json` 会记录失败时间、错误码和说明，监听成功后删除。准备日志 `logs/setup.log` 达到 5 MiB 时轮转，保留最近两份副本。
 
 ## 语音模型
 
-第一次开启录音时，应用调用 `cli.ts audio-models` 把约 270MB 的模型下载到数据目录的 `models/`，逐个校验 sha256 后再放进去（`hub/src/audio-models.ts`）。SenseVoice 优先从 Hugging Face 单独下载，失败时改从 GitHub 下载约 1GB 的整包取出。下载失败的，录音状态里会显示原因，60 秒后随下一次启动录音重试。
+第一次开启录音时，应用调用 `cli.ts audio-models` 把约 270MB 的模型下载到数据目录的 `models/`，逐个校验 sha256 后再放进去（`hub/src/audio-models.ts`）。每个文件都有三个内容完全相同的来源：ModelScope（国内直连快）、项目自己的 GitHub Release 副本（`models-v1`），以及 `sherpa-onnx` 的 GitHub Release（VAD、声纹）或 Hugging Face（SenseVoice）。下载前先向每个来源取一小段测速，从最快的下载，失败或校验不符再换下一个；都不行时最后才从 GitHub 下载约 1GB 的整包取出。下载失败的，录音状态里会显示原因，60 秒后随下一次启动录音重试。
 
 ## 从源码安装
 

@@ -97,12 +97,12 @@ Tacit requires an Apple silicon Mac running macOS 14 or later.
 2. Open Tacit from Applications. macOS may block the first launch because the app is signed with a self-signed certificate and has no Apple notarization. Click **Done**, go to **System Settings › Privacy & Security**, then click **Open Anyway** next to Tacit and enter your password. If the button is missing, run `xattr -dr com.apple.quarantine /Applications/Tacit.app` in Terminal, then open Tacit again.
 3. The main window opens and the Background service sets itself up. Tacit keeps recording in the menu bar after you close the window. Open Tacit from Applications again to bring the window back.
 
-The Setup checklist at the top of the Timeline shows what's left to do.
+The **Setup checklist** at the top of the Timeline opens automatically on first launch and shows what's left to do.
 
-- Grant the permissions you need under **Settings › Sources**.
-- Choose a Summary model in **Settings › AI models** and test the connection. Tacit uses your local Claude Code sign-in by default. You can select Codex or enter API settings.
+- Grant the permissions you need from the checklist or under **Settings › Sources**.
+- Choose a Summary model in **Settings › AI models**, click **Test connection**, and click **Save**. Tacit uses your local Claude Code sign-in by default, or Codex automatically if only Codex is installed. You can also enter an API endpoint and key.
 - Choose what to record under **Settings › Sources**. Enabling recording for the first time downloads about 270 MB of speech models.
-- Connect Claude Code or Codex under **Settings › AI tools**. Save a key backup under **Maintenance › Key backup**.
+- Connect Claude Code or Codex under **Settings › AI tools**. Save a key backup under **Settings › Maintenance**.
 
 See the [trial guide](docs/trial-guide.md) for a first-run walkthrough or [troubleshooting](docs/troubleshooting.md) if Tacit has trouble opening, recording, or transcribing.
 
@@ -114,13 +114,13 @@ Tacit requires an arm64 phone running Android 9 or later.
 
 1. Download `Tacit-<version>.apk` from the latest `Tacit v<version> - Android` entry in [Releases](https://github.com/JinSooo/tacit/releases) and install it.
 2. On first launch, enable recording and grant microphone access. Download the speech models in **Settings › Transcription**, then listen to a sample and confirm your voice once.
-3. **With a Mac.** Create an invite QR code in **Settings › Devices** on the Mac. Scan it under **Settings › Connect to Mac** on the phone. With View permission, the phone can sync transcripts and display the full Timeline. A Relay mailbox can carry encrypted updates while you're away.
+3. **With a Mac.** Create an invite QR code in **Settings › Background service and connection › Devices** on the Mac. Scan it under **Settings › Connect to Mac** on the phone. With View permission, the phone can sync transcripts and display the full Timeline. A Relay mailbox can carry encrypted updates while you're away.
 4. **On its own.** Recordings and transcripts stay in encrypted storage on the phone. You can configure an OpenAI-compatible endpoint under **Settings › AI summaries** to summarize individual conversations. See [Tacit for Android](android/README.md).
 
 <details>
 <summary><b>Run the Background service on a server with Docker</b></summary>
 
-The Mac app runs its Background service locally by default. If you want it to run on a Linux server or a Windows PC with Docker, use the public `ghcr.io/jinsooo/tacit-hub` image for `linux/amd64` or `linux/arm64`. After starting the container, generate an admin Invite link on the server and paste it under **Settings › Background & connection › Connect to a remote service** on the Mac. See the [server deployment guide](docs/server-deployment.md).
+The Mac app runs its Background service locally by default. If you want it to run on a Linux server or a Windows PC with Docker, use the public `ghcr.io/jinsooo/tacit-hub` image for `linux/amd64` or `linux/arm64`. After starting the container, generate an admin Invite link on the server and paste it under **Settings › Background service and connection › Connect to a remote service** on the Mac. See the [server deployment guide](docs/server-deployment.md).
 
 </details>
 
@@ -162,8 +162,8 @@ Choose your Summary model separately from the AI tools you connect. Tacit suppor
 - Tacit detects private browser windows by title. Some browsers or languages may be missed. Pause recording before handling sensitive material.
 - App exclusions are built in. Custom exclusions are currently unavailable.
 - In local mode, management, Web view, and MCP listen on localhost. Pairing a device opens a separate encrypted device port.
-- Manage Collect, View, and Admin permissions under **Settings › Devices**. Phones start with View and can switch between View and Collect. AI tools use restricted credentials for reading and appending. Large batches of remote deletions must be done on the Mac.
-- Set a self-hosted [Relay mailbox](relay/README.md) in **Settings › Background & connection › Relay mailbox** to sync when your phone is on a different network or your Mac is asleep. The mailbox can see message times and sizes. Message content stays end-to-end encrypted.
+- Manage Collect, View, and Admin permissions under **Settings › Background service and connection › Devices**. Phones start with View and can switch between View and Collect. AI tools use restricted credentials for reading and appending. Large batches of remote deletions must be done on the Mac.
+- Set a self-hosted [Relay mailbox](relay/README.md) in **Settings › Background service and connection › Relay mailbox** to sync when your phone is on a different network or your Mac is asleep. The mailbox can see message times and sizes. Message content stays end-to-end encrypted.
 - Installation of third-party Sources is currently unavailable from Settings. The plugin design limits access to approved paths, blocks network access, writes, and subprocesses, and requires a working sandbox.
 - Data is stored in `~/Library/Application Support/record-anything/`, outside the checkout. Keep record text, keys, audio, and other people's private material out of GitHub issues.
 

@@ -205,7 +205,7 @@ private struct AudioSourceSettings: View {
   func load() async {
     do { let d = try await store.api.retentionDays(); keepForever = d == 0; days = d == 0 ? 7 : d; savedDays = d; error = nil }
     catch is CancellationError {}
-    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
   private var retentionValue: Int? {
     L10n.Settings.audioRetentionValue(keepForever: keepForever, days: days)
@@ -215,10 +215,10 @@ private struct AudioSourceSettings: View {
     saving = true
     defer { saving = false }
     do { try await store.api.setRetentionDays(value); savedDays = value; status = nil; error = nil }
-    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
   func purge() async {
     do { try await store.api.purgeAudio(); status = L10n.Settings.audioDeletionScheduled; error = nil }
-    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+    catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }

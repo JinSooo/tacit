@@ -2,6 +2,7 @@ import { observeRequest, parseJSON, tokens } from "./process.ts";
 import { httpModelError, ModelError, modelErrorCategory } from "./error-category.ts";
 import type { BackendContext, ReadKey } from "./types.ts";
 import { isLoopback } from "./local.ts";
+import { proxiedFetch, proxyFor } from "../net/system-proxy.ts";
 export { isLoopback } from "./local.ts";
 
 // 思考型模型（如经 Anthropic 兼容接口接入的 MiniMax）的思考 token 也算在输出里，8192 对当天整理偏紧（2026-11-18）。
@@ -21,6 +22,7 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => { controller.abort(); reject(new ModelError("timeout")); }, ctx.timeoutMs);
   });
+  let networkDetail = "The connection to the model service failed.";
   try {
     return await Promise.race([deadline, (async () => {
       const local = isLoopback(ctx.config.base_url);
@@ -39,13 +41,23 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
           ...(ctx.config.reasoning_effort === undefined ? {} : { reasoning_effort: ctx.config.reasoning_effort }),
           ...(noResponseFormat.has(base) ? {} : { response_format: { type: "json_schema", json_schema: { name: "result", strict: true, schema: ctx.req.schema } } }),
         } as Record<string, unknown>;
+      const target = new URL(`${base}/${anthropic ? "messages" : "chat/completions"}`);
       const send = (body: Record<string, unknown>) => {
         observeRequest(ctx, "api", body);
-        return fetch(`${base}/${anthropic ? "messages" : "chat/completions"}`, {
+        const proxy = proxyFor(target);
+        return proxiedFetch(target, {
           method: "POST", signal: controller.signal, redirect: "error",
           headers: { "content-type": "application/json", ...(anthropic ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : local ? {} : { authorization: `Bearer ${key}` }) },
           body: JSON.stringify(body),
-        }).catch(() => { throw new ModelError("network"); });
+        }, proxy ?? false).catch(() => {
+          if (proxy) {
+            const { hostname, port, protocol } = new URL(proxy);
+            networkDetail = `Could not connect to proxy ${hostname}:${port || (protocol === "https:" ? "443" : "80")}.`;
+          } else {
+            networkDetail = `Could not connect to model service at ${target.host}.`;
+          }
+          throw new ModelError("network");
+        });
       };
       const receive = async (body: Record<string, unknown>) => {
         const response = await send(body);
@@ -88,7 +100,12 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
       return parseJSON(choice.message.content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, ""));
     })()]);
   } catch (error) {
-    if (controller.signal.aborted) throw new ModelError("timeout");
-    throw error;
+    const failure = controller.signal.aborted ? new ModelError("timeout") : error;
+    // 有响应的服务错误已进快照。这里只补没有响应正文时的固定说明。
+    if (failure instanceof ModelError && (failure.code === "timeout" || failure.code === "network")) {
+      const detail = failure.code === "timeout" ? "The model service did not reply before the time limit." : networkDetail;
+      try { ctx.observer?.failure?.(detail); } catch { throw new ModelError("usage_record_failed"); }
+    }
+    throw failure;
   } finally { clearTimeout(timer); }
 }

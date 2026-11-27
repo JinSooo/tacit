@@ -346,7 +346,7 @@ struct FactRow: View {
     Task {
       defer { detaching = false }
       do { try await store.api.detachFact(fact.id); store.revision += 1; onChanged() }
-      catch { detachError = error.localizedDescription }
+      catch { detachError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
     }
   }
 
@@ -463,7 +463,7 @@ struct FactCorrectionSheet: View {
           Task {
             busy = true; defer { busy = false }
             do { try await store.api.correct(fact, text: trimmed); onSaved(); dismiss() }
-            catch { self.error = error.localizedDescription }
+            catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
           }
         }
         .buttonStyle(.accent)

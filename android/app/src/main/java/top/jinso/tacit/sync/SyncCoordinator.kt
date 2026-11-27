@@ -31,6 +31,8 @@ internal data class MacStatus(
 
 internal class SyncCoordinator(private val app: TacitApp) {
     private val mutex = Mutex()
+    private data class PendingPair(val invite: Invitation, val keys: AsymmetricCipherKeyPair, val relay: RelayPairRequest)
+    private var pendingPair: PendingPair? = null
     private val vault get() = app.vault
     private val timelineCache = TimelineCache(EncryptedTimelineDisk(app), isDeleted = { vault.isRecordDeleted(it) })
     private val timeline = TimelineSync(timelineCache)
@@ -52,14 +54,15 @@ internal class SyncCoordinator(private val app: TacitApp) {
             }, data?.optBoolean("relayDisabled") == true)
     }
 
-    suspend fun pair(uri: String, address: String) = withContext(Dispatchers.IO) {
+    suspend fun pair(uri: String, address: String, onRelayWaiting: suspend () -> Unit = {}) = withContext(Dispatchers.IO) {
         mutex.withLock {
             val previous = vault.syncConnection()
             check(previous?.optBoolean("removed") != false)
             val invite = Invitation.parse(uri)
             val manual = parseAddress(address)
             val last = previous?.takeIf { it.optString("hub") == invite.hubId }?.optionalString("last")
-            val keys = DeviceEnvelope.generate()
+            val pending = pendingPair?.takeIf { it.invite == invite }
+            val keys = pending?.keys ?: DeviceEnvelope.generate()
             val public = DeviceEnvelope.public(keys).base64url()
             val secret = DeviceEnvelope.secret(keys)
             val wrapped = try { Keys(app).wrapDeviceKey(secret, public).base64url() } finally { secret.fill(0) }
@@ -67,17 +70,20 @@ internal class SyncCoordinator(private val app: TacitApp) {
             val phoneName = pairingDeviceName(customName, Build.MODEL, Build.BRAND, AppLocale.strings(app))
             pairWithAvailableTransport(invite, keys, phoneName, findMac = {
                 MacDiscovery(app).find(invite.hubId, last, invite.addresses, manual)
-            }, rateLimit = relayBackoff) { paired, origin ->
+            }, rateLimit = relayBackoff, pendingRelay = pending?.relay, relayRequest = {
+                RelayPairRequest(invite, keys, phoneName).also { pendingPair = PendingPair(invite, keys, it) }
+            }, onRelayWaiting = onRelayWaiting) { paired, origin ->
                 vault.saveSyncConnection(JSONObject().put("device", paired.id).put("hub", invite.hubId)
                     .put("name", invite.macName).put("hubKey", invite.publicKey).put("private", wrapped)
                     .put("public", public)
                     .put("addresses", JSONArray(invite.addresses)).put("last", origin).put("manual", manual)
                     .put("relay", paired.relay?.json()))
+                pendingPair = null
                 app.prefs.hubLanguage = null
+                SyncWorker.schedulePeriodic(app)
+                timelineWorkerScheduled = true
+                SyncWorker.enqueue(app)
             }
-            SyncWorker.schedulePeriodic(app)
-            timelineWorkerScheduled = true
-            SyncWorker.enqueue(app)
         }
     }
 
@@ -629,6 +635,7 @@ internal enum class SyncError(val label: Int, val waiting: Boolean = false) {
     INVITE_EXPIRED(R.string.sync_invite_expired),
     BATCH_TOO_LARGE(R.string.sync_batch_too_large),
     PAIR_RATE_LIMITED(R.string.sync_pair_rate_limited),
+    PAIR_TIMED_OUT(R.string.sync_pair_timed_out),
     PAIR_RELAY_FULL(R.string.sync_pair_relay_full),
     INVALID_ADDRESS(R.string.sync_invalid_address),
     MAC_BUSY(R.string.sync_mac_busy),
@@ -648,6 +655,7 @@ internal fun syncError(error: Throwable, pairing: Boolean = false): SyncError = 
         SyncError.INVITE_EXPIRED
     error is EnvelopeTooLarge -> SyncError.BATCH_TOO_LARGE
     // 配对是一次性动作，失败不会自动重试，不能说“会自动重试”。
+    pairing && error is RelayPairTimedOut -> SyncError.PAIR_TIMED_OUT
     pairing && error is RelayStatus && error.status == 429 -> SyncError.PAIR_RATE_LIMITED
     pairing && error is RelayStatus && error.status == 507 -> SyncError.PAIR_RELAY_FULL
     error is RelayStatus && error.status == 429 -> SyncError.RELAY_RATE_LIMITED

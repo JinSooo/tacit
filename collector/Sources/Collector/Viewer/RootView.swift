@@ -170,24 +170,24 @@ struct CaptureFooter: View {
 
   var body: some View {
     let c = store.capture
-    HStack(spacing: 8) {
-      Circle().fill(dot).frame(width: 8, height: 8).padding(.leading, 4)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title).font(.system(size: TextSize.body, weight: .semibold))
-          .foregroundStyle(c.state == .noPermission ? Palette.attention : Palette.ink)
-          .lineLimit(1)
-        if let subtitle {
-          Text(subtitle).font(.system(size: TextSize.caption))
-            .foregroundStyle(c.hubError != nil ? Palette.attention : Palette.muted)
-            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+    Group {
+      if c.state == .noPermission {
+        VStack(alignment: .leading, spacing: 4) {
+          statusLabel
+          HStack(spacing: 8) {
+            control
+            Spacer(minLength: 0)
+            settingsButton
+          }.padding(.leading, 20)
+        }
+      } else {
+        HStack(spacing: 8) {
+          statusLabel
+          Spacer(minLength: 0)
+          control
+          settingsButton
         }
       }
-      Spacer(minLength: 0)
-      control
-      Button { store.showSettings() } label: { PhIcon("gear-six", size: 16).frame(width: 28, height: 28).contentShape(Rectangle()) }
-        .buttonStyle(.plain)
-        .foregroundStyle(store.section == .settings ? Palette.accent : Palette.muted)
-        .help(L10n.Menu.settings).accessibilityLabel(L10n.Menu.settings)
     }
     .padding(.horizontal, 8).padding(.vertical, 12)
     .overlay(alignment: .top) { Rectangle().fill(Palette.hairline).frame(height: 1) }
@@ -197,6 +197,32 @@ struct CaptureFooter: View {
     .animation(Motion.standard, value: title)
     .animation(Motion.standard, value: subtitle)
     .animation(Motion.quick, value: store.section == .settings)
+  }
+
+  private var statusLabel: some View {
+    let c = store.capture
+    return HStack(spacing: 8) {
+      Circle().fill(dot).frame(width: 8, height: 8).padding(.leading, 4)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title).font(.system(size: TextSize.body, weight: .semibold))
+          .foregroundStyle(c.state == .noPermission ? Palette.attention : Palette.ink)
+          .lineLimit(c.state == .noPermission ? nil : 1)
+          .fixedSize(horizontal: false, vertical: true)
+        if let subtitle {
+          Text(subtitle).font(.system(size: TextSize.caption))
+            .foregroundStyle(c.hubError != nil ? Palette.attention : Palette.muted)
+            .lineLimit(c.state == .noPermission ? nil : 2)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+    }
+  }
+
+  private var settingsButton: some View {
+    Button { store.showSettings() } label: { PhIcon("gear-six", size: 16).frame(width: 28, height: 28).contentShape(Rectangle()) }
+      .buttonStyle(.plain)
+      .foregroundStyle(store.section == .settings ? Palette.accent : Palette.muted)
+      .help(L10n.Menu.settings).accessibilityLabel(L10n.Menu.settings)
   }
 
   @ViewBuilder var control: some View {

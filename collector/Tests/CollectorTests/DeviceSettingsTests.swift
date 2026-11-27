@@ -44,7 +44,7 @@ private func fixture() -> DeviceSettings {
   }
 }
 
-@Test func deviceActionsPreserveHubConflictAndForbiddenMessages() async {
+@Test(ChineseUITrait()) func deviceActionsPreserveHubConflictAndForbiddenMessages() async {
   let messages = ["devices.remove": HubError(message: "不能移除最后一台管理设备", status: 409),
                   "devices.role.update": HubError(message: "手机只能使用采集权限", status: 403)]
   let api = HubAPI(base: { URL(string: "http://unused.test")! }, token: { nil }, deviceAction: { op, _, _, _ in
@@ -61,7 +61,8 @@ private func fixture() -> DeviceSettings {
       Issue.record("应保留后台服务的操作错误")
     } catch {
       #expect((error as? HubError)?.status == expected.status)
-      #expect((error as? HubError)?.actionMessage == expected.message)
+      #expect((error as? HubError)?.needsAction == true)
+      #expect(UserFacingError.message(for: error, fallback: "fallback") == expected.message)
     }
   }
 }
@@ -157,9 +158,9 @@ func deviceInvitationCountdown(_ seconds: Int, _ expected: String) {
     let slow = HubError(message: L10n.serviceTimedOut, status: 0, kind: .timedOut)
     #expect(settingsReadFailure(slow, fallback: L10n.Settings.relaySettingsUnavailable, section: .relay)
       == "暂时无法读取信箱设置：后台服务没有响应，可能正忙。")
-    #expect(settingsReadFailure(HubError(message: "请求失败（500）", status: 500), fallback: L10n.Settings.devicesUnavailable, section: .devices)
+    #expect(settingsReadFailure(HubError(serviceMessage: "请求失败（500）", status: 500), fallback: L10n.Settings.devicesUnavailable, section: .devices)
       == "暂时无法读取设备：后台服务出错了。")
-    #expect(settingsReadFailure(HubError(message: "当前设备权限不足", status: 403), fallback: L10n.Settings.devicesUnavailable, section: .devices)
+    #expect(settingsReadFailure(HubError(serviceMessage: "当前设备权限不足", status: 403), fallback: L10n.Settings.devicesUnavailable, section: .devices)
       == "当前设备权限不足")
     #expect(settingsReadFailure(CancellationError(), fallback: L10n.Settings.devicesUnavailable, section: .devices)
       == "暂时无法读取设备。")

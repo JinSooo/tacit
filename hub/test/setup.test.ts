@@ -3,8 +3,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { DEFAULT_LAN_PORT, DEFAULT_PORT } from "../src/hub-json.ts";
 import { identityFromRaw } from "../src/devices/envelope.ts";
-import { parseShellEnv, plist, servicePath, setup } from "../src/setup.ts";
+import { parseShellEnv, plist, probePort, servicePath, setup } from "../src/setup.ts";
 
 function fixture() {
   // 稳定入口必须在临时目录之外，否则会被当成临时 shim。
@@ -22,6 +23,8 @@ function fixture() {
     launchctl: args => { calls.push(args.join(" ")); return args[0] === "print" ? 1 : 0; },
     healthy: async () => { events.push("health"); return true; },
     shellEnv: () => ({}),
+    systemPath: [],
+    probePort: async port => port,
     initialize: async () => { events.push("init"); },
     relocate: () => { events.push("relocate"); return []; },
     dropRemovedSettings: () => { events.push("frozen"); },
@@ -96,7 +99,7 @@ test("首次打开完整准备；之后打开没有变化时不重启后台；�
     // 后台已在运行：只核对，不初始化、不重启。
     const loaded = await f.run({ launchctl: args => { f.calls.push(args.join(" ")); return 0; } });
     expect(loaded).toEqual({ full: false, restarted: false });
-    expect(f.events).toEqual([]);
+    expect(f.events).toEqual(["health"]);
     expect(f.calls.some(c => c.startsWith("bootout") || c.startsWith("bootstrap"))).toBe(false);
 
     f.events.length = 0; f.setVersion("v2");
@@ -206,6 +209,148 @@ test("已提交的远端绑定在安装和升级时只准备采集，保留封�
   } finally { f.cleanup(); }
 });
 
+test("setup reports a fixed reason at each failure point", async () => {
+  const f = fixture();
+  try {
+    await expect(f.run({ app: f.home })).rejects.toMatchObject({ reason: "bundle_incomplete" });
+    await expect(f.run({ initialize: async () => { throw new Error("synthetic key error"); } })).rejects.toMatchObject({ reason: "database" });
+    await expect(f.run({ launchctl: () => 1 })).rejects.toMatchObject({ reason: "background_blocked" });
+    await expect(f.run({ healthy: async () => false })).rejects.toMatchObject({ reason: "service_unhealthy" });
+  } finally { f.cleanup(); }
+});
+
+test.each([22, null])("setup probes each second for at most 60 seconds when health returns at attempt %s", async (readyAt) => {
+  const f = fixture();
+  let attempts = 0;
+  const waits: number[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch() {
+      attempts++;
+      return new Response(JSON.stringify({ ok: readyAt !== null && attempts >= readyAt }));
+    },
+  });
+  try {
+    const run = f.run({
+      env: { RA_DATA_DIR: f.data, RA_PORT: String(server.port) },
+      healthy: undefined,
+      wait: async ms => { waits.push(ms); },
+    });
+    const stamp = join(f.data, "app-setup.json");
+    const distillLoaded = () => f.calls.some(c => c.startsWith("bootstrap ") && c.endsWith(".distill.plist"));
+    if (readyAt === null) {
+      await expect(run).rejects.toMatchObject({ reason: "service_unhealthy" });
+      expect(attempts).toBe(60);
+      expect(waits).toHaveLength(60);
+      expect(distillLoaded()).toBe(false);
+      expect(existsSync(stamp)).toBe(false);
+    } else {
+      await run;
+      expect(attempts).toBe(readyAt);
+      expect(waits).toHaveLength(readyAt - 1);
+      expect(distillLoaded()).toBe(true);
+      expect(existsSync(stamp)).toBe(true);
+    }
+    expect(waits.every(ms => ms >= 0 && ms <= 1000)).toBe(true);
+  } finally {
+    await server.stop(true);
+    f.cleanup();
+  }
+});
+
+test("startup detects a bound random port and allocates a free port with the OS", async () => {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  try {
+    expect(await probePort(server.port!, "127.0.0.1")).toBeNull();
+    const selected = await probePort(0, "127.0.0.1");
+    expect(selected).toBeGreaterThan(1023);
+    expect(selected).not.toBe(server.port);
+  } finally { await server.stop(true); }
+});
+
+test("setup moves occupied default ports before loading hub and leaves fixed ports alone", async () => {
+  const f = fixture();
+  try {
+    mkdirSync(f.data);
+    const file = join(f.data, "hub.json");
+    writeFileSync(file, JSON.stringify({ timezone: "Asia/Taipei" }));
+    const probe: typeof probePort = async (port, host) => {
+      if (port === 0) return host === "127.0.0.1" ? 52631 : 52632;
+      return null; // 模拟默认端口和固定端口被占，不接触真实默认监听。
+    };
+    await f.run({ probePort: probe, healthy: async port => port === 52631, launchctl: args => {
+      if (args[0] === "bootstrap") expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ port: 52631, lan_port: 52632 });
+      return args[0] === "print" ? 1 : 0;
+    } });
+    const saved = readFileSync(file, "utf8");
+    expect(JSON.parse(saved)).toEqual({ timezone: "Asia/Taipei", port: 52631, lan_port: 52632 });
+    await expect(f.run({ retry: true, probePort: probe })).rejects.toMatchObject({ reason: "port_in_use" });
+    await expect(f.run({ retry: true, probePort: probe, env: { RA_DATA_DIR: f.data, RA_PORT: String(DEFAULT_PORT) } }))
+      .rejects.toMatchObject({ reason: "port_in_use" });
+    expect(readFileSync(file, "utf8")).toBe(saved);
+
+    writeFileSync(file, JSON.stringify({ port: 52631, lan_port: DEFAULT_LAN_PORT }));
+    await f.run({ retry: true, probePort: async port => {
+      expect(port).toBe(52631); // LAN 固定值无需探测或替换。
+      return port;
+    } });
+    expect(JSON.parse(readFileSync(file, "utf8")).lan_port).toBe(DEFAULT_LAN_PORT);
+  } finally { f.cleanup(); }
+});
+
+test("setup only initializes Codex when Claude is unavailable and preserves existing model settings", async () => {
+  const f = fixture();
+  try {
+    const bin = join(f.home, ".npm-global/bin");
+    mkdirSync(bin, { recursive: true });
+    const file = join(f.data, "models.json");
+    await f.run({ env: { RA_DATA_DIR: f.data } });
+    expect(existsSync(file)).toBe(false);
+    for (const tool of ["claude", "codex"]) writeFileSync(join(bin, tool), "#!/bin/sh\n", { mode: 0o755 });
+    f.setVersion("v2");
+    await f.run();
+    expect(existsSync(file)).toBe(false);
+
+    unlinkSync(join(bin, "claude"));
+    f.setVersion("v3");
+    await f.run();
+    const tier = { provider: "codex-cli", model: "gpt-6-luna" };
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ tiers: { minute: tier, hour: tier, day: tier } });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const existing = JSON.stringify({ tiers: { minute: { ...tier, model: "custom" }, hour: tier, day: tier } });
+    writeFileSync(file, existing);
+    f.setVersion("v4");
+    await f.run();
+    expect(readFileSync(file, "utf8")).toBe(existing);
+  } finally { f.cleanup(); }
+});
+
+test("service PATH reaches npm CLI and a separate node, with stable manager fallbacks", () => {
+  const f = fixture();
+  try {
+    const install = (dir: string, tool: string) => {
+      const bin = join(f.home, dir);
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, tool), "#!/bin/sh\n", { mode: 0o755 });
+      return bin;
+    };
+    const codex = install(".npm-global/bin", "codex");
+    const oldNvm = install(".nvm/versions/node/v9.10.0/bin", "node");
+    const nvm = install(".nvm/versions/node/v22.2.1/bin", "node");
+    const dirs = (search: string[] = []) => servicePath("/x/bun", f.home, search).split(":");
+    expect(dirs()).toContain(codex);
+    expect(dirs()).toContain(nvm);
+    expect(dirs()).not.toContain(oldNvm);
+    for (const path of [".asdf/shims", ".volta/bin", ".fnm/aliases/default/bin"]) {
+      const bin = install(path, "node");
+      expect(dirs()).toContain(bin);
+      unlinkSync(join(bin, "node"));
+    }
+    const separate = install("other/bin", "node");
+    expect(dirs([separate])).toContain(separate);
+    expect(dirs()).toEqual(expect.arrayContaining(["/opt/homebrew/bin", "/usr/local/bin"]));
+  } finally { f.cleanup(); }
+});
 
 test("会话读取目录只传给采集端，手动接入用的配置目录不再传递", async () => {
   const f = fixture();
@@ -228,5 +373,74 @@ test("会话读取目录只传给采集端，手动接入用的配置目录不�
         else expect(config).not.toContain(entry);
       }
     }
+  } finally { f.cleanup(); }
+});
+
+test("setup probes separate durable ranges before considering an ephemeral port", async () => {
+  const f = fixture();
+  try {
+    const checked: [number, string][] = [];
+    await f.run({ probePort: async (port, host) => {
+      checked.push([port, host]);
+      return [47826, 47926].includes(port) ? port : null;
+    }, healthy: async port => port === 47826 });
+    expect(checked).toEqual([
+      [DEFAULT_PORT, "127.0.0.1"], [47825, "127.0.0.1"], [47826, "127.0.0.1"],
+      [DEFAULT_LAN_PORT, "0.0.0.0"], [47925, "0.0.0.0"], [47926, "0.0.0.0"],
+    ]);
+    expect(JSON.parse(readFileSync(join(f.data, "hub.json"), "utf8"))).toEqual({ port: 47826, lan_port: 47926 });
+  } finally { f.cleanup(); }
+});
+
+test("normal startup restarts an already registered hub once after a default port conflict", async () => {
+  const f = fixture();
+  try {
+    await f.run();
+    const marker = join(f.data, "hub-startup-error.json");
+    const healthPorts: number[] = [];
+    let loaded = true, restarts = 0;
+    const setConflict = () => writeFileSync(marker, JSON.stringify({ code: "port_in_use" }));
+    const launchctl = (args: string[]) => {
+      const hub = args.at(-1)?.includes("dev.record-anything.hub");
+      if (args[0] === "print") return hub && loaded ? 0 : 1;
+      if (hub && args[0] === "bootout") loaded = false;
+      if (hub && args[0] === "bootstrap") {
+        expect(existsSync(marker)).toBe(false);
+        restarts++;
+        loaded = true;
+      }
+      return 0;
+    };
+    const options = { launchctl, probePort: async (port: number) => port === DEFAULT_PORT ? null : port,
+      healthy: async (port: number) => {
+        healthPorts.push(port);
+        return port === 47825;
+      } };
+    setConflict();
+    expect(await f.run(options)).toEqual({ full: false, restarted: true });
+    expect(healthPorts).toEqual([DEFAULT_PORT, 47825]);
+    expect(restarts).toBe(1);
+
+    writeFileSync(join(f.data, "hub.json"), JSON.stringify({ port: DEFAULT_PORT }));
+    setConflict();
+    await expect(f.run(options)).rejects.toMatchObject({ reason: "port_in_use" });
+    expect(restarts).toBe(1);
+  } finally { f.cleanup(); }
+});
+
+// 回归（第 2 轮审查）：自家后台正监听默认端口、只是健康检查慢时，探测也显示“被占”，不能因此卸载并改端口。
+test("a slow but registered hub without a port_in_use record keeps its port", async () => {
+  const f = fixture();
+  try {
+    await f.run();
+    let bootouts = 0;
+    const launchctl = (args: string[]) => {
+      if (args[0] === "bootout") bootouts++;
+      return args[0] === "print" ? 0 : 0;
+    };
+    await expect(f.run({ launchctl, probePort: async () => null, healthy: async () => false }))
+      .rejects.toMatchObject({ reason: "service_unhealthy" });
+    expect(bootouts).toBe(0);
+    expect(existsSync(join(f.data, "hub.json")) ? JSON.parse(readFileSync(join(f.data, "hub.json"), "utf8")).port : undefined).toBeUndefined();
   } finally { f.cleanup(); }
 });

@@ -3,11 +3,13 @@ import { cliText } from "./agent-cli/locale.ts";
 import { readHubBinding } from "./hub-binding.ts";
 // 应用自己完成安装后的准备：数据目录与密钥、AI 工具连接路径、后台服务的启动配置。
 // 安装包首次打开、升级后打开，以及源码安装的 install.sh 都走这里；重复运行只改有变化的部分。
-import { accessSync, chmodSync, closeSync, constants, existsSync, fchmodSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants, existsSync, fchmodSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { dataDirOf, resolvePort } from "./hub-json.ts";
+import { dataDirOf, resolveLanBinding, resolvePort, writeHubPort } from "./hub-json.ts";
+import { initializeCodexConfig } from "./llm/config.ts";
 import { SHELL_ENV } from "./llm/process.ts";
 import { AGENT_TOOLS } from "../../packages/record/agent-tools.ts";
 import { agentBinDirectories, SYSTEM_BIN_DIRS } from "./agent-path.ts";
@@ -45,16 +47,35 @@ export function toolDirectory(name: string, candidates: string[]): string | null
   return null;
 }
 
-/** 后台服务的 PATH：识别支持自动连接的 AI 工具，并支持用 codex、claude 整理。 */
-export function servicePath(bun: string, home: string, search: string[], warn: (message: string) => void = () => {}, lang: Lang = "zh"): string {
-  const candidates = [...search, ...agentBinDirectories(home)];
-  const dirs: string[] = [];
-  for (const name of new Set(AGENT_TOOLS.flatMap(tool => tool.executables ?? []))) {
-    const found = toolDirectory(name, candidates);
-    if (found) dirs.push(found);
-    else if (name === "codex" || name === "claude") warn(cliText(`没找到 ${name}；装好并登录后重新打开 Tacit 即可使用。`, `Could not find ${name}. Install it, sign in, and reopen Tacit.`, lang));
+function toolLocations(home: string, search: string[], system = SYSTEM_BIN_DIRS) {
+  const nvm = join(home, ".nvm/versions/node");
+  let latestNvm: string | undefined;
+  try {
+    latestNvm = readdirSync(nvm)
+      .filter(version => /^v\d+\.\d+\.\d+$/.test(version) && executable(join(nvm, version, "bin/node")))
+      .sort((a, b) => b.localeCompare(a, "en", { numeric: true }))[0];
+  } catch {}
+  // 版本管理器装的 codex、claude 和它们 #!/usr/bin/env node 要找的 node。
+  const managers = [".fnm/aliases/default/bin", ".volta/bin", ".asdf/shims"].map(p => join(home, p));
+  if (latestNvm) managers.push(join(nvm, latestNvm, "bin"));
+  const candidates = [...search, ...agentBinDirectories(home).filter(dir => !SYSTEM_BIN_DIRS.includes(dir)), ...managers, ...system];
+  const found = new Map<string, string | null>();
+  for (const name of new Set([...AGENT_TOOLS.flatMap(tool => tool.executables ?? []), "codex", "claude", "node"])) {
+    found.set(name, toolDirectory(name, candidates));
   }
-  return [...new Set([...dirs, dirname(bun), ...SYSTEM_BIN_DIRS])].join(":");
+  return { codex: found.get("codex") ?? null, claude: found.get("claude") ?? null, dirs: [...found.values()].filter((dir): dir is string => dir !== null) };
+}
+
+/** 后台服务的 PATH：识别已安装的 AI 工具，整理用的 codex、claude 及它们调用的 node 都要能找到。 */
+export function servicePath(bun: string, home: string, search: string[], warn: (message: string) => void = () => {}, lang: Lang = "zh"): string {
+  return pathForTools(bun, toolLocations(home, search), warn, lang);
+}
+
+function pathForTools(bun: string, tools: ReturnType<typeof toolLocations>, warn: (message: string) => void, lang: Lang): string {
+  for (const name of ["codex", "claude"] as const) {
+    if (!tools[name]) warn(cliText(`没找到 ${name}；装好并登录后重新打开 Tacit 即可使用。`, `Could not find ${name}. Install it, sign in, and reopen Tacit.`, lang));
+  }
+  return [...new Set([...tools.dirs, dirname(bun), ...SYSTEM_BIN_DIRS])].join(":");
 }
 
 /** 从 Finder 或 launchd 启动时没有终端的环境，读一次用户登录 shell 的 PATH、代理和会话目录（密钥不落进启动配置）。 */
@@ -80,7 +101,7 @@ export function parseShellEnv(stdout: string, marker = "__TACIT_ENV__"): Record<
   return out;
 }
 
-export interface ServiceLayout { app: string; runtime: string; bun: string; data: string; path: string; cliEnv?: Record<string, string>; sessionPathEnv?: Record<string, string> }
+export interface ServiceLayout { app: string; runtime: string; bun: string; data: string; path: string; cliEnv?: Record<string, string>; sessionPathEnv?: Record<string, string>; hubEnv?: Record<string, string> }
 
 export function plist(job: Job, l: ServiceLayout): string {
   const cli = join(l.runtime, "hub/src/cli.ts");
@@ -92,10 +113,12 @@ export function plist(job: Job, l: ServiceLayout): string {
   ];
   if (job !== "collector") body.push(`  <key>WorkingDirectory</key><string>${xml(l.runtime)}</string>`);
   const extra = job !== "collector" && l.cliEnv && Object.keys(l.cliEnv).length ? `<key>TACIT_CLI_ENV</key><string>${xml(JSON.stringify(l.cliEnv))}</string>` : "";
+  const hubEnv = job === "collector" ? "" : Object.entries(l.hubEnv ?? {})
+    .map(([key, value]) => `<key>${xml(key)}</key><string>${xml(value)}</string>`).join("");
   // 自定义会话目录仅供采集端读取。
   const configPaths = job === "collector" ? Object.entries(l.sessionPathEnv ?? {})
     .map(([key, value]) => `<key>${xml(key)}</key><string>${xml(value)}</string>`).join("") : "";
-  body.push(`  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(path)}</string>${extra}${configPaths}</dict>`, `  <key>RunAtLoad</key><true/>`);
+  body.push(`  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(path)}</string>${extra}${configPaths}${hubEnv}</dict>`, `  <key>RunAtLoad</key><true/>`);
   if (job === "hub") body.push(`  <key>KeepAlive</key><true/>`, `  <key>ThrottleInterval</key><integer>10</integer>`, `  <key>ProcessType</key><string>Background</string>`);
   if (job === "distill") body.push(`  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>`, `  <key>ThrottleInterval</key><integer>60</integer>`,
     `  <key>ProcessType</key><string>Background</string>`, `  <key>LowPriorityIO</key><true/>`, `  <key>Nice</key><integer>10</integer>`);
@@ -118,14 +141,17 @@ export interface SetupOptions {
   app: string;
   /** 源码安装：无论记录如何都完整初始化，并启动采集端。 */
   install?: boolean;
+  retry?: boolean;
   /** 源码安装的 RA_NO_DISTILL=1：停用整理并记住这个选择。 */
   distill?: boolean;
   home?: string;
   env?: NodeJS.ProcessEnv;
   launchctl?: (args: string[]) => number;
   healthy?: (port: number) => Promise<boolean>;
+  probePort?: typeof probePort;
   wait?: (ms: number) => Promise<void>;
   shellEnv?: () => Record<string, string>;
+  systemPath?: string[];
   initialize?: () => Promise<void>;
   relocate?: (runtime: string, bun: string, home: string, log: (category: string) => void) => string[];
   dropRemovedSettings?: () => void;
@@ -134,7 +160,40 @@ export interface SetupOptions {
 }
 interface Stamp { app: string; version: string; distill: boolean }
 /** 只装入写给用户的固定文案，系统异常交给 CLI 按错误码处理。 */
-export class SetupError extends Error {}
+export class SetupError extends Error {
+  constructor(readonly reason: "bundle_incomplete" | "database" | "background_blocked" | "service_unhealthy" | "port_in_use", message: string) {
+    super(message);
+  }
+}
+
+/** Bind briefly to distinguish an occupied port from one the system can allocate. */
+export function probePort(port: number, host: string): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") resolve(null);
+      else reject(error);
+    });
+    server.listen(port, host, () => {
+      const address = server.address();
+      server.close(error => {
+        if (error) reject(error);
+        else resolve(typeof address === "object" && address !== null ? address.port : null);
+      });
+    });
+  });
+}
+
+async function alternatePort(probe: typeof probePort, host: string, first: number, reserved: number): Promise<number | null> {
+  // Keep durable fallbacks outside the macOS ephemeral range and give each listener its own range.
+  for (let port = first; port < first + 100; port++) {
+    if (port === reserved) continue;
+    const free = await probe(port, host);
+    if (free !== null) return free;
+  }
+  const free = await probe(0, host);
+  return free === reserved ? null : free;
+}
 
 function writePrivate(file: string, text: string) {
   writeFileSync(file, text, { mode: 0o600 }); chmodSync(file, 0o600);
@@ -148,7 +207,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
   const lang = o.lang ?? "zh";
   const t = (zh: string, en: string) => cliText(zh, en, lang);
   const runtime = join(o.app, "Contents/Resources/runtime"), bun = join(o.app, "Contents/Helpers/Tacit");
-  if (!existsSync(join(runtime, "hub/src/cli.ts")) || !executable(bun)) throw new SetupError(t("Tacit 安装包不完整", "The Tacit installation is incomplete"));
+  if (!existsSync(join(runtime, "hub/src/cli.ts")) || !executable(bun)) throw new SetupError("bundle_incomplete", t("Tacit 安装包不完整", "The Tacit installation is incomplete"));
   const data = dataDirOf(env);
   const { remote } = readHubBinding(data);
   const launchctl = o.launchctl ?? ((args: string[]) => spawnSync("/bin/launchctl", args, { stdio: "ignore" }).status ?? 1);
@@ -171,13 +230,23 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
   try { fchmodSync(setupLog, 0o600); } finally { closeSync(setupLog); }
   if (full) {
     // 前台创建或读取钥匙串里的数据库密钥，并试开一次数据库，失败当场可见。
-    if (!remote) await (o.initialize ?? (async () => {
-      const [{ loadConfig }, { HubDB }] = await Promise.all([import("./config.ts"), import("./db.ts")]);
-      const config = loadConfig(env);
-      // 打开失败的消息可能带出密钥，只报原因类别。
-      try { new HubDB(join(config.dataDir, "history.db"), config.dbKey).close(); }
-      catch { throw new SetupError(t("无法打开加密数据库，请确认钥匙串里的数据库密钥与数据目录匹配", "Could not open the encrypted database. Check that the key in the Keychain matches the data directory.")); }
-    }))();
+    if (!remote) {
+      // 在数据库初始化前校验端口，配置错误由 setup 按未知失败处理。
+      resolvePort(env, data);
+      resolveLanBinding(data, env);
+      try {
+        await (o.initialize ?? (async () => {
+          const [{ loadConfig }, { HubDB }] = await Promise.all([import("./config.ts"), import("./db.ts")]);
+          const config = loadConfig(env);
+          new HubDB(join(config.dataDir, "history.db"), config.dbKey).close();
+        }))();
+      } catch {
+        throw new SetupError("database", t(
+          "无法打开加密数据库，请检查钥匙串和数据库密钥。",
+          "Could not open the encrypted database. Check the Keychain and your database key.",
+        ));
+      }
+    }
     // 采集端配置只更新运行目录和 bun，保留用户改过的其他项。
     const collector = join(data, "collector.json");
     writePrivate(collector, JSON.stringify({ ...(readJSON(collector) ?? {}), repo: runtime, bun }, null, 2) + "\n");
@@ -200,7 +269,11 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
   // 终端里运行 install.sh 和从 Finder 打开应用得到同一个 PATH：都先看登录 shell 的 PATH。
   const { PATH: shellPath = "", ...shellVars } = (o.shellEnv ?? loginShellEnv)();
   const search = [...shellPath.split(":").filter(Boolean), ...(env.PATH ?? "").split(":").filter(Boolean)];
-  const path = servicePath(bun, home, search, log, lang);
+  const tools = toolLocations(home, search, o.systemPath);
+  const path = pathForTools(bun, tools, log, lang);
+  if (full && !remote && !tools.claude && tools.codex && !existsSync(join(data, "models.json"))) {
+    await initializeCodexConfig(data);
+  }
   // 终端里的代理和 CODEX_HOME 交给后台调用的 codex、claude，不然终端里能用、Tacit 里连不上。
   const cliEnv = Object.fromEntries(Object.entries(shellVars).filter(([key]) => SHELL_ENV.test(key)));
   const sessionPathEnv: Record<string, string> = {};
@@ -208,7 +281,11 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     const value = shellVars[key] || env[key];
     if (value) sessionPathEnv[key] = value;
   }
-  const layout: ServiceLayout = { app: o.app, runtime, bun, data, path, cliEnv, sessionPathEnv };
+  const hubEnv: Record<string, string> = { RA_DATA_DIR: data };
+  for (const key of ["RA_PORT", "RA_LAN_PORT"]) {
+    if (env[key] !== undefined) hubEnv[key] = env[key];
+  }
+  const layout: ServiceLayout = { app: o.app, runtime, bun, data, path, cliEnv, sessionPathEnv, hubEnv };
   const changed = new Set<Job>();
   for (const job of remote ? ["collector"] as const : JOBS) {
     const file = join(agents, `${label(job)}.plist`);
@@ -237,21 +314,68 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
       if (loaded(job)) return;
       await wait(1000);
     }
-    throw new SetupError(t(`后台任务 ${label(job)} 没能加载，请重新打开 Tacit`, `Could not load ${label(job)}. Reopen Tacit.`));
+    throw new SetupError("background_blocked", t(`后台任务 ${label(job)} 没能加载，请重新打开 Tacit`, `Could not load ${label(job)}. Reopen Tacit.`));
   };
-  const restart = !remote && (full || changed.has("hub") || changed.has("distill"));
+  let restart = !remote && (full || o.retry === true || changed.has("hub") || changed.has("distill"));
   if (restart) for (const job of ["distill", "hub"] as const) await unload(job);
-  if (!remote && (restart || !loaded("hub"))) {
-    await load("hub");
-    const { port } = resolvePort(env, data);
+  if (!remote) {
+    const startupMarker = join(data, "hub-startup-error.json");
+    const needsLoad = restart || !loaded("hub");
+    if (needsLoad) rmSync(startupMarker, { force: true });
+    let { port, source } = resolvePort(env, data);
+    const probe = o.probePort ?? probePort;
+    const occupied = () => new SetupError("port_in_use", t(
+      "后台服务的端口被占用了。请在设置 › 后台与连接里更换端口。",
+      "The background service port is in use. Change it in Settings → Background service and connection.",
+    ));
+    const startHub = async (movePort: boolean) => {
+      const lan = resolveLanBinding(data, env);
+      if (movePort) {
+        if (source !== "default") throw occupied();
+        const free = await alternatePort(probe, "127.0.0.1", 47825, lan.port);
+        if (free === null) throw occupied();
+        writeHubPort(data, free);
+        port = free;
+      }
+      // Mac 的设备监听按需打开。只为默认值腾出端口，用户固定的设备端口保持原值。
+      if (lan.source === "default" && (lan.port === port || await probe(lan.port, "0.0.0.0") === null)) {
+        const free = await alternatePort(probe, "0.0.0.0", 47925, port);
+        if (free !== null) writeHubPort(data, free, "lan_port");
+      }
+      await load("hub");
+    };
+    if (needsLoad) await startHub(port !== 0 && await probe(port, "127.0.0.1") === null);
     const healthy = o.healthy ?? (async (p: number) => {
-      for (let i = 0; i < 15; i++) {
-        try { if ((await fetch(`http://127.0.0.1:${p}/v1/health`)).ok) return true; } catch {}
-        await wait(1000);
+      for (let i = 0; i < 60; i++) {
+        const started = performance.now();
+        try {
+          const response = await fetch(`http://127.0.0.1:${p}/v1/health`, { signal: AbortSignal.timeout(1000) });
+          if (response.ok && (await response.json() as { ok?: boolean }).ok === true) return true;
+        } catch {}
+        await wait(Math.max(0, 1000 - (performance.now() - started)));
       }
       return false;
     });
-    if (!(await healthy(port))) throw new SetupError(t("后台服务没能启动，请查看 logs/hub.log", "The background service could not start. Check logs/hub.log."));
+    let ready = await healthy(port);
+    if (!ready && !needsLoad && source === "default") {
+      const code = readJSON(startupMarker)?.code;
+      // 只认后台自己写下的“端口被占”：自家后台正监听这个端口、只是启动慢时，探测也会显示被占（第 2 轮审查）。
+      if (code === "port_in_use") {
+        for (const job of ["distill", "hub"] as const) await unload(job);
+        rmSync(startupMarker, { force: true });
+        await startHub(await probe(port, "127.0.0.1") === null);
+        restart = true;
+        ready = await healthy(port);
+      }
+    }
+    if (!ready) {
+      const code = readJSON(startupMarker)?.code;
+      if (code === "port_in_use") throw occupied();
+      if (["db_key_missing", "db_key_unreadable", "db_open_failed", "db_migration_failed"].includes(code)) {
+        throw new SetupError("database", t("无法打开加密数据库。请检查钥匙串和数据库密钥。", "Could not open the encrypted database. Check the Keychain and your database key."));
+      }
+      throw new SetupError("service_unhealthy", t("后台服务没能启动。请重新准备。", "The background service did not start. Prepare it again."));
+    }
   }
   if (!remote && distill && (restart || !loaded("distill"))) await load("distill");
   // 先记下已完成，采集端启动后自己再跑一次时就不会重复初始化。

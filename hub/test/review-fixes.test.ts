@@ -39,7 +39,7 @@ test("归属坏批次保留待重试，后续批次仍能处理，日志不带�
 
 for (const [error, kind] of [
   ["Usage: codex exec [OPTIONS]", null], ["context length exceeded", null], ["output token limit exceeded", null],
-  ["request time limit exceeded", "network"], ["HTTP 429", "rate_limited"], ["rate_limit_exceeded", "rate_limited"],
+  ["request time limit exceeded", "network"], ["cli_network", "network"], ["HTTP 429", "rate_limited"], ["rate_limit_exceeded", "rate_limited"],
   ["You've hit your 5-hour limit", "quota"], ["insufficient_quota", "quota"],
 ] as const) test(`冷却识别额度、限流和超时：${error}`, async () => {
   const store = new DistillStore(context().db);

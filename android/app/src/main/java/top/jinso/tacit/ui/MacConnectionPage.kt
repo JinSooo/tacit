@@ -19,12 +19,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
@@ -45,6 +47,12 @@ import top.jinso.tacit.ui.components.*
     var invite by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var connecting by remember { mutableStateOf(false) }
+    var relayWaiting by remember { mutableStateOf(false) }
+    var longWait by remember { mutableStateOf(false) }
+    var actionJob by remember { mutableStateOf<Job?>(null) }
+    LaunchedEffect(relayWaiting) {
+        if (relayWaiting) { delay(30_000); longWait = true }
+    }
     var expanded by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
     LaunchedEffect(app, expanded) {
@@ -64,7 +72,7 @@ import top.jinso.tacit.ui.components.*
         message = null
         busy = true
         connecting = pairing
-        scope.launch {
+        actionJob = scope.launch {
             try { block() }
             catch (error: CancellationException) { throw error }
             catch (error: Exception) {
@@ -73,11 +81,14 @@ import top.jinso.tacit.ui.components.*
             } finally {
                 busy = false
                 connecting = false
+                relayWaiting = false
+                longWait = false
             }
         }
     }
     fun pair(value: String) = action(pairing = true) {
-        app.sync.pair(value, displayAddress)
+        invite = value
+        app.sync.pair(value, displayAddress) { withContext(Dispatchers.Main) { relayWaiting = true } }
         invite = ""
         address = null
     }
@@ -90,8 +101,9 @@ import top.jinso.tacit.ui.components.*
             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             .setPrompt(strings.text(R.string.scan_mac_qr)).setBeepEnabled(false).setBarcodeImageEnabled(false))
     }
+    val recoverPermission = rememberPermissionRecovery { message = it to true }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) scan() else message = strings.text(R.string.camera_ungranted) to true
+        if (granted) scan() else recoverPermission(Manifest.permission.CAMERA, strings.text(R.string.camera_ungranted))
     }
 
     var manualOpen by remember { mutableStateOf(false) }
@@ -147,11 +159,16 @@ import top.jinso.tacit.ui.components.*
                     if (activity.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scan()
                     else permission.launch(Manifest.permission.CAMERA)
                 }, enabled = !busy)
+                val link = invite.trim()
+                val linkValid = link.startsWith("tacit://pair?d=") && link.length > "tacit://pair?d=".length
+                val linkInvalid = link.isNotEmpty() && !linkValid
                 OutlinedTextField(invite, { invite = it.take(16_400) }, Modifier.fillMaxWidth(),
                     enabled = !busy, label = { Text(strings.text(R.string.invite_link)) }, placeholder = { Text(strings.text(R.string.invite_paste)) },
-                    singleLine = true, visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
-                TonalButton(strings.text(R.string.connect), { pair(invite) }, enabled = invite.isNotBlank() && !busy)
+                    singleLine = true, isError = linkInvalid,
+                    supportingText = if (linkInvalid) {{ Text(strings.text(R.string.invite_format_hint)) }} else null,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done,
+                        autoCorrectEnabled = false))
+                TonalButton(strings.text(R.string.connect), { pair(link) }, enabled = linkValid && !busy)
             }
             GroupDivider()
             SettingsRow(strings.text(R.string.mac_address), expanded = manualOpen, onClick = { manualOpen = !manualOpen })
@@ -172,7 +189,8 @@ import top.jinso.tacit.ui.components.*
     }
     if (busy || (current == null && message == null)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (connecting) Caption(strings.text(R.string.connecting_mac))
+            if (connecting) Caption(strings.text(if (longWait) R.string.confirm_mac_online else R.string.connecting_mac))
+            if (relayWaiting) TextAction(strings.text(R.string.cancel), { actionJob?.cancel() })
             ProgressLine()
         }
     }

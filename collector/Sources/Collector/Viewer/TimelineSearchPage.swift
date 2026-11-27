@@ -178,7 +178,7 @@ struct TimelineSearchPage: View {
     } catch is CancellationError {
     } catch {
       guard id == request, query == text else { return }
-      Motion.animate { loadError = error.localizedDescription }
+      Motion.animate { loadError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
     }
   }
 
@@ -211,7 +211,7 @@ struct TimelineSearchPage: View {
     } catch is CancellationError {
     } catch {
       guard id == request, query == text else { return }
-      openError = error.localizedDescription
+      openError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
     }
   }
 }

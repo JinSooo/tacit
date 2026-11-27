@@ -165,6 +165,12 @@ test("最近错误只有同一档位和用途的后续调用成功才显示恢�
   expect(snapshot().distill.last_error?.recovered).toBe(false);
 });
 
+test.each(["cli_not_logged_in:401", "cli_outdated", "cli_model_unavailable", "cli_network", "cli_runtime_missing"])("状态保留固定的 CLI 错误类别 %s", error => {
+  ctx.db.db.prepare("INSERT INTO llm_usage(id,at,tier,task,ok,error) VALUES(?,?,?,?,0,?)")
+    .run(ulid(now), toLocalIso(now), "minute", "assign", error);
+  expect(snapshot().distill.last_error?.error).toBe(error);
+});
+
 test("今天用量同时按 task 汇总，NULL 旧行、失败和未知 token 均保留", () => {
   seed();
   ctx.db.db.exec("UPDATE llm_usage SET task=CASE WHEN input_tokens=100 THEN 'assign' WHEN ok=0 THEN 'assign' WHEN input_tokens=999 THEN 'yesterday' ELSE NULL END");

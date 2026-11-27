@@ -8,9 +8,9 @@ import { hubModeOf, resolvePort, writeHubPort, PORT_MIN, PORT_MAX, type HubMode 
 import { friendlyConfigError, DEFAULT_TIERS, KEY_PROVIDERS, PROVIDERS, TIERS, isCliProvider, loadConfig, saveConfig, validateTier, validateTiers, type KeyProvider } from "./llm/config.ts";
 import { KEY_PATTERN, systemKeychain, type Keychain } from "./llm/keychain.ts";
 import { createLLM, type ModelConfig, type ReadKey, type Spawn, type Tier } from "./llm/index.ts";
+import * as codexCli from "./llm/codex-cli.ts";
 import { GENERAL_DEFAULTS, GENERAL_RANGES, readGeneral, updateGeneral } from "./general-settings.ts";
 import { readModelUsage } from "./model-usage.ts";
-import { redactString } from "./redact.ts";
 import { RuntimeLog, appliedCall } from "./runtime-log.ts";
 import { isLoopback, localModels } from "./llm/local.ts";
 import { AGENT_TOOLS, AgentCommandError, AgentConfigError, agentStatus, connectAgent, otherMcpConfig, type AgentTool, type InstallEnvironment } from "./agents-install.ts";
@@ -46,6 +46,8 @@ export const TIER_INFO: Record<Tier, { label: string; description: string }> = {
 
 const TEST_SCHEMA = { type: "object", properties: { ok: { type: "boolean", enum: [true] } }, required: ["ok"], additionalProperties: false };
 const TEST_TIMEOUT_MS = 60_000;
+const codexProbes: typeof codexCli & { resetCodexProbes?: () => void } = codexCli;
+const noStore = { headers: { "Cache-Control": "no-store" } };
 
 function defaultProbe(port: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -79,11 +81,15 @@ export function createSettings(deps: SettingsDeps) {
     const entries = await Promise.all(KEY_PROVIDERS.map(async p => [p, await keychain.has(p).catch(() => null)] as const));
     return Object.fromEntries(entries) as Record<KeyProvider, boolean | null>;
   }
-  async function models() {
+  async function models(hub: HubDB, remoteActor: boolean | undefined) {
     let tiers: Record<Tier, ModelConfig> | null = mode === "server" ? null : structuredClone(DEFAULT_TIERS);
     let config_error: string | null = null;
     try { tiers = await loadConfig(deps.dataDir, { mode }); } catch (error) { config_error = error instanceof Error ? error.message : "models.json 无效"; }
-    return { tiers, config_error, keys: await keyStatus(), providers, tier_info: TIER_INFO };
+    const keys = await keyStatus();
+    const last_failure_detail = remoteActor
+      ? Object.fromEntries(TIERS.map(tier => [tier, null]))
+      : new RuntimeLog(hub).lastFailureDetails(TIERS);
+    return { tiers, config_error, keys, providers, tier_info: TIER_INFO, last_failure_detail };
   }
   function general(hub: HubDB) {
     return { ...readGeneral(hub), defaults: GENERAL_DEFAULTS, ranges: GENERAL_RANGES, model_usage: readModelUsage(hub) };
@@ -118,7 +124,7 @@ export function createSettings(deps: SettingsDeps) {
     }
 
     if (pathname === "/v1/settings/models") {
-      if (method === "GET") return Response.json(await models());
+      if (method === "GET") return Response.json(await models(ctx.db, ctx.remoteActor), noStore);
       if (method === "PUT") {
         const body = object(await ctx.readJSON());
         if (Object.keys(body).some(k => k !== "tiers")) throw new InputError("只接受 tiers");
@@ -126,7 +132,7 @@ export function createSettings(deps: SettingsDeps) {
         const tiers = asConfigInput(() => validateTiers(body.tiers, "tiers", { mode }));
         try { await saveConfig(deps.dataDir, tiers, { mode }); }
         catch { return fail(500, "保存模型设置失败，请重试。"); }
-        return Response.json(await models());
+        return Response.json(await models(ctx.db, ctx.remoteActor), noStore);
       }
     }
 
@@ -153,14 +159,17 @@ export function createSettings(deps: SettingsDeps) {
       if (testing) return fail(409, "上一次测试还没结束");
       testing = true;
       try {
+        if (typeof codexProbes.resetCodexProbes === "function") codexProbes.resetCodexProbes();
         // 不记进 llm_usage：用量表统计的是提炼的消耗，测试调用不混进去。
+        const journal = new RuntimeLog(ctx.db);
         const llm = createLLM({
-          dataDir: deps.dataDir, mode, recordUsage: () => {}, journal: new RuntimeLog(ctx.db), ...deps.llm,
+          dataDir: deps.dataDir, mode, recordUsage: () => {}, journal, ...deps.llm,
           configs: async () => ({ minute: config, hour: config, day: config }),
         });
         const result = await llm.complete<{ ok: boolean }>({ tier, task: "connection_test", system: "这是连接测试。只按 schema 返回 {\"ok\": true}。", prompt: "连接测试：返回 ok=true。", schema: TEST_SCHEMA, timeoutMs: TEST_TIMEOUT_MS });
         if (result.ok) appliedCall(ctx.db,result.call_id);
-        return Response.json({ ok: result.ok, ms: result.ms, provider: config.provider, model: config.model, error: result.ok ? null : redactString(result.error).text.slice(0, 300) });
+        const detail = result.ok || ctx.remoteActor ? null : journal.failureDetail(result.call_id);
+        return Response.json({ ok: result.ok, ms: result.ms, provider: config.provider, model: config.model, error: result.ok ? null : result.error, detail }, noStore);
       } finally { testing = false; }
     }
 

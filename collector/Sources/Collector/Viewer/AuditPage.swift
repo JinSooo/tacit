@@ -102,7 +102,7 @@ struct AuditPage: View {
     } catch is CancellationError {
     } catch {
       guard !Task.isCancelled, tool == requestedTool else { return }
-      self.error = error.localizedDescription
+      self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
       if reset { reads = [] }
     }
   }

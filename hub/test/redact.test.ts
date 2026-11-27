@@ -154,3 +154,28 @@ test("people 和 media 中的自由文本也在入库前脱敏", () => {
     expect(stored.redactions).toBe(3); expect(stored.sensitivity).toBe("redacted");
   } finally { ctx.cleanup(); }
 });
+
+test("Basic credentials and single-component URL user information are redacted", () => {
+  for (const header of ["Authorization", "Proxy-Authorization"]) {
+    expect(redactString(`${header}: Basic dTpw`)).toEqual({
+      text: `${header}: Basic [已脱敏:Basic]`, count: 1,
+    });
+  }
+  expect(redactString("Connecting with Basic ZmFrZS1sb2dpbjpzYW1wbGU=")).toEqual({
+    text: "Connecting with Basic [已脱敏:Basic]", count: 1,
+  });
+  expect(redactString("http://example-access@proxy.example.invalid:8080/path")).toEqual({
+    text: "http://[已脱敏:URL凭据]@proxy.example.invalid:8080/path", count: 1,
+  });
+  expect(redactString("https://example.invalid/path/user@example.invalid")).toEqual({
+    text: "https://example.invalid/path/user@example.invalid", count: 0,
+  });
+});
+
+// 回归（第 2 轮审查）：普通英文里的 Basic 和 ssh 用户名不是凭据。
+test("plain English after Basic and ssh user names stay readable", () => {
+  for (const text of ["Use basic authentication for the demo", "Basic configuration steps", "basic implementation notes",
+    "Basic QWxwaGFCZXRhR2FtbWE=", "ssh://git@github.com/example/plugin.git", "git@github.com:example/plugin.git"]) {
+    expect(redactString(text)).toEqual({ text, count: 0 });
+  }
+});

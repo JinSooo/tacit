@@ -954,26 +954,24 @@ final class AdaptiveViewerDataSource: ViewerDataSource, @unchecked Sendable {
       if route.remote == nil, (try? session.sync.cache.cursor().epoch) == 0 {
         return try await localFallback()
       }
-      throw HubError(message: error.localizedDescription, status: 0)
+      throw error
     }
   }
 
   static func mapDeviceError(_ error: DeviceClientError) -> HubError {
     switch error {
-    case .transportError(let msg):
-      return HubError(message: L10n.unreachableService(msg), status: 0, kind: .unreachable)
-    case .hubBusy(let msg):
-      return HubError(message: msg ?? L10n.databaseBusyTryAgainShortly, status: 503)
-    case .operationError(_, 403, let msg), .plaintextError(403, let msg):
-      return HubError(message: msg ?? L10n.devicePermissionDenied, status: 403)
-    case .operationError(_, let status, let msg), .plaintextError(let status, let msg):
-      return HubError(message: msg ?? L10n.requestFailed(status), status: status)
-    case .envelopeTooLarge(let msg):
-      return HubError(message: msg ?? L10n.responseTooLarge, status: 413)
-    case .deviceRemoved(let msg):
-      return HubError(message: msg ?? L10n.requestFailed401, status: 401)
+    case .transportError(_, let code):
+      return HubError(networkCode: code ?? .unknown)
+    case .hubBusy(let message):
+      return HubError(serviceMessage: message, status: 503)
+    case .operationError(_, let status, let message), .plaintextError(let status, let message):
+      return HubError(serviceMessage: message, status: status)
+    case .envelopeTooLarge(let message):
+      return HubError(serviceMessage: message, status: 413)
+    case .deviceRemoved(let message):
+      return HubError(serviceMessage: message, status: 401)
     default:
-      return HubError(message: L10n.unreadableResponse, status: 0, kind: .badResponse)
+      return HubError(status: 0, kind: .badResponse)
     }
   }
 

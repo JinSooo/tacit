@@ -20,16 +20,32 @@ private func manifest(_ version: String, _ url: String = "https://example.com/re
 
 /// 2026-11-25 虚拟机实测：没装 Claude Code 时默认模型只报“命令行调用失败”，说不出缺什么。
 @Test(ChineseUITrait()) func missingCliIsExplainedAndNeedsUser() {
-  #expect(ModelErrorText.plain("cli_missing").contains("没找到 Claude Code"))
+  #expect(ModelErrorText.plain("cli_missing").contains("没找到所选的命令行工具"))
   #expect(ModelErrorText.needsUser("cli_missing"))
 }
 
 /// 2026-11-25 虚拟机实测：开机“重新打开窗口”恢复 Tacit 时也算访达启动，主窗口每次开机都弹出来。
 @Test func launchWindowStaysQuietRightAfterLogin() {
   let login = Date(timeIntervalSince1970: 1_000_000)
-  #expect(!LaunchWindowPolicy.opensWindow(source: .finder, loginAt: login, now: login.addingTimeInterval(20)))
-  #expect(LaunchWindowPolicy.opensWindow(source: .finder, loginAt: login, now: login.addingTimeInterval(600)))
-  #expect(LaunchWindowPolicy.opensWindow(source: .finder, loginAt: nil))
-  #expect(!LaunchWindowPolicy.opensWindow(source: .launchd, loginAt: login, now: login.addingTimeInterval(600)))
+  let oldStamp = login.addingTimeInterval(-600)
+  #expect(!LaunchWindowPolicy.opensWindow(source: .finder, loginAt: login, firstPreparedAt: oldStamp,
+                                         now: login.addingTimeInterval(89)))
+  #expect(LaunchWindowPolicy.opensWindow(source: .finder, loginAt: login, firstPreparedAt: oldStamp,
+                                        now: login.addingTimeInterval(90)))
+  #expect(LaunchWindowPolicy.opensWindow(source: .finder, loginAt: nil, firstPreparedAt: oldStamp))
+  #expect(!LaunchWindowPolicy.opensWindow(source: .launchd, loginAt: login, firstPreparedAt: oldStamp,
+                                         now: login.addingTimeInterval(600)))
   #expect(LoginSession.consoleLoginDate().map { $0 <= Date() } ?? true)
+}
+
+@Test func finderLaunchOpensDuringLoginQuietPeriodForFirstAndRecentPreparation() {
+  let login = Date(timeIntervalSince1970: 1_000_000)
+  let now = login.addingTimeInterval(20)
+  #expect(LaunchWindowPolicy.opensWindow(source: .finder, loginAt: login, firstPreparedAt: nil, now: now))
+  #expect(LaunchWindowPolicy.opensWindow(source: .finder, loginAt: login,
+                                        firstPreparedAt: now.addingTimeInterval(-299), now: now))
+  #expect(!LaunchWindowPolicy.opensWindow(source: .finder, loginAt: login,
+                                         firstPreparedAt: now.addingTimeInterval(-300), now: now))
+  #expect(!LaunchWindowPolicy.opensWindow(source: .launchd, loginAt: login, firstPreparedAt: nil, now: now))
+  #expect(!LaunchWindowPolicy.opensWindow(source: .launchd, loginAt: login, firstPreparedAt: now, now: now))
 }

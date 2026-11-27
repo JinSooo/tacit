@@ -9,6 +9,7 @@ import { deviceAccess } from "./store.ts";
 import { Projection } from "./projection.ts";
 import { projectionHead, pruneProjection, relayProjectionBytes, type ChangeRow } from "./projection-store.ts";
 import { dayMs, relayConfig, type Mailbox, type RelayRequest, type Space } from "./relay-store.ts";
+import { proxiedFetch, proxyFor } from "../net/system-proxy.ts";
 
 const tickMs = 5_000;
 // 单条消息最大 1 MiB，经代理或慢网络时一次存取可能要十几秒（2026-11-23 线上实测 14–17 秒）。
@@ -187,7 +188,7 @@ export class RelayService {
   }
 
   private async request(url: string, method: string, token?: string, body?: unknown, timeout = tickMs) {
-    const response = await fetch(url, {
+    const response = await proxiedFetch(url, {
       method, redirect: "error", signal: AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(timeout)]),
       headers: {
         ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
@@ -463,7 +464,7 @@ export class RelayService {
     const url = new URL(`${space.url}/v1/spaces/${space.space}/watch`);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     if (space.state === "current") this.countRequest(space.space, "watch");
-    const socket = new RelayWebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
+    const socket = new RelayWebSocket(url, { proxy: proxyFor(url), headers: { Authorization: `Bearer ${token}` } });
     this.watches.set(space.space, socket);
     socket.onopen = () => {
       this.connected.set(space.space, true);

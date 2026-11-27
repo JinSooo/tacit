@@ -27,7 +27,7 @@ struct Config {
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { file = j }
     // 应用包自带运行目录和 bun 时始终用自带的，首次打开还没写 collector.json 也能运行。
     let bundled = Bundled.current
-    var c = Config(dataDir: dataDir, fixedPort: arg("--port") ?? (file["port"] as? Int).map(String.init),
+    var c = Config(dataDir: dataDir, fixedPort: arg("--port") ?? Self.environmentPort ?? (file["port"] as? Int).map(String.init),
                    repo: arg("--repo") ?? bundled?.runtime ?? file["repo"] as? String,
                    bun: arg("--bun") ?? bundled?.bun ?? file["bun"] as? String ?? home.appendingPathComponent(".bun/bin/bun").path)
     if let d = arg("--device") ?? file["device"] as? String { c.device = d }
@@ -40,6 +40,31 @@ struct Config {
           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
           let p = j["port"] as? Int, (1024...65535).contains(p) else { return nil }
     return String(p)
+  }
+
+  private static var environmentPort: String? {
+    guard let raw = ProcessInfo.processInfo.environment["RA_PORT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+          let port = Int(raw), (1...65535).contains(port) else { return nil }
+    return String(port)
+  }
+
+  func writeHubPort(_ port: Int) throws {
+    guard allowsLocalHub, fixedPort == nil, ProcessInfo.processInfo.environment["RA_PORT"] == nil,
+          (1024...65535).contains(port) else { throw HubError.needsLocalHub }
+    let file = dataDir.appendingPathComponent("hub.json")
+    var fields: [String: Any]
+    do {
+      let data = try Data(contentsOf: file)
+      guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw CocoaError(.fileReadCorruptFile)
+      }
+      fields = object
+    } catch CocoaError.fileReadNoSuchFile {
+      fields = [:]
+    }
+    fields["port"] = port
+    try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try PrivateFile.write(JSONSerialization.data(withJSONObject: fields, options: [.prettyPrinted, .sortedKeys]), to: file)
   }
 
   func hubRoute() throws -> HubBinding.Route { try HubBinding.read(from: dataDir).route }
@@ -68,6 +93,7 @@ final class HubClient: @unchecked Sendable {
   private var inFlight = false
   private let lock = NSLock()
   private var networkError: String?
+  private var uploadFailure: UploadResponseFailure.Category?
   private var networkRoute: HubBinding.Route?
   private var storageError: String?
   private var storedCount = 0
@@ -77,7 +103,13 @@ final class HubClient: @unchecked Sendable {
   var queuePeak: Int { lock.lock(); defer { lock.unlock() }; return peak }
   private var pendingWrites = 0
   private let io = DispatchQueue(label: "record-anything.outbox", qos: .utility)
-  var lastError: String? { lock.lock(); defer { lock.unlock() }; return storageError ?? networkError }
+  var lastError: String? { deliveryIssue.message }
+  var deliveryIssue: (message: String?, category: UploadResponseFailure.Category?) {
+    lock.withLock {
+      if let storageError { return (storageError, nil) }
+      return (networkError, uploadFailure)
+    }
+  }
   var pendingCount: Int { lock.lock(); defer { lock.unlock() }; return storedCount + pendingWrites }
   private var sentCount = 0
   private var rejectedCount = 0
@@ -198,7 +230,7 @@ final class HubClient: @unchecked Sendable {
     let observed = try? config.hubRoute()
     if observed != networkRoute {
       networkRoute = observed
-      lock.withLock { networkError = nil }
+      lock.withLock { networkError = nil; uploadFailure = nil }
     }
     guard let route = observed else {
       lock.withLock { networkError = "后台连接配置无法读取，待发送记录已保留。" }
@@ -236,18 +268,24 @@ final class HubClient: @unchecked Sendable {
       } catch DeviceClientError.hubBusy, DeviceClientError.operationError(_, 503, _), DeviceClientError.plaintextError(503, _) {
         finish(on: route, error: nil, done: nil, status: 503)
       } catch DeviceClientError.operationError(_, let status, _), DeviceClientError.plaintextError(let status, _) {
-        finish(on: route, error: "后台服务拒绝了记录（\(status)）", done: nil)
+        finish(on: route, rejectedStatus: status)
       } catch RemoteDeviceAccess.Failure.frozen, DeviceClientError.deviceRemoved, DeviceClientError.invalidKey, DeviceClientError.keyStoreError, LocalDeviceLink.Failure.keyUnavailable {
         let backend = route.remote == nil ? "本机后台" : "远端后台"
         finish(on: route, error: "\(backend)连接凭据不可用，待发送记录已保留。", done: nil)
       } catch CollectorUpload.Failure.noToken {
-        finish(on: route, error: "找不到后台服务的访问凭证，请重启 Tacit", done: nil)
+        finish(on: route, error: startupDeliveryError("找不到后台服务的访问凭证，请重启 Tacit"), done: nil)
       } catch CollectorUpload.Failure.batchTooLarge, DeviceClientError.envelopeTooLarge {
-        finish(on: route, error: "待发送记录超过上传大小限制。", done: nil)
+        finish(on: route, rejectedStatus: 413)
       } catch {
-        finish(on: route, error: "连不上后台服务", done: nil)
+        finish(on: route, error: startupDeliveryError("连不上后台服务"), done: nil)
       }
     }
+  }
+
+  private func startupDeliveryError(_ error: String) -> String? {
+    let activity = AppSetup.activity
+    return LocalBackendPreparation.deliveryError(error, preparing: activity == .running,
+                                                 inStartupGrace: HubAPI.inStartupGrace(), setupFailed: activity.failure != nil)
   }
 
   private func sendRemote(on route: HubBinding.Route, queued: Int) {
@@ -290,7 +328,7 @@ final class HubClient: @unchecked Sendable {
         }
         if let status = delivery.rejectedStatus {
           if let nonce = delivery.nonce { try await session.releaseRejectedCapture(nonce: nonce, status: status) }
-          finish(on: route, error: "后台服务拒绝了记录（\(status)）", done: nil)
+          finish(on: route, rejectedStatus: status)
           return
         }
         guard let receipt = DeliveryReceipt.decode(delivery.body, batchCount: delivery.ids.count) else {
@@ -302,16 +340,23 @@ final class HubClient: @unchecked Sendable {
         finish(on: route, error: nil, done: done, relay: delivery.nonce.map { (session, $0) })
       } catch RemoteDeviceSession.Failure.awaitingReceipt, is RemoteSwitchWriteGate.Paused {
         finish(on: route, error: nil, done: nil)
+      } catch DeviceClientError.envelopeTooLarge {
+        finish(on: route, rejectedStatus: 413)
       } catch DeviceClientError.operationError(_, let status, _), DeviceClientError.plaintextError(let status, _) {
-        finish(on: route, error: "后台服务拒绝了记录（\(status)）", done: nil)
+        finish(on: route, rejectedStatus: status)
       } catch {
         finish(on: route, error: "远端后台暂不可用，待发送记录已保留。", done: nil)
       }
     }
   }
 
+  private func finish(on route: HubBinding.Route, rejectedStatus: Int) {
+    let failure = UploadResponseFailure(status: rejectedStatus)
+    finish(on: route, error: failure.message, done: nil, failureCategory: failure.category)
+  }
+
   private func finish(on route: HubBinding.Route, error: String?, done: (HubBinding.Route, Set<String>, Int, Int)?, status: Int? = nil,
-                      relay: (RemoteDeviceSession, String)? = nil) {
+                      relay: (RemoteDeviceSession, String)? = nil, failureCategory: UploadResponseFailure.Category? = nil) {
     io.async { [self] in
       var acknowledged = done
       if let done {
@@ -323,7 +368,7 @@ final class HubClient: @unchecked Sendable {
       let previousError = networkError
       if current, let status { deliveryMetrics.received(status: status) }
       inFlight = false
-      if current { networkError = error }
+      if current { networkError = error; uploadFailure = failureCategory }
       if let done = acknowledged {
         if done.0.remote == nil { sentCount += done.2 }
         else if current { remoteSent = (done.0, (remoteSent?.route == done.0 ? remoteSent?.count ?? 0 : 0) + done.2) }
@@ -467,7 +512,7 @@ final class PluginScheduler {
   }
   func manage(_ request: PluginRequest) async throws -> PluginResponse {
     let config = self.config
-    guard config.allowsLocalHub else { throw PluginFailure(message: L10n.Settings.localBackendRequired) }
+    guard config.allowsLocalHub else { throw HubError(message: L10n.Settings.localBackendRequired, status: 0) }
     let writeGate = self.writeGate
     let queue = ["install", "configure", "uninstall"].contains(request.action) ? jobs : DispatchQueue.global(qos: .utility)
     return try await withCheckedThrowingContinuation { continuation in
@@ -475,8 +520,8 @@ final class PluginScheduler {
         do {
           try writeGate?.begin()
           defer { writeGate?.end() }
-          guard config.allowsLocalHub else { throw PluginFailure(message: L10n.Settings.localBackendRequired) }
-          guard let repo = config.repo else { throw PluginFailure(message: L10n.Settings.installFolderMissing) }
+          guard config.allowsLocalHub else { throw HubError(message: L10n.Settings.localBackendRequired, status: 0) }
+          guard let repo = config.repo else { throw HubError(message: L10n.Settings.installFolderMissing, status: 0) }
           let p = Process(), output = Pipe(), input = Pipe()
           p.executableURL = URL(fileURLWithPath: config.bun)
           p.arguments = ["\(repo)/hub/src/cli.ts", "plugins"]

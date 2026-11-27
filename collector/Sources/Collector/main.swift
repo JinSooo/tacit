@@ -353,18 +353,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func applicationDidFinishLaunching(_ n: Notification) {
     terminationSignal = TerminationSignal { NSApp.terminate(nil) }
     Task { @MainActor [weak self] in
-      guard let self, AppSetup.checkPlacement() else { return }
+      guard let self else { return }
+      var recoveryMessage: String?
       do { try await self.remoteSwitch.recover() }
-      catch { NSLog("record-anything: %@", error.localizedDescription) }
+      catch {
+        NSLog("record-anything: %@", error.localizedDescription)
+        recoveryMessage = RemoteBackendSettingsModel.message(for: error, fallback: L10n.Settings.recoverSwitchFailed)
+      }
       guard !self.terminating else { return }
-      self.finishLaunchingAfterRecovery()
+      self.finishLaunchingAfterRecovery(recoveryMessage: recoveryMessage)
     }
   }
 
-  @MainActor private func finishLaunchingAfterRecovery() {
+  @MainActor private func finishLaunchingAfterRecovery(recoveryMessage: String?) {
+    let firstPreparedAt = AppSetup.firstPreparationDate(in: config.dataDir)
     AppSetup.start(config: config, startup: loginStartup, writeGate: switchWriteGate, standby: launchSource != .launchd)
     viewer.store.remoteBackend?.refreshContext()
-    if let failure = remoteSwitch.lastFailure { viewer.store.remoteBackend?.error = failure }
+    if let recoveryMessage { viewer.store.remoteBackend?.error = recoveryMessage }
     MainActor.assumeIsolated {
       WindowVisibility.onChange = { [weak self] _ in self?.updateSyncForeground() }
     }
@@ -407,6 +412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
         Task { await source.refreshBinding() }
         self?.hub.flush()
+        Task { @MainActor [weak self] in
+          guard let self, !self.terminating else { return }
+          await AppSetup.resumeAfterRecovery(config: self.config, startup: self.loginStartup, writeGate: self.switchWriteGate,
+                                             standby: launchSource != .launchd)
+        }
         Task { @MainActor [weak self] in await self?.historyImporter.tick() }
       },
       Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.writeStatus() },
@@ -436,10 +446,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if let day = pendingTimelineDay {
       pendingTimelineDay = nil
       MainActor.assumeIsolated { viewer.show(.timelineDay(day)) }
-    } else if LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate()) {
-      // 用户自己打开（首次安装、升级、退出后再开）就把主窗口拿出来：只有菜单栏图标时，新用户看不到准备清单，
-      // 刘海屏上图标还可能被挤掉，像是什么都没发生。登录自启和开机“重新打开窗口”恢复都不弹窗。
-      MainActor.assumeIsolated { viewer.show() }
+    } else if LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate(),
+                                             firstPreparedAt: firstPreparedAt) {
+      viewer.show()
     }
     ws.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.updateAudio() }
     ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in self?.tick() }
@@ -454,7 +463,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       self?.viewerDataSource.clearMemory()
     }
     DistributedNotificationCenter.default().addObserver(forName: .init(Self.showWindowNotification), object: nil, queue: .main) { [weak self] _ in
-      self?.openHistory()
+      MainActor.assumeIsolated { self?.viewer.show() }
     }
   }
 
@@ -743,7 +752,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
   func disabled(_ title: String) -> NSMenuItem { let i = NSMenuItem(title: title, action: nil, keyEquivalent: ""); i.isEnabled = false; return i }
 
+  @MainActor func prepareBackendAgain(port: Int? = nil) async throws {
+    let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+      AppSetup.start(config: config, startup: loginStartup, writeGate: switchWriteGate,
+                     standby: launchSource != .launchd, trigger: .manualRetry, port: port) {
+        continuation.resume(returning: $0)
+      }
+    }
+    hub.flush()
+    try result.get()
+    await viewer.store.refreshShared()
+  }
+
   @objc func requestAX() {
+    guard !AXIsProcessTrusted() else { return }
+    let key = "accessibilityPermissionRequested"
+    if UserDefaults.standard.bool(forKey: key) {
+      SystemPermissions.openPrivacyPane("Privacy_Accessibility")
+      return
+    }
+    UserDefaults.standard.set(true, forKey: key)
     AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
   }
   @objc func pauseHour() { pause(until: Date().addingTimeInterval(3600)) }
@@ -793,7 +821,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if task == .syncAll {
           // 整理进度由下一行的整理请求状态表达，这里不写“正在整理”，免得完成后还挂着。
           do { try await api.requestDistill(kind: "round") }
-          catch { text += "，整理没能开始：\(error.localizedDescription)" }
+          catch {
+            let fallback = L10n.text(zh: "整理没能开始，请稍后重试。", en: "Summarizing couldn't start. Try again shortly.")
+            text += L10n.text(zh: "，", en: " ") + UserFacingError.message(for: error, fallback: fallback)
+          }
         }
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let done = "\(f.string(from: Date())) 完成，" + text
@@ -818,12 +849,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       let outbox = hub.outboxStatus
       let hubBusy = hub.hubBusy
       let queuePeak = hub.queuePeak
-      let hubError = hub.lastError
+      let deliveryIssue = hub.deliveryIssue
+      let hubError = deliveryIssue.message
       let transcription = enabledSources["audio"] == true ? audio.transcriptionStatus() : nil
       var s: [String: Any] = stats
       s["queue"] = hub.pendingCount; s["dropped"] = hub.queue.dropped
       s["hubBusy"] = hubBusy; s["queuePeak"] = queuePeak
       s["sent"] = hub.sent; s["rejected"] = hub.rejected; s["hubError"] = hubError ?? NSNull()
+      s["hubErrorCategory"] = deliveryIssue.category?.rawValue ?? NSNull()
       s["axTrusted"] = AXIsProcessTrusted(); s["ocrEnabled"] = enabledSources["ocr"] ?? false; s["ocrGranted"] = ocr.granted
       s["sources"] = enabledSources
       s["paused"] = pausedUntil != nil; s["plugins"] = plugins.status()
@@ -903,6 +936,7 @@ if CommandLine.arguments.contains("--initialize-language") {
   MainActor.assumeIsolated { initializeAppLanguage(config) }
   exit(0)
 }
+guard MainActor.assumeIsolated({ AppSetup.checkPlacement() }) else { exit(0) }
 let logFile = config.dataDir.appendingPathComponent("logs/collector.log")
 let launchedByAgent = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"]?.hasPrefix("dev.record-anything.") == true
 let launchSource: DiagnosticLog.LaunchSource = launchedByAgent || DiagnosticLog.isFile(logFile, on: STDERR_FILENO)
@@ -911,14 +945,16 @@ do { try DiagnosticLog.redirectIfNeeded(to: logFile) }
 catch { DiagnosticLog.shared.record(.collectorLogOpenFailed) }
 DiagnosticLog.installUncaughtExceptionHandler()
 
-// 已经有一个采集端在跑时：用户打开的请它拿出窗口、自己退出（登录后 90 秒内是系统恢复，不弹窗）；
+// 已经有一个采集端在跑时：访达打开且满足启动窗口规则时，请运行中的实例拿出窗口。
 // launchd 拉起的留下待命，正在跑的那份崩溃时接手，正常退出时跟着退出（退出码 0，launchd 不再拉起）。
 let lockPath = config.dataDir.appendingPathComponent("collector.lock").path
 var instanceLock = InstanceLock.acquire(path: lockPath)
 if case .held = instanceLock {
   guard launchedByAgent else {
-    if LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate()) {
-      DistributedNotificationCenter.default().postNotificationName(.init(AppDelegate.showWindowNotification), object: nil, deliverImmediately: true)
+    if LaunchWindowPolicy.opensWindow(source: launchSource, loginAt: LoginSession.consoleLoginDate(),
+                                      firstPreparedAt: AppSetup.firstPreparationDate(in: config.dataDir)) {
+      DistributedNotificationCenter.default().postNotificationName(.init(AppDelegate.showWindowNotification), object: nil,
+                                                                    userInfo: nil, deliverImmediately: true)
     }
     exit(0)
   }

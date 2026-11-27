@@ -362,7 +362,7 @@ public enum Lane: Int, CaseIterable, Sendable {
     switch self {
     case .screen: return L10n.text(zh: "屏幕", en: "Screen")
     case .browser: return L10n.text(zh: "浏览", en: "Browsing")
-    case .agent: return "Agent"
+    case .agent: return L10n.Settings.aiTools
     case .terminal: return L10n.text(zh: "终端", en: "Terminal")
     case .voice: return L10n.text(zh: "对话", en: "Conversation")
     case .other: return L10n.text(zh: "其他", en: "Other")

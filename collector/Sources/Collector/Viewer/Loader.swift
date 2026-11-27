@@ -1,6 +1,8 @@
 import Foundation
 import Observation
 import SwiftUI
+import enum CollectorCore.UserFacingError
+import enum CollectorCore.L10n
 
 /// 读取一次、可重试的资源状态。
 @MainActor @Observable final class Loader<T> {
@@ -19,7 +21,7 @@ import SwiftUI
       apply { value = next; error = nil }
     }
     catch is CancellationError {}
-    catch { let message = error.localizedDescription; apply { self.error = message } }
+    catch { let message = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed); apply { self.error = message } }
   }
 
   func apply(_ change: () -> Void) {
@@ -40,6 +42,6 @@ extension Loader where T: Equatable {
       }
     }
     catch is CancellationError {}
-    catch { let message = error.localizedDescription; apply { self.error = message } }
+    catch { let message = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed); apply { self.error = message } }
   }
 }

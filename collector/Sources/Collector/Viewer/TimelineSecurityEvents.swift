@@ -1,6 +1,8 @@
 import SwiftUI
 import Observation
 import enum CollectorCore.L10n
+import enum CollectorCore.UserFacingError
+import struct CollectorCore.HubError
 
 struct TimelineSecurityEvent: Decodable, Identifiable {
   enum Action: String, Decodable {
@@ -56,7 +58,7 @@ struct TimelineSecurityEvent: Decodable, Identifiable {
       // The audit retention window may have expired since the line was shown.
       events.removeAll { $0.id == event.id }
     } catch {
-      self.error = (error as? HubError)?.actionMessage ?? L10n.acknowledgeFailed
+      self.error = UserFacingError.message(for: error, fallback: L10n.acknowledgeFailed)
     }
   }
 }

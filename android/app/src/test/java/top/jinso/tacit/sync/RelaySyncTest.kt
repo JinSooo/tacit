@@ -1,5 +1,8 @@
 package top.jinso.tacit.sync
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.bouncycastle.crypto.hpke.HPKE
 import org.json.JSONArray
@@ -426,11 +429,60 @@ class RelaySyncTest {
             val body = JSONObject().put("device_id", "android-aebagbaf").put("hub_id", invite.hubId).put("relay", permanent.json())
             fake.down[nonce] = seal(nonce, JSONObject().put("status", 200).put("body", body))
         }
-        pairThroughRelay(invite, phone, "测试手机", fake.client()) { result ->
+        RelayPairRequest(invite, phone, "测试手机").pair(fake.client()) { result ->
             assertTrue(fake.deleted.isEmpty())
             assertEquals(permanent, result.relay)
         }
         assertEquals(fake.puts, fake.deleted)
+    }
+
+    @Test fun failedRelayPutLetsTheNextPairingTryDiscoverTheMacAgain() = runBlocking {
+        val invite = Invitation("fixture-hub", "Mac", hubKey, id(8), emptyList(), Instant.now().plusSeconds(30), config)
+        val request = RelayPairRequest(invite, phone, "Phone")
+        val discoveryFailure = IOException("Synthetic direct discovery result")
+        var discoveryAttempts = 0
+        suspend fun pair(pending: RelayPairRequest?, findMac: suspend () -> String) =
+            pairWithAvailableTransport(invite, phone, "Phone", findMac = {
+                discoveryAttempts++
+                findMac()
+            }, pendingRelay = pending, relayRequest = { request }, relayHttp = fake.http) { _, _ ->
+                fail("No pairing reply was sent")
+            }
+
+        fake.onPut = { _, _ -> throw IOException("Synthetic relay delivery failure") }
+        val first = runCatching { pair(null) { throw MacUnavailable(false) } }
+        assertEquals("Synthetic relay delivery failure", first.exceptionOrNull()?.message)
+        assertEquals(1, fake.puts.size)
+
+        val retry = runCatching { pair(request) { throw discoveryFailure } }
+        assertSame(discoveryFailure, retry.exceptionOrNull())
+        assertEquals(2, discoveryAttempts)
+        assertEquals(1, fake.puts.size)
+    }
+
+    @Test fun pairingTimeoutAndCancellationCanResumeTheSameInvitation() = runBlocking {
+        val invite = Invitation("fixture-hub", "Mac", hubKey, id(8), emptyList(), Instant.now().plusSeconds(30), config)
+        val request = RelayPairRequest(invite, phone, "Phone")
+        val timedOut = runCatching { request.pair(fake.client(), waitMillis = 20) { fail("No reply yet") } }
+        assertTrue(timedOut.exceptionOrNull() is RelayPairTimedOut)
+        assertEquals(SyncError.PAIR_TIMED_OUT, syncError(timedOut.exceptionOrNull()!!, pairing = true))
+
+        val waiting = CompletableDeferred<Unit>()
+        val cancelled = launch { request.pair(fake.client(), onRelayWaiting = { waiting.complete(Unit) }) { fail("Cancelled") } }
+        waiting.await()
+        cancelled.cancelAndJoin()
+        assertTrue(cancelled.isCancelled)
+        assertEquals(1, fake.puts.size)
+
+        val nonce = fake.puts.single()
+        val body = JSONObject().put("device_id", "android-aebagbaf").put("hub_id", invite.hubId).put("relay", config.json())
+        fake.down[nonce] = seal(nonce, JSONObject().put("status", 200).put("body", body))
+        pairWithAvailableTransport(invite, phone, "Phone", findMac = { error("Relay receipt is already pending") },
+            pendingRelay = request, relayHttp = fake.http) { paired, origin ->
+            assertEquals("android-aebagbaf", paired.id)
+            assertNull(origin)
+        }
+        assertEquals(listOf(nonce), fake.puts)
     }
 
     @Test fun ambiguousPutResumesWithSameNonceAfterRestart() = runBlocking {
@@ -472,7 +524,9 @@ class RelaySyncTest {
         var denied: Int? = null
         var onPut: (String, ByteArray) -> Unit = { _, _ -> }
 
-        fun client() = RelayMailbox(config) { method, url, token, payload, _, _ ->
+        fun client() = RelayMailbox(config, http = http)
+
+        val http: RelayHttp = { method, url, token, payload, _, _ ->
             assertTrue(url.startsWith(config.url))
             val path = url.removePrefix(config.url)
             calls += if (method == "GET" && "?" in path) "list" else method

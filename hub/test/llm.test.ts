@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawn as nodeSpawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,10 +6,15 @@ import { dirname, join } from "node:path";
 
 import { createLLM, repairToSchema, type LLMRequest, type Spawn, type UsageRow } from "../src/llm/index.ts";
 import { loadConfig } from "../src/llm/config.ts";
-import { resetCodexCatalog } from "../src/llm/codex-cli.ts";
+import { codexCLI, resetCodexProbes } from "../src/llm/codex-cli.ts";
+import { classifyModelError } from "../src/llm/error-category.ts";
+import type { BackendContext } from "../src/llm/types.ts";
+import { httpComplete } from "../src/llm/http.ts";
 import { cliEnv } from "../src/llm/process.ts";
+import { systemProxyEnv } from "../src/net/system-proxy.ts";
 import { DAY_SCHEMA, DAY_SYSTEM, normalizeDayOutput } from "../src/distill/prompts.ts";
 
+const noSystemProxy = systemProxyEnv({ exceptions: [] });
 const dirs: string[] = [];
 const originalFetch = globalThis.fetch;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -32,14 +37,20 @@ async function fixture(provider = "claude-cli", mode = "success") {
   const log = join(dir, "calls.jsonl"), script = join(dir, provider === "codex-cli" ? "codex" : "claude");
   // 独立可执行脚本记录真实 argv、stdin、cwd 和进程时序；全部内容是合成数据。
   await writeFile(script, `#!${process.execPath}
-import { appendFileSync, writeFileSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 const args = process.argv.slice(2), mode = process.env.TEST_MODE, log = process.env.TEST_LOG;
-if (args[0] === "login") { console.log(mode === "nocatalog" ? "Logged in using an API key" : "Logged in using ChatGPT"); process.exit(0); }
+if (args[0] === "login") {
+  if (mode === "no-login" || (mode.startsWith("expired-") && existsSync(log))) {
+    console.error("Not logged in"); process.exit(1);
+  }
+  console.log(mode === "nocatalog" ? "Logged in using an API key" : "Logged in using ChatGPT"); process.exit(0);
+}
 if (args[0] === "debug") { console.log(mode === "nocatalog" ? "not json" : JSON.stringify({models:[{slug:"synthetic-model", tool_mode:"code_mode_only", multi_agent_version:"v1", experimental_supported_tools:["clock"], context_window:1000}]})); process.exit(0); }
 const stdin = await Bun.stdin.text();
 appendFileSync(log, JSON.stringify({event:"start", pid:process.pid, args, stdin, cwd:process.cwd(), mode:statSync(process.cwd()).mode & 0o777, at:Date.now()})+"\\n");
-if (mode === "timeout") await new Promise(() => setInterval(() => {}, 1000));
+if (mode === "expired-network") { console.error("stream disconnected"); process.exit(1); }
+if (mode === "timeout" || mode === "expired-timeout") await new Promise(() => setInterval(() => {}, 1000));
 await Bun.sleep(50);
 if (mode === "codex-error" || mode === "codex-echo") {
   console.log(JSON.stringify({type:"thread.started", thread_id:"synthetic"}));
@@ -110,7 +121,7 @@ test("每日概述向提供方请求新 schema，本地接受旧单编号响应"
 });
 
 test("Codex：安全参数、临时 schema 与输出、stdin 和 finally 清理", async () => {
-  resetCodexCatalog();
+  resetCodexProbes();
   const f = await fixture("codex-cli");
   expect((await f.llm.complete(request)).ok).toBe(true);
   const logs = await f.logs(), start = logs[0], schemaLog = logs.find(l => l.event === "schema");
@@ -135,7 +146,7 @@ test("Codex：安全参数、临时 schema 与输出、stdin 和 finally 清理"
 });
 
 test("Codex：读不到模型目录、不是 ChatGPT 登录时不覆盖，照常调用", async () => {
-  resetCodexCatalog();
+  resetCodexProbes();
   const f = await fixture("codex-cli", "nocatalog");
   expect((await f.llm.complete(request)).ok).toBe(true);
   const logs = await f.logs();
@@ -143,13 +154,116 @@ test("Codex：读不到模型目录、不是 ChatGPT 登录时不覆盖，照常
   expect(logs[0].args.some((a: string) => a.startsWith("model_catalog_json="))).toBe(false);
   // 不是 ChatGPT 登录时不改 provider。
   expect(logs[0].args.some((a: string) => a.startsWith("model_provider"))).toBe(false);
-  resetCodexCatalog();
+  resetCodexProbes();
+});
+
+test("Codex：失败的登录和目录探测 30 秒后重试，成功缓存仍有效，手动测试可立即重试", async () => {
+  resetCodexProbes();
+  const f = await fixture("codex-cli");
+  let offline = true, now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const probes = { debug: 0, login: 0 };
+  const spawn: Spawn = (command, args, options) => {
+    const kind = args[0];
+    if (kind === "debug" || kind === "login") {
+      probes[kind]++;
+      if (offline) throw new Error("synthetic spawn failure");
+    }
+    return f.spawn(command, args, options);
+  };
+  const llm = createLLM({ dataDir: f.dir, recordUsage: () => {}, spawn });
+  try {
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 1, login: 1 });
+    const [first] = await f.logs();
+    expect(first.args).not.toContain('model_provider="ra-https"');
+
+    offline = false;
+    now += 29_999;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 1, login: 1 });
+
+    now++;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 2, login: 2 });
+    const starts = (await f.logs()).filter(log => log.event === "start");
+    expect(starts.at(-1).args).toContain('model_provider="ra-https"');
+    expect(starts.at(-1).args.some((arg: string) => arg.startsWith("model_catalog_json="))).toBe(true);
+
+    now += 30_000;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 2, login: 2 });
+
+    resetCodexProbes();
+    offline = true;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 3, login: 3 });
+    resetCodexProbes();
+    offline = false;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 4, login: 4 });
+  } finally {
+    clock.mockRestore();
+    resetCodexProbes();
+  }
+});
+
+test("Codex：明确未登录时不执行模型命令，登录失败只缓存 30 秒", async () => {
+  resetCodexProbes();
+  const f = await fixture("codex-cli", "no-login"), commands: string[] = [], failure: string[] = [];
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const context: BackendContext = {
+    cwd: f.dir, req: request, config: { provider: "codex-cli", model: "synthetic-model" }, timeoutMs: 250,
+    metrics: { inputTokens: null, outputTokens: null, outputChars: 0 },
+    spawn: (command, args, options) => { commands.push(args[0]!); return f.spawn(command, args, options); },
+    observer: { request: () => {}, response: () => {}, failure: detail => failure.push(detail) },
+  };
+  try {
+    for (const advance of [0, 29_999, 1]) {
+      now += advance;
+      await expect(codexCLI(context)).rejects.toMatchObject({ code: "cli_not_logged_in" });
+    }
+    expect(commands).toEqual(["login", "login"]);
+    expect(failure).toEqual(Array(3).fill("codex login status: Not logged in"));
+    resetCodexProbes();
+    await expect(codexCLI(context)).rejects.toMatchObject({ code: "cli_not_logged_in" });
+    expect(commands).toEqual(["login", "login", "login"]);
+  } finally {
+    clock.mockRestore();
+    resetCodexProbes();
+  }
+});
+
+for (const mode of ["expired-network", "expired-timeout"]) {
+  test(`Codex：执行时登录失效，${mode} 后重新查到未登录`, async () => {
+    resetCodexProbes();
+    const f = await fixture("codex-cli", mode);
+    try {
+      expect(await f.llm.complete({ ...request, timeoutMs: 250 })).toMatchObject({ ok: false, error: "cli_not_logged_in" });
+      expect((await f.logs()).filter(entry => entry.event === "start")).toHaveLength(1);
+    } finally { resetCodexProbes(); }
+  });
+}
+
+test("Codex：自定义默认提供商地址也允许未登录执行", async () => {
+  resetCodexProbes();
+  const f = await fixture("codex-cli", "no-login");
+  const home = join(f.dir, "codex-home");
+  await Bun.write(join(home, "config.toml"), 'openai_base_url = "https://synthetic.invalid/v1"');
+  process.env.CODEX_HOME = home;
+  try {
+    expect(await f.llm.complete(request)).toMatchObject({ ok: true });
+    const [start] = await f.logs();
+    expect(start.args).toContain('openai_base_url="https://synthetic.invalid/v1"');
+    expect(start.args.join(" ")).not.toContain("ra-https");
+  } finally { resetCodexProbes(); }
 });
 
 // 回归（2026-11-27）：用户的 codex 走 config.toml 里自己的中转站，终端里正常，Tacit 加了 --ignore-user-config 后调用失败。
 test("Codex：沿用用户 config.toml 里选的连接，其余用户配置仍不加载", async () => {
-  resetCodexCatalog();
-  const f = await fixture("codex-cli");
+  resetCodexProbes();
+  const f = await fixture("codex-cli", "no-login");
   const home = join(f.dir, "codex-home");
   await Bun.write(join(home, "config.toml"), `profile = "work"
 model_reasoning_effort = "xhigh"
@@ -160,7 +274,7 @@ model_provider = "relay"
 name = "Synthetic relay"
 base_url = "https://relay.example.invalid/v1"
 wire_api = "responses"
-requires_openai_auth = true
+env_key = "SYNTHETIC_RELAY_KEY"
 http_headers = { "X-Synthetic" = "1", "x y" = "2" }
 [mcp_servers.synthetic]
 command = "/nonexistent"
@@ -170,20 +284,20 @@ command = "/nonexistent"
   const [start] = await f.logs();
   expect(start.args).toContain("--ignore-user-config");
   expect(start.args).toContain('model_provider="relay"');
-  expect(start.args).toContain('model_providers.relay={name="Synthetic relay",base_url="https://relay.example.invalid/v1",wire_api="responses",requires_openai_auth=true,http_headers={X-Synthetic="1","x y"="2"}}');
+  expect(start.args).toContain('model_providers.relay={name="Synthetic relay",base_url="https://relay.example.invalid/v1",wire_api="responses",env_key="SYNTHETIC_RELAY_KEY",http_headers={X-Synthetic="1","x y"="2"}}');
   expect(start.args).toContain('cli_auth_credentials_store="keyring"');
   // 用户自己的 provider 优先，不再套只走 HTTPS 的 ChatGPT provider；MCP 和推理强度不带过去。
   expect(start.args.join(" ")).not.toContain("ra-https");
   expect(start.args.join(" ")).not.toContain("mcp_servers");
   expect(start.args.join(" ")).not.toContain("xhigh");
-  resetCodexCatalog();
+  resetCodexProbes();
 });
 
 test("CLI 环境：带上安装时记下的代理和 CODEX_HOME，不带中转站变量", () => {
   const env = cliEnv({ HOME: "/h", PATH: "/p", ANTHROPIC_BASE_URL: "https://relay.example.invalid", OPENAI_API_KEY: "synthetic",
-    https_proxy: "http://127.0.0.1:1", TACIT_CLI_ENV: JSON.stringify({ https_proxy: "http://127.0.0.1:2", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", OPENAI_API_KEY: "x" }) });
-  expect(env).toEqual({ HOME: "/h", PATH: "/p", https_proxy: "http://127.0.0.1:1", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", CI: "1" });
-  expect(cliEnv({ HOME: "/h", TACIT_CLI_ENV: "{" })).toEqual({ HOME: "/h", CI: "1" });
+    https_proxy: "http://127.0.0.1:1", TACIT_CLI_ENV: JSON.stringify({ https_proxy: "http://127.0.0.1:2", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", OPENAI_API_KEY: "x" }) }, noSystemProxy);
+  expect(env).toEqual({ HOME: "/h", PATH: "/p", https_proxy: "http://127.0.0.1:1", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", NO_PROXY: noSystemProxy.NO_PROXY, CI: "1" });
+  expect(cliEnv({ HOME: "/h", TACIT_CLI_ENV: "{" }, noSystemProxy)).toEqual({ HOME: "/h", NO_PROXY: noSystemProxy.NO_PROXY, CI: "1" });
 });
 
 for (const provider of ["claude-cli", "codex-cli"]) {
@@ -332,8 +446,8 @@ test("OpenAI 兼容后端指向本机地址时不读也不发 API key", async ()
 // 回归：CLI 后端曾继承调用方的 ANTHROPIC_BASE_URL 等变量，手动运行时走了中转站（2026-11-08 实测发现）。
 test("CLI 后端只继承白名单环境变量", async () => {
   const { cliEnv } = await import("../src/llm/process.ts");
-  const env = cliEnv({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", ANTHROPIC_BASE_URL: "https://relay.invalid", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "m", CLAUDE_CODE_SESSION_ID: "s", CLAUDECODE: "1", CMUX_CLAUDE_PID: "1", OPENAI_API_KEY: "k" });
-  expect(env).toEqual({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", CI: "1" });
+  const env = cliEnv({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", ANTHROPIC_BASE_URL: "https://relay.invalid", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "m", CLAUDE_CODE_SESSION_ID: "s", CLAUDECODE: "1", CMUX_CLAUDE_PID: "1", OPENAI_API_KEY: "k" }, noSystemProxy);
+  expect(env).toEqual({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", NO_PROXY: noSystemProxy.NO_PROXY, CI: "1" });
 });
 
 // 回归：claude -p 把出错原因写在 stdout 的 JSON 里、stderr 为空，曾经只显示"退出失败（1）："（2026-11-08 首次真实运行发现）。
@@ -344,6 +458,26 @@ test("Claude 出错原因从 stdout 的 result 取出", async () => {
   expect(r.ok ? "" : r.error).toBe("quota");
 });
 
+test.each([
+  ["Not logged in · Please run /login", "cli_not_logged_in"],
+  ["unexpected status 401 Unauthorized: access token expired", "cli_not_logged_in"],
+  ["Your access token could not be refreshed. Please log out and sign in again.", "cli_not_logged_in"],
+  ["error: unexpected argument '--safe-mode' found\n\nUsage: claude [OPTIONS]", "cli_outdated"],
+  ["error: unknown option '--synthetic'\nUsage: codex exec [OPTIONS]", "cli_outdated"],
+  ["HTTP 403: The model 'fictional-model' is not supported with this account.", "cli_model_unavailable:403"],
+  ["The model `fictional-model` does not exist or you do not have access to it.", "cli_model_unavailable"],
+  ["There's an issue with the selected model (fictional-model). It may not exist or you may not have access to it.", "cli_model_unavailable"],
+  ["Reconnecting... 2/5: stream disconnected before completion: error sending request", "cli_network"],
+  ["proxy connection failed: getaddrinfo ENOTFOUND proxy.synthetic.invalid", "cli_network"],
+  ["env: node: No such file or directory", "cli_runtime_missing"],
+  ["/bin/sh: node: command not found", "cli_runtime_missing"],
+  ["HTTP 401: insufficient_quota; try codex login", "quota:401"],
+  ["HTTP 429: too many requests; Reconnecting...", "rate_limited:429"],
+  ["HTTP 503: proxy service unavailable", "server_error:503"],
+  ["HTTP 403: permission_error", "auth:403"],
+])("CLI 错误 %s 归类为 %s", (reason, category) => {
+  expect<string>(classifyModelError(reason, "cli_failed")).toBe(category);
+});
 
 // 2026-11-25：朋友的 Mac 没装 Claude Code 时，默认模型只报“命令行调用失败”，准备清单说不出缺什么。
 test("CLI 命令不存在时归为 cli_missing", async () => {
@@ -365,7 +499,7 @@ test("task 在成功和失败用量中保留，未提供时为 NULL", async () =
 });
 
 for (const mode of ["codex-error", "codex-echo"]) test(`Codex JSONL 失败诊断：${mode}`, async () => {
-  resetCodexCatalog();
+  resetCodexProbes();
   const f = await fixture("codex-cli", mode);
   const result = await f.llm.complete(request);
   expect(result.ok).toBe(false);
@@ -480,4 +614,28 @@ test("HTTP 输出校验前按 schema 修补小偏差，不改文字内容", asyn
   expect(result.ok && result.data).toEqual({ items: [{ thread_id: null, title: "合成" }, { thread_id: "t1", title: "合成二" }] });
   expect(sent).toBe(1);
   expect(repairToSchema({ title: "超过四个字的标题" }, { type: "object", properties: { title: { type: "string", maxLength: 4 } } })).toEqual({ title: "超过四个字的标题" });
+});
+
+test("API connection failures identify the selected proxy or direct target without credentials", async () => {
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const address = listener.url.host;
+  await listener.stop(true);
+  const proxy = `http://synthetic-user:synthetic-pass@${address}`;
+  const saved = process.env.https_proxy;
+  process.env.https_proxy = proxy;
+  try {
+    const details: string[] = [];
+    const call = (base_url: string) => httpComplete({
+      cwd: "", req: request, config: { provider: "openai-compatible", model: "synthetic-model", base_url },
+      timeoutMs: 1_000, metrics: { inputTokens: null, outputTokens: null, outputChars: 0 },
+      spawn: nodeSpawn, observer: { request: () => {}, response: () => {}, failure: detail => details.push(detail) },
+    }, () => "synthetic-key");
+    await expect(call("https://model.example.invalid/v1")).rejects.toMatchObject({ code: "network" });
+    await expect(call(`http://${address}/v1`)).rejects.toMatchObject({ code: "network" });
+    expect(details).toEqual([
+      `Could not connect to proxy ${address}.`, `Could not connect to model service at ${address}.`,
+    ]);
+  } finally {
+    if (saved === undefined) delete process.env.https_proxy; else process.env.https_proxy = saved;
+  }
 });

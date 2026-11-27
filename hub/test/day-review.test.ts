@@ -800,3 +800,53 @@ test("几个 AI 会话和录音同时进行时各成一整段，轮流发言不�
     expect(segments[1]!.evidence.every(e => !e.text.includes("发布展板"))).toBe(true);
   } finally { ctx.cleanup(); }
 });
+
+test("后台收到的未回复聊天不把进行中的 AI 会话切碎，单独浏览时仍成段", () => {
+  const ctx = setup(), store = new DistillStore(ctx.db);
+  try {
+    const start = span(0, 2, {
+      source: "claude_code.session", source_ref: "synthetic-verify#0",
+      title: "Claude Code · 合成苗圃 · 先核对一下吧",
+      body: "[我] 先核对一下吧\n\n[AI] 开始检查苗圃排布。",
+    });
+    const cont1 = span(9, 28, {
+      source: "claude_code.session", source_ref: "synthetic-verify#1",
+      title: "Claude Code · 合成苗圃 · AI 回复",
+      body: "[AI] 已核对东区和西区托盘。",
+    });
+    const cont2 = span(29, 34, {
+      source: "claude_code.session", source_ref: "synthetic-verify#2",
+      title: "Claude Code · 合成苗圃 · AI 回复",
+      body: "[AI] 全部核对完成。",
+    });
+    const groupMsgs = [7, 7, 13].map((m, i) => fixture({
+      source: "mac.wechat", t_start: point(m),
+      context: { app: "com.example.Chat", chat: "合成园区通知群", extra: { from_me: 0, sender: `合成同事${i}` } },
+      body: `园区通知第 ${i + 1} 条。`,
+    }));
+    const dm = fixture({
+      source: "mac.wechat", t_start: point(12),
+      context: { app: "com.example.Chat", chat: "合成联系人", extra: { from_me: 0, sender: "合成联系人" } },
+      body: "苗床容量多大？",
+    });
+    // 会话结束后只有屏幕浏览时，未回复聊天仍可正常成段。
+    const browse = span(40, 50, { source: "mac.screen", context: { app: "org.example.reader" }, title: "苗圃资料" });
+    const laterChat = [44, 45].map((m, i) => fixture({
+      source: "mac.wechat", t_start: point(m),
+      context: { app: "com.example.Chat", chat: "合成值班群", extra: { from_me: 0, sender: "合成值班员" } },
+      body: `晚间巡检提醒 ${i + 1}。`,
+    }));
+    ctx.db.ingest([start, cont1, cont2, ...groupMsgs, dm, browse, ...laterChat]);
+
+    const segments = reviewPlan(ctx.db, base, base + 60 * min).segments;
+    const sessionSegments = segments.filter(s => s.activity.kind === "session");
+    expect(sessionSegments).toHaveLength(1);
+    expect(sessionSegments[0]).toMatchObject({ id: start.id, start: base, end: base + 30 * min, seconds: 30 * 60 });
+    expect(segments.filter(s => s.activity.kind === "chat").map(s => [s.start, s.end])).toEqual([[base + 42 * min, base + 47 * min]]);
+
+    const dayDrafts = store.dayView(day, { now: base + 55 * min })?.drafts ?? [];
+    const sessionDrafts = dayDrafts.filter((d: { sources: string[] }) => d.sources.includes("claude_code.session"));
+    expect(sessionDrafts).toHaveLength(1);
+    expect(sessionDrafts[0]).toMatchObject({ id: start.id, title: "先核对一下吧", active_seconds: 30 * 60 });
+  } finally { ctx.cleanup(); }
+});

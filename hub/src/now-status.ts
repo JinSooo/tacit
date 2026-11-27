@@ -4,10 +4,14 @@ import { DistillStore, type Thread } from "./distill/store.ts";
 import type { Lang } from "./i18n/language.ts";
 
 const day = 24 * 3600_000;
-export const emptyNowBrief = "最近 24 小时没有活跃的线程。";
+export const emptyNowBrief = "最近 24 小时还没有整理出的活动。";
+export const englishEmptyNowBrief = "No activity summaries in the last 24 hours.";
 export const pendingBrief = "有新活动待整理。";
-const emptyBrief = emptyNowBrief;
-const englishEmptyBrief = "No active tasks in the last 24 hours.";
+// 升级前写下的空摘要仍可能留在缓存里。
+const emptyBriefs = new Set([emptyNowBrief, englishEmptyNowBrief,
+  "最近 24 小时没有活跃的线程。", "No active tasks in the last 24 hours."]);
+
+function emptyBrief(lang: Lang) { return lang === "zh" ? emptyNowBrief : englishEmptyNowBrief; }
 
 export function nowSummary(store: DistillStore, clock: number, include?: (id: string) => boolean, lang: Lang = "zh") {
   // 暂停的事项只要近 24 小时有活动，也仍属于此刻。
@@ -24,7 +28,7 @@ export function nowSummary(store: DistillStore, clock: number, include?: (id: st
   const threads = rows.map(t => ({ thread_id: t.id, title: t.title, brief: t.brief, project: t.project, last: toLocalIso(t.last_ms) }));
   const top = threads[0];
   const brief = top ? (top.project && !top.brief.includes(top.project) ? `${top.project}${lang === "zh" ? "：" : ": "}${top.brief}` : top.brief)
-    : lang === "zh" ? emptyBrief : englishEmptyBrief;
+    : emptyBrief(lang);
   const updated = rows[0]?.updated_at;
   return { brief, detail: { threads }, updated_at: top ? (updated && Number.isFinite(Date.parse(updated)) ? updated : null) : toLocalIso(clock) };
 }
@@ -47,7 +51,7 @@ function pendingActivity(store: DistillStore, clock: number) {
 export function currentNow(hub: HubDB, clock = Date.now(), lang: Lang = "zh") {
   const store = new DistillStore(hub);
   const saved = store.getState<{ brief?: string; detail?: unknown; updated_at?: string | null }>("now");
-  const hasCachedSummary = !!saved?.brief?.trim() && saved.brief !== emptyBrief;
+  const hasCachedSummary = !!saved?.brief?.trim() && !emptyBriefs.has(saved.brief);
   const live = hasCachedSummary ? null : nowSummary(store, clock, undefined, lang);
   const summary = live?.detail.threads.length ? live : saved;
   const hasSummary = hasCachedSummary || !!live?.detail.threads.length;
@@ -68,7 +72,7 @@ export function currentNow(hub: HubDB, clock = Date.now(), lang: Lang = "zh") {
       : (hasSummary ? "New activity is waiting to be summarized. Showing the previous recap." : "Activity has been recorded and is waiting for a summary.");
   }
   if (!summary && !feedback) return null;
-  if (lang === "en" && summary?.brief === emptyBrief) return { ...summary, brief: englishEmptyBrief, feedback };
+  if (summary?.brief && emptyBriefs.has(summary.brief)) return { ...summary, brief: emptyBrief(lang), feedback };
   if (lang === "en" && summary?.detail && typeof summary.detail === "object" && "threads" in summary.detail && Array.isArray(summary.detail.threads)) {
     const top = summary.detail.threads[0];
     if (top?.project && typeof top.brief === "string" && summary.brief === `${top.project}：${top.brief}`) {

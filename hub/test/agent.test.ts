@@ -3,6 +3,7 @@ import { AgentReads, estimateTokens } from "../src/agent.ts";
 import { stopAgentAudit } from "../src/agent-audit.ts";
 import { updateGeneral } from "../src/general-settings.ts";
 import { HubDB } from "../src/db.ts";
+import { currentNow, emptyNowBrief, englishEmptyNowBrief } from "../src/now-status.ts";
 import { nowStep } from "../src/distill/run.ts";
 import { DistillStore, type Thread } from "../src/distill/store.ts";
 import { createHandler } from "../src/server.ts";
@@ -212,7 +213,18 @@ test("明确忽略的公开活动和仅私密活动不触发此刻待整理", as
   store.createFrame({ id: "ignored", key: "app:test", record_ids: [ignored.id], t_start_ms: at, t_end_ms: at,
     chars: 1, private: 0, status: "ignored" });
   nowStep(store, clock);
-  expect((await read("/v1/now")).now).toMatchObject({ brief: "最近 24 小时没有活跃的线程。", feedback: null });
+  expect((await read("/v1/now")).now).toMatchObject({ brief: "最近 24 小时还没有整理出的活动。", feedback: null });
+});
+
+test("此刻空态兼容旧缓存，并与 Mac 占位文案一致", async () => {
+  const clock = Date.now();
+  store.setState("now", { brief: "最近 24 小时没有活跃的线程。", detail: { threads: [] }, updated_at: toLocalIso(clock) });
+  for (const [lang, brief] of [["zh", emptyNowBrief], ["en", englishEmptyNowBrief]] as const) {
+    expect(currentNow(ctx.db, clock, lang)).toMatchObject({ brief, feedback: null });
+  }
+  const models = await Bun.file(new URL("../../collector/Sources/CollectorCore/HubModels.swift", import.meta.url)).text();
+  expect(models.match(/private static let emptyBrief = "([^"]+)"/)?.[1]).toBe(emptyNowBrief);
+  expect(models.match(/private static let englishEmptyBrief = "([^"]+)"/)?.[1]).toBe(englishEmptyNowBrief);
 });
 
 test("非参数错误失败仍写审计，参数错误不写，鉴权和 Host 生效", async () => {

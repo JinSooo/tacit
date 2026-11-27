@@ -138,7 +138,7 @@ struct MenuBarPanel: View {
       VStack(alignment: .leading, spacing: 4) {
         if let state = now.value {
           if let feedback = state?.feedback { Text(feedback).font(.system(size: TextSize.caption)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true) }
-          if let brief = state?.brief, !brief.isEmpty {
+          if let brief = state?.activitySummary {
             Text(brief)
               .font(.serif(TextSize.title)).lineSpacing(TextSize.serifLineSpacing(TextSize.title)).foregroundStyle(.primary)
               .lineLimit(4).multilineTextAlignment(.leading)

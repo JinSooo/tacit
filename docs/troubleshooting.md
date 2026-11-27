@@ -2,9 +2,9 @@ English | [简体中文](zh/troubleshooting.md)
 
 # Troubleshooting Tacit
 
-When reporting a problem, include what happened, when it happened, and your diagnostics. Open **Settings › Maintenance › Copy diagnostics** in Tacit. Click **Preview**, review the contents, and click **Copy**. If the app won't open, start with what happened and when.
+When reporting a problem, include what happened, when it happened, and your diagnostics. Open **Settings › Maintenance › Diagnostics** in Tacit, click **Preview and copy…**, review the contents, and click **Copy**. If the app won't open, start with what happened and when.
 
-Keep your data directory, key backup, and links with access tokens private. This includes the Background service status URL opened from Tacit.
+Keep your data directory, key backup, and links with access tokens private.
 
 ## Tacit won't open or macOS blocks it
 
@@ -12,7 +12,7 @@ Drag Tacit from the disk image to Applications and open it from there. If macOS 
 
 ## The Background service won't start
 
-Check the message at the top of the Timeline. Use **Open log folder** next to the message to find the logs in Finder. Include the Timeline message in your report and keep the full logs on your Mac.
+Check the **Setup checklist** at the top of the Timeline. While the service is starting, it shows **Preparing the background service…**. If preparation fails, it shows the reason along with **Prepare again** and **Open log folder**. Try **Prepare again** first. If it still fails, include the message and your diagnostics in your report, and keep the full logs on your Mac.
 
 ## Records or a source are missing
 
@@ -20,7 +20,11 @@ Open **Settings › Sources** and select the missing source. Check whether it's 
 
 ## Summaries aren't updating
 
-Check the Setup checklist at the top of the Timeline. It shows what needs attention, such as a missing Claude Code installation, an invalid key, or a usage limit. Then open **Settings › Background & connection › Detailed status** and click **Open in browser**. Check the summary section for the last response, run, and model error. You can test the connection under **Settings › AI models**. Include the last summary time and the model error category in your report.
+1. Check the **Setup checklist** at the top of the Timeline. It opens automatically on first launch and shows what needs attention, such as neither Claude Code nor Codex being installed, an invalid key, or a usage limit. You can click **Test connection** right from the checklist.
+2. Open **Settings › AI models**. If an error appears, click **View reason** under the error message (shown only on this Mac) to see the details. Click **Test connection** to verify your model; if you made changes and see **Connection successful. Save to apply.**, click **Save** so they take effect.
+3. If you use a proxy on your Mac, Tacit uses the macOS HTTP/HTTPS system proxy automatically. PAC auto-proxy isn't supported yet—switch your proxy app to System Proxy / Global or TUN mode and test again.
+
+When reporting the issue, send the text from **View reason** together with your diagnostics from **Settings › Maintenance › Diagnostics**.
 
 ## A recording hasn't been transcribed
 

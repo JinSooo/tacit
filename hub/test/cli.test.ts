@@ -9,6 +9,28 @@ import { setup, fixture, networkDenied, removeProjectionSchema } from "./helpers
 const bindDenied = await networkDenied();
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+test("CLI setup reports the reason on its last stderr line", () => {
+  const ctx = setup();
+  try {
+    const app = join(ctx.dir, "Synthetic.app");
+    mkdirSync(join(app, "Contents/Resources/runtime/hub/src"), { recursive: true });
+    mkdirSync(join(app, "Contents/Helpers"), { recursive: true });
+    writeFileSync(join(app, "Contents/Resources/runtime/hub/src/cli.ts"), "");
+    writeFileSync(join(app, "Contents/Helpers/Tacit"), "#!/bin/sh\n", { mode: 0o755 });
+    for (const [args, code] of [
+      [["--app", join(ctx.dir, "missing.app")], "bundle_incomplete"],
+      [["--app", app], "database"],
+      [[], "unknown"],
+    ] as const) {
+      const result = spawnSync(process.execPath, [cli, "setup", ...args], {
+        env: { ...process.env, RA_DATA_DIR: ctx.dir, RA_PORT: "0", RA_DB_KEY: "synthetic-wrong-key" }, encoding: "utf8",
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(`setup_error:${code}`);
+    }
+  } finally { ctx.cleanup(); }
+});
+
 test("CLI run-plugin 真实子进程返回汇总、保存 state，错误命令非零退出", () => {
   const ctx = setup();
   try {

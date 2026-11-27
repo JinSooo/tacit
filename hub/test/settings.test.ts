@@ -10,8 +10,9 @@ import { lifecycleStep } from "../src/distill/run.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { AgentReads } from "../src/agent.ts";
 import { securityKeychain, type Keychain } from "../src/llm/keychain.ts";
-import type { SettingsDeps } from "../src/settings.ts";
-import type { Spawn } from "../src/llm/index.ts";
+import { createSettings, type SettingsDeps } from "../src/settings.ts";
+import { createLLM, type Spawn } from "../src/llm/index.ts";
+import { RuntimeLog } from "../src/runtime-log.ts";
 import { fixture, networkDenied, reviewEvidence, setup } from "./helpers.ts";
 
 const host = "127.0.0.1:47823";
@@ -214,6 +215,7 @@ test("models/test：用未保存的配置调一次，不写 llm_usage；错误�
 const input = await Bun.stdin.text();
 if (process.env.TEST_MODE === "rate") { console.error("HTTP 429"); process.exit(3); }
 if (process.env.TEST_MODE === "fail") { console.error("synthetic failure token=${SECRET}"); process.exit(3); }
+if (process.env.TEST_MODE === "login") { console.log(JSON.stringify({ type: "result", subtype: "error", is_error: true, result: "Not logged in · Please run /login" })); process.exit(0); }
 console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, structured_output: { ok: true }, usage: {} }));
 `);
   chmodSync(script, 0o700);
@@ -226,7 +228,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
   ctx.db.db.prepare("INSERT INTO distill_state(k,v) VALUES('llm_cooldown',?)").run(cooldown);
   const ok = await call(handler({ llm: { spawn: spawnWith("ok") } }), "POST", "/v1/settings/models/test", { tier: "hour", config: tier("claude-cli", "unsaved-model") });
   expect(ok.status).toBe(200);
-  expect(ok.body).toMatchObject({ ok: true, provider: "claude-cli", model: "unsaved-model", error: null });
+  expect(ok.body).toMatchObject({ ok: true, provider: "claude-cli", model: "unsaved-model", error: null, detail: null });
   expect(typeof ok.body.ms).toBe("number");
   expect(calls[0]).toContain("unsaved-model");
   expect(existsSync(join(ctx.dir, "models.json"))).toBe(false);
@@ -235,8 +237,9 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
   expect(failed.status).toBe(200);
   expect(failed.body.ok).toBe(false); expect(failed.body.model).toBe("haiku");
   expect(failed.body.error).toBe("cli_failed");
+  expect(failed.body.detail).toBe("synthetic failure token=[已脱敏:OpenAI]");
   const rate = await call(handler({ llm: { spawn: spawnWith("rate") } }), "POST", "/v1/settings/models/test", { tier: "minute" });
-  expect(rate.body).toMatchObject({ ok: false, error: "rate_limited:429" });
+  expect(rate.body).toMatchObject({ ok: false, error: "rate_limited:429", detail: "HTTP 429" });
   expect(state()).toEqual({ v: cooldown });
   expect(usage()).toBe(0);
 
@@ -252,6 +255,23 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
   expect(calls).toHaveLength(4);
   expect(usage()).toBe(1);
   expect(state()).toEqual({ v: cooldown });
+
+  const summary = createLLM({ dataDir: ctx.dir, spawn: spawnWith("login"), journal: new RuntimeLog(ctx.db),
+    recordUsage: ({ error, input_tokens, output_tokens, ...row }) =>
+      store.writeUsage({ ...row, error: error ?? undefined, input_tokens: input_tokens ?? undefined, output_tokens: output_tokens ?? undefined }) });
+  const result = await summary.complete({ tier: "hour", task: "thread_digest", system: "test", prompt: "test", schema: { type: "object" } });
+  expect(result).toMatchObject({ ok: false, error: "cli_not_logged_in" });
+  expect((await call(h, "GET", "/v1/settings/models")).body.last_failure_detail)
+    .toEqual({ minute: null, hour: "Not logged in · Please run /login", day: null });
+  expect((await call(h, "GET", "/v1/settings/models", undefined, false)).status).toBe(401);
+  const remote = createSettings({ dataDir: ctx.dir, keychain: fakeKeychain(), llm: { spawn: spawnWith("fail") } });
+  const remoteCtx = { db: ctx.db, port: 47823, lan: true, remoteActor: true, readJSON: async () => ({ tier: "hour" }) };
+  const remoteModels = await remote("GET", new URL(`http://${host}/v1/settings/models`), remoteCtx);
+  expect((await remoteModels!.json()).last_failure_detail).toEqual({ minute: null, hour: null, day: null });
+  const remoteTest = await remote("POST", new URL(`http://${host}/v1/settings/models/test`), remoteCtx);
+  expect(await remoteTest!.json()).toMatchObject({ error: "cli_failed", detail: null });
+  ctx.db.db.prepare("UPDATE runtime_calls SET at_ms=? WHERE id=?").run(Date.now() - 7 * 86400_000, result.call_id!);
+  expect((await call(h, "GET", "/v1/settings/models")).body.last_failure_detail.hour).toBeNull();
 
   for (const body of [{}, { tier: "week" }, { tier: "minute", config: tier("unknown") }, { tier: "minute", extra: 1 }]) expect((await call(h, "POST", "/v1/settings/models/test", body)).status).toBe(400);
   writeFileSync(join(ctx.dir, "models.json"), "{");

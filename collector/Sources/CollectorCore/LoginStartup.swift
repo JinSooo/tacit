@@ -116,9 +116,9 @@ public struct LoginStartup {
     case notInstalled, duplicate, switching
     var errorDescription: String? {
       switch self {
-      case .switching: return "后台正在切换，登录启动暂时无法更改。"
-      case .notInstalled: return "启动配置不完整，请重新安装应用后再试。"
-      case .duplicate: return "发现重复的启动配置，未作更改。请重新安装应用后再试。"
+      case .switching: return L10n.text(zh: "后台正在切换，登录启动暂时无法更改。", en: "Wait for the background service to finish switching before changing login startup.")
+      case .notInstalled: return L10n.text(zh: "启动配置不完整，请重新安装应用后再试。", en: "Startup settings are incomplete. Reinstall Tacit and try again.")
+      case .duplicate: return L10n.text(zh: "发现重复的启动配置，未作更改。请重新安装应用后再试。", en: "Duplicate startup settings were found, so the change was skipped. Reinstall Tacit and try again.")
       }
     }
   }

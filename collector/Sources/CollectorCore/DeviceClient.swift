@@ -28,7 +28,7 @@ public enum DeviceClientError: Error, Equatable, Sendable {
   /// 6.2：HTTP 200 加密回复内业务状态非 2xx（400、403、409、429、503 等）。
   case operationError(op: String, status: Int, message: String?)
   /// 底层网络或传输层失败。
-  case transportError(String)
+  case transportError(String, code: URLError.Code? = nil)
 }
 
 /// 配对设备平台标识（6.4 当前中枢支持 android，6.10 扩展至 mac 等）。
@@ -178,32 +178,32 @@ public struct DevicePairingInvitation: Equatable, Sendable {
     } catch let error as DeviceClientError {
       throw error
     } catch {
-      throw DeviceClientError.invalidInvitation("配对邀请 JSON 格式无效")
+      throw DeviceClientError.invalidInvitation("邀请链接格式无效")
     }
     guard wire.v == DeviceProtocol.version else {
       throw DeviceClientError.invalidInvitation("不支持的邀请版本")
     }
     guard DeviceProtocol.isValidHubID(wire.hub_id) else {
-      throw DeviceClientError.invalidInvitation("hub_id 格式无效")
+      throw DeviceClientError.invalidInvitation("后台服务身份无效")
     }
     guard let publicKeyData = DeviceProtocol.base64URLDecode(wire.pk, expectedLength: 32) else {
-      throw DeviceClientError.invalidInvitation("中枢公钥格式无效")
+      throw DeviceClientError.invalidInvitation("后台服务身份无法确认")
     }
     do {
       _ = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: publicKeyData)
     } catch {
-      throw DeviceClientError.invalidInvitation("无法解析中枢 X25519 公钥")
+      throw DeviceClientError.invalidInvitation("后台服务身份无法确认")
     }
     let computedHubID = try DeviceProtocol.hubID(forPublicKey: publicKeyData)
     guard computedHubID == wire.hub_id else {
-      throw DeviceClientError.invalidInvitation("hub_id 与公钥不匹配")
+      throw DeviceClientError.invalidInvitation("后台服务身份无法确认")
     }
     guard DeviceProtocol.base64URLDecode(wire.code, expectedLength: 16) != nil else {
       throw DeviceClientError.invalidInvitation("邀请码格式无效")
     }
     let hubName = wire.name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !hubName.isEmpty else {
-      throw DeviceClientError.invalidInvitation("中枢名称不能为空")
+      throw DeviceClientError.invalidInvitation("后台服务名称不能为空")
     }
     guard let expiresAt = DeviceProtocol.parseRFC3339(wire.expires_at) else {
       throw DeviceClientError.invalidInvitation("邀请过期时间无效")
@@ -431,10 +431,10 @@ public struct DirectDeviceTransport: DeviceTransport, Sendable {
     do {
       hello = try JSONDecoder().decode(DeviceHello.self, from: reply.body)
     } catch {
-      throw DeviceClientError.invalidEnvelope("hello 响应格式无效")
+      throw DeviceClientError.invalidEnvelope("后台服务返回的内容读不懂")
     }
     guard hello.v == DeviceProtocol.version, DeviceProtocol.isValidHubID(hello.hubID) else {
-      throw DeviceClientError.invalidEnvelope("hello 返回的中枢版本或身份无效")
+      throw DeviceClientError.invalidEnvelope("后台服务版本或身份无法确认")
     }
     return hello
   }
@@ -454,10 +454,11 @@ public struct DirectDeviceTransport: DeviceTransport, Sendable {
     } catch let error as URLError where error.code == .cancelled {
       throw CancellationError()
     } catch {
-      throw DeviceClientError.transportError(error.localizedDescription)
+      let code = (error as? URLError)?.code
+      throw DeviceClientError.transportError(UserFacingError.networkMessage(code ?? .unknown), code: code)
     }
     guard let http = response as? HTTPURLResponse else {
-      throw DeviceClientError.transportError("响应不是有效的 HTTP 响应")
+      throw DeviceClientError.transportError("后台服务返回的内容读不懂")
     }
     if data.count > limit {
       throw DeviceClientError.envelopeTooLarge(message: "响应体超过限制")
@@ -708,7 +709,7 @@ public actor DeviceClient {
     if isRemoved { throw DeviceClientError.deviceRemoved(message: nil) }
     guard deviceID == nil, !isPairing else { throw DeviceClientError.invalidRequest("当前客户端已配对或正在配对") }
     guard invitation.hubID == hubID, invitation.hubPublicKeyData == hubPublicKey.rawRepresentation else {
-      throw DeviceClientError.invalidInvitation("邀请所属中枢与当前客户端不一致")
+      throw DeviceClientError.invalidInvitation("邀请链接属于另一个后台服务")
     }
     guard invitation.expiresAt > clock() else { throw DeviceClientError.inviteExpired }
   }
@@ -746,7 +747,7 @@ public actor DeviceClient {
     } catch let error as DeviceClientError {
       throw error
     } catch {
-      throw DeviceClientError.keyStoreError(error.localizedDescription)
+      throw DeviceClientError.keyStoreError(L10n.Settings.keychainUnavailable)
     }
     if let loaded {
       if cachePrivateKey { cachedPrivateKey = loaded }
@@ -761,7 +762,7 @@ public actor DeviceClient {
     } catch let error as DeviceClientError {
       throw error
     } catch {
-      throw DeviceClientError.keyStoreError(error.localizedDescription)
+      throw DeviceClientError.keyStoreError(L10n.Settings.keychainUnavailable)
     }
     cachedPrivateKey = created
     return created

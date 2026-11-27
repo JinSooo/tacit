@@ -4,10 +4,10 @@ import Testing
 
 @Test func outboxRedactionMatchesSharedHubFixtures() throws {
   struct Example: Decodable { let input: String; let text: String; let count: Int }
-  struct Fixture: Decodable { let strings: [Example]; let clipboard: [Example] }
+  struct Fixture: Decodable { let strings: [Example]; let proxyCredentials: [Example]; let clipboard: [Example] }
   let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../schema/fixtures/redaction.json").standardizedFileURL
   let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
-  for e in fixture.strings {
+  for e in fixture.strings + fixture.proxyCredentials {
     let r = RecordRedaction.string(e.input)
     #expect(r.text == e.text); #expect(r.count == e.count)
   }

@@ -171,7 +171,7 @@ private func locateBun() -> String? {
 
   // MARK: 2. 401 时调 wipe 并退回 HTTP
 
-  @Test(arguments: [false, true]) func unauthorized401WipesCacheAndFallsBackToHTTP(usingAction: Bool) async throws {
+  @Test(ChineseUITrait(), arguments: [false, true]) func unauthorized401WipesCacheAndFallsBackToHTTP(usingAction: Bool) async throws {
     let dir = try makeTempDir()
     defer { try? FileManager.default.removeItem(at: dir) }
 

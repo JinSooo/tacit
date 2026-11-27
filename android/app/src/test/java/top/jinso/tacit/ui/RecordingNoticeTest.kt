@@ -15,7 +15,7 @@ class RecordingNoticeTest {
         val pause = "手机正在外放声音，暂不录音"
         val pending = AudioState(recording = false, modelsReady = false, message = R.string.recording_start_failed)
         fun notice(state: AudioState, wanted: Boolean = true, microphone: Boolean = true, notifications: Boolean = true) =
-            recordingNotice(state, wanted, microphone, notificationsBlocked = notifications, macRemoved = true, strings = strings)
+            recordingNotice(state, wanted, microphone, notificationsBlocked = notifications, macRemoved = true, strings = strings, backgroundLimited = true)
 
         assertEquals(Sources.AUDIO, notice(pending, microphone = false)?.route)
         assertEquals("录音没有开启", notice(pending.copy(message = null), wanted = false)?.text)
@@ -32,6 +32,16 @@ class RecordingNoticeTest {
             RecordingNotice("已在 Mac 上移除，请在 Mac 的 Tacit 里重新添加这台手机", SettingsRoutes.MAC),
             notice(recording, notifications = false),
         )
+    }
+
+    @Test fun backgroundRestrictionOnlyAppearsForEnabledRecordingWithModelsReady() {
+        val state = AudioState(recording = true, modelsReady = true, message = null)
+        fun notice(state: AudioState, wanted: Boolean) =
+            recordingNotice(state, wanted, true, false, false, strings, backgroundLimited = true)
+
+        assertEquals(SettingsRoutes.BACKGROUND, notice(state, true)?.route)
+        assertEquals(SettingsRoutes.SPEECH, notice(state.copy(modelsReady = false), true)?.route)
+        assertTrue(notice(state.copy(recording = false), false)!!.start)
     }
 
     @Test fun normalRecordingAndAutomaticStartStayQuietWithoutARemovedMac() {

@@ -42,7 +42,7 @@ struct RecordInspector: View {
       withAnimation(detail == nil ? Motion.standard : nil) { detail = d; error = nil }
     }
     catch is CancellationError {}
-    catch { let message = error.localizedDescription; Motion.animate { self.error = message } }
+    catch { let message = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed); Motion.animate { self.error = message } }
   }
 
   func content(_ d: RecordDetail) -> some View {
@@ -228,7 +228,7 @@ struct RecordInspector: View {
       try await store.api.deleteRecord(d.record.id)
       onDelete([d.record.id] + d.corrections.map(\.id))
       store.revision += 1
-    } catch { deleteError = error.localizedDescription }
+    } catch { deleteError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 
@@ -329,7 +329,7 @@ struct CorrectionSheet: View {
       "capture": ["method": "manual"], "sensitivity": original.sensitivity ?? "normal",
     ]
     do { try await store.api.saveManual(record); onSaved(); dismiss() }
-    catch { self.error = error.localizedDescription }
+    catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 
@@ -391,7 +391,7 @@ struct NoteSheet: View {
     ]
     if hasEnd { record["t_end"] = LocalTime.iso(end) }
     do { try await store.api.saveManual(record); onSaved(); dismiss() }
-    catch { self.error = error.localizedDescription }
+    catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 

@@ -395,7 +395,7 @@ function complete<T>(req: LLMRequest): Promise<LLMResult<T>>;   // 每次调用�
 ### 5.2 模型与库
 
 - sherpa-onnx v2.0.1（`sherpa-onnx-v2.0.1-osx-arm64-shared-no-tts-lib`），dylib 打进 app 的 `Contents/Frameworks` 并用同一张自签名证书签名；头文件 `sherpa-onnx/c-api/c-api.h`（同版本源码）。
-- 模型在第一次开启录音时由 `cli.ts audio-models`（`hub/src/audio-models.ts`）下载到 `<数据目录>/models/`，不进安装包、不进仓库，逐个校验 sha256，不符就不放进去。每个文件先从我们自己的 Release 副本 `github.com/JinSooo/tacit/releases/download/models-v1/` 下载（原样复制，资产名见下表），失败再走上游：sherpa-onnx 的 GitHub Release，SenseVoice 两个文件是 Hugging Face `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17`，再失败才从上游整包取。上游会重传文件（2026-11-19 重新导出了声纹模型，校验值变了、效果不变），所以一个文件可以认多个 sha256；新认一个版本前要用同一段语音比对声纹或转写结果一致。换副本内容时发新的 `models-v<N>`，不改已发的。
+- 模型在第一次开启录音时由 `cli.ts audio-models`（`hub/src/audio-models.ts`）下载到 `<数据目录>/models/`，不进安装包、不进仓库，逐个校验 sha256，不符就不放进去。每个文件都有 ModelScope 上别人传的原样副本，锁在固定提交：VAD `xnnehang/k2-fsa-silero-vad`（`resolve/e64bab14/`）、声纹 `zyaztec/sherpa-onnx-3dspeaker-eres2net-base-sv-zh-cn`（`resolve/5766f8a5/`）、SenseVoice `pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue`（`resolve/73eca476/`）。VAD 和声纹模型的另外两个候选是我们自己的 Release 副本 `github.com/JinSooo/tacit/releases/download/models-v1/`（原样复制，资产名见下表）和 sherpa-onnx 的 GitHub Release；SenseVoice 另两个候选是我们的副本和 Hugging Face `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17`；候选分属不同主机时，下载前并行向每个候选取前约 1 MB（单个最多 8 秒）测吞吐，按快慢排序，测速失败的排最后仍作兜底，再按顺序完整下载，哈希不符换下一个；都失败才从上游整包取。Android（`SpeechModelDownload.kt`）同样测速选源。上游会重传文件（2026-11-19 重新导出了声纹模型，校验值变了、效果不变），所以一个文件可以认多个 sha256；新认一个版本前要用同一段语音比对声纹或转写结果一致。换副本内容时发新的 `models-v<N>`，不改已发的。
 
 | 文件 | 副本资产名 | 上游（github.com/k2-fsa/sherpa-onnx/releases/download/…） | sha256 |
 |---|---|---|---|

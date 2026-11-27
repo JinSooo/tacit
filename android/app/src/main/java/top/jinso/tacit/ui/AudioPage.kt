@@ -232,6 +232,7 @@ import java.util.concurrent.CompletableFuture
             state, app.prefs.audioCaptureWanted,
             activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
             health?.recordingNotificationsBlocked == true, macRemoved, strings,
+            backgroundLimited = health?.batteryExempt == false || health?.backgroundRestricted == true,
         )
         if (notice != null) item(key = "notice") {
                     Box(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) {
@@ -475,6 +476,7 @@ internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, not
         }
         after()
     }
+    val recoverPermission = rememberPermissionRecovery(notify)
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result[Manifest.permission.RECORD_AUDIO] == true ||
             activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -482,7 +484,7 @@ internal fun rememberRecordingStarter(app: TacitApp, audio: AudioController, not
             // The result arrives before the page is resumed, and capture may only start from a visible page:
             // starting here failed the first time ("无法开始录音") right after the permission dialogs.
             scope.launch { owner?.lifecycle?.withResumed { start() } ?: start() }
-        } else notify(strings.text(R.string.microphone_ungranted_recording))
+        } else recoverPermission(Manifest.permission.RECORD_AUDIO, strings.text(R.string.microphone_ungranted_recording))
     }
     return {
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
@@ -505,6 +507,7 @@ internal fun recordingNotice(
     notificationsBlocked: Boolean,
     macRemoved: Boolean,
     strings: UiStrings,
+    backgroundLimited: Boolean = false,
 ): RecordingNotice? = when {
     !microphoneGranted && (wanted || state.recording) ->
         RecordingNotice(strings.text(R.string.microphone_ungranted), Sources.AUDIO)
@@ -517,6 +520,8 @@ internal fun recordingNotice(
     state.message != null -> RecordingNotice(strings.text(state.message))
     notificationsBlocked -> RecordingNotice(strings.text(R.string.recording_notifications_off), openNotifications = true)
     macRemoved -> RecordingNotice(strings.text(R.string.mac_removed_notice), SettingsRoutes.MAC)
+    backgroundLimited && (state.recording || wanted) ->
+        RecordingNotice(strings.text(R.string.recording_background_limited), SettingsRoutes.BACKGROUND)
     else -> null
 }
 

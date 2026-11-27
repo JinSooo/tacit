@@ -137,11 +137,12 @@ internal fun RecordDetail(
 }
 
 @Composable
-internal fun EmptyState(title: String, message: String) {
+internal fun EmptyState(title: String, message: String, action: (@Composable () -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 40.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Serif)
         Text(message, color = tacitColors.muted)
+        action?.invoke()
     }
 }
 

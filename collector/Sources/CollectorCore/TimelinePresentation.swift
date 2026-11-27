@@ -43,10 +43,23 @@ public enum TimelinePresence {
 }
 
 public enum TimelineSetup {
-  /// Unknown backend state must not be mistaken for unfinished setup.
-  public static func shouldShow(permissionsReady: Bool, modelReady: Bool?, agentReady: Bool?) -> Bool {
-    guard let modelReady, let agentReady else { return false }
-    return !permissionsReady || !modelReady || !agentReady
+  public static func missingPermissions(in sources: [DataSourceStatus])
+    -> (required: [DataSourceStatus], optionalSafari: DataSourceStatus?) {
+    var names = Set<String>()
+    let required = sources.filter {
+      $0.id != "browser" && DataSourceCatalog.isVisible($0.id) && $0.needsPermission
+        && names.insert($0.permissionName ?? $0.id).inserted
+    }
+    return (required, sources.first { $0.id == "browser" && $0.needsPermission })
+  }
+
+  public static func isExpanded(unfinished: Set<String>, collapsedWith: Set<String>) -> Bool {
+    !unfinished.isSubset(of: collapsedWith)
+  }
+
+  public static func rememberedCollapse(unfinished: Set<String>, completed: Set<String>,
+                                        collapsedWith: Set<String>) -> Set<String> {
+    isExpanded(unfinished: unfinished, collapsedWith: collapsedWith) ? [] : collapsedWith.subtracting(completed)
   }
 }
 

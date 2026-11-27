@@ -153,6 +153,11 @@ public extension L10n {
     public static var expanded: String { L10n.text(zh: "已展开", en: "Expanded") }
     public static var collapsed: String { L10n.text(zh: "已折叠", en: "Collapsed") }
     public static var grantSystemPermissions: String { L10n.text(zh: "打开系统权限", en: "Grant system permissions") }
+    public static var optionalFullDiskAccess: String { L10n.text(zh: "完全磁盘访问（可选）", en: "Full Disk Access (optional)") }
+    public static var safariPermissionNote: String {
+      L10n.text(zh: "只用于读取 Safari 浏览记录。打开后，系统会让 Tacit 重新打开。",
+                en: "Only used to read Safari history. macOS will ask to reopen Tacit after you grant access.")
+    }
     public static var setupModels: String { L10n.text(zh: "让 AI 整理你的记录", en: "Set up summaries for your records") }
     public static var checkModels: String { L10n.text(zh: "检查 AI 模型…", en: "Check AI models…") }
     public static var setupTools: String { L10n.text(zh: "连接你使用的 AI 工具", en: "Connect your AI tools") }
@@ -223,6 +228,9 @@ public extension L10n {
     public static var currentlyUnavailable: String { L10n.text(zh: "暂时读不到", en: "Unavailable") }
     public static var awaitingFirstSummary: String { L10n.text(zh: "等待首次完成", en: "Waiting for the first summary") }
     public static var connectionOK: String { L10n.text(zh: "连接正常。", en: "Connection successful.") }
+    public static var connectionNeedsSave: String { L10n.text(zh: "连接正常，保存后生效", en: "Connection successful. Save to apply.") }
+    public static var viewModelFailure: String { L10n.text(zh: "查看原因", en: "View reason") }
+    public static var modelFailureLocalNote: String { L10n.text(zh: "只在这台 Mac 上显示", en: "Shown only on this Mac") }
     public static var connectionTestNote: String { L10n.text(zh: "正在连接，最长等 1 分钟…", en: "Connecting. This can take up to a minute…") }
     public static var configured: String { L10n.text(zh: "已设置", en: "Set") }
     public static var notConfigured: String { L10n.text(zh: "未设置", en: "Not set") }
@@ -466,6 +474,7 @@ public extension L10n {
     public static var updatingRecordStatus: String { L10n.text(zh: "正在更新记录状态…", en: "Updating record status…") }
     public static var updateRecordStatusFailed: String { L10n.text(zh: "无法更改这条记录的状态，请稍后再试。", en: "Couldn't change this record's status. Try again shortly.") }
     public static var dismissNoticeFailed: String { L10n.text(zh: "无法关闭这条提示，请重试。", en: "Couldn't dismiss this notice. Try again.") }
+    public static var invalidInviteLink: String { L10n.text(zh: "邀请链接无法使用，请检查是否复制完整。", en: "The invite link is invalid. Check that you copied the full link.") }
     public static var inviteUnavailable: String { L10n.text(zh: "邀请链接已过期或已使用，请粘贴新链接。", en: "The invite link expired or was already used. Paste a new one.") }
     public static var inviteWrongBackend: String { L10n.text(zh: "请粘贴当前后台签发的邀请链接，连接其他后台前需先切回这台 Mac。", en: "Paste an invite from the current background service. Switch back to this Mac before connecting to another service.") }
     public static var returnWaitingForReconciliation: String { L10n.text(zh: "远端的删除和私密变更尚未核对完成，当前仍使用远端后台。", en: "The remote background service remains in use while deletions and privacy changes are checked.") }
@@ -710,7 +719,7 @@ public extension L10n {
     }
 
     public static func pairingError(_ failure: RemotePairing.Failure) -> String {
-      guard AppLanguage.current == .en else { return failure.localizedDescription }
+      guard AppLanguage.current == .en else { return failure.errorDescription ?? connectionFailed }
       switch failure {
       case .adminInvitationRequired: return "Use an invite link that grants management access."
       case .remoteUnavailable: return "Can't find the remote background service."
@@ -722,6 +731,54 @@ public extension L10n {
       case .retainedIdentityInvalid: return "Paste a new invite link with management access from the remote background service."
       case .recoveryRequired: return "Pairing didn't finish. Progress was saved so you can resume."
       }
+    }
+
+    public static var preparingBackend: String { L10n.text(zh: "正在准备后台服务…", en: "Preparing the background service…") }
+    public static var prepareAgain: String { L10n.text(zh: "重新准备", en: "Prepare again") }
+    public static var goToModelSettings: String { L10n.text(zh: "去设置", en: "Open settings") }
+    public static var noAvailableLocalModel: String {
+      L10n.text(zh: "这台 Mac 上没有可用的 AI 模型。装好并登录 Claude Code 或 Codex，或在设置里填 API。",
+                en: "No AI model is available on this Mac. Install and sign in to Claude Code or Codex, or configure an API in Settings.")
+    }
+    public static var offlinePortSaveFailed: String {
+      L10n.text(zh: "端口没能保存，请检查数据文件夹的访问权限。",
+                en: "The port couldn't be saved. Check access to the data folder.")
+    }
+    public static func setupFailure(_ reason: SetupStatus.Reason, lang: AppLanguage = .current) -> String {
+      switch reason {
+      case .bundleIncomplete:
+        return L10n.text(zh: "Tacit 安装不完整。请从安装包重新安装。", en: "The Tacit installation is incomplete. Reinstall it from the installer.", lang: lang)
+      case .database:
+        return L10n.text(zh: "记录库打开失败。请确认钥匙串已解锁，已有记录库缺少密钥时请用密钥备份恢复。",
+                         en: "The database could not be opened. Unlock the Keychain, or restore the key from backup if an existing database is missing its key.", lang: lang)
+      case .backgroundBlocked:
+        return L10n.text(zh: "系统没能启动后台服务。请在系统设置 › 通用 › 登录项与扩展里允许 Tacit 在后台运行，再点「重新准备」。",
+                         en: "macOS couldn't start the background service. Allow Tacit in System Settings → General → Login Items & Extensions, then click Prepare again.", lang: lang)
+      case .portInUse:
+        return L10n.text(zh: "后台服务的端口被占用了。请在设置 › 后台与连接里更换端口。",
+                         en: "The background service port is in use. Change it in Settings → Background service and connection.", lang: lang)
+      case .serviceUnhealthy, .unknown:
+        return L10n.text(zh: "后台服务没能启动。点「重新准备」再试。仍然失败时，可在设置 › 维护里复制诊断信息。",
+                         en: "The background service couldn't start. Click Prepare again. If it still fails, copy diagnostics in Settings → Maintenance.", lang: lang)
+      }
+    }
+
+    private static let unknownSpeechDownload = (
+      zh: "语音模型没能下载，稍后会自动重试",
+      en: "Couldn't download the speech model. Tacit will retry shortly."
+    )
+
+    private static let speechDownloadMessages: [Substring: (zh: String, en: String)] = [
+      "audio_models_error:network": ("连不上下载地址，检查网络或代理后会自动重试", "Can't reach the download. Check your network or proxy. Tacit will retry automatically."),
+      "audio_models_error:checksum": ("下载的文件不完整，会自动重新下载", "The downloaded file is incomplete. Tacit will download it again."),
+      "audio_models_error:disk": ("磁盘空间不够，清理后会自动重试", "Free up disk space and Tacit will retry automatically."),
+      "audio_models_error:extract": ("模型文件解压失败，会自动重试", "Couldn't unpack the model. Tacit will retry automatically."),
+    ]
+
+    public static func speechModelDownloadMessage(stderr: String, lang: AppLanguage = .current) -> String {
+      let marker = stderr.split(whereSeparator: \.isNewline).last ?? ""
+      let message = speechDownloadMessages[marker] ?? unknownSpeechDownload
+      return L10n.text(zh: message.zh, en: message.en, lang: lang)
     }
 
     public static func speechModelInstallationMissing(lang: AppLanguage = .current) -> String {
@@ -744,14 +801,22 @@ public extension L10n {
     }
 
     public static func serviceMessage(_ message: String, fallback: String) -> String {
+      guard UserFacingError.canDisplayServiceMessage(message) else { return fallback }
       guard AppLanguage.current == .en else { return message }
       switch message {
       case "不能移除最后一台管理设备": return "Keep at least one device with management access."
       case "手机只能使用采集权限": return "This phone supports collection access only."
       case "API key 格式不对：应为 8–1024 个英文字母、数字或符号，不能有空格、双引号或反斜杠。":
         return "Use 8–1,024 letters, numbers, or symbols for the API key. Omit spaces, double quotes, and backslashes."
-      default:
-        return hasChineseText(message) ? fallback : message
+      case "上一次测试还没结束": return "A test is already running."
+      case "地址要是完整的 http 或 https 链接，不能带用户名、密码或问号后的参数。":
+        return "Enter a full HTTP or HTTPS URL without a username, password, or query parameters."
+      case "模型列表只接受本机 HTTP(S) 地址": return "Use a local HTTP or HTTPS address to list models."
+      case "Git 地址需使用 https:// 或 ssh://": return "Use an https:// or ssh:// Git URL."
+      case "Git 地址需使用 HTTPS 或 SSH，不能包含密码或令牌":
+        return "Use an HTTPS or SSH Git URL without a password or access credential."
+      case "目录中缺少有效的 plugin.json 清单": return "The folder is missing a valid plugin.json manifest."
+      default: return fallback
       }
     }
 
@@ -782,11 +847,16 @@ public extension L10n {
     }
 
     public static func modelFailure(_ problem: String, fallback: String) -> String {
-      serviceMessage(ModelErrorText.plain(problem), fallback: fallback)
+      if ModelErrorText.isCode(problem) { return ModelErrorText.plain(problem) }
+      return serviceMessage(problem, fallback: fallback)
     }
 
     public static var summaryFailure: String {
       L10n.text(zh: "整理没能完成，请检查模型设置。", en: "Summarizing failed. Check your model settings.")
+    }
+
+    public static var pendingUploadTooLarge: String {
+      L10n.text(zh: "待发送记录超过上传大小限制。", en: "Pending records exceed the upload size limit.")
     }
 
     public static func backgroundIssue(_ message: String) -> String {
@@ -799,7 +869,12 @@ public extension L10n {
         ("后台未确认完整接收", "The background service didn't confirm receipt of all records. Pending records are kept."),
         ("后台服务拒绝了记录", "The background service rejected the records."),
         ("找不到后台服务的访问凭证", "Restart Tacit to restore the background service credentials."),
-        ("待发送记录超过上传大小限制", "Pending records exceed the upload size limit."),
+        ("待发送记录超过上传大小限制", pendingUploadTooLarge),
+        ("记录未写入，请重试", L10n.recordSaveFailed),
+        ("后台服务出错了，请稍后重试。", L10n.backgroundServiceFailed),
+        ("访问权限不足或身份已失效，请检查连接设置。", L10n.serviceAccessExpired),
+        ("这个版本的后台服务暂不支持此功能。", L10n.serviceFeatureUnavailable),
+        ("操作正在进行，请稍后再试。", L10n.serviceOperationInProgress),
         ("连不上后台服务", "Can't reach the background service."),
         ("待发送队列中有记录需要直连上传", "Some pending records need a direct connection to upload."),
         ("远端后台暂不可用", "The remote background service is temporarily unavailable. Pending records are kept."),
@@ -815,6 +890,10 @@ public extension L10n {
     }
 
     public static func recordingStatus(_ status: String) -> String {
+      let downloads = Array(speechDownloadMessages.values) + [unknownSpeechDownload]
+      if let download = downloads.first(where: { status == $0.zh || status == $0.en }) {
+        return L10n.text(zh: download.zh, en: download.en)
+      }
       guard AppLanguage.current == .en, hasChineseText(status) else { return status }
       if status == speechModelInstallationMissing(lang: .zh) { return speechModelInstallationMissing() }
       if status.hasPrefix("语音模型下载失败") { return speechModelDownloadFailed("") }
@@ -837,8 +916,8 @@ public extension L10n {
     }
 
     public static func sourceStatus(_ status: String, source: String, succeeded: Bool) -> String {
-      guard AppLanguage.current == .en, !status.isEmpty else { return status }
       if source == "audio" { return recordingStatus(status) }
+      guard AppLanguage.current == .en, !status.isEmpty else { return status }
       if source == "wechat", status.hasPrefix("“"), let end = status.range(of: "”新增 ", options: .backwards),
          let number = Int(status[end.upperBound...].dropLast(2)) {
         let chat = String(status[status.index(after: status.startIndex)..<end.lowerBound])

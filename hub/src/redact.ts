@@ -13,6 +13,7 @@ export function redactString(input: string): { text: string; count: number } {
   let text = input;
   const patterns: [string, RegExp][] = [
     ["私钥", /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g],
+    ["Basic", /(?<=\b(?:Proxy-)?Authorization:[ \t]*Basic[ \t]+)[A-Za-z0-9+/]+=*/gi],
     ["AWS", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g],
     ["GitHub", /\b(?:gh[pors]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g],
     ["Anthropic", /\bsk-ant-[A-Za-z0-9_-]{16,}/g],
@@ -27,11 +28,22 @@ export function redactString(input: string): { text: string; count: number } {
     ["Bearer", /(?<=\b(?:Bearer|Token)\s+)[A-Za-z0-9._~+\/-]{16,}=*/gi],
   ];
   for (const [type, pattern] of patterns) text = text.replace(pattern, () => replace(type));
+  // 没有 Authorization 前缀的 "Basic <值>"：只有值确实是 base64 且解出“用户:密码”时才算凭据，
+  // 否则 "basic authentication" 这类普通英文会被误遮（2026-11-27 第 2 轮审查）。
+  text = text.replace(/(?<=\bBasic[ \t]+)[A-Za-z0-9+/]{12,}={0,2}(?![A-Za-z0-9+/=])/g, value => {
+    if (value.length % 4 !== 0) return value;
+    let decoded = "";
+    try { decoded = Buffer.from(value, "base64").toString("utf8"); } catch { return value; }
+    return decoded.includes(":") && !/[\u0000-\u001f\u007f\ufffd]/.test(decoded) ? replace("Basic") : value;
+  });
   // 地图瓦片请求常只采到 DataServer?...&tk=…；限定查询参数和 32 位十六进制格式，普通哈希不动。
   text = text.replace(/([?&](?:amp;)?tk=)[a-f0-9]{32}(?![a-f0-9])/gi,
     (_, prefix: string) => prefix + replace("地图密钥"));
   text = text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+:)([^\s/@]+)(@)/gi,
     (_, prefix, _password, suffix) => prefix + replace("URL密码") + suffix);
+  // 单段用户信息只在网页、代理和 WebSocket 地址里当凭据；ssh://git@host 的 git 是用户名，不遮。
+  text = text.replace(/(\b(?:https?|wss?|socks(?:4a?|5h?)?):\/\/)[^\s\/@:?#]+(@)(?=[^\s\/@?#])/gi,
+    (_, prefix, suffix) => prefix + replace("URL凭据") + suffix);
   text = text.replace(/((?:["']?)(?:password|passwd|pwd|token|access_token|refresh_token|api[_-]?key|secret|client_secret)["']?\s*[:=]\s*)(["']?)([A-Za-z0-9_+\/.=~%!@#$^&*?:-]{16,})\2/gi,
     (whole, prefix: string, quote: string, value: string) => {
       const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter(r => r.test(value)).length;

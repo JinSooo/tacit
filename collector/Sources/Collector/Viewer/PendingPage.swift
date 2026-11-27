@@ -279,7 +279,7 @@ struct PendingCard: View {
       busy = true; error = nil
       defer { busy = false }
       do { try await store.api.resolve(item.id, action: action, name: name, target: target); onResolved() }
-      catch { self.error = error.localizedDescription }
+      catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
     }
   }
 }
@@ -337,7 +337,7 @@ struct SamplePlayer: View {
       data = d
       peaks = Waveform.peaks(wav: d, buckets: 64)
     } catch is CancellationError {
-    } catch { self.error = (error as? HubError)?.actionMessage ?? L10n.couldntLoadTheSample }
+    } catch { self.error = UserFacingError.message(for: error, fallback: L10n.couldntLoadTheSample) }
   }
 
   func toggle() async {

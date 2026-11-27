@@ -129,7 +129,7 @@ internal fun accelerationDisplay(
                             preparation.receivedBytes / 1_000_000.0, preparation.totalBytes / 1_000_000.0))
                     } else ProgressLine()
                 }
-                if (preparation.phase != SpeechPreparationPhase.DOWNLOADING || preparation.cancelling) {
+                if (preparation.phase != SpeechPreparationPhase.DOWNLOADING || preparation.cancelling || preparation.receivedBytes == 0L) {
                     Caption(preparation.message?.resolve(strings).orEmpty(), color = if (preparation.phase == SpeechPreparationPhase.ERROR)
                         tacitColors.attention else tacitColors.muted)
                 }
@@ -146,6 +146,7 @@ internal fun accelerationDisplay(
         val canImport = modelsReady != null && !preparation.busy
         SettingsRow(
             if (modelsReady == true) strings.text(R.string.models_replace_folder) else strings.text(R.string.models_import_folder),
+            status = strings.text(R.string.models_import_folder_hint, SpeechModels.required.joinToString(", ")),
             onClick = if (canImport) {{
                 models.launch(android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE)
                     .putExtra(android.content.Intent.EXTRA_LOCAL_ONLY, true)

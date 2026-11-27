@@ -112,11 +112,12 @@ import Testing
   try FileManager.default.createDirectory(at: setupLog, withIntermediateDirectories: false)
   let failed = Process()
   failed.executableURL = ok.executableURL
-  failed.arguments = ["-c", "echo synthetic-error >&2; exit 7"]
+  failed.arguments = ["-c", "printf 'synthetic-error\\nsetup_error:background_blocked\\n' >&2; exit 7"]
   SetupStatus.run(failed, dataDirectory: root, build: build, log: diagnostics, diagnosticDescriptor: fd)
   let status = try object(url)
   #expect(status["ok"] as? Bool == false)
   #expect(status["exit_code"] as? Int == 7)
+  #expect(status["reason"] as? String == "background_blocked")
   #expect(status["version"] as? String == build.version)
   #expect(status["build"] as? String == build.build)
   #expect(ISO8601DateFormatter().date(from: status["at"] as? String ?? "") != nil)
