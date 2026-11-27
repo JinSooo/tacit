@@ -7,6 +7,7 @@ export interface SessionDirectories {
   codexDir?: string;
   antigravityDir?: string;
   geminiDir?: string;
+  qwenDir?: string;
 }
 
 export interface SessionFile {
