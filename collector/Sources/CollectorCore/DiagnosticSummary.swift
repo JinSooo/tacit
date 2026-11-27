@@ -23,12 +23,10 @@ public enum DiagnosticSummary {
     "codex.session", "manual.note", "manual.correction", "manual.agent",
   ]
 
-  /// 只在后台不可达时展示。以本次准备的固定原因优先，数据库错误可用后台的细分原因补充。
-  public static func startupMessage(in dataDir: URL, reason: SetupStatus.Reason? = nil) -> String? {
-    let reason = reason ?? setupStatus(in: dataDir)?.reason
-    if let reason, reason != .database, reason != .unknown, reason != .serviceUnhealthy {
-      return L10n.Settings.setupFailure(reason)
-    }
+  /// 本次准备得到的原因优先，避免把上一次后台的错误当作本次失败。
+  public static func startupMessage(in dataDir: URL) -> String? {
+    let reason = setupStatus(in: dataDir)?.reason
+    if let reason, reason != .unknown { return L10n.Settings.setupFailure(reason) }
     if let failure = read(StartupFailure.self, at: dataDir.appendingPathComponent(startupFile)),
        timestamp(failure.at) != nil, let code = StartupCode(rawValue: failure.code) {
       switch code {

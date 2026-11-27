@@ -53,8 +53,8 @@ enum AppSetup {
   static func checklistStep(in dataDir: URL, reachable: Bool) -> ChecklistStep? {
     let state = activity
     if state == .running { return .preparing }
-    if case .finished(let reason?) = state, !reachable || reason == .backgroundBlocked || reason == .bundleIncomplete {
-      return .failed(DiagnosticSummary.startupMessage(in: dataDir, reason: reason) ?? L10n.Settings.setupFailure(reason))
+    if case .finished(let reason?) = state {
+      return .failed(L10n.Settings.setupFailure(reason))
     }
     if reachable { return nil }
     if HubAPI.inStartupGrace() { return .preparing }
@@ -98,8 +98,7 @@ enum AppSetup {
             reason = .bundleIncomplete
           }
           if let reason {
-            throw HubError(message: DiagnosticSummary.startupMessage(in: config.dataDir, reason: reason)
-                           ?? L10n.Settings.setupFailure(reason), status: 0)
+            throw HubError(message: L10n.Settings.setupFailure(reason), status: 0)
           }
           if standby { startup.ensureCollectorStandby() }
         } else {
