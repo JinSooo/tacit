@@ -1,5 +1,6 @@
 import { classifyModelError, ModelError } from "./error-category.ts";
 import type { BackendContext, Spawn } from "./types.ts";
+import { capturedCLIEnv, cliProxyEnv, systemProxyEnv } from "../net/system-proxy.ts";
 
 export function input(ctx: BackendContext): string {
   return JSON.stringify({ system: ctx.req.system, prompt: ctx.req.prompt });
@@ -9,16 +10,13 @@ export function input(ctx: BackendContext): string {
  * 代理和 CODEX_HOME 只决定 CLI 怎么连网、去哪读登录，照常传。 */
 export const SHELL_ENV = /^(CODEX_HOME|(?:http|https|all|no)_proxy|(?:HTTP|HTTPS|ALL|NO)_PROXY)$/;
 const KEEP_ENV = /^(HOME|USER|LOGNAME|PATH|SHELL|TMPDIR|LANG|LC_[A-Z_]+|TERM|__CF_USER_TEXT_ENCODING)$/;
-/** launchd 拉起的后台没有终端里的代理变量；安装时从登录 shell 读出的那几项放在 TACIT_CLI_ENV 里，只交给 CLI，
- * 不进后台自己的 fetch（2026-11-27：用户在 .zshrc 里设代理时，终端里 codex 正常、Tacit 里调用失败）。 */
-export function cliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  let captured: Record<string, string> = {};
-  try {
-    const parsed = JSON.parse(source.TACIT_CLI_ENV ?? "{}");
-    if (parsed && typeof parsed === "object") captured = Object.fromEntries(Object.entries(parsed).filter((e): e is [string, string] => SHELL_ENV.test(e[0]) && typeof e[1] === "string"));
-  } catch { /* 读不懂就当没有。 */ }
-  const kept = Object.fromEntries(Object.entries(source).filter(([k]) => KEEP_ENV.test(k) || SHELL_ENV.test(k)));
-  return { ...captured, ...kept, CI: "1" };
+/** 显式设置优先于安装时保存的登录 shell 环境，再回落到 macOS 系统代理。 */
+export function cliEnv(source: NodeJS.ProcessEnv = process.env, defaults = systemProxyEnv()): NodeJS.ProcessEnv {
+  const captured = capturedCLIEnv(source);
+  const kept = Object.fromEntries(Object.entries(source).filter(([key]) => KEEP_ENV.test(key)));
+  const codexHome = source.CODEX_HOME ?? captured.CODEX_HOME;
+  return { ...kept, ...cliProxyEnv(source, captured, defaults),
+    ...(codexHome === undefined ? {} : { CODEX_HOME: codexHome }), CI: "1" };
 }
 export function run(ctx: BackendContext, command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {

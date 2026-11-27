@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawn as nodeSpawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,10 +6,12 @@ import { dirname, join } from "node:path";
 
 import { createLLM, repairToSchema, type LLMRequest, type Spawn, type UsageRow } from "../src/llm/index.ts";
 import { loadConfig } from "../src/llm/config.ts";
-import { resetCodexCatalog } from "../src/llm/codex-cli.ts";
+import { resetCodexProbes } from "../src/llm/codex-cli.ts";
 import { cliEnv } from "../src/llm/process.ts";
+import { systemProxyEnv } from "../src/net/system-proxy.ts";
 import { DAY_SCHEMA, DAY_SYSTEM, normalizeDayOutput } from "../src/distill/prompts.ts";
 
+const noSystemProxy = systemProxyEnv({ exceptions: [] });
 const dirs: string[] = [];
 const originalFetch = globalThis.fetch;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -110,7 +112,7 @@ test("每日概述向提供方请求新 schema，本地接受旧单编号响应"
 });
 
 test("Codex：安全参数、临时 schema 与输出、stdin 和 finally 清理", async () => {
-  resetCodexCatalog();
+  resetCodexProbes();
   const f = await fixture("codex-cli");
   expect((await f.llm.complete(request)).ok).toBe(true);
   const logs = await f.logs(), start = logs[0], schemaLog = logs.find(l => l.event === "schema");
@@ -135,7 +137,7 @@ test("Codex：安全参数、临时 schema 与输出、stdin 和 finally 清理"
 });
 
 test("Codex：读不到模型目录、不是 ChatGPT 登录时不覆盖，照常调用", async () => {
-  resetCodexCatalog();
+  resetCodexProbes();
   const f = await fixture("codex-cli", "nocatalog");
   expect((await f.llm.complete(request)).ok).toBe(true);
   const logs = await f.logs();
@@ -143,12 +145,63 @@ test("Codex：读不到模型目录、不是 ChatGPT 登录时不覆盖，照常
   expect(logs[0].args.some((a: string) => a.startsWith("model_catalog_json="))).toBe(false);
   // 不是 ChatGPT 登录时不改 provider。
   expect(logs[0].args.some((a: string) => a.startsWith("model_provider"))).toBe(false);
-  resetCodexCatalog();
+  resetCodexProbes();
+});
+
+test("Codex：失败的登录和目录探测 30 秒后重试，成功缓存仍有效，手动测试可立即重试", async () => {
+  resetCodexProbes();
+  const f = await fixture("codex-cli");
+  let offline = true, now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const probes = { debug: 0, login: 0 };
+  const spawn: Spawn = (command, args, options) => {
+    const kind = args[0];
+    if (kind === "debug" || kind === "login") {
+      probes[kind]++;
+      if (offline) throw new Error("synthetic spawn failure");
+    }
+    return f.spawn(command, args, options);
+  };
+  const llm = createLLM({ dataDir: f.dir, recordUsage: () => {}, spawn });
+  try {
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 1, login: 1 });
+    const [first] = await f.logs();
+    expect(first.args).not.toContain('model_provider="ra-https"');
+
+    offline = false;
+    now += 29_999;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 1, login: 1 });
+
+    now++;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 2, login: 2 });
+    const starts = (await f.logs()).filter(log => log.event === "start");
+    expect(starts.at(-1).args).toContain('model_provider="ra-https"');
+    expect(starts.at(-1).args.some((arg: string) => arg.startsWith("model_catalog_json="))).toBe(true);
+
+    now += 30_000;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 2, login: 2 });
+
+    resetCodexProbes();
+    offline = true;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 3, login: 3 });
+    resetCodexProbes();
+    offline = false;
+    expect((await llm.complete(request)).ok).toBe(true);
+    expect(probes).toEqual({ debug: 4, login: 4 });
+  } finally {
+    clock.mockRestore();
+    resetCodexProbes();
+  }
 });
 
 // 回归（2026-11-27）：用户的 codex 走 config.toml 里自己的中转站，终端里正常，Tacit 加了 --ignore-user-config 后调用失败。
 test("Codex：沿用用户 config.toml 里选的连接，其余用户配置仍不加载", async () => {
-  resetCodexCatalog();
+  resetCodexProbes();
   const f = await fixture("codex-cli");
   const home = join(f.dir, "codex-home");
   await Bun.write(join(home, "config.toml"), `profile = "work"
@@ -176,14 +229,14 @@ command = "/nonexistent"
   expect(start.args.join(" ")).not.toContain("ra-https");
   expect(start.args.join(" ")).not.toContain("mcp_servers");
   expect(start.args.join(" ")).not.toContain("xhigh");
-  resetCodexCatalog();
+  resetCodexProbes();
 });
 
 test("CLI 环境：带上安装时记下的代理和 CODEX_HOME，不带中转站变量", () => {
   const env = cliEnv({ HOME: "/h", PATH: "/p", ANTHROPIC_BASE_URL: "https://relay.example.invalid", OPENAI_API_KEY: "synthetic",
-    https_proxy: "http://127.0.0.1:1", TACIT_CLI_ENV: JSON.stringify({ https_proxy: "http://127.0.0.1:2", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", OPENAI_API_KEY: "x" }) });
-  expect(env).toEqual({ HOME: "/h", PATH: "/p", https_proxy: "http://127.0.0.1:1", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", CI: "1" });
-  expect(cliEnv({ HOME: "/h", TACIT_CLI_ENV: "{" })).toEqual({ HOME: "/h", CI: "1" });
+    https_proxy: "http://127.0.0.1:1", TACIT_CLI_ENV: JSON.stringify({ https_proxy: "http://127.0.0.1:2", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", OPENAI_API_KEY: "x" }) }, noSystemProxy);
+  expect(env).toEqual({ HOME: "/h", PATH: "/p", https_proxy: "http://127.0.0.1:1", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", NO_PROXY: noSystemProxy.NO_PROXY, CI: "1" });
+  expect(cliEnv({ HOME: "/h", TACIT_CLI_ENV: "{" }, noSystemProxy)).toEqual({ HOME: "/h", NO_PROXY: noSystemProxy.NO_PROXY, CI: "1" });
 });
 
 for (const provider of ["claude-cli", "codex-cli"]) {
@@ -332,8 +385,8 @@ test("OpenAI 兼容后端指向本机地址时不读也不发 API key", async ()
 // 回归：CLI 后端曾继承调用方的 ANTHROPIC_BASE_URL 等变量，手动运行时走了中转站（2026-11-08 实测发现）。
 test("CLI 后端只继承白名单环境变量", async () => {
   const { cliEnv } = await import("../src/llm/process.ts");
-  const env = cliEnv({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", ANTHROPIC_BASE_URL: "https://relay.invalid", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "m", CLAUDE_CODE_SESSION_ID: "s", CLAUDECODE: "1", CMUX_CLAUDE_PID: "1", OPENAI_API_KEY: "k" });
-  expect(env).toEqual({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", CI: "1" });
+  const env = cliEnv({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", ANTHROPIC_BASE_URL: "https://relay.invalid", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "m", CLAUDE_CODE_SESSION_ID: "s", CLAUDECODE: "1", CMUX_CLAUDE_PID: "1", OPENAI_API_KEY: "k" }, noSystemProxy);
+  expect(env).toEqual({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", NO_PROXY: noSystemProxy.NO_PROXY, CI: "1" });
 });
 
 // 回归：claude -p 把出错原因写在 stdout 的 JSON 里、stderr 为空，曾经只显示"退出失败（1）："（2026-11-08 首次真实运行发现）。
@@ -365,7 +418,7 @@ test("task 在成功和失败用量中保留，未提供时为 NULL", async () =
 });
 
 for (const mode of ["codex-error", "codex-echo"]) test(`Codex JSONL 失败诊断：${mode}`, async () => {
-  resetCodexCatalog();
+  resetCodexProbes();
   const f = await fixture("codex-cli", mode);
   const result = await f.llm.complete(request);
   expect(result.ok).toBe(false);

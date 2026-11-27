@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { AUDIO_MODELS, MIRROR, ensureAudioModels, type Model } from "../src/audio-models.ts";
+import { AUDIO_MODELS, MIRROR, audioModelsErrorCategory, ensureAudioModels, type Model } from "../src/audio-models.ts";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -102,4 +102,96 @@ test("每个模型先从我们的 Release 副本下载，校验值和契约文�
     expect(model.urls.length).toBeGreaterThan(1);
     for (const hash of model.sha256) expect(contract).toContain(hash);
   }
+});
+
+test("下载等响应或等下一块数据超时都会重试，已收到的块从 Range 续传", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ra-models-")), dir = join(root, "models");
+  const text = "first-second-third-fourth-fifth", seen: (string | null)[] = [];
+  const encoder = new TextEncoder();
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(request) {
+      const range = request.headers.get("range");
+      seen.push(range);
+      if (seen.length === 1) {
+        await Bun.sleep(500);
+        return new Response("late headers");
+      }
+      if (seen.length === 2) {
+        return new Response(new ReadableStream({ start(c) { c.enqueue(encoder.encode("first")); } }));
+      }
+      const chunks = ["-second", "-third", "-fourth", "-fifth"];
+      return new Response(new ReadableStream({
+        async pull(c) {
+          await Bun.sleep(60);
+          c.enqueue(encoder.encode(chunks.shift()!));
+          if (!chunks.length) c.close();
+        },
+      }), { status: 206 });
+    },
+  });
+  try {
+    await ensureAudioModels(dir, { idleTimeoutMs: 150, wait: async () => {},
+      models: [{ file: "m.bin", sha256: [sha(text)], urls: [server.url.href] }] });
+    expect(readFileSync(join(dir, "m.bin"), "utf8")).toBe(text);
+    expect(seen).toEqual([null, null, "bytes=5-"]);
+  } finally {
+    await server.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("下载重定向到本机时重新选择代理", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ra-models-"));
+  const origin = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("local") });
+  const seen: string[] = [];
+  const proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: req => {
+    seen.push(req.url);
+    return Response.redirect(origin.url);
+  } });
+  const previous = process.env.http_proxy;
+  try {
+    process.env.http_proxy = proxy.url.href;
+    const external = "http://audio-model-proxy.example.invalid/model";
+    await ensureAudioModels(root, { models: [{ file: "m.bin", sha256: [sha("local")], urls: [external] }] });
+    expect(readFileSync(join(root, "m.bin"), "utf8")).toBe("local");
+    expect(seen).toEqual([external]);
+  } finally {
+    if (previous === undefined) delete process.env.http_proxy; else process.env.http_proxy = previous;
+    await Promise.all([origin.stop(true), proxy.stop(true)]);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("audio-models 失败时 stderr 最后一行只有固定错误类别", () => {
+  const root = mkdtempSync(join(tmpdir(), "ra-models-cli-"));
+  const cli = join(import.meta.dir, "../src/cli.ts");
+  const args = [process.execPath, cli, "audio-models"];
+  try {
+    const file = join(root, "data-as-file");
+    writeFileSync(file, "");
+    for (const [extra, category] of [[[], "disk"], [["unexpected"], "unknown"]] as const) {
+      const child = Bun.spawnSync([...args, ...extra], { env: { ...process.env, HOME: root, RA_DATA_DIR: file } });
+      expect(child.exitCode).toBe(1);
+      expect(child.stderr.toString()).toBe(`audio_models_error:${category}\n`);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("下载、内容校验和坏压缩包分别给出固定错误类别", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ra-models-"));
+  try {
+    const model = { file: "m.bin", sha256: [sha("valid")], urls: ["https://x/model"] };
+    const badArchive = { ...model, archive: { url: "https://x/archive", member: "bundle/m.bin" } };
+    const cases = [
+      { model, fetcher: () => new Response(null, { status: 404 }), category: "network" },
+      { model, fetcher: () => new Response("tampered"), category: "checksum" },
+      { model: badArchive, fetcher: () => new Response("invalid tar content"), category: "extract" },
+    ];
+    for (const { model, fetcher, category } of cases) {
+      const result = await ensureAudioModels(root, { models: [model], fetcher: async () => fetcher() })
+        .then(() => "success", audioModelsErrorCategory);
+      expect(result).toBe(category);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

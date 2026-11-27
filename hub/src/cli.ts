@@ -455,14 +455,15 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   } finally { db.close(); }
 }
 
-if (import.meta.main) main().catch(error => {
+if (import.meta.main) main().catch(async error => {
   if (["run-plugin", "plugin-run"].includes(process.argv[2] ?? "")) {
     const code = (error as { code?: string })?.code;
     console.log(JSON.stringify({ failure: error?.name === "SandboxUnavailableError" ? "sandbox" : code === "ENOENT" ? "missing_file" : code === "EACCES" || code === "EPERM" ? "permission" : "process" }));
   }
-  // 模型下载保留原有命令行输出。
-  if (process.argv[2] === "audio-models") console.error(error instanceof Error ? error.message : String(error));
-  else {
+  if (process.argv[2] === "audio-models") {
+    const { audioModelsErrorCategory } = await import("./audio-models.ts");
+    console.error(`audio_models_error:${audioModelsErrorCategory(error)}`);
+  } else {
     console.error(cliText("Hub 执行失败，请检查命令、数据目录、密钥及插件状态。", "The Tacit command failed. Check the command, data directory, keys, and plugin status."));
     console.error(cliErrorDetail(error));
   }

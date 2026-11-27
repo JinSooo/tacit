@@ -4,6 +4,7 @@ import { createReadStream, existsSync, mkdirSync, mkdtempSync, renameSync, rmSyn
 import { open } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { proxiedFetch } from "./net/system-proxy.ts";
 
 const GITHUB = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
 // 我们自己 Release 上的原样副本，排在上游前面：上游重传文件（2026-11-19 换了声纹模型）不会再挡住新安装。
@@ -42,42 +43,99 @@ export async function sha256(file: string): Promise<string> {
   return hash.digest("hex");
 }
 
-class HttpError extends Error { constructor(readonly status: number) { super(`下载失败（HTTP ${status}）`); } }
+type AudioModelsErrorCategory = "network" | "checksum" | "disk" | "extract" | "unknown";
+class AudioModelsError extends Error {
+  constructor(readonly category: AudioModelsErrorCategory, message: string = category) { super(message); }
+}
+class HttpError extends AudioModelsError {
+  constructor(readonly status: number) { super("network"); }
+}
+
+export function audioModelsErrorCategory(error: unknown): AudioModelsErrorCategory {
+  if (error instanceof AudioModelsError) return error.category;
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code && /^(EACCES|EDQUOT|EEXIST|EFBIG|EIO|EISDIR|ELOOP|EMFILE|ENAMETOOLONG|ENFILE|ENOENT|ENOSPC|ENOTDIR|EPERM|EROFS|EXDEV)$/.test(code)
+    ? "disk" : "unknown";
+}
+
+async function downloadAttempt(url: string, target: string, have: number, o: Required<Options>) {
+  const controller = new AbortController();
+  const waitForData = async <T>(receive: () => Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject();
+      }, o.idleTimeoutMs);
+    });
+    try {
+      return await Promise.race([deadline, receive()]);
+    } catch { throw new AudioModelsError("network"); }
+    finally { clearTimeout(timer); }
+  };
+  try {
+    let response: Response;
+    for (let redirects = 0; ; redirects++) {
+      // 逐跳重新选代理，免得重定向到内网时沿用外网代理。
+      response = await waitForData(() => o.fetcher(url, {
+        redirect: "manual", signal: controller.signal, headers: have ? { Range: `bytes=${have}-` } : {},
+      }));
+      const location = response.headers.get("location");
+      if (!location || ![301, 302, 303, 307, 308].includes(response.status)) break;
+      void response.body?.cancel().catch(() => {});
+      const next = URL.parse(location, url);
+      if (redirects === 20 || !next || !["http:", "https:"].includes(next.protocol) || next.username || next.password) {
+        throw new AudioModelsError("network");
+      }
+      url = next.href;
+    }
+    if (have && response.status === 416) return;
+    if (!response.ok || !response.body) throw new HttpError(response.status);
+    // 逐块写盘：断线时已收到的部分留在文件里，下次从这里续传。
+    const file = await open(target, have > 0 && response.status === 206 ? "a" : "w");
+    const reader = response.body.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await waitForData(() => reader.read());
+        if (done) break;
+        await file.write(value);
+      }
+    } finally {
+      if (controller.signal.aborted) void reader.cancel().catch(() => {});
+      reader.releaseLock();
+      await file.close();
+    }
+  } finally { controller.abort(); }
+}
 
 /** 断线或服务端出错时从已下载的位置续传，最多 6 次；4xx 不重试。 */
 async function download(url: string, target: string, o: Required<Options>) {
-  let failure: unknown;
   for (let attempt = 0; attempt < 6; attempt++) {
     if (attempt) await o.wait(Math.min(30_000, 2000 * 2 ** (attempt - 1)));
     const have = existsSync(target) ? statSync(target).size : 0;
     try {
-      const response = await o.fetcher(url, { redirect: "follow", headers: have ? { Range: `bytes=${have}-` } : {} });
-      if (have && response.status === 416) return;
-      if (!response.ok || !response.body) throw new HttpError(response.status);
-      const append = have > 0 && response.status === 206;
-      // 逐块写盘：断线时已收到的部分留在文件里，下次从这里续传。
-      const file = await open(target, append ? "a" : "w");
-      try { for await (const chunk of response.body) await file.write(chunk); } finally { await file.close(); }
+      await downloadAttempt(url, target, have, o);
       return;
     } catch (error) {
-      failure = error;
-      if (error instanceof HttpError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status)) break;
-      o.log(`${error instanceof Error ? error.message : "下载中断"}，稍后续传`);
+      const clientError = error instanceof HttpError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status);
+      if (clientError || attempt === 5 || audioModelsErrorCategory(error) !== "network") throw error;
+      o.log("下载中断，稍后续传");
     }
   }
-  throw failure instanceof Error ? failure : new Error("下载失败");
 }
 
 export interface Options {
-  fetcher?: typeof fetch;
+  fetcher?: typeof proxiedFetch;
   log?: (message: string) => void;
   models?: Model[];
   wait?: (ms: number) => Promise<void>;
+  idleTimeoutMs?: number;
 }
 
 /** 缺什么下载什么；已有且校验通过的文件不再下载。 */
 export async function ensureAudioModels(dir: string, options: Options = {}): Promise<void> {
-  const o: Required<Options> = { fetcher: fetch, log: () => {}, models: AUDIO_MODELS, wait: ms => Bun.sleep(ms), ...options };
+  const o: Required<Options> = { fetcher: proxiedFetch, log: () => {}, models: AUDIO_MODELS,
+    wait: ms => Bun.sleep(ms), idleTimeoutMs: 30_000, ...options };
   const { log, models } = o;
   mkdirSync(dir, { recursive: true });
   const missing: Model[] = [];
@@ -92,9 +150,17 @@ export async function ensureAudioModels(dir: string, options: Options = {}): Pro
     for (const model of missing) {
       const staged = join(staging, model.file.replaceAll("/", "_"));
       let ok = false;
+      let failure = new AudioModelsError("network");
       for (const url of model.urls) {
-        try { log(`下载 ${model.file}`); await download(url, staged, o); ok = model.sha256.includes(await sha256(staged)); }
-        catch (error) { log(`${model.file}：${error instanceof Error ? error.message : "下载失败"}`); }
+        log(`下载 ${model.file}`);
+        try {
+          await download(url, staged, o);
+          ok = model.sha256.includes(await sha256(staged));
+          if (!ok) failure = new AudioModelsError("checksum", "语音模型校验失败");
+        } catch (error) {
+          if (audioModelsErrorCategory(error) !== "network") throw error;
+          log("下载失败");
+        }
         if (ok) break;
         rmSync(staged, { force: true });
       }
@@ -108,13 +174,16 @@ export async function ensureAudioModels(dir: string, options: Options = {}): Pro
           const members = missing.filter(m => m.archive?.url === model.archive!.url).map(m => m.archive!.member);
           const tar = spawnSync("/usr/bin/tar", ["-xjf", packed, "-C", extracted, ...members], { stdio: "ignore" });
           rmSync(packed, { force: true });
-          if (tar.status !== 0) throw new Error("语音模型压缩包解压失败");
+          if (tar.status !== 0) throw new AudioModelsError("extract");
           archives.set(model.archive.url, extracted);
         }
         const from = join(extracted, model.archive.member);
-        if (existsSync(from)) { renameSync(from, staged); ok = model.sha256.includes(await sha256(staged)); }
+        if (!existsSync(from)) throw new AudioModelsError("extract");
+        renameSync(from, staged);
+        ok = model.sha256.includes(await sha256(staged));
+        if (!ok) failure = new AudioModelsError("checksum", "语音模型校验失败");
       }
-      if (!ok) throw new Error(`语音模型下载或校验失败：${model.file}`);
+      if (!ok) throw failure;
       const target = join(dir, model.file);
       mkdirSync(dirname(target), { recursive: true });
       renameSync(staged, target);

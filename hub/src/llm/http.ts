@@ -2,6 +2,7 @@ import { observeRequest, parseJSON, tokens } from "./process.ts";
 import { httpModelError, ModelError, modelErrorCategory } from "./error-category.ts";
 import type { BackendContext, ReadKey } from "./types.ts";
 import { isLoopback } from "./local.ts";
+import { proxiedFetch } from "../net/system-proxy.ts";
 export { isLoopback } from "./local.ts";
 
 // 思考型模型（如经 Anthropic 兼容接口接入的 MiniMax）的思考 token 也算在输出里，8192 对当天整理偏紧（2026-11-18）。
@@ -41,7 +42,7 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
         } as Record<string, unknown>;
       const send = (body: Record<string, unknown>) => {
         observeRequest(ctx, "api", body);
-        return fetch(`${base}/${anthropic ? "messages" : "chat/completions"}`, {
+        return proxiedFetch(`${base}/${anthropic ? "messages" : "chat/completions"}`, {
           method: "POST", signal: controller.signal, redirect: "error",
           headers: { "content-type": "application/json", ...(anthropic ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : local ? {} : { authorization: `Bearer ${key}` }) },
           body: JSON.stringify(body),
