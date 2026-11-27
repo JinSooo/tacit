@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { antigravityConfig, antigravityHooks, LEGACY_SERVER, SERVER, ownsMcpEntry as owns, saveConnectionPlan, sessionStartCommand, sessionStartCommandPaths } from "./agents-install.ts";
+import { antigravityConfig, antigravityHooks, codexApprovals, LEGACY_SERVER, SERVER, ownsMcpEntry as owns, saveConnectionPlan, words } from "./agents-install.ts";
 
 const tomlKey = (key: string) => /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
 /** 把 Codex 配置里 [mcp_servers.record-anything…] 各段的表头改成 tacit，其余文本原样保留；多行字符串里的同形文字不动。 */
@@ -35,13 +35,10 @@ function renameCodexServer(text: string, parsed: any): string {
   return out;
 }
 
-function updateHook(hook: any, tool: string, cli: string, bun: string): boolean {
-  const tokens = sessionStartCommandPaths(hook?.command, tool);
-  if (!tokens || tokens[0] === bun && tokens[1] === cli) return false;
-  hook.command = sessionStartCommand(bun, cli, tool);
-  // 新路径的命令由宿主重新确认，不伪造旧 trusted_hash。
-  delete hook.trusted_hash;
-  return true;
+/** 旧版写入的会话开始钩子（任何一份 Tacit 的 cli.ts）。2026-11-27 起撤下，升级时删掉。 */
+function oldHook(hook: any): boolean {
+  const tokens = typeof hook?.command === "string" ? words(hook.command) : null;
+  return !!tokens && !!tokens[1]?.endsWith("/hub/src/cli.ts") && tokens[2] === "hook" && tokens[3] === "session-start";
 }
 
 type MigrationCategory = "agent_config_read_failed" | "agent_config_invalid_json" | "agent_config_invalid_toml"
@@ -103,23 +100,35 @@ export function relocateInstall(
           const renamed = rules.map((r: unknown) => typeof r === "string" && (r === legacy || r.startsWith(`${legacy}__`)) ? `mcp__${SERVER}${r.slice(legacy.length)}` : r);
           if (renamed.some((r: unknown, i: number) => r !== rules[i])) { data.permissions[kind] = [...new Set(renamed)]; changed = true; }
         }
-        for (const row of data?.hooks?.SessionStart ?? []) for (const hook of row.hooks ?? []) {
-          if (updateHook(hook, tool, cli, bun)) changed = true;
+        const rows = data?.hooks?.SessionStart;
+        if (Array.isArray(rows) && rows.some((row: any) => Array.isArray(row?.hooks) && row.hooks.some(oldHook))) {
+          const kept = rows.flatMap((row: any) => {
+            if (!Array.isArray(row?.hooks) || !row.hooks.some(oldHook)) return [row];
+            const remaining = row.hooks.filter((hook: any) => !oldHook(hook));
+            return remaining.length ? [{ ...row, hooks: remaining }] : [];
+          });
+          if (kept.length) data.hooks.SessionStart = kept;
+          else { delete data.hooks.SessionStart; if (!Object.keys(data.hooks).length) delete data.hooks; }
+          changed = true;
         }
       }
       return changed ? JSON.stringify(data, null, 2) + "\n" : before;
     });
   }
   migrate("antigravity", antigravityHooks, JSON.parse, (data, before) => {
-    const hooks = data?.[SERVER]?.SessionStart;
-    let found = false, changed = false;
-    if (Array.isArray(hooks)) for (const hook of hooks) {
-      if (!sessionStartCommandPaths(hook?.command, "antigravity")) continue;
-      found = true;
-      if (updateHook(hook, "antigravity", cli, bun)) changed = true;
+    const group = data?.[SERVER], hooks = group?.SessionStart;
+    if (!Array.isArray(hooks) || !hooks.some(oldHook)) return before;
+    const kept = hooks.filter((hook: any) => !oldHook(hook));
+    if (kept.length) group.SessionStart = kept;
+    else {
+      delete group.SessionStart;
+      if (!Object.keys(group).some(key => key !== "enabled")) delete data[SERVER];
     }
-    return changed ? JSON.stringify(data, null, 2) + "\n" : found ? before : undefined;
+    return JSON.stringify(data, null, 2) + "\n";
   });
+  // 2026-11-27 新加的 project 补上免确认规则；其余工具的规则用户可能特意删过，不动。
+  const withApprovals = (text: string) => owns(parseToml(text).mcp_servers?.[SERVER], "codex")
+    ? codexApprovals(join(home, ".codex/config.toml"), true, [], SERVER, text, ["project"]).after : text;
   migrate("codex", ".codex/config.toml", parseToml, (existing, original) => {
     const before = renameCodexServer(original, existing), data = before === original ? existing : parseToml(before);
     const entry = data.mcp_servers?.[SERVER];
@@ -136,9 +145,9 @@ export function relocateInstall(
       const after = before.slice(0, start) + block + before.slice(end);
       entry.command = bun; entry.args[0] = cli;
       if (changes !== 2 || JSON.stringify(Bun.TOML.parse(after)) !== JSON.stringify(data)) throw new Error("Codex 连接配置校验失败，未迁移");
-      return after;
+      return withApprovals(after);
     }
-    return before;
+    return withApprovals(before);
   });
   for (const [group, files] of plans) {
     if (failed.has(group)) continue;

@@ -1,6 +1,7 @@
 import { RuntimeSnapshot } from "./runtime-snapshot.tsx";
 import React, { useEffect, useRef, useState } from "react";
-import { auditAction, auditPath, auditResults, auditSummary, auditTargets, auditVisible, toolNames, type AuditPage, type AuditRead, type AuditTarget, type AuditTargetCache } from "./audit.ts";
+import { auditAction, auditPath, auditResults, auditSummary, auditToolName, auditTargets, auditVisible, toolNames, type AuditPage, type AuditRead, type AuditTarget, type AuditTargetCache } from "./audit.ts";
+import { browserLanguage } from "./i18n.ts";
 import type { Api, DistillationApi } from "./distillation.ts";
 import { ProjectContent, ThreadContent } from "./distillation-views.tsx";
 const message = (error: unknown) => error instanceof Error ? error.message : "请求失败，请重试";
@@ -13,6 +14,7 @@ function auditTime(at: string, now = new Date()) {
   return `${d.getFullYear() !== now.getFullYear() ? `${d.getFullYear()}年` : ""}${d.getMonth() + 1}月${d.getDate()}日 ${clock}`;
 }
 export function AuditView({ api, distillation, onHistory }: { api: Api; distillation: DistillationApi; onHistory: (title: string) => void }) {
+  const lang = browserLanguage();
   const [tool, setTool] = useState("");
   const [snapshot,setSnapshot] = useState<string>();
   const [reads, setReads] = useState<AuditRead[]>([]);
@@ -77,7 +79,7 @@ export function AuditView({ api, distillation, onHistory }: { api: Api; distilla
     </article>
   </div>;
   return <section className="distillation-view" aria-label="读取记录">
-    <div className="status-head"><h2 className="section-title">AI 工具读取了什么</h2><select aria-label="AI 工具" value={tool} onChange={event => setTool(event.target.value)}><option value="">所有 AI 工具</option>{[...new Set([...Object.keys(toolNames), ...reads.map(row => row.tool)])].map(value => <option key={value} value={value}>{toolNames[value] ?? value}</option>)}</select></div>
+    <div className="status-head"><h2 className="section-title">AI 工具读取了什么</h2><select aria-label="AI 工具" value={tool} onChange={event => setTool(event.target.value)}><option value="">所有 AI 工具</option>{[...new Set([...Object.keys(toolNames), ...reads.map(row => row.tool)])].map(value => <option key={value} value={value}>{auditToolName(value, lang)}</option>)}</select></div>
     <p className="muted runtime-note">内容链接查看的是当前记录；自动带入可查看当时保存的正文。</p>
     {snapshot && <div className="group runtime-detail"><div className="status-head"><h3>当时自动带入的内容</h3><button onClick={()=>setSnapshot(undefined)}>收起</button></div><RuntimeSnapshot api={api} id={snapshot}/></div>}
     {selection && !expandedRow && detail}
@@ -86,7 +88,7 @@ export function AuditView({ api, distillation, onHistory }: { api: Api; distilla
       const open = more.has(row.id);
       const visible = auditVisible(results.items, results.unresolved, open);
       const summary = auditSummary(row.args, targets);
-      return <React.Fragment key={row.id}><tr><td><time dateTime={row.at} title={new Date(row.at).toLocaleString("zh-CN", { hour12: false })}>{auditTime(row.at)}</time></td><td className="end">{toolNames[row.tool] ?? row.tool}</td><td className="full">{auditAction(row.kind, row.args)}{row.kind === "context" && <button className="text-button runtime-open" onClick={()=>setSnapshot(snapshot===row.id?undefined:row.id)} aria-expanded={snapshot===row.id}>查看当时带入</button>}{!row.ok && <span className="error">，失败</span>}</td><td className="full">{summary && <div className="audit-summary">{summary}</div>}<div className="audit-ids">{visible.shown.map(({ id, target }) => target.kind === "record" ? <button className="text-button compact" key={id} onClick={() => onHistory(target.search)}>{target.title}</button> : <a key={id} href={`?${target.kind}=${encodeURIComponent(id)}`} aria-expanded={selection?.id === id && selection.kind === target.kind && expandedRow === row.id} aria-controls={`audit-row-${row.id}`} onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); toggle(id, target.kind, row.id); }}>{target.title}{target.kind === "project" && !target.item.confirmed && <span className="unconfirmed">未确认</span>}</a>)}{visible.unresolved > 0 && <span className="muted">{visible.unresolved} 项已删除或认不出</span>}{visible.hidden > 0 ? <button className="text-button compact" onClick={() => toggleMore(row.id)}>还有 {visible.hidden} 项</button> : open && <button className="text-button compact" onClick={() => toggleMore(row.id)}>收起</button>}</div></td></tr>{selection && expandedRow === row.id && <tr><td colSpan={4} className="full audit-detail-cell">{detail}</td></tr>}</React.Fragment>;
+      return <React.Fragment key={row.id}><tr><td><time dateTime={row.at} title={new Date(row.at).toLocaleString("zh-CN", { hour12: false })}>{auditTime(row.at)}</time></td><td className="end">{auditToolName(row.tool, lang)}</td><td className="full">{auditAction(row.kind, row.args)}{row.kind === "context" && <button className="text-button runtime-open" onClick={()=>setSnapshot(snapshot===row.id?undefined:row.id)} aria-expanded={snapshot===row.id}>查看当时带入</button>}{!row.ok && <span className="error">，失败</span>}</td><td className="full">{summary && <div className="audit-summary">{summary}</div>}<div className="audit-ids">{visible.shown.map(({ id, target }) => target.kind === "record" ? <button className="text-button compact" key={id} onClick={() => onHistory(target.search)}>{target.title}</button> : <a key={id} href={`?${target.kind}=${encodeURIComponent(id)}`} aria-expanded={selection?.id === id && selection.kind === target.kind && expandedRow === row.id} aria-controls={`audit-row-${row.id}`} onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); toggle(id, target.kind, row.id); }}>{target.title}{target.kind === "project" && !target.item.confirmed && <span className="unconfirmed">未确认</span>}</a>)}{visible.unresolved > 0 && <span className="muted">{visible.unresolved} 项已删除或认不出</span>}{visible.hidden > 0 ? <button className="text-button compact" onClick={() => toggleMore(row.id)}>还有 {visible.hidden} 项</button> : open && <button className="text-button compact" onClick={() => toggleMore(row.id)}>收起</button>}</div></td></tr>{selection && expandedRow === row.id && <tr><td colSpan={4} className="full audit-detail-cell">{detail}</td></tr>}</React.Fragment>;
     })}</tbody></table></div>}
     {!reads.length && !busy && !error && <p className="empty"><strong>AI 工具还没有读取过</strong>AI 工具每次读取你的记录、往历史记录里添加内容，都会记在这里。</p>}
     <div className="list-status">{busy ? <span role="status">正在读取…</span> : error ? <><span className="error" role="alert">{error}</span><button onClick={() => void load(cursor, controller.current!.signal)}>重试</button></> : cursor && <button onClick={() => void load(cursor, controller.current!.signal)}>加载更多</button>}</div>

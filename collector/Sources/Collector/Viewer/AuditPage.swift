@@ -208,7 +208,10 @@ struct AuditRow: View {
 
   var action: String {
     switch read.kind {
-    case "context": return read.args["event"]?.text == "compact" ? L10n.contextAfterCompaction : L10n.contextAtSessionStart
+    // 带 event 的是 2026-11-27 之前会话开始钩子留下的记录；之后都是 AI 通过 MCP 的 project 主动查的。
+    case "context":
+      guard let event = read.args["event"]?.text else { return L10n.contextOnRequest }
+      return event == "compact" ? L10n.contextAfterCompaction : L10n.contextAtSessionStart
     case "now": return L10n.viewNow
     case "get": return L10n.readAction(read.args["level"]?.text ?? "brief")
     case "search": return L10n.searchRecords

@@ -41,13 +41,6 @@ export interface AgentToolState {
   installed: boolean;
   connected: boolean;
   partial: boolean;
-  manual?: {
-    file: string;
-    kind: "mcp" | "session-start";
-    action: "create" | "add" | "replace" | "merge";
-    section?: string;
-    code: string;
-  }[];
 }
 export type GeneralKey = "inject_tokens" | "ask_done_days" | "archive_days";
 export const generalKeys: GeneralKey[] = ["inject_tokens", "ask_done_days", "archive_days"];
@@ -81,17 +74,11 @@ export function tierConfig(item: { provider: Provider; model: string; base_url: 
   return { provider: item.provider, model: item.model.trim(), ...(allowsUrl && base_url ? { base_url } : {}), ...(item.provider === "openai-compatible" && item.reasoning_effort ? { reasoning_effort: item.reasoning_effort } : {}) };
 }
 
-// The web settings surface only exposes the automatic connect/disconnect controls.
-function automaticTools<T extends { tools: AgentToolState[] }>(response: T): T {
-  const tools = response.tools?.filter(tool => !tool.manual);
-  return tools ? { ...response, tools } : response;
-}
-
 export function createSettingsApi(api: Api) {
   const json = (method: string, body: unknown) => ({ method, body: JSON.stringify(body) });
   return {
-    agents: (signal?: AbortSignal) => api<{ tools: AgentToolState[] }>("/v1/settings/agents", { signal }).then(automaticTools),
-    setAgent: (id: AgentToolState["id"], connected: boolean) => api<{ tools: AgentToolState[]; note: string | null }>(`/v1/settings/agents/${id}`, json("PUT", { connected })).then(automaticTools),
+    agents: (signal?: AbortSignal) => api<{ tools: AgentToolState[] }>("/v1/settings/agents", { signal }),
+    setAgent: (id: AgentToolState["id"], connected: boolean) => api<{ tools: AgentToolState[]; note: string | null }>(`/v1/settings/agents/${id}`, json("PUT", { connected })),
     models: (signal?: AbortSignal) => api<ModelSettingsData>("/v1/settings/models", { signal }),
     localModels: (base_url: string, signal?: AbortSignal) => api<{ models: string[] }>("/v1/settings/models/local", { ...json("POST", { base_url }), signal }),
     saveModels: (value: Record<Tier, TierConfig>) => api<ModelSettingsData>("/v1/settings/models", json("PUT", { tiers: value })),

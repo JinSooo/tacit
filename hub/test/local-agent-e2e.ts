@@ -37,25 +37,22 @@ async function runningOrigin(child: ReturnType<typeof startHub>) {
   } finally { reader.releaseLock(); }
 }
 
-async function sessionStart(origin: string) {
+async function project(origin: string) {
   // Explicitly inject a temporary file store so this macOS test never opens the real Keychain.
   const script = `
-    import { runAgentCommand } from "./hub/src/agent-cli/index.ts";
+    import { readHub } from "./hub/src/agent-cli/client.ts";
     import { fileAgentSecrets } from "./hub/src/agent-cli/identity.ts";
-    await runAgentCommand(["hook", "session-start", "--tool", "codex"], { secrets: fileAgentSecrets(process.env.RA_DATA_DIR) });`;
-  const start = performance.now();
+    const value = await readHub("context", new URLSearchParams({ tool: "codex", cwd: process.env.RA_E2E_CWD }), AbortSignal.timeout(2000), undefined, { secrets: fileAgentSecrets(process.env.RA_DATA_DIR) });
+    process.stdout.write(JSON.stringify(value));`;
   const child = Bun.spawn([process.execPath, "-e", script], {
-    env: { ...env, RA_PORT: new URL(origin).port },
-    stdin: Buffer.from(JSON.stringify({ cwd, source: "startup", session_id: "synthetic-session" })),
-    stdout: "pipe", stderr: "pipe", timeout: 3000,
+    env: { ...env, RA_PORT: new URL(origin).port, RA_E2E_CWD: cwd }, stdout: "pipe", stderr: "pipe", timeout: 3000,
   });
   const [stdout, stderr, exit] = await Promise.all([
     new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
   ]);
   assert.equal(exit, 0);
   assert.equal(stderr, "");
-  const ms = Math.round(performance.now() - start);
-  return { text: JSON.parse(stdout).hookSpecificOutput.additionalContext as string, ms };
+  return JSON.parse(stdout).text as string;
 }
 
 try {
@@ -106,16 +103,9 @@ try {
   assert.deepEqual(denied, { status: 403, body: { error: "当前设备权限不足" } });
   console.log("HTTP/HPKE delete：403 当前设备权限不足");
 
-  const online = await sessionStart(origin);
-  assert.ok(online.text.includes("第一轮合成对账已完成"));
-  assert.ok(!online.text.includes("离线缓存"));
-  hub.kill("SIGTERM");
-  assert.equal(await hub.exited, 0);
-  const offline = await sessionStart(origin);
-  assert.ok(offline.ms < 2000);
-  assert.match(offline.text, /^（离线缓存，同步于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}）/);
-  assert.ok(offline.text.endsWith(online.text));
-  console.log(`停止 Hub 后 SessionStart：${offline.ms} ms，${offline.text.split("\n")[0]} 第一轮合成对账已完成`);
+  const text = await project(origin);
+  assert.ok(text.includes("第一轮合成对账已完成"));
+  console.log("HTTP/HPKE agent.context（MCP project）：第一轮合成对账已完成");
 } finally {
   if (hub && hub.exitCode === null) {
     hub.kill("SIGTERM");

@@ -17,8 +17,8 @@ import { decodePairing, DeviceClient, type ResponseEnvelope } from "../src/devic
 import { deviceFixture } from "./generate-device-fixture.ts";
 import { fixture, setup, removeDeviceRoleSchema, removeProjectionSchema } from "./helpers.ts";
 
-import { readHub, sessionContext } from "../src/agent-cli/client.ts";
-import { ContextCache } from "../src/agent-cli/context-cache.ts";
+import { readHub } from "../src/agent-cli/client.ts";
+import { gitOrigin } from "../src/agent-cli/context-cache.ts";
 import { deviceAccount, ensureAgentIdentity, fileAgentSecrets } from "../src/agent-cli/identity.ts";
 
 const minute = 60_000;
@@ -808,19 +808,12 @@ test("设备 Agent 查询沿用旧接口语义，写入和审计记录调用设�
   } finally { await hub.dispose(); }
 });
 
-test("SessionStart 800 ms 回退到按 remote 匹配的加密缓存，7 天过期，恢复连接补报一次", async () => {
+test("AI 主动查项目进展：设备身份按 git remote 认出另一台 Mac 上的项目，旧的离线摘要缓存被删掉", async () => {
   const hub = await runningHub();
-  let requested = false;
-  const slow = Bun.serve({
-    hostname: "127.0.0.1", port: 0,
-    async fetch() { requested = true; await Bun.sleep(1800); return new Response(null, { status: 503 }); },
-  });
   try {
     const secrets = fileAgentSecrets(hub.dir);
     const env = { RA_DATA_DIR: hub.dir, RA_PORT: new URL(hub.origin).port };
     const link = await ensureAgentIdentity({ env, secrets });
-    expect(await ensureAgentIdentity({ env, secrets })).toEqual(link);
-    expect(await secrets.read(deviceAccount, AbortSignal.timeout(1000))).toMatch(/^[a-f0-9]{64}$/);
     const repoPath = join(hub.dir, "hub-side-repo"), checkout = join(hub.dir, "other-mac-repo");
     mkdirSync(checkout);
     for (const args of [["init", "-q"], ["remote", "add", "origin", "git@example.test:maple/ledger.git"]]) {
@@ -832,43 +825,21 @@ test("SessionStart 800 ms 回退到按 remote 匹配的加密缓存，7 天过�
       repos: [repoPath], remotes: ["example.test/maple/ledger"], hosts: [], chats: [],
     } });
     store.upsertThread({ id: threadId, project_id: projectId, status: "active", domain: "work", title: "对账", brief: "合成对账完成" });
-    const params = (cwd: string) => new URLSearchParams({ cwd, tool: "codex", event: "startup", session: "fictional-session" });
-    const run = async (cwd: string, port = env.RA_PORT) => {
-      let text = "";
-      await sessionContext(params(cwd), AbortSignal.timeout(2000), value => { text = value; },
-        { env: { ...env, RA_PORT: port }, secrets });
-      return text;
-    };
-    const online = await run(repoPath);
-    expect(online).toContain("合成对账完成");
-    expect(online).not.toContain("离线缓存");
-    const cachePath = join(hub.dir, "agent-context-cache", `${link.hub_id}-${link.device_id}`, `${projectId}.enc`);
-    expect(readFileSync(cachePath).includes(Buffer.from("合成对账完成"))).toBe(false);
-
-    const start = performance.now();
-    const offline = await run(checkout, String(slow.port));
-    const elapsed = performance.now() - start;
-    expect(requested).toBe(true);
-    expect(elapsed).toBeGreaterThanOrEqual(730);
-    expect(elapsed).toBeLessThan(1600);
-    expect(offline).toMatch(/^（离线缓存，同步于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}）/);
-    expect(offline).toContain(online);
-
-    const cache = new ContextCache(hub.dir, link, secrets);
-    expect(await cache.offline(params(checkout), "example.test/maple/ledger", AbortSignal.timeout(1000),
-      Date.now() + 7 * 86_400_000 + 1000)).toBe("");
-
-    const now = () => readHub("now", new URLSearchParams({ tool: "codex" }), AbortSignal.timeout(1000), undefined, { env, secrets });
-    await now();
-    await now();
-    const rows = hub.db.db.prepare("SELECT args, result_ids, bytes FROM agent_reads WHERE json_extract(args,'$.cached')=1").all() as
-      { args: string; result_ids: string; bytes: number }[];
-    expect(rows).toHaveLength(1);
-    expect(JSON.parse(rows[0]!.args)).toEqual({ session: "fictional-session", cwd: checkout, project: projectId, agent_device: link.device_id, cached: true });
-    expect(JSON.parse(rows[0]!.result_ids)).toEqual([threadId]);
-    expect(rows[0]!.bytes).toBe(0);
-    expect(await run(checkout)).toBe(online);
-  } finally { await slow.stop(true); await hub.dispose(); }
+    // 撤下会话开始带入前（2026-11-27）留在磁盘上的加密项目摘要。
+    const cacheDir = join(hub.dir, "agent-context-cache", `${link.hub_id}-${link.device_id}`), leftover = join(cacheDir, `${projectId}.enc`);
+    mkdirSync(cacheDir, { recursive: true }); writeFileSync(leftover, "synthetic");
+    const remote = await gitOrigin(checkout, AbortSignal.timeout(1000));
+    expect(remote).toBe("example.test/maple/ledger");
+    const result = await readHub("context", new URLSearchParams({ tool: "codex", cwd: checkout, remote: remote!, session: "fictional-session" }),
+      AbortSignal.timeout(2000), undefined, { env, secrets }) as { text: string; project_id: string };
+    expect(result.project_id).toBe(projectId);
+    expect(result.text).toContain("合成对账完成");
+    expect(existsSync(leftover)).toBe(false);
+    const row = hub.db.db.prepare("SELECT args, result_ids FROM agent_reads WHERE kind='context'").get() as { args: string; result_ids: string };
+    expect(JSON.parse(row.args)).toMatchObject({ cwd: checkout, project: projectId, session: "fictional-session", agent_device: link.device_id });
+    expect(JSON.parse(row.args)).not.toHaveProperty("event");
+    expect(JSON.parse(row.result_ids)).toEqual([threadId]);
+  } finally { await hub.dispose(); }
 });
 
 async function localClients(hub: Awaited<ReturnType<typeof runningHub>>) {

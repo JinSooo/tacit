@@ -13,7 +13,7 @@ import { GENERAL_DEFAULTS, GENERAL_RANGES, readGeneral, updateGeneral } from "./
 import { readModelUsage } from "./model-usage.ts";
 import { RuntimeLog, appliedCall } from "./runtime-log.ts";
 import { isLoopback, localModels } from "./llm/local.ts";
-import { AGENT_TOOLS, AgentCommandError, AgentConfigError, agentStatus, connectAgent, type AgentTool, type InstallEnvironment } from "./agents-install.ts";
+import { AGENT_TOOLS, AgentCommandError, AgentConfigError, agentStatus, connectAgent, otherMcpConfig, type AgentTool, type InstallEnvironment } from "./agents-install.ts";
 
 export interface SettingsDeps {
   dataDir: string;
@@ -216,7 +216,9 @@ export function createSettings(deps: SettingsDeps) {
       return Response.json({ provider, set: true });
     }
 
-    if (pathname === "/v1/settings/agents" && method === "GET") return Response.json({ tools: agentStatus(deps.agents) });
+    if (pathname === "/v1/settings/agents" && method === "GET") {
+      return Response.json({ tools: agentStatus(deps.agents), other_mcp: otherMcpConfig(deps.agents) });
+    }
     const agent = /^\/v1\/settings\/agents\/([^/]+)$/.exec(pathname);
     if (agent && method === "PUT") {
       const id = agent[1] as AgentTool;

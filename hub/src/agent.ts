@@ -118,7 +118,8 @@ export class AgentReads {
   private context(params: URLSearchParams, includeCache: boolean, remote: string | null) {
     const cwd = required(params, "cwd");
     if (!isAbsolute(cwd)) throw new InputError("cwd 必须是绝对路径");
-    if (!["startup", "resume", "clear", "compact"].includes(params.get("event") ?? "")) throw new InputError("event 无效");
+    // 旧版会话开始钩子带 event；MCP 的 project 主动查询不带。
+    if (params.has("event") && !["startup", "resume", "clear", "compact"].includes(params.get("event")!)) throw new InputError("event 无效");
     const project = this.projectAt(cwd, remote);
     if (!project) return { value: { text: "", project_id: null, tokens_est: 0 }, ids: [] };
     const result = this.projectContext(project);
@@ -139,7 +140,7 @@ export class AgentReads {
 
   projectContext(project: Project, options?: { thread: (thread: Thread) => boolean; openFacts: (id: string) => string[]; now: number }) {
     const { language: lang, inject_tokens: limit } = readGeneral(this.hub);
-    const { intro, hint } = framing[lang];
+    const { intro } = framing[lang];
     const empty = { value: { text: "", project_id: project.id, tokens_est: 0 }, ids: [], threads: [] };
     // 带入已整理的公开事项；有其他来源且最新修正为私密时，也不能把它误作公开依据。
     const threads = this.hub.db.prepare(`SELECT t.* FROM threads t WHERE t.project_id=? AND (t.domain IS NULL OR t.domain='work')
@@ -158,7 +159,7 @@ export class AgentReads {
         : `Task ${title} [${t.id}] (${t.status === "active" ? "in progress" : "paused"}, ${freshness(t, lang)}): ${brief}${open.length ? ` Open: ${open.join("; ")}` : ""}`;
       return { thread: { ...t, open }, text };
     });
-    const render = () => [intro, `${lang === "zh" ? "项目：" : "Project: "}${line(project.name)}`, ...entries.map(e => e.text), hint].join("\n");
+    const render = () => [intro, `${lang === "zh" ? "项目：" : "Project: "}${line(project.name)}`, ...entries.map(e => e.text)].join("\n");
     // 预算不足先舍弃最旧的事项；没有可带入的事项时，连标题也不发。
     while (entries.length && estimateTokens(render()) > limit) entries.pop();
     if (!entries.length) return empty;

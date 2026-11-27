@@ -94,7 +94,6 @@ enum Route: Hashable {
   var speakers: [Speaker] = []
   var sharedError: String?
   var capture = CaptureSnapshot()
-  private(set) var preferences = SettingsPreferences()
   private(set) var extensions = ExtensionSettings()
 
   /// nil 时跟随今天，手动选中以往日期时保留选择。
@@ -169,7 +168,6 @@ enum Route: Hashable {
     pending = []
     speakers = []
     sharedError = nil
-    preferences = SettingsPreferences()
     extensions = ExtensionSettings()
     reviewDay = nil
     timelineSearch = ""

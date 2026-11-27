@@ -6,7 +6,7 @@ import { dataDirOf, resolvePort } from "../hub-json.ts";
 
 import { DeviceTransportError, type DeviceClient } from "../devices/client.ts";
 import { object } from "../devices/envelope.ts";
-import { ContextCache, gitOrigin, readContextResult } from "./context-cache.ts";
+import { ContextCache } from "./context-cache.ts";
 import { agentSecrets, linkedClient, readBoundAgentLink, type AgentClientOptions } from "./identity.ts";
 
 export class AgentError extends Error {
@@ -18,7 +18,7 @@ function readBinding(dir: string) {
   catch { throw new AgentError("Unable to read the Tacit background service configuration"); }
 }
 
-async function connection(params: URLSearchParams, signal: AbortSignal, options: AgentClientOptions) {
+async function connection(tool: string | null, signal: AbortSignal, options: AgentClientOptions) {
   const env = options.env ?? process.env, dir = dataDirOf(env);
   const binding = readBinding(dir);
   const { remote } = binding;
@@ -32,7 +32,7 @@ async function connection(params: URLSearchParams, signal: AbortSignal, options:
     }
   };
   checkBinding();
-  if (params.get("tool") === "claude-desktop") {
+  if (tool === "claude-desktop") {
     if (remote) throw new AgentError("The local Claude Desktop connection is unavailable in remote mode");
     return { linked: null, checkBinding };
   }
@@ -72,8 +72,9 @@ async function request(client: DeviceClient, kind: string, body: object, signal:
   throw new AgentError(`Tacit request failed (HTTP ${reply.status})`, reply.status >= 500);
 }
 
-export async function readHub(kind: string, params: URLSearchParams, signal: AbortSignal, body?: unknown, options: AgentClientOptions = {}) {
-  const { linked, checkBinding, remote } = await connection(params, signal, options);
+export async function readHub(kind: string, params: URLSearchParams, signal: AbortSignal, body?: unknown, options: AgentClientOptions & { launchedTool?: string } = {}) {
+  // MCP 的自报名只用于请求标识，不能切换 Claude Desktop 的本地连接方式。
+  const { linked, checkBinding, remote } = await connection(options.launchedTool ?? params.get("tool"), signal, options);
   if (!linked) {
     checkBinding();
     return legacy(kind, params, signal, body, options.env);
@@ -84,47 +85,6 @@ export async function readHub(kind: string, params: URLSearchParams, signal: Abo
   // A slow audit upload must not hold the interactive tool call open.
   await linked.cache.syncAudit(client, AbortSignal.any([signal, AbortSignal.timeout(300)])).catch(() => {});
   return result;
-}
-
-export async function sessionContext(params: URLSearchParams, signal: AbortSignal, emit: (text: string) => void, options: AgentClientOptions = {}) {
-  const { linked, checkBinding, remote } = await connection(params, signal, options);
-  if (!linked) {
-    checkBinding();
-    const result = readContextResult(await legacy("context", params, signal, undefined, options.env));
-    if (!result) throw new AgentError("Tacit returned an invalid session context");
-    checkBinding();
-    if (!signal.aborted) emit(result.text);
-    return;
-  }
-  const cwd = params.get("cwd")!;
-  const querySignal = AbortSignal.any([signal, AbortSignal.timeout(800)]);
-  const remoteProbe = gitOrigin(cwd, querySignal);
-  let client: DeviceClient, result: ReturnType<typeof readContextResult>;
-  try {
-    client = await linked.client(querySignal);
-    const repoRemote = await remoteProbe;
-    checkBinding();
-    result = readContextResult(await request(client, "context", {
-      ...Object.fromEntries(params), cache: true, ...(repoRemote ? { remote: repoRemote } : {}),
-    }, querySignal, !!remote));
-    if (!result) throw new AgentError("Tacit returned an invalid session context");
-  } catch (error) {
-    if (signal.aborted || (!querySignal.aborted && !(error instanceof AgentError && error.unavailable))) throw error;
-    // 先确认绑定没换，再写离线审计，免得在旧后台的缓存目录留下没发出的审计。
-    const repoRemote = await remoteProbe;
-    checkBinding();
-    const cached = await linked.cache.offline(params, repoRemote, signal, Date.now(), checkBinding);
-    checkBinding();
-    if (!signal.aborted) emit(cached);
-    return;
-  }
-  if (signal.aborted) return;
-  checkBinding();
-  emit(result.text);
-  await Promise.allSettled([
-    linked.cache.refresh(result, cwd, await remoteProbe, signal),
-    linked.cache.syncAudit(client, AbortSignal.any([signal, AbortSignal.timeout(300)])),
-  ]);
 }
 
 /** 传 body 时用 POST 写入（目前只有 append），否则 GET 读取。 */

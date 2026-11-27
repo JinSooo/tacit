@@ -74,7 +74,11 @@ test("后台服务 PATH 优先稳定入口，CLI 符号链接升级后无需重�
   try {
     for (const v of ["v1", "v2"]) { mkdirSync(join(root, v)); writeFileSync(join(root, v, "codex"), `#!/bin/sh\necho ${v}\n`, { mode: 0o755 }); }
     symlinkSync(join(root, "v1", "codex"), join(bin, "codex"));
-    const path = servicePath("/x/bun", root, [bin, "/usr/bin", "/bin"]);
+    const manualBin = join(root, "manual-bin");
+    mkdirSync(manualBin);
+    writeFileSync(join(manualBin, "opencode"), "#!/bin/sh\n", { mode: 0o755 });
+    const path = servicePath("/x/bun", root, [manualBin, bin, "/usr/bin", "/bin"]);
+    expect(path.split(":")).not.toContain(manualBin);
     expect(path.split(":")[0]).toBe(bin);
     unlinkSync(join(bin, "codex")); symlinkSync(join(root, "v2", "codex"), join(bin, "codex"));
     const next = spawnSync("/bin/sh", ["-c", "codex"], { encoding: "utf8", env: { PATH: path } });
@@ -348,43 +352,27 @@ test("service PATH reaches npm CLI and a separate node, with stable manager fall
   } finally { f.cleanup(); }
 });
 
-test("升级把注册的其他 CLI 目录写进已有 hub 和 distill 启动配置", async () => {
+test("会话读取目录只传给采集端，手动接入用的配置目录不再传递", async () => {
   const f = fixture();
+  const paths = {
+    CODEBUDDY_CONFIG_DIR: "/custom/codebuddy",
+    COPILOT_HOME: "/custom/copilot",
+    FACTORY_HOME_OVERRIDE: "/custom/factory",
+    GEMINI_CLI_HOME: "/custom/gemini&config",
+    QWEN_HOME: "/custom/qwen",
+  };
   try {
-    await f.run();
-    const bins = ["agy", "opencode", "gemini", "qwen", "droid", "copilot", "kimi", "cbc"].map(name => {
-      const dir = join(f.root, name);
-      mkdirSync(dir);
-      writeFileSync(join(dir, name), "#!/bin/sh\n", { mode: 0o700 });
-      return dir;
-    });
-    const readPlist = (job: string) => readFileSync(join(f.agents, `dev.record-anything.${job}.plist`), "utf8");
-    expect(readPlist("hub")).not.toContain(bins[0]!);
-    f.setVersion("v2");
-    const warnings: string[] = [];
-    expect(await f.run({ shellEnv: () => ({ PATH: bins.join(":") }), log: message => warnings.push(message) })).toEqual({ full: true, restarted: true });
-    for (const job of ["hub", "distill"]) for (const bin of bins) expect(readPlist(job)).toContain(bin);
-    expect(readPlist("collector")).not.toContain(bins[0]!);
-    expect(warnings.join("\n")).not.toContain("没找到 cursor");
-  } finally { f.cleanup(); }
-});
-
-
-// 回归（第 2 轮审查）：只传给 hub 时，设置页显示已接入，采集端却按默认目录找不到会话。
-test("只把允许的 AI 工具配置路径从登录 shell 传给 hub 和采集端", async () => {
-  const f = fixture();
-  try {
-    const output = "\n__TACIT_ENV__\nGEMINI_CLI_HOME=/demo/gemini&config\nOPENCODE_CONFIG_DIR=/demo/opencode\nFACTORY_HOME_OVERRIDE=/demo/factory\nGEMINI_API_KEY=synthetic\n\n__TACIT_ENV__\n";
-    await f.run({ shellEnv: () => parseShellEnv(output) });
-    const readPlist = (job: string) => readFileSync(join(f.agents, `dev.record-anything.${job}.plist`), "utf8");
-    for (const job of ["hub", "collector"]) {
-      const text = readPlist(job);
-      expect(text).toContain("<key>GEMINI_CLI_HOME</key><string>/demo/gemini&amp;config</string>");
-      expect(text).toContain("<key>OPENCODE_CONFIG_DIR</key><string>/demo/opencode</string>");
-      expect(text).toContain("<key>FACTORY_HOME_OVERRIDE</key><string>/demo/factory</string>");
-      expect(text).not.toContain("GEMINI_API_KEY");
+    const shellEnv = parseShellEnv(`\n__TACIT_ENV__\n${Object.entries(paths).map(([key, value]) => `${key}=${value}`).join("\n")}\nOPENCODE_CONFIG=/custom/opencode.json\nOPENCODE_CONFIG_DIR=/custom/opencode\nXDG_CONFIG_HOME=/custom/xdg\nKIMI_CODE_HOME=/custom/kimi\nGEMINI_API_KEY=synthetic\n\n__TACIT_ENV__\n`);
+    expect(shellEnv).toEqual(paths);
+    await f.run({ shellEnv: () => shellEnv });
+    for (const job of ["collector", "hub", "distill"]) {
+      const config = readFileSync(join(f.agents, `dev.record-anything.${job}.plist`), "utf8");
+      for (const [key, value] of Object.entries(paths)) {
+        const entry = `<key>${key}</key><string>${value.replaceAll("&", "&amp;")}</string>`;
+        if (job === "collector") expect(config).toContain(entry);
+        else expect(config).not.toContain(entry);
+      }
     }
-    expect(readPlist("distill")).not.toContain("GEMINI_CLI_HOME");
   } finally { f.cleanup(); }
 });
 

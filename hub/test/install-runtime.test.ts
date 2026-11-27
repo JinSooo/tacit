@@ -12,7 +12,7 @@ afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, f
 function temp() { const d = mkdtempSync(join(tmpdir(), "ra-runtime-")); dirs.push(d); return d; }
 function write(file: string, data: unknown) { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, typeof data === "string" ? data : JSON.stringify(data)); }
 
-test("已连接工具迁移固定路径：保留用户配置、权限选择，幂等且不新建连接", () => {
+test("已连接工具迁移固定路径并删掉旧的会话开始钩子：保留用户配置、权限选择，幂等且不新建连接", () => {
   const home = temp(), runtime = join(home, "Tacit runtime's"), bun = process.execPath, old = "/old/repo/hub/src/cli.ts";
   const mcp = (tool: string) => ({ command: "/old/bun", args: [old, "mcp", "--tool", tool], disabled: true });
   const hook = (tool: string) => ({ type: "command", command: `/old/bun ${old} hook session-start --tool ${tool}`, timeout: 5 });
@@ -31,11 +31,18 @@ test("已连接工具迁移固定路径：保留用户配置、权限选择，�
   expect(parsed.mcp_servers.tacit.enabled).toBe(false);
   expect(parsed.mcp_servers.tacit.tools.history_append.approval_mode).toBe("prompt");
   expect(toml).toContain("[mcp_servers.tacit.tools.history_append]");
+  // 只给新加的 project 补免确认规则；用户没有的其他工具规则不替他加回来。
+  expect(Object.keys(parsed.mcp_servers.tacit.tools).sort()).toEqual(["history_append", "project"]);
+  expect(parsed.mcp_servers.tacit.tools.project.approval_mode).toBe("approve");
   expect(parsed.mcp_servers.other.command).toBe("untouched");
   const claude = JSON.parse(readFileSync(join(home, ".claude.json"), "utf8"));
   expect(Object.keys(claude.mcpServers)).toEqual(["tacit", "other"]);
   expect(claude.mcpServers.tacit.disabled).toBe(true);
-  expect(JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")).permissions.allow).toEqual(["mcp__tacit__search", "mcp__tacit", "Bash(ls)"]);
+  const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+  expect(settings.permissions.allow).toEqual(["mcp__tacit__search", "mcp__tacit", "Bash(ls)"]);
+  // 2026-11-27 起不在会话开始时带入，升级删掉旧钩子，同组的用户钩子保留。
+  expect(settings.hooks).toEqual({ SessionStart: [{ hooks: [{ command: "echo unchanged" }] }] });
+  expect(JSON.parse(readFileSync(join(home, ".codex/hooks.json"), "utf8"))).toEqual({});
   expect(Object.keys(JSON.parse(readFileSync(join(home, "Library/Application Support/Claude/claude_desktop_config.json"), "utf8")).mcpServers)).toEqual(["tacit"]);
   expect(relocateInstall(runtime, bun, home)).toEqual([]);
   const empty = temp(); expect(relocateInstall(runtime, bun, empty)).toEqual([]); expect(readdirSync(empty)).toEqual([]);
@@ -54,7 +61,7 @@ test("迁移后的连接在设置页显示为已连接（路径不含需要引�
   expect(states.filter(s => s.id === "claude-code" || s.id === "codex").map(s => [s.id, s.connected, s.partial])).toEqual([["claude-code", true, false], ["codex", true, false]]);
 });
 
-test("升级迁移 Antigravity 的 MCP 和会话开始命令，其他配置原样保留", () => {
+test("升级迁移 Antigravity 的 MCP、删掉旧的会话开始钩子组，其他配置原样保留", () => {
   const home = temp(), runtime = join(home, "Tacit runtime's"), bun = join(home, "bin/bun");
   const mcp = join(home, ".gemini/config/mcp_config.json"), hooks = join(home, ".gemini/config/hooks.json");
   const original = { type: "command", command: "/old/bun /old/runtime/hub/src/cli.ts hook session-start --tool antigravity", timeout: 5 };
@@ -66,7 +73,7 @@ test("升级迁移 Antigravity 的 MCP 和会话开始命令，其他配置原�
     tacit: { command: bun, args: [join(runtime, "hub/src/cli.ts"), "mcp", "--tool", "antigravity"] },
     other: { command: "other" },
   });
-  expect(JSON.parse(readFileSync(hooks, "utf8")).other).toEqual(unrelated);
+  expect(JSON.parse(readFileSync(hooks, "utf8"))).toEqual({ other: unrelated });
   expect(agentStatus({ home, repo: runtime, bun, which: () => null, appExists: () => true }).find(t => t.id === "antigravity"))
     .toMatchObject({ connected: true, partial: false });
   expect(relocateInstall(runtime, bun, home)).toEqual([]);
@@ -87,7 +94,7 @@ test("迁移跳过损坏文件与非本应用条目，其他文件继续迁移",
   const messages: string[] = [];
   expect(relocateInstall("/runtime", "/bun", home, message => messages.push(message))).toEqual([file, desktop]);
   expect([codex, hooks, agMcp].map(path => readFileSync(path, "utf8"))).toEqual(before);
-  expect(readFileSync(file, "utf8")).toContain("/runtime/hub/src/cli.ts");
+  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({});
   expect(readFileSync(desktop, "utf8")).toContain("/runtime/hub/src/cli.ts");
   expect(messages).toEqual(["agent_config_no_tacit_entry", "agent_config_invalid_json", "agent_config_invalid_toml"]);
   write(join(home, ".codex/config.toml"), '[mcp_servers.record-anything]\ncommand="other"\nargs=["custom"]\n');

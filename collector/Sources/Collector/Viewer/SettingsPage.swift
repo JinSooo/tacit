@@ -234,55 +234,6 @@ private struct LoginStartupSection: View {
   func refresh() { enabled = startup?.enabled == true; installed = startup?.installed == true; mixed = startup?.mixed == true }
 }
 
-struct GeneralPreferencesSection: View {
-  @Environment(ViewerStore.self) private var store
-  let context: Bool
-  var body: some View {
-    @Bindable var p = store.preferences
-    Section {
-      if let d = Binding($p.draft) {
-        // 自动归档天数由系统按默认值处理，不在设置页开放（2026-11-25）；context 只剩 true 一种。
-        row(L10n.Settings.sessionContextLimit, value: d.injectTokens, key: "inject_tokens", unit: "token")
-        // 已经是默认值、又没改动时，这一行什么都没有，不占位。
-        if !p.isDefault(context: context) || p.changed(context: context) {
-        HStack {
-          // 已经是默认值时“恢复默认”没有用处，不出现。
-          if !p.isDefault(context: context) {
-            Button(L10n.Settings.restoreDefaults) { p.restore(context: context) }.disabled(p.busy)
-          }
-          Spacer()
-          if p.changed(context: context) {
-            Button(L10n.Settings.revertChanges) { p.revert(context: context) }.disabled(p.busy)
-            Button(p.busy ? L10n.Settings.saving : L10n.Settings.save) { Task { await p.save(api: store.api, context: context) } }.disabled(p.busy)
-          }
-        }
-        }
-      } else if p.error == nil { ProgressView() }
-      if let error = p.error {
-        SettingsMessage(text: error)
-        Button(L10n.Settings.retry) { Task { await p.load(api: store.api) } }
-      }
-      if let message = p.message { SettingsMessage(text: message, warning: false) }
-    } header: { Text(L10n.Settings.sessionContext) }
-    footer: {
-      Note(L10n.Settings.sessionContextNote)
-    }
-    .task { await p.load(api: store.api) }
-  }
-  func row(_ title: String, value: Binding<Int>, key: String, unit: String) -> some View {
-    let limits = store.preferences.draft?.ranges[key] ?? [1, 90]
-    return SettingsRow(title) {
-      HStack(spacing: 8) {
-        TextField(title, value: value, format: .number.grouping(.never))
-          .labelsHidden().textFieldStyle(.roundedBorder).frame(width: 72).multilineTextAlignment(.trailing)
-          .accessibilityLabel(title)
-        Text(unit).foregroundStyle(Palette.muted)
-        Stepper(title, value: value, in: limits[0]...limits[1], step: context ? 100 : 1).labelsHidden()
-      }
-    }
-  }
-}
-
 // MARK: 后台服务
 
 struct HubSettingsView: View {

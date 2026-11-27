@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/readme/hero-en-dark.png">
-    <img src="assets/readme/hero-en-light.png" alt="Tacit Timeline and Claude Code using Sunledger session context" width="100%">
+    <img src="assets/readme/hero-en-light.png" alt="Tacit Timeline and Claude Code checking Sunledger project progress" width="100%">
   </picture>
 </p>
 
@@ -55,7 +55,7 @@ The Project page starts with a one-sentence overview. Tasks under In progress sh
 
 ### Pick up where you left off with AI
 
-Claude Code and Codex get Session context about the current Project's active Tasks when a new session starts. AI tools can also look up what you did yesterday, what you decided, or which conversation a conclusion came from.
+When an AI tool starts working in a repository, it can check that Project's progress: active Tasks and open questions. It can also look up what you did yesterday, what you decided, or which conversation a conclusion came from.
 
 ### Find something you saw
 
@@ -129,13 +129,7 @@ The Mac app runs its Background service locally by default. If you want it to ru
 
 ## Connect AI tools
 
-| Tool | Search records | Project context in new sessions |
-| --- | --- | --- |
-| Claude Code | Yes | Yes |
-| Codex | Yes | Yes |
-| Other MCP-compatible AI tools | Yes | No |
-
-Connect Claude Code and Codex in Settings. Other AI tools can connect to the standard MCP interface to search or append records.
+Connect Claude Code, Codex, Claude Desktop, or Antigravity in **Settings › AI tools**. For any other MCP-compatible AI tool, copy the standard MCP configuration from **Other AI tools** on the same page. Connected tools can check the current Project's progress, search records, and append records when you ask.
 
 For example, you can ask:
 
@@ -157,7 +151,7 @@ Choose your Summary model separately from the AI tools you connect. Tacit suppor
 - **Encrypted storage.** The database, original audio, and outgoing records are encrypted at rest. macOS Keychain or Android Keystore protects the keys. Keep a key backup. Losing the keys makes the data unreadable.
 - **Screenshots and audio.** Tacit discards screenshots after extracting text in memory. You can change the default seven-day audio retention period. Transcripts, Tasks, and the Timeline are kept separately.
 - **Recording.** Transcription runs on the device by default. Tacit transcribes conversations that contain your voice, with an exception for meetings on Mac. Follow local recording laws and tell people before recording.
-- **Private records.** Tacit excludes `private` records from summaries and Session context by default. AI tools can still retrieve them through a direct query.
+- **Private records.** Tacit excludes `private` records from summaries and Project progress by default. AI tools can still retrieve them through a direct query.
 - **Secret filtering.** Tacit blocks known key and token formats before writing records. Some secret formats may go undetected.
 - **Update checks.** The Mac and Android apps read the website's `latest.json` once a day and show Update available on the Timeline when a new version is available. You can also check from Settings. The request contains no cookies or device details. The website host can see the source IP address.
 

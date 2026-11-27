@@ -476,7 +476,6 @@ struct GeneralSettingsInfo: Decodable, Equatable {
   enum PolishTiming: String, Decodable { case afterSegment = "after_segment", hourly, nightly }
   enum OverviewTiming: String, Decodable { case hourly, everyThreeHours = "every_3h", nightly }
 
-  var injectTokens: Int
   var askDoneDays: Int
   var archiveDays: Int
   let timelinePolish: PolishTiming

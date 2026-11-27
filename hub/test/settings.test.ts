@@ -58,16 +58,16 @@ test("Desktop 设置接口连接、断开、重启提示及鉴权；无需编程
   expect((await call(h, "PUT", "/v1/settings/agents/workbuddy", { connected: true })).status).toBe(400);
 });
 
-test("设置接口允许连接 Antigravity，手动工具只返回接入片段", async () => {
+test("设置接口只列自带工具，通用 MCP 配置与自动连接使用同一本机路径", async () => {
   const home = join(ctx.dir, "ai-tools-home");
   const h = handler({ agents: { home, bun: "/synthetic/bun", repo: "/synthetic/Tacit", which: command => `/synthetic/${command}`, appExists: () => false } });
   const path = "/v1/settings/agents";
   const status = await call(h, "GET", path);
-  const tools = status.body.tools;
-  expect(tools.find((tool: any) => tool.id === "cursor")).toMatchObject({ installed: true, connected: false, manual: [{ action: "create" }, { action: "create" }] });
-  expect(tools.find((tool: any) => tool.id === "gemini-cli")).toMatchObject({ installed: true, connected: false, manual: [{ action: "create" }, { action: "add" }] });
-  expect(tools.find((tool: any) => tool.id === "opencode")).toMatchObject({ installed: true, connected: false, manual: [{ kind: "mcp" }] });
-  expect(tools.find((tool: any) => tool.id === "copilot-cli")).toMatchObject({ installed: true, connected: false, manual: [{ kind: "mcp" }, { kind: "session-start" }] });
+  expect(status.status).toBe(200);
+  expect(status.body.tools.map((tool: { id: string }) => tool.id)).toEqual(["claude-code", "codex", "claude-desktop", "antigravity"]);
+  expect(status.body.other_mcp).toEqual({
+    command: "/synthetic/bun", args: ["/synthetic/Tacit/hub/src/cli.ts", "mcp", "--tool", "mcp"],
+  });
   for (const id of ["cursor", "gemini-cli", "opencode", "qwen-code", "droid", "copilot-cli", "codebuddy", "workbuddy", "kimi-cli"]) for (const connected of [true, false]) {
     expect((await call(h, "PUT", `${path}/${id}`, { connected })).status).toBe(400);
   }
@@ -75,6 +75,8 @@ test("设置接口允许连接 Antigravity，手动工具只返回接入片段",
   const connected = await call(h, "PUT", `${path}/antigravity`, { connected: true });
   expect(connected.status).toBe(200);
   expect(connected.body.tools.find((tool: any) => tool.id === "antigravity")).toMatchObject({ connected: true, partial: false });
+  const config = JSON.parse(readFileSync(join(home, ".gemini/config/mcp_config.json"), "utf8")).mcpServers.tacit;
+  expect(status.body.other_mcp).toEqual({ command: config.command, args: [...config.args.slice(0, -1), "mcp"] });
   expect(existsSync(join(home, ".gemini/settings.json"))).toBe(false);
 });
 
@@ -395,7 +397,7 @@ process.exit(Number(process.env.FAKE_CODE ?? 0));
   await expect(securityKeychain(join(ctx.dir, "missing")).has("anthropic")).rejects.toThrow("无法查询钥匙串");
 });
 
-test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；找不到工具时不写入", async () => {
+test("AI 工具接入：连接只登记 MCP、不写钩子，状态随之变化；找不到工具时不写入", async () => {
   const home = join(ctx.dir, "home");
   mkdirSync(home);
   const calls: string[][] = [];
@@ -416,14 +418,14 @@ test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；�
   };
   const h = handler({ agents });
   const before = await call(h, "GET", "/v1/settings/agents");
-  expect(before.body.tools.filter((t: any) => !t.manual).map((t: any) => [t.id, t.installed, t.connected])).toEqual([
+  expect(before.body.tools.map((t: any) => [t.id, t.installed, t.connected])).toEqual([
     ["claude-code", true, false], ["codex", false, false], ["claude-desktop", false, false], ["antigravity", false, false],
   ]);
 
   const connected = await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: true });
   expect(connected.status).toBe(200);
   expect(connected.body.tools[0]).toMatchObject({ id: "claude-code", connected: true, partial: false });
-  expect(readFileSync(join(home, ".claude/settings.json"), "utf8")).toContain("hook session-start --tool claude-code");
+  expect(existsSync(join(home, ".claude/settings.json"))).toBe(false);
 
   const missing = await call(h, "PUT", "/v1/settings/agents/codex", { connected: true });
   expect(missing).toEqual({ status: 409, body: { error: "这台 Mac 上没找到 Codex，装好并登录后再连接。" } });

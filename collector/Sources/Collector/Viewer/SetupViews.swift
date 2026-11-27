@@ -10,23 +10,28 @@ struct AgentToolState: Decodable, Identifiable, Equatable {
   let installed: Bool
   let connected: Bool
   let partial: Bool
-  let manual: [AgentConfigSnippet]?
 
   var shouldConnect: Bool { installed && !connected }
 }
 
-struct AgentConfigSnippet: Decodable, Equatable {
-  enum Kind: String, Decodable { case mcp, sessionStart = "session-start" }
-  enum Action: String, Decodable { case create, add, replace, merge }
+struct AgentMCPConfig: Codable {
+  let command: String
+  let args: [String]
 
-  let file: String
-  let kind: Kind
-  let action: Action
-  let section: String?
-  let code: String
+  /// 按常见写法排版：command 在 args 前，冒号后一个空格（JSONEncoder 的排序和 " : " 与各家文档示例对不上）。
+  var json: String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.withoutEscapingSlashes]
+    let quote = { (value: String) in (try? encoder.encode(value)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\"" }
+    let arguments = args.map { "        " + quote($0) }.joined(separator: ",\n")
+    return "{\n  \"mcpServers\": {\n    \"tacit\": {\n      \"command\": \(quote(command)),\n      \"args\": [\n\(arguments)\n      ]\n    }\n  }\n}"
+  }
 
-  var instruction: String {
-    L10n.Settings.agentConfigInstruction(file, section: section, action: action.rawValue, sessionStart: kind == .sessionStart)
+  var arguments: String {
+    args.map { argument in
+      argument.range(of: #"^[a-zA-Z0-9_./:=-]+$"#, options: .regularExpression) != nil
+        ? argument : "'" + argument.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }.joined(separator: " ")
   }
 }
 
@@ -42,7 +47,16 @@ struct SetupReadiness {
   }
 }
 
+struct AgentSettingsData: Decodable {
+  let tools: [AgentToolState]
+  let otherMcp: AgentMCPConfig
+}
+
 extension HubAPI {
+  func agentSettings() async throws -> AgentSettingsData {
+    try await get(AgentSettingsData.self, "/v1/settings/agents")
+  }
+
   func setupReadiness(includeLocalTools: Bool) async throws -> SetupReadiness {
     async let health = distillHealth()
     async let tools = includeLocalTools ? agentTools() : nil
@@ -70,10 +84,11 @@ extension HubAPI {
 struct AgentSettingsView: View {
   @Environment(ViewerStore.self) private var store
   @State private var tools: [AgentToolState]?
+  @State private var otherMCP: AgentMCPConfig?
   @State private var busy: String?
   @State private var note: String?
   @State private var error: String?
-  @State private var instructions: AgentToolState?
+  @State private var showInstructions = false
 
   var body: some View {
     SettingsForm {
@@ -81,7 +96,7 @@ struct AgentSettingsView: View {
         if let tools {
           AgentToolRows(tools: tools, busy: busy, connect: { tool in
             Task { await set(tool, tool.shouldConnect) }
-          }, showInstructions: { instructions = $0 })
+          }, showInstructions: { showInstructions = true })
         } else if error == nil {
           ProgressView().frame(maxWidth: .infinity)
         }
@@ -90,23 +105,23 @@ struct AgentSettingsView: View {
       } footer: {
         Note(L10n.Settings.toolsNote)
       }
-      GeneralPreferencesSection(context: true)
     }
     .task { await load() }
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
       guard busy == nil else { return }
       Task { await load() }
     }
-    .sheet(item: $instructions, onDismiss: { Task { await load() } }) { tool in
-      AgentConnectionInstructions(tool: tool)
+    .sheet(isPresented: $showInstructions) {
+      if let otherMCP { AgentConnectionInstructions(config: otherMCP) }
     }
   }
 
   func load() async {
     do {
-      let states = try await store.api.agentTools()
+      let settings = try await store.api.agentSettings()
       guard busy == nil else { return }
-      tools = states
+      tools = settings.tools
+      otherMCP = settings.otherMcp
       error = nil
     }
     catch is CancellationError {}
@@ -128,16 +143,13 @@ struct AgentToolRows: View {
   let tools: [AgentToolState]
   let busy: String?
   let connect: (AgentToolState) -> Void
-  let showInstructions: (AgentToolState) -> Void
+  let showInstructions: () -> Void
 
   var body: some View {
-    ForEach(tools.filter(\.installed), content: row)
-    let others = tools.filter { !$0.installed }
-    if !others.isEmpty {
-      DisclosureGroup(L10n.Settings.otherAgentTools) {
-        ForEach(others, content: row)
-      }
-      .disclosureGroupStyle(SettingsDisclosureStyle())
+    ForEach(tools, content: row)
+    SettingsRow(L10n.Settings.otherAgentTools) {
+      Button(L10n.Settings.agentInstructions, action: showInstructions)
+        .accessibilityLabel(L10n.Settings.otherAgentInstructionsTitle)
     }
   }
 
@@ -147,15 +159,12 @@ struct AgentToolRows: View {
         if tool.connected {
           Text(L10n.Settings.toolConnected).foregroundStyle(Palette.muted)
         } else if tool.partial {
-          Text(tool.manual == nil ? L10n.Settings.toolPartiallyConnected : L10n.Settings.manualToolPartial)
+          Text(L10n.Settings.toolPartiallyConnected)
             .foregroundStyle(Palette.attention)
         } else if !tool.installed {
           Text(L10n.Settings.toolNotInstalled).foregroundStyle(Palette.muted)
         }
-        if tool.manual != nil {
-          Button(L10n.Settings.agentInstructions) { showInstructions(tool) }
-            .accessibilityLabel(L10n.Settings.agentInstructionsFor(tool.label))
-        } else if tool.installed || tool.connected || tool.partial {
+        if tool.installed || tool.connected || tool.partial {
           Button(connectionAction(tool)) { connect(tool) }
             .disabled(busy != nil)
         }
@@ -171,11 +180,11 @@ struct AgentToolRows: View {
 
 struct AgentConnectionInstructions: View {
   @Environment(\.dismiss) private var dismiss
-  let tool: AgentToolState
+  let config: AgentMCPConfig
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text(L10n.Settings.agentInstructionsFor(tool.label))
+      Text(L10n.Settings.otherAgentInstructionsTitle)
         .font(.system(size: TextSize.title, weight: .semibold))
         .accessibilityAddTraits(.isHeader)
       ViewThatFits(in: .vertical) {
@@ -183,7 +192,7 @@ struct AgentConnectionInstructions: View {
         ScrollView { snippets }
       }
       HStack(spacing: 12) {
-        Text(L10n.Settings.reopenAgent(tool.label)).foregroundStyle(Palette.muted)
+        Text(L10n.Settings.reopenOtherAgent).foregroundStyle(Palette.muted)
           .fixedSize(horizontal: false, vertical: true)
         Spacer()
         Button(L10n.Settings.close) { dismiss() }.keyboardShortcut(.cancelAction)
@@ -198,36 +207,56 @@ struct AgentConnectionInstructions: View {
 
   private var snippets: some View {
     VStack(alignment: .leading, spacing: 16) {
-      ForEach(Array((tool.manual ?? []).enumerated()), id: \.offset) { _, snippet in
-        AgentSnippetBlock(snippet: snippet)
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(alignment: .top, spacing: 12) {
+          Text(L10n.Settings.otherAgentMCPInstructions)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          AgentCopyButton(code: config.json)
+            .accessibilityHint(L10n.Settings.otherAgentMCPInstructions)
+        }
+        codeText(config.json)
+          .padding(12)
+          .background(Palette.fill, in: RoundedRectangle(cornerRadius: Radius.control))
+      }
+      VStack(alignment: .leading, spacing: 8) {
+        Text(L10n.Settings.otherAgentCommandInstructions).fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 8) {
+          commandRow(L10n.Settings.agentCommand, config.command)
+          commandRow(L10n.Settings.agentArguments, config.arguments)
+        }
+        .padding(12)
+        .background(Palette.fill, in: RoundedRectangle(cornerRadius: Radius.control))
       }
     }
   }
+
+  private func commandRow(_ label: String, _ value: String) -> some View {
+    HStack(alignment: .top, spacing: 12) {
+      Text(label).foregroundStyle(Palette.muted).frame(width: 64, alignment: .leading)
+      codeText(value)
+      AgentCopyButton(code: value).accessibilityHint(label)
+    }
+  }
+
+  private func codeText(_ value: String) -> some View {
+    Text(verbatim: value).font(.system(size: TextSize.caption, design: .monospaced))
+      .textSelection(.enabled)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .leading)
+  }
 }
 
-private struct AgentSnippetBlock: View {
-  let snippet: AgentConfigSnippet
+private struct AgentCopyButton: View {
+  let code: String
   @State private var copied = false
   @State private var copyCount = 0
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(alignment: .top, spacing: 12) {
-        Text(snippet.instruction).fixedSize(horizontal: false, vertical: true)
-          .frame(maxWidth: .infinity, alignment: .leading)
-        Button(copied ? L10n.Settings.copied : L10n.Settings.copy) {
-          NSPasteboard.general.clearContents()
-          copied = NSPasteboard.general.setString(snippet.code, forType: .string)
-          copyCount += 1
-        }
-        .accessibilityHint(snippet.file)
-      }
-      Text(verbatim: snippet.code).font(.system(size: TextSize.caption, design: .monospaced))
-        .textSelection(.enabled)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Palette.fill, in: RoundedRectangle(cornerRadius: Radius.control))
+    Button(copied ? L10n.Settings.copied : L10n.Settings.copy) {
+      NSPasteboard.general.clearContents()
+      copied = NSPasteboard.general.setString(code, forType: .string)
+      copyCount += 1
     }
     .task(id: copyCount) {
       guard copied else { return }
