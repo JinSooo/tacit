@@ -11,5 +11,4 @@
     <string name="source_droid">Droid</string>
     <string name="source_qwen_code">Qwen Code</string>
     <string name="source_gemini_cli">Gemini CLI</string>
-    <string name="source_kimi_cli">Kimi CLI</string>
 </resources>

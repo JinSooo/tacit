@@ -201,3 +201,41 @@ test("已提交的远端绑定在安装和升级时只准备采集，保留封�
     expect(f.events).toEqual(["relocate", "frozen"]);
   } finally { f.cleanup(); }
 });
+
+
+test("升级把注册的其他 CLI 目录写进已有 hub 和 distill 启动配置", async () => {
+  const f = fixture();
+  try {
+    await f.run();
+    const bins = ["agy", "opencode", "gemini", "qwen", "droid", "copilot", "kimi", "cbc"].map(name => {
+      const dir = join(f.root, name);
+      mkdirSync(dir);
+      writeFileSync(join(dir, name), "#!/bin/sh\n", { mode: 0o700 });
+      return dir;
+    });
+    const readPlist = (job: string) => readFileSync(join(f.agents, `dev.record-anything.${job}.plist`), "utf8");
+    expect(readPlist("hub")).not.toContain(bins[0]!);
+    f.setVersion("v2");
+    const warnings: string[] = [];
+    expect(await f.run({ shellEnv: () => ({ PATH: bins.join(":") }), log: message => warnings.push(message) })).toEqual({ full: true, restarted: true });
+    for (const job of ["hub", "distill"]) for (const bin of bins) expect(readPlist(job)).toContain(bin);
+    expect(readPlist("collector")).not.toContain(bins[0]!);
+    expect(warnings.join("\n")).not.toContain("没找到 cursor");
+  } finally { f.cleanup(); }
+});
+
+
+test("只把允许的 AI 工具配置路径从登录 shell 传给 hub", async () => {
+  const f = fixture();
+  try {
+    const output = "\n__TACIT_ENV__\nGEMINI_CLI_HOME=/demo/gemini&config\nOPENCODE_CONFIG_DIR=/demo/opencode\nFACTORY_HOME_OVERRIDE=/demo/factory\nGEMINI_API_KEY=synthetic\n\n__TACIT_ENV__\n";
+    await f.run({ shellEnv: () => parseShellEnv(output) });
+    const readPlist = (job: string) => readFileSync(join(f.agents, `dev.record-anything.${job}.plist`), "utf8");
+    const hub = readPlist("hub");
+    expect(hub).toContain("<key>GEMINI_CLI_HOME</key><string>/demo/gemini&amp;config</string>");
+    expect(hub).toContain("<key>OPENCODE_CONFIG_DIR</key><string>/demo/opencode</string>");
+    expect(hub).toContain("<key>FACTORY_HOME_OVERRIDE</key><string>/demo/factory</string>");
+    expect(hub).not.toContain("GEMINI_API_KEY");
+    for (const job of ["collector", "distill"]) expect(readPlist(job)).not.toContain("GEMINI_CLI_HOME");
+  } finally { f.cleanup(); }
+});

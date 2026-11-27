@@ -23,7 +23,7 @@
 | `mac.wechat` | Mac 采集端"微信对话"数据源（默认关闭）：读微信窗口聊天区，一条消息一条记录，格式见下 |
 | `mac.browser` | plugins/browser |
 | `claude_code.session`、`codex.session` | plugins/agent-sessions |
-| `antigravity.session`、`opencode.session`、`codebuddy.session`、`workbuddy.session`、`copilot_cli.session`、`droid.session`、`qwen_code.session`、`gemini_cli.session`、`kimi_cli.session` | plugins/agent-sessions |
+| `antigravity.session`、`opencode.session`、`codebuddy.session`、`workbuddy.session`、`copilot_cli.session`、`droid.session`、`qwen_code.session`、`gemini_cli.session` | plugins/agent-sessions |
 | `manual.note`、`manual.correction` | 网页手动补写 / 修正 |
 | `manual.agent` | 用户让 Agent 代存的内容（MCP `history_append`，见 4.6）；`context.app` 是写入的 Agent，内容变化时的修正仍用 `manual.correction` |
 

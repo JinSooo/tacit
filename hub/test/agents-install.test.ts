@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { agentStatus, connectAgent, runAgents, type InstallEnvironment } from "../src/agents-install.ts";
+import { agentStatus, connectAgent, runAgents, sessionStartCommand, type InstallEnvironment } from "../src/agents-install.ts";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function setup() {
@@ -154,6 +154,14 @@ test("无配置时卸载不创建文件；新配置卸载清理空的 hooks", ()
   expect(ctx.calls).toEqual([]);
   expect(ctx.output.join("\n")).toContain("跳过 MCP");
 });
+test("Codex 已安装但从未配置时，默认卸载不会创建配置目录", () => {
+  const ctx = setup();
+  ctx.missing();
+  runAgents(["uninstall", "--yes"], ctx.env);
+  expect(ctx.calls).toContainEqual(["/fake/codex", "mcp", "get", "tacit"]);
+  expect(readdirSync(ctx.home)).toEqual([]);
+});
+
 test("任一 JSON 损坏或结构不合法时，所有文件和外部配置均不变", () => {
   const ctx = setup(); ctx.write(ctx.original);
   const file = join(ctx.home, ".codex/hooks.json"); mkdirSync(dirname(file)); writeFileSync(file, "{损坏");
@@ -496,4 +504,135 @@ test.each([
     }
   }
   expect(status()).toMatchObject({ connected: true, partial: false });
+});
+
+
+test("受限 PATH 仍能发现常见用户目录里的 CLI，并用 agy 接入 Antigravity", () => {
+  const ctx = setup();
+  delete ctx.env.which;
+  ctx.env.variables!.PATH = "/usr/bin:/bin";
+  for (const [bin, commands] of [
+    [".local/bin", ["agy", "opencode", "droid"]],
+    [".bun/bin", ["gemini", "qwen", "copilot"]],
+    [".npm-global/bin", ["kimi", "cbc"]],
+  ] as const) {
+    mkdirSync(join(ctx.home, bin), { recursive: true });
+    for (const cmd of commands) writeFileSync(join(ctx.home, bin, cmd), "#!/bin/sh\n", { mode: 0o700 });
+  }
+  const installed = agentStatus(ctx.env).filter(t => t.installed).map(t => t.id);
+  expect(installed).toEqual(expect.arrayContaining(["antigravity", "opencode", "droid", "gemini-cli", "qwen-code", "copilot-cli", "kimi-cli", "codebuddy"]));
+  expect(connectAgent("antigravity", true, ctx.env).states.find(t => t.id === "antigravity")?.connected).toBe(true);
+});
+
+test.each([
+  [".gemini/config/hooks.json", '{"tacit":{"PreToolUse":[]}}'],
+  [".gemini/config/mcp_config.json", '{"mcpServers":{"tacit":{"command":"other"}}}'],
+  [".gemini/config/mcp_config.json", "{// synthetic invalid configuration"],
+  [".gemini/config/hooks.json", '{"other":{"SessionStart":[]}}'],
+])("默认卸载跳过不相关或损坏的 Antigravity 配置 %s", (relative, contents) => {
+  const ctx = setup();
+  ctx.env.appExists = () => true;
+  runAgents(["install", "--yes"], ctx.env);
+  connectAgent("claude-desktop", true, ctx.env);
+  ctx.calls.length = 0;
+  const file = join(ctx.home, relative);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, contents);
+
+  runAgents(["uninstall", "--yes"], ctx.env);
+  expect(ctx.calls.filter(call => call[2] === "remove" && call.at(-1) === "tacit").map(call => call[0])).toEqual(["/fake/claude", "/fake/codex"]);
+  expect(JSON.parse(readFileSync(ctx.file, "utf8")).hooks).toBeUndefined();
+  expect(JSON.parse(readFileSync(join(ctx.home, ".codex/hooks.json"), "utf8")).hooks).toBeUndefined();
+  expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")?.connected).toBe(false);
+  expect(readFileSync(file, "utf8")).toBe(contents);
+  expect(ctx.output.join("\n")).toContain("跳过 Antigravity");
+});
+
+test("Antigravity 重连保留 MCP 自定义字段，重复连接不再写入", () => {
+  const ctx = setup();
+  const file = join(ctx.home, ".gemini/config/mcp_config.json");
+  const preferences = { timeoutSeconds: 60, disabledTools: ["history_append"], env: { SAMPLE: "synthetic-do-not-print" } };
+  ctx.write({ mcpServers: { tacit: {
+    command: "/old/bun", args: ["/old/hub/src/cli.ts", "mcp", "--tool", "antigravity"], disabled: true, ...preferences,
+  } } }, file);
+  runAgents(["install", "--tool", "antigravity", "--yes"], ctx.env);
+  const connected = readFileSync(file, "utf8");
+  expect(JSON.parse(connected).mcpServers.tacit).toEqual({
+    command: ctx.env.bun, args: [ctx.env.repo + "/hub/src/cli.ts", "mcp", "--tool", "antigravity"], ...preferences,
+  });
+  expect(ctx.output.join("\n")).not.toContain("synthetic-do-not-print");
+  const files = readdirSync(dirname(file));
+  runAgents(["install", "--tool", "antigravity", "--yes"], ctx.env);
+  expect(readdirSync(dirname(file))).toEqual(files);
+  expect(readFileSync(file, "utf8")).toBe(connected);
+});
+
+test.each([
+  ["gemini-cli", "GEMINI_CLI_HOME", ".gemini/settings.json"],
+  ["droid", "FACTORY_HOME_OVERRIDE", ".factory/mcp.json"],
+] as const)("%s 的环境变量覆盖家目录，保留配置子目录", (id, variable, relative) => {
+  const ctx = setup(), cli = ctx.env.repo + "/hub/src/cli.ts";
+  ctx.env.variables![variable] = "~/custom home";
+  const file = join(ctx.home, "custom home", relative);
+  const config = {
+    mcpServers: { tacit: { command: ctx.env.bun, args: [cli, "mcp", "--tool", id] } },
+    ...(id === "gemini-cli" && { hooks: { SessionStart: [{
+      hooks: [{ type: "command", command: sessionStartCommand(ctx.env.bun!, cli, id) }],
+    }] } }),
+  };
+  ctx.write(config, file);
+  const status = agentStatus(ctx.env).find(t => t.id === id)!;
+  expect(status).toMatchObject({ connected: true, partial: false });
+  expect(status.manual!.map(s => s.file)).toEqual(id === "gemini-cli" ? [file, file] : [file]);
+});
+
+test("OpenCode 读取配置文件覆盖、额外目录与 XDG 用户配置", () => {
+  const ctx = setup();
+  const status = () => agentStatus(ctx.env).find(t => t.id === "opencode")!;
+  const entry = JSON.parse(status().manual![0]!.code).mcp.tacit;
+  ctx.env.variables!.XDG_CONFIG_HOME = "~/xdg";
+  const xdg = join(ctx.home, "xdg/opencode/config.json");
+  ctx.write({ mcp: { tacit: entry } }, xdg);
+  expect(status()).toMatchObject({ connected: true, manual: [{ file: xdg }] });
+
+  ctx.env.variables!.OPENCODE_CONFIG_DIR = "~/extra";
+  const extra = join(ctx.home, "extra/opencode.jsonc");
+  ctx.write({ mcp: {} }, extra);
+  expect(status()).toMatchObject({ connected: true, manual: [{ file: xdg }] });
+  ctx.write({ mcp: { tacit: { ...entry, enabled: false } } }, extra);
+  expect(status()).toMatchObject({ connected: false, partial: true, manual: [{ file: extra }] });
+
+  ctx.env.variables!.OPENCODE_CONFIG = "~/custom/settings.jsonc";
+  const explicit = join(ctx.home, "custom/settings.jsonc");
+  ctx.write({ mcp: { tacit: entry } }, explicit);
+  writeFileSync(explicit, "// synthetic config\n" + readFileSync(explicit, "utf8"));
+  expect(status()).toMatchObject({ connected: true, partial: false, manual: [{ file: explicit }] });
+});
+
+test("OpenCode 片段优先指向用户指定的新配置文件或额外目录", () => {
+  const ctx = setup();
+  const snippet = () => agentStatus(ctx.env).find(t => t.id === "opencode")!.manual![0]!;
+  ctx.env.variables!.OPENCODE_CONFIG_DIR = "~/extra";
+  expect(snippet()).toMatchObject({ file: join(ctx.home, "extra/opencode.json"), action: "create" });
+  ctx.env.variables!.OPENCODE_CONFIG = "~/custom/settings.jsonc";
+  expect(snippet()).toMatchObject({ file: join(ctx.home, "custom/settings.jsonc"), action: "create" });
+});
+
+test.each([
+  ["gemini-cli", ".gemini/settings.json", ".gemini/settings.json"],
+  ["qwen-code", ".qwen/settings.json", ".qwen/settings.json"],
+  ["codebuddy", ".codebuddy.json", ".codebuddy/settings.json"],
+] as const)("%s 的 Claude 风格钩子只有 command 类型才生效", (id, mcpPath, hooksPath) => {
+  const ctx = setup(), cli = ctx.env.repo + "/hub/src/cli.ts";
+  const mcp = { mcpServers: { tacit: { command: ctx.env.bun, args: [cli, "mcp", "--tool", id] } } };
+  const status = () => agentStatus(ctx.env).find(t => t.id === id)!;
+  if (mcpPath !== hooksPath) ctx.write(mcp, join(ctx.home, mcpPath));
+  for (const type of [undefined, "prompt", "command"]) {
+    ctx.write({
+      ...(mcpPath === hooksPath ? mcp : {}),
+      hooks: { SessionStart: [{ hooks: [{ type, command: sessionStartCommand(ctx.env.bun!, cli, id) }] }] },
+    }, join(ctx.home, hooksPath));
+    expect(status()).toMatchObject({ connected: type === "command", partial: type !== "command" });
+    expect(status().manual![1]).toMatchObject({ action: "replace", section: "hooks.SessionStart[0].hooks[0]" });
+  }
 });

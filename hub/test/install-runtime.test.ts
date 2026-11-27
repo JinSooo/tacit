@@ -72,12 +72,24 @@ test("升级迁移 Antigravity 的 MCP 和会话开始命令，其他配置原�
   expect(relocateInstall(runtime, bun, home)).toEqual([]);
 });
 
-test("配置预检失败时不迁移任何文件；不覆盖同名非本应用 MCP", () => {
+test("迁移跳过损坏文件与非本应用条目，其他文件继续迁移", () => {
   const home = temp(), file = join(home, ".claude/settings.json");
   write(file, { hooks: { SessionStart: [{ hooks: [{ command: "/bun /old/hub/src/cli.ts hook session-start --tool claude-code" }] }] } });
-  const before = readFileSync(file, "utf8");
-  write(join(home, ".codex/config.toml"), "broken = [");
-  expect(() => relocateInstall("/runtime", "/bun", home)).toThrow(); expect(readFileSync(file, "utf8")).toBe(before);
+  const codex = join(home, ".codex/config.toml"), hooks = join(home, ".gemini/config/hooks.json");
+  const agMcp = join(home, ".gemini/config/mcp_config.json");
+  const desktop = join(home, "Library/Application Support/Claude/claude_desktop_config.json");
+  const entry = (tool: string) => ({ command: "/old/bun", args: ["/old/hub/src/cli.ts", "mcp", "--tool", tool] });
+  write(codex, "synthetic-private-value = [");
+  write(hooks, "{synthetic-private-value");
+  write(agMcp, { mcpServers: { tacit: { command: "synthetic unrelated MCP" } } });
+  write(desktop, { mcpServers: { tacit: entry("claude-desktop") } });
+  const before = [codex, hooks, agMcp].map(path => readFileSync(path, "utf8"));
+  const messages: string[] = [];
+  expect(relocateInstall("/runtime", "/bun", home, message => messages.push(message))).toEqual([file, desktop]);
+  expect([codex, hooks, agMcp].map(path => readFileSync(path, "utf8"))).toEqual(before);
+  expect(readFileSync(file, "utf8")).toContain("/runtime/hub/src/cli.ts");
+  expect(readFileSync(desktop, "utf8")).toContain("/runtime/hub/src/cli.ts");
+  expect(messages).toEqual(["agent_config_no_tacit_entry", "agent_config_invalid_json", "agent_config_invalid_toml"]);
   write(join(home, ".codex/config.toml"), '[mcp_servers.record-anything]\ncommand="other"\nargs=["custom"]\n');
   write(join(home, ".claude.json"), { mcpServers: { "record-anything": { command: "other" } } });
   relocateInstall("/runtime", "/bun", home);

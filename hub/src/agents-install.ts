@@ -7,6 +7,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
+import { agentBinDirectories } from "./agent-path.ts";
 import { redactString } from "./redact.ts";
 import { tools as mcpTools } from "./agent-cli/mcp.ts";
 
@@ -64,9 +65,15 @@ function appInstalled(app: string, home: string, env: InstallEnvironment): boole
   const exists = env.appExists ?? existsSync;
   return exists(`/Applications/${app}.app`) || exists(resolve(home, `Applications/${app}.app`));
 }
+function findAgentExecutable(command: string, home: string, env: InstallEnvironment): string | null {
+  if (env.which) return env.which(command);
+  const path = (env.variables ?? process.env).PATH;
+  return Bun.which(command, { PATH: path }) ?? Bun.which(command, { PATH: agentBinDirectories(home).join(":") });
+}
+
 const desktopInstalled = (home: string, env: InstallEnvironment) => appInstalled("Claude", home, env);
 const antigravityInstalled = (home: string, env: InstallEnvironment) =>
-  !!(env.which ?? Bun.which)("agy") || appInstalled("Antigravity", home, env);
+  !!findAgentExecutable("agy", home, env) || appInstalled("Antigravity", home, env);
 
 const mcpEntry = (cli: string, bun: string, tool: string) => ({ command: bun, args: [cli, "mcp", "--tool", tool] });
 export function ownsMcpEntry(value: unknown, tool: string): value is Json {
@@ -105,7 +112,10 @@ function mcpFile(file: string, tool: "claude-desktop" | "antigravity", install: 
   if (!install && current === undefined && !legacy) return { ...plan, after: plan.before };
   if (legacy) delete data.mcpServers[LEGACY_SERVER];
   if (install) {
-    const entry = mcpEntry(cli, bun, tool);
+    const entry: Json = tool === "antigravity"
+      ? { ...(ownsMcpEntry(current, tool) ? current : {}), ...mcpEntry(cli, bun, tool) }
+      : mcpEntry(cli, bun, tool);
+    if (entry.disabled === true) delete entry.disabled;
     if (!legacy && JSON.stringify(current) === JSON.stringify(entry)) return { ...plan, after: plan.before };
     data.mcpServers ??= {};
     data.mcpServers[SERVER] = entry;
@@ -304,7 +314,7 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
   }
   const home = resolve(env.home ?? homedir()), repo = resolve(env.repo ?? fileURLToPath(new URL("../../", import.meta.url)));
   const bun = resolve(env.bun ?? process.execPath), cli = resolve(repo, "hub/src/cli.ts");
-  const print = env.print ?? console.log, which = env.which ?? (command => Bun.which(command));
+  const print = env.print ?? console.log;
   // 只有目标不是真实家目录（测试用临时 HOME）时才覆盖环境变量：对真实用户设置 CLAUDE_CONFIG_DIR
   // 会让 claude 把全局配置写到 ~/.claude/.claude.json，而不是平时用的 ~/.claude.json。
   const run = env.run ?? ((command, args, home) => spawnSync(command, args, { encoding: "utf8", env: home === resolve(homedir()) ? process.env : { ...process.env, HOME: home, CODEX_HOME: resolve(home, ".codex"), CLAUDE_CONFIG_DIR: resolve(home, ".claude") }, timeout: 30000 }));
@@ -313,15 +323,28 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
   if (action === "install" && tools.includes("claude-desktop") && !desktopInstalled(home, env)) throw new Error(t("这台 Mac 上没找到 Claude Desktop，安装后再连接。", "Claude Desktop was not found on this Mac. Install it before connecting."));
   if (!selected && action === "uninstall" && [antigravityConfig, antigravityHooks].some(file => existsSync(resolve(home, file)))) tools.push("antigravity");
   if (action === "install" && tools.includes("antigravity") && !antigravityInstalled(home, env)) throw new Error(t("这台 Mac 上没找到 Antigravity，安装后再连接。", "Antigravity was not found on this Mac. Install it before connecting."));
-  // 全部解析成功后才可能写入，防止第二份 JSON 无效时已改第一份。
+  // 先预检配置；显式断开 Antigravity 时两份文件都必须能安全更新。
   const desktopPlan = tools.includes("claude-desktop") ? mcpFile(desktopConfig(home), "claude-desktop", action === "install", cli, bun, lang) : undefined;
-  const antigravityPlans = tools.includes("antigravity") ? [
+  const planAntigravity = () => [
     mcpFile(resolve(home, antigravityConfig), "antigravity", action === "install", cli, bun, lang),
     antigravityHookFile(resolve(home, antigravityHooks), action === "install", cli, bun, lang),
-  ] : [];
+  ];
+  let antigravityPlans: ReturnType<typeof planAntigravity> = [];
+  if (tools.includes("antigravity")) {
+    if (selected) antigravityPlans = planAntigravity();
+    else {
+      try {
+        const plans = planAntigravity();
+        if (plans.some(plan => plan.before !== plan.after)) antigravityPlans = plans;
+        else print(t("跳过 Antigravity：没有 Tacit 的连接配置。", "Skipping Antigravity. No Tacit connection was found."));
+      } catch {
+        print(t("跳过 Antigravity：无法安全清理连接配置。", "Skipping Antigravity. Its connection settings could not be safely cleaned up."));
+      }
+    }
+  }
   const cliTools = tools.filter(tool => tool === "claude-code" || tool === "codex");
   const plans = cliTools.map(tool => hookFile(resolve(home, tool === "codex" ? ".codex/hooks.json" : ".claude/settings.json"), action === "install", cli, bun, tool, lang));
-  const commands = cliTools.map(tool => ({ tool, command: which(tool === "codex" ? "codex" : "claude") }));
+  const commands = cliTools.map(tool => ({ tool, command: findAgentExecutable(tool === "codex" ? "codex" : "claude", home, env) }));
   const codexFile = resolve(home, ".codex/config.toml");
   // 提前校验 TOML，避免改完 MCP 后才发现原配置损坏。
   const approvalPlan = tools.includes("codex") ? codexApprovals(codexFile, action === "install") : undefined;
@@ -377,7 +400,7 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
             const plan = next();
             if (plan.before !== plan.after) { print(approvalDiff(plan)); saveConnectionPlan(plan); }
           }
-          pruneConnectionBackups(codexFile);
+          if (existsSync(dirname(codexFile))) pruneConnectionBackups(codexFile);
         }
       }
     }
@@ -452,7 +475,7 @@ function manualSnippet(
 }
 
 function manualAgentStatus(home: string, cli: string, bun: string, env: InstallEnvironment): AgentState[] {
-  const which = env.which ?? Bun.which;
+  const variables = env.variables ?? process.env;
   const absolute = (file: string) => resolve(home, file.replace(/^~\//, ""));
   const config = (file: string, jsonc = false) => {
     try {
@@ -463,19 +486,31 @@ function manualAgentStatus(home: string, cli: string, bun: string, env: InstallE
       return { file, data: {}, exists: (error as NodeJS.ErrnoException).code !== "ENOENT" };
     }
   };
-  return TOOL_CATALOG.flatMap(({ id, label, sessionStart, manualConnection: setup }) => {
+  const overridePath = (key: string | undefined) => {
+    const value = key && variables[key]?.trim();
+    return value ? absolute(value === "~" ? "~/" : value) : undefined;
+  };
+  const openCodeConfigs = () => {
+    const explicit = overridePath("OPENCODE_CONFIG");
+    const extra = overridePath("OPENCODE_CONFIG_DIR");
+    const xdg = overridePath("XDG_CONFIG_HOME");
+    const global = xdg ? join(xdg, "opencode") : "~/.config/opencode";
+    const filesIn = (directory: string) => ["opencode.jsonc", "opencode.json", "config.json"].map(name => config(join(directory, name), true));
+    const groups = [...(extra ? [filesIn(extra)] : []), filesIn(global)];
+    const candidates = [...(explicit ? [config(explicit, true)] : []), ...groups.flat()];
+    return candidates.find(candidate => Object.hasOwn(candidate.data.mcp ?? {}, SERVER))
+      ?? (explicit ? candidates[0]! : groups[0]!.find(candidate => candidate.exists) ?? groups[0]![1]!);
+  };
+  return TOOL_CATALOG.flatMap(({ id, label, executables, sessionStart, manualConnection: setup }) => {
     if (!setup) return [];
-    const installed = !!setup.executables?.some(command => !!which(command)) || !!setup.macApp && appInstalled(setup.macApp, home, env);
+    const installed = !!executables?.some(command => !!findAgentExecutable(command, home, env)) || !!setup.macApp && appInstalled(setup.macApp, home, env);
     const opencode = setup.mcpFormat === "opencode";
     const copilot = setup.mcpFormat === "copilot";
-    const override = setup.configDirEnv ? (env.variables ?? process.env)[setup.configDirEnv]?.trim() : undefined;
-    const dir = override && absolute(override === "~" ? "~/" : override);
-    const configPath = (file: string) => dir ? join(dir, copilot ? file.slice(".copilot/".length) : basename(file)) : `~/${file}`;
-    const mcpFile = configPath(setup.mcpFile), section = opencode ? "mcp" : "mcpServers";
-    const json = config(mcpFile, opencode);
-    const jsonc = opencode ? config(`${mcpFile}c`, true) : undefined;
-    const useJsonc = jsonc?.exists && (jsonc.data[section]?.[SERVER] !== undefined || json.data[section]?.[SERVER] === undefined);
-    const mcpConfig = useJsonc ? jsonc : json;
+    const configHome = overridePath(setup.configHomeEnv), dir = overridePath(setup.configDirEnv);
+    const configPath = (file: string) => configHome ? join(configHome, file)
+      : dir ? join(dir, copilot ? file.slice(".copilot/".length) : basename(file)) : `~/${file}`;
+    const section = opencode ? "mcp" : "mcpServers";
+    const mcpConfig = opencode ? openCodeConfigs() : config(configPath(setup.mcpFile));
     const current = mcpConfig.data[section]?.[SERVER];
     const stdio = mcpEntry(cli, bun, id);
     const commandLine = [bun, ...stdio.args];
@@ -501,7 +536,7 @@ function manualAgentStatus(home: string, cli: string, bun: string, env: InstallE
       const ours = (handler: Json) => paths(handler) !== null;
       const valid = (handler: Json) => {
         const tokens = paths(handler);
-        return (!copilot || handler?.type === "command") && tokens?.[0] === bun && tokens[1] === cli;
+        return ((!copilot && sessionStart !== "claude") || handler?.type === "command") && tokens?.[0] === bun && tokens[1] === cli;
       };
       const configs = [sameFile ? mcpConfig : config(hookFile)];
       if (copilot) {
@@ -543,7 +578,6 @@ function manualAgentStatus(home: string, cli: string, bun: string, env: InstallE
 export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
   const home = resolve(env.home ?? homedir()), repo = resolve(env.repo ?? fileURLToPath(new URL("../../", import.meta.url)));
   const bun = resolve(env.bun ?? process.execPath), cli = resolve(repo, "hub/src/cli.ts");
-  const which = env.which ?? (command => Bun.which(command));
   const read = (file: string) => { try { return readFileSync(file, "utf8"); } catch { return null; } };
   const automatic = AGENT_TOOLS.map(id => {
     if (id === "claude-desktop") {
@@ -591,7 +625,7 @@ export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
         mcp = !!text && object((Bun.TOML.parse(text) as Json).mcp_servers?.[SERVER]);
       }
     } catch {}
-    return { id, label: LABELS[id], installed: !!which(id === "codex" ? "codex" : "claude"), connected: hook && mcp, partial: hook !== mcp };
+    return { id, label: LABELS[id], installed: !!findAgentExecutable(id === "codex" ? "codex" : "claude", home, env), connected: hook && mcp, partial: hook !== mcp };
   });
   return [...automatic, ...manualAgentStatus(home, cli, bun, env)];
 }

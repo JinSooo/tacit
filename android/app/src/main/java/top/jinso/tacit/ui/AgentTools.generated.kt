@@ -22,5 +22,4 @@ internal val agentSessionTools = mapOf(
     "droid.session" to AgentSessionTool(R.string.source_droid, null, R.drawable.ph_terminal_window),
     "qwen_code.session" to AgentSessionTool(R.string.source_qwen_code, null, R.drawable.ph_terminal_window),
     "gemini_cli.session" to AgentSessionTool(R.string.source_gemini_cli, null, R.drawable.ph_terminal_window),
-    "kimi_cli.session" to AgentSessionTool(R.string.source_kimi_cli, null, R.drawable.ph_terminal_window),
 )
