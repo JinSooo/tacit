@@ -10,7 +10,7 @@ type SystemProxy = {
 };
 
 const DIRECT = [
-  "localhost", "*.localhost", "127.0.0.0/8", "::1", "10.0.0.0/8", "172.16.0.0/12",
+  "localhost", "*.localhost", "0.0.0.0/8", "127.0.0.0/8", "::/128", "::1", "10.0.0.0/8", "172.16.0.0/12",
   "192.168.0.0/16", "169.254.0.0/16", "fe80::/10", "fc00::/7", "*.local",
 ];
 
@@ -122,7 +122,11 @@ function ipNumber(host: string, version: number): bigint {
 function matches(host: string, port: string, rule: string): boolean {
   const [network, width, extra] = rule.split("/");
   if (width !== undefined) {
-    const ip = network!.replace(/^\[(.*)\]$/, "$1");
+    let ip = network!.replace(/^\[(.*)\]$/, "$1");
+    if (/^\d{1,3}(?:\.\d{1,3}){0,2}$/.test(ip)) {
+      const parts = ip.split(".");
+      ip = [...parts, ...Array<string>(4 - parts.length).fill("0")].join(".");
+    }
     const version = isIP(ip), bits = version === 4 ? 32 : 128, prefix = Number(width);
     if (extra !== undefined || !version || isIP(host) !== version || !/^\d+$/.test(width) || prefix > bits) return false;
     const shift = BigInt(bits - prefix);

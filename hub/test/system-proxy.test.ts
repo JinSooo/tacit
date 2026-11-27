@@ -108,3 +108,15 @@ test("实际 fetch 把公网请求交给代理，环境里配置了代理时本�
     await Promise.all([remote.stop(true), proxy.stop(true)]);
   }
 });
+
+test("short macOS IPv4 CIDR rules and unspecified local addresses bypass the proxy", () => {
+  const env = { HTTP_PROXY: "http://proxy.example.invalid:8080" };
+  const system = { exceptions: ["100.64/10", "198.18/15", "203.0.113/24", "11/8", "300.1/16", "192.0/33", "10/8"] };
+  for (const host of ["100.127.255.255", "198.19.255.255", "203.0.113.4", "11.255.255.255", "10.2.3.4",
+    "0.0.0.0", "0.4.5.6", "[::]", "[::ffff:100.64.3.4]"]) {
+    expect(proxyFor(`http://${host}`, env, system), host).toBeUndefined();
+  }
+  for (const host of ["100.128.0.0", "198.20.0.0", "203.0.114.4", "12.0.0.0", "44.1.0.1", "192.0.1.2", "[::2]"]) {
+    expect(proxyFor(`http://${host}`, env, system), host).toBe(env.HTTP_PROXY);
+  }
+});
