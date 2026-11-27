@@ -42,7 +42,8 @@ const error = (code: number, message: string) => ({ error: { code, message } });
 const toolError = (text: string) => ({ result: { isError: true, content: [{ type: "text", text }] } });
 
 function normalizeToolName(name: string): string {
-  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 32);
+  // 首尾的连字符去掉：纯中文等名字规范化后为空，退回通用的 "mcp"。
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32).replace(/-+$/, "");
 }
 
 function clientToolName(params: unknown): string {

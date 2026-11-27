@@ -24,6 +24,8 @@ private let config = AgentMCPConfig(
   let mcp = try #require(decoded["mcpServers"]?["tacit"])
   #expect(mcp.command == config.command)
   #expect(mcp.args == config.args)
+  // 和各家文档示例一样：command 在 args 前，冒号后一个空格。
+  #expect(model.otherMcp.json.hasPrefix("{\n  \"mcpServers\": {\n    \"tacit\": {\n      \"command\": \"/Applications/Tacit.app/Contents/Helpers/Tacit\",\n      \"args\": [\n"))
   #expect(model.otherMcp.arguments == "'/Users/sample/Library/Application Support/Tacit/runtime/hub/src/cli.ts' mcp --tool mcp")
 }
 

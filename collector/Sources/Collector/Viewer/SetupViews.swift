@@ -18,11 +18,13 @@ struct AgentMCPConfig: Codable {
   let command: String
   let args: [String]
 
+  /// 按常见写法排版：command 在 args 前，冒号后一个空格（JSONEncoder 的排序和 " : " 与各家文档示例对不上）。
   var json: String {
     let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-    return (try? encoder.encode(["mcpServers": ["tacit": self]]))
-      .map { String(decoding: $0, as: UTF8.self) } ?? ""
+    encoder.outputFormatting = [.withoutEscapingSlashes]
+    let quote = { (value: String) in (try? encoder.encode(value)).map { String(decoding: $0, as: UTF8.self) } ?? "\"\"" }
+    let arguments = args.map { "        " + quote($0) }.joined(separator: ",\n")
+    return "{\n  \"mcpServers\": {\n    \"tacit\": {\n      \"command\": \(quote(command)),\n      \"args\": [\n\(arguments)\n      ]\n    }\n  }\n}"
   }
 
   var arguments: String {
