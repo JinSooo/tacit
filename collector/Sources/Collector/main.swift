@@ -353,7 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func applicationDidFinishLaunching(_ n: Notification) {
     terminationSignal = TerminationSignal { NSApp.terminate(nil) }
     Task { @MainActor [weak self] in
-      guard let self, AppSetup.checkPlacement() else { return }
+      guard let self else { return }
       var recoveryMessage: String?
       do { try await self.remoteSwitch.recover() }
       catch {
@@ -931,6 +931,7 @@ if CommandLine.arguments.contains("--initialize-language") {
   MainActor.assumeIsolated { initializeAppLanguage(config) }
   exit(0)
 }
+guard MainActor.assumeIsolated({ AppSetup.checkPlacement() }) else { exit(0) }
 let logFile = config.dataDir.appendingPathComponent("logs/collector.log")
 let launchedByAgent = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"]?.hasPrefix("dev.record-anything.") == true
 let launchSource: DiagnosticLog.LaunchSource = launchedByAgent || DiagnosticLog.isFile(logFile, on: STDERR_FILENO)

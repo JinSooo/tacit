@@ -44,6 +44,25 @@ import Testing
   #expect(AppPlacement.of(bundlePath: "/Applications/Utilities/Tacit.app", home: home) == .elsewhere)
 }
 
+@Test func bundledAppMustMoveFromDownloadsAndDesktopButSourceBuildCanRun() throws {
+  let home = "/Users/someone"
+  for folder in ["Downloads", "Desktop"] {
+    let path = "\(home)/\(folder)/Tacit.app"
+    #expect(AppPlacement.of(bundlePath: path, home: home, hasBundledRuntime: true) == .mustMove)
+    #expect(AppPlacement.of(bundlePath: path, home: home, hasBundledRuntime: false) == .elsewhere)
+  }
+  #expect(AppPlacement.of(bundlePath: "/Applications/Tacit.app", home: home, hasBundledRuntime: true) == .installed)
+  #expect(AppPlacement.of(bundlePath: "\(home)/Applications/Tacit.app", home: home, hasBundledRuntime: true) == .installed)
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let source = root.appendingPathComponent("collector")
+  let app = source.appendingPathComponent("build/Tacit.app").path
+  try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+  #expect(AppPlacement.of(bundlePath: app, home: home, hasBundledRuntime: true) == .mustMove)
+  try Data().write(to: source.appendingPathComponent("Package.swift"))
+  #expect(AppPlacement.of(bundlePath: app, home: home, hasBundledRuntime: true) == .elsewhere)
+}
+
 /// 2026-11-25 虚拟机实测：安装包首次打开后采集端崩溃，要到下次登录才有 launchd 拉起。
 @Test func collectorStandbyIsLoadedOrStartedOnlyWhenLoginStartIsOn() throws {
   let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
