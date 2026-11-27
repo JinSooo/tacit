@@ -5,10 +5,20 @@ export function input(ctx: BackendContext): string {
   return JSON.stringify({ system: ctx.req.system, prompt: ctx.req.prompt });
 }
 /** CLI 后端只继承这些变量。调用方环境里的中转站地址、模型映射（ANTHROPIC_*）和宿主 Agent 会话变量（CLAUDE_CODE_*、CMUX_* 等）
- * 一律不传：提炼必须走 models.json 选定的通道，而且不能因为是谁启动的 distill 而改变（2026-11-08 实测：继承后会走中转站）。 */
+ * 一律不传：提炼必须走 models.json 选定的通道，而且不能因为是谁启动的 distill 而改变（2026-11-08 实测：继承后会走中转站）。
+ * 代理和 CODEX_HOME 只决定 CLI 怎么连网、去哪读登录，照常传。 */
+export const SHELL_ENV = /^(CODEX_HOME|(?:http|https|all|no)_proxy|(?:HTTP|HTTPS|ALL|NO)_PROXY)$/;
 const KEEP_ENV = /^(HOME|USER|LOGNAME|PATH|SHELL|TMPDIR|LANG|LC_[A-Z_]+|TERM|__CF_USER_TEXT_ENCODING)$/;
+/** launchd 拉起的后台没有终端里的代理变量；安装时从登录 shell 读出的那几项放在 TACIT_CLI_ENV 里，只交给 CLI，
+ * 不进后台自己的 fetch（2026-11-27：用户在 .zshrc 里设代理时，终端里 codex 正常、Tacit 里调用失败）。 */
 export function cliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return { ...Object.fromEntries(Object.entries(source).filter(([k]) => KEEP_ENV.test(k))), CI: "1" };
+  let captured: Record<string, string> = {};
+  try {
+    const parsed = JSON.parse(source.TACIT_CLI_ENV ?? "{}");
+    if (parsed && typeof parsed === "object") captured = Object.fromEntries(Object.entries(parsed).filter((e): e is [string, string] => SHELL_ENV.test(e[0]) && typeof e[1] === "string"));
+  } catch { /* 读不懂就当没有。 */ }
+  const kept = Object.fromEntries(Object.entries(source).filter(([k]) => KEEP_ENV.test(k) || SHELL_ENV.test(k)));
+  return { ...captured, ...kept, CI: "1" };
 }
 export function run(ctx: BackendContext, command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {

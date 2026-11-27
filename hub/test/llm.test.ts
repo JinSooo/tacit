@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawn as nodeSpawn } from "node:child_process";
 import { chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,11 +7,17 @@ import { dirname, join } from "node:path";
 import { createLLM, repairToSchema, type LLMRequest, type Spawn, type UsageRow } from "../src/llm/index.ts";
 import { loadConfig } from "../src/llm/config.ts";
 import { resetCodexCatalog } from "../src/llm/codex-cli.ts";
+import { cliEnv } from "../src/llm/process.ts";
 import { DAY_SCHEMA, DAY_SYSTEM, normalizeDayOutput } from "../src/distill/prompts.ts";
 
 const dirs: string[] = [];
 const originalFetch = globalThis.fetch;
-afterEach(async () => { globalThis.fetch = originalFetch; await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
+const originalCodexHome = process.env.CODEX_HOME;
+// Codex 后端会读用户的 config.toml；测试指向不存在的目录，不受开发机自己的配置影响。
+beforeEach(() => { process.env.CODEX_HOME = join(tmpdir(), "llm-test-no-codex-home"); });
+afterEach(async () => {
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome;
+  globalThis.fetch = originalFetch; await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 const schema = { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false };
 const request: LLMRequest = { tier: "minute", system: "只返回合成结果", prompt: "把合成词语你好译成英文", schema };
 
@@ -138,6 +144,46 @@ test("Codex：读不到模型目录、不是 ChatGPT 登录时不覆盖，照常
   // 不是 ChatGPT 登录时不改 provider。
   expect(logs[0].args.some((a: string) => a.startsWith("model_provider"))).toBe(false);
   resetCodexCatalog();
+});
+
+// 回归（2026-11-27）：用户的 codex 走 config.toml 里自己的中转站，终端里正常，Tacit 加了 --ignore-user-config 后调用失败。
+test("Codex：沿用用户 config.toml 里选的连接，其余用户配置仍不加载", async () => {
+  resetCodexCatalog();
+  const f = await fixture("codex-cli");
+  const home = join(f.dir, "codex-home");
+  await Bun.write(join(home, "config.toml"), `profile = "work"
+model_reasoning_effort = "xhigh"
+cli_auth_credentials_store = "keyring"
+[profiles.work]
+model_provider = "relay"
+[model_providers.relay]
+name = "Synthetic relay"
+base_url = "https://relay.example.invalid/v1"
+wire_api = "responses"
+requires_openai_auth = true
+http_headers = { "X-Synthetic" = "1", "x y" = "2" }
+[mcp_servers.synthetic]
+command = "/nonexistent"
+`);
+  process.env.CODEX_HOME = home;
+  expect((await f.llm.complete(request)).ok).toBe(true);
+  const [start] = await f.logs();
+  expect(start.args).toContain("--ignore-user-config");
+  expect(start.args).toContain('model_provider="relay"');
+  expect(start.args).toContain('model_providers.relay={name="Synthetic relay",base_url="https://relay.example.invalid/v1",wire_api="responses",requires_openai_auth=true,http_headers={X-Synthetic="1","x y"="2"}}');
+  expect(start.args).toContain('cli_auth_credentials_store="keyring"');
+  // 用户自己的 provider 优先，不再套只走 HTTPS 的 ChatGPT provider；MCP 和推理强度不带过去。
+  expect(start.args.join(" ")).not.toContain("ra-https");
+  expect(start.args.join(" ")).not.toContain("mcp_servers");
+  expect(start.args.join(" ")).not.toContain("xhigh");
+  resetCodexCatalog();
+});
+
+test("CLI 环境：带上安装时记下的代理和 CODEX_HOME，不带中转站变量", () => {
+  const env = cliEnv({ HOME: "/h", PATH: "/p", ANTHROPIC_BASE_URL: "https://relay.example.invalid", OPENAI_API_KEY: "synthetic",
+    https_proxy: "http://127.0.0.1:1", TACIT_CLI_ENV: JSON.stringify({ https_proxy: "http://127.0.0.1:2", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", OPENAI_API_KEY: "x" }) });
+  expect(env).toEqual({ HOME: "/h", PATH: "/p", https_proxy: "http://127.0.0.1:1", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", CI: "1" });
+  expect(cliEnv({ HOME: "/h", TACIT_CLI_ENV: "{" })).toEqual({ HOME: "/h", CI: "1" });
 });
 
 for (const provider of ["claude-cli", "codex-cli"]) {
