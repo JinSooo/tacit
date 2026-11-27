@@ -232,6 +232,7 @@ import java.util.concurrent.CompletableFuture
             state, app.prefs.audioCaptureWanted,
             activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
             health?.recordingNotificationsBlocked == true, macRemoved, strings,
+            backgroundLimited = health?.batteryExempt == false || health?.backgroundRestricted == true,
         )
         if (notice != null) item(key = "notice") {
                     Box(Modifier.itemMotion(this).padding(end = 12.dp, top = 8.dp)) {
@@ -506,6 +507,7 @@ internal fun recordingNotice(
     notificationsBlocked: Boolean,
     macRemoved: Boolean,
     strings: UiStrings,
+    backgroundLimited: Boolean = false,
 ): RecordingNotice? = when {
     !microphoneGranted && (wanted || state.recording) ->
         RecordingNotice(strings.text(R.string.microphone_ungranted), Sources.AUDIO)
@@ -518,6 +520,8 @@ internal fun recordingNotice(
     state.message != null -> RecordingNotice(strings.text(state.message))
     notificationsBlocked -> RecordingNotice(strings.text(R.string.recording_notifications_off), openNotifications = true)
     macRemoved -> RecordingNotice(strings.text(R.string.mac_removed_notice), SettingsRoutes.MAC)
+    backgroundLimited && (state.recording || wanted) ->
+        RecordingNotice(strings.text(R.string.recording_background_limited), SettingsRoutes.BACKGROUND)
     else -> null
 }
 

@@ -376,4 +376,5 @@
     <string name="summary_address_format">Enter a full service address starting with https:// (or http:// for a local service).</string>
     <string name="summary_address_https">A public service address must start with https://.</string>
     <string name="summary_address_components">Remove credentials, query parameters or the # fragment from the service address.</string>
+    <string name="recording_background_limited">Battery restrictions may interrupt recording. Check background operation settings.</string>
 </resources>

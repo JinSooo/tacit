@@ -364,4 +364,5 @@
     <string name="summary_address_format">请输入以 https:// 开头的完整服务地址，局域网或本机服务可用 http://。</string>
     <string name="summary_address_https">公网服务地址必须以 https:// 开头。</string>
     <string name="summary_address_components">请去掉服务地址里的账号密码、查询参数或 # 后的内容。</string>
+    <string name="recording_background_limited">系统省电限制可能中断录音，请检查后台运行设置。</string>
 </resources>
