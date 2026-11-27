@@ -377,7 +377,7 @@ process.exit(Number(process.env.FAKE_CODE ?? 0));
   await expect(securityKeychain(join(ctx.dir, "missing")).has("anthropic")).rejects.toThrow("无法查询钥匙串");
 });
 
-test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；找不到工具时不写入", async () => {
+test("AI 工具接入：连接只登记 MCP、不写钩子，状态随之变化；找不到工具时不写入", async () => {
   const home = join(ctx.dir, "home");
   mkdirSync(home);
   const calls: string[][] = [];
@@ -405,7 +405,7 @@ test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；�
   const connected = await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: true });
   expect(connected.status).toBe(200);
   expect(connected.body.tools[0]).toMatchObject({ id: "claude-code", connected: true, partial: false });
-  expect(readFileSync(join(home, ".claude/settings.json"), "utf8")).toContain("hook session-start --tool claude-code");
+  expect(existsSync(join(home, ".claude/settings.json"))).toBe(false);
 
   const missing = await call(h, "PUT", "/v1/settings/agents/codex", { connected: true });
   expect(missing).toEqual({ status: 409, body: { error: "这台 Mac 上没找到 Codex，装好并登录后再连接。" } });

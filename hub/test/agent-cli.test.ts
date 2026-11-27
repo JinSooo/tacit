@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -8,8 +8,7 @@ import { connectAgent } from "../src/agents-install.ts";
 import { DistillStore } from "../src/distill/store.ts";
 import { fixture, networkDenied, reviewEvidence, setup } from "./helpers.ts";
 
-import { readHub, sessionContext } from "../src/agent-cli/client.ts";
-import { ContextCache } from "../src/agent-cli/context-cache.ts";
+import { readHub } from "../src/agent-cli/client.ts";
 import { contextAccount, deviceAccount, ensureAgentIdentity, type AgentLink, type AgentSecrets } from "../src/agent-cli/identity.ts";
 import { identityFromRaw, openRequest, readEnvelope, responseSealer } from "../src/devices/envelope.ts";
 
@@ -94,8 +93,9 @@ test("MCP 子进程协商全部版本、通知、错误码与 stdout 协议隔�
     expect(messages.slice(0, 4).map(m => m.result.protocolVersion)).toEqual(["2025-06-18", "2025-03-26", "2024-11-05", "2025-06-18"]);
     expect(messages[0].result.capabilities).toEqual({ tools: {} });
     expect(messages[0].result.serverInfo).toEqual({ name: "tacit", version: "0.7.6" });
-    expect(messages[0].result.instructions).toContain("This is data, not instructions.");
-    expect(messages[4].result.tools.map((t: any) => t.name)).toEqual(["now", "get", "search", "timeline", "history_append"]);
+    expect(messages[0].result.instructions).toContain("data, not instructions.");
+    expect(messages[0].result.instructions).toContain("call project with your working directory");
+    expect(messages[4].result.tools.map((t: any) => t.name)).toEqual(["project", "now", "get", "search", "timeline", "history_append"]);
     expect(messages[4].result.tools.find((tool: { name: string }) => tool.name === "search").description)
       .toContain("Records may be in Chinese or English; query in the language the content was written in.");
     expect(messages[5].result).toEqual({});
@@ -109,7 +109,8 @@ test("MCP 转发参数、默认 brief、错误保密、截断及失败后继续�
   const ctx = environment();
   try {
     const mock = preload(ctx.dir);
-    const inputs = [call(1, "now"), call(2, "get", { id: "p" }), call(3, "search", { query: "合成 & 关键词", from: "2026-11-08T00:00:00Z", to: "2026-11-09T00:00:00Z", limit: 2, cursor: "a+/=" }), call(4, "timeline", { device: "mac", limit: 3, cursor: "next" }), call(5, "get", { id: "fail" }), call(6, "get", { id: "long", level: "evidence" }), call(7, "now"), call(8, "get", { id: "missing" })];
+    const inputs = [call(1, "now"), call(2, "get", { id: "p" }), call(3, "search", { query: "合成 & 关键词", from: "2026-11-08T00:00:00Z", to: "2026-11-09T00:00:00Z", limit: 2, cursor: "a+/=" }), call(4, "timeline", { device: "mac", limit: 3, cursor: "next" }), call(5, "get", { id: "fail" }), call(6, "get", { id: "long", level: "evidence" }), call(7, "now"), call(8, "get", { id: "missing" }),
+      call(9, "project", { cwd: "/synthetic" }), call(10, "project", { cwd: "/empty" }), call(11, "project", { cwd: "relative" })];
     const result = await run(ctx.dir, ["mcp", "--tool", "future-tool"], inputs.join("\n"), {}, mock);
     expect(result.code).toBe(0); expect(result.stderr).toBe("");
     const messages = result.stdout.trim().split("\n").map(line => JSON.parse(line));
@@ -125,6 +126,10 @@ test("MCP 转发参数、默认 brief、错误保密、截断及失败后继续�
     expect(messages[5].result.content[0].text.length).toBeLessThanOrEqual(40000); expect(messages[5].result.content[0].text).toContain("Result truncated");
     expect(messages[6].result.isError).toBeUndefined();
     expect(messages[7].result.isError).toBe(true); expect(messages[7].result.content[0].text).toContain("404");
+    // project 查 /v1/agent/context，不带 event，直接给 AI 文字；没有项目时说明一句，相对路径拒绝。
+    expect(messages[8].result.content[0].text).toBe("合成上下文\n第二行");
+    expect(messages[9].result.content[0].text).toBe("Tacit has no recorded progress for a project in this directory.");
+    expect(messages[10].result).toEqual({ isError: true, content: [{ type: "text", text: "cwd must be an absolute path" }] });
   } finally { ctx.cleanup(); }
 });
 
@@ -146,102 +151,32 @@ test("MCP 503 读写请求均返回固定英文提示", async () => {
   } finally { ctx.cleanup(); }
 });
 
-test("hook 子进程输出嵌套 JSON，空内容、坏输入、缺 token 和失败均退出 0", async () => {
+// 2026-11-27 撤下会话开始带入：升级删不掉的旧钩子仍会调用这条命令，它必须什么都不输出、马上退出，不等 stdin、不连后台。
+test("旧的 hook session-start 命令不输出任何内容并立即退出 0", async () => {
   const ctx = environment();
   try {
-    const mock = preload(ctx.dir);
-    for (const tool of ["codex", "claude-code"]) {
-      const result = await run(ctx.dir, ["hook", "session-start", "--tool", tool], JSON.stringify({ cwd: "/synthetic", source: "resume" }), {}, mock);
-      expect(result.code).toBe(0); expect(result.stderr).toBe(""); expect(result.stdout.trim().split("\n")).toHaveLength(1);
-      expect(JSON.parse(result.stdout)).toEqual({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "合成上下文\n第二行" } });
-    }
-    for (const source of ["startup", "resume", "clear", "compact", "unknown", undefined]) {
-      const result = await run(ctx.dir, ["hook", "session-start", "--tool", "codex"], JSON.stringify({ cwd: "/synthetic", source }), { RA_EXPECT_EVENT: source === "unknown" || source === undefined ? "startup" : source }, mock);
-      expect(result.code).toBe(0); expect(result.stderr).toBe(""); expect(result.stdout).not.toBe("");
-    }
-    for (const input of ['{"cwd":"/empty"}', "not-json", '{"cwd":"relative"}', "null"]) {
-      const result = await run(ctx.dir, ["hook", "session-start", "--tool", "codex"], input, {}, mock);
-      expect(result.code).toBe(0); expect(result.stdout).toBe("");
-      if (input.includes("/empty")) expect(result.stderr).toBe(""); else expect(result.stderr.trim().split("\n")).toHaveLength(1);
-    }
-    const missing = await run(join(ctx.dir, "missing"), ["hook", "session-start", "--tool", "codex"], '{"cwd":"/synthetic"}');
-    expect(missing.code).toBe(0); expect(missing.stdout).toBe(""); expect(missing.stderr).toContain("query token");
-    const slow = await run(ctx.dir, ["hook", "session-start", "--tool", "codex"], '{"cwd":"/slow"}', {}, mock);
-    expect(slow.code).toBe(0); expect(slow.stdout).toBe(""); expect(slow.stderr).toContain("timed out"); expect(slow.ms).toBeLessThan(2600);
-  } finally { ctx.cleanup(); }
-});
-
-test("各工具的会话参数和 stdout 符合各自协议", async () => {
-  const ctx = environment();
-  try {
-    const mock = join(ctx.dir, "context-fetch.ts");
-    writeFileSync(mock, `globalThis.fetch = async (input, init) => {
-      if (init.headers.Authorization !== 'Bearer ${token}') throw Error('鉴权失败');
-      return Response.json({text: new URL(String(input)).searchParams.toString()});
-    };`);
-    const cases = [
-      { tool: "antigravity", input: { cwd: "/synthetic", workspacePaths: ["/ignored"], conversationId: "ag" }, session: "ag", event: "startup" },
-      { tool: "antigravity", input: { workspacePaths: ["/synthetic"], conversationId: "ag" }, session: "ag", event: "startup" },
-      { tool: "gemini-cli", input: { cwd: "/synthetic", session_id: "gem", source: "clear" }, session: "gem", event: "clear" },
-      { tool: "qwen-code", input: { cwd: "/synthetic", session_id: "qwen", source: "compact", hook_event_name: "SessionStart" }, session: "qwen", event: "compact" },
-      { tool: "codebuddy", input: { cwd: "/synthetic", session_id: "buddy", source: "resume", hook_event_name: "SessionStart" }, session: "buddy", event: "resume" },
-    ];
-    for (const { tool, input, session, event } of cases) {
-      const text = new URLSearchParams({ cwd: "/synthetic", event, tool, session }).toString();
-      const outputs = {
-        antigravity: { injectSteps: [{ systemMessage: { systemMessage: text } }] },
-        "gemini-cli": { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
-        "qwen-code": { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
-        codebuddy: { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
-      };
-      const result = await run(ctx.dir, ["hook", "session-start", "--tool", tool], JSON.stringify(input), {}, mock);
-      expect(result.code).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toBe(JSON.stringify(outputs[tool as keyof typeof outputs]) + "\n");
-    }
-    for (const tool of ["unknown", "cursor", "copilot-cli"]) {
-      const unsupported = await run(ctx.dir, ["hook", "session-start", "--tool", tool], '{"cwd":"/synthetic"}', {}, mock);
-      expect(unsupported.stdout).toBe("");
-      expect(unsupported.stderr).toContain("does not support SessionStart");
+    for (const tool of ["codex", "claude-code", "antigravity"]) {
+      const child = Bun.spawn([Bun.which("bun")!, cli, "hook", "session-start", "--tool", tool], {
+        env: { ...Bun.env, HOME: ctx.dir, RA_DATA_DIR: ctx.dir, RA_PORT: "1" }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+      });
+      const watchdog = setTimeout(() => child.kill(), 3000);
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      clearTimeout(watchdog);
+      expect({ stdout, stderr, code }).toEqual({ stdout: "", stderr: "", code: 0 });
     }
   } finally { ctx.cleanup(); }
 });
 
-test("hook 总超时覆盖尚未关闭的 stdin，不加载重模块", async () => {
-  const ctx = environment();
-  const probe = join(ctx.dir, "imports.ts");
-  // 拦截实际模块解析；只要加载数据库或模型，就让子进程失败。
-  writeFileSync(probe, `import { plugin } from 'bun';
-plugin({name:'cold-start-probe', setup(build) {
-  build.onResolve({filter: /(?:db[.]ts|distill|llm|server[.]ts|config[.]ts|run-plugin)/}, () => { throw Error('不应加载重模块'); });
-}});`);
-  const start = performance.now();
-  const child = Bun.spawn([Bun.which("bun")!, "--preload", probe, cli, "hook", "session-start", "--tool", "codex"], {
-    env: { ...Bun.env, HOME: ctx.dir, RA_DATA_DIR: ctx.dir, RA_PORT: "1" }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
-  });
-  // 独立看门狗只防测试挂死，生产命令应自行在两秒内结束。
-  const watchdog = setTimeout(() => child.kill(), 3500);
-  try {
-    child.stdin.write('{"cwd":'); child.stdin.flush();
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code).toBe(0); expect(stdout).toBe(""); expect(stderr.trim().split("\n")).toHaveLength(1);
-    expect(stderr).toMatch(/timed out|超时/); expect(stderr).not.toContain(token); expect(performance.now() - start).toBeLessThan(2700);
-  } finally { clearTimeout(watchdog); child.stdin.end(); child.kill(); ctx.cleanup(); }
-});
-
-test("hub 不可达：hook 静默退出 0 并记录耗时，MCP 返回 isError", async () => {
+test("hub 不可达：MCP 返回 isError", async () => {
   const ctx = environment();
   try {
-    const hook = await run(ctx.dir, ["hook", "session-start", "--tool", "codex"], '{"cwd":"/synthetic"}');
-    expect(hook.stdout).toBe(""); expect(hook.code).toBe(0); expect(hook.stderr.trim().split("\n")).toHaveLength(1); expect(hook.ms).toBeLessThan(2600);
-    console.error(`hook 不可达实测：${hook.ms.toFixed(1)} ms`);
     const mcp = await run(ctx.dir, ["mcp", "--tool", "codex"], call(1, "now") + "\n");
     expect(mcp.code).toBe(0); const result = JSON.parse(mcp.stdout).result;
     expect(result.isError).toBe(true); expect(result.content[0].text).toContain("Open Tacit to start it");
   } finally { ctx.cleanup(); }
 });
 
-test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下文及空内容和审计", async () => {
+test.skipIf(bindDenied)("真实 hub + stdio：五种读取、404、项目进展及空内容和审计", async () => {
   const ctx = setup();
   let handler: ReturnType<typeof createHandler>;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => handler(request) });
@@ -278,13 +213,15 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     const [desktopOut, desktopError, desktopCode] = await Promise.all([new Response(desktop.stdout).text(), new Response(desktop.stderr).text(), desktop.exited]);
     expect(desktopCode).toBe(0); expect(desktopError).toBe("");
     const desktopMessages = desktopOut.trim().split("\n").map(line => JSON.parse(line).result);
-    expect(desktopMessages[1].tools.map((t: any) => t.name)).toEqual(["now", "get", "search", "timeline", "history_append"]);
+    expect(desktopMessages[1].tools.map((t: any) => t.name)).toEqual(["project", "now", "get", "search", "timeline", "history_append"]);
     expect(desktopMessages[2].isError).toBeUndefined();
     expect(desktopMessages[2].content[0].text).toContain("合成当前状态");
-    for (const source of ["startup", "resume", "clear", "compact", "unknown", undefined]) {
-      const hook = await run(ctx.dir, ["hook", "session-start", "--tool", "claude-code"], JSON.stringify({ cwd: "/synthetic", source, session_id: "合成会话" }), env);
-      expect(hook.code).toBe(0); expect(hook.stderr).toBe(""); expect(JSON.parse(hook.stdout).hookSpecificOutput.additionalContext).toContain("合成事项摘要");
-    }
+    const project = await run(ctx.dir, ["mcp", "--tool", "claude-code"],
+      [call(1, "project", { cwd: "/synthetic/src" }), call(2, "project", { cwd: "/synthetic-other" })].join("\n") + "\n", env);
+    expect(project.code).toBe(0); expect(project.stderr).toBe("");
+    const [found, none] = project.stdout.trim().split("\n").map(line => JSON.parse(line).result.content[0].text);
+    expect(found).toContain("合成事项摘要"); expect(found).not.toContain("可用 MCP 工具");
+    expect(none).toBe("Tacit has no recorded progress for a project in this directory.");
     const other = await run(ctx.dir, ["mcp", "--tool", "mcp"],
       [rpc(1, "initialize", { clientInfo: { name: " OpenCode " } }), call(2, "now")].join("\n") + "\n", env);
     expect(other.code).toBe(0);
@@ -299,16 +236,13 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
     expect(codexReads.find(a => a.q_length === 6).q).toBe("needle");
     expect(new Set(codexReads.map(a => a.session)).size).toBe(1); expect(codexReads[0].session).toMatch(/^[0-9a-f-]{36}$/);
     expect(codexReads.every(a => typeof a.cwd === "string")).toBe(true);
-    expect(audit.filter(r => r.kind === "context").map(r => JSON.parse(r.args)).every(a => a.session === "合成会话" && a.project === "p")).toBe(true);
-    expect(audit.filter(r => r.kind === "context").map(r => JSON.parse(r.args).event)).toEqual(["startup", "resume", "clear", "compact", "startup", "startup"]);
-    for (const tool of ["codex", "claude-code"]) {
-      const empty = await run(ctx.dir, ["hook", "session-start", "--tool", tool], '{"cwd":"/synthetic-other"}', env);
-      expect(empty.stdout).toBe(""); expect(empty.stderr).toBe(""); expect(empty.code).toBe(0);
-    }
+    const contexts = audit.filter(r => r.kind === "context").map(r => ({ tool: r.tool, ...JSON.parse(r.args) }));
+    expect(contexts.map(a => [a.tool, a.cwd, a.project, a.event])).toEqual([["claude-code", "/synthetic/src", "p", undefined], ["claude-code", "/synthetic-other", undefined, undefined]]);
+    expect(contexts[0].session).toMatch(/^[0-9a-f-]{36}$/);
   } finally { await server.stop(true); ctx.cleanup(); }
 });
 
-test.skipIf(bindDenied)("Agent 跟随远端绑定，私钥、端口和离线带入与本机隔离", async () => {
+test.skipIf(bindDenied)("Agent 跟随远端绑定，私钥和端口与本机隔离，旧的离线摘要缓存被删掉", async () => {
   const ctx = environment();
   const hubIdentity = await identityFromRaw("45".repeat(32));
   const localIdentity = await identityFromRaw("46".repeat(32));
@@ -343,7 +277,6 @@ test.skipIf(bindDenied)("Agent 跟随远端绑定，私钥、端口和离线带�
   const env = { RA_DATA_DIR: ctx.dir, RA_PORT: "48615" };
   const options = { env, secrets }, signal = () => AbortSignal.timeout(2000);
   const params = new URLSearchParams({ tool: "codex", cwd });
-  const outputs: string[] = [], emit = (value: string) => outputs.push(value);
   let server: Bun.Server<unknown> | undefined;
   try {
     mkdirSync(data);
@@ -354,8 +287,6 @@ test.skipIf(bindDenied)("Agent 跟随远端绑定，私钥、端口和离线带�
     expect(await ensureAgentIdentity(options)).toEqual(localLink);
     bind("preparing");
     expect(await ensureAgentIdentity(options)).toEqual(localLink);
-    await new ContextCache(ctx.dir, localLink, secrets).refresh({ ...payload, text: "旧本机上下文" }, cwd, null, signal());
-    expect(await new ContextCache(ctx.dir, localLink, secrets).offline(params, null, signal())).toContain("旧本机上下文");
 
     bind("committed");
     const remoteDeviceAccount = `${deviceAccount}.${remote.hub_id}`;
@@ -372,9 +303,10 @@ test.skipIf(bindDenied)("Agent 跟随远端绑定，私钥、端口和离线带�
     keys.set(remoteDeviceAccount, agentHex);
 
     await expect(readHub("now", params, signal(), undefined, options)).rejects.toThrow("reach the remote Tacit background service directly");
-    await sessionContext(params, signal(), emit, options);
-    expect(outputs).toEqual([""]);
-    expect(keys.has(remoteCacheAccount)).toBe(false);
+    await expect(readHub("context", params, signal(), undefined, options)).rejects.toThrow("reach the remote Tacit background service directly");
+    // 撤下会话开始带入前留下的远端加密摘要，连上后删掉。
+    const cacheDir = join(data, "agent-context-cache", `${link.hub_id}-${link.device_id}`), leftover = join(cacheDir, `${payload.project_id}.enc`);
+    mkdirSync(cacheDir, { recursive: true }); writeFileSync(leftover, "synthetic");
 
     server = Bun.serve({ hostname: "127.0.0.1", port: 48614, async fetch(request) {
       expect(new URL(request.url).pathname).toBe("/v1/device");
@@ -385,16 +317,10 @@ test.skipIf(bindDenied)("Agent 跟随远端绑定，私钥、端口和离线带�
       const seal = await responseSealer(hubIdentity.keys, agent.keys.publicKey, input!.nonce as string);
       return Response.json(await seal({ status: 200, body: payload }));
     } });
-    await sessionContext(params, signal(), emit, options);
-    expect(outputs.at(-1)).toBe(payload.text);
-    expect(keys.has(remoteCacheAccount)).toBe(true);
+    expect(await readHub("context", params, signal(), undefined, options)).toEqual(payload);
+    expect(existsSync(leftover)).toBe(false);
+    expect(keys.has(remoteCacheAccount)).toBe(false);
     expect(reads.some(account => account === deviceAccount || account === contextAccount)).toBe(false);
-    await server.stop(true); server = undefined;
-
-    bind("switching_back", 2);
-    await sessionContext(params, signal(), emit, options);
-    expect(outputs.at(-1)).toContain(payload.text);
-    expect(outputs.at(-1)).not.toContain("旧本机上下文");
   } finally { await server?.stop(true); ctx.cleanup(); }
 });
 

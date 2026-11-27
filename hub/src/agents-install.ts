@@ -91,9 +91,7 @@ export function ownsMcpEntry(value: unknown, tool: string): value is Json {
     && value.args.slice(1).join("\n") === `mcp\n--tool\n${tool}`;
 }
 
-export function sessionStartCommand(bun: string, cli: string, tool: string): string {
-  return `${quote(bun)} ${quote(cli)} hook session-start --tool ${quote(tool)}`;
-}
+/** 认出旧版写入的会话开始钩子（2026-11-27 起不再写入，连接、断开和升级时删掉）。 */
 export function sessionStartCommandPaths(command: unknown, tool: string): string[] | null {
   const tokens = typeof command === "string" ? words(command) : null;
   return tokens?.length === 6 && tokens[1]?.endsWith("/hub/src/cli.ts")
@@ -135,24 +133,16 @@ function mcpFile(file: string, tool: "claude-desktop" | "antigravity", install: 
   return { ...plan, after: JSON.stringify(data, null, 2) + "\n" };
 }
 
-function antigravityHookFile(file: string, install: boolean, cli: string, bun: string, lang: Lang) {
+function antigravityHookFile(file: string, lang: Lang) {
   const { data, ...plan } = jsonFile(file, lang);
   const group = data[SERVER];
   const ours = (hook: unknown) => object(hook) && sessionStartCommandPaths(hook.command, "antigravity") !== null;
-  if (Object.hasOwn(data, SERVER) && (!object(group) || !Array.isArray(group.SessionStart) || !group.SessionStart.some(ours))) {
-    throw new AgentConfigError(cliText("Antigravity 中的 tacit 名称已被其他配置占用，请先检查 hooks.json。", "Another Antigravity hook group already uses the name tacit. Check hooks.json first.", lang), "agent_config_conflict");
-  }
-  const before = group?.SessionStart ?? [];
+  // 同名但不是本应用写的钩子组不归我们管，原样留着。
+  if (!object(group) || !Array.isArray(group.SessionStart) || !group.SessionStart.some(ours)) return { ...plan, after: plan.before };
+  const before = group.SessionStart;
   const next = before.filter((hook: unknown) => !ours(hook));
-  if (install) {
-    const index = before.findIndex(ours);
-    next.splice(index < 0 ? next.length : index, 0, {
-      type: "command", command: sessionStartCommand(bun, cli, "antigravity"), timeout: 5,
-    });
-  }
-  const enable = install && group?.enabled === false;
-  if (!enable && JSON.stringify(before) === JSON.stringify(next)) return { ...plan, after: plan.before };
-  if (next.length) data[SERVER] = { ...group, ...(enable ? { enabled: true } : {}), SessionStart: next };
+  if (JSON.stringify(before) === JSON.stringify(next)) return { ...plan, after: plan.before };
+  if (next.length) data[SERVER] = { ...group, SessionStart: next };
   else {
     delete group.SessionStart;
     if (!Object.keys(group).some(key => key !== "enabled")) delete data[SERVER];
@@ -187,7 +177,8 @@ function diff(file: string, before: string, after: string, existed: boolean) {
   return [`--- ${existed ? file : "/dev/null"}`, `+++ ${file}`, `@@ -${a.length ? 1 : 0},${a.length} +${b.length ? 1 : 0},${b.length} @@`,
     ...a.map(line => `-${line}`), ...(before && !before.endsWith("\n") ? ["\\ No newline at end of file"] : []), ...b.map(line => `+${line}`)].join("\n");
 }
-function hookFile(file: string, install: boolean, cli: string, bun: string, tool: AgentTool, lang: Lang = "zh") {
+/** 删掉旧版写入的会话开始钩子，其他钩子原样保留；没有时不改、不建文件。 */
+function hookFile(file: string, lang: Lang = "zh") {
   const existed = existsSync(file), before = existed ? readFileSync(file, "utf8") : "";
   let data: Json;
   try { data = existed ? JSON.parse(before) : {}; } catch { throw new AgentConfigError(cliText("配置文件不是合法 JSON，未写入配置。", "The configuration contains invalid JSON and was not saved.", lang), "agent_config_invalid_json"); }
@@ -196,24 +187,19 @@ function hookFile(file: string, install: boolean, cli: string, bun: string, tool
   const ours = (hook: any) => {
     if (!object(hook) || typeof hook.command !== "string") return false;
     const tokens = words(hook.command);
-    return !!tokens && tokens[1] === cli && tokens[2] === "hook" && tokens[3] === "session-start";
+    // 任何一份 Tacit 的旧钩子都删：这个功能已经撤下，留着只会在会话开始时空跑一次。
+    return !!tokens && !!tokens[1]?.endsWith("/hub/src/cli.ts") && tokens[2] === "hook" && tokens[3] === "session-start";
   };
-  let found = false;
-  if (!install && !(data.hooks?.SessionStart ?? []).some((row: any) => object(row) && Array.isArray(row.hooks) && row.hooks.some(ours))) return { file, existed, before, after: before };
-  const entry = { matcher: "startup|resume|clear|compact", hooks: [{ type: "command", command: `${quote(bun)} ${quote(cli)} hook session-start --tool ${tool}`, timeout: 5 }] };
+  if (!(data.hooks?.SessionStart ?? []).some((row: any) => object(row) && Array.isArray(row.hooks) && row.hooks.some(ours))) return { file, existed, before, after: before };
   const rows: any[] = [];
-  for (const row of data.hooks?.SessionStart ?? []) {
+  for (const row of data.hooks.SessionStart) {
     if (!object(row) || !Array.isArray(row.hooks) || !row.hooks.some(ours)) { rows.push(row); continue; }
     const remaining = row.hooks.filter((hook: any) => !ours(hook));
     if (remaining.length) rows.push({ ...row, hooks: remaining });
-    if (install && !found) { rows.push(entry); found = true; }
   }
-  if (install && !found) rows.push(entry);
-  if (rows.length) { data.hooks ??= {}; data.hooks.SessionStart = rows; }
-  else if (data.hooks) { delete data.hooks.SessionStart; if (!Object.keys(data.hooks).length) delete data.hooks; }
-  const after = JSON.stringify(data, null, 2) + "\n";
-  // 没有目标条目时卸载不重排、不创建文件。
-  return { file, existed, before, after: !install && !found && JSON.stringify(data) === JSON.stringify(existed ? JSON.parse(before) : {}) ? before : after };
+  if (rows.length) data.hooks.SessionStart = rows;
+  else { delete data.hooks.SessionStart; if (!Object.keys(data.hooks).length) delete data.hooks; }
+  return { file, existed, before, after: JSON.stringify(data, null, 2) + "\n" };
 }
 /** 每个配置只留最近一份；只清理本应用命名的普通文件。 */
 export function pruneConnectionBackups(file: string): number {
@@ -257,8 +243,9 @@ function approvalDiff(plan: ReturnType<typeof codexApprovals>) {
 }
 
 // 只定位普通 TOML 表；解析表头以兼容引号和空白，不重排其余文本。
-function codexApprovals(file: string, install: boolean, preserved: string[] = [], server: string = SERVER) {
-  const existed = existsSync(file), before = existed ? readFileSync(file, "utf8") : "";
+/** `only` 限定只补这些工具的规则（升级时只补新加的工具，不把用户删掉的规则加回来）。 */
+export function codexApprovals(file: string, install: boolean, preserved: string[] = [], server: string = SERVER, text?: string, only?: string[]) {
+  const existed = text !== undefined || existsSync(file), before = text ?? (existed ? readFileSync(file, "utf8") : "");
   const data = Bun.TOML.parse(before) as Json;
   const target = data.mcp_servers?.[server]?.tools ?? {};
   const names = new Set(mcpTools.map(tool => tool.name));
@@ -290,7 +277,7 @@ function codexApprovals(file: string, install: boolean, preserved: string[] = []
   const ours = (keys: string[]) => keys.length === 4 && keys[0] === "mcp_servers" && keys[1] === server && keys[2] === "tools" && names.has(keys[3]!);
   let after = before;
   if (install) {
-    const missing = mcpTools.filter(tool => !Object.hasOwn(target, tool.name));
+    const missing = mcpTools.filter(tool => !Object.hasOwn(target, tool.name) && (!only || only.includes(tool.name)));
     const additions = missing.map(tool => preserved.find(text => {
       const parsed = Bun.TOML.parse(text) as Json;
       const tools = parsed.mcp_servers?.[server]?.tools ?? parsed.mcp_servers?.[LEGACY_SERVER]?.tools ?? {};
@@ -336,7 +323,7 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
   const desktopPlan = tools.includes("claude-desktop") ? mcpFile(desktopConfig(home), "claude-desktop", action === "install", cli, bun, lang) : undefined;
   const planAntigravity = () => [
     mcpFile(resolve(home, antigravityConfig), "antigravity", action === "install", cli, bun, lang),
-    antigravityHookFile(resolve(home, antigravityHooks), action === "install", cli, bun, lang),
+    antigravityHookFile(resolve(home, antigravityHooks), lang),
   ];
   let antigravityPlans: ReturnType<typeof planAntigravity> = [];
   if (tools.includes("antigravity")) {
@@ -352,7 +339,8 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
     }
   }
   const cliTools = tools.filter(tool => tool === "claude-code" || tool === "codex");
-  const plans = cliTools.map(tool => hookFile(resolve(home, tool === "codex" ? ".codex/hooks.json" : ".claude/settings.json"), action === "install", cli, bun, tool, lang));
+  // 连接和断开都清掉旧版的会话开始钩子：上下文改由 AI 调用 MCP 的 project 自己查（2026-11-27）。
+  const plans = cliTools.map(tool => hookFile(resolve(home, tool === "codex" ? ".codex/hooks.json" : ".claude/settings.json"), lang));
   const commands = cliTools.map(tool => ({ tool, command: findAgentExecutable(tool === "codex" ? "codex" : "claude", home, env) }));
   const codexFile = resolve(home, ".codex/config.toml");
   // 提前校验 TOML，避免改完 MCP 后才发现原配置损坏。
@@ -416,7 +404,6 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
     if (yes) for (const plan of [...plans, ...antigravityPlans]) if (plan.before !== plan.after) saveConnectionPlan(plan);
     if (yes && desktopPlan && desktopPlan.before !== desktopPlan.after) saveConnectionPlan(desktopPlan);
     if (desktopPlan) print(t("完全退出并重新打开 Claude Desktop 后生效；连接后可让它查询历史记录。", "Quit and reopen Claude Desktop to apply the change."));
-    if (action === "install" && tools.includes("codex")) print(t("Codex 新 hook 需要在 Codex 里批准一次（trusted_hash）才会生效。", "Approve the new hook once in Codex to enable session context."));
   };
   if (yes && action === "install" && (cliTools.length || antigravityPlans.length) && registerIdentity) {
     // 登记失败（中枢没在运行等）不挡接入：没有身份时 agent-cli 退回本机令牌（6.10.6 双栈），之后再接入一次即可补上。
@@ -433,7 +420,7 @@ export interface AgentState {
   label: string;
   /** 本机找得到应用或命令行工具。 */
   installed: boolean;
-  /** MCP 和工具所需的会话开始钩子均已登记。 */
+  /** 已登记 Tacit 的 MCP 查询服务。 */
   connected: boolean;
   /** 只登记了一半（例如手动删过其中一个），需要重新连接。 */
   partial: boolean;
@@ -459,29 +446,15 @@ export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
       return { id, label: LABELS[id], installed: desktopInstalled(home, env), connected, partial };
     }
     if (id === "antigravity") {
-      let hook = false, mcp = false, configured = false;
+      let mcp = false, configured = false;
       try {
         const data = JSON.parse(read(resolve(home, antigravityConfig)) ?? "{}");
         const entry = data?.mcpServers?.[SERVER];
         mcp = ownsMcpEntry(entry, id) && entry.command === bun && entry.args[0] === cli && entry.disabled !== true;
         configured = Object.hasOwn(data?.mcpServers ?? {}, SERVER) || ownsMcpEntry(data?.mcpServers?.[LEGACY_SERVER], id);
       } catch { configured = true; }
-      try {
-        const group = JSON.parse(read(resolve(home, antigravityHooks)) ?? "{}")?.[SERVER];
-        configured ||= group !== undefined;
-        hook = group?.enabled !== false && Array.isArray(group?.SessionStart) && group.SessionStart.some((entry: Json) => {
-          const paths = sessionStartCommandPaths(entry?.command, id);
-          return entry?.type === "command" && paths?.[0] === bun && paths[1] === cli;
-        });
-      } catch { configured = true; }
-      return { id, label: LABELS[id], installed: antigravityInstalled(home, env), connected: hook && mcp, partial: configured && !(hook && mcp) };
+      return { id, label: LABELS[id], installed: antigravityInstalled(home, env), connected: mcp, partial: configured && !mcp };
     }
-    let hook = false;
-    try {
-      const file = resolve(home, id === "codex" ? ".codex/hooks.json" : ".claude/settings.json");
-      const plan = hookFile(file, false, cli, bun, id);
-      hook = plan.before !== plan.after;
-    } catch {}
     let mcp = false;
     try {
       if (id === "claude-code") {
@@ -492,7 +465,7 @@ export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
         mcp = !!text && object((Bun.TOML.parse(text) as Json).mcp_servers?.[SERVER]);
       }
     } catch {}
-    return { id, label: LABELS[id], installed: !!findAgentExecutable(id === "codex" ? "codex" : "claude", home, env), connected: hook && mcp, partial: hook !== mcp };
+    return { id, label: LABELS[id], installed: !!findAgentExecutable(id === "codex" ? "codex" : "claude", home, env), connected: mcp, partial: false };
   });
 }
 
@@ -502,6 +475,6 @@ export function connectAgent(id: AgentTool, connect: boolean, env: InstallEnviro
   runAgents([connect ? "install" : "uninstall", "--tool", id, "--yes"], { ...env, print: line => output.push(line) });
   const note = id === "antigravity" ? (connect ? "重开 Antigravity 后生效，它会在首次调用 Tacit 查询时请你批准。" : "重开 Antigravity 后生效。")
     : id === "claude-desktop" ? `完全退出并重新打开 Claude Desktop 后生效。${connect ? "连接后可以问它“我昨天下午在做什么”。" : "重启后将停止提供历史记录查询。"}`
-    : connect && id === "codex" ? "第一次在 Codex 里开新会话时，它会请你批准一次，批准后才会自动带入。" : null;
+    : null;
   return { states: agentStatus(env), note };
 }

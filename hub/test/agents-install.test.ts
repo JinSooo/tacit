@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { agentStatus, connectAgent, runAgents, sessionStartCommand, type InstallEnvironment } from "../src/agents-install.ts";
+import { agentStatus, connectAgent, runAgents, type InstallEnvironment } from "../src/agents-install.ts";
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function setup() {
@@ -17,8 +17,11 @@ function setup() {
   } };
   const file = join(home, ".claude/settings.json");
   const original = { custom: { enabled: true }, hooks: { SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: "echo 合成用户钩子" }] }], Stop: [{ hooks: [] }] }, tail: 2 };
+  // 旧版写入的会话开始钩子（2026-11-27 撤下）：连接、断开和升级时都要删掉。
+  const oldHook = (tool: string, repo = "/tmp/合成仓库 with 'quote'") => ({ type: "command", command: `'/tmp/bun bin' '${repo.replaceAll("'", "'\\''")}/hub/src/cli.ts' hook session-start --tool ${tool}`, timeout: 5 });
+  const withOldHook = (tool: string) => ({ ...original, hooks: { ...original.hooks, SessionStart: [...original.hooks.SessionStart, { matcher: "startup|resume|clear|compact", hooks: [oldHook(tool)] }] } });
   const write = (data: unknown, target = file) => { mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, JSON.stringify(data, null, 2) + "\n"); };
-  return { home, calls, output, env, file, original, write, missing: () => { registered = false; } };
+  return { home, calls, output, env, file, original, oldHook, withOldHook, write, missing: () => { registered = false; } };
 }
 test("预览给出 unified diff 和外部命令，既不写文件也不调用外部程序", () => {
   const ctx = setup(); ctx.write(ctx.original);
@@ -28,9 +31,9 @@ test("预览给出 unified diff 和外部命令，既不写文件也不调用外
   expect(readdirSync(join(ctx.home, ".claude"))).toEqual(["settings.json"]);
   expect(existsSync(join(ctx.home, ".codex"))).toBe(false);
   expect(ctx.calls).toEqual([]);
-  expect(ctx.output.join("\n")).toContain("@@ -1,");
+  expect(ctx.output.join("\n")).toContain(`${ctx.file}：无需改动`);
   expect(ctx.output.join("\n")).toContain("--scope user tacit --");
-  expect(ctx.output.join("\n")).toContain("trusted_hash");
+  expect(ctx.output.join("\n")).not.toContain("hook session-start");
 });
 
 test("Desktop 不依赖 CLI 或 hook：预览不泄密，连接幂等并保留其他配置，断开只删自身", () => {
@@ -105,25 +108,20 @@ test("默认安装不连接 Desktop；默认卸载包含卸载应用后留下的
   runAgents(["uninstall", "--yes"], ctx.env);
   expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")?.connected).toBe(false);
 });
-test("两工具安装幂等，保留用户 hook、字段顺序、权限和最近一份备份；卸载往返一致", () => {
-  const ctx = setup(); ctx.write(ctx.original); chmodSync(ctx.file, 0o640);
-  const codexFile = join(ctx.home, ".codex/hooks.json"); ctx.write(ctx.original, codexFile);
-  const before = readFileSync(ctx.file, "utf8");
+test("两工具连接只登记 MCP：删掉旧版会话开始钩子，保留用户 hook、字段顺序、权限和最近一份备份；断开不再改动", () => {
+  const ctx = setup(); ctx.write(ctx.withOldHook("claude-code")); chmodSync(ctx.file, 0o640);
+  const codexFile = join(ctx.home, ".codex/hooks.json"); ctx.write(ctx.withOldHook("codex"), codexFile);
+  const clean = JSON.stringify(ctx.original, null, 2) + "\n";
   for (let round = 0; round < 2; round++) {
     runAgents(["install", "--yes"], ctx.env);
-    const installed = readFileSync(ctx.file, "utf8");
-    const data = JSON.parse(installed);
-    expect(data.hooks.SessionStart).toHaveLength(2);
-    expect(data.hooks.SessionStart[0]).toEqual(ctx.original.hooks.SessionStart[0]);
-    expect(data.hooks.SessionStart[1].hooks[0]).toMatchObject({ timeout: 5, type: "command" });
-    expect(Object.keys(data)).toEqual(Object.keys(ctx.original));
+    expect(readFileSync(ctx.file, "utf8")).toBe(clean);
+    expect(readFileSync(codexFile, "utf8")).toBe(clean);
     const backupCount = readdirSync(dirname(ctx.file)).length;
     runAgents(["install", "--yes"], ctx.env);
-    expect(readFileSync(ctx.file, "utf8")).toBe(installed);
     expect(readdirSync(dirname(ctx.file))).toHaveLength(backupCount);
     runAgents(["uninstall", "--yes"], ctx.env);
-    expect(readFileSync(ctx.file, "utf8")).toBe(before);
-    expect(readFileSync(codexFile, "utf8")).toBe(before);
+    expect(readFileSync(ctx.file, "utf8")).toBe(clean);
+    expect(readFileSync(codexFile, "utf8")).toBe(clean);
   }
   expect(statSync(ctx.file).mode & 0o777).toBe(0o640);
   expect(readdirSync(dirname(ctx.file)).filter(name => name.includes(".ra-backup-"))).toHaveLength(1);
@@ -131,26 +129,22 @@ test("两工具安装幂等，保留用户 hook、字段顺序、权限和最近
   expect(ctx.calls.slice(0, 5).map(call => `${call[2]} ${call.includes("record-anything") ? "record-anything" : "tacit"}`)).toEqual(["get tacit", "get record-anything", "remove record-anything", "remove tacit", "add tacit"]);
   expect(ctx.calls.some(call => call.includes("--scope"))).toBe(true);
   expect(ctx.calls.some(call => call[0] === "/fake/codex" && call.includes("--scope"))).toBe(false);
-  // shell 引用实际解析后仍是绝对路径和原始参数，不执行目标命令。
-  runAgents(["install", "--tool", "claude-code", "--yes"], ctx.env);
-  const command = JSON.parse(readFileSync(ctx.file, "utf8")).hooks.SessionStart[1].hooks[0].command;
-  const result = spawnSync("/bin/sh", ["-c", `set -- ${command}; printf '%s\\n' "$@"`], { encoding: "utf8" });
-  expect(result.stdout.split("\n").slice(0, 4)).toEqual(["/tmp/bun bin", "/tmp/合成仓库 with 'quote'/hub/src/cli.ts", "hook", "session-start"]);
+  expect(agentStatus(ctx.env).filter(t => t.id === "claude-code" || t.id === "codex")).toMatchObject([{ connected: false, partial: false }, { connected: false, partial: false }]);
 });
 test("中枢没在运行时登记设备身份失败，命令行接入照常完成并提示退回本机令牌", async () => {
   const ctx = setup(); const output: string[] = []; ctx.env.print = line => output.push(line);
   await runAgents(["install", "--tool", "claude-code", "--yes"], ctx.env, async () => { throw new Error("当前无法连接 Tacit 中枢"); });
   expect(ctx.calls.some(call => call[2] === "add")).toBe(true);
-  expect(JSON.parse(readFileSync(ctx.file, "utf8")).hooks.SessionStart.length).toBeGreaterThan(0);
+  expect(existsSync(ctx.file)).toBe(false);
   expect(output.some(line => line.includes("先用本机令牌接入"))).toBe(true);
 });
-test("无配置时卸载不创建文件；新配置卸载清理空的 hooks", () => {
+test("无配置时连接和断开都不创建钩子文件", () => {
   const ctx = setup(); ctx.env.which = () => null;
   runAgents(["uninstall", "--yes"], ctx.env);
   expect(readdirSync(ctx.home)).toEqual([]);
   runAgents(["install", "--yes"], ctx.env);
   runAgents(["uninstall", "--yes"], ctx.env);
-  expect(JSON.parse(readFileSync(ctx.file, "utf8"))).toEqual({});
+  expect(readdirSync(ctx.home)).toEqual([]);
   expect(ctx.calls).toEqual([]);
   expect(ctx.output.join("\n")).toContain("跳过 MCP");
 });
@@ -172,15 +166,14 @@ test("任一 JSON 损坏或结构不合法时，所有文件和外部配置均�
     expect(() => runAgents(["install", "--yes"], ctx.env)).toThrow("结构无效");
   }
 });
-test("混合条目卸载只移除本仓库命令，并清理重复注册", () => {
+test("任何一份 Tacit 的旧会话开始钩子都删掉，同组的用户钩子保留", () => {
   const ctx = setup(); ctx.env.repo = "/tmp/synthetic";
   const own = { type: "command", command: "/bin/bun /tmp/synthetic/hub/src/cli.ts hook session-start --tool claude-code" };
   const other = { type: "command", command: "/bin/bun /other/hub/src/cli.ts hook session-start" };
-  ctx.write({ hooks: { SessionStart: [{ matcher: "startup", custom: true, hooks: [own, other] }, { hooks: [own] }] } });
+  const user = { type: "command", command: "echo 合成用户钩子" };
+  ctx.write({ hooks: { SessionStart: [{ matcher: "startup", custom: true, hooks: [own, user, other] }, { hooks: [own] }] } });
   runAgents(["install", "--tool", "claude-code", "--yes"], ctx.env);
-  expect(JSON.parse(readFileSync(ctx.file, "utf8")).hooks.SessionStart).toHaveLength(2);
-  runAgents(["uninstall", "--tool", "claude-code", "--yes"], ctx.env);
-  expect(JSON.parse(readFileSync(ctx.file, "utf8"))).toEqual({ hooks: { SessionStart: [{ matcher: "startup", custom: true, hooks: [other] }] } });
+  expect(JSON.parse(readFileSync(ctx.file, "utf8"))).toEqual({ hooks: { SessionStart: [{ matcher: "startup", custom: true, hooks: [user] }] } });
 });
 test("未注册不 remove，命令失败中止，非法参数不触发操作", () => {
   const ctx = setup(); ctx.missing();
@@ -233,7 +226,7 @@ test("Codex 文本补齐保留现有工具规则、其他服务、权限并备�
   writeFileSync(file, original); chmodSync(file, 0o640);
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   const installed = readFileSync(file, "utf8"), data = Bun.TOML.parse(installed) as any;
-  expect(data.mcp_servers["tacit"].tools).toEqual({ now: { approval_mode: "prompt" }, get: { approval_mode: "approve" }, search: { approval_mode: "approve" }, timeline: { approval_mode: "approve" }, history_append: { approval_mode: "prompt" } });
+  expect(data.mcp_servers["tacit"].tools).toEqual({ now: { approval_mode: "prompt" }, project: { approval_mode: "approve" }, get: { approval_mode: "approve" }, search: { approval_mode: "approve" }, timeline: { approval_mode: "approve" }, history_append: { approval_mode: "prompt" } });
   expect(installed).toContain('[mcp_servers."tacit".tools."now"] # 保留用户规则\napproval_mode = "prompt"');
   expect(installed).toContain('[mcp_servers.other]\ncommand = "other"\n');
   expect(installed.indexOf("tools.get")).toBeLessThan(installed.indexOf('tools."now"'));
@@ -269,9 +262,9 @@ test.skipIf(!Bun.which("codex"))("真实 Codex 在临时 HOME 安装、重装保
   ctx.env.run = undefined;
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   let data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
-  expect(Object.keys(data.mcp_servers["tacit"].tools).sort()).toEqual(["get", "history_append", "now", "search", "timeline"]);
+  expect(Object.keys(data.mcp_servers["tacit"].tools).sort()).toEqual(["get", "history_append", "now", "project", "search", "timeline"]);
   expect(data.mcp_servers["tacit"].tools.history_append.approval_mode).toBe("prompt");
-  writeFileSync(file, readFileSync(file, "utf8").replace('approval_mode = "approve"', 'approval_mode = "prompt"'));
+  writeFileSync(file, readFileSync(file, "utf8").replace('[mcp_servers.tacit.tools.now]\napproval_mode = "approve"', '[mcp_servers.tacit.tools.now]\napproval_mode = "prompt"'));
   runAgents(["install", "--tool", "codex", "--yes"], ctx.env);
   data = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
   expect(data.mcp_servers["tacit"].tools.now.approval_mode).toBe("prompt");
@@ -303,14 +296,14 @@ test("Antigravity 预览、连接、重复连接和断开保留其他条目，�
   const servers = { mcpServers: { other: { command: "other", env: { TOKEN: "synthetic-private-do-not-print" } } } };
   const groups = { other: { SessionStart: [{ type: "command", command: "echo other" }] } };
   ctx.write(servers, mcp);
-  ctx.write(groups, hooks);
+  ctx.write({ ...groups, tacit: { SessionStart: [ctx.oldHook("antigravity")] } }, hooks);
   const before = [mcp, hooks].map(file => readFileSync(file, "utf8"));
   runAgents(["install", "--tool", "antigravity"], ctx.env);
   expect([mcp, hooks].map(file => readFileSync(file, "utf8"))).toEqual(before);
   const preview = ctx.output.join("\n");
   expect(preview).toContain(`--- ${mcp}`);
   expect(preview).toContain(`+++ ${hooks}`);
-  expect(preview).toContain("hook session-start --tool antigravity");
+  expect(preview).toMatch(/^-.*hook session-start --tool antigravity/m);
   expect(preview).not.toContain("synthetic-private-do-not-print");
   const getStatus = () => agentStatus(ctx.env).find(t => t.id === "antigravity");
   expect(getStatus()).toMatchObject({ installed: true, connected: false, partial: false });
@@ -319,9 +312,8 @@ test("Antigravity 预览、连接、重复连接和断开保留其他条目，�
   expect(JSON.parse(readFileSync(mcp, "utf8"))).toEqual({
     mcpServers: { ...servers.mcpServers, tacit: { command: ctx.env.bun, args: [ctx.env.repo + "/hub/src/cli.ts", "mcp", "--tool", "antigravity"] } },
   });
-  expect(JSON.parse(readFileSync(hooks, "utf8"))).toEqual({
-    ...groups, tacit: { SessionStart: [{ type: "command", command: expect.stringContaining("hook session-start --tool antigravity"), timeout: 5 }] },
-  });
+  // 连接只写 MCP，旧版会话开始钩子组整组删掉，其他组不动。
+  expect(JSON.parse(readFileSync(hooks, "utf8"))).toEqual(groups);
   const backup = (file: string) => readdirSync(dirname(file)).filter(name => name.startsWith(file.split("/").at(-1) + ".ra-backup-"));
   const connected = [mcp, hooks].map(file => readFileSync(file, "utf8"));
   const firstBackups = [mcp, hooks].map(backup);
@@ -331,26 +323,27 @@ test("Antigravity 预览、连接、重复连接和断开保留其他条目，�
   expect(firstBackups.map(names => names.length)).toEqual([1, 1]);
   connectAgent("antigravity", false, ctx.env);
   expect(getStatus()).toMatchObject({ connected: false, partial: false });
-  expect([mcp, hooks].map(file => readFileSync(file, "utf8"))).toEqual(before);
+  expect(readFileSync(mcp, "utf8")).toBe(before[0]);
+  expect(readFileSync(hooks, "utf8")).toBe(connected[1]);
   expect([mcp, hooks].map(backup).map(names => names.length)).toEqual([1, 1]);
-  expect([mcp, hooks].map(file => readFileSync(join(dirname(file), backup(file)[0]!), "utf8"))).toEqual(connected);
+  expect(readFileSync(join(dirname(mcp), backup(mcp)[0]!), "utf8")).toBe(connected[0]);
   expect(ctx.calls).toEqual([]);
 });
 
-test("Antigravity 遇到同名 MCP 或钩子组冲突时不改任何文件", () => {
-  const ctx = setup();
+test("Antigravity 遇到同名 MCP 冲突时不改任何文件；同名但不是本应用的钩子组原样保留", () => {
+  const ctx = setup(); ctx.env.appExists = () => true;
   const mcp = join(ctx.home, ".gemini/config/mcp_config.json"), hooks = join(ctx.home, ".gemini/config/hooks.json");
-  for (const [servers, groups] of [
-    [{ mcpServers: { tacit: { command: "other" } } }, {}],
-    [{}, { tacit: { SessionStart: [{ command: "echo other" }] } }],
-  ]) {
-    ctx.write(servers, mcp);
-    ctx.write(groups, hooks);
-    const before = [mcp, hooks].map(file => readFileSync(file, "utf8"));
-    for (const on of [true, false]) expect(() => connectAgent("antigravity", on, ctx.env)).toThrow("已被其他配置占用");
-    expect([mcp, hooks].map(file => readFileSync(file, "utf8"))).toEqual(before);
-    expect(readdirSync(dirname(mcp)).sort()).toEqual(["hooks.json", "mcp_config.json"]);
-  }
+  ctx.write({ mcpServers: { tacit: { command: "other" } } }, mcp);
+  ctx.write({ tacit: { SessionStart: [ctx.oldHook("antigravity")] } }, hooks);
+  const before = [mcp, hooks].map(file => readFileSync(file, "utf8"));
+  for (const on of [true, false]) expect(() => connectAgent("antigravity", on, ctx.env)).toThrow("已被其他配置占用");
+  expect([mcp, hooks].map(file => readFileSync(file, "utf8"))).toEqual(before);
+  expect(readdirSync(dirname(mcp)).sort()).toEqual(["hooks.json", "mcp_config.json"]);
+  ctx.write({}, mcp);
+  ctx.write({ tacit: { SessionStart: [{ command: "echo other" }] } }, hooks);
+  const groups = readFileSync(hooks, "utf8");
+  connectAgent("antigravity", true, ctx.env);
+  expect(readFileSync(hooks, "utf8")).toBe(groups);
 });
 
 test("受限 PATH 仍能发现常见用户目录里的 CLI，并用 agy 接入 Antigravity", () => {
@@ -387,8 +380,8 @@ test.each([
 
   runAgents(["uninstall", "--yes"], ctx.env);
   expect(ctx.calls.filter(call => call[2] === "remove" && call.at(-1) === "tacit").map(call => call[0])).toEqual(["/fake/claude", "/fake/codex"]);
-  expect(JSON.parse(readFileSync(ctx.file, "utf8")).hooks).toBeUndefined();
-  expect(JSON.parse(readFileSync(join(ctx.home, ".codex/hooks.json"), "utf8")).hooks).toBeUndefined();
+  expect(existsSync(ctx.file)).toBe(false);
+  expect(existsSync(join(ctx.home, ".codex/hooks.json"))).toBe(false);
   expect(agentStatus(ctx.env).find(t => t.id === "claude-desktop")?.connected).toBe(false);
   expect(readFileSync(file, "utf8")).toBe(contents);
   expect(ctx.output.join("\n")).toContain("跳过 Antigravity");
