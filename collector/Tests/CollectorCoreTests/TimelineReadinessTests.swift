@@ -40,8 +40,9 @@ import Testing
 
 @Test func localDeliveryKeepsConnectionFailuresQuietDuringPreparationOrGrace() {
   for error in ["missing token", "unreachable"] {
-    #expect(LocalBackendPreparation.deliveryError(error, preparing: true, inStartupGrace: false) == nil)
-    #expect(LocalBackendPreparation.deliveryError(error, preparing: false, inStartupGrace: true) == nil)
-    #expect(LocalBackendPreparation.deliveryError(error, preparing: false, inStartupGrace: false) == error)
+    #expect(LocalBackendPreparation.deliveryError(error, preparing: true, inStartupGrace: false, setupFailed: false) == nil)
+    #expect(LocalBackendPreparation.deliveryError(error, preparing: false, inStartupGrace: true, setupFailed: false) == nil)
+    #expect(LocalBackendPreparation.deliveryError(error, preparing: false, inStartupGrace: false, setupFailed: false) == error)
+    #expect(LocalBackendPreparation.deliveryError(error, preparing: false, inStartupGrace: true, setupFailed: true) == error)
   }
 }

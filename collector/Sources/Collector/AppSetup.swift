@@ -28,6 +28,11 @@ enum AppSetup {
 
   enum Activity: Equatable {
     case idle, running, finished(SetupStatus.Reason?)
+
+    var failure: SetupStatus.Reason? {
+      if case .finished(let reason) = self { return reason }
+      return nil
+    }
   }
 
   private static let lock = NSLock()
@@ -57,7 +62,7 @@ enum AppSetup {
 
   static func checklistStep(activity: Activity, reachable: Bool, inStartupGrace: Bool,
                             startupMessage: @autoclosure () -> String?) -> ChecklistStep? {
-    if case .finished(let reason?) = activity {
+    if let reason = activity.failure {
       return .failed(L10n.Settings.setupFailure(reason))
     }
     if reachable { return nil }

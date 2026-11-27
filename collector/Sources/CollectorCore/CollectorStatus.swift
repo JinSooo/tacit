@@ -252,7 +252,7 @@ public struct UploadResponseFailure {
 }
 
 public enum LocalBackendPreparation {
-  public static func deliveryError(_ error: String, preparing: Bool, inStartupGrace: Bool) -> String? {
-    preparing || inStartupGrace ? nil : error
+  public static func deliveryError(_ error: String, preparing: Bool, inStartupGrace: Bool, setupFailed: Bool) -> String? {
+    preparing || (inStartupGrace && !setupFailed) ? nil : error
   }
 }

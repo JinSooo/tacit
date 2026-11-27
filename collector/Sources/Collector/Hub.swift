@@ -283,7 +283,9 @@ final class HubClient: @unchecked Sendable {
   }
 
   private func startupDeliveryError(_ error: String) -> String? {
-    LocalBackendPreparation.deliveryError(error, preparing: AppSetup.activity == .running, inStartupGrace: HubAPI.inStartupGrace())
+    let activity = AppSetup.activity
+    return LocalBackendPreparation.deliveryError(error, preparing: activity == .running,
+                                                 inStartupGrace: HubAPI.inStartupGrace(), setupFailed: activity.failure != nil)
   }
 
   private func sendRemote(on route: HubBinding.Route, queued: Int) {
