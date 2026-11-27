@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import CollectorCore
 
@@ -9,18 +10,34 @@ struct AgentToolState: Decodable, Identifiable, Equatable {
   let installed: Bool
   let connected: Bool
   let partial: Bool
+  let manual: [AgentConfigSnippet]?
+}
+
+struct AgentConfigSnippet: Decodable, Equatable {
+  enum Kind: String, Decodable { case mcp, sessionStart = "session-start" }
+  enum Action: String, Decodable { case create, add, replace, merge }
+
+  let file: String
+  let kind: Kind
+  let action: Action
+  let section: String?
+  let code: String
+
+  var instruction: String {
+    L10n.Settings.agentConfigInstruction(file, section: section, action: action.rawValue, sessionStart: kind == .sessionStart)
+  }
 }
 
 extension HubAPI {
   func agentTools() async throws -> [AgentToolState] {
     struct R: Decodable { let tools: [AgentToolState] }
-    return try await get(R.self, "/v1/settings/agents").tools.filter { $0.id != "claude-desktop" }
+    return try await get(R.self, "/v1/settings/agents").tools
   }
   /// 连接要调用 claude / codex 的命令行登记，给足时间。
   func setAgent(_ id: String, connected: Bool) async throws -> (tools: [AgentToolState], note: String?) {
     struct R: Decodable { let tools: [AgentToolState]; let note: String? }
     let r = try await call(R.self, "PUT", "/v1/settings/agents/\(id)", ["connected": connected], timeout: 120)
-    return (r.tools.filter { $0.id != "claude-desktop" }, r.note)
+    return (r.tools, r.note)
   }
   func distillHealth() async throws -> DistillHealth {
     struct R: Decodable { let distill: DistillHealth }
@@ -36,24 +53,15 @@ struct AgentSettingsView: View {
   @State private var busy: String?
   @State private var note: String?
   @State private var error: String?
+  @State private var instructions: AgentToolState?
 
   var body: some View {
     SettingsForm {
       Section {
         if let tools {
-          ForEach(tools) { t in
-            SettingsRow(t.label) {
-              HStack(spacing: 8) {
-                if let text = status(t) { Text(text).foregroundStyle(t.partial ? Palette.attention : Palette.muted) }
-                if t.installed || t.connected || t.partial {
-                  Button(busy == t.id ? (t.connected ? L10n.Settings.disconnecting : L10n.Settings.connecting) : (t.connected ? L10n.Settings.disconnect : L10n.Settings.connect)) {
-                    Task { await set(t, !t.connected) }
-                  }
-                  .disabled(busy != nil)
-                }
-              }
-            }
-          }
+          AgentToolRows(tools: tools, busy: busy, connect: { tool in
+            Task { await set(tool, !tool.connected) }
+          }, showInstructions: { instructions = $0 })
         } else if error == nil {
           ProgressView().frame(maxWidth: .infinity)
         }
@@ -65,17 +73,22 @@ struct AgentSettingsView: View {
       GeneralPreferencesSection(context: true)
     }
     .task { await load() }
-  }
-
-  /// 连接与否由右边的“连接 / 断开”说明，这里只写按钮说明不了的。
-  func status(_ t: AgentToolState) -> String? {
-    if !t.installed { return L10n.Settings.toolNotInstalled }
-    if t.partial { return L10n.Settings.toolPartiallyConnected }
-    return nil
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+      guard busy == nil else { return }
+      Task { await load() }
+    }
+    .sheet(item: $instructions, onDismiss: { Task { await load() } }) { tool in
+      AgentConnectionInstructions(tool: tool)
+    }
   }
 
   func load() async {
-    do { tools = try await store.api.agentTools(); error = nil }
+    do {
+      let states = try await store.api.agentTools()
+      guard busy == nil else { return }
+      tools = states
+      error = nil
+    }
     catch is CancellationError {}
     catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.agentOperationFailed) }
   }
@@ -88,6 +101,118 @@ struct AgentSettingsView: View {
       tools = result.tools
       note = result.note.map(L10n.Settings.agentNote).flatMap { $0.isEmpty ? nil : $0 }
     } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.agentOperationFailed) }
+  }
+}
+
+struct AgentToolRows: View {
+  let tools: [AgentToolState]
+  let busy: String?
+  let connect: (AgentToolState) -> Void
+  let showInstructions: (AgentToolState) -> Void
+
+  var body: some View {
+    ForEach(tools.filter(\.installed), content: row)
+    let others = tools.filter { !$0.installed }
+    if !others.isEmpty {
+      DisclosureGroup(L10n.Settings.otherAgentTools) {
+        ForEach(others, content: row)
+      }
+    }
+  }
+
+  private func row(_ tool: AgentToolState) -> some View {
+    SettingsRow(tool.label) {
+      HStack(spacing: 8) {
+        if tool.connected {
+          Text(L10n.Settings.toolConnected).foregroundStyle(Palette.muted)
+        } else if tool.partial {
+          Text(tool.manual == nil ? L10n.Settings.toolPartiallyConnected : L10n.Settings.manualToolPartial)
+            .foregroundStyle(Palette.attention)
+        } else if !tool.installed {
+          Text(L10n.Settings.toolNotInstalled).foregroundStyle(Palette.muted)
+        }
+        if tool.manual != nil {
+          Button(L10n.Settings.agentInstructions) { showInstructions(tool) }
+            .accessibilityLabel(L10n.Settings.agentInstructionsFor(tool.label))
+        } else if tool.installed || tool.connected || tool.partial {
+          Button(connectionAction(tool)) { connect(tool) }
+            .disabled(busy != nil)
+        }
+      }
+    }
+  }
+
+  private func connectionAction(_ tool: AgentToolState) -> String {
+    if busy == tool.id { return tool.connected ? L10n.Settings.disconnecting : L10n.Settings.connecting }
+    return tool.connected ? L10n.Settings.disconnect : L10n.Settings.connect
+  }
+}
+
+struct AgentConnectionInstructions: View {
+  @Environment(\.dismiss) private var dismiss
+  let tool: AgentToolState
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text(L10n.Settings.agentInstructionsFor(tool.label))
+        .font(.system(size: TextSize.title, weight: .semibold))
+        .accessibilityAddTraits(.isHeader)
+      ViewThatFits(in: .vertical) {
+        snippets
+        ScrollView { snippets }
+      }
+      HStack(spacing: 12) {
+        Text(L10n.Settings.reopenAgent(tool.label)).foregroundStyle(Palette.muted)
+          .fixedSize(horizontal: false, vertical: true)
+        Spacer()
+        Button(L10n.Settings.close) { dismiss() }.keyboardShortcut(.cancelAction)
+      }
+    }
+    .font(.system(size: TextSize.body))
+    .padding(24)
+    .frame(width: 560)
+    .frame(maxHeight: 600)
+    .tint(Palette.accent)
+  }
+
+  private var snippets: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      ForEach(Array((tool.manual ?? []).enumerated()), id: \.offset) { _, snippet in
+        AgentSnippetBlock(snippet: snippet)
+      }
+    }
+  }
+}
+
+private struct AgentSnippetBlock: View {
+  let snippet: AgentConfigSnippet
+  @State private var copied = false
+  @State private var copyCount = 0
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .top, spacing: 12) {
+        Text(snippet.instruction).fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        Button(copied ? L10n.Settings.copied : L10n.Settings.copy) {
+          NSPasteboard.general.clearContents()
+          copied = NSPasteboard.general.setString(snippet.code, forType: .string)
+          copyCount += 1
+        }
+        .accessibilityHint(snippet.file)
+      }
+      Text(verbatim: snippet.code).font(.system(size: TextSize.caption, design: .monospaced))
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Palette.fill, in: RoundedRectangle(cornerRadius: Radius.control))
+    }
+    .task(id: copyCount) {
+      guard copied else { return }
+      try? await Task.sleep(for: .seconds(1.5))
+      if !Task.isCancelled { copied = false }
+    }
   }
 }
 
