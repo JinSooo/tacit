@@ -376,7 +376,7 @@ test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；�
   };
   const h = handler({ agents });
   const before = await call(h, "GET", "/v1/settings/agents");
-  expect(before.body.tools.map((t: any) => [t.id, t.installed, t.connected])).toEqual([["claude-code", true, false], ["codex", false, false], ["claude-desktop", false, false]]);
+  expect(before.body.tools.map((t: any) => [t.id, t.installed, t.connected])).toEqual([["claude-code", true, false], ["codex", false, false], ["claude-desktop", false, false], ["antigravity", false, false]]);
 
   const connected = await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: true });
   expect(connected.status).toBe(200);

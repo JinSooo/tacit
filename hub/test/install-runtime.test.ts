@@ -51,7 +51,25 @@ test("迁移后的连接在设置页显示为已连接（路径不含需要引�
   write(join(home, ".codex/config.toml"), `[mcp_servers.tacit]\ncommand = "/old/bun"\nargs = ["${old}", "mcp", "--tool", "codex"]\n`);
   relocateInstall(runtime, bun, home);
   const states = agentStatus({ home, repo: runtime, bun, which: c => `/fake/${c}`, appExists: () => false });
-  expect(states.filter(s => s.id !== "claude-desktop").map(s => [s.id, s.connected, s.partial])).toEqual([["claude-code", true, false], ["codex", true, false]]);
+  expect(states.filter(s => s.id === "claude-code" || s.id === "codex").map(s => [s.id, s.connected, s.partial])).toEqual([["claude-code", true, false], ["codex", true, false]]);
+});
+
+test("升级迁移 Antigravity 的 MCP 和会话开始命令，其他配置原样保留", () => {
+  const home = temp(), runtime = join(home, "Tacit runtime's"), bun = join(home, "bin/bun");
+  const mcp = join(home, ".gemini/config/mcp_config.json"), hooks = join(home, ".gemini/config/hooks.json");
+  const original = { type: "command", command: "/old/bun /old/runtime/hub/src/cli.ts hook session-start --tool antigravity", timeout: 5 };
+  const unrelated = { SessionStart: [{ command: "echo other" }] };
+  write(mcp, { mcpServers: { tacit: { command: "/old/bun", args: ["/old/runtime/hub/src/cli.ts", "mcp", "--tool", "antigravity"] }, other: { command: "other" } } });
+  write(hooks, { tacit: { SessionStart: [original] }, other: unrelated });
+  expect(relocateInstall(runtime, bun, home)).toEqual([mcp, hooks]);
+  expect(JSON.parse(readFileSync(mcp, "utf8")).mcpServers).toEqual({
+    tacit: { command: bun, args: [join(runtime, "hub/src/cli.ts"), "mcp", "--tool", "antigravity"] },
+    other: { command: "other" },
+  });
+  expect(JSON.parse(readFileSync(hooks, "utf8")).other).toEqual(unrelated);
+  expect(agentStatus({ home, repo: runtime, bun, which: () => null, appExists: () => true }).find(t => t.id === "antigravity"))
+    .toMatchObject({ connected: true, partial: false });
+  expect(relocateInstall(runtime, bun, home)).toEqual([]);
 });
 
 test("配置预检失败时不迁移任何文件；不覆盖同名非本应用 MCP", () => {
