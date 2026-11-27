@@ -10,6 +10,7 @@ export interface SessionDirectories {
   factoryDir?: string;
   copilotDir?: string;
   codebuddyDir?: string;
+  workbuddyDir?: string;
 }
 
 export interface SessionFile {

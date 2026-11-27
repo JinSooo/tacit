@@ -27,6 +27,7 @@ export function sessionFixture() {
       factoryDir: path.join(root, "factory"),
       copilotDir: path.join(root, "copilot"),
       codebuddyDir: path.join(root, "codebuddy"),
+      workbuddyDir: path.join(root, "workbuddy"),
       ...options,
       onRecord: record => { records.push(record); },
       onWarning: () => {},
