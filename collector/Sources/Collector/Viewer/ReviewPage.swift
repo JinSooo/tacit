@@ -5,6 +5,8 @@ struct ReviewPage: View {
   @Environment(ViewerStore.self) private var store
   @State private var refresh = 0
 
+  static func allowsDayRecords(backendSetup: AppSetup.ChecklistStep?) -> Bool { backendSetup == nil }
+
   var body: some View {
     TimelineView(.everyMinute) { clock in
       let today = Calendar.current.startOfDay(for: clock.date)
@@ -78,8 +80,7 @@ private struct ReviewDayContent: View {
 
   private var localSetup: AppSetup.ChecklistStep? { store.isRemoteBackend ? nil : backendSetup }
 
-  static func allowsDayRecords(backendSetup: AppSetup.ChecklistStep?) -> Bool { backendSetup == nil }
-  private var allowsDayRecords: Bool { Self.allowsDayRecords(backendSetup: localSetup) }
+  private var allowsDayRecords: Bool { ReviewPage.allowsDayRecords(backendSetup: localSetup) }
   private var density: TimelineDensity { store.timelineDensity }
   private var current: Bool { loadedRevision == store.revision }
   /// 重新读取时继续显示上一版，新内容到了再原位换上，不先清空闪一下。
