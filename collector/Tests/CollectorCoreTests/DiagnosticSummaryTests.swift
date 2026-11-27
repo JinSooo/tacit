@@ -98,6 +98,10 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
     for privateValue in ["example-person", "SecretProject", "ExampleDevice", "fake_secret_ABC123", "private-model-name"] {
       #expect(!text.contains(privateValue))
     }
+    let cliFailure = Data(#"{"distill":{"last_error":{"error":"cli_not_logged_in:401","detail":"synthetic stderr line"}}}"#.utf8)
+    let cliSummary = summary(in: directory, reachable: true, status: cliFailure)
+    #expect(cliSummary.contains("最近模型错误  命令行工具未登录（cli_not_logged_in:401）"))
+    #expect(!cliSummary.contains("synthetic stderr line"))
   }
 }
 

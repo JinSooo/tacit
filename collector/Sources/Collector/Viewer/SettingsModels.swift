@@ -22,10 +22,22 @@ struct ModelSettingsView: View {
   @State private var removingKey: String?
   @State private var health: DistillHealth?
   @State private var healthUnavailable = false
+  @State private var summaryFailureDetail: String?
   /// 三档用同一个模型时合成一组显示；用户点“按任务分别设置”后才展开三档。
   @State private var splitTiers = false
 
-  enum TestState: Equatable { case running, ok(Double?), failed(String) }
+  enum TestState: Equatable { case running, ok(Double?), failed(String, detail: String?) }
+
+  private struct SummaryFailureDetails: Decodable {
+    let lastFailureDetail: [String: String?]?
+  }
+
+  private struct ConnectionTestPayload: Decodable {
+    let ok: Bool
+    let ms: Double?
+    let error: String?
+    let detail: String?
+  }
 
   static let tiers = ["minute", "hour", "day"]
   private static let showsLocalModelOptions = false
@@ -274,6 +286,7 @@ struct ModelSettingsView: View {
       .disabled(testingConnection || c.provider.isEmpty || c.model.isEmpty)
     if let failingHere {
       SettingsMessage(text: L10n.Settings.modelFailure(failingHere, fallback: L10n.Settings.summaryFailure))
+      if let summaryFailureDetail { ModelFailureDetail(text: summaryFailureDetail).id(summaryFailureDetail) }
     }
     if first, healthUnavailable {
       SettingsRow(L10n.Settings.latestSummary) { HStack(spacing: 12) { Text(L10n.Settings.currentlyUnavailable).foregroundStyle(Palette.attention); button } }
@@ -285,8 +298,18 @@ struct ModelSettingsView: View {
       SettingsRow { button } label: { EmptyView() }
     }
     switch tests[tier] {
-    case .ok(let ms): Text(ms.map { L10n.Settings.connectionDuration($0 / 1000) } ?? L10n.Settings.connectionOK).foregroundStyle(Palette.muted)
-    case .failed(let e): SettingsMessage(text: e)
+    case .ok(let ms):
+      if sharesOneModel ? draft != saved : draft[tier] != saved[tier] {
+        HStack(spacing: 12) {
+          Text(L10n.Settings.connectionNeedsSave).foregroundStyle(Palette.muted)
+          Button(L10n.Settings.save) { Task { await save() } }.disabled(saving || !canSaveModels)
+        }
+      } else {
+        Text(ms.map { L10n.Settings.connectionDuration($0 / 1000) } ?? L10n.Settings.connectionOK).foregroundStyle(Palette.muted)
+      }
+    case .failed(let message, let detail):
+      SettingsMessage(text: message)
+      if let detail { ModelFailureDetail(text: detail).id(detail) }
     case .running: Text(L10n.Settings.connectionTestNote).foregroundStyle(Palette.muted)
     case nil: EmptyView()
     }
@@ -395,8 +418,21 @@ struct ModelSettingsView: View {
   }
 
   func loadHealth() async {
-    do { health = try await store.api.distillHealth(); healthUnavailable = false }
-    catch is CancellationError {} catch { healthUnavailable = true }
+    do {
+      let current = try await store.api.distillHealth()
+      healthUnavailable = false
+      var detail: String?
+      if let tier = current.failingTier, store.canManageBackend, !store.isRemoteBackend {
+        let payload = try? await store.api.get(SummaryFailureDetails.self, "/v1/settings/models", device: .init("settings.models.get"))
+        detail = payload?.lastFailureDetail?[tier] ?? nil
+      }
+      guard !Task.isCancelled else { return }
+      health = current
+      summaryFailureDetail = detail
+    } catch is CancellationError {} catch {
+      healthUnavailable = true
+      summaryFailureDetail = nil
+    }
   }
 
   private func applyTimeline(_ settings: GeneralSettingsInfo) {
@@ -471,16 +507,40 @@ struct ModelSettingsView: View {
     }
     tests[tier] = .running
     do {
-      let r = try await store.api.testModel(tier: tier, config: c)
+      let r = try await store.api.call(ConnectionTestPayload.self, "POST", "/v1/settings/models/test",
+        ["tier": tier, "config": HubAPI.tierJSON(c)], timeout: 75, device: .init("settings.models.test"))
       guard draft[tier] == c else { return }
-      tests[tier] = r.ok ? .ok(r.ms) : .failed(r.error.map { L10n.Settings.modelFailure($0, fallback: L10n.Settings.connectionFailed) } ?? L10n.Settings.connectionFailed)
-    } catch { if draft[tier] == c { tests[tier] = .failed(L10n.Settings.modelFailure(error.localizedDescription, fallback: L10n.Settings.connectionFailed)) } }
+      let message = r.error.map { L10n.Settings.modelFailure($0, fallback: L10n.Settings.connectionFailed) } ?? L10n.Settings.connectionFailed
+      tests[tier] = r.ok ? .ok(r.ms) : .failed(message, detail: store.isRemoteBackend ? nil : r.detail)
+    } catch is CancellationError {} catch {
+      if draft[tier] == c { tests[tier] = .failed(L10n.Settings.connectionFailed, detail: nil) }
+    }
   }
 
   func removeKey(_ provider: String) async {
     guard store.canManageBackend else { return }
     do { try await store.api.deleteKey(provider: provider); await load() }
     catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.settingsRequestFailed) }
+  }
+}
+
+private struct ModelFailureDetail: View {
+  let text: String
+
+  var body: some View {
+    DisclosureGroup(L10n.Settings.viewModelFailure) {
+      VStack(alignment: .leading, spacing: 5) {
+        Text(verbatim: text)
+          .font(.system(size: TextSize.caption, design: .monospaced))
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+        Text(L10n.Settings.modelFailureLocalNote)
+          .font(.system(size: TextSize.caption))
+          .foregroundStyle(Palette.muted)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.top, 4)
+    }
   }
 }
 

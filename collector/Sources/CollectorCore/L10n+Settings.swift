@@ -208,6 +208,9 @@ public extension L10n {
     public static var currentlyUnavailable: String { L10n.text(zh: "暂时读不到", en: "Unavailable") }
     public static var awaitingFirstSummary: String { L10n.text(zh: "等待首次完成", en: "Waiting for the first summary") }
     public static var connectionOK: String { L10n.text(zh: "连接正常。", en: "Connection successful.") }
+    public static var connectionNeedsSave: String { L10n.text(zh: "连接正常，保存后生效", en: "Connection successful. Save to apply.") }
+    public static var viewModelFailure: String { L10n.text(zh: "查看原因", en: "View reason") }
+    public static var modelFailureLocalNote: String { L10n.text(zh: "只在这台 Mac 上显示", en: "Shown only on this Mac") }
     public static var connectionTestNote: String { L10n.text(zh: "正在连接，最长等 1 分钟…", en: "Connecting. This can take up to a minute…") }
     public static var configured: String { L10n.text(zh: "已设置", en: "Set") }
     public static var notConfigured: String { L10n.text(zh: "未设置", en: "Not set") }
