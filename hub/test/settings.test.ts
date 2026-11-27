@@ -235,7 +235,8 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
   expect(state()).toEqual({ v: cooldown });
 
   const summary = createLLM({ dataDir: ctx.dir, spawn: spawnWith("login"), journal: new RuntimeLog(ctx.db),
-    recordUsage: ({ error, ...row }) => store.writeUsage({ ...row, error: error ?? undefined }) });
+    recordUsage: ({ error, input_tokens, output_tokens, ...row }) =>
+      store.writeUsage({ ...row, error: error ?? undefined, input_tokens: input_tokens ?? undefined, output_tokens: output_tokens ?? undefined }) });
   const result = await summary.complete({ tier: "hour", task: "thread_digest", system: "test", prompt: "test", schema: { type: "object" } });
   expect(result).toMatchObject({ ok: false, error: "cli_not_logged_in" });
   expect((await call(h, "GET", "/v1/settings/models")).body.last_failure_detail)

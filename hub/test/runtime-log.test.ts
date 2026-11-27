@@ -241,7 +241,7 @@ test("失败原因先脱敏再截断，只供设置读取，随快照过期和�
     const observer = log.begin(id, req, config);
     observer.request("cli", {});
     if (index === 0) observer.response("existing stdout");
-    observer.failure(reason);
+    observer.failure!(reason);
     log.finish({ ...usage(id), ok: 0, error: "cli_failed" }, false);
     return observer;
   });
@@ -259,7 +259,7 @@ test("失败原因先脱敏再截断，只供设置读取，随快照过期和�
   expect(log.failureDetail(ids[0]!)).toBeNull();
   ctx.db.delete(record.id);
   for (const [index, id] of ids.entries()) {
-    observers[index]!.failure("late failure");
+    observers[index]!.failure!("late failure");
     expect(stored(id)).toBeNull();
     expect(log.failureDetail(id)).toBeNull();
   }

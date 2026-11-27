@@ -348,10 +348,12 @@ test("Claude 出错原因从 stdout 的 result 取出", async () => {
 test.each([
   ["Not logged in · Please run /login", "cli_not_logged_in"],
   ["unexpected status 401 Unauthorized: access token expired", "cli_not_logged_in"],
+  ["Your access token could not be refreshed. Please log out and sign in again.", "cli_not_logged_in"],
   ["error: unexpected argument '--safe-mode' found\n\nUsage: claude [OPTIONS]", "cli_outdated"],
   ["error: unknown option '--synthetic'\nUsage: codex exec [OPTIONS]", "cli_outdated"],
   ["HTTP 403: The model 'fictional-model' is not supported with this account.", "cli_model_unavailable:403"],
   ["The model `fictional-model` does not exist or you do not have access to it.", "cli_model_unavailable"],
+  ["There's an issue with the selected model (fictional-model). It may not exist or you may not have access to it.", "cli_model_unavailable"],
   ["Reconnecting... 2/5: stream disconnected before completion: error sending request", "cli_network"],
   ["proxy connection failed: getaddrinfo ENOTFOUND proxy.synthetic.invalid", "cli_network"],
   ["env: node: No such file or directory", "cli_runtime_missing"],
@@ -361,7 +363,7 @@ test.each([
   ["HTTP 503: proxy service unavailable", "server_error:503"],
   ["HTTP 403: permission_error", "auth:403"],
 ])("CLI 错误 %s 归类为 %s", (reason, category) => {
-  expect(classifyModelError(reason, "cli_failed")).toBe(category);
+  expect<string>(classifyModelError(reason, "cli_failed")).toBe(category);
 });
 
 // 2026-11-25：朋友的 Mac 没装 Claude Code 时，默认模型只报“命令行调用失败”，准备清单说不出缺什么。

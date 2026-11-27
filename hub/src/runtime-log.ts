@@ -10,6 +10,7 @@ export const SNAPSHOT_DAYS = 7;
 const RETENTION = SNAPSHOT_DAYS * 86400_000;
 const OUTPUT_LIMIT = 128_000;
 const FAILURE_MARKER = "\n--- failure detail ---\n";
+const ESCAPED_FAILURE_MARKER = "\n--- failure detail --- \n";
 export const runtimeSchema = `
 CREATE TABLE runtime_calls (
   id TEXT PRIMARY KEY, at TEXT NOT NULL, at_ms INTEGER NOT NULL, kind TEXT NOT NULL,
@@ -36,7 +37,7 @@ function failureDetailFrom(row?: FailureSnapshot): string | null {
   else if (row.transport === "api" && /:[1-5]\d{2}$/.test(row.error)) {
     try {
       const body = JSON.parse(text);
-      detail = [body?.error?.message, body?.error, body?.base_resp?.status_msg, body?.message]
+      detail = [body?.error?.message, body?.error, body?.base_resp?.status_msg, body?.message, body]
         .find((value): value is string => typeof value === "string" && Boolean(value.trim()));
     } catch { detail = text; }
   }
@@ -112,7 +113,7 @@ export class RuntimeLog {
         }
       }
       const safe = redactString(text); // 先完整脱敏再截断，避免在密钥中间截断而漏检。
-      const body = safe.text.replaceAll(FAILURE_MARKER, "\n--- failure detail --- \n");
+      const body = safe.text.replaceAll(FAILURE_MARKER, ESCAPED_FAILURE_MARKER);
       this.hub.db.transaction(() => {
         expireSnapshots(this.hub);
         this.hub.db.prepare(`UPDATE runtime_calls SET provider_state='returned',
@@ -123,7 +124,7 @@ export class RuntimeLog {
     };
     const failure = (text: string) => {
       const safe = redactString(text);
-      const detail = Array.from(safe.text.trim()).slice(0, 500).join("").replaceAll(FAILURE_MARKER, "\n--- failure detail --- \n");
+      const detail = Array.from(safe.text.replaceAll(FAILURE_MARKER, ESCAPED_FAILURE_MARKER).trim()).slice(0, 500).join("");
       if (!detail) return;
       this.hub.db.transaction(() => {
         expireSnapshots(this.hub);

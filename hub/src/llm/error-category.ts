@@ -35,8 +35,8 @@ export class ModelError extends Error {
 
 function cliCategory(message: string, status: number | undefined): ModelErrorCategory | undefined {
   if (/\benv:\s*node:\s*no such file or directory|\bnode:\s*command not found/i.test(message)) return "cli_runtime_missing";
-  if (/\bmodel\b[^\r\n]{0,180}(?:not found|does not exist|(?:not|isn't) supported|not available)|\b(?:model_not_found|unsupported_model)\b|\b(?:do not|don't) have access to (?:the |this )?model/i.test(message)) return "cli_model_unavailable";
-  if (status === 401 || /\b(?:401|unauthorized|not (?:logged|signed) in|authentication_error|invalid_api_key|oauth token (?:has )?expired)\b|\b(?:codex|claude) login\b|(?:run|use)\s+`?\/login\b|\b(?:please|must) (?:log|sign) in\b|没有登录|登录已过期/i.test(message)) return "cli_not_logged_in";
+  if (/\bmodel\b[^\r\n]{0,180}(?:not found|not exist|(?:not|isn't) supported|not available|not have access)|\b(?:model_not_found|unsupported_model)\b|\b(?:do not|don't) have access to (?:the |this )?model/i.test(message)) return "cli_model_unavailable";
+  if (status === 401 || /\b(?:401|unauthorized|not (?:logged|signed) in|authentication_error|invalid_api_key|oauth token (?:has )?expired)\b|\b(?:codex|claude) login\b|(?:run|use)\s+`?\/login\b|\b(?:please|must) (?:log|sign) in\b|\bsign in again\b|\baccess token could not be refreshed\b|没有登录|登录已过期/i.test(message)) return "cli_not_logged_in";
   if (/\b(?:unexpected argument|unknown (?:option|argument)|unrecognized (?:option|argument))\b|\berror:\s*unrecognized\b|^\s*usage:/im.test(message)) return "cli_outdated";
   if (/\b(?:stream disconnected|error sending request|reconnecting|failed to connect|could not connect|unable to connect|connect(?:ion)? (?:failed|refused|reset)|dns error|network|proxy|econnreset|econnrefused|enetunreach|ehostunreach|enotfound|eai_again)\b|网络/i.test(message)) return "cli_network";
 }
