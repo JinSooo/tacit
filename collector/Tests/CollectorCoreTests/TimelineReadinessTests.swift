@@ -22,6 +22,24 @@ import Testing
   #expect(TimelineSetup.isExpanded(unfinished: pending, collapsedWith: ["models"]))
 }
 
+@Test func setupDoesNotWaitForSafariFullDiskAccess() {
+  func denied(_ id: String, _ permission: String) -> DataSourceStatus {
+    .init(id: id, title: id, kind: id == "browser" ? .plugin : .builtin, enabled: true,
+          permission: .denied, permissionName: permission, lastRun: nil, detail: "", ok: false, canRunNow: false)
+  }
+  var screen = denied("screen", "辅助功能")
+  var mic = denied("audio", "麦克风")
+  var safari = denied("browser", "完全磁盘访问")
+  #expect(TimelineSetup.missingPermissions(in: [screen, mic, safari]).required.map(\.id) == ["screen", "audio"])
+  screen.permission = .granted
+  mic.enabled = false
+  let setup = TimelineSetup.missingPermissions(in: [screen, mic, safari])
+  #expect(setup.required.isEmpty)
+  #expect(setup.optionalSafari?.id == "browser")
+  safari.permission = .granted
+  #expect(TimelineSetup.missingPermissions(in: [safari]).optionalSafari == nil)
+}
+
 @Test(ChineseUITrait()) func captureTitleDistinguishesDisabledSourcesAndGlobalPause() {
   let until = Date(timeIntervalSince1970: 1000)
   #expect(CaptureFooterStatus.title(state: .recording, enabledSources: 0) == "未在记录")
