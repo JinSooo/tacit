@@ -3,8 +3,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { DEFAULT_LAN_PORT, DEFAULT_PORT } from "../src/hub-json.ts";
 import { identityFromRaw } from "../src/devices/envelope.ts";
-import { parseShellEnv, plist, servicePath, setup } from "../src/setup.ts";
+import { parseShellEnv, plist, probePort, servicePath, setup } from "../src/setup.ts";
 
 function fixture() {
   // 稳定入口必须在临时目录之外，否则会被当成临时 shim。
@@ -22,6 +23,8 @@ function fixture() {
     launchctl: args => { calls.push(args.join(" ")); return args[0] === "print" ? 1 : 0; },
     healthy: async () => { events.push("health"); return true; },
     shellEnv: () => ({}),
+    systemPath: [],
+    probePort: async port => port,
     initialize: async () => { events.push("init"); },
     relocate: () => { events.push("relocate"); return []; },
     dropRemovedSettings: () => { events.push("frozen"); },
@@ -92,7 +95,7 @@ test("首次打开完整准备；之后打开没有变化时不重启后台；�
     // 后台已在运行：只核对，不初始化、不重启。
     const loaded = await f.run({ launchctl: args => { f.calls.push(args.join(" ")); return 0; } });
     expect(loaded).toEqual({ full: false, restarted: false });
-    expect(f.events).toEqual([]);
+    expect(f.events).toEqual(["health"]);
     expect(f.calls.some(c => c.startsWith("bootout") || c.startsWith("bootstrap"))).toBe(false);
 
     f.events.length = 0; f.setVersion("v2");
@@ -199,5 +202,109 @@ test("已提交的远端绑定在安装和升级时只准备采集，保留封�
     expect(await f.run()).toEqual({ full: true, restarted: false });
     expect(f.calls).toEqual([]);
     expect(f.events).toEqual(["relocate", "frozen"]);
+  } finally { f.cleanup(); }
+});
+
+test("setup reports a fixed reason at each failure point", async () => {
+  const f = fixture();
+  try {
+    await expect(f.run({ app: f.home })).rejects.toMatchObject({ reason: "bundle_incomplete" });
+    await expect(f.run({ initialize: async () => { throw new Error("synthetic key error"); } })).rejects.toMatchObject({ reason: "database" });
+    await expect(f.run({ launchctl: () => 1 })).rejects.toMatchObject({ reason: "background_blocked" });
+    await expect(f.run({ healthy: async () => false })).rejects.toMatchObject({ reason: "service_unhealthy" });
+  } finally { f.cleanup(); }
+});
+
+test("startup detects a bound random port and allocates a free port with the OS", async () => {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  try {
+    expect(await probePort(server.port!, "127.0.0.1")).toBeNull();
+    const selected = await probePort(0, "127.0.0.1");
+    expect(selected).toBeGreaterThan(1023);
+    expect(selected).not.toBe(server.port);
+  } finally { await server.stop(true); }
+});
+
+test("setup moves occupied default ports before loading hub and leaves fixed ports alone", async () => {
+  const f = fixture();
+  try {
+    mkdirSync(f.data);
+    const file = join(f.data, "hub.json");
+    writeFileSync(file, JSON.stringify({ timezone: "Asia/Taipei" }));
+    const probe: typeof probePort = async (port, host) => {
+      if (port === 0) return host === "127.0.0.1" ? 52631 : 52632;
+      return null; // 模拟默认端口和固定端口被占，不接触真实默认监听。
+    };
+    await f.run({ probePort: probe, healthy: async port => port === 52631, launchctl: args => {
+      if (args[0] === "bootstrap") expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ port: 52631, lan_port: 52632 });
+      return args[0] === "print" ? 1 : 0;
+    } });
+    const saved = readFileSync(file, "utf8");
+    expect(JSON.parse(saved)).toEqual({ timezone: "Asia/Taipei", port: 52631, lan_port: 52632 });
+    await expect(f.run({ retry: true, probePort: probe })).rejects.toMatchObject({ reason: "port_in_use" });
+    await expect(f.run({ retry: true, probePort: probe, env: { RA_DATA_DIR: f.data, RA_PORT: String(DEFAULT_PORT) } }))
+      .rejects.toMatchObject({ reason: "port_in_use" });
+    expect(readFileSync(file, "utf8")).toBe(saved);
+
+    writeFileSync(file, JSON.stringify({ port: 52631, lan_port: DEFAULT_LAN_PORT }));
+    await f.run({ retry: true, probePort: async port => {
+      expect(port).toBe(52631); // LAN 固定值无需探测或替换。
+      return port;
+    } });
+    expect(JSON.parse(readFileSync(file, "utf8")).lan_port).toBe(DEFAULT_LAN_PORT);
+  } finally { f.cleanup(); }
+});
+
+test("setup only initializes Codex when Claude is unavailable and preserves existing model settings", async () => {
+  const f = fixture();
+  try {
+    const bin = join(f.home, ".npm-global/bin");
+    mkdirSync(bin, { recursive: true });
+    const file = join(f.data, "models.json");
+    await f.run({ env: { RA_DATA_DIR: f.data } });
+    expect(existsSync(file)).toBe(false);
+    for (const tool of ["claude", "codex"]) writeFileSync(join(bin, tool), "#!/bin/sh\n", { mode: 0o755 });
+    f.setVersion("v2");
+    await f.run();
+    expect(existsSync(file)).toBe(false);
+
+    unlinkSync(join(bin, "claude"));
+    f.setVersion("v3");
+    await f.run();
+    const tier = { provider: "codex-cli", model: "gpt-6-luna" };
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ tiers: { minute: tier, hour: tier, day: tier } });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const existing = JSON.stringify({ tiers: { minute: { ...tier, model: "custom" }, hour: tier, day: tier } });
+    writeFileSync(file, existing);
+    f.setVersion("v4");
+    await f.run();
+    expect(readFileSync(file, "utf8")).toBe(existing);
+  } finally { f.cleanup(); }
+});
+
+test("service PATH reaches npm CLI and a separate node, with stable manager fallbacks", () => {
+  const f = fixture();
+  try {
+    const install = (dir: string, tool: string) => {
+      const bin = join(f.home, dir);
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, tool), "#!/bin/sh\n", { mode: 0o755 });
+      return bin;
+    };
+    const codex = install(".npm-global/bin", "codex");
+    const oldNvm = install(".nvm/versions/node/v9.10.0/bin", "node");
+    const nvm = install(".nvm/versions/node/v22.2.1/bin", "node");
+    const dirs = (search: string[] = []) => servicePath("/x/bun", f.home, search).split(":");
+    expect(dirs()).toContain(codex);
+    expect(dirs()).toContain(nvm);
+    expect(dirs()).not.toContain(oldNvm);
+    for (const path of [".asdf/shims", ".volta/bin", ".fnm/aliases/default/bin"]) {
+      const bin = install(path, "node");
+      expect(dirs()).toContain(bin);
+      unlinkSync(join(bin, "node"));
+    }
+    const separate = install("other/bin", "node");
+    expect(dirs([separate])).toContain(separate);
+    expect(dirs()).toEqual(expect.arrayContaining(["/opt/homebrew/bin", "/usr/local/bin"]));
   } finally { f.cleanup(); }
 });

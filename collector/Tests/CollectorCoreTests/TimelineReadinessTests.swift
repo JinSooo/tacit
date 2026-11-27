@@ -12,12 +12,14 @@ import Testing
 }
 
 @Test func setupReturnsUntilAllThreeRequirementsAreReadyAndDoesNotGuessOnErrors() {
-  #expect(TimelineSetup.shouldShow(permissionsReady: false, modelReady: true, agentReady: true))
-  #expect(TimelineSetup.shouldShow(permissionsReady: true, modelReady: false, agentReady: true))
-  #expect(TimelineSetup.shouldShow(permissionsReady: true, modelReady: true, agentReady: false))
-  #expect(!TimelineSetup.shouldShow(permissionsReady: true, modelReady: true, agentReady: true))
-  #expect(!TimelineSetup.shouldShow(permissionsReady: false, modelReady: nil, agentReady: true))
-  #expect(!TimelineSetup.shouldShow(permissionsReady: false, modelReady: true, agentReady: nil))
+  let pending: Set<String> = ["models", "permission.microphone"]
+  #expect(TimelineSetup.isExpanded(unfinished: pending, collapsedWith: []))
+  #expect(!TimelineSetup.isExpanded(unfinished: pending, collapsedWith: pending))
+  #expect(TimelineSetup.isExpanded(unfinished: pending.union(["backend"]), collapsedWith: pending))
+  #expect(TimelineSetup.rememberedCollapse(unfinished: pending.union(["backend"]), completed: [], collapsedWith: pending).isEmpty)
+  #expect(TimelineSetup.rememberedCollapse(unfinished: ["permission.microphone"], completed: [], collapsedWith: pending) == pending)
+  #expect(TimelineSetup.rememberedCollapse(unfinished: ["models"], completed: ["permission.microphone"], collapsedWith: pending) == ["models"])
+  #expect(TimelineSetup.isExpanded(unfinished: pending, collapsedWith: ["models"]))
 }
 
 @Test(ChineseUITrait()) func captureTitleDistinguishesDisabledSourcesAndGlobalPause() {
@@ -34,4 +36,12 @@ import Testing
   #expect(TimelinePresence.repeatsTitle(recordCount: 1, recordTitle: "海报草稿", segmentTitle: "海报草稿"))
   #expect(!TimelinePresence.repeatsTitle(recordCount: 2, recordTitle: "海报草稿", segmentTitle: "海报草稿"))
   #expect(!TimelinePresence.repeatsTitle(recordCount: 1, recordTitle: "海报草稿", segmentTitle: "完成试印"))
+}
+
+@Test func localDeliveryKeepsConnectionFailuresQuietDuringPreparationOrGrace() {
+  for error in ["missing token", "unreachable"] {
+    #expect(LocalBackendPreparation.deliveryError(error, preparing: true, inStartupGrace: false) == nil)
+    #expect(LocalBackendPreparation.deliveryError(error, preparing: false, inStartupGrace: true) == nil)
+    #expect(LocalBackendPreparation.deliveryError(error, preparing: false, inStartupGrace: false) == error)
+  }
 }

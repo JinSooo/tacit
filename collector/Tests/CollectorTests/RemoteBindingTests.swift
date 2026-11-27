@@ -1223,3 +1223,27 @@ func finalReviewInvalidRetainedIdentityCanPairAgain(scenario: String) async thro
   #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(newRemote.dir)
     .appendingPathComponent("retained-preparation").path))
 }
+
+
+// Settings must be able to save a local port even when no service has created hub.json yet.
+@Test func offlinePortUpdatesLiveOriginAndPreservesOtherSettings() throws {
+  let dir = try syntheticDirectory()
+  defer { try? FileManager.default.removeItem(at: dir) }
+  let config = Config(dataDir: dir, bun: "")
+  let file = dir.appendingPathComponent("hub.json")
+  try config.writeHubPort(52631)
+  #expect(config.hubURL.port == 52631)
+  try PrivateFile.write(Data(#"{"port":52631,"lan_port":52632,"timezone":"Asia/Taipei"}"#.utf8), to: file)
+  try config.writeHubPort(52633)
+  #expect(config.hubURL.port == 52633)
+  let fields = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+  #expect(fields["lan_port"] as? Int == 52632)
+  #expect(fields["timezone"] as? String == "Asia/Taipei")
+  #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int == 0o600)
+  let fixed = Config(dataDir: dir, fixedPort: "52634", bun: "")
+  #expect(throws: HubError.self) { try fixed.writeHubPort(52635) }
+  #expect(config.hubURL.port == 52633)
+  _ = try commit(dir, identity(Curve25519.KeyAgreement.PrivateKey()))
+  #expect(throws: HubError.self) { try config.writeHubPort(52635) }
+  #expect(config.hubURL.port == 52633)
+}

@@ -93,51 +93,154 @@ struct AgentSettingsView: View {
 
 // MARK: 回顾 → 准备清单
 
-/// 三件事都好了就不显示：系统权限、AI 模型能整理、至少接入一个 AI 工具。
-/// 后台服务读不到时不显示，页面其他部分已经会报错。
 struct SetupChecklist: View {
-  let health: DistillHealth
-  let tools: [AgentToolState]
+  let backend: AppSetup.ChecklistStep?
+  let backendChecked: Bool
+  let health: DistillHealth?
+  let tools: [AgentToolState]?
+  let minuteModel: ModelTierConfig?
   @Environment(ViewerStore.self) private var store
-  @State private var expanded = false
+  @AppStorage("setupChecklist.collapsedWith") private var collapsedWith = ""
+  @State private var retrying = false
+  @State private var retryError: String?
+  @State private var testing = false
+  @State private var testResult: String?
 
-  @ViewBuilder var body: some View {
-    let missing = store.capture.sources.filter { DataSourceCatalog.isVisible($0.id) && $0.needsPermission }
-    let modelReady = health.state == .working
-    let agentsReady = tools.contains(where: \.connected)
-    if TimelineSetup.shouldShow(permissionsReady: missing.isEmpty, modelReady: modelReady, agentReady: agentsReady) {
-      VStack(alignment: .leading, spacing: 0) {
-        Button { Motion.animate { expanded.toggle() } } label: {
-          HStack(spacing: 8) {
-            PhIcon("check-circle", size: 14)
-            Text(L10n.Settings.setupChecklist)
-            Spacer()
-            DisclosureChevron(expanded: expanded, sideways: true)
-          }.padding(.vertical, 4)
+  private var missing: [DataSourceStatus] {
+    var names = Set<String>()
+    return store.capture.sources.filter {
+      DataSourceCatalog.isVisible($0.id) && $0.needsPermission && names.insert($0.permissionName ?? $0.id).inserted
+    }
+  }
+
+  private var unfinished: Set<String> {
+    var items = Set(missing.map { "permission." + ($0.permissionName ?? $0.id) })
+    if backend != nil, backendChecked { items.insert("backend") }
+    if let health, health.state != .working { items.insert("models") }
+    if let tools, !tools.contains(where: \.connected) { items.insert("tools") }
+    return items
+  }
+
+  private var remembered: Set<String> { Set(collapsedWith.split(separator: "|").map(String.init)) }
+
+  private var completed: Set<String> {
+    var items = Set(remembered.filter { $0.hasPrefix("permission.") && !unfinished.contains($0) })
+    if backendChecked, backend == nil { items.insert("backend") }
+    if health?.state == .working { items.insert("models") }
+    if tools?.contains(where: \.connected) == true { items.insert("tools") }
+    return items
+  }
+
+  private var modelMissing: Bool {
+    guard health?.lastOkAt == nil, !store.isRemoteBackend, let provider = minuteModel?.provider, let tools else { return false }
+    let tool = provider == "claude-cli" ? "claude-code" : provider == "codex-cli" ? "codex" : nil
+    guard let tool else { return false }
+    return tools.contains { $0.id == tool && !$0.installed }
+  }
+
+  var body: some View {
+    let unfinished = unfinished
+    let expanded = !backendChecked || TimelineSetup.isExpanded(unfinished: unfinished, collapsedWith: remembered)
+    Group {
+      if backend != nil || !unfinished.isEmpty {
+        VStack(alignment: .leading, spacing: 0) {
+          Button {
+            Motion.animate { collapsedWith = expanded ? unfinished.sorted().joined(separator: "|") : "" }
+          } label: {
+            HStack(spacing: 8) {
+              PhIcon("check-circle", size: 14)
+              Text(L10n.Settings.setupChecklist)
+              Spacer()
+              DisclosureChevron(expanded: expanded, sideways: true)
+            }.padding(.vertical, 4)
+          }
+          .disabled(!backendChecked)
+          .buttonStyle(.accentLink).font(.system(size: TextSize.body))
+          .accessibilityValue(expanded ? L10n.Settings.expanded : L10n.Settings.collapsed)
+          if expanded { steps }
         }
-        .buttonStyle(.accentLink).font(.system(size: TextSize.body))
-        .accessibilityValue(expanded ? L10n.Settings.expanded : L10n.Settings.collapsed)
-        if expanded {
-          step(done: missing.isEmpty, title: L10n.Settings.grantSystemPermissions, detail: permissionDetail(missing)) {
-            if let first = missing.first { Button(L10n.Settings.grantPermission) { store.perform(.requestPermission(first.id)) } }
-          }
-          Divider()
-          step(done: modelReady, title: L10n.Settings.setupModels, detail: modelDetail(health.state)) {
-            Button(L10n.Settings.checkModels) { open(.models) }
-          }
-          Divider()
-          step(done: agentsReady, title: L10n.Settings.setupTools, detail: agentsReady ? nil : agentDetail(tools)) {
-            if tools.contains(where: \.installed) { Button(L10n.Settings.connectEllipsis) { open(.agents) } }
+      }
+    }
+    .onChange(of: [unfinished, completed], initial: true) {
+      collapsedWith = TimelineSetup.rememberedCollapse(unfinished: unfinished, completed: completed, collapsedWith: remembered)
+        .sorted().joined(separator: "|")
+    }
+    .onChange(of: minuteModel) { testResult = nil }
+    .onChange(of: backend) { retryError = nil }
+  }
+
+  @ViewBuilder private var steps: some View {
+    if let backend {
+      switch backend {
+      case .preparing:
+        step(done: false, title: L10n.Settings.preparingBackend, detail: nil) { EmptyView() }
+      case .failed(let message):
+        if retrying {
+          step(done: false, title: L10n.Settings.preparingBackend, detail: nil) { EmptyView() }
+        } else {
+          step(done: false, title: L10n.Settings.backgroundService, detail: retryError ?? message) {
+            VStack(alignment: .trailing, spacing: 4) {
+              Button(L10n.Settings.prepareAgain) { Task { await retry() } }
+              OpenLogsButton().buttonStyle(.accentLink).font(.system(size: TextSize.caption))
+            }.fixedSize()
           }
         }
+      }
+      Divider()
+    }
+    if missing.isEmpty {
+      step(done: true, title: L10n.Settings.grantSystemPermissions, detail: nil) { EmptyView() }
+    } else {
+      ForEach(missing, id: \.id) { source in
+        step(done: false, title: L10n.permission(source.permissionName ?? source.title), detail: nil) {
+          Button(L10n.Settings.grantPermission) { store.perform(.requestPermission(source.id)) }
+        }
+      }
+    }
+    if let health {
+      Divider()
+      step(done: health.state == .working, title: L10n.Settings.setupModels, detail: modelDetail(health.state)) {
+        VStack(alignment: .trailing, spacing: 4) {
+          Button(modelMissing ? L10n.Settings.goToModelSettings : L10n.Settings.checkModels) { open(.models) }
+          if !modelMissing, let minuteModel, store.canManageBackend {
+            Button(testing ? L10n.Settings.testing : L10n.Settings.testConnection) {
+              Task { await testConnection(minuteModel) }
+            }.disabled(testing)
+          }
+        }.fixedSize()
+      }
+    }
+    if let tools {
+      let ready = tools.contains(where: \.connected)
+      Divider()
+      step(done: ready, title: L10n.Settings.setupTools, detail: ready ? nil : agentDetail(tools)) {
+        if tools.contains(where: \.installed) { Button(L10n.Settings.connectEllipsis) { open(.agents) } }
       }
     }
   }
 
-  func permissionDetail(_ missing: [DataSourceStatus]) -> String? {
-    var names: [String] = []
-    for n in missing.compactMap(\.permissionName) where !names.contains(n) { names.append(n) }
-    return names.isEmpty ? nil : L10n.Settings.missingPermissions(names)
+  private func retry() async {
+    guard !retrying, let delegate = store.controls as? AppDelegate else { return }
+    retrying = true
+    retryError = nil
+    defer { retrying = false }
+    do { try await delegate.prepareBackendAgain() }
+    catch { retryError = error.localizedDescription }
+  }
+
+  private func testConnection(_ model: ModelTierConfig) async {
+    guard !testing else { return }
+    testing = true
+    testResult = nil
+    defer { testing = false }
+    let result: String
+    do {
+      let response = try await store.api.testModel(tier: "minute", config: model)
+      result = response.ok ? L10n.Settings.connectionOK : response.error.map { L10n.Settings.modelFailure($0, fallback: L10n.Settings.connectionFailed) } ?? L10n.Settings.connectionFailed
+    } catch {
+      result = L10n.Settings.modelFailure(error.localizedDescription, fallback: L10n.Settings.connectionFailed)
+    }
+    if minuteModel == model { testResult = result }
   }
 
   func agentDetail(_ tools: [AgentToolState]) -> String {
@@ -147,6 +250,8 @@ struct SetupChecklist: View {
   }
 
   func modelDetail(_ s: DistillHealth.State) -> String? {
+    if modelMissing { return L10n.Settings.noAvailableLocalModel }
+    if let testResult { return testResult }
     switch s {
     case .waiting: return L10n.Settings.firstSummaryNote
     case .failing(let reason): return L10n.Settings.modelFailure(reason, fallback: L10n.Settings.summaryFailure)

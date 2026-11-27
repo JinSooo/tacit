@@ -11,14 +11,6 @@ public enum DiagnosticSummary {
   private struct StartupFailure: Decodable {
     let at: String?
     let code: String
-    let message: String?
-  }
-  private struct SetupStatus: Decodable {
-    let at: String
-    let version: String
-    let build: String
-    let exit_code: Int
-    let ok: Bool
   }
 
   private static let startupFile = "hub-startup-error.json"
@@ -31,19 +23,23 @@ public enum DiagnosticSummary {
     "codex.session", "manual.note", "manual.correction", "manual.agent",
   ]
 
-  /// 只在后台不可达时由调用方展示。准备状态只在启动错误文件缺席时兜底。
+  /// 本次准备得到的原因优先，避免把上一次后台的错误当作本次失败。
   public static func startupMessage(in dataDir: URL) -> String? {
-    let file = dataDir.appendingPathComponent(startupFile)
-    if FileManager.default.fileExists(atPath: file.path) {
-      guard let failure = read(StartupFailure.self, at: file),
-            timestamp(failure.at) != nil,
-            StartupCode(rawValue: failure.code) != nil,
-            let message = failure.message?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !message.isEmpty else { return nil }
-      return message
+    let reason = setupStatus(in: dataDir)?.reason
+    if let reason, reason != .unknown { return L10n.Settings.setupFailure(reason) }
+    if let failure = read(StartupFailure.self, at: dataDir.appendingPathComponent(startupFile)),
+       timestamp(failure.at) != nil, let code = StartupCode(rawValue: failure.code) {
+      switch code {
+      case .db_key_missing: return L10n.text(zh: "记录库的密钥不见了。请用之前的密钥备份恢复。", en: "The database key is missing. Restore it from your key backup.")
+      case .db_key_unreadable: return L10n.Settings.setupFailure(.database)
+      case .db_open_failed: return L10n.text(zh: "记录库打开失败。请确认密钥与记录库匹配。", en: "The database could not be opened. Check that its key matches the database.")
+      case .db_migration_failed: return L10n.text(zh: "记录库升级失败。请保留记录库和迁移备份，并在设置 › 维护里复制诊断信息。", en: "The database upgrade failed. Keep the database and its backup, and copy diagnostics in Settings → Maintenance.")
+      case .port_in_use: return L10n.Settings.setupFailure(.portInUse)
+      case .unknown: break
+      }
+      return L10n.Settings.setupFailure(reason ?? .unknown)
     }
-    guard let setup = setupStatus(in: dataDir), !setup.ok else { return nil }
-    return L10n.text(zh: "后台准备没有完成（退出码 \(setup.exit_code)）", en: "Background service setup did not finish (exit code \(setup.exit_code))")
+    return reason.map { L10n.Settings.setupFailure($0) }
   }
 
   public static func make(
@@ -113,6 +109,7 @@ public enum DiagnosticSummary {
       add(L10n.text(zh: "Tacit 版本", en: "Tacit version"), bundleIdentifier(setup.version))
       add(L10n.text(zh: "构建", en: "Build"), bundleIdentifier(setup.build))
       add(L10n.text(zh: "结果", en: "Result"), setup.ok ? L10n.text(zh: "成功", en: "Succeeded") : L10n.text(zh: "失败", en: "Failed"))
+      add(L10n.text(zh: "准备失败类别", en: "Setup failure category"), setup.reason?.rawValue)
       add(L10n.text(zh: "退出码", en: "Exit code"), String(setup.exit_code))
     }
     if let data = readStatusFile(dataDir.appendingPathComponent("collector-status.json")),

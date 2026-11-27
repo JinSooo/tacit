@@ -25,11 +25,15 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
     let setup = directory.appendingPathComponent("setup-status.json")
     #expect(DiagnosticSummary.startupMessage(in: directory) == nil)
     try Data(#"{"at":"2026-11-19T14:00:00+09:00","version":"0.3.0","build":"abcd123","exit_code":17,"ok":false}"#.utf8).write(to: setup)
-    #expect(DiagnosticSummary.startupMessage(in: directory) == "后台准备没有完成（退出码 17）")
+    #expect(DiagnosticSummary.startupMessage(in: directory) == L10n.Settings.setupFailure(.unknown))
     try Data(#"{"at":"2026-11-19T14:00:00+09:00","code":"port_in_use","message":"后台服务端口已被占用。"}"#.utf8).write(to: startup)
-    #expect(DiagnosticSummary.startupMessage(in: directory) == "后台服务端口已被占用。")
+    #expect(DiagnosticSummary.startupMessage(in: directory) == L10n.Settings.setupFailure(.portInUse))
+    let oldStatus = try Data(contentsOf: setup)
+    try Data(#"{"at":"2026-11-19T14:00:01+09:00","version":"0.3.0","build":"abcd123","exit_code":1,"ok":false,"reason":"database"}"#.utf8).write(to: setup)
+    #expect(DiagnosticSummary.startupMessage(in: directory) == L10n.Settings.setupFailure(.database))
+    try oldStatus.write(to: setup)
     try Data("{".utf8).write(to: startup)
-    #expect(DiagnosticSummary.startupMessage(in: directory) == nil)
+    #expect(DiagnosticSummary.startupMessage(in: directory) == L10n.Settings.setupFailure(.unknown))
     try FileManager.default.removeItem(at: startup)
     try Data(#"{"ok":false,"exit_code":"17"}"#.utf8).write(to: setup)
     #expect(DiagnosticSummary.startupMessage(in: directory) == nil)
@@ -160,4 +164,41 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
     #expect(events.last?.contains(#""times":50"#) == true)
     #expect(events.last?.contains("2026-11-19T14:00:49+09:00") == true)
   }
+}
+
+@Test func setupFailureCodesDecodeNewAndOldStatuses() throws {
+  for code in ["bundle_incomplete", "database", "background_blocked", "service_unhealthy", "port_in_use", "unknown"] {
+    let reason = try #require(SetupStatus.Reason(rawValue: code))
+    let status = try JSONDecoder().decode(SetupStatus.self, from: Data(
+      """
+      {"at":"2026-11-19T14:00:00+09:00","version":"1","build":"2","exit_code":17,"ok":false,"reason":"\(code)"}
+      """.utf8))
+    #expect(status.reason == reason)
+    #expect(SetupStatus.Reason.fromStandardError("earlier details\r\nsetup_error:\(code)\r\n") == reason)
+    #expect(!L10n.Settings.setupFailure(reason, lang: .en).contains("exit code"))
+    #expect(!L10n.Settings.setupFailure(reason, lang: .zh).contains(code))
+  }
+  let old = Data(#"{"at":"2026-11-19T14:00:00+09:00","version":"1","build":"2","exit_code":17,"ok":false}"#.utf8)
+  #expect(try JSONDecoder().decode(SetupStatus.self, from: old).reason == .unknown)
+  #expect(SetupStatus.Reason.fromStandardError("setup_error:port_in_use\nother log") == .unknown)
+  #expect(SetupStatus.Reason.fromStandardError("setup_error:unrecognized") == .unknown)
+  #expect(L10n.Settings.setupFailure(.backgroundBlocked, lang: .en).contains("Login Items & Extensions"))
+  #expect(L10n.Settings.setupFailure(.portInUse, lang: .zh).contains("后台与连接"))
+}
+
+@Test func speechModelFailuresUseOnlyKnownLastLineAndCurrentLanguage() {
+  let cases = [
+    ("network", "连不上下载地址，检查网络或代理后会自动重试", "network or proxy"),
+    ("checksum", "下载的文件不完整，会自动重新下载", "incomplete"),
+    ("disk", "磁盘空间不够，清理后会自动重试", "disk space"),
+    ("extract", "模型文件解压失败，会自动重试", "unpack"),
+    ("unknown", "语音模型没能下载，稍后会自动重试", "retry shortly"),
+  ]
+  for (code, chinese, english) in cases {
+    let stderr = "synthetic raw path\r\naudio_models_error:\(code)\r\n"
+    #expect(L10n.Settings.speechModelDownloadMessage(stderr: stderr, lang: .zh) == chinese)
+    #expect(L10n.Settings.speechModelDownloadMessage(stderr: stderr, lang: .en).contains(english))
+  }
+  #expect(L10n.Settings.speechModelDownloadMessage(stderr: "audio_models_error:disk\nprivate details", lang: .zh) == cases[4].1)
+  #expect(L10n.Settings.speechModelDownloadMessage(stderr: "audio_models_error:unsupported", lang: .zh) == cases[4].1)
 }
