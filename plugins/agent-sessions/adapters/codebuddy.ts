@@ -17,11 +17,10 @@ export function* buddyFiles(home: string) {
 export const buddyTranscript = {
   additionalRootFields: new Set(["role", "content", "__timestamp", "providerData", "interactionType", "status"]),
   sessionId(_event: Json | null, file: SessionFile) { return path.basename(file.path, ".jsonl"); },
-  cwd(event: Json) { return event.cwd; },
-  skipSession(event: Json) { return event.isSidechain === true; },
+  cwd(event: Json) { return event.isSidechain === true ? undefined : event.cwd; },
   parse(event: Json | null, hasSession: boolean) {
     if (!event) return unknown;
-    if (metadata.has(event.type)) return ignored;
+    if (event.isSidechain === true || metadata.has(event.type)) return ignored;
     if (event.type !== "message") return unknown;
     const provider = event.providerData;
     if (event.isMeta === true || provider?.isMeta === true
@@ -30,7 +29,7 @@ export const buddyTranscript = {
     if (event.role === "assistant" && event.status !== undefined && event.status !== "completed") return ignored;
     // 上游打包代码确认到的扁平字段；未知包装交由格式诊断。
     const timestamp = event.timestamp ?? event.__timestamp;
-    return parseMessage({ timestamp }, { role: event.role, content: event.content }, hasSession, true);
+    return parseMessage({ timestamp }, { role: event.role, content: event.content }, hasSession);
   },
 } satisfies Omit<SessionAdapter, "id" | "files">;
 

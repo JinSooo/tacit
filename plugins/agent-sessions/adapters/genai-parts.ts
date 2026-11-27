@@ -16,7 +16,7 @@ export function parseGenaiParts(
     )) continue;
     const text = typeof part === "string" ? part : block?.text;
     if (typeof text !== "string") { recognized = false; continue; }
-    const cleaned = cleanUserText(text);
+    const cleaned = role === "user" ? cleanUserText(text) : text.trim();
     if (cleaned) texts.push(cleaned);
   }
   return { recognized, message: texts.length ? { role, time, text: texts.join("\n") } : undefined };

@@ -135,13 +135,62 @@ test("Antigravity 从仍在写入的 WAL 读到 cwd 和子会话标记", async (
   }
 });
 
-test("Antigravity 元数据库损坏时照常产出，异常字段组合进入格式告警", async () => {
+test("Antigravity 无法验证索引时暂停该目录，恢复后再输出", async () => {
+  const s = setup();
+  const transcript = path.join(s.logs("main"), "transcript_full.jsonl");
+  const dbFile = s.summaries([["main", "/synthetic/main"]]);
+  s.write(transcript, [step("USER_INPUT", "合成待发送输入")], base + minute);
+  const first = await s.run(undefined, base + 2 * minute);
+  expect(first.records).toEqual([]);
+  fs.writeFileSync(dbFile, "invalid synthetic database");
+  s.write(transcript, [step("PLANNER_RESPONSE", "合成回复", 2)], base + 2 * minute, true);
+  const other = path.join(s.logs("cli", "antigravity-cli"), "transcript_full.jsonl");
+  s.write(other, [step("USER_INPUT", "另一目录不受影响")]);
+
+  const corrupt = await s.run(first.state);
+  expect(corrupt.records.map(r => r.body)).toEqual(["[我] 另一目录不受影响"]);
+  expect(corrupt.state.files[transcript]).toEqual(first.state.files[transcript]);
+  expect(corrupt.state.sessions["antigravity:main"]).toEqual(first.state.sessions["antigravity:main"]);
+  fs.unlinkSync(dbFile);
+  s.summaries([["main", "/synthetic/main"]]);
+  const recovered = await s.run(corrupt.state);
+  expect(recovered.records.map(r => r.body)).toEqual(["[我] 合成待发送输入\n\n[AI] 合成回复"]);
+});
+
+test("Antigravity 缺少共享内存文件时不忽略尚未写回的 WAL", async () => {
+  const s = setup();
+  const live = s.summaries([], "antigravity-acp");
+  const db = new Database(live);
+  try {
+    db.exec("PRAGMA wal_autocheckpoint = 0");
+    db.run("INSERT INTO conversation_summaries VALUES ('child', '', 'main', 1)");
+    const transcript = path.join(s.logs("child"), "transcript_full.jsonl");
+    s.write(transcript, [step("USER_INPUT", "合成子会话")]);
+    const snapshot = path.join(s.data(), "conversation_summaries.db");
+    fs.copyFileSync(live, snapshot);
+    fs.copyFileSync(live + "-wal", snapshot + "-wal");
+    expect(fs.statSync(snapshot + "-wal").size).toBeGreaterThan(0);
+
+    const skipped = await s.run();
+    expect(skipped.records).toEqual([]);
+    expect(skipped.state.files[transcript]).toBeUndefined();
+    expect(fs.existsSync(snapshot + "-shm")).toBe(false);
+
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    fs.copyFileSync(live, snapshot);
+    fs.unlinkSync(snapshot + "-wal");
+    const recovered = await s.run(skipped.state);
+    expect(recovered.records).toEqual([]);
+    expect(recovered.state.sessions["antigravity:child"]).toBeUndefined();
+  } finally { db.close(); }
+});
+
+test("Antigravity 缺少索引时照常产出，异常字段组合进入格式告警", async () => {
   const s = setup();
   const file = path.join(s.logs("visible"), "transcript_full.jsonl");
   s.write(file, [step("USER_INPUT", "合成输入"), step("PLANNER_RESPONSE", "合成回复")]);
-  fs.writeFileSync(path.join(s.data(), "conversation_summaries.db"), "invalid synthetic database");
   const invalid = [
-    step("USER_INPUT", "未知来源", 1, "NEW_SOURCE"),
+    step("USER_INPUT", ["错误正文"]),
     step("PLANNER_RESPONSE", ["错误正文"]),
     { ...step("USER_INPUT", "错误时间"), created_at: "bad-time" },
     { content: "没有类型" },
@@ -209,4 +258,41 @@ test("Antigravity 用户消息只取 USER_REQUEST 里的原话，系统附加信
   expect(records.map(record => record.body)).toEqual(["[我] 核对合成展板\n\n[AI] 展板已核对"]);
   expect(records[0]!.title).toBe("Antigravity · 未知项目 · 核对合成展板");
   expect(warnings).toEqual([]);
+});
+
+test("Antigravity 保留用户讨论的请求结束标签，无正文回复和系统输入不报格式变化", async () => {
+  const s = setup();
+  s.write(path.join(s.logs("request"), "transcript_full.jsonl"), [
+    step("USER_INPUT", "<USER_REQUEST>\n检查 </USER_REQUEST> 标签。\n</USER_REQUEST>\n<ADDITIONAL_METADATA>time</ADDITIONAL_METADATA>"),
+  ]);
+  for (const [id, event] of [
+    ["no-text", step("PLANNER_RESPONSE", null)],
+    ["injected", step("USER_INPUT", "合成系统消息", 1, "SYSTEM_SDK")],
+  ] as const) {
+    s.write(path.join(s.logs(id), "transcript_full.jsonl"), Array.from({ length: 20 }, () => event));
+  }
+  const { records, warnings } = await s.run();
+  expect({ bodies: records.map(r => r.body), warnings }).toEqual({
+    bodies: ["[我] 检查 </USER_REQUEST> 标签。"], warnings: [],
+  });
+});
+
+test("Antigravity 的只读索引连接被锁住时不读旧快照", async () => {
+  const s = setup();
+  const db = new Database(s.summaries([]));
+  try {
+    db.exec("PRAGMA journal_mode = DELETE");
+    db.exec("BEGIN EXCLUSIVE");
+    db.run("INSERT INTO conversation_summaries VALUES ('child', '', 'main', 1)");
+    const target = path.join(s.logs("child"), "transcript_full.jsonl");
+    s.write(target, [step("USER_INPUT", "合成子会话")]);
+    const locked = await s.run();
+    expect(locked.records).toEqual([]);
+    expect(locked.state.files[target]).toBeUndefined();
+
+    db.exec("COMMIT");
+    const resumed = await s.run(locked.state);
+    expect(resumed.records).toEqual([]);
+    expect(resumed.state.files[target]).toBeUndefined();
+  } finally { db.close(); }
 });

@@ -68,7 +68,7 @@ test("OpenCode 读 WAL 可见对话，等流式回复写完，并沿用旧 check
     message(db, "msg-answer", 2, "assistant", { time: { created: at(2), completed: at(3) } });
     part(db, "prt-04", "msg-answer", { type: "reasoning", text: "忽略思考" }, at(2));
     part(db, "prt-05", "msg-answer", { type: "tool", state: { output: "忽略工具" } }, at(2));
-    part(db, "prt-06", "msg-answer", { type: "text", text: "已加上 60 秒缓存" }, at(3));
+    part(db, "prt-06", "msg-answer", { type: "text", text: "  ## Skills\n- TypeScript  " }, at(3));
 
     message(db, "msg-compact-user", 4, "user");
     part(db, "prt-07", "msg-compact-user", { type: "text", text: "忽略压缩请求" }, at(4));
@@ -85,12 +85,12 @@ test("OpenCode 读 WAL 可见对话，等流式回复写完，并沿用旧 check
 
     const first = await s.run(legacy.state);
     expect(first.records.map(record => [record.source, record.source_ref, record.context?.cwd, record.body])).toEqual([
-      ["opencode.session", "ses-main#2026-11-27T02:00:00.000Z", cwd, "[我] 给商品详情加空值缓存\n\n[AI] 已加上 60 秒缓存\n\n[我] 再补一个用例"],
+      ["opencode.session", "ses-main#2026-11-27T02:00:00.000Z", cwd, "[我] 给商品详情加空值缓存\n\n[AI] ## Skills\n- TypeScript\n\n[我] 再补一个用例"],
     ]);
     expect(Date.parse(first.records[0]!.t_start)).toBe(at(1));
     expect(Date.parse(first.records[0]!.t_end!)).toBe(at(20));
     expect(first.warnings).toEqual([]);
-    expect(first.state.databases?.[s.file]?.updated).toBe(at(20));
+    expect(first.state.databases?.[s.file]?.updated).toBe(at(5));
 
     // 流式块写回时，消息列还保留旧更新时间；块在上一次扫描的同一毫秒更新。
     db.run("UPDATE message SET data = ? WHERE id = 'msg-streaming'", [JSON.stringify({ role: "assistant", time: { created: at(6), completed: at(20) } })]);
@@ -149,6 +149,31 @@ test("OpenCode 读取冷 WAL 库时不创建 sidecar，未知消息进入格式�
     expect(fs.readdirSync(s.root)).toEqual(["opencode.db"]);
     expect((await s.run(first.state)).warnings).toEqual([]);
   } finally {
+    fs.rmSync(s.root, { recursive: true, force: true });
+  }
+});
+
+test("OpenCode 未完成消息挡住游标，稍后提交的早时间戳消息仍可采到", async () => {
+  const s = setup();
+  let db: Database | undefined;
+  try {
+    db = s.database(true);
+    message(db, "msg-first", 1, "user");
+    part(db, "prt-first", "msg-first", { type: "text", text: "合成首条" }, at(1));
+    message(db, "msg-streaming", 6, "assistant");
+    message(db, "msg-later", 20, "user");
+    part(db, "prt-later", "msg-later", { type: "text", text: "合成后续" }, at(20));
+    const first = await s.run();
+    expect(first.records.map(record => record.body)).toEqual(["[我] 合成首条\n\n[我] 合成后续"]);
+    // 另一个会话在快照之后写入，比当时未完成的消息还早。
+    message(db, "msg-late-commit", 4, "user", {}, "ses-main", at(5) + 1);
+    part(db, "prt-late", "msg-late-commit", { type: "text", text: "并行提交的确认" }, at(5) + 1);
+    const late = await s.run(first.state, 32);
+    expect(late.records.map(record => record.body)).toEqual(["[我] 并行提交的确认"]);
+
+    expect(late.state.databases?.[s.file]?.updated).toBe(at(5) + 1);
+  } finally {
+    db?.close();
     fs.rmSync(s.root, { recursive: true, force: true });
   }
 });

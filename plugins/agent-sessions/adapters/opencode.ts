@@ -44,7 +44,8 @@ function parse(row: MessageRow, parts: () => Iterable<PartRow>): Parsed | null {
     if (ignoredParts.has(part.type ?? "") || part.synthetic === 1 || part.ignored === 1) continue;
     if (part.type !== "text" || typeof part.text !== "string") { recognized = false; continue; }
     const prefix = capturePrefix(part.text, TEXT_LIMIT, part.text.length > TEXT_LIMIT);
-    const text = cleanUserText(prefix.length < part.text.length ? prefix + "…[已截断]" : prefix);
+    const content = prefix.length < part.text.length ? prefix + "…[已截断]" : prefix;
+    const text = role === "user" ? cleanUserText(content) : content.trim();
     if (text) texts.push(text);
   }
   if (role === "user" && !hasParts) return null;
@@ -89,7 +90,8 @@ export const opencode: DatabaseSessionAdapter = {
       const identity = `${stat.dev}:${stat.ino}`;
       const old = previous?.identity === identity ? previous : undefined;
       const since = Math.max(floor, rescan ? floor : old?.updated ?? floor);
-      let updated = Math.max(since, old?.updated ?? since);
+      let updated = since;
+      let blocked = false;
       const boundary = new Set(old?.updated === updated ? old.boundary : []);
       const rows: NonNullable<ReturnType<DatabaseSessionAdapter["readDatabase"]>>["rows"] = [];
       const messages = db.query<MessageRow, [number, number, number]>(`
@@ -116,16 +118,22 @@ export const opencode: DatabaseSessionAdapter = {
       `);
       for (const row of messages.iterate(since, since, floor)) {
         if (!rescan && row.updated === updated && boundary.has(row.id)) continue;
-        if (row.updated > updated) {
+        const result = parse(row, () => parts.iterate(row.id));
+        if (!result) {
+          blocked = true;
+          continue;
+        }
+        // 仍处理后续已完成消息，但留在未完成消息之前，下轮靠消息哈希去重。
+        if (!blocked && row.updated > updated) {
           updated = row.updated;
           boundary.clear();
         }
-        const result = parse(row, () => parts.iterate(row.id));
-        if (!result) continue;
         if (row.updated === updated) boundary.add(row.id);
         rows.push({ sessionId: row.session_id, cwd: row.directory, mtime: Math.max(row.session_updated, row.updated), result });
       }
-      return { progress: { identity, updated, boundary: [...boundary] }, rows };
+      const progress = !blocked && old && old.updated > updated
+        ? old : { identity, updated, boundary: [...boundary] };
+      return { progress, rows };
     } catch {
       // 锁住、正在恢复或无法打开的库留给下一轮，原游标保持不动。
       return null;

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
 import { at, sessionFixture } from "./adapter-fixture.ts";
 
 const start = (id: string, extra = {}) => ({ type: "session_start", id, cwd: "/Users/alice/demo", owner: "alice", ...extra });
@@ -27,8 +28,8 @@ test("Droid 读取逐条 ISO 或毫秒时间，过滤注入、工具、思考和
     ]);
     s.write(s.file("factory/sessions/-Users-alice-demo/main.settings.json"), [message("user", "配置文件")]);
     const markers = [
-      { callingSessionId: "main" }, { callingToolUseId: "call" }, { parent: "main" },
-      { decompSessionType: "worker" }, { decompMissionId: "mission" }, { forkedAtMessageId: "from-message" },
+      { callingSessionId: "main" }, { callingToolUseId: "call" },
+      { decompSessionType: "worker" }, { decompMissionId: "mission" },
       ...["subagent", "automation", "exec", "evaluation"].map(tag => ({ tags: [tag] })),
     ];
     for (const [i, marker] of markers.entries()) {
@@ -55,5 +56,24 @@ test("Droid 读取逐条 ISO 或毫秒时间，过滤注入、工具、思考和
       [`main#${at(0)}#2`, "[AI] 也补了测试。"],
     ]);
     expect((await s.run({}, second.state)).records).toEqual([]);
+  } finally { s.close(); }
+});
+
+test("Droid 保留用户手动分叉的会话", async () => {
+  const s = sessionFixture();
+  try {
+    const target = s.file("factory/sessions/demo/fork.jsonl");
+    s.write(target, [
+      start("fork", { parent: "main", forkedAtMessageId: "from-message" }),
+      message("user", "合成分叉后的问题"),
+    ]);
+    const first = await s.run({});
+    expect(first.records.map(r => r.body)).toEqual(["[我] 合成分叉后的问题"]);
+
+    const old = s.oldCheckpoint();
+    const stat = fs.statSync(target);
+    old.files[target] = { skipped: true, offset: stat.size, size: stat.size, mtime: stat.mtimeMs, identity: `${stat.dev}:${stat.ino}`, session: null };
+    const resumed = await s.run({}, old);
+    expect(resumed.records.map(r => r.body)).toEqual(["[我] 合成分叉后的问题"]);
   } finally { s.close(); }
 });

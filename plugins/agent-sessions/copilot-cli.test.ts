@@ -60,14 +60,36 @@ test("Copilot CLI 跨采集轮次按原顺序拼接同一次回复的文本片�
       event("assistant.message", { apiCallId: "call", chunkCount: 2, chunkIndex: 0, content: "已完成 " }, 2),
       event("tool.execution_complete", { content: "工具输出" }, 3),
     ]);
-    const first = await s.run({});
-    expect(first.records.map(r => r.body)).toEqual(["[我] 给出验证结论"]);
-    expect(first.records[0]?.context?.cwd).toBeNull();
+    const first = await s.run({ now: Date.parse(at(2)) });
+    expect(first.records).toEqual([]);
     s.write(target, [event("assistant.message", { apiCallId: "call", chunkCount: 2, chunkIndex: 1, content: "HMAC 验签。" }, 4)], true);
     const next = await s.run({}, first.state);
-    expect(next.records.map(r => r.body)).toEqual(["[AI] 已完成 HMAC 验签。"]);
-    expect(Date.parse(next.records[0]!.t_start)).toBe(Date.parse(at(2)));
+    expect(next.records.map(r => r.body)).toEqual(["[我] 给出验证结论\n\n[AI] 已完成 HMAC 验签。"]);
+    expect(next.records[0]?.context?.cwd).toBeNull();
+    expect(Date.parse(next.records[0]!.t_start)).toBe(Date.parse(at(1)));
     expect(next.diagnostics).toEqual([]);
     expect((await s.run({}, next.state)).records).toEqual([]);
+  } finally { s.close(); }
+});
+
+test("Copilot CLI 安静三分钟后输出缺尾的回复，workspace cwd 缺失时使用 git_root", async () => {
+  const s = sessionFixture();
+  try {
+    const dir = "copilot/session-state/interrupted";
+    const target = s.file(`${dir}/events.jsonl`);
+    fs.writeFileSync(s.file(`${dir}/workspace.yaml`), "git_root: '/synthetic/project' # workspace\n");
+    s.write(target, [
+      event("user.message", { content: "合成问题" }),
+      event("assistant.message", { apiCallId: "call", chunkCount: 2, chunkIndex: 0, content: "已收到的分片" }, 2),
+      event("tool.execution_complete", {}, 2),
+    ]);
+    const active = await s.run({ now: Date.parse(at(2)) });
+    expect(active.records).toEqual([]);
+    const idle = await s.run({ now: Date.parse(at(3)) }, active.state);
+    expect(idle.records.map(r => [r.body, r.context?.cwd])).toEqual([
+      ["[我] 合成问题\n\n[AI] 已收到的分片", "/synthetic/project"],
+    ]);
+    expect(idle.state.files[target]?.offset).toBe(fs.statSync(target).size);
+    expect((await s.run({}, idle.state)).records).toEqual([]);
   } finally { s.close(); }
 });
