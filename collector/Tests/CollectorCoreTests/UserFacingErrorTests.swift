@@ -43,7 +43,7 @@ func hubErrorsKeepStatusMeaningWithoutShowingStatusCodes(_ language: AppLanguage
 func backendTextMustPassTheSameFilterInSettingsAndHubErrors(_ language: AppLanguage) {
   AppLanguage.$scopedLanguage.withValue(language) {
     let untrusted = [
-      "需要有效的 bEaReR token", "读取JSON失败", "tier 必须是 minute、hour 或 day", "只接受 tier 和 config",
+      "需要有效的 bEaReR token", "请求失败 HTTP 500", "出错了 Exception: failure", "tier 必须是 minute、hour 或 day", "只接受 tier 和 config",
       "存储操作失败", "中枢返回了错误", "OCR 兜底", "读取 models.json 时记录了 Stack",
       "需要重新注入", "档位未配置", "提炼线程失败", "解析失败 (500)", "系统出现错误（401）",
       "操作失败\n详细信息", "The operation couldn't be completed.", String(repeating: "测", count: 121),
@@ -62,5 +62,25 @@ func backendTextMustPassTheSameFilterInSettingsAndHubErrors(_ language: AppLangu
     let key = "API key 格式不对：应为 8–1024 个英文字母、数字或符号，不能有空格、双引号或反斜杠。"
     #expect(L10n.Settings.serviceMessage(key, fallback: "fallback") == (language == .zh ? key :
       "Use 8–1,024 letters, numbers, or symbols for the API key. Omit spaces, double quotes, and backslashes."))
+  }
+}
+
+@Test(arguments: AppLanguage.allCases)
+func supportedServiceInstructionsRemainVisible(_ language: AppLanguage) {
+  AppLanguage.$scopedLanguage.withValue(language) {
+    let cases = [
+      ("地址要是完整的 http 或 https 链接，不能带用户名、密码或问号后的参数。",
+       "Enter a full HTTP or HTTPS URL without a username, password, or query parameters.", 400),
+      ("模型列表只接受本机 HTTP(S) 地址", "Use a local HTTP or HTTPS address to list models.", 400),
+      ("Git 地址需使用 https:// 或 ssh://", "Use an https:// or ssh:// Git URL.", 400),
+      ("Git 地址需使用 HTTPS 或 SSH，不能包含密码或令牌",
+       "Use an HTTPS or SSH Git URL without a password or access credential.", 400),
+      ("目录中缺少有效的 plugin.json 清单", "The folder is missing a valid plugin.json manifest.", 400),
+      ("上一次测试还没结束", "A test is already running.", 409),
+    ]
+    for (zh, en, status) in cases {
+      let error = HubError(serviceMessage: zh, status: status)
+      #expect(UserFacingError.message(for: error, fallback: L10n.Settings.connectionFailed) == (language == .zh ? zh : en))
+    }
   }
 }

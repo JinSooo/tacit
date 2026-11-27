@@ -826,6 +826,13 @@ public extension L10n {
       case "API key 格式不对：应为 8–1024 个英文字母、数字或符号，不能有空格、双引号或反斜杠。":
         return "Use 8–1,024 letters, numbers, or symbols for the API key. Omit spaces, double quotes, and backslashes."
       case "上一次测试还没结束": return "A test is already running."
+      case "地址要是完整的 http 或 https 链接，不能带用户名、密码或问号后的参数。":
+        return "Enter a full HTTP or HTTPS URL without a username, password, or query parameters."
+      case "模型列表只接受本机 HTTP(S) 地址": return "Use a local HTTP or HTTPS address to list models."
+      case "Git 地址需使用 https:// 或 ssh://": return "Use an https:// or ssh:// Git URL."
+      case "Git 地址需使用 HTTPS 或 SSH，不能包含密码或令牌":
+        return "Use an HTTPS or SSH Git URL without a password or access credential."
+      case "目录中缺少有效的 plugin.json 清单": return "The folder is missing a valid plugin.json manifest."
       default: return fallback
       }
     }

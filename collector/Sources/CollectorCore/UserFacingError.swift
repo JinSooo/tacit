@@ -98,7 +98,7 @@ public enum UserFacingError {
     }
   }
 
-  private static let internalTerms = #"中枢|线程|提炼|注入|档位|存储操作失败|(?<![a-z0-9_])(?:tier|token|bearer|json|schema|https?|hello|models\.json|sqlite|stack|ocr|hub(?:_id)?|thread|distill|inject|agent|DecodingError|codingPath|debugDescription|NSURLErrorDomain|Error Domain|WebSocket|HPKE|X25519)(?![a-z0-9_])"#
+  private static let internalTerms = #"中枢|线程|提炼|注入|档位|存储操作失败|(?<![a-z0-9_])(?:tier|token|bearer|schema|hello|models\.json|sqlite|stack|ocr|hub(?:_id)?|thread|distill|inject|agent|DecodingError|codingPath|debugDescription|NSURLErrorDomain|Error Domain|WebSocket|HPKE|X25519)(?![a-z0-9_])|\bHTTP\s+[0-9]{3}\b|\b(?:traceback|exception|fatal error)\s*[:(]"#
 
   static func canDisplayServiceMessage(_ message: String) -> Bool {
     message.count <= 120

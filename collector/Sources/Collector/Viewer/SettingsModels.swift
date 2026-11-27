@@ -513,7 +513,9 @@ struct ModelSettingsView: View {
       let message = r.error.map { L10n.Settings.modelFailure($0, fallback: L10n.Settings.connectionFailed) } ?? L10n.Settings.connectionFailed
       tests[tier] = r.ok ? .ok(r.ms) : .failed(message, detail: store.isRemoteBackend ? nil : r.detail)
     } catch is CancellationError {} catch {
-      if draft[tier] == c { tests[tier] = .failed(L10n.Settings.connectionFailed, detail: nil) }
+      if draft[tier] == c {
+        tests[tier] = .failed(UserFacingError.message(for: error, fallback: L10n.Settings.connectionFailed), detail: nil)
+      }
     }
   }
 
