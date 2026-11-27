@@ -141,7 +141,7 @@ test("hook 子进程输出嵌套 JSON，空内容、坏输入、缺 token 和失
   } finally { ctx.cleanup(); }
 });
 
-test("Antigravity、Cursor、Gemini CLI 的会话参数和 stdout 符合各自协议", async () => {
+test("各工具的会话参数和 stdout 符合各自协议", async () => {
   const ctx = environment();
   try {
     const mock = join(ctx.dir, "context-fetch.ts");
@@ -155,6 +155,10 @@ test("Antigravity、Cursor、Gemini CLI 的会话参数和 stdout 符合各自�
       { tool: "cursor", input: { workspace_roots: ["/synthetic", "/ignored"], session_id: "cur", conversation_id: "ignored" }, session: "cur", event: "startup" },
       { tool: "cursor", input: { workspace_roots: ["/synthetic"], conversation_id: "cur" }, session: "cur", event: "startup" },
       { tool: "gemini-cli", input: { cwd: "/synthetic", session_id: "gem", source: "clear" }, session: "gem", event: "clear" },
+      { tool: "qwen-code", input: { cwd: "/synthetic", session_id: "qwen", source: "compact", hook_event_name: "SessionStart" }, session: "qwen", event: "compact" },
+      { tool: "codebuddy", input: { cwd: "/synthetic", session_id: "buddy", source: "resume", hook_event_name: "SessionStart" }, session: "buddy", event: "resume" },
+      { tool: "copilot-cli", input: { cwd: "/synthetic", sessionId: "cop-resume", source: "resume", timestamp: 1795659000000 }, session: "cop-resume", event: "resume" },
+      { tool: "copilot-cli", input: { cwd: "/synthetic", sessionId: "cop-new", source: "new", timestamp: "2026-11-27T09:00:00Z", initialPrompt: "合成提问" }, session: "cop-new", event: "startup" },
     ];
     for (const { tool, input, session, event } of cases) {
       const text = new URLSearchParams({ cwd: "/synthetic", event, tool, session }).toString();
@@ -162,6 +166,9 @@ test("Antigravity、Cursor、Gemini CLI 的会话参数和 stdout 符合各自�
         antigravity: { injectSteps: [{ systemMessage: { systemMessage: text } }] },
         cursor: { additional_context: text },
         "gemini-cli": { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
+        "qwen-code": { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
+        codebuddy: { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
+        "copilot-cli": { additionalContext: text },
       };
       const result = await run(ctx.dir, ["hook", "session-start", "--tool", tool], JSON.stringify(input), {}, mock);
       expect(result.code).toBe(0);

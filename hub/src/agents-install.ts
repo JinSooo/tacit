@@ -3,7 +3,7 @@ import { AGENT_TOOLS as TOOL_CATALOG } from "../../packages/record/agent-tools.t
 import type { Lang } from "./i18n/language.ts";
 import { chmodSync, copyFileSync, readdirSync, lstatSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -29,6 +29,7 @@ type Json = Record<string, any>;
 export interface InstallEnvironment {
   lang?: Lang;
   home?: string; repo?: string; bun?: string;
+  variables?: NodeJS.ProcessEnv;
   which?: (command: string) => string | null;
   appExists?: (path: string) => boolean;
   run?: (command: string, args: string[], home: string) => { status: number | null; stdout: string; stderr: string };
@@ -400,7 +401,7 @@ export interface AgentState {
   label: string;
   /** 本机找得到应用或命令行工具。 */
   installed: boolean;
-  /** 必要配置已登记；Desktop 只需 MCP，编程工具还需会话开始钩子。 */
+  /** MCP 和接入方法中提供的会话开始钩子均已登记。 */
   connected: boolean;
   /** 只登记了一半（例如手动删过其中一个），需要重新连接。 */
   partial: boolean;
@@ -422,7 +423,7 @@ function manualSnippet(
   options: { create: boolean; replace?: string; replacement?: Json; version?: number },
 ): ManualSnippet {
   const make = (action: ManualSnippet["action"], code: string, section?: string) =>
-    ({ file: `~/${file}`, kind, action, section, code });
+    ({ file, kind, action, section, code });
   const wrap = (keys: string[], child: unknown) =>
     keys.reduceRight<unknown>((nested, key) => ({ [key]: nested }), child);
   const full = () => JSON.stringify({
@@ -452,49 +453,84 @@ function manualSnippet(
 
 function manualAgentStatus(home: string, cli: string, bun: string, env: InstallEnvironment): AgentState[] {
   const which = env.which ?? Bun.which;
-  const config = (relative: string) => {
-    const file = resolve(home, relative);
+  const absolute = (file: string) => resolve(home, file.replace(/^~\//, ""));
+  const config = (file: string, jsonc = false) => {
     try {
-      const data: unknown = JSON.parse(readFileSync(file, "utf8"));
-      return { data: object(data) ? data : {}, exists: true };
+      const content = readFileSync(absolute(file), "utf8");
+      const data: unknown = jsonc ? Bun.JSONC.parse(content) : JSON.parse(content);
+      return { file, data: object(data) ? data : {}, exists: true };
     } catch (error) {
-      return { data: {}, exists: (error as NodeJS.ErrnoException).code !== "ENOENT" };
+      return { file, data: {}, exists: (error as NodeJS.ErrnoException).code !== "ENOENT" };
     }
   };
-  return TOOL_CATALOG.flatMap(({ id, label, manualConnection: setup }) => {
+  return TOOL_CATALOG.flatMap(({ id, label, sessionStart, manualConnection: setup }) => {
     if (!setup) return [];
-    const installed = !!which(setup.executable) || !!setup.macApp && appInstalled(setup.macApp, home, env);
-    const mcpConfig = config(setup.mcpFile), current = mcpConfig.data.mcpServers?.[SERVER];
-    const mcp = ownsMcpEntry(current, id) && current.command === bun && current.args[0] === cli
-      && (current.type === undefined || current.type === "stdio") && current.disabled !== true;
-    const entry = { ...(setup.mcpType && { type: setup.mcpType }), ...mcpEntry(cli, bun, id) };
-    const manual = [manualSnippet(setup.mcpFile, "mcp", mcpConfig.data, ["mcpServers", SERVER], entry, {
+    const installed = !!setup.executables?.some(command => !!which(command)) || !!setup.macApp && appInstalled(setup.macApp, home, env);
+    const opencode = setup.mcpFormat === "opencode";
+    const copilot = setup.mcpFormat === "copilot";
+    const override = setup.configDirEnv ? (env.variables ?? process.env)[setup.configDirEnv]?.trim() : undefined;
+    const dir = override && absolute(override === "~" ? "~/" : override);
+    const configPath = (file: string) => dir ? join(dir, copilot ? file.slice(".copilot/".length) : basename(file)) : `~/${file}`;
+    const mcpFile = configPath(setup.mcpFile), section = opencode ? "mcp" : "mcpServers";
+    const json = config(mcpFile, opencode);
+    const jsonc = opencode ? config(`${mcpFile}c`, true) : undefined;
+    const useJsonc = jsonc?.exists && (jsonc.data[section]?.[SERVER] !== undefined || json.data[section]?.[SERVER] === undefined);
+    const mcpConfig = useJsonc ? jsonc : json;
+    const current = mcpConfig.data[section]?.[SERVER];
+    const stdio = mcpEntry(cli, bun, id);
+    const commandLine = [bun, ...stdio.args];
+    const entry = opencode ? { type: "local", command: commandLine, enabled: true }
+      : copilot ? { type: "local", ...stdio, tools: ["*"] }
+      : { ...(setup.mcpType && { type: setup.mcpType }), ...stdio };
+    const mcp = opencode
+      ? current?.type === "local" && current.enabled !== false && Array.isArray(current.command)
+        && current.command.length === commandLine.length && commandLine.every((part, index) => part === current.command[index])
+      : ownsMcpEntry(current, id) && current.command === bun && current.args[0] === cli && current.disabled !== true
+        && (copilot ? (current.type === "local" || current.type === "stdio") && Array.isArray(current.tools) && current.tools.length > 0
+          : current.type === undefined || current.type === "stdio");
+    const manual = [manualSnippet(mcpConfig.file, "mcp", mcpConfig.data, [section, SERVER], entry, {
       create: !mcpConfig.exists,
-      replace: Object.hasOwn(mcpConfig.data.mcpServers ?? {}, SERVER) ? `mcpServers.${SERVER}` : undefined,
+      replace: Object.hasOwn(mcpConfig.data[section] ?? {}, SERVER) ? `${section}.${SERVER}` : undefined,
     })];
     let hook = true, hookPresent = false;
     if (setup.hook) {
       const { file, event, version, timeout, matcher } = setup.hook;
-      const sameFile = file === setup.mcpFile;
-      const hookConfig = sameFile ? mcpConfig : config(file);
-      const rows = hookConfig.data.hooks?.[event];
+      const sameFile = file === setup.mcpFile, hookFile = configPath(file);
       const handlers = (row: Json) => matcher ? (Array.isArray(row?.hooks) ? row.hooks : []) : [row];
-      const ours = (handler: Json) => sessionStartCommandPaths(handler?.command, id) !== null;
-      const start = Array.isArray(rows) ? rows.findIndex((row: Json) => handlers(row).some(ours)) : -1;
-      const row = rows?.[start];
-      const handlerIndex = start >= 0 ? handlers(row).findIndex(ours) : -1;
+      const paths = (handler: Json) => sessionStartCommandPaths(copilot ? handler?.bash ?? handler?.command : handler?.command, id);
+      const ours = (handler: Json) => paths(handler) !== null;
       const valid = (handler: Json) => {
-        const paths = sessionStartCommandPaths(handler?.command, id);
-        return paths?.[0] === bun && paths[1] === cli;
+        const tokens = paths(handler);
+        return (!copilot || handler?.type === "command") && tokens?.[0] === bun && tokens[1] === cli;
       };
+      const configs = [sameFile ? mcpConfig : config(hookFile)];
+      if (copilot) {
+        const folder = dirname(hookFile);
+        try {
+          for (const name of readdirSync(absolute(folder)).sort()) {
+            if (name.endsWith(".json") && name !== basename(hookFile)) configs.push(config(join(folder, name)));
+          }
+        } catch {}
+      }
+      const candidates = configs.map(config => {
+        const rows: unknown = config.data.hooks?.[event];
+        const start = Array.isArray(rows) ? rows.findIndex((row: Json) => handlers(row).some(ours)) : -1;
+        const handlerIndex = Array.isArray(rows) && start >= 0 ? handlers(rows[start]).findIndex(ours) : -1;
+        const active = (version === undefined || config.data.version === version) && Array.isArray(rows)
+          && rows.some((row: Json) => handlers(row).some(valid));
+        return { config, start, handlerIndex, active };
+      });
+      const { config: hookConfig, start, handlerIndex, active } =
+        candidates.find(candidate => candidate.active) ?? candidates.find(candidate => candidate.start >= 0) ?? candidates[0]!;
       hookPresent = start >= 0;
-      hook = (version === undefined || hookConfig.data.version === version) && Array.isArray(rows)
-        && rows.some((row: Json) => handlers(row).some(valid));
+      hook = active;
       const command = sessionStartCommand(bun, cli, id);
-      const handler = matcher ? { name: "tacit-session-start", type: "command", command, timeout } : { command, timeout };
+      const handler = sessionStart === "copilot" ? { type: "command", bash: command, timeoutSec: timeout }
+        : matcher ? { ...(id === "gemini-cli" && { name: "tacit-session-start" }), type: "command", command, timeout }
+        : { command, timeout };
       const replace = hookPresent ? `hooks.${event}[${start}]${matcher ? `.hooks[${handlerIndex}]` : ""}` : undefined;
       const value = matcher ? { matcher, hooks: [handler] } : handler;
-      manual.push(manualSnippet(file, "session-start", hookConfig.data, ["hooks", event], [value], {
+      manual.push(manualSnippet(hookConfig.file, "session-start", hookConfig.data, ["hooks", event], [value], {
         create: !sameFile && !hookConfig.exists, replace, replacement: handler, version,
       }));
     }
