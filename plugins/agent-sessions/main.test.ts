@@ -400,7 +400,7 @@ test("单文件格式变化告警；未知事件、角色、时刻及正文均�
   const lines = result.stdout.toString().trim().split("\n").map(line => JSON.parse(line));
   expect(lines.at(-1).sessionWarnings).toEqual({ unrecognized: 20 });
   expect(lines.filter(line => line.type === "record").map(line => line.record.body)).toEqual(["[我] 可见消息"]);
-  expect(result.stderr.toString().trim()).toBe("Skipped 20 unrecognized Claude Code or Codex log lines. The session format may have changed.");
+  expect(result.stderr.toString().trim()).toBe("The AI session format may have changed. Skipped 20 unrecognized lines.");
   expect(JSON.stringify(lines.at(-1)) + result.stderr.toString()).not.toContain("合成日志原文");
 });
 
@@ -426,7 +426,7 @@ test("整轮告警要求至少 50 行且严格过半，已知工具和被过滤�
   expect(await run(0, 30)).toEqual([]);
   expect(await run(10, 1, true)).toEqual([]); // 49 行，比例过半
   expect(await run(10, 10)).toEqual([]);  // 50 行，比例刚好一半
-  expect(await run(10, 9)).toEqual(["Claude Code / Codex 会话格式可能已变化，有 50 行没有识别"]);
+  expect(await run(10, 9)).toEqual(["AI 会话格式可能已变化，有 50 行没有识别"]);
 });
 
 test("runner 将诊断计数交给采集端，checkpoint 保存和去重照常", async () => {
@@ -441,11 +441,11 @@ test("runner 将诊断计数交给采集端，checkpoint 保存和去重照常",
   fs.appendFileSync(file, "{损坏的合成日志}\n");
   const db = new HubDB(path.join(s.root, "synthetic-history.db"), "synthetic-db-key-0123456789");
   const command = [process.execPath, path.join(import.meta.dir, "main.ts")];
-  const env = { ...process.env, RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir, RA_DATA_DIR: s.root };
+  const env = { ...process.env, LC_ALL: "zh_CN.UTF-8", RA_CLAUDE_DIR: s.claudeDir, RA_CODEX_DIR: s.codexDir, RA_DATA_DIR: s.root };
   const run = () => runPlugin({ db, dataDir: s.root, name: "agent-sessions", command, env });
   try {
     const first = await run();
-    expect(first).toMatchObject({ accepted: 1, stateWritten: true, warnings: ["Claude Code / Codex 会话格式可能已变化，有 20 行没有识别", "跳过 1 行损坏数据"] });
+    expect(first).toMatchObject({ accepted: 1, stateWritten: true, warnings: ["AI 会话格式可能已变化，有 20 行没有识别", "跳过 1 行损坏数据"] });
     expect(JSON.stringify(first)).not.toContain("合成");
     fs.unlinkSync(path.join(s.root, "plugins/agent-sessions/state.json"));
     expect(await run()).toMatchObject({ accepted: 0, duplicates: 1, stateWritten: true });

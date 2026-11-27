@@ -8,7 +8,8 @@ import { createHash } from "node:crypto";
 import { readEvents } from "./json-lines.ts";
 import { clampTitle, parsePluginArgs, toLocalIso, ulid, validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { messageBuffer, type Message } from "./message-buffer.ts";
-import { parseSessionEvent, type Provider } from "./session-events.ts";
+import { adapters, adaptersByCheckpointKey } from "./adapters/index.ts";
+import type { SessionDirectories } from "./adapters/types.ts";
 
 const HOUR = 3_600_000;
 // 会话安静满 3 分钟，或一批最早的消息已等了 15 分钟，就先输出这一批；同一小时后续内容用 #2、#3 接着编号。
@@ -22,19 +23,10 @@ const PENDING_MESSAGES = 20_000;
 const PENDING_LIMIT = "当前会话待保存内容超过上限，关闭后重试";
 interface SessionWarnings { unrecognized?: number; damaged?: number }
 interface Bucket { part: number; messages: Message[] }
-interface Session { provider: Provider; id: string; cwd: string | null; seen: { [hour: string]: string[] }; buckets: { [hour: string]: Bucket }; mtime: number; lastActivity?: number }
+interface Session { provider: string; id: string; cwd: string | null; seen: { [hour: string]: string[] }; buckets: { [hour: string]: Bucket }; mtime: number; lastActivity?: number }
 interface FileProgress { offset: number; mtime: number; size: number; identity: string; session: string | null; cwd?: string | null }
 export interface State { version: 2; since: number; replaySince: number; files: { [file: string]: FileProgress }; sessions: { [id: string]: Session } }
-export interface Options { device: string; lang?: Lang; now?: number; since?: number; state?: State; claudeDir?: string; codexDir?: string; excludeDirs?: string[]; onRecord?: (record: RecordV1) => void | Promise<void>; onWarning?: (message: string) => void; onDiagnostics?: (warnings: SessionWarnings) => void }
-
-function* walk(root: string): Generator<string> {
-  if (!fs.existsSync(root)) return;
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    const file = path.join(root, entry.name);
-    if (entry.isDirectory()) yield* walk(file);
-    else if (entry.isFile() && /\.jsonl(?:\.zst)?$/.test(entry.name)) yield file;
-  }
-}
+export interface Options extends SessionDirectories { device: string; lang?: Lang; now?: number; since?: number; state?: State; excludeDirs?: string[]; onRecord?: (record: RecordV1) => void | Promise<void>; onWarning?: (message: string) => void; onDiagnostics?: (warnings: SessionWarnings) => void }
 
 function repoRoot(cwd: string | null): string | null {
   if (!cwd || !path.isAbsolute(cwd)) return null;
@@ -53,15 +45,14 @@ function shorten(text: string, length: number): string {
 }
 
 async function emitBucket(options: Options, session: Session, hour: string, bucket: Bucket, messages: Iterable<Message>) {
-  const app = session.provider === "claude" ? "claude-code" : "codex";
-  const name = session.provider === "claude" ? "Claude Code" : "Codex";
+  const { id: app, label: name, source } = adaptersByCheckpointKey.get(session.provider)!.tool;
   const repo = repoRoot(session.cwd);
   const ref = `${session.id}#${new Date(Number(hour)).toISOString()}`;
   let body = "", firstUser: string | undefined, start = 0, end = 0;
   const flush = async () => {
     const part = bucket.part + 1;
     const record: RecordV1 = {
-      id: ulid(), schema: 1, device: options.device, source: session.provider === "claude" ? "claude_code.session" : "codex.session",
+      id: ulid(), schema: 1, device: options.device, source,
       source_ref: part === 1 ? ref : `${ref}#${part}`,
       kind: "span", t_start: toLocalIso(start), t_end: toLocalIso(end),
       context: { app, cwd: session.cwd, repo }, title: clampTitle(`${name} · ${path.basename(repo ?? session.cwd ?? "未知项目")} · ${firstUser ?? "AI 回复"}`),
@@ -108,11 +99,6 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
   if (state.version !== 2 || !Number.isFinite(state.since) || !Number.isFinite(state.replaySince)) throw new Error("不支持的 checkpoint 格式");
   let damaged = 0, parsed = 0, unrecognized = 0, unrecognizedFile = false;
   for (const file of Object.keys(state.files)) if (!fs.existsSync(file)) delete state.files[file];
-  const roots: [Provider, string][] = [
-    ["claude", path.join(options.claudeDir ?? process.env.RA_CLAUDE_DIR ?? path.join(os.homedir(), ".claude"), "projects")],
-    ["codex", path.join(options.codexDir ?? process.env.RA_CODEX_DIR ?? path.join(os.homedir(), ".codex"), "sessions")],
-    ["codex", path.join(options.codexDir ?? process.env.RA_CODEX_DIR ?? path.join(os.homedir(), ".codex"), "archived_sessions")],
-  ];
   // 已有 state 时再传 --since 表示从该时刻起重新读取（重新导入、导入全部历史）：之后改过的文件从头读，
   // 窗口内已输出过的消息靠 seen 跳过，更早的靠 hub 按 source_ref 去重；state 的增量游标不倒退。
   const rescan = options.state !== undefined && options.since !== undefined;
@@ -128,9 +114,9 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     for (const message of bucket.messages) add(bucket, message, null);
     bucket.messages = [];
   }
-  for (const [provider, root] of roots) for (const file of walk(root)) {
-    // Claude 的子 Agent 日志不是用户直接参与的会话。
-    if (provider === "claude" && file.split(path.sep).includes("subagents")) continue;
+  for (const adapter of adapters) for (const sessionFile of adapter.files(options)) {
+    const provider = adapter.checkpointKey;
+    const file = sessionFile.path;
     const stat = fs.statSync(file);
     const old = state.files[file];
     if (!old && stat.mtimeMs < (rescan ? floor : state.since)) continue;
@@ -145,14 +131,14 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
         if (line.damaged) { damaged++; continue; }
         const event = line.event;
         if (event === undefined) continue;
-        const id = provider === "claude" && event ? event.sessionId ?? path.basename(file, ".jsonl") : event?.type === "session_meta" ? event.payload?.id : null;
+        const id = adapter.sessionId(event, sessionFile);
         if (typeof id === "string" && id) progress.session = `${provider}:${id}`;
-        const result = parseSessionEvent(event, provider, !!progress.session);
+        const result = adapter.parse(event, !!progress.session);
         fileParsed++;
         if (!result.recognized) fileUnknown++;
         if (!progress.session || !event) continue;
         const session = state.sessions[progress.session] ??= { provider, id: progress.session.slice(provider.length + 1), cwd: progress.cwd ?? null, seen: {}, buckets: {}, mtime: stat.mtimeMs };
-        const cwd = provider === "claude" ? event.cwd : event.type === "session_meta" ? event.payload?.cwd : null;
+        const cwd = adapter.cwd(event);
         if (typeof cwd === "string") session.cwd = cwd;
         progress.cwd = session.cwd;
         const message = result.message;
@@ -235,9 +221,8 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
   if (unrecognizedFile || (unrecognized >= 50 && unrecognized * 2 > parsed)) {
     warnings.unrecognized = unrecognized;
     warn(cliText(
-      `Claude Code / Codex 会话格式可能已变化，有 ${unrecognized} 行没有识别`,
-      unrecognized ? `Skipped ${unrecognized} unrecognized Claude Code or Codex log lines. The session format may have changed.`
-        : "Some Claude Code or Codex session logs could not be recognized.",
+      `AI 会话格式可能已变化，有 ${unrecognized} 行没有识别`,
+      `The AI session format may have changed. Skipped ${unrecognized} unrecognized lines.`,
       lang,
     ));
   }
