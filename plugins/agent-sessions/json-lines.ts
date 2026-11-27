@@ -4,11 +4,15 @@ import { StringDecoder } from "node:string_decoder";
 import { createZstdDecompress } from "node:zlib";
 
 type Json = { [key: string]: any };
-type Context = "root" | "message" | "origin" | "blocks" | "block" | "ignored";
+type Context = "root" | "message" | "origin" | "data" | "workspace" | "providerData" | "blocks" | "block" | "strings" | "presence" | "ignored";
 interface Frame { kind: "object" | "array"; context: Context; value: any; state: string; key: string; hasInvalidBlock?: boolean }
 const fields: { [context: string]: Set<string> } = {
   root: new Set(["type", "sessionId", "timestamp", "cwd", "isSidechain", "isMeta", "isCompactSummary", "promptSource", "turnOrigin", "origin", "message", "payload"]),
   message: new Set(["type", "id", "cwd", "role", "channel", "recipient", "content"]),
+  data: new Set(["context", "content", "isAutopilotContinuation", "parentAgentTaskId", "parentToolCallId",
+    "causalDependencies", "detachedFromSpawningParentSessionId", "apiCallId", "chunkIndex", "chunkCount"]),
+  workspace: new Set(["cwd"]),
+  providerData: new Set(["isMeta", "interactionType"]),
   origin: new Set(["kind"]), block: new Set(["type", "text"]),
 };
 const STRING_LIMIT = 150_064;
@@ -33,12 +37,19 @@ export class EventParser {
   private nonempty = false;
   private result: Json | null = null;
 
-  constructor(private readonly additionalRootFields?: ReadonlySet<string>) {}
+  constructor(
+    private readonly additionalRootFields?: ReadonlySet<string>,
+    private readonly additionalMessageFields?: ReadonlySet<string>,
+  ) {}
 
   private keep(): boolean {
     const top = this.stack.at(-1);
+    if (top?.context === "strings") return true;
     return !!top && top.kind === "object" && (
-      !!fields[top.context]?.has(top.key) || (top.context === "root" && !!this.additionalRootFields?.has(top.key))
+      !!fields[top.context]?.has(top.key)
+      || (top.context === "root" && !!this.additionalRootFields?.has(top.key))
+      || (top.context === "message" && !!this.additionalMessageFields?.has(top.key))
+      || (top.context === "providerData" && /initiator$/i.test(top.key))
     );
   }
   private append(value: string) {
@@ -55,6 +66,8 @@ export class EventParser {
       if (this.keep()) top.value[top.key] = value;
     } else {
       if (!["value", "first"].includes(top.state)) throw Error();
+      if (top.context === "strings" && typeof value === "string") top.value.push(value);
+      if (top.context === "presence" && top.value.length === 0) top.value.push(true);
       if (top.context === "blocks") {
         if (value && typeof value === "object") top.value.push(value);
         else if (!top.hasInvalidBlock) {
@@ -72,7 +85,12 @@ export class EventParser {
     else if (parent.context === "root" && kind === "object") {
       if (["message", "payload"].includes(parent.key)) context = "message";
       if (parent.key === "origin") context = "origin";
-    } else if (parent.context === "message" && parent.key === "content" && kind === "array") context = "blocks";
+      if (parent.key === "data" && this.keep()) context = "data";
+      if (parent.key === "providerData" && this.keep()) context = "providerData";
+    } else if (parent.context === "root" && parent.key === "tags" && kind === "array" && this.keep()) context = "strings";
+    else if (parent.context === "data" && parent.key === "context" && kind === "object") context = "workspace";
+    else if (parent.context === "data" && parent.key === "causalDependencies" && kind === "array") context = "presence";
+    else if ((parent.context === "message" || parent.context === "root") && parent.key === "content" && kind === "array" && this.keep()) context = "blocks";
     else if (parent.context === "blocks" && kind === "object") context = "block";
     const value = context === "ignored" ? null : kind === "object" ? Object.create(null) : [];
     this.accept(value);
@@ -202,14 +220,14 @@ export class EventParser {
 }
 
 /** 普通日志只读新增字节；压缩归档逐块解压。offset 均以解压后的完整行字节计。 */
-export async function* readEvents(file: string, offset: number, size: number, additionalRootFields?: ReadonlySet<string>) {
+export async function* readEvents(file: string, offset: number, size: number, additionalRootFields?: ReadonlySet<string>, additionalMessageFields?: ReadonlySet<string>) {
   const compressed = file.endsWith(".zst");
   if (!compressed && offset >= size) return;
   const input = fs.createReadStream(file, { highWaterMark: 64 * 1024, ...(compressed ? {} : { start: offset, end: size - 1 }) });
   const stream = compressed ? input.pipe(createZstdDecompress({ chunkSize: 64 * 1024 })) : input;
   // pipe 默认不会把源的错误传给目标。
   if (compressed) input.on("error", error => stream.destroy(error));
-  let parser = new EventParser(additionalRootFields); let decoder = new StringDecoder("utf8");
+  let parser = new EventParser(additionalRootFields, additionalMessageFields); let decoder = new StringDecoder("utf8");
   let position = compressed ? 0 : offset;
   let lineStart = position;
   try {
@@ -226,7 +244,7 @@ export async function* readEvents(file: string, offset: number, size: number, ad
         if (newline < 0) break;
         position++;
         if (position > offset) { parser.push(decoder.end()); yield { ...parser.finish(), end: position }; }
-        parser = new EventParser(additionalRootFields); decoder = new StringDecoder("utf8"); lineStart = position; start = end + 1;
+        parser = new EventParser(additionalRootFields, additionalMessageFields); decoder = new StringDecoder("utf8"); lineStart = position; start = end + 1;
       }
     }
     // 归档是完整文件，允许最后一行无换行；活动日志半行留给下次。

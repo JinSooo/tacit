@@ -8,6 +8,7 @@ import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { dataDirOf, resolvePort } from "./hub-json.ts";
+import { SHELL_ENV } from "./llm/process.ts";
 
 const SYSTEM = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 /** 已撤下的采集来源（2026-11-22）：升级时清掉它们在采集端留下的开关和配置。 */
@@ -53,19 +54,30 @@ export function servicePath(bun: string, home: string, search: string[], warn: (
   return [...new Set([...dirs, dirname(bun), ...SYSTEM])].join(":");
 }
 
-/** 从 Finder 或 launchd 启动时没有终端的 PATH，读一次用户登录 shell 的 PATH。 */
-export function loginShellPath(): string[] {
+/** 从 Finder 或 launchd 启动时没有终端的环境，读一次用户登录 shell 的 PATH、代理和 CODEX_HOME（不读其他变量，密钥不落进启动配置）。 */
+export function loginShellEnv(): Record<string, string> {
   let shell = "/bin/zsh";
   try { shell = userInfo().shell || shell; } catch {}
-  const marker = "__TACIT_PATH__";
-  const result = spawnSync(shell, ["-ilc", `printf '%s%s%s' ${marker} "$PATH" ${marker}`], {
+  const marker = "__TACIT_ENV__";
+  const result = spawnSync(shell, ["-ilc", `printf '\\n%s\\n' ${marker}; env; printf '\\n%s\\n' ${marker}`], {
     encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
   });
-  const match = new RegExp(`${marker}(.*?)${marker}`).exec(result.stdout ?? "");
-  return match ? match[1]!.split(":").filter(Boolean) : [];
+  return parseShellEnv(result.stdout ?? "", marker);
+}
+export function parseShellEnv(stdout: string, marker = "__TACIT_ENV__"): Record<string, string> {
+  const body = stdout.split(`\n${marker}\n`)[1];
+  if (body === undefined) return {};
+  const out: Record<string, string> = {};
+  for (const line of body.split("\n")) {
+    const i = line.indexOf("=");
+    if (i <= 0) continue;
+    const key = line.slice(0, i), value = line.slice(i + 1);
+    if ((key === "PATH" || SHELL_ENV.test(key)) && value) out[key] = value;
+  }
+  return out;
 }
 
-export interface ServiceLayout { app: string; runtime: string; bun: string; data: string; path: string }
+export interface ServiceLayout { app: string; runtime: string; bun: string; data: string; path: string; cliEnv?: Record<string, string> }
 
 export function plist(job: Job, l: ServiceLayout): string {
   const cli = join(l.runtime, "hub/src/cli.ts");
@@ -76,7 +88,8 @@ export function plist(job: Job, l: ServiceLayout): string {
     `  <key>ProgramArguments</key><array>${program.map(p => `<string>${xml(p)}</string>`).join("")}</array>`,
   ];
   if (job !== "collector") body.push(`  <key>WorkingDirectory</key><string>${xml(l.runtime)}</string>`);
-  body.push(`  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(path)}</string></dict>`, `  <key>RunAtLoad</key><true/>`);
+  const extra = job !== "collector" && l.cliEnv && Object.keys(l.cliEnv).length ? `<key>TACIT_CLI_ENV</key><string>${xml(JSON.stringify(l.cliEnv))}</string>` : "";
+  body.push(`  <key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(path)}</string>${extra}</dict>`, `  <key>RunAtLoad</key><true/>`);
   if (job === "hub") body.push(`  <key>KeepAlive</key><true/>`, `  <key>ThrottleInterval</key><integer>10</integer>`, `  <key>ProcessType</key><string>Background</string>`);
   if (job === "distill") body.push(`  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>`, `  <key>ThrottleInterval</key><integer>60</integer>`,
     `  <key>ProcessType</key><string>Background</string>`, `  <key>LowPriorityIO</key><true/>`, `  <key>Nice</key><integer>10</integer>`);
@@ -106,7 +119,7 @@ export interface SetupOptions {
   launchctl?: (args: string[]) => number;
   healthy?: (port: number) => Promise<boolean>;
   wait?: (ms: number) => Promise<void>;
-  shellPath?: () => string[];
+  shellEnv?: () => Record<string, string>;
   initialize?: () => Promise<void>;
   relocate?: (runtime: string, bun: string, home: string) => string[];
   dropRemovedSettings?: () => void;
@@ -179,9 +192,11 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
   const agents = existsSync(join(manual, `${label("collector")}.plist`)) ? manual : join(home, "Library/LaunchAgents");
   mkdirSync(agents, { recursive: true });
   // 终端里运行 install.sh 和从 Finder 打开应用得到同一个 PATH：都先看登录 shell 的 PATH。
-  const search = [...(o.shellPath ?? loginShellPath)(), ...(env.PATH ?? "").split(":").filter(Boolean)];
+  const { PATH: shellPath = "", ...shellVars } = (o.shellEnv ?? loginShellEnv)();
+  const search = [...shellPath.split(":").filter(Boolean), ...(env.PATH ?? "").split(":").filter(Boolean)];
   const path = servicePath(bun, home, search, log, lang);
-  const layout: ServiceLayout = { app: o.app, runtime, bun, data, path };
+  // 终端里的代理和 CODEX_HOME 交给后台调用的 codex、claude，不然终端里能用、Tacit 里连不上。
+  const layout: ServiceLayout = { app: o.app, runtime, bun, data, path, cliEnv: shellVars };
   const changed = new Set<Job>();
   for (const job of remote ? ["collector"] as const : JOBS) {
     const file = join(agents, `${label(job)}.plist`);

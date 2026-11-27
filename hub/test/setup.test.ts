@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { identityFromRaw } from "../src/devices/envelope.ts";
-import { plist, servicePath, setup } from "../src/setup.ts";
+import { parseShellEnv, plist, servicePath, setup } from "../src/setup.ts";
 
 function fixture() {
   // 稳定入口必须在临时目录之外，否则会被当成临时 shim。
@@ -21,7 +21,7 @@ function fixture() {
     app, home, env: { RA_DATA_DIR: data, PATH: "/usr/bin:/bin" },
     launchctl: args => { calls.push(args.join(" ")); return args[0] === "print" ? 1 : 0; },
     healthy: async () => { events.push("health"); return true; },
-    shellPath: () => [],
+    shellEnv: () => ({}),
     initialize: async () => { events.push("init"); },
     relocate: () => { events.push("relocate"); return []; },
     dropRemovedSettings: () => { events.push("frozen"); },
@@ -47,6 +47,22 @@ test("中枢和整理进程带同一个 PATH，采集端由应用包启动", () 
     const lint = spawnSync("/usr/bin/plutil", ["-lint", "-"], { input: plist(job, layout) });
     expect(lint.status).toBe(0);
   }
+});
+
+// 回归（2026-11-27）：代理设在 .zshrc 里时，终端里 codex 正常，launchd 拉起的后台里没有代理、调用失败。
+test("登录 shell 的代理和 CODEX_HOME 只写进中枢和整理任务", () => {
+  const out = `motd\n\n__TACIT_ENV__\nPATH=/a:/b\nhttps_proxy=http://127.0.0.1:7890\nOPENAI_API_KEY=synthetic\nCODEX_HOME=/c\nEMPTY_PROXY=\n\n__TACIT_ENV__\n`;
+  const env = parseShellEnv(out);
+  expect(env).toEqual({ PATH: "/a:/b", https_proxy: "http://127.0.0.1:7890", CODEX_HOME: "/c" });
+  const { PATH: _, ...cliEnv } = env;
+  const layout = { app: "/Applications/Tacit.app", runtime: "/r", bun: "/b/Tacit", data: "/d", path: "/a", cliEnv };
+  for (const job of ["hub", "distill"] as const) {
+    expect(plist(job, layout)).toContain(`<key>TACIT_CLI_ENV</key><string>{"https_proxy":"http://127.0.0.1:7890","CODEX_HOME":"/c"}</string>`);
+    expect(spawnSync("/usr/bin/plutil", ["-lint", "-"], { input: plist(job, layout) }).status).toBe(0);
+  }
+  expect(plist("collector", layout)).not.toContain("TACIT_CLI_ENV");
+  // 没有代理时启动配置和以前一样，升级不会因此重启后台。
+  expect(plist("hub", { ...layout, cliEnv: {} })).not.toContain("TACIT_CLI_ENV");
 });
 
 test("后台服务 PATH 优先稳定入口，CLI 符号链接升级后无需重新准备", () => {

@@ -9,7 +9,7 @@ const ignoredRoles = new Set(["system", "developer", "tool"]);
 const ignoredBlocks = new Set(["image", "input_image", "document", "tool_use", "tool_result", "thinking", "redacted_thinking", "reasoning", "server_tool_use", "web_search_tool_result", "refusal"]);
 const textBlocks = new Set(["text", "input_text", "output_text"]);
 
-export function parseMessage(event: Json, message: Json, hasSession: boolean): Parsed {
+export function parseMessage(event: Json, message: Json, hasSession: boolean, cleanText = false): Parsed {
   const role = message.role ?? event.type;
   if (ignoredRoles.has(role)) return ignored;
   if (role !== "user" && role !== "assistant") return unknown;
@@ -22,7 +22,7 @@ export function parseMessage(event: Json, message: Json, hasSession: boolean): P
   for (const block of content) {
     if (ignoredBlocks.has(block?.type)) continue;
     if (!textBlocks.has(block?.type) || typeof block.text !== "string") { recognized = false; continue; }
-    const text = role === "user" ? cleanUserText(block.text) : block.text.trim();
+    const text = role === "user" || cleanText ? cleanUserText(block.text) : block.text.trim();
     if (text) parts.push(text);
   }
   return { recognized, message: parts.length ? { time, role, text: parts.join("\n") } : undefined };
