@@ -18,7 +18,7 @@ function readBinding(dir: string) {
   catch { throw new AgentError("Unable to read the Tacit background service configuration"); }
 }
 
-async function connection(params: URLSearchParams, signal: AbortSignal, options: AgentClientOptions) {
+async function connection(tool: string | null, signal: AbortSignal, options: AgentClientOptions) {
   const env = options.env ?? process.env, dir = dataDirOf(env);
   const binding = readBinding(dir);
   const { remote } = binding;
@@ -32,7 +32,7 @@ async function connection(params: URLSearchParams, signal: AbortSignal, options:
     }
   };
   checkBinding();
-  if (params.get("tool") === "claude-desktop") {
+  if (tool === "claude-desktop") {
     if (remote) throw new AgentError("The local Claude Desktop connection is unavailable in remote mode");
     return { linked: null, checkBinding };
   }
@@ -72,8 +72,9 @@ async function request(client: DeviceClient, kind: string, body: object, signal:
   throw new AgentError(`Tacit request failed (HTTP ${reply.status})`, reply.status >= 500);
 }
 
-export async function readHub(kind: string, params: URLSearchParams, signal: AbortSignal, body?: unknown, options: AgentClientOptions = {}) {
-  const { linked, checkBinding, remote } = await connection(params, signal, options);
+export async function readHub(kind: string, params: URLSearchParams, signal: AbortSignal, body?: unknown, options: AgentClientOptions & { launchedTool?: string } = {}) {
+  // MCP 的自报名只用于请求标识，不能切换 Claude Desktop 的本地连接方式。
+  const { linked, checkBinding, remote } = await connection(options.launchedTool ?? params.get("tool"), signal, options);
   if (!linked) {
     checkBinding();
     return legacy(kind, params, signal, body, options.env);
@@ -87,7 +88,7 @@ export async function readHub(kind: string, params: URLSearchParams, signal: Abo
 }
 
 export async function sessionContext(params: URLSearchParams, signal: AbortSignal, emit: (text: string) => void, options: AgentClientOptions = {}) {
-  const { linked, checkBinding, remote } = await connection(params, signal, options);
+  const { linked, checkBinding, remote } = await connection(params.get("tool"), signal, options);
   if (!linked) {
     checkBinding();
     const result = readContextResult(await legacy("context", params, signal, undefined, options.env));

@@ -1,3 +1,4 @@
+import { AGENT_TOOLS } from "../../../packages/record/agent-tools.ts";
 import { randomUUID } from "node:crypto";
 import { readHub, reason } from "./client.ts";
 import { jsonLines } from "../jsonl.ts";
@@ -40,7 +41,19 @@ function object(value: unknown): value is ObjectValue {
 const error = (code: number, message: string) => ({ error: { code, message } });
 const toolError = (text: string) => ({ result: { isError: true, content: [{ type: "text", text }] } });
 
-async function dispatch(method: string, params: unknown, tool: string, session: string) {
+function normalizeToolName(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 32);
+}
+
+function clientToolName(params: unknown): string {
+  const client = object(params) ? params.clientInfo : undefined;
+  if (!object(client) || typeof client.name !== "string") return "mcp";
+  const name = normalizeToolName(client.name);
+  const known = AGENT_TOOLS.find(tool => tool.id === name || normalizeToolName(tool.label) === name);
+  return known?.id ?? (name || "mcp");
+}
+
+async function dispatch(method: string, params: unknown, auditTool: string, session: string, launchedTool: string) {
   if (method === "initialize") {
     const requested = object(params) ? params.protocolVersion : undefined;
     return { result: {
@@ -68,13 +81,13 @@ async function dispatch(method: string, params: unknown, tool: string, session: 
     : typeof value === "string" && (schema.minLength === undefined || value.length >= schema.minLength) && (schema.maxLength === undefined || value.length <= schema.maxLength) && (schema.enum === undefined || schema.enum.includes(value)));
   for (const [key, value] of Object.entries(args)) if (!valid(properties[key], value)) return error(-32602, "Invalid tool parameters");
   // session 与 cwd 只进审计，用来统计带入后是否有主动查询；一个 MCP 进程对应一个 AI 会话。
-  const query = new URLSearchParams({ tool, session, cwd: process.cwd() });
+  const query = new URLSearchParams({ tool: auditTool, session, cwd: process.cwd() });
   // 写入工具的参数以 JSON 正文发给 hub；读取工具的参数放在查询串里。
   const write = params.name === "history_append";
   if (!write) for (const [key, value] of Object.entries(args)) query.set(key === "query" ? "q" : key, String(value));
   if (params.name === "get" && !query.has("level")) query.set("level", "brief");
   try {
-    const value = await readHub(write ? "append" : params.name, query, AbortSignal.timeout(10_000), write ? args : undefined);
+    const value = await readHub(write ? "append" : params.name, query, AbortSignal.timeout(10_000), write ? args : undefined, { launchedTool });
     let text = JSON.stringify(value);
     const suffix = "\n… (Result truncated at 40,000 characters.)";
     if (text.length > 40000) text = text.slice(0, 40000 - suffix.length) + suffix;
@@ -85,6 +98,7 @@ async function dispatch(method: string, params: unknown, tool: string, session: 
 export async function runMcp(tool: string): Promise<void> {
   const write = (value: unknown) => process.stdout.write(JSON.stringify(value) + "\n");
   const session = randomUUID();
+  let auditTool = tool;
   for await (const line of jsonLines(process.stdin)) {
     let message: unknown;
     try { message = JSON.parse(line); }
@@ -94,7 +108,8 @@ export async function runMcp(tool: string): Promise<void> {
     }
     // 所有通知均不响应，包括客户端尚未识别的通知。
     if (!("id" in message)) continue;
-    try { write({ jsonrpc: "2.0", id: message.id, ...await dispatch(message.method, message.params, tool, session) }); }
+    if (tool === "mcp" && message.method === "initialize") auditTool = clientToolName(message.params);
+    try { write({ jsonrpc: "2.0", id: message.id, ...await dispatch(message.method, message.params, auditTool, session, tool) }); }
     catch { write({ jsonrpc: "2.0", id: message.id, ...error(-32603, "Internal error") }); }
   }
 }

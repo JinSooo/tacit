@@ -40,3 +40,8 @@ private func segment(_ id: String, project: String?) throws -> DayDiary.Item {
   #expect(SourceApplication.bundle(app: nil, source: "antigravity.session") == "com.google.antigravity")
   #expect(SourceApplication.bundle(app: "synthetic-unknown-tool", source: "antigravity.session") == "synthetic-unknown-tool")
 }
+
+@Test func genericMCPAuditLabelUsesTheAppLanguage() {
+  AppLanguage.$scopedLanguage.withValue(.zh) { #expect(AgentTools.auditTool(id: "mcp").label == "其他 AI 工具") }
+  AppLanguage.$scopedLanguage.withValue(.en) { #expect(AgentTools.auditTool(id: "mcp").label == "Other AI tool") }
+}

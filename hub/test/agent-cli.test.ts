@@ -50,6 +50,35 @@ function preload(dir: string) {
   return file;
 }
 
+test.each([
+  ["mcp", undefined, "mcp"],
+  ["mcp", {}, "mcp"],
+  ["mcp", { name: "" }, "mcp"],
+  ["mcp", { name: "  \t " }, "mcp"],
+  ["mcp", { name: 42 }, "mcp"],
+  ["mcp", { name: "自定义工具" }, "-"],
+  ["mcp", { name: "  My__AI!!客户端...tool  " }, "my-ai-tool"],
+  ["mcp", { name: "  CLAUDE___CODE  " }, "claude-code"],
+  ["mcp", { name: "  OpenCode  " }, "opencode"],
+  ["mcp", { name: " GEMINI CLI " }, "gemini-cli"],
+  ["mcp", { name: "x".repeat(40) }, "x".repeat(32)],
+  ["codex", { name: "OpenCode" }, "codex"],
+] as const)("MCP --tool %s 的客户端 %j 记为 %s", async (tool, clientInfo, expected) => {
+  const ctx = environment();
+  try {
+    const inputs = [
+      rpc(1, "initialize", { clientInfo }), call(2, "now"), call(3, "search", { query: "synthetic" }),
+    ];
+    const result = await run(ctx.dir, ["mcp", "--tool", tool], inputs.join("\n") + "\n", {}, preload(ctx.dir));
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    const messages = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+    const calls = messages.slice(1).map(message => JSON.parse(message.result.content[0].text).args);
+    expect(calls.map(args => args.tool)).toEqual([expected, expected]);
+    expect(calls[0].session).toBe(calls[1].session);
+  } finally { ctx.cleanup(); }
+});
+
 test("MCP 子进程协商全部版本、通知、错误码与 stdout 协议隔离", async () => {
   const ctx = environment();
   try {
@@ -255,7 +284,13 @@ test.skipIf(bindDenied)("真实 hub + stdio：四种读取、404、hook 上下�
       const hook = await run(ctx.dir, ["hook", "session-start", "--tool", "claude-code"], JSON.stringify({ cwd: "/synthetic", source, session_id: "合成会话" }), env);
       expect(hook.code).toBe(0); expect(hook.stderr).toBe(""); expect(JSON.parse(hook.stdout).hookSpecificOutput.additionalContext).toContain("合成事项摘要");
     }
+    const other = await run(ctx.dir, ["mcp", "--tool", "mcp"],
+      [rpc(1, "initialize", { clientInfo: { name: " OpenCode " } }), call(2, "now")].join("\n") + "\n", env);
+    expect(other.code).toBe(0);
+    expect(other.stderr).toBe("");
+    expect(JSON.parse(other.stdout.trim().split("\n")[1]!).result.content[0].text).toContain("合成当前状态");
     const audit = ctx.db.db.prepare("SELECT tool,kind,args FROM agent_reads").all() as any[];
+    expect(audit.some(r => r.tool === "opencode" && r.kind === "now")).toBe(true);
     expect(audit.some(r => r.tool === "codex" && r.kind === "search" && JSON.parse(r.args).q_length === 6)).toBe(true);
     expect(audit.some(r => r.tool === "claude-desktop" && r.kind === "now")).toBe(true);
     // 补记：检索词、会话和项目，用来统计利用率与命中情况。

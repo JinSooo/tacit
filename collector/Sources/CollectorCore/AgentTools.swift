@@ -26,7 +26,10 @@ public enum AgentTools {
   public static func session(source: String) -> Tool? { bySource[source] }
   static func named(_ app: String) -> Tool? { byDisplayName[app.lowercased()] }
 
+  private static var otherMCPLabel: String { L10n.text(zh: "其他 AI 工具", en: "Other AI tool") }
+
   public static func auditTool(id: String) -> Tool {
-    byID[id] ?? Tool(id: id, source: nil, label: id, bundle: nil, symbol: "circle-dashed", alias: nil, substitute: nil)
+    byID[id] ?? Tool(id: id, source: nil, label: id == "mcp" ? otherMCPLabel : id, bundle: nil,
+                      symbol: "circle-dashed", alias: nil, substitute: nil)
   }
 }
