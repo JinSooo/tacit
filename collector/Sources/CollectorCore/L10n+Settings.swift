@@ -783,19 +783,22 @@ public extension L10n {
       }
     }
 
+    private static let unknownSpeechDownload = (
+      zh: "语音模型没能下载，稍后会自动重试",
+      en: "Couldn't download the speech model. Tacit will retry shortly."
+    )
+
+    private static let speechDownloadMessages: [Substring: (zh: String, en: String)] = [
+      "audio_models_error:network": ("连不上下载地址，检查网络或代理后会自动重试", "Can't reach the download. Check your network or proxy. Tacit will retry automatically."),
+      "audio_models_error:checksum": ("下载的文件不完整，会自动重新下载", "The downloaded file is incomplete. Tacit will download it again."),
+      "audio_models_error:disk": ("磁盘空间不够，清理后会自动重试", "Free up disk space and Tacit will retry automatically."),
+      "audio_models_error:extract": ("模型文件解压失败，会自动重试", "Couldn't unpack the model. Tacit will retry automatically."),
+    ]
+
     public static func speechModelDownloadMessage(stderr: String, lang: AppLanguage = .current) -> String {
-      switch stderr.split(whereSeparator: \.isNewline).last {
-      case "audio_models_error:network":
-        return L10n.text(zh: "连不上下载地址，检查网络或代理后会自动重试", en: "Can't reach the download. Check your network or proxy. Tacit will retry automatically.", lang: lang)
-      case "audio_models_error:checksum":
-        return L10n.text(zh: "下载的文件不完整，会自动重新下载", en: "The downloaded file is incomplete. Tacit will download it again.", lang: lang)
-      case "audio_models_error:disk":
-        return L10n.text(zh: "磁盘空间不够，清理后会自动重试", en: "Free up disk space and Tacit will retry automatically.", lang: lang)
-      case "audio_models_error:extract":
-        return L10n.text(zh: "模型文件解压失败，会自动重试", en: "Couldn't unpack the model. Tacit will retry automatically.", lang: lang)
-      default:
-        return L10n.text(zh: "语音模型没能下载，稍后会自动重试", en: "Couldn't download the speech model. Tacit will retry shortly.", lang: lang)
-      }
+      let marker = stderr.split(whereSeparator: \.isNewline).last ?? ""
+      let message = speechDownloadMessages[marker] ?? unknownSpeechDownload
+      return L10n.text(zh: message.zh, en: message.en, lang: lang)
     }
 
     public static func speechModelInstallationMissing(lang: AppLanguage = .current) -> String {
@@ -901,6 +904,10 @@ public extension L10n {
     }
 
     public static func recordingStatus(_ status: String) -> String {
+      let downloads = Array(speechDownloadMessages.values) + [unknownSpeechDownload]
+      if let download = downloads.first(where: { status == $0.zh || status == $0.en }) {
+        return L10n.text(zh: download.zh, en: download.en)
+      }
       guard AppLanguage.current == .en, hasChineseText(status) else { return status }
       if status == speechModelInstallationMissing(lang: .zh) { return speechModelInstallationMissing() }
       if status.hasPrefix("语音模型下载失败") { return speechModelDownloadFailed("") }
@@ -923,8 +930,8 @@ public extension L10n {
     }
 
     public static func sourceStatus(_ status: String, source: String, succeeded: Bool) -> String {
-      guard AppLanguage.current == .en, !status.isEmpty else { return status }
       if source == "audio" { return recordingStatus(status) }
+      guard AppLanguage.current == .en, !status.isEmpty else { return status }
       if source == "wechat", status.hasPrefix("“"), let end = status.range(of: "”新增 ", options: .backwards),
          let number = Int(status[end.upperBound...].dropLast(2)) {
         let chat = String(status[status.index(after: status.startIndex)..<end.lowerBound])

@@ -7,6 +7,7 @@ public extension L10n {
     case "辅助功能": return "Accessibility"
     case "录屏": return "Screen Recording"
     case "麦克风": return "Microphone"
+    case "完全磁盘访问": return "Full Disk Access"
     default: return name
     }
   }

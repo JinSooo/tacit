@@ -84,3 +84,21 @@ func supportedServiceInstructionsRemainVisible(_ language: AppLanguage) {
     }
   }
 }
+
+@Test func preparationPermissionsAndDownloadFailuresFollowTheCurrentLanguage() {
+  AppLanguage.$scopedLanguage.withValue(.en) {
+    #expect(L10n.permission("完全磁盘访问") == "Full Disk Access")
+  }
+  for category in ["network", "checksum", "disk", "extract", "unknown"] {
+    let stderr = "audio_models_error:\(category)"
+    let zh = L10n.Settings.speechModelDownloadMessage(stderr: stderr, lang: .zh)
+    let en = L10n.Settings.speechModelDownloadMessage(stderr: stderr, lang: .en)
+    #expect(zh != en)
+    AppLanguage.$scopedLanguage.withValue(.en) {
+      #expect(L10n.Settings.recordingStatus(zh) == en)
+    }
+    AppLanguage.$scopedLanguage.withValue(.zh) {
+      #expect(L10n.Settings.recordingStatus(en) == zh)
+    }
+  }
+}
