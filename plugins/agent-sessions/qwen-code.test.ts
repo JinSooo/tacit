@@ -47,8 +47,11 @@ test("Qwen Code 只读有逐条时间的真实对话，沿用旧 checkpoint 和�
     const noise = { ...user, message: { role: "user", parts: [{ text: "忽略程序输入" }] } };
     const subtypes = ["agent_mention", "agent_message", "notification", "background_task_completed", "cron", "agent_bootstrap", "agent_launch_prompt", "agent_retry"];
     write(file, [
-      user, intermediate, tool, reply, ...subtypes.map(subtype => ({ ...noise, subtype })),
-      { ...noise, type: "system", subtype: "chat_compression" }, { ...noise, backgroundTurn: true },
+      user,
+      { ...user, timestamp: date(21), backgroundTurn: false, message: { role: "user", parts: [{ text: "保留 false 的消息" }] } },
+      { ...user, timestamp: date(22), backgroundTurn: null, message: { role: "user", parts: [{ text: "保留 null 的消息" }] } },
+      intermediate, tool, reply, ...subtypes.map(subtype => ({ ...noise, subtype })),
+      { ...noise, type: "system", subtype: "chat_compression" }, { ...noise, backgroundTurn: true }, { ...noise, backgroundTurn: { id: "task" } },
       { ...noise, externalInputKind: "notification" }, { ...noise, clientInitiatedSkills: true },
       { ...noise, timestamp: undefined }, { ...noise, agentId: "subagent", cwd: "/synthetic/child" },
     ]);
@@ -57,7 +60,7 @@ test("Qwen Code 只读有逐条时间的真实对话，沿用旧 checkpoint 和�
     ]);
     const first = await run(legacy.state);
     expect(first.records.map(record => [record.source, record.source_ref, record.context?.cwd, record.body])).toEqual([
-      ["qwen_code.session", "ses-qwen-001#2026-11-27T02:00:00.000Z", "/synthetic/demo", "[我] 给 CSV 加转义\n\n[AI] 已处理引号和换行"],
+      ["qwen_code.session", "ses-qwen-001#2026-11-27T02:00:00.000Z", "/synthetic/demo", "[我] 给 CSV 加转义\n\n[我] 保留 false 的消息\n\n[我] 保留 null 的消息\n\n[AI] 已处理引号和换行"],
     ]);
     expect(Date.parse(first.records[0]!.t_end!)).toBe(Date.parse(date(23)));
     expect(first.state.files[file]?.offset).toBe(fs.statSync(file).size);

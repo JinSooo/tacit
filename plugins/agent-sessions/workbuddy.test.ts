@@ -24,10 +24,11 @@ test("WorkBuddy 缺省目录安静跳过，按同源格式独立识别来源、�
       { type: "function_call", timestamp: at(2), name: "read", arguments: "工具输入" },
       { type: "function_call_output", timestamp: at(3), output: "工具输出" },
       { type: "summary", timestamp: at(4), content: "压缩摘要" },
+      user("合成侧链", { isSidechain: true, cwd: "/synthetic/sidechain" }),
       reply("已核对三个字段。", 5),
     ]);
     s.write(s.file(`${dir}/same-id/subagents/agent-child.jsonl`), [user("子 Agent 路径")]);
-    s.write(s.file(`${dir}/sidechain.jsonl`), [user("侧链", { isSidechain: true }), reply("侧链回复", 2)]);
+    s.write(s.file(`${dir}/sidechain.jsonl`), [user("侧链", { isSidechain: true }), { ...reply("侧链回复", 2), isSidechain: true }]);
     s.write(s.file("workbuddy-ai/projects/compressed/other.jsonl"), [user("未经证实的目录")]);
     const first = await s.run({}, empty.state);
     expect(first.diagnostics).toEqual([]);

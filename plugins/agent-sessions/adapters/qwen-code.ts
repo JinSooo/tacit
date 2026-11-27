@@ -35,7 +35,7 @@ function parseQwenEvent(event: Json | null, hasSession: boolean): Parsed {
   if (isSidechain(event) || event.type === "system" || event.type === "tool_result") return ignored;
   if (event.type !== "user" && event.type !== "assistant") return unknown;
   if (event.type === "user" && (
-    nonUserSubtypes.has(event.subtype) || Object.hasOwn(event, "backgroundTurn")
+    nonUserSubtypes.has(event.subtype) || event.backgroundTurn
     || event.externalInputKind === "notification" || event.clientInitiatedSkills === true
   )) return ignored;
   if (event.message?.role !== (event.type === "user" ? "user" : "model") || !Array.isArray(event.message.parts)) return unknown;

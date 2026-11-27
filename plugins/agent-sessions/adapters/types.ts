@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { readEvents } from "../json-lines.ts";
 import type { Json, Parsed } from "../session-events.ts";
 
 export interface SessionDirectories {
@@ -29,8 +28,11 @@ export interface SessionAdapter {
   additionalRootFields?: ReadonlySet<string>;
   additionalMessageFields?: ReadonlySet<string>;
   genaiParts?: "content" | "parts";
-  files(directories: SessionDirectories): Iterable<SessionFile>;
-  readEvents?: typeof readEvents;
+  files(directories: SessionDirectories, deferDirectory?: (directory: string) => void): Iterable<SessionFile>;
+  /** Readers with pending fragments are retried at the quiet boundary even when the file is unchanged. */
+  readEvents?(file: string, offset: number, size: number, quiet: boolean):
+    AsyncIterable<{ event: Json | null | undefined; damaged: boolean; end: number }>;
+  skipSessionVersion?: number;
   sessionId?(event: Json | null, file: SessionFile): unknown;
   /** 子 Agent、分叉等不属于用户直接参与的会话：返回 true 时整段跳过。 */
   skipSession?(event: Json): boolean;

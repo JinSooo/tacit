@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { cleanLegacyUserText } from "../filters.ts";
 import { ignored, parseMessage, unknown, type Json, type Parsed } from "../session-events.ts";
 import { walkJsonl, type SessionAdapter } from "./types.ts";
 
@@ -11,7 +12,7 @@ function parseClaudeEvent(event: Json | null, hasSession: boolean): Parsed {
   if (event.type !== "user" && event.type !== "assistant") return unknown;
   if (event.isSidechain || event.isMeta || event.isCompactSummary) return ignored;
   if (event.type === "user" && (event.promptSource === "system" || ["task_notification", "hook"].includes(event.turnOrigin) || /task-notification|hook/.test(event.origin?.kind ?? ""))) return ignored;
-  return parseMessage(event, event.message ?? {}, hasSession);
+  return parseMessage(event, event.message ?? {}, hasSession, cleanLegacyUserText);
 }
 
 export const claudeCode: SessionAdapter = {

@@ -14,30 +14,36 @@ interface Summary {
   nesting_depth: number | null;
 }
 
-function readSummaries(root: string): Map<string, Summary> {
+function readSummaries(root: string): Map<string, Summary> | null {
   const file = path.join(root, "conversation_summaries.db");
-  if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isFile()) return new Map();
-  const uri = pathToFileURL(path.resolve(file));
-  // 有现成的 WAL 和共享内存文件时读最新数据。归档数据库不创建 sidecar。
-  const modes = fs.existsSync(file + "-shm") && fs.existsSync(file + "-wal")
-    ? ["mode=ro", "mode=ro&immutable=1"] : ["mode=ro&immutable=1"];
-  for (const mode of modes) {
-    let db: Database | undefined;
-    try {
-      uri.search = mode;
-      db = new Database(uri.href, { readonly: true });
-      const rows = db.query<Summary, []>(`
-        SELECT conversation_id, workspace_uris, parent_conversation_id, nesting_depth
-        FROM conversation_summaries
-      `).all();
-      return new Map(rows.map(row => [row.conversation_id, row]));
-    } catch {
-      // 普通只读打开失败时，仍尝试从已写回的数据库读取。
-    } finally {
-      db?.close();
-    }
+  let db: Database | undefined;
+  try {
+    const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+    if (!stat) return new Map();
+    if (!stat.isFile()) return null;
+    const hasUncheckpointedWal = () => (fs.statSync(file + "-wal", { throwIfNoEntry: false })?.size ?? 0) > 0;
+    const activeWal = hasUncheckpointedWal();
+    // SQLite 可能为只读连接创建 sidecar。缺少共享内存时等待写入端恢复或写回。
+    if (activeWal && !fs.existsSync(file + "-shm")) return null;
+    const header = Buffer.alloc(20);
+    const fd = fs.openSync(file, "r");
+    try { fs.readSync(fd, header, 0, header.length, 0); } finally { fs.closeSync(fd); }
+    const immutable = !activeWal && (header[18] === 2 || header[19] === 2);
+    const uri = pathToFileURL(path.resolve(file));
+    uri.search = immutable ? "mode=ro&immutable=1" : "mode=ro";
+    db = new Database(uri.href, { readonly: true });
+    db.exec("PRAGMA busy_timeout = 1000");
+    const rows = db.query<Summary, []>(`
+      SELECT conversation_id, workspace_uris, parent_conversation_id, nesting_depth
+      FROM conversation_summaries
+    `).all();
+    if (immutable && hasUncheckpointedWal()) return null;
+    return new Map(rows.map(row => [row.conversation_id, row]));
+  } catch {
+    return null;
+  } finally {
+    db?.close();
   }
-  return new Map();
 }
 
 function workspaceCwd(workspaceUris: string | null | undefined): string | null {
@@ -63,8 +69,10 @@ function workspaceCwd(workspaceUris: string | null | undefined): string | null {
 
 // 桌面版把用户原话包在 <USER_REQUEST> 里，后面附带当前时间、设置变更等系统信息（2026-11-27 真机样本），只取原话。
 function userRequest(content: string): string {
-  const match = content.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/);
-  return match ? match[1]! : content;
+  const open = "<USER_REQUEST>", close = "</USER_REQUEST>";
+  const value = content.trimStart();
+  const end = value.lastIndexOf(close);
+  return value.startsWith(open) && end >= open.length ? value.slice(open.length, end) : content;
 }
 
 function parseAntigravityEvent(event: Json | null, hasSession: boolean): Parsed {
@@ -74,8 +82,8 @@ function parseAntigravityEvent(event: Json | null, hasSession: boolean): Parsed 
     return typeof event.source === "string" && event.source ? ignored : unknown;
   }
   const role = event.type === "USER_INPUT" ? "user" : "assistant";
-  if (role === "user" && event.source !== "USER_EXPLICIT") return unknown;
-  if (role === "assistant" && event.content === undefined) return ignored;
+  if (role === "user" && event.source !== "USER_EXPLICIT") return ignored;
+  if (role === "assistant" && event.content == null) return ignored;
   const time = typeof event.created_at === "string" ? Date.parse(event.created_at) : NaN;
   if (!hasSession || !Number.isFinite(time) || typeof event.content !== "string") return unknown;
   const text = role === "user" ? cleanUserText(userRequest(event.content)) : event.content.trim();
@@ -85,7 +93,7 @@ function parseAntigravityEvent(event: Json | null, hasSession: boolean): Parsed 
 export const antigravity: SessionAdapter = {
   id: "antigravity",
   additionalRootFields: new Set(["source", "created_at", "content"]),
-  *files({ antigravityDir }) {
+  *files({ antigravityDir }, deferDirectory) {
     const gemini = antigravityDir ?? process.env.RA_ANTIGRAVITY_DIR ?? path.join(os.homedir(), ".gemini");
     for (const name of ["antigravity", "antigravity-cli", "antigravity-ide"]) {
       const root = path.join(gemini, name);
@@ -93,6 +101,10 @@ export const antigravity: SessionAdapter = {
       const brain = path.join(root, "brain");
       if (!fs.lstatSync(brain, { throwIfNoEntry: false })?.isDirectory()) continue;
       const summaries = readSummaries(root);
+      if (!summaries) {
+        deferDirectory?.(brain);
+        continue;
+      }
       for (const entry of fs.readdirSync(brain, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
         const generated = path.join(brain, entry.name, ".system_generated");

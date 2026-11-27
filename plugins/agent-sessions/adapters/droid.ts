@@ -4,7 +4,7 @@ import { ignored, parseMessage, unknown, type Json } from "../session-events.ts"
 import { directoryEntries, jsonlFiles, type SessionAdapter } from "./types.ts";
 
 const linkedSessionFields = [
-  "callingSessionId", "callingToolUseId", "parent", "decompSessionType", "decompMissionId", "forkedAtMessageId",
+  "callingSessionId", "callingToolUseId", "decompSessionType", "decompMissionId",
 ];
 const metadata = new Set(["session_start", "compaction_state", "todo_state", "queued_messages_discarded", "tool_call"]);
 const internalPrefix = /^(?:__internal__system-reminder__|injected-summary-|---BEGIN TASK FROM PARENT AGENT---)/;
@@ -12,6 +12,7 @@ const internal = (value: unknown) => typeof value === "string" && internalPrefix
 
 export const droid: SessionAdapter = {
   id: "droid",
+  skipSessionVersion: 1,
   additionalRootFields: new Set(["id", "lastCwd", "tags", ...linkedSessionFields]),
   additionalMessageFields: new Set(["visibility", "systemNotice", "hiddenFromUserViews", "isUserVisible", "hookEventName"]),
   *files({ factoryDir }) {
@@ -47,6 +48,6 @@ export const droid: SessionAdapter = {
       if (!Number.isFinite(date.getTime())) return unknown;
       timestamp = date.toISOString();
     }
-    return parseMessage({ timestamp }, { role: message.role, content }, hasSession, true);
+    return parseMessage({ timestamp }, { role: message.role, content }, hasSession);
   },
 };

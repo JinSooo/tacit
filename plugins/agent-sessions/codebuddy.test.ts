@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
 import { at, sessionFixture } from "./adapter-fixture.ts";
 
 const message = (role: string, text: string, minute = 1, extra = {}) => ({
@@ -18,19 +19,23 @@ test("CodeBuddy 读取有逐条时间的可见正文，过滤钩子、工具、�
       message("user", "Agent 投递", 4, { providerData: { "runtime:initiator": "agent" } }),
       message("user", "系统通知", 5, { providerData: { interactionType: "notification" } }),
       message("assistant", "中间回复", 6, { status: "in_progress" }),
+      message("user", "合成侧链", 7, { isSidechain: true, cwd: "/synthetic/sidechain" }),
       ...["function_call", "function_call_output", "function_call_result", "reasoning", "thinking", "summary", "topic", "resend-fork-notice"]
         .map(type => ({ type, timestamp: at(7), content: "中间记录" })),
-      message("assistant", "已将默认超时改成 10000ms。", 8, { status: "completed", timestamp: undefined, __timestamp: at(8) }),
+      message("assistant", "已将默认超时改成 10000ms。", 8, { status: "completed", timestamp: undefined, __timestamp: at(8), cwd: undefined }),
     ]);
     s.write(s.file(`${dir}/main/subagents/agent-child.jsonl`), [message("user", "子 Agent 路径")]);
     s.write(s.file(`${dir}/sidechain.jsonl`), [
-      message("user", "侧链", 2, { isSidechain: true }), message("assistant", "侧链没有标记的回复"),
+      message("user", "侧链", 2, { isSidechain: true }), message("assistant", "侧链回复", 3, { isSidechain: true }),
     ]);
     const invalid = message("user", "时间不可知", 3, { timestamp: undefined, time: at(3) });
     const wrapped = { item: message("user", "未知包装"), timestamp: at(3) };
     s.write(s.file(`${dir}/unknown.jsonl`), Array.from({ length: 20 }, (_, i) => i % 2 ? invalid : wrapped));
 
-    const first = await s.run({}, s.oldCheckpoint());
+    const old = s.oldCheckpoint();
+    const stat = fs.statSync(target);
+    old.files[target] = { skipped: true, offset: stat.size, size: stat.size, mtime: stat.mtimeMs, identity: `${stat.dev}:${stat.ino}`, session: null };
+    const first = await s.run({}, old);
     expect(first.diagnostics).toEqual([{ unrecognized: 20 }]);
     expect(first.records).toHaveLength(1);
     expect(first.records[0]).toMatchObject({

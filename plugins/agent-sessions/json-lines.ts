@@ -102,7 +102,9 @@ export class EventParser {
     else if (parent.context === "blocks" && kind === "object") context = "block";
     else if (parent.context === "parts" && kind === "object") context = "part";
     const value = context === "ignored" ? null : kind === "object" ? Object.create(null) : [];
-    this.accept(value);
+    // Qwen 只需知道 backgroundTurn 的对象或数组为真，无需保存其中的数据。
+    const background = parent?.context === "root" && parent.key === "backgroundTurn";
+    this.accept(background ? true : value);
     if (context === "root") this.result = value;
     this.stack.push({ kind, context, value, state: kind === "object" ? "first-key" : "first", key: "" });
   }

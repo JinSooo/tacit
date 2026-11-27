@@ -6,6 +6,7 @@ import { zstdCompressSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { collect, type State } from "./main.ts";
 import { cleanUserText, injectionRules, injectedBlockRules } from "./filters.ts";
+import { framing } from "../../hub/src/agent-cli/context-language.ts";
 import { validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 
 const temporary: string[] = [];
@@ -454,4 +455,14 @@ test("runner 将诊断计数交给采集端，checkpoint 保存和去重照常",
     expect(next).toMatchObject({ accepted: 0, duplicates: 0, stateWritten: true });
     expect(next.warnings).toBeUndefined();
   } finally { db.close(); }
+});
+
+test("剥离中英文会话开场及转义包装，保留后面的用户原话", () => {
+  for (const { intro, hint } of Object.values(framing)) {
+    const injected = `${intro}\n合成项目 <fixture>\n${hint}`;
+    const escaped = `&lt;hook-additional-context&gt;\n${injected.replaceAll("<", "&lt;").replaceAll(">", "&gt;")}\n&lt;/hook-additional-context&gt;`;
+    expect([cleanUserText(injected), cleanUserText(escaped)]).toEqual(["", ""]);
+    expect(cleanUserText(`${escaped}\n核对 &lt;fixture&gt; 的标题`)).toBe("核对 &lt;fixture&gt; 的标题");
+    expect(cleanUserText(`${injected}\n核对标题`)).toBe("核对标题");
+  }
 });

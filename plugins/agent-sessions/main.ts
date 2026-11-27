@@ -24,7 +24,7 @@ const PENDING_LIMIT = "当前会话待保存内容超过上限，关闭后重试
 interface SessionWarnings { unrecognized?: number; damaged?: number }
 interface Bucket { part: number; messages: Message[] }
 interface Session { provider: string; id: string; cwd: string | null; seen: { [hour: string]: string[] }; buckets: { [hour: string]: Bucket }; mtime: number; lastActivity?: number }
-interface FileProgress { offset: number; mtime: number; size: number; identity: string; session: string | null; cwd?: string | null; skipped?: true }
+interface FileProgress { offset: number; mtime: number; size: number; identity: string; session: string | null; cwd?: string | null; skipped?: true; skipVersion?: number }
 export interface State { version: 2; since: number; replaySince: number; files: { [file: string]: FileProgress }; sessions: { [id: string]: Session }; databases?: { [file: string]: DatabaseProgress } }
 export interface Options extends SessionDirectories { device: string; lang?: Lang; now?: number; since?: number; state?: State; excludeDirs?: string[]; onRecord?: (record: RecordV1) => void | Promise<void>; onWarning?: (message: string) => void; onDiagnostics?: (warnings: SessionWarnings) => void }
 
@@ -98,7 +98,15 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
   }
   if (state.version !== 2 || !Number.isFinite(state.since) || !Number.isFinite(state.replaySince)) throw new Error("不支持的 checkpoint 格式");
   let damaged = 0, parsed = 0, unrecognized = 0, unrecognizedFile = false;
-  for (const file of Object.keys(state.files)) if (!fs.existsSync(file)) delete state.files[file];
+  const deferredDirectories: string[] = [];
+  const deferredSessions = new Set<string>();
+  const deferDirectory = (directory: string) => {
+    const prefix = directory + path.sep;
+    deferredDirectories.push(prefix);
+    for (const [file, progress] of Object.entries(state.files)) {
+      if (file.startsWith(prefix) && progress.session) deferredSessions.add(progress.session);
+    }
+  };
   // 已有 state 时再传 --since 表示从该时刻起重新读取（重新导入、导入全部历史）：之后改过的文件从头读，
   // 窗口内已输出过的消息靠 seen 跳过，更早的靠 hub 按 source_ref 去重；state 的增量游标不倒退。
   const rescan = options.state !== undefined && options.since !== undefined;
@@ -123,9 +131,8 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
   };
   for (const session of Object.values(state.sessions)) for (const bucket of Object.values(session.buckets)) {
     for (const message of bucket.messages) add(bucket, message, null);
-    bucket.messages = [];
   }
-  for (const adapter of adapters) if ("files" in adapter) for (const sessionFile of adapter.files(options)) {
+  for (const adapter of adapters) if ("files" in adapter) for (const sessionFile of adapter.files(options, deferDirectory)) {
     const provider = adapter.checkpointKey;
     const file = sessionFile.path;
     const metadata = sessionFile.session;
@@ -139,7 +146,8 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     const old = state.files[file];
     if (!old && stat.mtimeMs < (rescan ? floor : state.since)) continue;
     const identity = `${stat.dev}:${stat.ino}`;
-    const reset = (rescan && stat.mtimeMs >= floor) || (file.endsWith(".zst") && (stat.size !== old?.size || stat.mtimeMs !== old?.mtime)) || !old || old.identity !== identity || stat.size < old.size || (stat.size === old.size && stat.mtimeMs !== old.mtime);
+    const staleSkip = old?.skipped && (!adapter.skipSession || old.skipVersion !== adapter.skipSessionVersion);
+    const reset = staleSkip || (rescan && stat.mtimeMs >= floor) || (file.endsWith(".zst") && (stat.size !== old?.size || stat.mtimeMs !== old?.mtime)) || !old || old.identity !== identity || stat.size < old.size || (stat.size === old.size && stat.mtimeMs !== old.mtime);
     const fallback = sessionFile.fallbackSessionId;
     const progress: FileProgress = reset ? { offset: 0, mtime: stat.mtimeMs, size: stat.size, identity, session: old?.session ?? (fallback ? `${provider}:${fallback}` : null), cwd: old?.cwd ?? null } : { ...old };
     if (!progress.skipped && metadata && sessionKey) {
@@ -150,11 +158,15 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
         if (session) session.cwd = metadata.cwd;
       }
     }
-    // 未修改文件不读取，但仍在下面检查它的待关闭桶。
-    if (!progress.skipped && (reset || stat.size !== old?.size || stat.mtimeMs !== old?.mtime)) {
+    const quiet = now - stat.mtimeMs >= QUIET;
+    const retryFragments = adapter.readEvents && quiet && progress.offset < stat.size;
+    // 未修改文件通常只检查待关闭桶。分片读取器还需要在安静时处理未完成的片段。
+    if (!progress.skipped && (reset || stat.size !== old?.size || stat.mtimeMs !== old?.mtime || retryFragments)) {
       let fileParsed = 0, fileUnknown = 0;
-      const events = adapter.readEvents ?? readEvents;
-      for await (const line of events(file, progress.offset, stat.size, adapter.additionalRootFields, adapter.additionalMessageFields, adapter.genaiParts)) {
+      const events = adapter.readEvents
+        ? adapter.readEvents(file, progress.offset, stat.size, quiet)
+        : readEvents(file, progress.offset, stat.size, adapter.additionalRootFields, adapter.additionalMessageFields, adapter.genaiParts);
+      for await (const line of events) {
         progress.offset = line.end;
         if (line.damaged) { damaged++; continue; }
         const event = line.event;
@@ -165,6 +177,7 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
           if (progress.session) delete state.sessions[progress.session];
           progress.session = null;
           progress.skipped = true;
+          if (adapter.skipSessionVersion !== undefined) progress.skipVersion = adapter.skipSessionVersion;
           break;
         }
         const result = adapter.parse(event, !!progress.session);
@@ -204,6 +217,9 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     unrecognized += databaseUnknown;
     if (databaseUnknown >= 20 && databaseUnknown === scan.rows.length) unrecognizedFile = true;
   }
+  for (const file of Object.keys(state.files)) {
+    if (!deferredDirectories.some(prefix => file.startsWith(prefix)) && !fs.existsSync(file)) delete state.files[file];
+  }
   // 同一会话可能同时出现在活动目录和归档目录，统一去重、分桶和计算最近修改时间。
   // 保留已移走文件的最近活动时间，避免把仍有待输出内容的会话误判为空。
   for (const progress of Object.values(state.files)) if (progress.session && state.sessions[progress.session]) {
@@ -220,8 +236,8 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
   // 活动桶要随 checkpoint 保留。超限时在发送任何记录前结束本轮，
   // runner 保留旧游标，等桶关闭后重读；中途输出会改变分条边界。
   let pendingBytes = 0, pendingMessages = 0;
-  for (const session of Object.values(state.sessions)) {
-    if (isExcluded(session.cwd)) continue;
+  for (const [key, session] of Object.entries(state.sessions)) {
+    if (deferredSessions.has(key) || isExcluded(session.cwd)) continue;
     for (const [hour, bucket] of Object.entries(session.buckets)) {
       const id = bucketIds.get(bucket);
       if (id === undefined || isClosed(hour, session, id)) continue;
@@ -232,11 +248,13 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     }
   }
   const cutoff = now - RETENTION;
-  for (const session of Object.values(state.sessions)) {
+  for (const [key, session] of Object.entries(state.sessions)) {
+    if (deferredSessions.has(key)) continue;
     const excluded = isExcluded(session.cwd);
     for (const [hour, bucket] of Object.entries(session.buckets).sort(([a], [b]) => Number(a) - Number(b))) {
       const id = bucketIds.get(bucket);
       if (id === undefined) continue;
+      bucket.messages = [];
       const closed = isClosed(hour, session, id);
       const buffer = getBuffer();
       if (!excluded) {
@@ -251,6 +269,7 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
   // 已过期的桶不再重放；文件偏移和 cwd 仍保留，休眠会话追加时可直接恢复。
   const replaySince = Math.floor(cutoff / HOUR) * HOUR;
   for (const [key, session] of Object.entries(state.sessions)) {
+    if (deferredSessions.has(key)) continue;
     for (const hour of Object.keys(session.seen)) {
       if (Number(hour) + HOUR <= cutoff && !session.buckets[hour]?.messages.length) delete session.seen[hour];
     }

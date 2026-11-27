@@ -16,7 +16,12 @@ const metadata = new Set([
 function workspaceCwd(file: string): string | undefined {
   const stat = fs.lstatSync(file, { throwIfNoEntry: false });
   if (!stat?.isFile() || stat.size > 64 * 1024) return;
-  const line = /^cwd:[ \t]*(.*)$/m.exec(fs.readFileSync(file, "utf8"))?.[1]?.trim();
+  const yaml = fs.readFileSync(file, "utf8");
+  return workspacePath(/^cwd:[ \t]*(.*)$/m.exec(yaml)?.[1]) ?? workspacePath(/^git_root:[ \t]*(.*)$/m.exec(yaml)?.[1]);
+}
+
+function workspacePath(raw?: string): string | undefined {
+  const line = raw?.trim();
   if (!line) return;
   const doubleQuoted = /^("(?:[^"\\]|\\.)*")(?:\s+#.*)?$/.exec(line);
   const singleQuoted = /^'((?:[^']|'')*)'(?:\s+#.*)?$/.exec(line);
@@ -42,12 +47,12 @@ function parseCopilotEvent(event: Json | null, hasSession: boolean) {
   if (isInjected(event)) return ignored;
   if (typeof event.data?.content !== "string") return unknown;
   const role = event.type === "user.message" ? "user" : "assistant";
-  return parseMessage(event, { role, content: event.data.content }, hasSession, true);
+  return parseMessage(event, { role, content: event.data.content }, hasSession);
 }
 
 type Line = { event: Json | null | undefined; damaged: boolean; end: number };
 const maxText = 150_000;
-async function* readCopilotEvents(file: string, offset: number, size: number): AsyncGenerator<Line> {
+async function* readCopilotEvents(file: string, offset: number, size: number, quiet: boolean): AsyncGenerator<Line> {
   let start = offset;
   let pending: { event: Json; offset: number; id: string; lastIndex: number; count: number; end: number; text: string } | undefined;
   for await (const line of readEvents(file, offset, size, fields)) {
@@ -89,7 +94,9 @@ async function* readCopilotEvents(file: string, offset: number, size: number): A
     }
   }
   // 活跃调用可能在下一轮才写完；下次从第一片续读，再按完整回复去重。
-  if (pending) yield { event: undefined, end: pending.offset, damaged: false };
+  if (pending) yield quiet
+    ? { event: pending.event, end: start, damaged: false }
+    : { event: undefined, end: pending.offset, damaged: false };
 }
 
 export const copilotCli: SessionAdapter = {

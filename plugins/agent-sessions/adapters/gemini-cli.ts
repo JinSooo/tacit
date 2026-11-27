@@ -48,16 +48,24 @@ export const geminiCli: SessionAdapter = {
     const home = process.env.GEMINI_CLI_HOME || os.homedir();
     const override = geminiDir ?? process.env.RA_GEMINI_DIR;
     const root = override ?? path.join(home, ".gemini");
-    const runtime = !override && process.env.SANDBOX === "sandbox-exec" ? path.join(home, ".cache", ".gemini") : root;
+    const runtimes = [path.join(root, "tmp")];
+    if (override === undefined) runtimes.push(path.join(home, ".cache", ".gemini", "tmp"));
     const projects = projectPaths(root);
-    for (const project of directoriesIn(path.join(runtime, "tmp"))) {
-      const chats = path.join(project, "chats");
-      if (!fs.lstatSync(chats, { throwIfNoEntry: false })?.isDirectory()) continue;
-      const cwd = projects.get(path.basename(project)) ?? projectMarker(project);
-      for (const entry of fs.readdirSync(chats, { withFileTypes: true })) {
-        if (!entry.isFile()) continue;
-        const fallbackSessionId = sessionName.exec(entry.name)?.groups?.shortId;
-        if (fallbackSessionId) yield { path: path.join(chats, entry.name), cwd, fallbackSessionId };
+    const scanned = new Set<string>();
+    for (const runtime of runtimes) {
+      let real: string;
+      try { real = fs.realpathSync(runtime); } catch { continue; }
+      if (scanned.has(real)) continue;
+      scanned.add(real);
+      for (const project of directoriesIn(runtime)) {
+        const chats = path.join(project, "chats");
+        if (!fs.lstatSync(chats, { throwIfNoEntry: false })?.isDirectory()) continue;
+        const cwd = projects.get(path.basename(project)) ?? projectMarker(project);
+        for (const entry of fs.readdirSync(chats, { withFileTypes: true })) {
+          if (!entry.isFile()) continue;
+          const fallbackSessionId = sessionName.exec(entry.name)?.groups?.shortId;
+          if (fallbackSessionId) yield { path: path.join(chats, entry.name), cwd, fallbackSessionId };
+        }
       }
     }
   },
