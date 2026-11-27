@@ -6,6 +6,7 @@ export interface SessionDirectories {
   claudeDir?: string;
   codexDir?: string;
   antigravityDir?: string;
+  factoryDir?: string;
 }
 
 export interface SessionFile {
@@ -17,10 +18,23 @@ export interface SessionAdapter {
   id: string;
   checkpointKey?: string;
   additionalRootFields?: ReadonlySet<string>;
+  additionalMessageFields?: ReadonlySet<string>;
   files(directories: SessionDirectories): Iterable<SessionFile>;
   sessionId?(event: Json | null, file: SessionFile): unknown;
+  skipSession?(event: Json): boolean;
   cwd?(event: Json): unknown;
   parse(event: Json | null, hasSession: boolean): Parsed;
+}
+
+export function directoryEntries(root: string): fs.Dirent[] {
+  if (!fs.statSync(root, { throwIfNoEntry: false })?.isDirectory()) return [];
+  return fs.readdirSync(root, { withFileTypes: true });
+}
+
+export function* jsonlFiles(root: string): Generator<SessionFile> {
+  for (const entry of directoryEntries(root)) {
+    if (entry.isFile() && entry.name.endsWith(".jsonl")) yield { path: path.join(root, entry.name) };
+  }
 }
 
 export function* walkJsonl(root: string, excludeDirectory?: string): Generator<SessionFile> {
