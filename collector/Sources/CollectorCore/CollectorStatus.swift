@@ -229,6 +229,28 @@ public struct SetupStatus: Codable {
   }
 }
 
+public struct UploadResponseFailure {
+  public enum Category: String {
+    case tooLarge = "upload_too_large"
+    case rejected = "upload_rejected"
+
+    var diagnosticText: String {
+      switch self {
+      case .tooLarge: return L10n.text(zh: "待发送记录超过大小限制", en: "Pending records exceed the upload size limit")
+      case .rejected: return L10n.text(zh: "后台服务拒绝请求", en: "Background service rejected the request")
+      }
+    }
+  }
+
+  public let status: Int
+  public init(status: Int) { self.status = status }
+  public var category: Category { status == 413 ? .tooLarge : .rejected }
+  public var message: String {
+    if category == .tooLarge { return L10n.Settings.pendingUploadTooLarge }
+    return UserFacingError.message(for: HubError(status: status), fallback: L10n.recordSaveFailed)
+  }
+}
+
 public enum LocalBackendPreparation {
   public static func deliveryError(_ error: String, preparing: Bool, inStartupGrace: Bool) -> String? {
     preparing || inStartupGrace ? nil : error

@@ -844,12 +844,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       let outbox = hub.outboxStatus
       let hubBusy = hub.hubBusy
       let queuePeak = hub.queuePeak
-      let hubError = hub.lastError
+      let deliveryIssue = hub.deliveryIssue
+      let hubError = deliveryIssue.message
       let transcription = enabledSources["audio"] == true ? audio.transcriptionStatus() : nil
       var s: [String: Any] = stats
       s["queue"] = hub.pendingCount; s["dropped"] = hub.queue.dropped
       s["hubBusy"] = hubBusy; s["queuePeak"] = queuePeak
       s["sent"] = hub.sent; s["rejected"] = hub.rejected; s["hubError"] = hubError ?? NSNull()
+      s["hubErrorCategory"] = deliveryIssue.category?.rawValue ?? NSNull()
       s["axTrusted"] = AXIsProcessTrusted(); s["ocrEnabled"] = enabledSources["ocr"] ?? false; s["ocrGranted"] = ocr.granted
       s["sources"] = enabledSources
       s["paused"] = pausedUntil != nil; s["plugins"] = plugins.status()

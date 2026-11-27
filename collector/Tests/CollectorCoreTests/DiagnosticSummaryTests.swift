@@ -202,3 +202,30 @@ private func summary(in directory: URL, reachable: Bool = false, status: Data? =
   #expect(L10n.Settings.speechModelDownloadMessage(stderr: "audio_models_error:disk\nprivate details", lang: .zh) == cases[4].1)
   #expect(L10n.Settings.speechModelDownloadMessage(stderr: "audio_models_error:unsupported", lang: .zh) == cases[4].1)
 }
+
+@Test func uploadResponseFailuresUseUploadCopyAndFixedDiagnosticCategories() throws {
+  let cases: [(Int, UploadResponseFailure.Category, String)] = [
+    (413, .tooLarge, "Pending records exceed the upload size limit"),
+    (400, .rejected, "Background service rejected the request"),
+    (500, .rejected, "Background service rejected the request"),
+  ]
+  for (status, category, diagnostic) in cases {
+    let failure = UploadResponseFailure(status: status)
+    let zh = AppLanguage.$scopedLanguage.withValue(.zh) { failure.message }
+    try AppLanguage.$scopedLanguage.withValue(.en) {
+      #expect(failure.category == category)
+      #expect(L10n.Settings.backgroundIssue(zh) == failure.message)
+      if status == 413 {
+        #expect(zh == "待发送记录超过上传大小限制。")
+        #expect(failure.message == "Pending records exceed the upload size limit.")
+      }
+      try withDiagnosticDirectory { directory in
+        let fields = ["hubError": "synthetic private detail", "hubErrorCategory": failure.category.rawValue]
+        try JSONSerialization.data(withJSONObject: fields).write(to: directory.appendingPathComponent("collector-status.json"))
+        let text = summary(in: directory)
+        #expect(text.contains("Save error category  \(diagnostic)"))
+        #expect(!text.contains("synthetic private detail"))
+      }
+    }
+  }
+}

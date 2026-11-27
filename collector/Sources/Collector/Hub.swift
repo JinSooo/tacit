@@ -93,6 +93,7 @@ final class HubClient: @unchecked Sendable {
   private var inFlight = false
   private let lock = NSLock()
   private var networkError: String?
+  private var uploadFailure: UploadResponseFailure.Category?
   private var networkRoute: HubBinding.Route?
   private var storageError: String?
   private var storedCount = 0
@@ -102,7 +103,13 @@ final class HubClient: @unchecked Sendable {
   var queuePeak: Int { lock.lock(); defer { lock.unlock() }; return peak }
   private var pendingWrites = 0
   private let io = DispatchQueue(label: "record-anything.outbox", qos: .utility)
-  var lastError: String? { lock.lock(); defer { lock.unlock() }; return storageError ?? networkError }
+  var lastError: String? { deliveryIssue.message }
+  var deliveryIssue: (message: String?, category: UploadResponseFailure.Category?) {
+    lock.withLock {
+      if let storageError { return (storageError, nil) }
+      return (networkError, uploadFailure)
+    }
+  }
   var pendingCount: Int { lock.lock(); defer { lock.unlock() }; return storedCount + pendingWrites }
   private var sentCount = 0
   private var rejectedCount = 0
@@ -223,7 +230,7 @@ final class HubClient: @unchecked Sendable {
     let observed = try? config.hubRoute()
     if observed != networkRoute {
       networkRoute = observed
-      lock.withLock { networkError = nil }
+      lock.withLock { networkError = nil; uploadFailure = nil }
     }
     guard let route = observed else {
       lock.withLock { networkError = "后台连接配置无法读取，待发送记录已保留。" }
@@ -261,14 +268,14 @@ final class HubClient: @unchecked Sendable {
       } catch DeviceClientError.hubBusy, DeviceClientError.operationError(_, 503, _), DeviceClientError.plaintextError(503, _) {
         finish(on: route, error: nil, done: nil, status: 503)
       } catch DeviceClientError.operationError(_, let status, _), DeviceClientError.plaintextError(let status, _) {
-        finish(on: route, error: UserFacingError.message(for: HubError(status: status), fallback: L10n.recordSaveFailed), done: nil)
+        finish(on: route, rejectedStatus: status)
       } catch RemoteDeviceAccess.Failure.frozen, DeviceClientError.deviceRemoved, DeviceClientError.invalidKey, DeviceClientError.keyStoreError, LocalDeviceLink.Failure.keyUnavailable {
         let backend = route.remote == nil ? "本机后台" : "远端后台"
         finish(on: route, error: "\(backend)连接凭据不可用，待发送记录已保留。", done: nil)
       } catch CollectorUpload.Failure.noToken {
         finish(on: route, error: startupDeliveryError("找不到后台服务的访问凭证，请重启 Tacit"), done: nil)
       } catch CollectorUpload.Failure.batchTooLarge, DeviceClientError.envelopeTooLarge {
-        finish(on: route, error: "待发送记录超过上传大小限制。", done: nil)
+        finish(on: route, rejectedStatus: 413)
       } catch {
         finish(on: route, error: startupDeliveryError("连不上后台服务"), done: nil)
       }
@@ -319,7 +326,7 @@ final class HubClient: @unchecked Sendable {
         }
         if let status = delivery.rejectedStatus {
           if let nonce = delivery.nonce { try await session.releaseRejectedCapture(nonce: nonce, status: status) }
-          finish(on: route, error: UserFacingError.message(for: HubError(status: status), fallback: L10n.recordSaveFailed), done: nil)
+          finish(on: route, rejectedStatus: status)
           return
         }
         guard let receipt = DeliveryReceipt.decode(delivery.body, batchCount: delivery.ids.count) else {
@@ -331,16 +338,23 @@ final class HubClient: @unchecked Sendable {
         finish(on: route, error: nil, done: done, relay: delivery.nonce.map { (session, $0) })
       } catch RemoteDeviceSession.Failure.awaitingReceipt, is RemoteSwitchWriteGate.Paused {
         finish(on: route, error: nil, done: nil)
+      } catch DeviceClientError.envelopeTooLarge {
+        finish(on: route, rejectedStatus: 413)
       } catch DeviceClientError.operationError(_, let status, _), DeviceClientError.plaintextError(let status, _) {
-        finish(on: route, error: UserFacingError.message(for: HubError(status: status), fallback: L10n.recordSaveFailed), done: nil)
+        finish(on: route, rejectedStatus: status)
       } catch {
         finish(on: route, error: "远端后台暂不可用，待发送记录已保留。", done: nil)
       }
     }
   }
 
+  private func finish(on route: HubBinding.Route, rejectedStatus: Int) {
+    let failure = UploadResponseFailure(status: rejectedStatus)
+    finish(on: route, error: failure.message, done: nil, failureCategory: failure.category)
+  }
+
   private func finish(on route: HubBinding.Route, error: String?, done: (HubBinding.Route, Set<String>, Int, Int)?, status: Int? = nil,
-                      relay: (RemoteDeviceSession, String)? = nil) {
+                      relay: (RemoteDeviceSession, String)? = nil, failureCategory: UploadResponseFailure.Category? = nil) {
     io.async { [self] in
       var acknowledged = done
       if let done {
@@ -352,7 +366,7 @@ final class HubClient: @unchecked Sendable {
       let previousError = networkError
       if current, let status { deliveryMetrics.received(status: status) }
       inFlight = false
-      if current { networkError = error }
+      if current { networkError = error; uploadFailure = failureCategory }
       if let done = acknowledged {
         if done.0.remote == nil { sentCount += done.2 }
         else if current { remoteSent = (done.0, (remoteSent?.route == done.0 ? remoteSent?.count ?? 0 : 0) + done.2) }

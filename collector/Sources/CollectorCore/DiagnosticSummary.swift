@@ -125,7 +125,9 @@ public enum DiagnosticSummary {
                                  ("outboxBytes", L10n.text(zh: "待发送文件大小", en: "Pending upload size"), "字节"), ("outboxDropped", L10n.text(zh: "待发送记录丢弃", en: "Pending records discarded"), "条")] {
         add(label, number(capture[key]).map { "\($0) \(unit)" })
       }
-      if let error = capture["hubError"] as? String { add(L10n.text(zh: "保存错误类别", en: "Save error category"), deliveryError(error)) }
+      let uploadCategory = (capture["hubErrorCategory"] as? String).flatMap(UploadResponseFailure.Category.init(rawValue:))
+      let deliveryCategory = uploadCategory?.diagnosticText ?? (capture["hubError"] as? String).map(deliveryError)
+      add(L10n.text(zh: "保存错误类别", en: "Save error category"), deliveryCategory)
       if let transcription = capture["transcription"] as? Fields {
         add(L10n.text(zh: "等待转写", en: "Awaiting transcription"), number(transcription["pending"]).map { L10n.text(zh: "\($0) 段", en: "\($0)") })
         add(L10n.text(zh: "转写失败", en: "Transcription failed"), number(transcription["failed"]).map { L10n.text(zh: "\($0) 段", en: "\($0)") })

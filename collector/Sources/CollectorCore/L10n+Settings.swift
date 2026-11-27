@@ -878,6 +878,10 @@ public extension L10n {
       L10n.text(zh: "整理没能完成，请检查模型设置。", en: "Summarizing failed. Check your model settings.")
     }
 
+    public static var pendingUploadTooLarge: String {
+      L10n.text(zh: "待发送记录超过上传大小限制。", en: "Pending records exceed the upload size limit.")
+    }
+
     public static func backgroundIssue(_ message: String) -> String {
       guard AppLanguage.current == .en, hasChineseText(message) else { return message }
       let messages: [(prefix: String, text: String)] = [
@@ -888,7 +892,12 @@ public extension L10n {
         ("后台未确认完整接收", "The background service didn't confirm receipt of all records. Pending records are kept."),
         ("后台服务拒绝了记录", "The background service rejected the records."),
         ("找不到后台服务的访问凭证", "Restart Tacit to restore the background service credentials."),
-        ("待发送记录超过上传大小限制", "Pending records exceed the upload size limit."),
+        ("待发送记录超过上传大小限制", pendingUploadTooLarge),
+        ("记录未写入，请重试", L10n.recordSaveFailed),
+        ("后台服务出错了，请稍后重试。", L10n.backgroundServiceFailed),
+        ("访问权限不足或身份已失效，请检查连接设置。", L10n.serviceAccessExpired),
+        ("这个版本的后台服务暂不支持此功能。", L10n.serviceFeatureUnavailable),
+        ("操作正在进行，请稍后再试。", L10n.serviceOperationInProgress),
         ("连不上后台服务", "Can't reach the background service."),
         ("待发送队列中有记录需要直连上传", "Some pending records need a direct connection to upload."),
         ("远端后台暂不可用", "The remote background service is temporarily unavailable. Pending records are kept."),
