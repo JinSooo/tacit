@@ -12,7 +12,9 @@ export type ModelErrorCode = ModelErrorCategory | `${ModelErrorCategory}:${numbe
 const known = (value: string): value is ModelErrorCategory => Object.hasOwn(MODEL_ERROR_LABELS, value);
 
 export function modelErrorCategory(code: ModelErrorCode): ModelErrorCategory {
-  return code.split(":")[0] as ModelErrorCategory;
+  const category = code.split(":")[0] as ModelErrorCategory;
+  // 调度的断网冷却不分后端。存储和界面仍使用 classifyModelError 返回的具体类别。
+  return category === "cli_network" ? "network" : category;
 }
 
 function statusCode(category: ModelErrorCategory, status?: number): ModelErrorCode {
