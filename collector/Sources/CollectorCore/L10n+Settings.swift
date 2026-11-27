@@ -454,6 +454,7 @@ public extension L10n {
     public static var updatingRecordStatus: String { L10n.text(zh: "正在更新记录状态…", en: "Updating record status…") }
     public static var updateRecordStatusFailed: String { L10n.text(zh: "无法更改这条记录的状态，请稍后再试。", en: "Couldn't change this record's status. Try again shortly.") }
     public static var dismissNoticeFailed: String { L10n.text(zh: "无法关闭这条提示，请重试。", en: "Couldn't dismiss this notice. Try again.") }
+    public static var invalidInviteLink: String { L10n.text(zh: "邀请链接无法使用，请检查是否复制完整。", en: "The invite link is invalid. Check that you copied the full link.") }
     public static var inviteUnavailable: String { L10n.text(zh: "邀请链接已过期或已使用，请粘贴新链接。", en: "The invite link expired or was already used. Paste a new one.") }
     public static var inviteWrongBackend: String { L10n.text(zh: "请粘贴当前后台签发的邀请链接，连接其他后台前需先切回这台 Mac。", en: "Paste an invite from the current background service. Switch back to this Mac before connecting to another service.") }
     public static var returnWaitingForReconciliation: String { L10n.text(zh: "远端的删除和私密变更尚未核对完成，当前仍使用远端后台。", en: "The remote background service remains in use while deletions and privacy changes are checked.") }

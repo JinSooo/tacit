@@ -12,6 +12,7 @@ private func deviceMessage(_ error: Error, fallback: String) -> String {
 func settingsReadFailure(_ error: Error, fallback: String, section: DiagnosticLog.SettingsSection) -> String {
   let hubError = error as? HubError
   DiagnosticLog.shared.record(.settingsReadFailed(section, reason: (hubError?.reason ?? .other).rawValue))
+  if let message = hubError?.displayableServiceMessage { return message }
   let reason: String? = switch hubError?.reason {
   case .unreachable: L10n.Settings.reasonUnreachable
   case .timedOut: L10n.Settings.reasonTimedOut

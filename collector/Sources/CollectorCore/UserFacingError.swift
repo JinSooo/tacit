@@ -8,7 +8,7 @@ public struct HubError: LocalizedError {
 
   public let status: Int
   public let reason: Reason
-  fileprivate let serviceMessage: String?
+  private let serviceMessage: String?
   fileprivate let localizedMessage: String?
 
   /// 来自后台的原文，显示前要经过可展示检查。
@@ -35,7 +35,12 @@ public struct HubError: LocalizedError {
 
   public var message: String { UserFacingError.message(for: self, fallback: L10n.Settings.settingsRequestFailed) }
   public var errorDescription: String? { message }
-  public var needsAction: Bool { [401, 403, 409, 429].contains(status) }
+  public var needsAction: Bool { [403, 409, 429].contains(status) }
+  public var displayableServiceMessage: String? {
+    guard let serviceMessage else { return nil }
+    let text = L10n.Settings.serviceMessage(serviceMessage, fallback: "")
+    return text.isEmpty ? nil : text
+  }
   public static var needsLocalHub: Self { .init(message: L10n.localServiceRequired, status: 0) }
   public static var invalidBinding: Self { .init(message: L10n.unreadableConnectionSettings, status: 0) }
   public static var remoteUnavailable: Self { .init(message: L10n.remoteServiceUnavailable, status: 0) }
@@ -47,13 +52,13 @@ public enum UserFacingError {
     if error is DecodingError { return L10n.unreadableResponse }
     if let hub = error as? HubError {
       if let message = hub.localizedMessage { return message }
-      let standard = hubMessage(status: hub.status, reason: hub.reason, fallback: fallback)
-      return hub.serviceMessage.map { L10n.Settings.serviceMessage($0, fallback: standard) } ?? standard
+      return hub.displayableServiceMessage ?? hubMessage(status: hub.status, reason: hub.reason, fallback: fallback)
     }
     if let device = error as? DeviceClientError {
       switch device {
       case .transportError(_, let code): return networkMessage(code ?? .unknown)
-      case .invalidInvitation: return L10n.Settings.inviteUnavailable
+      case .invalidInvitation: return L10n.Settings.invalidInviteLink
+      case .inviteExpired: return L10n.Settings.inviteUnavailable
       case .plaintextError(let status, let detail), .operationError(_, let status, let detail):
         return message(for: HubError(serviceMessage: detail, status: status), fallback: fallback)
       case .deviceRemoved(let detail): return message(for: HubError(serviceMessage: detail, status: 401), fallback: fallback)

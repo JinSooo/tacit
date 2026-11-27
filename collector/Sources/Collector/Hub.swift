@@ -496,7 +496,7 @@ final class PluginScheduler {
   }
   func manage(_ request: PluginRequest) async throws -> PluginResponse {
     let config = self.config
-    guard config.allowsLocalHub else { throw PluginFailure(message: L10n.Settings.localBackendRequired) }
+    guard config.allowsLocalHub else { throw HubError(message: L10n.Settings.localBackendRequired, status: 0) }
     let writeGate = self.writeGate
     let queue = ["install", "configure", "uninstall"].contains(request.action) ? jobs : DispatchQueue.global(qos: .utility)
     return try await withCheckedThrowingContinuation { continuation in
@@ -504,8 +504,8 @@ final class PluginScheduler {
         do {
           try writeGate?.begin()
           defer { writeGate?.end() }
-          guard config.allowsLocalHub else { throw PluginFailure(message: L10n.Settings.localBackendRequired) }
-          guard let repo = config.repo else { throw PluginFailure(message: L10n.Settings.installFolderMissing) }
+          guard config.allowsLocalHub else { throw HubError(message: L10n.Settings.localBackendRequired, status: 0) }
+          guard let repo = config.repo else { throw HubError(message: L10n.Settings.installFolderMissing, status: 0) }
           let p = Process(), output = Pipe(), input = Pipe()
           p.executableURL = URL(fileURLWithPath: config.bun)
           p.arguments = ["\(repo)/hub/src/cli.ts", "plugins"]

@@ -348,7 +348,7 @@ private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
   }
 
   // hub_id 与公钥不匹配被拒绝。
-  #expect(throws: DeviceClientError.invalidInvitation("hub_id 与公钥不匹配")) {
+  #expect(throws: DeviceClientError.invalidInvitation("后台服务身份无法确认")) {
     _ = try DevicePairingInvitation.parse(try makeURI(hubID: "aaaaaaaaaaaaaaaaaaaaaaaaaa"), now: expiry.addingTimeInterval(-1))
   }
 

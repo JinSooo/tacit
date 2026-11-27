@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import enum CollectorCore.L10n
 import enum CollectorCore.UserFacingError
+import struct CollectorCore.HubError
 
 // 与 docs/plugins.md 的清单和本机管理 CLI 一致。
 enum PluginValue: Codable, Equatable {
@@ -43,8 +44,6 @@ struct PluginRequest: Encodable {
 struct PluginResponse: Decodable {
   var plugins: [ExtensionPlugin]?; var preview: ExtensionPreview?; var plugin: ExtensionPlugin?; var deleted: Int?; var error: String?
 }
-struct PluginFailure: LocalizedError { let message: String; var errorDescription: String? { message } }
-
 @MainActor @Observable final class ExtensionSettings {
   var plugins: [ExtensionPlugin] = []
   var preview: ExtensionPreview?
@@ -57,7 +56,7 @@ struct PluginFailure: LocalizedError { let message: String; var errorDescription
     defer { busy = false }
     do {
       let result = try await controls.pluginCommand(request)
-      if let error = result.error { throw PluginFailure(message: error) }
+      if let error = result.error { throw HubError(serviceMessage: error, status: 0) }
       if let plugins = result.plugins { self.plugins = plugins }
       if let preview = result.preview { self.preview = preview }
       if let plugin = result.plugin {
