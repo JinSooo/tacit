@@ -20,7 +20,7 @@ private func manifest(_ version: String, _ url: String = "https://example.com/re
 
 /// 2026-11-25 虚拟机实测：没装 Claude Code 时默认模型只报“命令行调用失败”，说不出缺什么。
 @Test(ChineseUITrait()) func missingCliIsExplainedAndNeedsUser() {
-  #expect(ModelErrorText.plain("cli_missing").contains("没找到 Claude Code"))
+  #expect(ModelErrorText.plain("cli_missing").contains("没找到所选的命令行工具"))
   #expect(ModelErrorText.needsUser("cli_missing"))
 }
 

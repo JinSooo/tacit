@@ -2,6 +2,8 @@ export const MODEL_ERROR_LABELS = {
   timeout: "超时", network: "网络不可用", rate_limited: "请求太频繁", quota: "额度用完",
   auth: "密钥无效", bad_request: "请求被拒绝", server_error: "服务出错", invalid_json: "返回不是 JSON",
   schema_mismatch: "返回格式不对", cli_missing: "没找到命令行工具", cli_failed: "命令行调用失败", usage_record_failed: "用量记录失败",
+  cli_not_logged_in: "命令行工具未登录", cli_outdated: "命令行工具版本不兼容",
+  cli_model_unavailable: "命令行模型不可用", cli_network: "命令行工具连不上模型服务", cli_runtime_missing: "找不到 Node.js",
   config_error: "模型配置无效", unknown: "未知错误",
 } as const;
 
@@ -31,6 +33,14 @@ export class ModelError extends Error {
   constructor(readonly code: ModelErrorCode, readonly retryAfterMs?: number) { super(code); }
 }
 
+function cliCategory(message: string, status: number | undefined): ModelErrorCategory | undefined {
+  if (/\benv:\s*node:\s*no such file or directory|\bnode:\s*command not found/i.test(message)) return "cli_runtime_missing";
+  if (/\bmodel\b[^\r\n]{0,180}(?:not found|does not exist|(?:not|isn't) supported|not available)|\b(?:model_not_found|unsupported_model)\b|\b(?:do not|don't) have access to (?:the |this )?model/i.test(message)) return "cli_model_unavailable";
+  if (status === 401 || /\b(?:401|unauthorized|not (?:logged|signed) in|authentication_error|invalid_api_key|oauth token (?:has )?expired)\b|\b(?:codex|claude) login\b|(?:run|use)\s+`?\/login\b|\b(?:please|must) (?:log|sign) in\b|没有登录|登录已过期/i.test(message)) return "cli_not_logged_in";
+  if (/\b(?:unexpected argument|unknown (?:option|argument)|unrecognized (?:option|argument))\b|\berror:\s*unrecognized\b|^\s*usage:/im.test(message)) return "cli_outdated";
+  if (/\b(?:stream disconnected|error sending request|reconnecting|failed to connect|could not connect|unable to connect|connect(?:ion)? (?:failed|refused|reset)|dns error|network|proxy|econnreset|econnrefused|enetunreach|ehostunreach|enotfound|eai_again)\b|网络/i.test(message)) return "cli_network";
+}
+
 /** 用诊断文字识别旧错误、CLI 失败和服务商错误类型，返回值永远来自固定集合。 */
 export function classifyModelError(error: unknown, fallback: ModelErrorCategory = "unknown"): ModelErrorCode {
   if (error instanceof ModelError) return error.code;
@@ -40,12 +50,14 @@ export function classifyModelError(error: unknown, fallback: ModelErrorCategory 
 
   const statusText = /\bHTTP\s+(?:请求失败[（(])?([1-5]\d{2})\b/i.exec(message)?.[1];
   const status = statusText ? Number(statusText) : undefined;
+  const cli = fallback === "cli_failed" ? cliCategory(message, status) : undefined;
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
   if (code === "config_error") return "config_error";
   let category: ModelErrorCategory;
   if (/服务端中枢仅支持 API 模型|服务端中枢尚未配置 API 模型/.test(message)) category = "config_error";
   else if (/\b(?:insufficient[ _-](?:quota|balance)(?:_error)?|quota(?:_exceeded)?|usage[ _-]+limit)\b|\b(?:hit|reached|exceeded)\s+(?:your\s+|the\s+)?(?:\d+[ -](?:hour|day|week|month)\s+)?limit\b|额度|余额不足|限额/i.test(message)) category = "quota";
   else if (/\brate[ _-]?limit(?:ed|ing|s|_exceeded|_error)?\b|频率限制|请求太频繁|too many requests/i.test(message)) category = "rate_limited";
+  else if (cli && (cli !== "cli_network" || status === undefined)) category = cli;
   else if (status !== undefined && categoryForStatus(status) !== "unknown") category = categoryForStatus(status);
   else if (code === "ETIMEDOUT" || (error instanceof Error && error.name === "TimeoutError") || /超时|time[ -]?out|timed?\s*out|time limit exceeded/i.test(message)) category = "timeout";
   else if ((typeof code === "string" && /^(?:ECONNRESET|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN)$/.test(code)) ||
