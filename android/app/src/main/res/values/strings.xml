@@ -217,9 +217,7 @@
     <string name="source_app">App</string>
     <string name="source_browser">Browser</string>
     <string name="source_calendar">Calendar</string>
-    <string name="source_claude_code">Claude Code</string>
     <string name="source_clipboard">Clipboard</string>
-    <string name="source_codex">Codex</string>
     <string name="source_conversation">Conversation</string>
     <string name="source_correction">Correction</string>
     <string name="source_file">File</string>

@@ -27,7 +27,7 @@
 | `manual.note`、`manual.correction` | 网页手动补写 / 修正 |
 | `manual.agent` | 用户让 Agent 代存的内容（MCP `history_append`，见 4.6）；`context.app` 是写入的 Agent，内容变化时的修正仍用 `manual.correction` |
 
-AI 会话来源以 `packages/record/agent-tools.ts` 为准。每个工具使用自己的来源名，并按上面的 `source_ref` 规则去重。Cursor 暂无会话来源。
+AI 会话来源以 `packages/record/agent-tools.ts` 为准。每个工具使用自己的来源名，并按上面的 `source_ref` 规则去重。Cursor 暂无会话来源。变更目录后运行 `bun packages/record/generate-agent-tools.ts` 更新 Swift 和 Android 的目录与资源。
 
 ### 1.1 微信消息记录
 
