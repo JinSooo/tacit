@@ -97,7 +97,7 @@ internal fun installTaggingWith(dir: File, files: List<SpeechModelResource>, dow
 }
 
 /** Only model errors with deliberately authored copy are shown verbatim. */
-internal class SpeechModelProblem(val label: Int) : IllegalArgumentException()
+internal class SpeechModelProblem(val label: Int, val argument: String? = null) : IllegalArgumentException()
 
 enum class SpeechPreparationPhase { IDLE, DOWNLOADING, VALIDATING, IMPORTING, READY, CANCELLED, ERROR }
 internal data class SpeechPreparationState(
@@ -124,7 +124,7 @@ internal data class SpeechPreparationState(
             is java.net.SocketTimeoutException -> UiMessage(R.string.model_download_timeout)
             is java.net.UnknownHostException, is java.net.ConnectException -> UiMessage(R.string.model_download_unreachable)
             is SecurityException -> UiMessage(R.string.model_download_no_permission)
-            is SpeechModelProblem -> UiMessage(cause.label)
+            is SpeechModelProblem -> UiMessage(cause.label, cause.argument)
             else -> UiMessage(R.string.model_preparation_failed)
         }
         return copy(phase = phase, message = message, cancelling = false)

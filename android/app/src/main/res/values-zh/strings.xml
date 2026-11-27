@@ -126,7 +126,7 @@
     <string name="model_error_rejected">模型服务拒绝了请求，请检查模型名和地址。</string>
     <string name="model_error_server">模型服务暂时出错，稍后会自动重试。</string>
     <string name="model_error_timeout">模型服务一直没有回应，请检查网络或稍后再试。</string>
-    <string name="model_folder_incomplete">文件夹缺少语音模型文件，请重新选择</string>
+    <string name="model_folder_incomplete">缺少模型文件：%1$s</string>
     <string name="model_folder_required">请选择模型文件夹</string>
     <string name="model_importing">正在导入并验证模型</string>
     <string name="model_name">模型名</string>
@@ -355,4 +355,6 @@
     <string name="acceleration_files_missing">加速模型缺少文件。</string>
     <string name="acceleration_unsupported">这台手机不支持本机加速。</string>
     <string name="acceleration_cleanup_failed">无法清理上次未完成的加速模型。</string>
+    <string name="models_import_folder_hint">请选择包含这些文件的文件夹：%1$s。</string>
+    <string name="model_folder_duplicate">文件夹里有多个同名项：%1$s。</string>
 </resources>

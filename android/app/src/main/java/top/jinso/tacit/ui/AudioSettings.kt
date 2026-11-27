@@ -146,6 +146,7 @@ internal fun accelerationDisplay(
         val canImport = modelsReady != null && !preparation.busy
         SettingsRow(
             if (modelsReady == true) strings.text(R.string.models_replace_folder) else strings.text(R.string.models_import_folder),
+            status = strings.text(R.string.models_import_folder_hint, SpeechModels.required.joinToString(", ")),
             onClick = if (canImport) {{
                 models.launch(android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE)
                     .putExtra(android.content.Intent.EXTRA_LOCAL_ONLY, true)

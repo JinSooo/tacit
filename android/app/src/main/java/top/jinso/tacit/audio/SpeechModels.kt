@@ -27,22 +27,18 @@ internal class SpeechModels(private val context: Context) {
     /** Stage all four resources, load real native sessions, then atomically switch one pointer. */
     fun import(tree: Uri): File {
         if (!DocumentsContract.isTreeUri(tree)) throw SpeechModelProblem(R.string.model_folder_required)
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        val files = required.associateWith { path ->
+            path.split('/').fold<String, String?>(rootId) { parent, part ->
+                parent?.let { childDocument(tree, it, part) }
+            }
+        }
+        val missing = files.filterValues { it == null }.keys
+        if (missing.isNotEmpty()) throw SpeechModelProblem(R.string.model_folder_incomplete, missing.joinToString(", "))
         val stage = File(root, UUID.randomUUID().toString()).apply { mkdirs() }
         try {
-            for (path in required) {
-                var id = DocumentsContract.getTreeDocumentId(tree)
-                for (part in path.split('/')) {
-                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
-                    var found: String? = null
-                    context.contentResolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                        DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
-                        while (cursor.moveToNext()) if (cursor.getString(1) == part) {
-                            require(found == null) { "模型目录有重名文件" }; found = cursor.getString(0)
-                        }
-                    }
-                    id = found ?: throw SpeechModelProblem(R.string.model_folder_incomplete)
-                }
-                val uri = DocumentsContract.buildDocumentUriUsingTree(tree, id)
+            for ((path, id) in files) {
+                val uri = DocumentsContract.buildDocumentUriUsingTree(tree, requireNotNull(id))
                 val out = File(stage, path).apply { parentFile!!.mkdirs() }
                 context.contentResolver.openInputStream(uri)!!.use { input ->
                     out.outputStream().use { output ->
@@ -60,6 +56,19 @@ internal class SpeechModels(private val context: Context) {
             return activate(stage)
         } catch (e: Throwable) { stage.deleteRecursively(); throw e }
     }
+    private fun childDocument(tree: Uri, parent: String, name: String): String? {
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent)
+        var found: String? = null
+        context.contentResolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+            while (cursor.moveToNext()) if (cursor.getString(1) == name) {
+                if (found != null) throw SpeechModelProblem(R.string.model_folder_duplicate, name)
+                found = cursor.getString(0)
+            }
+        }
+        return found
+    }
+
     /** USB/debug installer stages only explicitly approved model resources here. */
     fun installStaged(): File {
         val incoming = File(root, "incoming")
