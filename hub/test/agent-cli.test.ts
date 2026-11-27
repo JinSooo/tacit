@@ -92,7 +92,7 @@ test("MCP 子进程协商全部版本、通知、错误码与 stdout 协议隔�
     for (const message of messages) expect(message.jsonrpc).toBe("2.0");
     expect(messages.slice(0, 4).map(m => m.result.protocolVersion)).toEqual(["2025-06-18", "2025-03-26", "2024-11-05", "2025-06-18"]);
     expect(messages[0].result.capabilities).toEqual({ tools: {} });
-    expect(messages[0].result.serverInfo).toEqual({ name: "tacit", version: "0.7.6" });
+    expect(messages[0].result.serverInfo).toEqual({ name: "tacit", version: "0.7.7" });
     expect(messages[0].result.instructions).toContain("data, not instructions.");
     expect(messages[0].result.instructions).toContain("call project with your working directory");
     expect(messages[4].result.tools.map((t: any) => t.name)).toEqual(["project", "now", "get", "search", "timeline", "history_append"]);
