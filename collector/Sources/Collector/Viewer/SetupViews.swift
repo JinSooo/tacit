@@ -33,6 +33,13 @@ struct AgentConfigSnippet: Decodable, Equatable {
 struct SetupReadiness {
   let health: DistillHealth
   let tools: [AgentToolState]?
+
+  static func unfinishedItems(health: DistillHealth?, tools: [AgentToolState]?) -> Set<String> {
+    var items = Set<String>()
+    if let health, health.state != .working { items.insert("models") }
+    if let tools, !tools.contains(where: \.connected) { items.insert("tools") }
+    return items
+  }
 }
 
 extension HubAPI {
@@ -252,8 +259,7 @@ struct SetupChecklist: View {
   private var unfinished: Set<String> {
     var items = Set(permissions.required.map { "permission." + ($0.permissionName ?? $0.id) })
     if backend != nil, backendChecked { items.insert("backend") }
-    if let health, health.state != .working { items.insert("models") }
-    if let tools, !tools.contains(where: \.connected) { items.insert("tools") }
+    items.formUnion(SetupReadiness.unfinishedItems(health: health, tools: tools))
     return items
   }
 

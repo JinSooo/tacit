@@ -18,6 +18,10 @@ struct Bundled {
 
 /// 启动时的安装准备：首次打开或升级后初始化数据与密钥、写后台服务配置并启动；之后每次打开只核对有无变化。
 enum AppSetup {
+  static func hasCompletedPreparation(in dataDir: URL) -> Bool {
+    FileManager.default.fileExists(atPath: dataDir.appendingPathComponent("app-setup.json").path)
+  }
+
   @MainActor static func checkPlacement() -> Bool {
     let placement = AppPlacement.of(bundlePath: Bundle.main.bundlePath,
                                     home: FileManager.default.homeDirectoryForCurrentUser.path,

@@ -78,6 +78,15 @@ private func identity(_ hub: Curve25519.KeyAgreement.PrivateKey) throws -> HubBi
   let readiness = try await api.setupReadiness(includeLocalTools: false)
   #expect(readiness.health.state == .waiting)
   #expect(readiness.tools == nil)
+  #expect(SetupReadiness.unfinishedItems(health: readiness.health, tools: readiness.tools) == ["models"])
+}
+
+@Test func firstPreparationStampIsReadFromTheActiveDataDirectory() throws {
+  let dir = try syntheticDirectory()
+  defer { try? FileManager.default.removeItem(at: dir) }
+  #expect(!AppSetup.hasCompletedPreparation(in: dir))
+  try Data(#"{"version":"fixture"}"#.utf8).write(to: dir.appendingPathComponent("app-setup.json"))
+  #expect(AppSetup.hasCompletedPreparation(in: dir))
 }
 
 private func writeRemote(_ dir: URL, _ identity: HubBinding.Remote) throws -> URL {
