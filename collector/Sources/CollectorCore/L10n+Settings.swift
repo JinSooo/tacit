@@ -135,39 +135,25 @@ public extension L10n {
     public static var toolNotInstalled: String { L10n.text(zh: "这台 Mac 上没有安装", en: "Not installed on this Mac") }
     public static var toolPartiallyConnected: String { L10n.text(zh: "连接不完整，请重新连接。", en: "Reconnect to finish setting up this AI tool.") }
     public static var toolConnected: String { L10n.text(zh: "已接入", en: "Connected") }
-    public static var otherAgentTools: String { L10n.text(zh: "其他工具", en: "Other tools") }
-    public static var manualToolPartial: String { L10n.text(zh: "接入未完成", en: "Setup incomplete") }
+    public static var otherAgentTools: String { L10n.text(zh: "其他 AI 工具", en: "Other AI tools") }
     public static var agentInstructions: String { L10n.text(zh: "接入方法", en: "How to connect") }
-    public static func agentInstructionsFor(_ tool: String) -> String {
-      L10n.text(zh: "在 \(tool) 里接入 Tacit", en: "Connect Tacit in \(tool)")
+    public static var otherAgentInstructionsTitle: String {
+      L10n.text(zh: "在其他 AI 工具里接入 Tacit", en: "Connect Tacit in other AI tools")
+    }
+    public static var otherAgentMCPInstructions: String {
+      L10n.text(zh: "大多数 AI 工具都认这个格式，贴进它的 MCP 配置里。",
+                en: "Most AI tools accept this format in their MCP settings.")
+    }
+    public static var otherAgentCommandInstructions: String {
+      L10n.text(zh: "如果它让你分开填写命令和参数：", en: "If the tool asks for a command and arguments separately:")
+    }
+    public static var agentCommand: String { L10n.text(zh: "命令", en: "Command") }
+    public static var agentArguments: String { L10n.text(zh: "参数", en: "Arguments") }
+    public static var reopenOtherAgent: String {
+      L10n.text(zh: "改完重开那个工具生效。", en: "Reopen the tool to apply the changes.")
     }
     public static func reopenAgent(_ tool: String) -> String {
       L10n.text(zh: "改完重开 \(tool) 生效。", en: "Reopen \(tool) to apply the changes.")
-    }
-    public static func agentConfigInstruction(_ file: String, section: String?, action: String, sessionStart: Bool) -> String {
-      let zh: String
-      let en: String
-      switch (action, section) {
-      case ("create", _):
-        zh = "新建 \(file) 并填入以下内容"
-        en = "Create \(file) with the configuration below"
-      case ("replace", let section?):
-        zh = "在 \(file) 中替换 \(section)"
-        en = "Replace \(section) in \(file)"
-      case ("add", let section?):
-        zh = "加到 \(file) 的 \(section) 里"
-        en = "Add this to \(section) in \(file)"
-      case ("merge", _):
-        zh = "将以下设置合并到 \(file)"
-        en = "Merge these settings into \(file)"
-      default:
-        zh = "加到 \(file) 的最外层"
-        en = "Add this at the top level of \(file)"
-      }
-      return L10n.text(
-        zh: zh + (sessionStart ? "，新会话开头会自动带上项目近况。" : "。"),
-        en: en + (sessionStart ? " to include project context at the start of new sessions." : ".")
-      )
     }
     public static var setupChecklist: String { L10n.text(zh: "还差几步", en: "Setup checklist") }
     public static var expanded: String { L10n.text(zh: "已展开", en: "Expanded") }

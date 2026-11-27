@@ -4,86 +4,35 @@ import SwiftUI
 import Testing
 @testable import Collector
 
+private let config = AgentMCPConfig(
+  command: "/Applications/Tacit.app/Contents/Helpers/Tacit",
+  args: ["/Users/sample/Library/Application Support/Tacit/runtime/hub/src/cli.ts", "mcp", "--tool", "mcp"]
+)
+
+@Test func genericAgentInstructionsUseThePathsReturnedByTheHub() throws {
+  let payload = """
+    {
+      "tools": [],
+      "other_mcp": {
+        "command": "/Applications/Tacit.app/Contents/Helpers/Tacit",
+        "args": ["/Users/sample/Library/Application Support/Tacit/runtime/hub/src/cli.ts", "mcp", "--tool", "mcp"]
+      }
+    }
+    """
+  let model = try HubJSON.decoder().decode(AgentSettingsData.self, from: Data(payload.utf8))
+  let decoded = try JSONDecoder().decode([String: [String: AgentMCPConfig]].self, from: Data(model.otherMcp.json.utf8))
+  let mcp = try #require(decoded["mcpServers"]?["tacit"])
+  #expect(mcp.command == config.command)
+  #expect(mcp.args == config.args)
+  #expect(model.otherMcp.arguments == "'/Users/sample/Library/Application Support/Tacit/runtime/hub/src/cli.ts' mcp --tool mcp")
+}
+
 @MainActor @Test func renderAgentSettingsSnapshots() throws {
-  let cursor = AgentToolState(id: "cursor", label: "Cursor", installed: true, connected: false, partial: false, manual: [
-    .init(file: "~/.cursor/mcp.json", kind: .mcp, action: .create, section: nil, code: """
-    {
-      "mcpServers": {
-        "tacit": {
-          "type": "stdio",
-          "command": "/opt/homebrew/bin/bun",
-          "args": ["/Users/sample/Library/Application Support/Tacit/runtime/hub/src/cli.ts", "mcp", "--tool", "cursor"]
-        }
-      }
-    }
-    """),
-    .init(file: "~/.cursor/hooks.json", kind: .sessionStart, action: .add, section: "hooks.sessionStart", code: """
-    {
-      "command": "/opt/homebrew/bin/bun '/Users/sample/Library/Application Support/Tacit/runtime/hub/src/cli.ts' hook session-start --tool cursor",
-      "timeout": 5
-    }
-    """),
-  ])
-  let opencode = AgentToolState(id: "opencode", label: "OpenCode", installed: false, connected: false, partial: false, manual: [
-    .init(file: "~/.config/opencode/opencode.json", kind: .mcp, action: .create, section: nil, code: """
-    {
-      "mcp": {
-        "tacit": {
-          "type": "local",
-          "command": [
-            "/opt/homebrew/bin/bun",
-            "/Users/sample/Tacit/runtime/hub/src/cli.ts",
-            "mcp",
-            "--tool",
-            "opencode"
-          ],
-          "enabled": true
-        }
-      }
-    }
-    """),
-  ])
-  let copilot = AgentToolState(id: "copilot-cli", label: "Copilot CLI", installed: false, connected: false, partial: false, manual: [
-    .init(file: "~/.copilot/mcp-config.json", kind: .mcp, action: .create, section: nil, code: """
-    {
-      "mcpServers": {
-        "tacit": {
-          "type": "local",
-          "command": "/opt/homebrew/bin/bun",
-          "args": [
-            "/Users/sample/Tacit/runtime/hub/src/cli.ts",
-            "mcp",
-            "--tool",
-            "copilot-cli"
-          ],
-          "tools": [
-            "*"
-          ]
-        }
-      }
-    }
-    """),
-    .init(file: "~/.copilot/hooks/tacit.json", kind: .sessionStart, action: .create, section: nil, code: """
-    {
-      "version": 1,
-      "hooks": {
-        "sessionStart": [
-          {
-            "type": "command",
-            "bash": "/opt/homebrew/bin/bun /Users/sample/Tacit/runtime/hub/src/cli.ts hook session-start --tool copilot-cli",
-            "timeoutSec": 5
-          }
-        ]
-      }
-    }
-    """),
-  ])
   let tools: [AgentToolState] = [
-    .init(id: "claude-code", label: "Claude Code", installed: true, connected: true, partial: false, manual: nil),
-    .init(id: "codex", label: "Codex", installed: true, connected: true, partial: false, manual: nil),
-    .init(id: "claude-desktop", label: "Claude Desktop", installed: false, connected: false, partial: false, manual: nil),
-    .init(id: "antigravity", label: "Antigravity", installed: true, connected: false, partial: false, manual: nil),
-    cursor,
+    .init(id: "claude-code", label: "Claude Code", installed: true, connected: true, partial: false),
+    .init(id: "codex", label: "Codex", installed: true, connected: true, partial: false),
+    .init(id: "claude-desktop", label: "Claude Desktop", installed: false, connected: false, partial: false),
+    .init(id: "antigravity", label: "Antigravity", installed: true, connected: false, partial: false),
   ]
   let output = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -108,7 +57,7 @@ import Testing
         try render("ai-tools", VStack(alignment: .leading, spacing: 12) {
           Text(L10n.Settings.aiTools).font(.system(size: TextSize.title, weight: .semibold))
           VStack(alignment: .leading, spacing: 12) {
-            AgentToolRows(tools: tools, busy: nil, connect: { _ in }, showInstructions: { _ in })
+            AgentToolRows(tools: tools, busy: nil, connect: { _ in }, showInstructions: {})
           }
           .padding(12).card()
           Note(L10n.Settings.toolsNote)
@@ -117,35 +66,16 @@ import Testing
         .padding(20).frame(width: 560)
         .background(Palette.paper).tint(Palette.accent))
 
-        try render("agent-instructions", AgentConnectionInstructions(tool: cursor).background(Palette.paperRaised))
-        if language == .zh && scheme == .light {
-          try render("agent-instructions-opencode", AgentConnectionInstructions(tool: opencode).background(Palette.paperRaised))
-
-          // SwiftUI 的 ImageRenderer 不会绘制 AppKit 承载的滚动内容。
-          let appearance = try #require(NSAppearance(named: .aqua))
-          let host = NSHostingView(rootView: AgentConnectionInstructions(tool: copilot)
-            .background(Palette.paperRaised).environment(\.colorScheme, scheme))
-          host.appearance = appearance
-          host.frame = CGRect(origin: .zero, size: host.fittingSize)
-          let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-          window.appearance = appearance
-          window.contentView = host
-          host.layoutSubtreeIfNeeded()
-          let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-          appearance.performAsCurrentDrawingAppearance { host.cacheDisplay(in: host.bounds, to: bitmap) }
-          window.contentView = nil
-          let data = try #require(bitmap.representation(using: .png, properties: [:]))
-          try data.write(to: output.appendingPathComponent("agent-instructions-copilot-cli-\(variant).png"))
-        }
+        try render("agent-instructions", AgentConnectionInstructions(config: config).background(Palette.paperRaised))
       }
     }
   }
 }
 
 @Test func automaticAgentConnectionActionCanCleanUpAnUninstalledTool() {
-  let partial = AgentToolState(id: "antigravity", label: "Antigravity", installed: false, connected: false, partial: true, manual: nil)
-  let installed = AgentToolState(id: "antigravity", label: "Antigravity", installed: true, connected: false, partial: true, manual: nil)
-  let connected = AgentToolState(id: "antigravity", label: "Antigravity", installed: true, connected: true, partial: false, manual: nil)
+  let partial = AgentToolState(id: "antigravity", label: "Antigravity", installed: false, connected: false, partial: true)
+  let installed = AgentToolState(id: "antigravity", label: "Antigravity", installed: true, connected: false, partial: true)
+  let connected = AgentToolState(id: "antigravity", label: "Antigravity", installed: true, connected: true, partial: false)
   #expect(!partial.shouldConnect)
   #expect(installed.shouldConnect)
   #expect(!connected.shouldConnect)
