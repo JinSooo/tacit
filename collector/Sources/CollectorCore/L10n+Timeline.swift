@@ -285,13 +285,20 @@ public extension L10n {
   static var databaseBusyTryAgainShortly: String { text(zh: "数据库忙，稍后再试", en: "Database busy. Try again shortly.") }
   static var devicePermissionDenied: String { text(zh: "当前设备权限不足", en: "This device lacks permission") }
   static var responseTooLarge: String { text(zh: "响应过大，请缩小查询范围", en: "Response too large. Narrow the search.") }
-  static var requestFailed401: String { text(zh: "请求失败（401）", en: "Request failed (401)") }
-  static var unreadableResponse: String { text(zh: "后台服务返回的数据读不出来", en: "Can't read the background service response") }
+  static var unreadableResponse: String {
+    text(zh: "后台服务返回的内容读不懂，请重试。如果还是不行，请复制诊断信息发给我们。",
+         en: "The background service returned an unreadable reply. Try again. If it still fails, copy the diagnostics and send them to us.")
+  }
+  static var serviceOffline: String { text(zh: "网络已断开，恢复连接后请重试。", en: "The network is disconnected. Reconnect and try again.") }
+  static var serviceAccessExpired: String { text(zh: "访问权限不足或身份已失效，请检查连接设置。", en: "Access was denied or has expired. Check your connection settings.") }
+  static var serviceFeatureUnavailable: String { text(zh: "这个版本的后台服务暂不支持此功能。", en: "This feature is unavailable in this version of the background service.") }
+  static var serviceOperationInProgress: String { text(zh: "操作正在进行，请稍后再试。", en: "An operation is in progress. Try again shortly.") }
+  static var backgroundServiceFailed: String { text(zh: "后台服务出错了，请稍后重试。", en: "The background service encountered an error. Try again shortly.") }
   static var localServiceRequired: String { text(zh: "需要连接这台 Mac 的后台", en: "Connect to this Mac's background service") }
   static var unreadableConnectionSettings: String { text(zh: "后台连接配置无法读取", en: "Can't read the connection settings") }
   static var remoteServiceUnavailable: String { text(zh: "远端后台连接不可用", en: "Remote background service unavailable") }
   static var directServiceRequired: String { text(zh: "需要直连远端后台才能读取这些内容", en: "Connect directly to the remote background service to read this content") }
-  static var missingAccessToken: String { text(zh: "找不到后台服务的访问令牌，后台服务可能还没启动过", en: "Can't find the access token. The background service may not have started yet.") }
+  static var missingAccessToken: String { text(zh: "后台服务可能还没启动，请重启 Tacit。", en: "The background service may not have started. Restart Tacit.") }
   static var serviceTimedOut: String { text(zh: "后台服务没有响应", en: "The background service didn't respond") }
   static var errorSeparator: String { text(zh: "；", en: ", ") }
   static var recordSaveFailed: String { text(zh: "记录未写入，请重试", en: "Couldn't save the record. Try again.") }
@@ -490,14 +497,6 @@ public extension L10n {
 
   static func truncatedResponse(_ n: Int) -> String {
     text(zh: "返回内容（仅保留前 \(number(n)) 字符）", en: "First \(number(n)) characters of the response")
-  }
-
-  static func requestFailed(_ status: Int) -> String { text(zh: "请求失败（\(status)）", en: "Request failed (\(status))") }
-  static func unreadableResponse(_ detail: String) -> String {
-    text(zh: "后台服务返回的数据读不出来：\(detail)", en: "Can't read the background service response: \(detail)")
-  }
-  static func unreachableService(_ detail: String) -> String {
-    text(zh: "连不上后台服务：\(detail)", en: "Can't reach the background service: \(detail)")
   }
 
   static func draftTitle(_ title: String, kind: String? = nil, lang: AppLanguage = .current) -> String {

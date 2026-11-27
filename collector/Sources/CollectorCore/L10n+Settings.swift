@@ -454,6 +454,7 @@ public extension L10n {
     public static var updatingRecordStatus: String { L10n.text(zh: "正在更新记录状态…", en: "Updating record status…") }
     public static var updateRecordStatusFailed: String { L10n.text(zh: "无法更改这条记录的状态，请稍后再试。", en: "Couldn't change this record's status. Try again shortly.") }
     public static var dismissNoticeFailed: String { L10n.text(zh: "无法关闭这条提示，请重试。", en: "Couldn't dismiss this notice. Try again.") }
+    public static var invalidInviteLink: String { L10n.text(zh: "邀请链接无法使用，请检查是否复制完整。", en: "The invite link is invalid. Check that you copied the full link.") }
     public static var inviteUnavailable: String { L10n.text(zh: "邀请链接已过期或已使用，请粘贴新链接。", en: "The invite link expired or was already used. Paste a new one.") }
     public static var inviteWrongBackend: String { L10n.text(zh: "请粘贴当前后台签发的邀请链接，连接其他后台前需先切回这台 Mac。", en: "Paste an invite from the current background service. Switch back to this Mac before connecting to another service.") }
     public static var returnWaitingForReconciliation: String { L10n.text(zh: "远端的删除和私密变更尚未核对完成，当前仍使用远端后台。", en: "The remote background service remains in use while deletions and privacy changes are checked.") }
@@ -703,7 +704,7 @@ public extension L10n {
     }
 
     public static func pairingError(_ failure: RemotePairing.Failure) -> String {
-      guard AppLanguage.current == .en else { return failure.localizedDescription }
+      guard AppLanguage.current == .en else { return failure.errorDescription ?? connectionFailed }
       switch failure {
       case .adminInvitationRequired: return "Use an invite link that grants management access."
       case .remoteUnavailable: return "Can't find the remote background service."
@@ -782,14 +783,15 @@ public extension L10n {
     }
 
     public static func serviceMessage(_ message: String, fallback: String) -> String {
+      guard UserFacingError.canDisplayServiceMessage(message) else { return fallback }
       guard AppLanguage.current == .en else { return message }
       switch message {
       case "不能移除最后一台管理设备": return "Keep at least one device with management access."
       case "手机只能使用采集权限": return "This phone supports collection access only."
       case "API key 格式不对：应为 8–1024 个英文字母、数字或符号，不能有空格、双引号或反斜杠。":
         return "Use 8–1,024 letters, numbers, or symbols for the API key. Omit spaces, double quotes, and backslashes."
-      default:
-        return hasChineseText(message) ? fallback : message
+      case "上一次测试还没结束": return "A test is already running."
+      default: return fallback
       }
     }
 
@@ -813,7 +815,8 @@ public extension L10n {
     }
 
     public static func modelFailure(_ problem: String, fallback: String) -> String {
-      serviceMessage(ModelErrorText.plain(problem), fallback: fallback)
+      if ModelErrorText.isCode(problem) { return ModelErrorText.plain(problem) }
+      return serviceMessage(problem, fallback: fallback)
     }
 
     public static var summaryFailure: String {

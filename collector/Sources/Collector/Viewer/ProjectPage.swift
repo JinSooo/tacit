@@ -213,7 +213,7 @@ struct ProjectPage: View {
     } catch is CancellationError {
     } catch {
       guard revision == store.revision else { return }
-      moreError = error.localizedDescription
+      moreError = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
     }
   }
 }

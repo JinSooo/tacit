@@ -1,4 +1,5 @@
 import Foundation
+import struct CollectorCore.HubError
 import Testing
 @testable import Collector
 

@@ -258,18 +258,25 @@ public struct NowState: Decodable, Equatable, Sendable {
   public var activitySummary: String? {
     let text = brief?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     // /v1/now 为没有真实摘要的情况返回占位文字。
-    return text.isEmpty || text == Self.pendingBrief || text == Self.emptyBrief ? nil : text
+    return text.isEmpty || Self.placeholderBriefs.contains(text) ? nil : text
   }
 
   public var activityNotice: Notice? {
     if let feedback {
       return feedback.hasPrefix("最近一次整理失败") ? .failed(feedback) : .pending(feedback)
     }
-    return brief == Self.pendingBrief ? .pending(Self.pendingBrief) : nil
+    return [Self.pendingBrief, Self.englishPendingBrief].contains(brief ?? "") ? brief.map(Notice.pending) : nil
   }
 
   private static let pendingBrief = "有新活动待整理。"
-  private static let emptyBrief = "最近 24 小时没有活跃的线程。"
+  private static let englishPendingBrief = "New activity is waiting to be summarized."
+  private static let emptyBrief = "最近 24 小时还没有整理出的活动。"
+  private static let englishEmptyBrief = "No activity summaries in the last 24 hours."
+  private static let placeholderBriefs: Set<String> = [
+    pendingBrief, englishPendingBrief, emptyBrief, englishEmptyBrief,
+    // 仍可能连到旧版后台。
+    "最近 24 小时没有活跃的线程。", "No active tasks in the last 24 hours.",
+  ]
 }
 
 public struct DayDiary: Decodable, Equatable, Sendable {

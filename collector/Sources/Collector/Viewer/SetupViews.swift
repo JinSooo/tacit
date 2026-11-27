@@ -77,7 +77,7 @@ struct AgentSettingsView: View {
   func load() async {
     do { tools = try await store.api.agentTools(); error = nil }
     catch is CancellationError {}
-    catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.agentOperationFailed) }
+    catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.agentOperationFailed) }
   }
 
   func set(_ t: AgentToolState, _ on: Bool) async {
@@ -87,7 +87,7 @@ struct AgentSettingsView: View {
       let result = try await store.api.setAgent(t.id, connected: on)
       tools = result.tools
       note = result.note.map(L10n.Settings.agentNote).flatMap { $0.isEmpty ? nil : $0 }
-    } catch { self.error = L10n.Settings.serviceMessage(error.localizedDescription, fallback: L10n.Settings.agentOperationFailed) }
+    } catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.agentOperationFailed) }
   }
 }
 
@@ -225,7 +225,7 @@ struct SetupChecklist: View {
     retryError = nil
     defer { retrying = false }
     do { try await delegate.prepareBackendAgain() }
-    catch { retryError = error.localizedDescription }
+    catch { retryError = UserFacingError.message(for: error, fallback: L10n.Settings.setupFailure(.unknown)) }
   }
 
   private func testConnection(_ model: ModelTierConfig) async {
@@ -238,7 +238,7 @@ struct SetupChecklist: View {
       let response = try await store.api.testModel(tier: "minute", config: model)
       result = response.ok ? L10n.Settings.connectionOK : response.error.map { L10n.Settings.modelFailure($0, fallback: L10n.Settings.connectionFailed) } ?? L10n.Settings.connectionFailed
     } catch {
-      result = L10n.Settings.modelFailure(error.localizedDescription, fallback: L10n.Settings.connectionFailed)
+      result = UserFacingError.message(for: error, fallback: L10n.Settings.connectionFailed)
     }
     if minuteModel == model { testResult = result }
   }

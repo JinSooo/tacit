@@ -198,8 +198,11 @@ struct RelaySettingsSection: View {
     } catch is CancellationError {
     } catch {
       let hubError = error as? HubError
-      let fallback = L10n.Settings.relayFailure(hubError?.status)
-      actionError = hubError?.actionMessage.map { L10n.Settings.serviceMessage($0, fallback: fallback) } ?? fallback
+      if let hubError, hubError.status > 0 {
+        actionError = hubError.displayableServiceMessage ?? L10n.Settings.relayFailure(hubError.status)
+      } else {
+        actionError = UserFacingError.message(for: error, fallback: L10n.Settings.relayFailure(hubError?.status))
+      }
     }
   }
 }

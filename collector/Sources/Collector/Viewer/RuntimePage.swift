@@ -61,7 +61,7 @@ private struct ModelCallsPage: View {
       calls = reset ? page.calls : calls + page.calls.filter { item in !calls.contains(where: { $0.id == item.id }) }
       cursor = page.nextCursor; error = nil
       if !reset { loadedMore = true }
-    } catch is CancellationError {} catch { self.error = error.localizedDescription }
+    } catch is CancellationError {} catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
   }
 }
 
@@ -134,7 +134,7 @@ struct RuntimeSnapshotView: View {
       while !Task.isCancelled {
         do { let value = try await store.api.callSnapshot(id); if !Task.isCancelled { snapshot = value; error = nil } }
         catch is CancellationError { break }
-        catch { snapshot = nil; self.error = error.localizedDescription }
+        catch { snapshot = nil; self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
         await WindowVisibility.pause(.seconds(5))
       }
     }
@@ -174,7 +174,7 @@ private struct BackgroundCallsPage: View {
       // 运行状态自己刷新，不放刷新按钮。
       while !Task.isCancelled {
         do { let value = try await store.api.backgroundLog(source); if !Task.isCancelled { page = value; error = nil } }
-        catch is CancellationError {} catch { self.error = error.localizedDescription }
+        catch is CancellationError {} catch { self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed) }
         await WindowVisibility.pause(.seconds(15))
       }
     }

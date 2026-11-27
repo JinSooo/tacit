@@ -269,7 +269,7 @@ struct TimelineSegmentRecords: View {
       try await store.api.deleteSegment(day: day, id: item.id, recordIds: recordIds)
       store.revision += 1
     } catch {
-      let message = error.localizedDescription
+      let message = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
       Motion.animate { deleteError = message }
     }
   }
@@ -339,7 +339,7 @@ private struct SegmentCorrectionSheet: View {
       store.revision += 1
       dismiss()
     } catch {
-      self.error = error.localizedDescription
+      self.error = UserFacingError.message(for: error, fallback: L10n.Settings.settingsRequestFailed)
     }
   }
 }

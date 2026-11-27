@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import enum CollectorCore.L10n
+import enum CollectorCore.UserFacingError
 import struct CollectorCore.HubBinding
 import class CollectorCore.RemotePairing
 import struct CollectorCore.RemoteDeviceLink
@@ -646,11 +647,11 @@ import struct CollectorCore.DistillHealth
     case RemoteSwitch.Failure.commandTimedOut:
       return L10n.Settings.backendTimedOut
     case let failure as RemoteSwitch.Failure:
-      return failure.localizedDescription
+      return failure.errorDescription ?? fallback
     case let failure as RemotePairing.Failure:
       return L10n.Settings.pairingError(failure)
     default:
-      return fallback
+      return UserFacingError.message(for: error, fallback: fallback)
     }
   }
 }

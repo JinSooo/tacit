@@ -5,14 +5,14 @@ import enum CollectorCore.ViewerFormat
 import enum CollectorCore.ViewerTime
 
 private func deviceMessage(_ error: Error, fallback: String) -> String {
-  (error as? HubError)?.actionMessage.map { L10n.Settings.serviceMessage($0, fallback: fallback) } ?? fallback
+  UserFacingError.message(for: error, fallback: fallback)
 }
 
 /// 设置页读取失败：能让用户处理的照原话说，其他的在原句后补一句原因，并在诊断信息里记下固定类别。
 func settingsReadFailure(_ error: Error, fallback: String, section: DiagnosticLog.SettingsSection) -> String {
   let hubError = error as? HubError
   DiagnosticLog.shared.record(.settingsReadFailed(section, reason: (hubError?.reason ?? .other).rawValue))
-  if let action = hubError?.actionMessage { return L10n.Settings.serviceMessage(action, fallback: fallback) }
+  if let message = hubError?.displayableServiceMessage { return message }
   let reason: String? = switch hubError?.reason {
   case .unreachable: L10n.Settings.reasonUnreachable
   case .timedOut: L10n.Settings.reasonTimedOut
@@ -21,7 +21,7 @@ func settingsReadFailure(_ error: Error, fallback: String, section: DiagnosticLo
   case .server: L10n.Settings.reasonServer
   case .other, nil: nil
   }
-  return reason.map { L10n.Settings.unavailable(fallback, because: $0) } ?? fallback
+  return reason.map { L10n.Settings.unavailable(fallback, because: $0) } ?? UserFacingError.message(for: error, fallback: fallback)
 }
 
 struct DeviceSettingsSection: View {
@@ -285,8 +285,8 @@ struct DeviceSettingsSection: View {
         } catch is CancellationError {
           return
         } catch {
-          if let message = (error as? HubError)?.actionMessage {
-            sheetError = L10n.Settings.serviceMessage(message, fallback: L10n.Settings.devicesUnavailable)
+          if (error as? HubError)?.needsAction == true {
+            sheetError = UserFacingError.message(for: error, fallback: L10n.Settings.devicesUnavailable)
             return
           }
           // 连接暂时中断时，保留邀请并在下一轮再检查。

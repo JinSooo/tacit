@@ -6,8 +6,9 @@ import { dirname, join } from "node:path";
 
 import { createLLM, repairToSchema, type LLMRequest, type Spawn, type UsageRow } from "../src/llm/index.ts";
 import { loadConfig } from "../src/llm/config.ts";
-import { resetCodexProbes } from "../src/llm/codex-cli.ts";
+import { codexCLI, resetCodexProbes } from "../src/llm/codex-cli.ts";
 import { classifyModelError } from "../src/llm/error-category.ts";
+import type { BackendContext } from "../src/llm/types.ts";
 import { cliEnv } from "../src/llm/process.ts";
 import { systemProxyEnv } from "../src/net/system-proxy.ts";
 import { DAY_SCHEMA, DAY_SYSTEM, normalizeDayOutput } from "../src/distill/prompts.ts";
@@ -35,14 +36,20 @@ async function fixture(provider = "claude-cli", mode = "success") {
   const log = join(dir, "calls.jsonl"), script = join(dir, provider === "codex-cli" ? "codex" : "claude");
   // 独立可执行脚本记录真实 argv、stdin、cwd 和进程时序；全部内容是合成数据。
   await writeFile(script, `#!${process.execPath}
-import { appendFileSync, writeFileSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 const args = process.argv.slice(2), mode = process.env.TEST_MODE, log = process.env.TEST_LOG;
-if (args[0] === "login") { console.log(mode === "nocatalog" ? "Logged in using an API key" : "Logged in using ChatGPT"); process.exit(0); }
+if (args[0] === "login") {
+  if (mode === "no-login" || (mode.startsWith("expired-") && existsSync(log))) {
+    console.error("Not logged in"); process.exit(1);
+  }
+  console.log(mode === "nocatalog" ? "Logged in using an API key" : "Logged in using ChatGPT"); process.exit(0);
+}
 if (args[0] === "debug") { console.log(mode === "nocatalog" ? "not json" : JSON.stringify({models:[{slug:"synthetic-model", tool_mode:"code_mode_only", multi_agent_version:"v1", experimental_supported_tools:["clock"], context_window:1000}]})); process.exit(0); }
 const stdin = await Bun.stdin.text();
 appendFileSync(log, JSON.stringify({event:"start", pid:process.pid, args, stdin, cwd:process.cwd(), mode:statSync(process.cwd()).mode & 0o777, at:Date.now()})+"\\n");
-if (mode === "timeout") await new Promise(() => setInterval(() => {}, 1000));
+if (mode === "expired-network") { console.error("stream disconnected"); process.exit(1); }
+if (mode === "timeout" || mode === "expired-timeout") await new Promise(() => setInterval(() => {}, 1000));
 await Bun.sleep(50);
 if (mode === "codex-error" || mode === "codex-echo") {
   console.log(JSON.stringify({type:"thread.started", thread_id:"synthetic"}));
@@ -200,10 +207,62 @@ test("Codex：失败的登录和目录探测 30 秒后重试，成功缓存仍�
   }
 });
 
+test("Codex：明确未登录时不执行模型命令，登录失败只缓存 30 秒", async () => {
+  resetCodexProbes();
+  const f = await fixture("codex-cli", "no-login"), commands: string[] = [], failure: string[] = [];
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const context: BackendContext = {
+    cwd: f.dir, req: request, config: { provider: "codex-cli", model: "synthetic-model" }, timeoutMs: 250,
+    metrics: { inputTokens: null, outputTokens: null, outputChars: 0 },
+    spawn: (command, args, options) => { commands.push(args[0]!); return f.spawn(command, args, options); },
+    observer: { request: () => {}, response: () => {}, failure: detail => failure.push(detail) },
+  };
+  try {
+    for (const advance of [0, 29_999, 1]) {
+      now += advance;
+      await expect(codexCLI(context)).rejects.toMatchObject({ code: "cli_not_logged_in" });
+    }
+    expect(commands).toEqual(["login", "login"]);
+    expect(failure).toEqual(Array(3).fill("codex login status: Not logged in"));
+    resetCodexProbes();
+    await expect(codexCLI(context)).rejects.toMatchObject({ code: "cli_not_logged_in" });
+    expect(commands).toEqual(["login", "login", "login"]);
+  } finally {
+    clock.mockRestore();
+    resetCodexProbes();
+  }
+});
+
+for (const mode of ["expired-network", "expired-timeout"]) {
+  test(`Codex：执行时登录失效，${mode} 后重新查到未登录`, async () => {
+    resetCodexProbes();
+    const f = await fixture("codex-cli", mode);
+    try {
+      expect(await f.llm.complete({ ...request, timeoutMs: 250 })).toMatchObject({ ok: false, error: "cli_not_logged_in" });
+      expect((await f.logs()).filter(entry => entry.event === "start")).toHaveLength(1);
+    } finally { resetCodexProbes(); }
+  });
+}
+
+test("Codex：自定义默认提供商地址也允许未登录执行", async () => {
+  resetCodexProbes();
+  const f = await fixture("codex-cli", "no-login");
+  const home = join(f.dir, "codex-home");
+  await Bun.write(join(home, "config.toml"), 'openai_base_url = "https://synthetic.invalid/v1"');
+  process.env.CODEX_HOME = home;
+  try {
+    expect(await f.llm.complete(request)).toMatchObject({ ok: true });
+    const [start] = await f.logs();
+    expect(start.args).toContain('openai_base_url="https://synthetic.invalid/v1"');
+    expect(start.args.join(" ")).not.toContain("ra-https");
+  } finally { resetCodexProbes(); }
+});
+
 // 回归（2026-11-27）：用户的 codex 走 config.toml 里自己的中转站，终端里正常，Tacit 加了 --ignore-user-config 后调用失败。
 test("Codex：沿用用户 config.toml 里选的连接，其余用户配置仍不加载", async () => {
   resetCodexProbes();
-  const f = await fixture("codex-cli");
+  const f = await fixture("codex-cli", "no-login");
   const home = join(f.dir, "codex-home");
   await Bun.write(join(home, "config.toml"), `profile = "work"
 model_reasoning_effort = "xhigh"
@@ -214,7 +273,7 @@ model_provider = "relay"
 name = "Synthetic relay"
 base_url = "https://relay.example.invalid/v1"
 wire_api = "responses"
-requires_openai_auth = true
+env_key = "SYNTHETIC_RELAY_KEY"
 http_headers = { "X-Synthetic" = "1", "x y" = "2" }
 [mcp_servers.synthetic]
 command = "/nonexistent"
@@ -224,7 +283,7 @@ command = "/nonexistent"
   const [start] = await f.logs();
   expect(start.args).toContain("--ignore-user-config");
   expect(start.args).toContain('model_provider="relay"');
-  expect(start.args).toContain('model_providers.relay={name="Synthetic relay",base_url="https://relay.example.invalid/v1",wire_api="responses",requires_openai_auth=true,http_headers={X-Synthetic="1","x y"="2"}}');
+  expect(start.args).toContain('model_providers.relay={name="Synthetic relay",base_url="https://relay.example.invalid/v1",wire_api="responses",env_key="SYNTHETIC_RELAY_KEY",http_headers={X-Synthetic="1","x y"="2"}}');
   expect(start.args).toContain('cli_auth_credentials_store="keyring"');
   // 用户自己的 provider 优先，不再套只走 HTTPS 的 ChatGPT provider；MCP 和推理强度不带过去。
   expect(start.args.join(" ")).not.toContain("ra-https");

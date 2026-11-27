@@ -17,11 +17,11 @@ const FAILED_PROBE_TTL = 30_000;
 type Probe<T> = { until: number; result: Promise<T> };
 let catalog: Probe<string | null> | null = null;
 
-function cacheProbe<T>(pending: Promise<T>): Probe<T> {
+function cacheProbe<T>(pending: Promise<T>, succeeded: (result: T) => boolean = Boolean): Probe<T> {
   // 并发调用复用正在进行的探测。得到结果后才开始计算有效期。
   const entry = { until: Infinity, result: pending };
   entry.result = pending.then(result => {
-    entry.until = Date.now() + (result ? PROBE_TTL : FAILED_PROBE_TTL);
+    entry.until = Date.now() + (succeeded(result) ? PROBE_TTL : FAILED_PROBE_TTL);
     return result;
   });
   return entry;
@@ -66,34 +66,47 @@ function cachedCatalog(ctx: BackendContext): Promise<string | null> {
 // 每次提炼调用从约 10 秒变成约 115 秒，接近 180 秒上限）。用 ChatGPT 账号登录时，提炼改用一个只走 HTTPS 的
 // provider，仍由 codex 自己的登录认证，不读也不存令牌。用户 2026-11-12 确认。其他登录方式不改。
 const CHATGPT_HTTPS = '{name="OpenAI",base_url="https://chatgpt.com/backend-api/codex",wire_api="responses",requires_openai_auth=true,supports_websockets=false}';
-let login: Probe<boolean> | null = null;
+type LoginStatus = "chatgpt" | "other" | "none";
+let login: Probe<LoginStatus> | null = null;
 
-function readLogin(ctx: BackendContext): Promise<boolean> {
+function readLogin(ctx: BackendContext): Promise<LoginStatus> {
   return new Promise(resolve => {
     let out = "", done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (v: boolean) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
+    const finish = (v: LoginStatus) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
     let child;
     try { child = ctx.spawn("codex", ["login", "status"], { cwd: ctx.cwd, stdio: "pipe", env: cliEnv() }); }
-    catch { finish(false); return; }
-    timer = setTimeout(() => { child.kill("SIGKILL"); finish(false); }, 10_000);
+    catch { finish("other"); return; }
+    timer = setTimeout(() => { child.kill("SIGKILL"); finish("other"); }, 10_000);
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
-    // 状态写在 stdout 或 stderr 里都有可能，只看是不是 ChatGPT 登录，不保留其他内容。
+    // CLI 可能写到 stdout 或 stderr。只取已知状态，其余内容不保留。
     const take = (c: string) => { out = (out + c).slice(-2000); };
     child.stdout.on("data", take); child.stderr.on("data", take);
-    child.on("error", () => finish(false));
-    child.on("close", code => finish(code === 0 && /using ChatGPT/i.test(out)));
+    child.on("error", () => finish("other"));
+    child.on("close", code => {
+      if (code === 0 && /using ChatGPT/i.test(out)) finish("chatgpt");
+      else if (code !== null && code !== 0 && /\bNot logged in\b/i.test(out)) finish("none");
+      else finish("other");
+    });
     child.stdin.end();
   });
 }
-function cachedLogin(ctx: BackendContext): Promise<boolean> {
-  if (!login || Date.now() >= login.until) login = cacheProbe(readLogin(ctx));
-  return login.result;
+function cachedLogin(ctx: BackendContext, refresh?: Probe<LoginStatus>): Probe<LoginStatus> {
+  if (!login || login === refresh || Date.now() >= login.until) {
+    login = cacheProbe(readLogin(ctx), status => status === "chatgpt");
+  }
+  return login;
+}
+
+function loginRequired(ctx: BackendContext): never {
+  try { ctx.observer?.failure?.("codex login status: Not logged in"); }
+  catch { throw new ModelError("usage_record_failed"); }
+  throw new ModelError("cli_not_logged_in");
 }
 // 仍用 --ignore-user-config：用户自己的 MCP、钩子、通知、推理强度、服务档位这些不该带进每次整理。
 // 但“怎么连上模型”跟着用户走：用户在 config.toml 里选的 provider（中转站、自定义 base_url）、ChatGPT 地址和登录凭据存放位置
 // 原样用 -c 传回去（2026-11-27：用户 codex 走自己的中转站配置，终端里正常、Tacit 里调用失败）。
-const CONNECTION_KEYS = ["chatgpt_base_url", "cli_auth_credentials_store", "forced_chatgpt_workspace_id"] as const;
+const CONNECTION_KEYS = ["chatgpt_base_url", "openai_base_url", "cli_auth_credentials_store", "forced_chatgpt_workspace_id"] as const;
 
 function tomlValue(value: unknown): string | null {
   if (typeof value === "string") return JSON.stringify(value);
@@ -123,19 +136,18 @@ export async function connectionOverrides(env: NodeJS.ProcessEnv): Promise<{ arg
   const profile = typeof config.profile === "string" ? config.profiles?.[config.profile] : undefined;
   const pick = (key: string) => profile && Object.hasOwn(profile, key) ? profile[key] : config[key];
   const args: string[] = [];
-  const provider = pick("model_provider");
-  if (typeof provider === "string" && provider) {
-    const table = config.model_providers?.[provider];
-    const text = table === undefined ? null : tomlValue(table);
-    if (text !== null) args.push("-c", `model_providers.${/^[A-Za-z0-9_-]+$/.test(provider) ? provider : JSON.stringify(provider)}=${text}`);
-    args.push("-c", `model_provider=${JSON.stringify(provider)}`);
-  }
+  const selected = pick("model_provider");
+  const provider = typeof selected === "string" && selected ? selected : "openai";
+  const table = config.model_providers?.[provider];
+  const text = table === undefined ? null : tomlValue(table);
+  if (text !== null) args.push("-c", `model_providers.${/^[A-Za-z0-9_-]+$/.test(provider) ? provider : JSON.stringify(provider)}=${text}`);
+  if (selected === provider) args.push("-c", `model_provider=${JSON.stringify(provider)}`);
   for (const key of CONNECTION_KEYS) {
     const text = pick(key) === undefined ? null : tomlValue(pick(key));
     if (text !== null) args.push("-c", `${key}=${text}`);
   }
-  // 用户自己选了非默认 provider 或改了 ChatGPT 地址时，不再套只走 HTTPS 的那个 provider。
-  return { args, custom: (typeof provider === "string" && provider !== "" && provider !== "openai") || pick("chatgpt_base_url") !== undefined };
+  // 用户自己选了非默认 provider 或改了服务地址时，保留这条连接。
+  return { args, custom: provider !== "openai" || Boolean(table?.base_url || pick("openai_base_url") || pick("chatgpt_base_url")) };
 }
 
 /** 手动测试连接时，清掉上次的模型目录和登录探测结果。 */
@@ -143,7 +155,11 @@ export function resetCodexProbes() { catalog = null; login = null; }
 
 export async function codexCLI(ctx: BackendContext): Promise<unknown> {
   const connection = await connectionOverrides(cliEnv());
-  const trimmed = await cachedCatalog(ctx), https = !connection.custom && await cachedLogin(ctx);
+  const probe = connection.custom ? undefined : cachedLogin(ctx);
+  const status = await probe?.result;
+  if (status === "none") loginRequired(ctx);
+  const https = status === "chatgpt";
+  const trimmed = await cachedCatalog(ctx);
   const dir = await mkdtemp(join(tmpdir(), "record-anything-llm-"));
   try {
     const schema = join(dir, "schema.json"), output = join(dir, "result.json"), instructions = join(dir, "instructions.md"), models = join(dir, "models.json");
@@ -157,7 +173,12 @@ export async function codexCLI(ctx: BackendContext): Promise<unknown> {
       "-c", "features.shell_tool=false", "-c", "features.unified_exec=false", "-c", "features.view_image=false", "-c", "features.image_generation=false", "-c", "features.apps=false", "-c", "features.memories=false", "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.sleep_tool=false", "-c", "features.tool_suggest=false", "-c", "features.plugins=false", "-c", "features.hooks=false",
       "-c", "features.goals=false", "-c", "features.collaboration_modes=false", "-c", "features.skill_search=false",
       ...connection.args,
-      ...(https ? ["-c", `model_providers.ra-https=${CHATGPT_HTTPS}`, "-c", 'model_provider="ra-https"'] : []), "-"]);
+      ...(https ? ["-c", `model_providers.ra-https=${CHATGPT_HTTPS}`, "-c", 'model_provider="ra-https"'] : []), "-"]).catch(async error => {
+      if (probe && error instanceof ModelError && (error.code === "timeout" || error.code === "cli_network")) {
+        if (await cachedLogin(ctx, probe).result === "none") loginRequired(ctx);
+      }
+      throw error;
+    });
     // JSONL 事件只取用量，不把事件正文写入日志。
     for (const line of stdout.split("\n").filter(Boolean)) {
       try {
