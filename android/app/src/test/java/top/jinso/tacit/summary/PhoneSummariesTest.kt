@@ -4,6 +4,7 @@ import top.jinso.tacit.i18n.AppLang
 import top.jinso.tacit.i18n.TestStrings
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -17,6 +18,17 @@ class PhoneSummariesTest {
     private val minute = 60_000L
     private fun record(id: String, start: Long, end: Long?, sensitivity: String = "normal") =
         HistoryRecord(id, "android.audio", "对话记录", "", start * minute, end?.let { it * minute }, null, sensitivity, null, 0)
+
+    @Test fun firstValidSaveEnablesSummariesButEditsRespectTheUsersSwitch() {
+        val first = SummaryModel("https://api.example.com/v1", "first", "")
+        val second = first.copy(model = "second")
+        val incomplete = summaryModelJson(false, first.copy(model = ""))
+        assertTrue(savedSummaryModel(null, first, turnOn = false).getBoolean("enabled"))
+        assertTrue(savedSummaryModel(incomplete, first, turnOn = false).getBoolean("enabled"))
+        val off = summaryModelJson(false, first)
+        assertFalse(savedSummaryModel(off, second, turnOn = false).getBoolean("enabled"))
+        assertTrue(savedSummaryModel(off, second, turnOn = true).getBoolean("enabled"))
+    }
 
     @Test fun groupsLikeTheHub() {
         // Joined while the next starts within 10 minutes of the latest end; one private record makes the whole one private.
@@ -96,7 +108,12 @@ class PhoneSummariesTest {
     @Test fun plainHttpOnlyForThisPhoneOrTheHomeNetwork() {
         assertEquals("http://127.0.0.1:8080/v1/chat/completions", SummaryClient.endpointOf("http://127.0.0.1:8080/v1/"))
         assertEquals("http://192.168.1.20:11434/v1/chat/completions", SummaryClient.endpointOf("http://192.168.1.20:11434/v1"))
-        assertThrows(SummaryFailure::class.java) { SummaryClient.endpointOf("http://api.example.com/v1") }
+        assertEquals(SummaryError.ADDRESS_HTTPS,
+            assertThrows(SummaryFailure::class.java) { SummaryClient.endpointOf("http://api.example.com/v1") }.error)
+        assertEquals(SummaryError.ADDRESS_FORMAT,
+            assertThrows(SummaryFailure::class.java) { SummaryClient.endpointOf("api.example.com/v1") }.error)
+        assertEquals(SummaryError.ADDRESS_COMPONENTS,
+            assertThrows(SummaryFailure::class.java) { SummaryClient.endpointOf("https://api.example.com/v1?key=test") }.error)
         assertThrows(SummaryFailure::class.java) { SummaryClient.endpointOf("ftp://example.com") }
     }
 

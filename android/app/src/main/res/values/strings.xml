@@ -39,7 +39,7 @@
     <string name="connect_mac">Connect to Mac</string>
     <string name="connect_scan">Scan to connect</string>
     <string name="connecting_mac">Connecting to Mac…</string>
-    <string name="connection_hint">Add a device in Tacit settings on your Mac to get a QR code or invite link.</string>
+    <string name="connection_hint">On your Mac, go to Settings › Background service and connection › Devices in Tacit to get a QR code or invite link.</string>
     <string name="connection_test_passed">Connection works.</string>
     <string name="connection_unavailable">Couldn\'t read the connection status. Check the local record library.</string>
     <string name="conversation_no_transcript">There is no complete transcript for this conversation.</string>
@@ -109,7 +109,7 @@
     <string name="model_cancelled">Cancelled. Installed models are unchanged.</string>
     <string name="model_cancelling">Cancelling. Installed models remain available.</string>
     <string name="model_checksum_failed">The model file failed verification. Download it again.</string>
-    <string name="model_connecting_download">Connecting to the model download site</string>
+    <string name="model_connecting_download">Connecting to the download source…</string>
     <string name="model_download_failed">Couldn\'t download the models. Try again later.</string>
     <string name="model_download_incomplete">The model download is incomplete. Try again.</string>
     <string name="model_download_network">A network issue interrupted the download. Try again later.</string>
@@ -126,7 +126,7 @@
     <string name="model_error_rejected">The model service rejected the request. Check the model name and address.</string>
     <string name="model_error_server">The model service encountered an error. Tacit will retry automatically.</string>
     <string name="model_error_timeout">The model service didn\'t respond. Check your network or try again later.</string>
-    <string name="model_folder_incomplete">Some speech model files are missing. Choose another folder.</string>
+    <string name="model_folder_incomplete">Missing model files: %1$s</string>
     <string name="model_folder_required">Choose a model folder</string>
     <string name="model_importing">Importing and checking models</string>
     <string name="model_name">Model name</string>
@@ -362,4 +362,18 @@
         <item quantity="one">%1$s voice</item>
         <item quantity="other">%1$s voices</item>
     </plurals>
+    <string name="acceleration_archive_invalid">The acceleration download couldn\'t be unpacked. Try downloading it again.</string>
+    <string name="acceleration_files_missing">Some acceleration model files are missing.</string>
+    <string name="acceleration_unsupported">This phone doesn\'t support hardware acceleration.</string>
+    <string name="acceleration_cleanup_failed">Couldn\'t clear the previous acceleration download.</string>
+    <string name="models_import_folder_hint">Choose the folder that contains these files: %1$s.</string>
+    <string name="model_folder_duplicate">More than one file or folder is named %1$s.</string>
+    <string name="go_to_system_settings">Go to system settings</string>
+    <string name="confirm_mac_online">Check that your Mac is on and connected to the internet.</string>
+    <string name="sync_pair_timed_out">No reply yet. Try connecting again with the same invite link.</string>
+    <string name="invite_format_hint">Paste the full link starting with tacit://pair?d=.</string>
+    <string name="summary_address_format">Enter a full service address starting with https:// (or http:// for a local service).</string>
+    <string name="summary_address_https">A public service address must start with https://.</string>
+    <string name="summary_address_components">Remove credentials, query parameters or the # fragment from the service address.</string>
+    <string name="recording_background_limited">Battery restrictions may interrupt recording. Check background operation settings.</string>
 </resources>

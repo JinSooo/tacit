@@ -18,6 +18,14 @@ class TacitApp : Application() {
         opened ?: Vault(this, prefs) { SyncWorker.enqueue(this, newRecord = true) }.also { opened = it }
     }
 
+    internal fun resumeSummaryWorker() {
+        Thread({
+            // Opening can fail while keys or the database are unavailable. Let the foreground offer a retry.
+            val enabled = runCatching { vault.summaryModel()?.optBoolean("enabled") == true }.getOrDefault(false)
+            if (enabled) top.jinso.tacit.summary.SummaryWorker.apply(this, true)
+        }, "tacit-summary-start").apply { isDaemon = true }.start()
+    }
+
     override fun onCreate() {
         super.onCreate()
         if (getProcessName().endsWith(":qnn")) return
@@ -26,7 +34,7 @@ class TacitApp : Application() {
         prefs.dropRemovedSettings()
         top.jinso.tacit.sources.Sources.retireRemovedCollectors(this)
         top.jinso.tacit.audio.AudioMaintenanceWorker.schedule(this)
-        Thread({ if (vault.summaryModel()?.optBoolean("enabled") == true) top.jinso.tacit.summary.SummaryWorker.apply(this, true) }, "tacit-summary-start").apply { isDaemon = true }.start()
+        resumeSummaryWorker()
         Thread({ top.jinso.tacit.data.LegacyFiles.remove(noBackupFilesDir) }, "tacit-legacy-cleanup").apply { isDaemon = true }.start()
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {

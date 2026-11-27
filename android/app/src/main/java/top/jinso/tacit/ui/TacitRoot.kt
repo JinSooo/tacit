@@ -39,6 +39,7 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
     val reading = remember(activity) { ViewModelProvider(activity)[ReadingModel::class.java] }
     var vault by remember { mutableStateOf<Vault?>(null) }
     var locked by remember { mutableStateOf(false) }
+    var openAttempt by remember { mutableIntStateOf(0) }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var hubRoute by rememberSaveable { mutableStateOf<String?>(null) }
     var healthRefresh by remember { mutableIntStateOf(0) }
@@ -79,9 +80,15 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
             else -> selectedItem = null
         }
     }
-    LaunchedEffect(Unit) {
-        try { vault = withContext(Dispatchers.IO) { app.vault } }
-        catch (_: Exception) { locked = true }
+    LaunchedEffect(openAttempt) {
+        try {
+            vault = withContext(Dispatchers.IO) { app.vault }
+            if (openAttempt > 0) app.resumeSummaryWorker()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            locked = true
+        }
     }
     val open = detail != null || conversation.isNotEmpty() || timelineItem != null
     BackHandler(open) { back() }
@@ -117,7 +124,14 @@ fun TacitRoot(app: TacitApp, resumed: Int) = TacitTheme {
                 val shownItem = rememberLatest(timelineItem?.takeIf { page.kind == PageKind.TIMELINE && it.id == page.id })
                 ActiveScope(active) { Box(Modifier.fillMaxSize().background(tacitColors.paper)) {
                     when {
-                        page.kind == PageKind.LOCKED -> EmptyState(strings.text(R.string.vault_locked), strings.text(R.string.vault_locked_hint))
+                        page.kind == PageKind.LOCKED -> EmptyState(
+                            strings.text(R.string.vault_locked), strings.text(R.string.vault_locked_hint),
+                        ) {
+                            TonalButton(strings.text(R.string.retry), {
+                                locked = false
+                                openAttempt++
+                            }, enabled = active)
+                        }
                         page.kind == PageKind.LOADING || store == null -> ProgressLine()
                         page.kind == PageKind.RECORD -> if (shownDetail != null) RecordDetail(
                             shownDetail, store, app, onBack = ::back, notify = ::notify,

@@ -1,5 +1,10 @@
 package top.jinso.tacit.summary
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import org.json.JSONArray
 import org.json.JSONObject
 import top.jinso.tacit.core.HistoryRecord
@@ -142,6 +147,9 @@ internal enum class SummaryError(val label: Int, val needsUser: Boolean = false)
     QUOTA(R.string.model_error_quota, needsUser = true),
     REJECTED(R.string.model_error_rejected, needsUser = true),
     CONFIG(R.string.model_error_config, needsUser = true),
+    ADDRESS_FORMAT(R.string.summary_address_format, needsUser = true),
+    ADDRESS_HTTPS(R.string.summary_address_https, needsUser = true),
+    ADDRESS_COMPONENTS(R.string.summary_address_components, needsUser = true),
     TIMEOUT(R.string.model_error_timeout),
     NETWORK(R.string.model_error_network),
     RATE_LIMIT(R.string.model_error_rate_limit),
@@ -222,12 +230,18 @@ internal class SummaryClient(private val model: SummaryModel, private val lang: 
         /** People often paste the full …/chat/completions URL. Plain HTTP only for this phone or the home network. */
         fun endpointOf(base: String): String {
             val trimmed = base.trim().trimEnd('/').removeSuffix("/chat/completions")
-            val uri = try { URI(trimmed) } catch (_: Exception) { throw SummaryFailure(SummaryError.CONFIG) }
-            val host = uri.host ?: throw SummaryFailure(SummaryError.CONFIG)
+            val uri = try { URI(trimmed) } catch (_: java.net.URISyntaxException) {
+                throw SummaryFailure(SummaryError.ADDRESS_FORMAT)
+            }
+            val host = uri.host ?: throw SummaryFailure(SummaryError.ADDRESS_FORMAT)
+            if (uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null) {
+                throw SummaryFailure(SummaryError.ADDRESS_COMPONENTS)
+            }
+            if (uri.port != -1 && uri.port !in 1..65535) throw SummaryFailure(SummaryError.ADDRESS_FORMAT)
             when (uri.scheme) {
                 "https" -> Unit
-                "http" -> if (!localHost(host)) throw SummaryFailure(SummaryError.CONFIG)
-                else -> throw SummaryFailure(SummaryError.CONFIG)
+                "http" -> if (!localHost(host)) throw SummaryFailure(SummaryError.ADDRESS_HTTPS)
+                else -> throw SummaryFailure(SummaryError.ADDRESS_FORMAT)
             }
             return "$trimmed/chat/completions"
         }
@@ -239,13 +253,42 @@ internal class SummaryClient(private val model: SummaryModel, private val lang: 
             return address.isLoopbackAddress || address.isSiteLocalAddress || address.isLinkLocalAddress
         }
 
-        private fun post(url: String, headers: Map<String, String>, body: String): Pair<Int, String> {
+        suspend fun testConnection(model: SummaryModel, lang: AppLang) {
+            val timeout = 45_000
+            withTimeoutOrNull(timeout.toLong()) {
+                suspendCancellableCoroutine<Unit> { continuation ->
+                    Dispatchers.IO.dispatch(continuation.context, Runnable {
+                        if (!continuation.isActive) return@Runnable
+                        try {
+                            SummaryClient(model, lang) { url, headers, body ->
+                                post(url, headers, body, timeout) { connection ->
+                                    continuation.invokeOnCancellation {
+                                        Dispatchers.IO.dispatch(continuation.context, Runnable { connection.disconnect() })
+                                    }
+                                    if (!continuation.isActive) throw kotlinx.coroutines.CancellationException()
+                                }
+                            }.test()
+                            continuation.resume(Unit)
+                        } catch (error: Exception) {
+                            continuation.resumeWithException(error)
+                        }
+                    })
+                }
+            } ?: throw SummaryFailure(SummaryError.TIMEOUT)
+        }
+
+        private fun post(url: String, headers: Map<String, String>, body: String): Pair<Int, String> =
+            post(url, headers, body, 120_000) {}
+
+        private fun post(url: String, headers: Map<String, String>, body: String, timeout: Int,
+            onConnection: (HttpURLConnection) -> Unit): Pair<Int, String> {
             val connection = URI(url).toURL().openConnection() as HttpURLConnection
             try {
                 connection.instanceFollowRedirects = false
                 connection.useCaches = false
                 connection.connectTimeout = 15_000
-                connection.readTimeout = 120_000
+                connection.readTimeout = timeout
+                onConnection(connection)
                 connection.requestMethod = "POST"
                 connection.doOutput = true
                 headers.forEach(connection::setRequestProperty)

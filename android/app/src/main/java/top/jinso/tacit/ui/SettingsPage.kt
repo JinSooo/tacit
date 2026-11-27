@@ -33,6 +33,31 @@ import top.jinso.tacit.sync.MacStatus
 import top.jinso.tacit.ui.components.*
 import top.jinso.tacit.ui.onboarding.*
 
+/** Use after a denied permission result, when Android can tell whether it will show the prompt again. */
+@Composable
+internal fun rememberPermissionRecovery(notify: (String) -> Unit): (String, String) -> Unit {
+    val activity = LocalActivity.current ?: return { _, _ -> }
+    val strings = uiStrings()
+    var explanation by rememberSaveable { mutableStateOf<String?>(null) }
+    explanation?.let { message ->
+        AlertDialog(
+            onDismissRequest = { explanation = null },
+            text = { Text(message) },
+            confirmButton = {
+                TextAction(strings.text(R.string.go_to_system_settings), {
+                    explanation = null
+                    openSystemPage(activity, SystemPage.APP, notify)
+                })
+            },
+            dismissButton = { TextAction(strings.text(R.string.cancel), { explanation = null }) },
+        )
+    }
+    return { permission, denied ->
+        if (activity.shouldShowRequestPermissionRationale(permission)) notify(denied)
+        else explanation = denied
+    }
+}
+
 @Composable
 internal fun SettingsPage(
     app: TacitApp,
@@ -50,6 +75,7 @@ internal fun SettingsPage(
     val strings = uiStrings()
     var parent by rememberSaveable { mutableStateOf<String?>(null) }
     val activity = LocalActivity.current ?: return
+    val recoverPermission = rememberPermissionRecovery(notify)
     var pendingPermission by rememberSaveable { mutableStateOf<String?>(null) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         refreshHealth()
@@ -63,8 +89,10 @@ internal fun SettingsPage(
             else -> null
         }
         // 被永久拒绝后系统不再弹框，直接打开系统设置让人手动开，免得“允许”变成点了没反应的按钮。
-        if (!granted && (requested == null || !activity.shouldShowRequestPermissionRationale(requested))) {
-            openSystemPage(activity, if (pendingPermission == Sources.AUDIO) SystemPage.APP else SystemPage.NOTIFICATIONS, notify)
+        if (!granted && pendingPermission == Sources.AUDIO) {
+            recoverPermission(Manifest.permission.RECORD_AUDIO, strings.text(R.string.microphone_ungranted))
+        } else if (!granted && (requested == null || !activity.shouldShowRequestPermissionRationale(requested))) {
+            openSystemPage(activity, SystemPage.NOTIFICATIONS, notify)
         } else notify(if (granted) strings.text(R.string.permissions_updated) else strings.text(R.string.permission_missing_hint))
         pendingPermission = null
     }

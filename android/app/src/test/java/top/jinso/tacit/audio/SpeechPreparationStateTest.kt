@@ -23,10 +23,11 @@ class SpeechPreparationStateTest {
 
     @Test fun wrongFolderShowsAnInstructionInSpeechSettings() {
         val importing = SpeechPreparationState(SpeechPreparationPhase.IMPORTING)
-        val finished = importing.finished(CompletionException(SpeechModelProblem(R.string.model_folder_incomplete)))
+        val missing = "sense-voice/tokens.txt, silero_vad.onnx"
+        val finished = importing.finished(CompletionException(SpeechModelProblem(R.string.model_folder_incomplete, missing)))
 
         assertEquals(SpeechPreparationPhase.ERROR, finished.phase)
-        assertEquals("文件夹缺少语音模型文件，请重新选择", finished.message?.resolve(chinese))
+        assertEquals("缺少模型文件：$missing", finished.message?.resolve(chinese))
         assertFalse(finished.busy)
     }
 
