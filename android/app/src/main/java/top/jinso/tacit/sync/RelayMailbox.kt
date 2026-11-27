@@ -176,14 +176,15 @@ internal suspend fun pairWithAvailableTransport(
     pendingRelay: RelayPairRequest? = null,
     relayRequest: () -> RelayPairRequest = { RelayPairRequest(invite, keys, phoneName) },
     onRelayWaiting: suspend () -> Unit = {},
+    relayHttp: RelayHttp = ::relayHttp,
     persist: (PairedDevice, String?) -> Unit,
 ) {
-    val origin = try { if (pendingRelay == null) findMac() else null } catch (error: MacUnavailable) {
+    val origin = try { if (pendingRelay?.submitted == true) null else findMac() } catch (error: MacUnavailable) {
         if (invite.relay == null) throw error
         null
     }
     if (origin == null) {
-        val mailbox = RelayMailbox(requireNotNull(invite.relay), rateLimit = rateLimit)
+        val mailbox = RelayMailbox(requireNotNull(invite.relay), rateLimit = rateLimit, http = relayHttp)
         (pendingRelay ?: relayRequest()).pair(mailbox, onRelayWaiting = onRelayWaiting) { persist(it, null) }
     } else {
         val client = DeviceClient(invite.publicKey, keys, { deviceHttp(origin, it) })
@@ -195,7 +196,8 @@ internal suspend fun pairWithAvailableTransport(
 internal class RelayPairRequest(private val invite: Invitation, keys: AsymmetricCipherKeyPair, phoneName: String) {
     private val protocol = DeviceMessages(invite.publicKey, keys)
     private val request = protocol.request("pair", pairBody(invite, keys, phoneName))
-    private var submitted = false
+    var submitted = false
+        private set
 
     suspend fun pair(
         mailbox: RelayMailbox,

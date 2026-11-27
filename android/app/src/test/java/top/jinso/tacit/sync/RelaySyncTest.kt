@@ -436,6 +436,30 @@ class RelaySyncTest {
         assertEquals(fake.puts, fake.deleted)
     }
 
+    @Test fun failedRelayPutLetsTheNextPairingTryDiscoverTheMacAgain() = runBlocking {
+        val invite = Invitation("fixture-hub", "Mac", hubKey, id(8), emptyList(), Instant.now().plusSeconds(30), config)
+        val request = RelayPairRequest(invite, phone, "Phone")
+        val discoveryFailure = IOException("Synthetic direct discovery result")
+        var discoveryAttempts = 0
+        suspend fun pair(pending: RelayPairRequest?, findMac: suspend () -> String) =
+            pairWithAvailableTransport(invite, phone, "Phone", findMac = {
+                discoveryAttempts++
+                findMac()
+            }, pendingRelay = pending, relayRequest = { request }, relayHttp = fake.http) { _, _ ->
+                fail("No pairing reply was sent")
+            }
+
+        fake.onPut = { _, _ -> throw IOException("Synthetic relay delivery failure") }
+        val first = runCatching { pair(null) { throw MacUnavailable(false) } }
+        assertEquals("Synthetic relay delivery failure", first.exceptionOrNull()?.message)
+        assertEquals(1, fake.puts.size)
+
+        val retry = runCatching { pair(request) { throw discoveryFailure } }
+        assertSame(discoveryFailure, retry.exceptionOrNull())
+        assertEquals(2, discoveryAttempts)
+        assertEquals(1, fake.puts.size)
+    }
+
     @Test fun pairingTimeoutAndCancellationCanResumeTheSameInvitation() = runBlocking {
         val invite = Invitation("fixture-hub", "Mac", hubKey, id(8), emptyList(), Instant.now().plusSeconds(30), config)
         val request = RelayPairRequest(invite, phone, "Phone")
@@ -453,7 +477,11 @@ class RelaySyncTest {
         val nonce = fake.puts.single()
         val body = JSONObject().put("device_id", "android-aebagbaf").put("hub_id", invite.hubId).put("relay", config.json())
         fake.down[nonce] = seal(nonce, JSONObject().put("status", 200).put("body", body))
-        request.pair(fake.client()) { assertEquals("android-aebagbaf", it.id) }
+        pairWithAvailableTransport(invite, phone, "Phone", findMac = { error("Relay receipt is already pending") },
+            pendingRelay = request, relayHttp = fake.http) { paired, origin ->
+            assertEquals("android-aebagbaf", paired.id)
+            assertNull(origin)
+        }
         assertEquals(listOf(nonce), fake.puts)
     }
 
@@ -496,7 +524,9 @@ class RelaySyncTest {
         var denied: Int? = null
         var onPut: (String, ByteArray) -> Unit = { _, _ -> }
 
-        fun client() = RelayMailbox(config) { method, url, token, payload, _, _ ->
+        fun client() = RelayMailbox(config, http = http)
+
+        val http: RelayHttp = { method, url, token, payload, _, _ ->
             assertTrue(url.startsWith(config.url))
             val path = url.removePrefix(config.url)
             calls += if (method == "GET" && "?" in path) "list" else method
