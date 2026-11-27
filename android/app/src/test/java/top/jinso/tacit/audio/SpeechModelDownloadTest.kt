@@ -15,6 +15,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class SpeechModelDownloadTest {
     private val chinese = TestStrings(AppLang.ZH)
@@ -62,6 +65,68 @@ class SpeechModelDownloadTest {
         }
         assertEquals(SpeechModels.tagging, SpeechModelCatalog.tagging.map { it.path })
     }
+    @Test fun sortsByMeasuredSpeedAndRetainsFailedSourcesInCatalogOrder() {
+        val sources = listOf("slow", "unreachable", "fast", "timeout")
+        assertEquals(listOf("fast", "slow", "unreachable", "timeout"), rankModelSources(sources) {
+            assertEquals(sources, it)
+            mapOf("fast" to 17.0, "slow" to 1.0)
+        })
+        assertEquals(sources, rankModelSources(sources) { emptyMap() })
+    }
+
+    @Test fun skipsProbingSingleSource() {
+        assertEquals(listOf("only"), rankModelSources(listOf("only")) { error("No probe needed") })
+    }
+
+    @Test fun usesMeasuredOrderAndStillFallsBackWhenFastestHashDoesNotMatch() {
+        val model = resource().copy(url = "https://slow.example/model",
+            fallbackUrls = listOf("https://fast.example/model", "https://failed.example/model"))
+        val requested = mutableListOf<String>()
+        val stage = SpeechModelDownload(listOf(model), sourceProbes = { _, _, _ ->
+            mapOf(model.url to 1.0, model.fallbackUrls.first() to 17.0)
+        }) { url ->
+            requested += url.host
+            when (url.host) {
+                "fast.example" -> Connection(url, ByteArray(bytes.size))
+                "slow.example" -> Connection(url, bytes, status = 404)
+                else -> Connection(url, bytes)
+            }
+        }.prepare(temp.root, ModelDownloadCancellation()) { _, _ -> }
+        assertEquals(listOf("fast.example", "slow.example", "failed.example"), requested)
+        assertArrayEquals(bytes, File(stage, model.path).readBytes())
+    }
+
+    @Test fun rangeProbesRunInParallelAndFetchOnlyTheSample() {
+        val model = resource().copy(url = "https://fallback.example/model",
+            fallbackUrls = listOf("https://reachable.example/model"))
+        val parallel = CountDownLatch(2)
+        val probed = ConcurrentLinkedQueue<String>()
+        val downloaded = mutableListOf<String>()
+        val stage = SpeechModelDownload(listOf(model)) { url ->
+            val reachable = url.host == "reachable.example"
+            object : HttpURLConnection(url) {
+                override fun connect() = Unit
+                override fun disconnect() = Unit
+                override fun usingProxy() = false
+                override fun getResponseCode(): Int {
+                    if (getRequestProperty("Range") == "bytes=0-${bytes.lastIndex}") {
+                        probed += url.host
+                        parallel.countDown()
+                        if (!parallel.await(1, TimeUnit.SECONDS)) return 408
+                    } else {
+                        downloaded += url.host
+                    }
+                    return if (reachable) 200 else 404
+                }
+                override fun getContentLengthLong() = bytes.size.toLong()
+                override fun getInputStream() = ByteArrayInputStream(bytes)
+            }
+        }.prepare(temp.root, ModelDownloadCancellation()) { _, _ -> }
+        assertEquals(setOf("reachable.example", "fallback.example"), probed.toSet())
+        assertEquals(listOf("reachable.example"), downloaded)
+        assertArrayEquals(bytes, File(stage, model.path).readBytes())
+    }
+
     @Test fun taggingInstallUnpacksOnlyVerifiedFilesAndCleansUp() {
         val model = "model bytes".toByteArray(); val labels = "index,mid,display_name".toByteArray()
         fun sha(b: ByteArray) = MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
@@ -103,7 +168,7 @@ class SpeechModelDownloadTest {
         val model = resource().copy(url = "https://mirror.example/m", fallbackUrls = listOf("https://upstream.example/m"),
             alternates = listOf(reexport.size.toLong() to sha(reexport)))
         val requested = mutableListOf<String>()
-        val stage = SpeechModelDownload(listOf(model)) {
+        val stage = SpeechModelDownload(listOf(model), sourceProbes = { _, _, _ -> emptyMap() }) {
             requested += it.toString()
             if (it.host == "mirror.example") Connection(it, reexport, status = 404) else Connection(it, reexport)
         }.prepare(temp.root, ModelDownloadCancellation()) { _, _ -> }
@@ -129,7 +194,7 @@ class SpeechModelDownloadTest {
     }
     private fun failsCleanly(resource: SpeechModelResource = resource(), factory: (URL) -> HttpURLConnection): Throwable {
         val old = File(temp.root, "existing").apply { mkdir(); File(this,"marker").writeText("keep") }
-        val failure = runCatching { SpeechModelDownload(listOf(resource), pause = {}, openConnection = factory).prepare(temp.root, ModelDownloadCancellation()) { _, _ -> } }.exceptionOrNull()
+        val failure = runCatching { SpeechModelDownload(listOf(resource), pause = {}, sourceProbes = { _, _, _ -> emptyMap() }, openConnection = factory).prepare(temp.root, ModelDownloadCancellation()) { _, _ -> } }.exceptionOrNull()
         assertNotNull(failure)
         assertEquals(listOf(old), temp.root.listFiles()!!.toList())
         assertEquals("keep", File(old,"marker").readText())

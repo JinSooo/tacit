@@ -309,7 +309,7 @@ internal class AudioRuntime private constructor(val context: Context) {
         val cancellation = beginModelPreparation(SpeechPreparationPhase.DOWNLOADING)
         return CompletableFuture.supplyAsync({
             val stage = models.download(cancellation) { bytes, path ->
-                updateModelPreparation(SpeechPreparationPhase.DOWNLOADING, bytes, if (bytes == 0L) UiMessage(R.string.model_connecting) else UiMessage(R.string.model_downloading_file, path))
+                updateModelPreparation(SpeechPreparationPhase.DOWNLOADING, bytes, if (bytes == 0L) UiMessage(R.string.model_connecting_download) else UiMessage(R.string.model_downloading_file, path))
             }
             try {
                 cancellation.check()
@@ -337,7 +337,7 @@ internal class AudioRuntime private constructor(val context: Context) {
         return CompletableFuture.supplyAsync({
             check(models.current() != null) { "请先准备语音模型" }
             val stage = qnnModels.download(cancellation) { bytes, _ ->
-                updateModelPreparation(SpeechPreparationPhase.DOWNLOADING, bytes, UiMessage(if (bytes == 0L) R.string.model_connecting else R.string.acceleration_downloading))
+                updateModelPreparation(SpeechPreparationPhase.DOWNLOADING, bytes, UiMessage(if (bytes == 0L) R.string.model_connecting_download else R.string.acceleration_downloading))
             }
             try {
                 updateModelPreparation(SpeechPreparationPhase.VALIDATING, QnnCatalog.archive.bytes, UiMessage(R.string.model_wait_recording))

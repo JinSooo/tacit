@@ -109,7 +109,7 @@
     <string name="model_cancelled">Cancelled. Installed models are unchanged.</string>
     <string name="model_cancelling">Cancelling. Installed models remain available.</string>
     <string name="model_checksum_failed">The model file failed verification. Download it again.</string>
-    <string name="model_connecting_download">Connecting to the model download site</string>
+    <string name="model_connecting_download">Connecting to the download source…</string>
     <string name="model_download_failed">Couldn\'t download the models. Try again later.</string>
     <string name="model_download_incomplete">The model download is incomplete. Try again.</string>
     <string name="model_download_network">A network issue interrupted the download. Try again later.</string>
@@ -362,7 +362,6 @@
         <item quantity="one">%1$s voice</item>
         <item quantity="other">%1$s voices</item>
     </plurals>
-    <string name="model_connecting">Connecting to the download source…</string>
     <string name="acceleration_archive_invalid">The acceleration download couldn\'t be unpacked. Try downloading it again.</string>
     <string name="acceleration_files_missing">Some acceleration model files are missing.</string>
     <string name="acceleration_unsupported">This phone doesn\'t support hardware acceleration.</string>

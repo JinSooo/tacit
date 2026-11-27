@@ -16,10 +16,13 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletionException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorCompletionService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 internal data class SpeechModelResource(
     val path: String, val url: String, val bytes: Long, val sha256: String,
-    /** Tried in order after [url] fails, e.g. upstream after our release mirror. */
+    /** Additional candidates. Catalog order breaks ties and determines the order of failed probes. */
     val fallbackUrls: List<String> = emptyList(),
     /** Upstream re-exports verified to behave the same, as (bytes, sha256). */
     val alternates: List<Pair<Long, String>> = emptyList()
@@ -34,7 +37,7 @@ internal object SpeechModelCatalog {
     private const val modelScope = "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master"
     private const val sense = "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07"
     private const val release = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
-    /** Unmodified copies on our own release, tried first so an upstream re-upload cannot block new installs. */
+    /** Unmodified copies on our own release so an upstream re-upload cannot block new installs. */
     const val mirror = "https://github.com/JinSooo/tacit/releases/download/models-v1"
     private const val speaker = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
     val resources = listOf(
@@ -151,10 +154,17 @@ internal class ModelDownloadCancellation {
     @Synchronized fun commit(action: () -> Unit) { check(); action(); committed = true }
 }
 
+internal fun rankModelSources(sources: List<String>, probeAll: (List<String>) -> Map<String, Double>): List<String> {
+    if (sources.size < 2) return sources
+    val speeds = probeAll(sources)
+    return sources.sortedByDescending { speeds[it]?.takeIf { speed -> speed.isFinite() && speed > 0 } ?: 0.0 }
+}
+
 /** Only anonymous HTTPS GETs of the fixed model URLs. Never receives audio, records or credentials. */
 internal class SpeechModelDownload(
     private val resources: List<SpeechModelResource> = SpeechModelCatalog.resources,
     private val pause: (Long) -> Unit = Thread::sleep,
+    private val sourceProbes: ((List<String>, Long, ModelDownloadCancellation) -> Map<String, Double>)? = null,
     private val openConnection: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
 ) {
     fun prepare(root: File, cancellation: ModelDownloadCancellation, progress: (Long, String) -> Unit): File {
@@ -180,11 +190,14 @@ internal class SpeechModelDownload(
         }
     }
 
-    /** Tries each source in order; reports the last source's error when all fail. */
+    /** Tries measured sources first, then keeps any unmeasured sources as fallbacks. */
     private fun transfer(resource: SpeechModelResource, target: File, cancellation: ModelDownloadCancellation,
         progress: (Long) -> Unit) {
         var failure: Throwable? = null
-        for (source in listOf(resource.url) + resource.fallbackUrls) {
+        val sources = rankModelSources(listOf(resource.url) + resource.fallbackUrls) {
+            (sourceProbes ?: ::measureSources)(it, minOf(resource.bytes, 1_048_576L), cancellation)
+        }
+        for (source in sources) {
             cancellation.check()
             for (attempt in 0..3) {
                 try {
@@ -216,6 +229,79 @@ internal class SpeechModelDownload(
     private fun transferFrom(source: String, resource: SpeechModelResource, target: File, cancellation: ModelDownloadCancellation,
         progress: (Long) -> Unit) {
         val offset = target.length()
+        fetch(source, if (offset > 0) "bytes=$offset-" else null, cancellation,
+            timeout = { 15_000 }, attach = cancellation::attach) { connection, status ->
+            if (status == 408 || status == 429 || status in 500..599) throw RetryableHttpStatus()
+            if (status != 200 && status != 206) throw SpeechModelProblem(R.string.model_download_failed)
+            receive(connection, status, offset, resource, target, cancellation, progress)
+        }
+    }
+
+    private fun measureSources(sources: List<String>, bytes: Long, cancellation: ModelDownloadCancellation): Map<String, Double> {
+        val pool = Executors.newFixedThreadPool(sources.size)
+        val probes = ExecutorCompletionService<Pair<String, Double?>>(pool)
+        val active = java.util.concurrent.ConcurrentHashMap.newKeySet<HttpURLConnection>()
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
+        try {
+            sources.forEach { source ->
+                probes.submit {
+                    source to runCatching { measureSource(source, bytes, deadline, cancellation, active) }.getOrNull()
+                }
+            }
+            val speeds = mutableMapOf<String, Double>()
+            var pending = sources.size
+            while (pending > 0) {
+                cancellation.check()
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0) break
+                val complete = probes.poll(minOf(remaining, TimeUnit.MILLISECONDS.toNanos(100)), TimeUnit.NANOSECONDS)
+                    ?: continue
+                val (source, speed) = complete.get()
+                if (speed != null) speeds[source] = speed
+                pending--
+            }
+            return speeds
+        } finally {
+            pool.shutdownNow()
+            // Disconnect off the model worker, so a timed-out socket cannot delay the full download.
+            active.forEach { connection -> CompletableFuture.runAsync { connection.disconnect() } }
+        }
+    }
+
+    private fun measureSource(source: String, bytes: Long, deadline: Long, cancellation: ModelDownloadCancellation,
+        active: MutableSet<HttpURLConnection>): Double? {
+        val started = System.nanoTime()
+        fun remainingMillis(): Int {
+            val remaining = deadline - System.nanoTime()
+            if (remaining <= 0 || Thread.currentThread().isInterrupted) throw java.net.SocketTimeoutException()
+            return TimeUnit.NANOSECONDS.toMillis(remaining).toInt().coerceAtLeast(1)
+        }
+        return fetch(source, "bytes=0-${bytes - 1}", cancellation, timeout = ::remainingMillis,
+            attach = { if (it != null) active.add(it) }, detach = { active.remove(it) }) { connection, status ->
+            val range = CONTENT_RANGE.matchEntire(connection.getHeaderField("Content-Range").orEmpty())
+            val validRange = range != null && range.groupValues[1] == "0" &&
+                range.groupValues[2].toLongOrNull() == bytes - 1 &&
+                (range.groupValues[3].toLongOrNull() ?: 0) >= bytes
+            if (status != 200 && (status != 206 || !validRange)) return@fetch null
+            connection.inputStream.use { input ->
+                val buffer = ByteArray(65_536)
+                var received = 0L
+                while (received < bytes) {
+                    cancellation.check()
+                    remainingMillis()
+                    val n = input.read(buffer, 0, minOf(bytes - received, buffer.size.toLong()).toInt())
+                    if (n < 0) return@fetch null
+                    received += n
+                }
+            }
+            remainingMillis()
+            bytes.toDouble() / (System.nanoTime() - started).coerceAtLeast(1)
+        }
+    }
+
+    private fun <T> fetch(source: String, range: String?, cancellation: ModelDownloadCancellation, timeout: () -> Int,
+        attach: (HttpURLConnection?) -> Unit, detach: (HttpURLConnection) -> Unit = { attach(null) },
+        response: (HttpURLConnection, Int) -> T): T {
         var url = try { URL(source) } catch (_: java.net.MalformedURLException) { throw SpeechModelProblem(R.string.model_download_network) }
         repeat(6) {
             if (url.protocol != "https" || url.userInfo != null) throw SpeechModelProblem(R.string.model_download_network)
@@ -223,28 +309,23 @@ internal class SpeechModelDownload(
             val connection = openConnection(url)
             try {
                 connection.instanceFollowRedirects = false
-                connection.connectTimeout = 15000
-                connection.readTimeout = 15000
+                connection.connectTimeout = timeout()
+                connection.readTimeout = timeout()
                 connection.useCaches = false
                 connection.requestMethod = "GET"
                 connection.setRequestProperty("Accept-Encoding", "identity")
-                if (offset > 0) connection.setRequestProperty("Range", "bytes=$offset-")
-                cancellation.attach(connection)
+                if (range != null) connection.setRequestProperty("Range", range)
+                attach(connection)
                 val status = connection.responseCode
-                if (status in listOf(301, 302, 303, 307, 308)) {
-                    val location = connection.getHeaderField("Location") ?: throw SpeechModelProblem(R.string.model_download_network)
-                    url = try { URL(url, location) }
-                    catch (_: java.net.MalformedURLException) { throw SpeechModelProblem(R.string.model_download_network) }
-                } else {
-                    if (status == 408 || status == 429 || status in 500..599) throw RetryableHttpStatus()
-                    if (status != 200 && status != 206) throw SpeechModelProblem(R.string.model_download_failed)
-                    receive(connection, status, offset, resource, target, cancellation, progress)
-                    return
-                }
+                if (status !in listOf(301, 302, 303, 307, 308)) return response(connection, status)
+                val location = connection.getHeaderField("Location") ?: throw SpeechModelProblem(R.string.model_download_network)
+                url = try { URL(url, location) }
+                catch (_: java.net.MalformedURLException) { throw SpeechModelProblem(R.string.model_download_network) }
             } finally {
-                connection.disconnect()
-                // Do not throw here: preserve the original error, or the outer cancellation check.
-                runCatching { cancellation.attach(null) }
+                try { connection.disconnect() } finally {
+                    // Do not mask the transfer error if the caller just cancelled.
+                    runCatching { detach(connection) }
+                }
             }
         }
         throw SpeechModelProblem(R.string.model_download_network)
