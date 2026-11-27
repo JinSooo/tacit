@@ -4,7 +4,7 @@ import { StringDecoder } from "node:string_decoder";
 import { createZstdDecompress } from "node:zlib";
 
 type Json = { [key: string]: any };
-type Context = "root" | "message" | "origin" | "data" | "workspace" | "blocks" | "block" | "strings" | "presence" | "ignored";
+type Context = "root" | "message" | "origin" | "data" | "workspace" | "providerData" | "blocks" | "block" | "strings" | "presence" | "ignored";
 interface Frame { kind: "object" | "array"; context: Context; value: any; state: string; key: string; hasInvalidBlock?: boolean }
 const fields: { [context: string]: Set<string> } = {
   root: new Set(["type", "sessionId", "timestamp", "cwd", "isSidechain", "isMeta", "isCompactSummary", "promptSource", "turnOrigin", "origin", "message", "payload"]),
@@ -12,6 +12,7 @@ const fields: { [context: string]: Set<string> } = {
   data: new Set(["context", "content", "isAutopilotContinuation", "parentAgentTaskId", "parentToolCallId",
     "causalDependencies", "detachedFromSpawningParentSessionId", "apiCallId", "chunkIndex", "chunkCount"]),
   workspace: new Set(["cwd"]),
+  providerData: new Set(["isMeta", "interactionType"]),
   origin: new Set(["kind"]), block: new Set(["type", "text"]),
 };
 const STRING_LIMIT = 150_064;
@@ -48,6 +49,7 @@ export class EventParser {
       !!fields[top.context]?.has(top.key)
       || (top.context === "root" && !!this.additionalRootFields?.has(top.key))
       || (top.context === "message" && !!this.additionalMessageFields?.has(top.key))
+      || (top.context === "providerData" && /initiator$/i.test(top.key))
     );
   }
   private append(value: string) {
@@ -84,10 +86,11 @@ export class EventParser {
       if (["message", "payload"].includes(parent.key)) context = "message";
       if (parent.key === "origin") context = "origin";
       if (parent.key === "data" && this.keep()) context = "data";
+      if (parent.key === "providerData" && this.keep()) context = "providerData";
     } else if (parent.context === "root" && parent.key === "tags" && kind === "array" && this.keep()) context = "strings";
     else if (parent.context === "data" && parent.key === "context" && kind === "object") context = "workspace";
     else if (parent.context === "data" && parent.key === "causalDependencies" && kind === "array") context = "presence";
-    else if (parent.context === "message" && parent.key === "content" && kind === "array") context = "blocks";
+    else if ((parent.context === "message" || parent.context === "root") && parent.key === "content" && kind === "array" && this.keep()) context = "blocks";
     else if (parent.context === "blocks" && kind === "object") context = "block";
     const value = context === "ignored" ? null : kind === "object" ? Object.create(null) : [];
     this.accept(value);

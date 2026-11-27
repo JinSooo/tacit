@@ -9,6 +9,7 @@ export interface SessionDirectories {
   antigravityDir?: string;
   factoryDir?: string;
   copilotDir?: string;
+  codebuddyDir?: string;
 }
 
 export interface SessionFile {

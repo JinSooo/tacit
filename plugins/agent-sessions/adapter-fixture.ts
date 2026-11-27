@@ -26,6 +26,7 @@ export function sessionFixture() {
       claudeDir: path.join(root, "claude"), codexDir: path.join(root, "codex"), antigravityDir: path.join(root, "gemini"),
       factoryDir: path.join(root, "factory"),
       copilotDir: path.join(root, "copilot"),
+      codebuddyDir: path.join(root, "codebuddy"),
       ...options,
       onRecord: record => { records.push(record); },
       onWarning: () => {},
