@@ -8,8 +8,10 @@ import { createLLM, repairToSchema, type LLMRequest, type Spawn, type UsageRow }
 import { loadConfig } from "../src/llm/config.ts";
 import { resetCodexCatalog } from "../src/llm/codex-cli.ts";
 import { cliEnv } from "../src/llm/process.ts";
+import { systemProxyEnv } from "../src/net/system-proxy.ts";
 import { DAY_SCHEMA, DAY_SYSTEM, normalizeDayOutput } from "../src/distill/prompts.ts";
 
+const noSystemProxy = systemProxyEnv({ exceptions: [] });
 const dirs: string[] = [];
 const originalFetch = globalThis.fetch;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -181,9 +183,9 @@ command = "/nonexistent"
 
 test("CLI 环境：带上安装时记下的代理和 CODEX_HOME，不带中转站变量", () => {
   const env = cliEnv({ HOME: "/h", PATH: "/p", ANTHROPIC_BASE_URL: "https://relay.example.invalid", OPENAI_API_KEY: "synthetic",
-    https_proxy: "http://127.0.0.1:1", TACIT_CLI_ENV: JSON.stringify({ https_proxy: "http://127.0.0.1:2", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", OPENAI_API_KEY: "x" }) });
-  expect(env).toEqual({ HOME: "/h", PATH: "/p", https_proxy: "http://127.0.0.1:1", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", CI: "1" });
-  expect(cliEnv({ HOME: "/h", TACIT_CLI_ENV: "{" })).toEqual({ HOME: "/h", CI: "1" });
+    https_proxy: "http://127.0.0.1:1", TACIT_CLI_ENV: JSON.stringify({ https_proxy: "http://127.0.0.1:2", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", OPENAI_API_KEY: "x" }) }, noSystemProxy);
+  expect(env).toEqual({ HOME: "/h", PATH: "/p", https_proxy: "http://127.0.0.1:1", ALL_PROXY: "socks5://127.0.0.1:3", CODEX_HOME: "/c", NO_PROXY: noSystemProxy.NO_PROXY, CI: "1" });
+  expect(cliEnv({ HOME: "/h", TACIT_CLI_ENV: "{" }, noSystemProxy)).toEqual({ HOME: "/h", NO_PROXY: noSystemProxy.NO_PROXY, CI: "1" });
 });
 
 for (const provider of ["claude-cli", "codex-cli"]) {
@@ -332,8 +334,8 @@ test("OpenAI 兼容后端指向本机地址时不读也不发 API key", async ()
 // 回归：CLI 后端曾继承调用方的 ANTHROPIC_BASE_URL 等变量，手动运行时走了中转站（2026-11-08 实测发现）。
 test("CLI 后端只继承白名单环境变量", async () => {
   const { cliEnv } = await import("../src/llm/process.ts");
-  const env = cliEnv({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", ANTHROPIC_BASE_URL: "https://relay.invalid", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "m", CLAUDE_CODE_SESSION_ID: "s", CLAUDECODE: "1", CMUX_CLAUDE_PID: "1", OPENAI_API_KEY: "k" });
-  expect(env).toEqual({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", CI: "1" });
+  const env = cliEnv({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", ANTHROPIC_BASE_URL: "https://relay.invalid", ANTHROPIC_AUTH_TOKEN: "x", ANTHROPIC_DEFAULT_HAIKU_MODEL: "m", CLAUDE_CODE_SESSION_ID: "s", CLAUDECODE: "1", CMUX_CLAUDE_PID: "1", OPENAI_API_KEY: "k" }, noSystemProxy);
+  expect(env).toEqual({ HOME: "/h", PATH: "/p", LANG: "zh_CN.UTF-8", NO_PROXY: noSystemProxy.NO_PROXY, CI: "1" });
 });
 
 // 回归：claude -p 把出错原因写在 stdout 的 JSON 里、stderr 为空，曾经只显示"退出失败（1）："（2026-11-08 首次真实运行发现）。
