@@ -12,8 +12,20 @@ const INSTRUCTIONS = "用户消息是一个 JSON 对象：system 是任务说明
 
 // 代码执行模式和多 Agent 工具由模型目录里的 tool_mode / multi_agent_version 强制打开，配置项关不掉；
 // 用本机 codex 自己的目录去掉这几项后作为覆盖传入。读不到或格式不认识时不覆盖，照常调用。
-const CATALOG_TTL = 60 * 60_000;
-let catalog: { at: number; text: Promise<string | null> } | null = null;
+const PROBE_TTL = 60 * 60_000;
+const FAILED_PROBE_TTL = 30_000;
+type Probe<T> = { until: number; result: Promise<T> };
+let catalog: Probe<string | null> | null = null;
+
+function cacheProbe<T>(pending: Promise<T>): Probe<T> {
+  // 并发调用复用正在进行的探测。得到结果后才开始计算有效期。
+  const entry = { until: Infinity, result: pending };
+  entry.result = pending.then(result => {
+    entry.until = Date.now() + (result ? PROBE_TTL : FAILED_PROBE_TTL);
+    return result;
+  });
+  return entry;
+}
 
 export function trimCatalog(raw: string): string | null {
   try {
@@ -31,11 +43,12 @@ export function trimCatalog(raw: string): string | null {
 function readCatalog(ctx: BackendContext): Promise<string | null> {
   return new Promise(resolve => {
     let out = "", done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (v: string | null) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
     let child;
     try { child = ctx.spawn("codex", ["debug", "models"], { cwd: ctx.cwd, stdio: "pipe", env: cliEnv() }); }
     catch { finish(null); return; }
-    const timer = setTimeout(() => { child.kill("SIGKILL"); finish(null); }, 10_000);
+    timer = setTimeout(() => { child.kill("SIGKILL"); finish(null); }, 10_000);
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (c: string) => { out += c; if (out.length > 4 * 1024 * 1024) { child.kill("SIGKILL"); finish(null); } });
     child.on("error", () => finish(null));
@@ -45,24 +58,25 @@ function readCatalog(ctx: BackendContext): Promise<string | null> {
 }
 
 function cachedCatalog(ctx: BackendContext): Promise<string | null> {
-  if (!catalog || Date.now() - catalog.at > CATALOG_TTL) catalog = { at: Date.now(), text: readCatalog(ctx) };
-  return catalog.text;
+  if (!catalog || Date.now() >= catalog.until) catalog = cacheProbe(readCatalog(ctx));
+  return catalog.result;
 }
 
 // codex 默认先走 WebSocket，连不上要超时重连 5 次（约 110 秒）才退回 HTTPS（2026-11-12 实测：用户换了代理后
 // 每次提炼调用从约 10 秒变成约 115 秒，接近 180 秒上限）。用 ChatGPT 账号登录时，提炼改用一个只走 HTTPS 的
 // provider，仍由 codex 自己的登录认证，不读也不存令牌。用户 2026-11-12 确认。其他登录方式不改。
 const CHATGPT_HTTPS = '{name="OpenAI",base_url="https://chatgpt.com/backend-api/codex",wire_api="responses",requires_openai_auth=true,supports_websockets=false}';
-let login: { at: number; chatgpt: Promise<boolean> } | null = null;
+let login: Probe<boolean> | null = null;
 
 function readLogin(ctx: BackendContext): Promise<boolean> {
   return new Promise(resolve => {
     let out = "", done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (v: boolean) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
     let child;
     try { child = ctx.spawn("codex", ["login", "status"], { cwd: ctx.cwd, stdio: "pipe", env: cliEnv() }); }
     catch { finish(false); return; }
-    const timer = setTimeout(() => { child.kill("SIGKILL"); finish(false); }, 10_000);
+    timer = setTimeout(() => { child.kill("SIGKILL"); finish(false); }, 10_000);
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
     // 状态写在 stdout 或 stderr 里都有可能，只看是不是 ChatGPT 登录，不保留其他内容。
     const take = (c: string) => { out = (out + c).slice(-2000); };
@@ -73,8 +87,8 @@ function readLogin(ctx: BackendContext): Promise<boolean> {
   });
 }
 function cachedLogin(ctx: BackendContext): Promise<boolean> {
-  if (!login || Date.now() - login.at > CATALOG_TTL) login = { at: Date.now(), chatgpt: readLogin(ctx) };
-  return login.chatgpt;
+  if (!login || Date.now() >= login.until) login = cacheProbe(readLogin(ctx));
+  return login.result;
 }
 // 仍用 --ignore-user-config：用户自己的 MCP、钩子、通知、推理强度、服务档位这些不该带进每次整理。
 // 但“怎么连上模型”跟着用户走：用户在 config.toml 里选的 provider（中转站、自定义 base_url）、ChatGPT 地址和登录凭据存放位置
@@ -124,8 +138,8 @@ export async function connectionOverrides(env: NodeJS.ProcessEnv): Promise<{ arg
   return { args, custom: (typeof provider === "string" && provider !== "" && provider !== "openai") || pick("chatgpt_base_url") !== undefined };
 }
 
-/** 测试用：清掉缓存的模型目录和登录方式。 */
-export function resetCodexCatalog() { catalog = null; login = null; }
+/** 手动测试连接时，清掉上次的模型目录和登录探测结果。 */
+export function resetCodexProbes() { catalog = null; login = null; }
 
 export async function codexCLI(ctx: BackendContext): Promise<unknown> {
   const connection = await connectionOverrides(cliEnv());
