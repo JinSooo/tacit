@@ -10,7 +10,7 @@ function setup() {
   const home = mkdtempSync(join(tmpdir(), "ra-agents-")); dirs.push(home);
   const calls: string[][] = [], output: string[] = [];
   let registered = true;
-  const env: InstallEnvironment = { home, repo: "/tmp/合成仓库 with 'quote'", bun: "/tmp/bun bin", appExists: () => false, which: command => `/fake/${command}`, print: line => output.push(line), run: (command, args, passedHome) => {
+  const env: InstallEnvironment = { home, repo: "/tmp/合成仓库 with 'quote'", bun: "/tmp/bun bin", variables: {}, appExists: () => false, which: command => `/fake/${command}`, print: line => output.push(line), run: (command, args, passedHome) => {
     expect(passedHome).toBe(home); calls.push([command, ...args]);
     if (args[1] === "get") return { status: registered ? 0 : 1, stdout: "", stderr: registered ? "" : "No MCP server found" };
     return { status: 0, stdout: "", stderr: "" };
@@ -392,4 +392,108 @@ test("Cursor 和 Gemini CLI 片段使用实际安装路径，只读检测两个�
   expect(Object.keys(JSON.parse(`{${existing[0]!.code}}`))).toEqual(["tacit"]);
   expect(existing[1]).toMatchObject({ action: "add", section: "hooks.SessionStart" });
   expect(JSON.parse(existing[1]!.code).hooks[0].timeout).toBe(5000);
+});
+
+test.each([
+  ["opencode", "opencode", ".config/opencode/opencode.json", "mcp", { type: "local", enabled: true }, null],
+  ["qwen-code", "qwen", ".qwen/settings.json", "mcpServers", {}, ".qwen/settings.json"],
+  ["droid", "droid", ".factory/mcp.json", "mcpServers", { type: "stdio" }, null],
+  ["copilot-cli", "copilot", ".copilot/mcp-config.json", "mcpServers", { type: "local", tools: ["*"] }, ".copilot/hooks/tacit.json"],
+  ["codebuddy", "cbc", ".codebuddy.json", "mcpServers", { type: "stdio" }, ".codebuddy/settings.json"],
+  ["workbuddy", null, ".workbuddy/mcp.json", "mcpServers", {}, null],
+  ["kimi-cli", "kimi", ".kimi-code/mcp.json", "mcpServers", {}, null],
+] as const)("%s 的手动配置可直接贴用，状态只读", (id, executable, file, section, extra, hookFile) => {
+  const ctx = setup(), cli = ctx.env.repo + "/hub/src/cli.ts";
+  const status = () => agentStatus(ctx.env).find(tool => tool.id === id)!;
+  ctx.env.which = () => null;
+  expect(status().installed).toBe(false);
+  ctx.env.which = command => command === executable ? "/synthetic/" + command : null;
+  ctx.env.appExists = path => id === "workbuddy" && path === join(ctx.home, "Applications/WorkBuddy.app");
+  const initial = status();
+  expect(initial).toMatchObject({ installed: true, connected: false, partial: false });
+  expect(readdirSync(ctx.home)).toEqual([]);
+  const [mcp, hook] = initial.manual!;
+  expect(initial.manual).toHaveLength(hookFile ? 2 : 1);
+  expect(mcp).toMatchObject({ file: `~/${file}`, kind: "mcp", action: "create" });
+  const args = [cli, "mcp", "--tool", id];
+  const server = { ...extra, ...(section === "mcp" ? { command: [ctx.env.bun, ...args] } : { command: ctx.env.bun, args }) };
+  const mcpData = JSON.parse(mcp!.code);
+  expect(mcpData).toEqual({ [section]: { tacit: server } });
+  const target = join(ctx.home, file);
+  ctx.write(mcpData, target);
+  if (hookFile) {
+    expect(status()).toMatchObject({ connected: false, partial: true });
+    expect(hook).toMatchObject({ file: `~/${hookFile}`, kind: "session-start", action: hookFile === file ? "add" : "create" });
+    const command = "'/tmp/bun bin' '/tmp/合成仓库 with '\\''quote'\\''/hub/src/cli.ts' hook session-start --tool " + id;
+    const config = JSON.parse(hookFile === file ? `{${hook!.code}}` : hook!.code);
+    if (id === "copilot-cli") {
+      expect(config).toEqual({ version: 1, hooks: { sessionStart: [{ type: "command", bash: command, timeoutSec: 5 }] } });
+    } else {
+      expect(config).toEqual({ hooks: { SessionStart: [{ matcher: "startup|resume|clear|compact",
+        hooks: [{ type: "command", command, timeout: 5 }],
+      }] } });
+    }
+    ctx.write(hookFile === file ? { ...mcpData, ...config } : config, join(ctx.home, hookFile));
+  }
+  const files = [...new Set([target, ...(hookFile ? [join(ctx.home, hookFile)] : [])])];
+  const before = files.map(path => readFileSync(path, "utf8"));
+  expect(status()).toMatchObject({ connected: true, partial: false });
+  for (const action of ["install", "uninstall"]) {
+    expect(() => runAgents([action, "--tool", id, "--yes"], ctx.env)).toThrow();
+  }
+  expect(ctx.calls).toEqual([]);
+  expect(files.map(path => readFileSync(path, "utf8"))).toEqual(before);
+});
+
+test("OpenCode 读取带注释和尾逗号的 JSONC，保留用户配置并提示替换禁用的条目", () => {
+  const ctx = setup();
+  const status = () => agentStatus(ctx.env).find(tool => tool.id === "opencode")!;
+  const entry = JSON.parse(status().manual![0]!.code).mcp.tacit;
+  const plain = join(ctx.home, ".config/opencode/opencode.json");
+  const comments = plain + "c";
+  ctx.write({ mcp: {} }, plain);
+  const content = (enabled: boolean) => `{ /* test */ "mcp": { "tacit": {
+    "type": "local", "command": [${entry.command.map((part: string) => JSON.stringify(part)).join(",")},],
+    "environment": { "TEST_URL": "https://example.invalid//path" },
+    "enabled": ${enabled}, // keep this comment
+  }, }, }\n`;
+  writeFileSync(comments, content(true));
+  expect(status()).toMatchObject({ connected: true, partial: false });
+  writeFileSync(comments, content(false));
+  expect(status()).toMatchObject({ connected: false, partial: true });
+  expect(status().manual![0]).toMatchObject({ file: "~/.config/opencode/opencode.jsonc", action: "replace", section: "mcp.tacit" });
+  expect(readFileSync(comments, "utf8")).toBe(content(false));
+});
+
+test.each([
+  ["copilot-cli", "COPILOT_HOME", ".copilot/mcp-config.json", "mcp-config.json", "hooks/tacit.json"],
+  ["qwen-code", "QWEN_HOME", ".qwen/settings.json", "settings.json", "settings.json"],
+  ["codebuddy", "CODEBUDDY_CONFIG_DIR", ".codebuddy.json", ".codebuddy.json", "settings.json"],
+  ["kimi-cli", "KIMI_CODE_HOME", ".kimi-code/mcp.json", "mcp.json", null],
+] as const)("%s 的目录覆盖同时用于片段和只读检测", (id, variable, defaultFile, filename, hookFile) => {
+  const ctx = setup();
+  const status = () => agentStatus(ctx.env).find(tool => tool.id === id)!;
+  const defaultMcp = JSON.parse(status().manual![0]!.code);
+  ctx.write(defaultMcp, join(ctx.home, defaultFile));
+  ctx.env.variables![variable] = "~/custom config";
+  const dir = join(ctx.home, "custom config");
+  const [mcp, hook] = status().manual!;
+  expect(status()).toMatchObject({ connected: false, partial: false });
+  expect(mcp!.file).toBe(join(dir, filename));
+  const mcpData = JSON.parse(mcp!.code);
+  ctx.write(mcpData, mcp!.file);
+  if (hookFile) {
+    expect(hook!.file).toBe(join(dir, hookFile));
+    if (id === "copilot-cli") {
+      const otherFile = join(dir, "hooks/custom.json");
+      ctx.write(JSON.parse(hook!.code), otherFile);
+      expect(status().manual![1]!.file).toBe(otherFile);
+      expect(existsSync(hook!.file)).toBe(false);
+    } else if (hookFile === filename) {
+      ctx.write({ ...mcpData, ...JSON.parse(`{${hook!.code}}`) }, hook!.file);
+    } else {
+      ctx.write(JSON.parse(hook!.code), hook!.file);
+    }
+  }
+  expect(status()).toMatchObject({ connected: true, partial: false });
 });

@@ -35,11 +35,14 @@ function sessionQuery(format: SessionStartFormat, tool: string, input: unknown):
   } else if (format === "cursor") {
     cwd = firstPath(fields.workspace_roots);
     session = fields.session_id || fields.conversation_id;
+  } else if (format === "copilot") {
+    session = fields.sessionId;
   }
   if (typeof cwd !== "string" || !isAbsolute(cwd)) {
     throw new AgentError(cliText("SessionStart cwd 必须是绝对路径", "SessionStart cwd must be an absolute path"));
   }
-  const source = format === "claude" ? fields.source : undefined;
+  const source = format === "copilot" && fields.source === "resume" ? "resume"
+    : format === "claude" ? fields.source : undefined;
   const event = typeof source === "string" && ["startup", "resume", "clear", "compact"].includes(source) ? source : "startup";
   const query = new URLSearchParams({ cwd, event, tool });
   if (typeof session === "string" && session && session.length <= 128 && !/[\x00-\x1f\x7f]/.test(session)) query.set("session", session);
@@ -50,6 +53,7 @@ function sessionOutput(format: SessionStartFormat, text: string) {
   switch (format) {
     case "antigravity": return { injectSteps: [{ systemMessage: { systemMessage: text } }] };
     case "cursor": return { additional_context: text };
+    case "copilot": return { additionalContext: text };
     case "claude": return { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } };
   }
 }

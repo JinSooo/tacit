@@ -124,7 +124,7 @@ AI 会话来源以 `packages/record/agent-tools.ts` 为准。每个工具使用�
 | DELETE | `/v1/settings/keys/:provider` | — | `{ provider, deleted }`；`deleted` 为删除前是否存在 |
 | GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, timeline_polish, timeline_overview, daily_token_limit, language, defaults, ranges, model_usage }` |
 | PUT | `/v1/settings/general` | 七个设置字段中任意几项 | 同 GET。空请求、未知字段及非法值返回 400，整份不写 |
-| GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial, manual? }] }`。支持自动连接的工具为 Claude Code、Codex、Claude Desktop 和 Antigravity。Cursor 和 Gemini CLI 的 `manual` 为待编辑片段数组 `[{ file, kind, action, section?, code }]`，`kind` 为 `mcp` 或 `session-start`，`action` 为 `create`、`add`、`replace` 或 `merge`，`section` 指明配置里的目标位置。编程工具的 MCP 和会话开始配置都在才算 `connected`，Desktop 只需 MCP。状态表示配置已登记，应用重载后才生效 |
+| GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial, manual? }] }`。支持自动连接的工具为 Claude Code、Codex、Claude Desktop 和 Antigravity。手动工具的 `manual` 为待编辑片段数组 `[{ file, kind, action, section?, code }]`，`kind` 为 `mcp` 或 `session-start`，`action` 为 `create`、`add`、`replace` 或 `merge`，`section` 指明配置里的目标位置。MCP 和接入方法中提供的会话开始钩子均已登记时，状态为 `connected`。配置由工具重载后生效 |
 | PUT | `/v1/settings/agents/:id` | `{ connected }` | `{ tools, note }`。等同 `cli.ts agents install\|uninstall --tool <id> --yes`。手动工具返回 400，找不到要连接的工具时返回 409，写配置失败返回 500。Codex 连接后的 `note` 提醒首次批准。Desktop 和 Antigravity 的 `note` 提醒重开应用 |
 
 - `:provider` 只能是 `anthropic`、`openai-compatible`。key 只进钥匙串：不出现在响应、错误信息、日志、文件和 `security` 的进程参数里（经 `security -i` 的 stdin 传入）。
@@ -147,7 +147,9 @@ AI 会话来源以 `packages/record/agent-tools.ts` 为准。每个工具使用�
 
 Claude Desktop 的 MCP 配置写入 `~/Library/Application Support/Claude/claude_desktop_config.json` 的 `mcpServers.tacit`：Bun 与入口均用绝对路径，参数为 `<repo>/hub/src/cli.ts mcp --tool claude-desktop`。不写 token、不登记 hook、不采集 Desktop 聊天记录。保留其他连接器和偏好；写前备份，原子替换；同名非本工具配置拒绝覆盖。路径过期显示 `partial`，重新连接修复。默认 `agents install` 接入 Claude Code 和 Codex，其他自动工具通过 `--tool` 单独接入。默认 `uninstall` 也处理 Claude Desktop 和 Antigravity 遗留的配置。读取及用户明确要求的追加沿用 4.6，审计 tool 为 `claude-desktop`。
 
-Antigravity 自动连接使用 `~/.gemini/config/mcp_config.json` 的 `mcpServers.tacit` 和 `~/.gemini/config/hooks.json` 的 `tacit.SessionStart`。Cursor 和 Gemini CLI 的片段使用同一组本机 Bun 和 CLI 路径，分别指向 `~/.cursor/mcp.json`、`~/.cursor/hooks.json` 和 `~/.gemini/settings.json`。Tacit 只读取手动工具的文件，升级也不修改它们。
+Antigravity 自动连接使用 `~/.gemini/config/mcp_config.json` 的 `mcpServers.tacit` 和 `~/.gemini/config/hooks.json` 的 `tacit.SessionStart`。手动片段使用本机 Bun 和 CLI 路径。Cursor、Gemini CLI、Qwen Code、CodeBuddy 和 Copilot CLI 提供 MCP 与会话开始钩子。OpenCode、Droid、WorkBuddy 和 Kimi 提供 MCP。Tacit 只读取手动工具的文件，升级也不修改它们。
+
+Copilot CLI 的 `hook session-start --tool copilot-cli` 读取 `cwd`、`sessionId` 和 `source`，将 `new` 归为 `startup`，保留 `resume`，有上下文时输出 `{ "additionalContext": "…" }`。Qwen Code 和 CodeBuddy 沿用 Claude Code 钩子协议。
 
 ## 4. 提炼层（v1）
 
