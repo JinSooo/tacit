@@ -296,6 +296,63 @@
       "count": 0
     }
   ],
+  "proxyCredentials": [
+    {
+      "input": "Authorization: Basic dTpw",
+      "text": "Authorization: Basic [已脱敏:Basic]",
+      "count": 1
+    },
+    {
+      "input": "proxy-authorization:\tBaSiC YWJj",
+      "text": "proxy-authorization:\tBaSiC [已脱敏:Basic]",
+      "count": 1
+    },
+    {
+      "input": "Basic dXNlcjpwYXNz",
+      "text": "Basic [已脱敏:Basic]",
+      "count": 1
+    },
+    {
+      "input": "http://token@proxy.example.invalid:8080",
+      "text": "http://[已脱敏:URL凭据]@proxy.example.invalid:8080",
+      "count": 1
+    },
+    {
+      "input": "WSS://token@socket.example.invalid and socks5h://token@proxy.example.invalid:1080",
+      "text": "WSS://[已脱敏:URL凭据]@socket.example.invalid and socks5h://[已脱敏:URL凭据]@proxy.example.invalid:1080",
+      "count": 2
+    },
+    {
+      "input": "Use basic authentication",
+      "text": "Use basic authentication",
+      "count": 0
+    },
+    {
+      "input": "Basic configuration steps",
+      "text": "Basic configuration steps",
+      "count": 0
+    },
+    {
+      "input": "Basic dXNlcjpwYXNzAA==",
+      "text": "Basic dXNlcjpwYXNzAA==",
+      "count": 0
+    },
+    {
+      "input": "Basic anVzdC13b3Jkcw==",
+      "text": "Basic anVzdC13b3Jkcw==",
+      "count": 0
+    },
+    {
+      "input": "ssh://git@github.com/x.git",
+      "text": "ssh://git@github.com/x.git",
+      "count": 0
+    },
+    {
+      "input": "git@github.com:x.git",
+      "text": "git@github.com:x.git",
+      "count": 0
+    }
+  ],
   "clipboard": [
     {
       "input": "Qw#58kLp2z",

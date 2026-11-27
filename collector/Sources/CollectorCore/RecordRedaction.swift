@@ -1,7 +1,7 @@
 import Foundation
 
 /// 与 hub/src/redact.ts 的入库规则一致；加密待发送文件也只保存脱敏后的文字。
-/// schema/fixtures/redaction.json 是两种实现共用的兼容性样例。
+/// schema/fixtures/redaction.json 保存共用的兼容性样例。
 public enum RecordRedaction {
   private static let patterns: [(String, String)] = [
     ("私钥", #"-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END \1-----"#),
@@ -28,7 +28,10 @@ public enum RecordRedaction {
     return (output, count)
   }
   public static func string(_ input: String) -> (text: String, count: Int) {
-    var text = input, count = 0
+    // ICU 不支持 JS 的无限长 lookbehind，匹配时捕获前缀并原样保留。
+    var (text, count) = replace(input, pattern: #"(?i)(\b(?:Proxy-)?Authorization:[ \t]*Basic[ \t]+)[A-Za-z0-9+/]+=*"#) { m, s in
+      s.substring(with: m.range(at: 1)) + "[已脱敏:Basic]"
+    }
     for (type, pattern) in patterns {
       let r = replace(text, pattern: pattern) { _, _ in "[已脱敏:\(type)]" }
       text = r.0; count += r.1
@@ -37,15 +40,26 @@ public enum RecordRedaction {
       s.substring(with: m.range(at: 1)) + "[已脱敏:地图密钥]"
     }
     text = mapKey.0; count += mapKey.1
-    // ICU 不支持 JS 的无限长 lookbehind，保留前缀而只替换第二组。
     let bearer = replace(text, pattern: #"(?i)(\b(?:Bearer|Token)\s+)[A-Za-z0-9._~+/\-]{16,}=*"#) { m, s in
       s.substring(with: m.range(at: 1)) + "[已脱敏:Bearer]"
     }
     text = bearer.0; count += bearer.1
+    let basic = replace(text, pattern: #"(\bBasic[ \t]+)([A-Za-z0-9+/]{12,}={0,2})(?![A-Za-z0-9+/=])"#) { m, s in
+      let value = s.substring(with: m.range(at: 2))
+      guard value.utf8.count % 4 == 0, let data = Data(base64Encoded: value),
+            let decoded = String(data: data, encoding: .utf8), decoded.contains(":"),
+            !decoded.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 || $0.value == 0xfffd }) else { return nil }
+      return s.substring(with: m.range(at: 1)) + "[已脱敏:Basic]"
+    }
+    text = basic.0; count += basic.1
     let url = replace(text, pattern: #"(?i)(\b[a-z][a-z0-9+.-]*://[^\s/@:]+:)([^\s/@]+)(@)"#) { m, s in
       s.substring(with: m.range(at: 1)) + "[已脱敏:URL密码]@"
     }
     text = url.0; count += url.1
+    let urlCredentials = replace(text, pattern: #"(?i)(\b(?:https?|wss?|socks(?:4a?|5h?)?)://)[^\s/@:?#]+@(?=[^\s/@?#])"#) { m, s in
+      s.substring(with: m.range(at: 1)) + "[已脱敏:URL凭据]@"
+    }
+    text = urlCredentials.0; count += urlCredentials.1
     let assignment = replace(text, pattern: #"(?i)((?:["']?)(?:password|passwd|pwd|token|access_token|refresh_token|api[_-]?key|secret|client_secret)["']?\s*[:=]\s*)(["']?)([A-Za-z0-9_+/.=~%!@#$^&*?:\-]{16,})\2"#) { m, s in
       let value = s.substring(with: m.range(at: 3)), quote = s.substring(with: m.range(at: 2))
       guard classes(value) >= 2, entropy(value) >= 3.5 else { return nil }
