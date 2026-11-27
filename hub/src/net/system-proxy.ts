@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { isIP } from "node:net";
 
 type SystemProxy = {
@@ -35,16 +35,30 @@ export function parseScutilProxy(output: string): SystemProxy {
     pac: fields.get("ProxyAutoConfigEnable") === "1", exceptions };
 }
 
+const SCUTIL = "/usr/sbin/scutil";
+const SCUTIL_OPTIONS = { encoding: "utf8", timeout: 1000 } as const;
+const SYSTEM_PROXY_TTL_MS = 30_000;
 let cached: { until: number; value: SystemProxy } | undefined;
+let refreshing = false;
 function readSystemProxy(): SystemProxy {
   if (process.platform !== "darwin") return { exceptions: [] };
-  if (cached && Date.now() < cached.until) return cached.value;
+  if (cached) {
+    const { until, value } = cached;
+    if (Date.now() >= until && !refreshing) {
+      refreshing = true;
+      execFile(SCUTIL, ["--proxy"], SCUTIL_OPTIONS, (error, stdout) => {
+        cached = { until: Date.now() + SYSTEM_PROXY_TTL_MS, value: error ? value : parseScutilProxy(stdout) };
+        refreshing = false;
+      });
+    }
+    return value;
+  }
   let value: SystemProxy = { exceptions: [] };
   try {
-    const result = spawnSync("/usr/sbin/scutil", ["--proxy"], { encoding: "utf8", timeout: 1000 });
+    const result = spawnSync(SCUTIL, ["--proxy"], SCUTIL_OPTIONS);
     if (result.status === 0) value = parseScutilProxy(result.stdout);
   } catch { /* 系统设置读不到时仍可使用环境变量。 */ }
-  cached = { until: Date.now() + 30_000, value };
+  cached = { until: Date.now() + SYSTEM_PROXY_TTL_MS, value };
   return value;
 }
 
@@ -65,11 +79,12 @@ export function capturedCLIEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {};
 }
 
-function proxySetting(layers: NodeJS.ProcessEnv[], ...keys: string[]): [string, string] | undefined {
+function proxySetting(layers: NodeJS.ProcessEnv[], keys: readonly string[],
+  supports = (_value: string) => true): [string, string] | undefined {
   for (const layer of layers) {
     for (const key of keys) {
       const value = layer[key]?.trim();
-      if (value) return [key, value];
+      if (value && supports(value)) return [key, value];
     }
   }
 }
@@ -90,9 +105,9 @@ export function systemProxyEnv(system = readSystemProxy()): Record<string, strin
 
 export function cliProxyEnv(source: NodeJS.ProcessEnv, captured: NodeJS.ProcessEnv, defaults: Record<string, string>): Record<string, string> {
   const layers = [source, captured, defaults];
-  const all = proxySetting(layers, ...aliases.all);
-  const http = proxySetting(layers, ...aliases.http, ...aliases.all);
-  const https = proxySetting(layers, ...aliases.https, ...aliases.all);
+  const all = proxySetting(layers, aliases.all);
+  const http = proxySetting(layers, [...aliases.http, ...aliases.all]);
+  const https = proxySetting(layers, [...aliases.https, ...aliases.all]);
   const no = bypassList(...layers.flatMap(layer => aliases.no.map(key => layer[key]))).join(",");
   // 大小写视为同一个设置。高层的 ALL_PROXY 也能覆盖低层的 HTTP(S)_PROXY。
   return {
@@ -157,9 +172,9 @@ export function proxyFor(url: string | URL, source = process.env, system = readS
   if (bypassList(...layers.flatMap(layer => aliases.no.map(key => layer[key])))
     .some(rule => matches(host, port, rule) || (mapped !== undefined && matches(mapped, port, rule)))) return;
 
-  const proxy = proxySetting(layers, ...aliases[secure ? "https" : "http"], ...aliases.all)?.[1];
   // Bun 的 HTTP 和 WebSocket 代理只接受 HTTP(S) 地址。
-  if (proxy && /^https?:\/\//i.test(proxy) && URL.canParse(proxy)) return proxy;
+  return proxySetting(layers, [...aliases[secure ? "https" : "http"], ...aliases.all],
+    value => /^https?:\/\//i.test(value) && URL.canParse(value))?.[1];
 }
 
 export function proxiedFetch(input: string | URL | Request, init?: RequestInit,

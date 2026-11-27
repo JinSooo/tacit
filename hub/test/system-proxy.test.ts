@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import * as childProcess from "node:child_process";
 import { parseScutilProxy, proxiedFetch, proxyFor, systemProxyEnv } from "../src/net/system-proxy.ts";
 import { cliEnv } from "../src/llm/process.ts";
 
@@ -82,6 +83,60 @@ test("后台和子进程都按进程、安装时环境、系统的顺序选择�
   expect(allCLI.all_proxy).toBe(explicit);
   expect(allCLI.HTTPS_PROXY).toBeUndefined();
   expect(allCLI.https_proxy).toBeUndefined();
+});
+
+test("Bun 跳过不支持的 SOCKS 代理，子进程仍拿到原配置", () => {
+  const socks = "socks5h://shell.example.invalid:1080";
+  const env = { TACIT_CLI_ENV: JSON.stringify({ ALL_PROXY: socks }) };
+  expect(proxyFor("http://external.example", env, SYSTEM)).toBe(SYSTEM.http!);
+  expect(proxyFor("wss://external.example", env, SYSTEM)).toBe(SYSTEM.https!);
+  expect(proxyFor("http://external.example", env, { exceptions: [] })).toBeUndefined();
+  expect(cliEnv(env, systemProxyEnv(SYSTEM)).ALL_PROXY).toBe(socks);
+  expect(proxyFor("http://external.example", {
+    http_proxy: socks, HTTP_PROXY: "http://explicit.example.invalid:8888",
+  }, SYSTEM)).toBe("http://explicit.example.invalid:8888");
+});
+
+test.skipIf(process.platform !== "darwin")("系统代理过期时立即返回旧值，只发起一次异步刷新", async () => {
+  // 隔离这个用例的缓存，避免依赖其他用例是否已经读取过系统代理。
+  const modulePath = "../src/net/system-proxy.ts?refresh-test";
+  const { systemProxyEnv: readEnv } = await import(modulePath) as typeof import("../src/net/system-proxy.ts");
+  const output = (host: string) => `HTTPEnable : 1\nHTTPPort : 8888\nHTTPProxy : ${host}`;
+  let now = 1_000_000;
+  let complete: ((error: Error | null, stdout: string, stderr: string) => void) | undefined;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const sync = spyOn(childProcess, "spawnSync").mockReturnValue({
+    status: 0, stdout: output("old.example"), stderr: "", pid: 1, signal: null, output: [],
+  });
+  const fakeExecFile = (...args: unknown[]) => {
+    complete = args.at(-1) as typeof complete;
+    return new childProcess.ChildProcess();
+  };
+  const refresh = spyOn(childProcess, "execFile").mockImplementation(fakeExecFile as typeof childProcess.execFile);
+  try {
+    expect(readEnv().HTTP_PROXY).toBe("http://old.example:8888");
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(0);
+
+    now += 30_000;
+    expect(readEnv().HTTP_PROXY).toBe("http://old.example:8888");
+    expect(readEnv().HTTP_PROXY).toBe("http://old.example:8888");
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    complete!(null, output("new.example"), "");
+    expect(readEnv().HTTP_PROXY).toBe("http://new.example:8888");
+
+    now += 30_000;
+    expect(readEnv().HTTP_PROXY).toBe("http://new.example:8888");
+    complete!(new Error("timeout"), "", "");
+    expect(readEnv().HTTP_PROXY).toBe("http://new.example:8888");
+    expect(sync).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  } finally {
+    refresh.mockRestore();
+    sync.mockRestore();
+    clock.mockRestore();
+  }
 });
 
 test("实际 fetch 把公网请求交给代理，环境里配置了代理时本地请求仍直连", async () => {
