@@ -182,6 +182,17 @@ export function probePort(port: number, host: string): Promise<number | null> {
   });
 }
 
+async function alternatePort(probe: typeof probePort, host: string, first: number, reserved: number): Promise<number | null> {
+  // Keep durable fallbacks outside the macOS ephemeral range and give each listener its own range.
+  for (let port = first; port < first + 100; port++) {
+    if (port === reserved) continue;
+    const free = await probe(port, host);
+    if (free !== null) return free;
+  }
+  const free = await probe(0, host);
+  return free === reserved ? null : free;
+}
+
 function writePrivate(file: string, text: string) {
   writeFileSync(file, text, { mode: 0o600 }); chmodSync(file, 0o600);
 }
@@ -303,7 +314,7 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     }
     throw new SetupError("background_blocked", t(`后台任务 ${label(job)} 没能加载，请重新打开 Tacit`, `Could not load ${label(job)}. Reopen Tacit.`));
   };
-  const restart = !remote && (full || o.retry === true || changed.has("hub") || changed.has("distill"));
+  let restart = !remote && (full || o.retry === true || changed.has("hub") || changed.has("distill"));
   if (restart) for (const job of ["distill", "hub"] as const) await unload(job);
   if (!remote) {
     const startupMarker = join(data, "hub-startup-error.json");
@@ -315,22 +326,23 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
       "后台服务的端口被占用了。请在设置 › 后台与连接里更换端口。",
       "The background service port is in use. Change it in Settings → Background & connection.",
     ));
-    if (needsLoad) {
-      if (port !== 0 && await probe(port, "127.0.0.1") === null) {
+    const startHub = async (movePort: boolean) => {
+      const lan = resolveLanBinding(data, env);
+      if (movePort) {
         if (source !== "default") throw occupied();
-        const free = await probe(0, "127.0.0.1");
+        const free = await alternatePort(probe, "127.0.0.1", 47825, lan.port);
         if (free === null) throw occupied();
         writeHubPort(data, free);
         port = free;
       }
       // Mac 的设备监听按需打开。只为默认值腾出端口，用户固定的设备端口保持原值。
-      const lan = resolveLanBinding(data, env);
       if (lan.source === "default" && (lan.port === port || await probe(lan.port, "0.0.0.0") === null)) {
-        const free = await probe(0, "0.0.0.0");
-        if (free !== null && free !== port) writeHubPort(data, free, "lan_port");
+        const free = await alternatePort(probe, "0.0.0.0", 47925, port);
+        if (free !== null) writeHubPort(data, free, "lan_port");
       }
       await load("hub");
-    }
+    };
+    if (needsLoad) await startHub(port !== 0 && await probe(port, "127.0.0.1") === null);
     const healthy = o.healthy ?? (async (p: number) => {
       for (let i = 0; i < 15; i++) {
         const started = Date.now();
@@ -342,7 +354,18 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
       }
       return false;
     });
-    if (!(await healthy(port))) {
+    let ready = await healthy(port);
+    if (!ready && !needsLoad && source === "default") {
+      const code = readJSON(startupMarker)?.code;
+      if (code === "port_in_use" || (!code && await probe(port, "127.0.0.1") === null)) {
+        for (const job of ["distill", "hub"] as const) await unload(job);
+        rmSync(startupMarker, { force: true });
+        await startHub(true);
+        restart = true;
+        ready = await healthy(port);
+      }
+    }
+    if (!ready) {
       const code = readJSON(startupMarker)?.code;
       if (code === "port_in_use") throw occupied();
       if (["db_key_missing", "db_key_unreadable", "db_open_failed", "db_migration_failed"].includes(code)) {

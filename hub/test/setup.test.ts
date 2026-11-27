@@ -348,3 +348,54 @@ test("只把允许的 AI 工具配置路径从登录 shell 传给 hub 和采集�
     expect(readPlist("distill")).not.toContain("GEMINI_CLI_HOME");
   } finally { f.cleanup(); }
 });
+
+test("setup probes separate durable ranges before considering an ephemeral port", async () => {
+  const f = fixture();
+  try {
+    const checked: [number, string][] = [];
+    await f.run({ probePort: async (port, host) => {
+      checked.push([port, host]);
+      return [47826, 47926].includes(port) ? port : null;
+    }, healthy: async port => port === 47826 });
+    expect(checked).toEqual([
+      [DEFAULT_PORT, "127.0.0.1"], [47825, "127.0.0.1"], [47826, "127.0.0.1"],
+      [DEFAULT_LAN_PORT, "0.0.0.0"], [47925, "0.0.0.0"], [47926, "0.0.0.0"],
+    ]);
+    expect(JSON.parse(readFileSync(join(f.data, "hub.json"), "utf8"))).toEqual({ port: 47826, lan_port: 47926 });
+  } finally { f.cleanup(); }
+});
+
+test("normal startup restarts an already registered hub once after a default port conflict", async () => {
+  const f = fixture();
+  try {
+    await f.run();
+    const marker = join(f.data, "hub-startup-error.json");
+    const healthPorts: number[] = [];
+    let loaded = true, restarts = 0;
+    const setConflict = () => writeFileSync(marker, JSON.stringify({ code: "port_in_use" }));
+    const launchctl = (args: string[]) => {
+      const hub = args.at(-1)?.includes("dev.record-anything.hub");
+      if (args[0] === "print") return hub && loaded ? 0 : 1;
+      if (hub && args[0] === "bootout") loaded = false;
+      if (hub && args[0] === "bootstrap") {
+        expect(existsSync(marker)).toBe(false);
+        restarts++;
+        loaded = true;
+      }
+      return 0;
+    };
+    const options = { launchctl, healthy: async (port: number) => {
+      healthPorts.push(port);
+      return port === 47825;
+    } };
+    setConflict();
+    expect(await f.run(options)).toEqual({ full: false, restarted: true });
+    expect(healthPorts).toEqual([DEFAULT_PORT, 47825]);
+    expect(restarts).toBe(1);
+
+    writeFileSync(join(f.data, "hub.json"), JSON.stringify({ port: DEFAULT_PORT }));
+    setConflict();
+    await expect(f.run(options)).rejects.toMatchObject({ reason: "port_in_use" });
+    expect(restarts).toBe(1);
+  } finally { f.cleanup(); }
+});
