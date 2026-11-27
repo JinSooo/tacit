@@ -1,4 +1,5 @@
 import { cliText } from "./agent-cli/locale.ts";
+import { AGENT_TOOLS as TOOL_CATALOG } from "../../packages/record/agent-tools.ts";
 import type { Lang } from "./i18n/language.ts";
 import { chmodSync, copyFileSync, readdirSync, lstatSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -395,7 +396,7 @@ export function runAgents(argv: string[], env: InstallEnvironment = {}, register
 }
 
 export interface AgentState {
-  id: AgentTool;
+  id: string;
   label: string;
   /** 本机找得到应用或命令行工具。 */
   installed: boolean;
@@ -403,9 +404,104 @@ export interface AgentState {
   connected: boolean;
   /** 只登记了一半（例如手动删过其中一个），需要重新连接。 */
   partial: boolean;
+  manual?: ManualSnippet[];
+}
+
+export interface ManualSnippet {
+  file: string;
+  kind: "mcp" | "session-start";
+  action: "create" | "add" | "replace" | "merge";
+  section?: string;
+  code: string;
 }
 
 const LABELS: Record<AgentTool, string> = { "claude-code": "Claude Code", codex: "Codex", "claude-desktop": "Claude Desktop", antigravity: "Antigravity" };
+
+function manualSnippet(
+  file: string, kind: ManualSnippet["kind"], data: Json | null, path: string[], value: Json,
+  options: { create: boolean; replace?: string; replacement?: Json; version?: number },
+): ManualSnippet {
+  const make = (action: ManualSnippet["action"], code: string, section?: string) =>
+    ({ file: `~/${file}`, kind, action, section, code });
+  const wrap = (keys: string[], child: unknown) =>
+    keys.reduceRight<unknown>((nested, key) => ({ [key]: nested }), child);
+  const full = () => JSON.stringify({
+    ...(options.version === undefined ? {} : { version: options.version }),
+    ...wrap(path, value) as Json,
+  }, null, 2);
+  if (options.create) return make("create", full());
+  if (options.version !== undefined && options.version !== data?.version) return make("merge", full());
+  if (options.replace) {
+    const replacement = options.replacement ?? (Array.isArray(value) ? value[0] : value);
+    return make("replace", JSON.stringify(replacement, null, 2), options.replace);
+  }
+  let depth = 0, node = data;
+  for (const key of path) {
+    const child: unknown = node?.[key];
+    if (object(child) || Array.isArray(child) && depth === path.length - 1) {
+      node = child;
+      depth++;
+    } else break;
+  }
+  const section = path.slice(0, depth).join(".") || undefined;
+  if (Array.isArray(value) && depth === path.length) return make("add", JSON.stringify(value[0], null, 2), section);
+  // 已有文件中插入属性，缺的父级随片段一起生成。
+  const code = JSON.stringify(wrap(path.slice(depth), value), null, 2);
+  return make("add", code.slice(2, -2).split("\n").map(line => line.slice(2)).join("\n"), section);
+}
+
+function manualAgentStatus(home: string, cli: string, bun: string, env: InstallEnvironment): AgentState[] {
+  const which = env.which ?? Bun.which;
+  const config = (relative: string) => {
+    const file = resolve(home, relative);
+    try {
+      const data: unknown = JSON.parse(readFileSync(file, "utf8"));
+      return { data: object(data) ? data : {}, exists: true };
+    } catch (error) {
+      return { data: {}, exists: (error as NodeJS.ErrnoException).code !== "ENOENT" };
+    }
+  };
+  return TOOL_CATALOG.flatMap(({ id, label, manualConnection: setup }) => {
+    if (!setup) return [];
+    const installed = !!which(setup.executable) || !!setup.macApp && appInstalled(setup.macApp, home, env);
+    const mcpConfig = config(setup.mcpFile), current = mcpConfig.data.mcpServers?.[SERVER];
+    const mcp = ownsMcpEntry(current, id) && current.command === bun && current.args[0] === cli
+      && (current.type === undefined || current.type === "stdio") && current.disabled !== true;
+    const entry = { ...(setup.mcpType && { type: setup.mcpType }), ...mcpEntry(cli, bun, id) };
+    const manual = [manualSnippet(setup.mcpFile, "mcp", mcpConfig.data, ["mcpServers", SERVER], entry, {
+      create: !mcpConfig.exists,
+      replace: Object.hasOwn(mcpConfig.data.mcpServers ?? {}, SERVER) ? `mcpServers.${SERVER}` : undefined,
+    })];
+    let hook = true, hookPresent = false;
+    if (setup.hook) {
+      const { file, event, version, timeout, matcher } = setup.hook;
+      const sameFile = file === setup.mcpFile;
+      const hookConfig = sameFile ? mcpConfig : config(file);
+      const rows = hookConfig.data.hooks?.[event];
+      const handlers = (row: Json) => matcher ? (Array.isArray(row?.hooks) ? row.hooks : []) : [row];
+      const ours = (handler: Json) => sessionStartCommandPaths(handler?.command, id) !== null;
+      const start = Array.isArray(rows) ? rows.findIndex((row: Json) => handlers(row).some(ours)) : -1;
+      const row = rows?.[start];
+      const handlerIndex = start >= 0 ? handlers(row).findIndex(ours) : -1;
+      const valid = (handler: Json) => {
+        const paths = sessionStartCommandPaths(handler?.command, id);
+        return paths?.[0] === bun && paths[1] === cli;
+      };
+      hookPresent = start >= 0;
+      hook = (version === undefined || hookConfig.data.version === version) && Array.isArray(rows)
+        && rows.some((row: Json) => handlers(row).some(valid));
+      const command = sessionStartCommand(bun, cli, id);
+      const handler = matcher ? { name: "tacit-session-start", type: "command", command, timeout } : { command, timeout };
+      const replace = hookPresent ? `hooks.${event}[${start}]${matcher ? `.hooks[${handlerIndex}]` : ""}` : undefined;
+      const value = matcher ? { matcher, hooks: [handler] } : handler;
+      manual.push(manualSnippet(file, "session-start", hookConfig.data, ["hooks", event], [value], {
+        create: !sameFile && !hookConfig.exists, replace, replacement: handler, version,
+      }));
+    }
+    const connected = mcp && hook;
+    return [{ id, label, installed, connected, partial: !connected && (current !== undefined || hookPresent), manual }];
+  });
+}
 
 /** 只读配置文件判断是否已接入，不调用外部命令：设置页每次打开都会查，不能卡住中枢。 */
 export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
@@ -413,7 +509,7 @@ export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
   const bun = resolve(env.bun ?? process.execPath), cli = resolve(repo, "hub/src/cli.ts");
   const which = env.which ?? (command => Bun.which(command));
   const read = (file: string) => { try { return readFileSync(file, "utf8"); } catch { return null; } };
-  return AGENT_TOOLS.map(id => {
+  const automatic = AGENT_TOOLS.map(id => {
     if (id === "claude-desktop") {
       let connected = false, partial = false;
       try {
@@ -461,6 +557,7 @@ export function agentStatus(env: InstallEnvironment = {}): AgentState[] {
     } catch {}
     return { id, label: LABELS[id], installed: !!which(id === "codex" ? "codex" : "claude"), connected: hook && mcp, partial: hook !== mcp };
   });
+  return [...automatic, ...manualAgentStatus(home, cli, bun, env)];
 }
 
 /** 设置页的"连接 / 断开"：等同 `agents install|uninstall --tool <id> --yes`，返回执行后的状态。 */
