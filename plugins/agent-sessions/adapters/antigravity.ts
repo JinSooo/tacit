@@ -16,23 +16,28 @@ interface Summary {
 
 function readSummaries(root: string): Map<string, Summary> {
   const file = path.join(root, "conversation_summaries.db");
-  let db: Database | undefined;
-  try {
-    if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isFile()) return new Map();
-    const uri = pathToFileURL(path.resolve(file));
-    // WAL 数据库缺少共享内存文件时也能读，且不会创建 sidecar。
-    uri.search = "mode=ro&immutable=1";
-    db = new Database(uri.href, { readonly: true });
-    const rows = db.query<Summary, []>(`
-      SELECT conversation_id, workspace_uris, parent_conversation_id, nesting_depth
-      FROM conversation_summaries
-    `).all();
-    return new Map(rows.map(row => [row.conversation_id, row]));
-  } catch {
-    return new Map();
-  } finally {
-    db?.close();
+  if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isFile()) return new Map();
+  const uri = pathToFileURL(path.resolve(file));
+  // 有现成的 WAL 和共享内存文件时读最新数据。归档数据库不创建 sidecar。
+  const modes = fs.existsSync(file + "-shm") && fs.existsSync(file + "-wal")
+    ? ["mode=ro", "mode=ro&immutable=1"] : ["mode=ro&immutable=1"];
+  for (const mode of modes) {
+    let db: Database | undefined;
+    try {
+      uri.search = mode;
+      db = new Database(uri.href, { readonly: true });
+      const rows = db.query<Summary, []>(`
+        SELECT conversation_id, workspace_uris, parent_conversation_id, nesting_depth
+        FROM conversation_summaries
+      `).all();
+      return new Map(rows.map(row => [row.conversation_id, row]));
+    } catch {
+      // 普通只读打开失败时，仍尝试从已写回的数据库读取。
+    } finally {
+      db?.close();
+    }
   }
+  return new Map();
 }
 
 function workspaceCwd(workspaceUris: string | null | undefined): string | null {

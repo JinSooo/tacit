@@ -117,6 +117,24 @@ test("Antigravity 跳过两种子会话标记，也撤下后来才识别出的�
   expect(Object.keys(state.sessions)).toEqual(["antigravity:parent"]);
 });
 
+test("Antigravity 从仍在写入的 WAL 读到 cwd 和子会话标记", async () => {
+  const s = setup();
+  const file = s.summaries([]);
+  const db = new Database(file);
+  try {
+    db.run("INSERT INTO conversation_summaries VALUES (?, ?, ?, ?)", ["main", "/synthetic/live", null, 0]);
+    db.run("INSERT INTO conversation_summaries VALUES (?, ?, ?, ?)", ["child", "/synthetic/live", "main", 1]);
+    expect(fs.statSync(file + "-wal").size).toBeGreaterThan(0);
+    for (const id of ["main", "child"]) {
+      s.write(path.join(s.logs(id), "transcript_full.jsonl"), [step("USER_INPUT", id)]);
+    }
+    const { records } = await s.run();
+    expect(records.map(record => [record.body, record.context?.cwd])).toEqual([["[我] main", "/synthetic/live"]]);
+  } finally {
+    db.close();
+  }
+});
+
 test("Antigravity 元数据库损坏时照常产出，异常字段组合进入格式告警", async () => {
   const s = setup();
   const file = path.join(s.logs("visible"), "transcript_full.jsonl");
