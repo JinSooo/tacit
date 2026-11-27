@@ -117,28 +117,41 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
   for (const adapter of adapters) for (const sessionFile of adapter.files(options)) {
     const provider = adapter.checkpointKey;
     const file = sessionFile.path;
+    const metadata = sessionFile.session;
+    const sessionKey = metadata && `${provider}:${metadata.id}`;
+    if (metadata?.subagent && sessionKey) {
+      delete state.sessions[sessionKey];
+      delete state.files[file];
+      continue;
+    }
     const stat = fs.statSync(file);
     const old = state.files[file];
     if (!old && stat.mtimeMs < (rescan ? floor : state.since)) continue;
     const identity = `${stat.dev}:${stat.ino}`;
     const reset = (rescan && stat.mtimeMs >= floor) || (file.endsWith(".zst") && (stat.size !== old?.size || stat.mtimeMs !== old?.mtime)) || !old || old.identity !== identity || stat.size < old.size || (stat.size === old.size && stat.mtimeMs !== old.mtime);
     const progress: FileProgress = reset ? { offset: 0, mtime: stat.mtimeMs, size: stat.size, identity, session: old?.session ?? null, cwd: old?.cwd ?? null } : { ...old };
+    if (metadata && sessionKey) {
+      progress.session = sessionKey;
+      progress.cwd = metadata.cwd;
+      const session = state.sessions[sessionKey];
+      if (session) session.cwd = metadata.cwd;
+    }
     // 未修改文件不读取，但仍在下面检查它的待关闭桶。
     if (reset || stat.size !== old?.size || stat.mtimeMs !== old?.mtime) {
       let fileParsed = 0, fileUnknown = 0;
-      for await (const line of readEvents(file, progress.offset, stat.size)) {
+      for await (const line of readEvents(file, progress.offset, stat.size, adapter.additionalRootFields)) {
         progress.offset = line.end;
         if (line.damaged) { damaged++; continue; }
         const event = line.event;
         if (event === undefined) continue;
-        const id = adapter.sessionId(event, sessionFile);
+        const id = adapter.sessionId?.(event, sessionFile);
         if (typeof id === "string" && id) progress.session = `${provider}:${id}`;
         const result = adapter.parse(event, !!progress.session);
         fileParsed++;
         if (!result.recognized) fileUnknown++;
         if (!progress.session || !event) continue;
         const session = state.sessions[progress.session] ??= { provider, id: progress.session.slice(provider.length + 1), cwd: progress.cwd ?? null, seen: {}, buckets: {}, mtime: stat.mtimeMs };
-        const cwd = adapter.cwd(event);
+        const cwd = adapter.cwd?.(event);
         if (typeof cwd === "string") session.cwd = cwd;
         progress.cwd = session.cwd;
         const message = result.message;

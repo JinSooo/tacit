@@ -1,8 +1,9 @@
 import { AGENT_SESSIONS } from "../../../packages/record/agent-tools.ts";
+import { antigravity } from "./antigravity.ts";
 import { claudeCode } from "./claude-code.ts";
 import { codex } from "./codex.ts";
 
-export const adapters = [claudeCode, codex].map(adapter => {
+export const adapters = [claudeCode, codex, antigravity].map(adapter => {
   const tool = AGENT_SESSIONS.find(tool => tool.id === adapter.id);
   if (!tool) throw new Error(`Missing session tool: ${adapter.id}`);
   // 保留旧 checkpoint 中的 provider 和会话键，文件游标、待发桶和去重哈希可以直接续用。

@@ -5,18 +5,21 @@ import type { Json, Parsed } from "../session-events.ts";
 export interface SessionDirectories {
   claudeDir?: string;
   codexDir?: string;
+  antigravityDir?: string;
 }
 
 export interface SessionFile {
   path: string;
+  session?: { id: string; cwd: string | null; subagent: boolean };
 }
 
 export interface SessionAdapter {
   id: string;
   checkpointKey?: string;
+  additionalRootFields?: ReadonlySet<string>;
   files(directories: SessionDirectories): Iterable<SessionFile>;
-  sessionId(event: Json | null, file: SessionFile): unknown;
-  cwd(event: Json): unknown;
+  sessionId?(event: Json | null, file: SessionFile): unknown;
+  cwd?(event: Json): unknown;
   parse(event: Json | null, hasSession: boolean): Parsed;
 }
 
