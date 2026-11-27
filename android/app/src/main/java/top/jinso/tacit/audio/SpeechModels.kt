@@ -69,11 +69,8 @@ internal class SpeechModels(private val context: Context) {
         return activate(stage)
     }
     fun download(cancellation: ModelDownloadCancellation, progress: (Long, String) -> Unit): File =
-        SpeechModelDownload().prepare(root, cancellation, progress).also { stage ->
-            // Best effort: a failed 6 MB extra never blocks the speech models; the maintenance job retries.
-            runCatching { installTagging(stage, cancellation) }
-                .onFailure { if (it is java.util.concurrent.CancellationException) throw it }
-        }
+        SpeechModelDownload().prepare(root, cancellation, progress)
+
     /** True when the installed models lack the music detector, so a background fetch is worthwhile. */
     fun taggingMissing(): Boolean = current()?.let { dir -> tagging.any { !File(dir, it).isFile } } == true
     fun supplementTagging() { current()?.let { installTagging(it) } }

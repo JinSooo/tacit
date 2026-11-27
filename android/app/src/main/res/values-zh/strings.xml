@@ -350,4 +350,9 @@
     <plurals name="voice_count">
         <item quantity="other">%1$s 个声音</item>
     </plurals>
+    <string name="model_connecting">正在连接下载源…</string>
+    <string name="acceleration_archive_invalid">无法解开加速模型压缩包，请重新下载。</string>
+    <string name="acceleration_files_missing">加速模型缺少文件。</string>
+    <string name="acceleration_unsupported">这台手机不支持本机加速。</string>
+    <string name="acceleration_cleanup_failed">无法清理上次未完成的加速模型。</string>
 </resources>

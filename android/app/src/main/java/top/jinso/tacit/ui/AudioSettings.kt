@@ -129,7 +129,7 @@ internal fun accelerationDisplay(
                             preparation.receivedBytes / 1_000_000.0, preparation.totalBytes / 1_000_000.0))
                     } else ProgressLine()
                 }
-                if (preparation.phase != SpeechPreparationPhase.DOWNLOADING || preparation.cancelling) {
+                if (preparation.phase != SpeechPreparationPhase.DOWNLOADING || preparation.cancelling || preparation.receivedBytes == 0L) {
                     Caption(preparation.message?.resolve(strings).orEmpty(), color = if (preparation.phase == SpeechPreparationPhase.ERROR)
                         tacitColors.attention else tacitColors.muted)
                 }

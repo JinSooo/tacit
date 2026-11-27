@@ -6,6 +6,8 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.File
 import java.io.InputStream
+import java.io.FileOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -152,6 +154,7 @@ internal class ModelDownloadCancellation {
 /** Only anonymous HTTPS GETs of the fixed model URLs. Never receives audio, records or credentials. */
 internal class SpeechModelDownload(
     private val resources: List<SpeechModelResource> = SpeechModelCatalog.resources,
+    private val pause: (Long) -> Unit = Thread::sleep,
     private val openConnection: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }
 ) {
     fun prepare(root: File, cancellation: ModelDownloadCancellation, progress: (Long, String) -> Unit): File {
@@ -183,15 +186,36 @@ internal class SpeechModelDownload(
         var failure: Throwable? = null
         for (source in listOf(resource.url) + resource.fallbackUrls) {
             cancellation.check()
-            try { return transferFrom(source, resource, target, cancellation, progress) }
-            catch (error: CancellationException) { throw error }
-            catch (error: Exception) { failure = error }
+            for (attempt in 0..3) {
+                try {
+                    return transferFrom(source, resource, target, cancellation, progress)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    cancellation.check()
+                    failure = error
+                    val retry = error is IOException && error !is javax.net.ssl.SSLException ||
+                        error is SpeechModelProblem && error.label == R.string.model_download_incomplete
+                    if (!retry || attempt == 3) break
+                    repeat(5 shl attempt) {
+                        cancellation.check()
+                        pause(100)
+                    }
+                }
+            }
+            target.delete()
+            progress(0)
         }
-        throw failure ?: SpeechModelProblem(R.string.model_download_failed)
+        val error = failure
+        throw if (error is RetryableHttpStatus) SpeechModelProblem(R.string.model_download_failed)
+            else error ?: SpeechModelProblem(R.string.model_download_failed)
     }
+
+    private class RetryableHttpStatus : IOException()
 
     private fun transferFrom(source: String, resource: SpeechModelResource, target: File, cancellation: ModelDownloadCancellation,
         progress: (Long) -> Unit) {
+        val offset = target.length()
         var url = try { URL(source) } catch (_: java.net.MalformedURLException) { throw SpeechModelProblem(R.string.model_download_network) }
         repeat(6) {
             if (url.protocol != "https" || url.userInfo != null) throw SpeechModelProblem(R.string.model_download_network)
@@ -204,6 +228,7 @@ internal class SpeechModelDownload(
                 connection.useCaches = false
                 connection.requestMethod = "GET"
                 connection.setRequestProperty("Accept-Encoding", "identity")
+                if (offset > 0) connection.setRequestProperty("Range", "bytes=$offset-")
                 cancellation.attach(connection)
                 val status = connection.responseCode
                 if (status in listOf(301, 302, 303, 307, 308)) {
@@ -211,10 +236,9 @@ internal class SpeechModelDownload(
                     url = try { URL(url, location) }
                     catch (_: java.net.MalformedURLException) { throw SpeechModelProblem(R.string.model_download_network) }
                 } else {
-                    if (status != 200) throw SpeechModelProblem(R.string.model_download_failed)
-                    val length = connection.contentLengthLong
-                    if (length >= 0 && !resource.acceptsSize(length)) throw SpeechModelProblem(R.string.model_size_invalid)
-                    connection.inputStream.use { copyVerified(it, target, resource, cancellation, progress) }
+                    if (status == 408 || status == 429 || status in 500..599) throw RetryableHttpStatus()
+                    if (status != 200 && status != 206) throw SpeechModelProblem(R.string.model_download_failed)
+                    receive(connection, status, offset, resource, target, cancellation, progress)
                     return
                 }
             } finally {
@@ -226,7 +250,66 @@ internal class SpeechModelDownload(
         throw SpeechModelProblem(R.string.model_download_network)
     }
 
+    private fun receive(connection: HttpURLConnection, status: Int, offset: Long, resource: SpeechModelResource,
+        target: File, cancellation: ModelDownloadCancellation, progress: (Long) -> Unit) {
+        val length = connection.contentLengthLong
+        var total = 0L
+        var expected = length
+        var end = if (length < 0) resource.maxBytes else length
+        if (status == 206) {
+            val range = CONTENT_RANGE.matchEntire(connection.getHeaderField("Content-Range").orEmpty())
+            val start = range?.groupValues?.get(1)?.toLongOrNull()
+            val last = range?.groupValues?.get(2)?.toLongOrNull()
+            val size = range?.groupValues?.get(3)?.toLongOrNull()
+            if (offset == 0L || start != offset || last == null || size == null || !resource.acceptsSize(size) ||
+                last !in offset until size || (length >= 0 && length != last - offset + 1)) {
+                throw SpeechModelProblem(R.string.model_size_invalid)
+            }
+            total = offset
+            expected = size
+            end = last + 1
+        } else if (length >= 0 && !resource.acceptsSize(length)) {
+            throw SpeechModelProblem(R.string.model_size_invalid)
+        }
+        // A server may ignore Range and reply with the full file. Overwrite rather than append that response.
+        connection.inputStream.use { input ->
+            FileOutputStream(target, status == 206).use { output ->
+                if (offset != total) progress(total)
+                val buffer = ByteArray(65536)
+                while (true) {
+                    cancellation.check()
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    cancellation.check()
+                    total += n
+                    if (total > end) throw SpeechModelProblem(R.string.model_size_invalid)
+                    output.write(buffer, 0, n)
+                    progress(total)
+                }
+                if (total < expected || !resource.acceptsSize(total)) {
+                    throw SpeechModelProblem(R.string.model_download_incomplete)
+                }
+                cancellation.check()
+                output.fd.sync()
+            }
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        target.inputStream().use { input ->
+            val buffer = ByteArray(65536)
+            while (true) {
+                cancellation.check()
+                val n = input.read(buffer)
+                if (n < 0) break
+                digest.update(buffer, 0, n)
+            }
+        }
+        val hash = digest.digest().joinToString("") { "%02x".format(it) }
+        if (!resource.accepts(total, hash)) throw SpeechModelProblem(R.string.model_checksum_failed)
+    }
+
     companion object {
+        private val CONTENT_RANGE = Regex("bytes ([0-9]+)-([0-9]+)/([0-9]+)")
+
         internal fun copyVerified(input: InputStream, target: File, resource: SpeechModelResource,
             cancellation: ModelDownloadCancellation, progress: (Long) -> Unit) {
             val digest = MessageDigest.getInstance("SHA-256")

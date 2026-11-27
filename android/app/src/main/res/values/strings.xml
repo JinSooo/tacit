@@ -362,4 +362,9 @@
         <item quantity="one">%1$s voice</item>
         <item quantity="other">%1$s voices</item>
     </plurals>
+    <string name="model_connecting">Connecting to the download source…</string>
+    <string name="acceleration_archive_invalid">The acceleration download couldn\'t be unpacked. Try downloading it again.</string>
+    <string name="acceleration_files_missing">Some acceleration model files are missing.</string>
+    <string name="acceleration_unsupported">This phone doesn\'t support hardware acceleration.</string>
+    <string name="acceleration_cleanup_failed">Couldn\'t clear the previous acceleration download.</string>
 </resources>

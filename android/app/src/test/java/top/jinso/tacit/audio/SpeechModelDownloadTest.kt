@@ -25,14 +25,18 @@ class SpeechModelDownloadTest {
         SpeechModelResource(path, "https://models.example/$path", bytes.size.toLong(), hash)
     private class Connection(url: URL, val body: ByteArray, val status: Int = 200,
         val location: String? = null, val length: Long = body.size.toLong(),
-        val stream: InputStream? = null) : HttpURLConnection(url) {
+        val stream: InputStream? = null, val range: String? = null) : HttpURLConnection(url) {
         var closed = false
         override fun connect() = Unit
         override fun disconnect() { closed = true }
         override fun usingProxy() = false
         override fun getResponseCode() = status
         override fun getContentLengthLong() = length
-        override fun getHeaderField(name: String?) = if (name == "Location") location else null
+        override fun getHeaderField(name: String?) = when (name) {
+            "Location" -> location
+            "Content-Range" -> range
+            else -> null
+        }
         override fun getInputStream() = stream ?: ByteArrayInputStream(body)
     }
     @Test fun fixedCatalogMatchesSharedContractHashesAndSize() {
@@ -125,7 +129,7 @@ class SpeechModelDownloadTest {
     }
     private fun failsCleanly(resource: SpeechModelResource = resource(), factory: (URL) -> HttpURLConnection): Throwable {
         val old = File(temp.root, "existing").apply { mkdir(); File(this,"marker").writeText("keep") }
-        val failure = runCatching { SpeechModelDownload(listOf(resource), factory).prepare(temp.root, ModelDownloadCancellation()) { _, _ -> } }.exceptionOrNull()
+        val failure = runCatching { SpeechModelDownload(listOf(resource), pause = {}, openConnection = factory).prepare(temp.root, ModelDownloadCancellation()) { _, _ -> } }.exceptionOrNull()
         assertNotNull(failure)
         assertEquals(listOf(old), temp.root.listFiles()!!.toList())
         assertEquals("keep", File(old,"marker").readText())
@@ -168,6 +172,39 @@ class SpeechModelDownloadTest {
         failsCleanly { requests++; Connection(it,bytes,302,"https://cdn.example/model") }
         assertEquals(6, requests)
     }
+    @Test fun resumesAfterInterruptedResponseAndRetriesThrottledSource() {
+        val waits = mutableListOf<Long>()
+        val connections = mutableListOf<Connection>()
+        val cut = 5
+        val stage = SpeechModelDownload(listOf(resource()), pause = { waits.add(it) }) { url ->
+            when (connections.size) {
+                0 -> Connection(url, bytes, stream = object : InputStream() {
+                    private var offset = 0
+                    override fun read(): Int {
+                        if (offset == cut) throw IOException("connection lost")
+                        return bytes[offset++].toInt()
+                    }
+                })
+                1 -> Connection(url, bytes, status = 429)
+                else -> Connection(url, bytes.copyOfRange(cut, bytes.size), status = 206,
+                    range = "bytes $cut-${bytes.lastIndex}/${bytes.size}")
+            }.also(connections::add)
+        }.prepare(temp.root, ModelDownloadCancellation()) { _, _ -> }
+        assertEquals(listOf(null, "bytes=$cut-", "bytes=$cut-"), connections.map { it.getRequestProperty("Range") })
+        assertEquals(1500L, waits.sum())
+        assertArrayEquals(bytes, File(stage, resource().path).readBytes())
+    }
+
+    @Test fun serverThatIgnoresRangeRestartsFileWithoutAppendingIt() {
+        val connections = mutableListOf<Connection>()
+        val stage = SpeechModelDownload(listOf(resource()), pause = {}) { url ->
+            (if (connections.isEmpty()) Connection(url, bytes.copyOf(4), length = -1)
+            else Connection(url, bytes)).also(connections::add)
+        }.prepare(temp.root, ModelDownloadCancellation()) { _, _ -> }
+        assertEquals("bytes=4-", connections[1].getRequestProperty("Range"))
+        assertArrayEquals(bytes, File(stage, resource().path).readBytes())
+    }
+
     @Test fun disconnectMidDownloadCleansStageAndKeepsCurrent() {
         failsCleanly { Connection(it,bytes,stream = object : InputStream() {
             var first = true

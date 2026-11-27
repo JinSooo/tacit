@@ -12,7 +12,11 @@ class AudioMaintenanceWorker(context:Context,params:WorkerParameters):CoroutineW
         fun schedule(context:Context) {
             val work=WorkManager.getInstance(context)
             work.enqueueUniquePeriodicWork("tacit-audio-retention",ExistingPeriodicWorkPolicy.KEEP,PeriodicWorkRequestBuilder<AudioMaintenanceWorker>(1,TimeUnit.DAYS).build())
-            work.enqueueUniqueWork("tacit-audio-tagging",ExistingWorkPolicy.KEEP,OneTimeWorkRequestBuilder<MusicModelWorker>()
+            scheduleTagging(context)
+        }
+
+        internal fun scheduleTagging(context: Context) {
+            WorkManager.getInstance(context).enqueueUniqueWork("tacit-audio-tagging",ExistingWorkPolicy.KEEP,OneTimeWorkRequestBuilder<MusicModelWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.MINUTES).build())
         }
