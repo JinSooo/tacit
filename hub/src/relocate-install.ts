@@ -1,11 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { LEGACY_SERVER, SERVER, quote, saveConnectionPlan, words } from "./agents-install.ts";
-
-const owns = (entry: any, tool: string) => entry && typeof entry.command === "string" && Array.isArray(entry.args)
-  && entry.args.length === 4 && typeof entry.args[0] === "string" && entry.args[0].endsWith("/hub/src/cli.ts")
-  && entry.args.slice(1).join("\n") === `mcp\n--tool\n${tool}`;
+import { antigravityConfig, antigravityHooks, LEGACY_SERVER, SERVER, ownsMcpEntry as owns, saveConnectionPlan, sessionStartCommand, sessionStartCommandPaths } from "./agents-install.ts";
 
 const tomlKey = (key: string) => /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
 /** 把 Codex 配置里 [mcp_servers.record-anything…] 各段的表头改成 tacit，其余文本原样保留；多行字符串里的同形文字不动。 */
@@ -40,13 +36,22 @@ export function renameCodexServer(text: string): string {
   return out;
 }
 
+function updateHook(hook: any, tool: string, cli: string, bun: string): boolean {
+  const tokens = sessionStartCommandPaths(hook?.command, tool);
+  if (!tokens || tokens[0] === bun && tokens[1] === cli) return false;
+  hook.command = sessionStartCommand(bun, cli, tool);
+  // 新路径的命令由宿主重新确认，不伪造旧 trusted_hash。
+  delete hook.trusted_hash;
+  return true;
+}
+
 /** 仅迁移本应用已有的 AI 连接。升级时停用终端记录。全部预检后才写入。 */
 export function relocateInstall(runtime: string, bun: string, home = homedir()) {
   const cli = join(resolve(runtime), "hub/src/cli.ts"), plans: Parameters<typeof saveConnectionPlan>[0][] = [];
   const add = (file: string, before: string, after: string) => { if (before !== after) plans.push({ file, existed: true, before, after }); };
   for (const [relative, tool, mcp] of [
     [".claude/settings.json", "claude-code", false], [".codex/hooks.json", "codex", false],
-    [".claude.json", "claude-code", true], ["Library/Application Support/Claude/claude_desktop_config.json", "claude-desktop", true],
+    [".claude.json", "claude-code", true], [antigravityConfig, "antigravity", true], ["Library/Application Support/Claude/claude_desktop_config.json", "claude-desktop", true],
   ] as const) {
     const file = join(home, relative); if (!existsSync(file)) continue;
     const before = readFileSync(file, "utf8"), data = JSON.parse(before); let changed = false;
@@ -71,17 +76,20 @@ export function relocateInstall(runtime: string, bun: string, home = homedir()) 
         if (renamed.some((r: unknown, i: number) => r !== rules[i])) { data.permissions[kind] = [...new Set(renamed)]; changed = true; }
       }
       for (const row of data?.hooks?.SessionStart ?? []) for (const hook of row.hooks ?? []) {
-        if (typeof hook.command !== "string") continue;
-        const tokens = words(hook.command);
-        if (tokens?.length === 6 && tokens[1]?.endsWith("/hub/src/cli.ts") && tokens.slice(2).join("\n") === `hook\nsession-start\n--tool\n${tool}`) {
-          if (tokens[0] === bun && tokens[1] === cli) continue;
-          hook.command = `${quote(bun)} ${quote(cli)} hook session-start --tool ${tool}`;
-          // 新路径的命令由宿主重新确认，不伪造旧 trusted_hash。
-          delete hook.trusted_hash; changed = true;
-        }
+        if (updateHook(hook, tool, cli, bun)) changed = true;
       }
     }
     if (changed) add(file, before, JSON.stringify(data, null, 2) + "\n");
+  }
+  const agHooks = join(home, antigravityHooks);
+  if (existsSync(agHooks)) {
+    const before = readFileSync(agHooks, "utf8"), data = JSON.parse(before);
+    const hooks = data?.[SERVER]?.SessionStart;
+    let changed = false;
+    if (Array.isArray(hooks)) for (const hook of hooks) {
+      if (updateHook(hook, "antigravity", cli, bun)) changed = true;
+    }
+    if (changed) add(agHooks, before, JSON.stringify(data, null, 2) + "\n");
   }
   const file = join(home, ".codex/config.toml");
   if (existsSync(file)) {

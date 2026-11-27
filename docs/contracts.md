@@ -23,8 +23,11 @@
 | `mac.wechat` | Mac 采集端"微信对话"数据源（默认关闭）：读微信窗口聊天区，一条消息一条记录，格式见下 |
 | `mac.browser` | plugins/browser |
 | `claude_code.session`、`codex.session` | plugins/agent-sessions |
+| `antigravity.session`、`opencode.session`、`codebuddy.session`、`workbuddy.session`、`copilot_cli.session`、`droid.session`、`qwen_code.session`、`gemini_cli.session`、`kimi_cli.session` | plugins/agent-sessions |
 | `manual.note`、`manual.correction` | 网页手动补写 / 修正 |
 | `manual.agent` | 用户让 Agent 代存的内容（MCP `history_append`，见 4.6）；`context.app` 是写入的 Agent，内容变化时的修正仍用 `manual.correction` |
+
+AI 会话来源以 `packages/record/agent-tools.ts` 为准。每个工具使用自己的来源名，并按上面的 `source_ref` 规则去重。Cursor 暂无会话来源。变更目录后运行 `bun packages/record/generate-agent-tools.ts` 更新 Swift 和 Android 的目录与资源。
 
 ### 1.1 微信消息记录
 
@@ -121,8 +124,8 @@
 | DELETE | `/v1/settings/keys/:provider` | — | `{ provider, deleted }`；`deleted` 为删除前是否存在 |
 | GET | `/v1/settings/general` | — | `{ inject_tokens, ask_done_days, archive_days, timeline_polish, timeline_overview, daily_token_limit, language, defaults, ranges, model_usage }` |
 | PUT | `/v1/settings/general` | 七个设置字段中任意几项 | 同 GET。空请求、未知字段及非法值返回 400，整份不写 |
-| GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial }] }`，`id` 为 `claude-code`、`codex`、`claude-desktop`。前两者的会话开始钩子（`~/.claude/settings.json`、`~/.codex/hooks.json`）和 MCP 登记（`~/.claude.json` 的 `mcpServers`、`~/.codex/config.toml` 的 `mcp_servers`）都在才算 `connected`，只有一个算 `partial`。Desktop 检查 `/Applications/Claude.app` 或 `~/Applications/Claude.app` 是否存在，MCP 配置见下，不要求 hook。状态表示配置已登记，不表示应用已重载 |
-| PUT | `/v1/settings/agents/:id` | `{ connected }` | `{ tools, note }`。等同 `cli.ts agents install|uninstall --tool <id> --yes`；本机找不到该工具时连接返回 409；执行失败 500，带原因。Codex 连接后的 `note` 提醒首次批准钩子；Desktop 连接、断开均提醒完全退出并重新打开应用；其他情况为 null |
+| GET | `/v1/settings/agents` | — | `{ tools: [{ id, label, installed, connected, partial, manual? }] }`。支持自动连接的工具为 Claude Code、Codex、Claude Desktop 和 Antigravity。Cursor 和 Gemini CLI 的 `manual` 为待编辑片段数组 `[{ file, kind, action, section?, code }]`，`kind` 为 `mcp` 或 `session-start`，`action` 为 `create`、`add`、`replace` 或 `merge`，`section` 指明配置里的目标位置。编程工具的 MCP 和会话开始配置都在才算 `connected`，Desktop 只需 MCP。状态表示配置已登记，应用重载后才生效 |
+| PUT | `/v1/settings/agents/:id` | `{ connected }` | `{ tools, note }`。等同 `cli.ts agents install\|uninstall --tool <id> --yes`。手动工具返回 400，找不到要连接的工具时返回 409，写配置失败返回 500。Codex 连接后的 `note` 提醒首次批准。Desktop 和 Antigravity 的 `note` 提醒重开应用 |
 
 - `:provider` 只能是 `anthropic`、`openai-compatible`。key 只进钥匙串：不出现在响应、错误信息、日志、文件和 `security` 的进程参数里（经 `security -i` 的 stdin 传入）。
 - models 的 GET 字段：`tiers` 当前三档（`models.json` 不存在时是代码默认值；文件无效时 `tiers` 是默认值、`config_error` 是原因，此时提炼会失败，应提示用户保存一份新的）；`keys` 形如 `{ "anthropic": true, "openai-compatible": false }`，查询钥匙串失败时为 `null`；`providers` 是 `[{ id, label, needs_key, base_url }]`，`base_url` 为 true 表示该后端可填 `base_url`；`tier_info` 是 `{ minute: { label, description }, … }`。
@@ -142,7 +145,9 @@
 
 在 Claude Code、Codex 和 Claude Desktop 里登记的服务名是 `tacit`（工具名形如 `mcp__tacit__search`）。0.2.0 以前叫 `record-anything`：升级时（`hub/src/relocate-install.ts`）把本应用登记的旧条目原位改名，Codex 的工具审批子表和 Claude Code 用户设置里 `mcp__record-anything…` 的权限规则一并改名；设置页连接或断开时也会移除本应用的旧条目。同名的他人条目不动。
 
-Claude Desktop 的 MCP 配置写入 `~/Library/Application Support/Claude/claude_desktop_config.json` 的 `mcpServers.tacit`：Bun 与入口均用绝对路径，参数为 `<repo>/hub/src/cli.ts mcp --tool claude-desktop`。不写 token、不登记 hook、不采集 Desktop 聊天记录。保留其他连接器和偏好；写前备份，原子替换；同名非本工具配置拒绝覆盖。路径过期显示 `partial`，重新连接修复。默认 `agents install` 在发现应用时包含 Desktop，默认 `uninstall` 也清理应用移除后遗留的配置。读取及用户明确要求的追加沿用 4.6，审计 tool 为 `claude-desktop`。
+Claude Desktop 的 MCP 配置写入 `~/Library/Application Support/Claude/claude_desktop_config.json` 的 `mcpServers.tacit`：Bun 与入口均用绝对路径，参数为 `<repo>/hub/src/cli.ts mcp --tool claude-desktop`。不写 token、不登记 hook、不采集 Desktop 聊天记录。保留其他连接器和偏好；写前备份，原子替换；同名非本工具配置拒绝覆盖。路径过期显示 `partial`，重新连接修复。默认 `agents install` 接入 Claude Code 和 Codex，其他自动工具通过 `--tool` 单独接入。默认 `uninstall` 也处理 Claude Desktop 和 Antigravity 遗留的配置。读取及用户明确要求的追加沿用 4.6，审计 tool 为 `claude-desktop`。
+
+Antigravity 自动连接使用 `~/.gemini/config/mcp_config.json` 的 `mcpServers.tacit` 和 `~/.gemini/config/hooks.json` 的 `tacit.SessionStart`。Cursor 和 Gemini CLI 的片段使用同一组本机 Bun 和 CLI 路径，分别指向 `~/.cursor/mcp.json`、`~/.cursor/hooks.json` 和 `~/.gemini/settings.json`。Tacit 只读取手动工具的文件，升级也不修改它们。
 
 ## 4. 提炼层（v1）
 
@@ -855,7 +860,7 @@ CREATE TABLE project_context_cache (
 - v17 增加 `devices.local_only INTEGER NOT NULL DEFAULT 0` 和可空的 `bootstrap_agent_id TEXT`。已有设备默认保留远程连接能力。双身份登记时，Mac 行关联同一次登记的 Agent ID。
 - `ingest` 按已登记的平台检查来源：
   - `android` 允许 `android.*`、`manual.note`、`manual.correction`（仅指向本设备记录）。
-  - `mac` 允许 `mac.*`、`claude_code.session`、`codex.session`、`plugin.ext_*`、`manual.note`、`manual.correction`。采集和查看角色的修正只可指向自己的记录，管理设备也可以修正其他记录。
+  - `mac` 允许 `mac.*`、第 1 节登记的所有 AI 会话来源、`plugin.ext_*`、`manual.note`、`manual.correction`。采集和查看角色的修正只可指向自己的记录，管理设备也可以修正其他记录。
   - `agent` 的写入走 `agent.append`，调用 `ingest` 返回加密 403。创建的 `manual.agent` 及其后续修正都用调用方 `device_id`。旧 HTTP 接口仍写历史身份 `"mac"`。
 - 历史 `device = "mac"` 的记录照常展示、搜索与整理。今后走设备协议采集的 Mac 记录使用 `mac-<8 位 base32>`。Mac 管理设备可删除和修正历史 `device = "mac"` 的记录。历史记录和活动段的读取筛选 `device=mac` 包含旧 `mac` 和新 `mac-<id>`；指定完整设备 ID 时仍精确匹配。归属、鉴权和同步继续校验完整设备 ID；唯一例外是本机登记的 Mac（`platform=mac`、`local_only=1`）在音频模块与历史 `device = "mac"` 视为同一音频身份，以保证已确认声纹、命名说话人、相邻 10 分钟内的对话分场、试听样本请求、补转写/重认及保留期清理连续不断，不改写已有记录。
 

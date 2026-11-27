@@ -57,6 +57,24 @@ test("Desktop 设置接口连接、断开、重启提示及鉴权；无需编程
   expect((await call(h, "PUT", "/v1/settings/agents/workbuddy", { connected: true })).status).toBe(400);
 });
 
+test("设置接口允许连接 Antigravity，手动工具只返回接入片段", async () => {
+  const home = join(ctx.dir, "ai-tools-home");
+  const h = handler({ agents: { home, bun: "/synthetic/bun", repo: "/synthetic/Tacit", which: command => `/synthetic/${command}`, appExists: () => false } });
+  const path = "/v1/settings/agents";
+  const status = await call(h, "GET", path);
+  const tools = status.body.tools;
+  expect(tools.find((tool: any) => tool.id === "cursor")).toMatchObject({ installed: true, connected: false, manual: [{ action: "create" }, { action: "create" }] });
+  expect(tools.find((tool: any) => tool.id === "gemini-cli")).toMatchObject({ installed: true, connected: false, manual: [{ action: "create" }, { action: "add" }] });
+  for (const id of ["cursor", "gemini-cli"]) for (const connected of [true, false]) {
+    expect((await call(h, "PUT", `${path}/${id}`, { connected })).status).toBe(400);
+  }
+  expect(existsSync(home)).toBe(false);
+  const connected = await call(h, "PUT", `${path}/antigravity`, { connected: true });
+  expect(connected.status).toBe(200);
+  expect(connected.body.tools.find((tool: any) => tool.id === "antigravity")).toMatchObject({ connected: true, partial: false });
+  expect(existsSync(join(home, ".gemini/settings.json"))).toBe(false);
+});
+
 test("端口优先级：RA_PORT > hub.json > 47823；hub.json 无效时报错，写入保留其他字段", () => {
   expect(resolvePort({}, ctx.dir)).toEqual({ port: 47823, source: "default" });
   writeFileSync(join(ctx.dir, "hub.json"), JSON.stringify({ port: 50001, note: "保留" }));
@@ -376,7 +394,7 @@ test("AI 工具接入：连接写入钩子并登记 MCP，状态随之变化；�
   };
   const h = handler({ agents });
   const before = await call(h, "GET", "/v1/settings/agents");
-  expect(before.body.tools.map((t: any) => [t.id, t.installed, t.connected])).toEqual([["claude-code", true, false], ["codex", false, false], ["claude-desktop", false, false]]);
+  expect(before.body.tools.map((t: any) => [t.id, t.installed, t.connected])).toEqual([["claude-code", true, false], ["codex", false, false], ["claude-desktop", false, false], ["antigravity", false, false], ["gemini-cli", false, false], ["cursor", false, false]]);
 
   const connected = await call(h, "PUT", "/v1/settings/agents/claude-code", { connected: true });
   expect(connected.status).toBe(200);

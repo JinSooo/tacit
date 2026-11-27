@@ -27,7 +27,7 @@ function environment() {
 async function run(dir: string, args: string[], input: string, extra: Record<string, string> = {}, preload?: string) {
   const start = performance.now();
   const process = Bun.spawn([Bun.which("bun")!, ...(preload ? ["--preload", preload] : []), cli, ...args], {
-    env: { ...Bun.env, RA_DATA_DIR: dir, RA_PORT: "1", LC_ALL: "en_US.UTF-8", ...extra }, stdin: new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe",
+    env: { ...Bun.env, HOME: dir, RA_DATA_DIR: dir, RA_PORT: "1", LC_ALL: "en_US.UTF-8", ...extra }, stdin: new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe",
   });
   const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   expect(stdout).not.toContain(token); expect(stderr).not.toContain(token);
@@ -141,6 +141,39 @@ test("hook 子进程输出嵌套 JSON，空内容、坏输入、缺 token 和失
   } finally { ctx.cleanup(); }
 });
 
+test("Antigravity、Cursor、Gemini CLI 的会话参数和 stdout 符合各自协议", async () => {
+  const ctx = environment();
+  try {
+    const mock = join(ctx.dir, "context-fetch.ts");
+    writeFileSync(mock, `globalThis.fetch = async (input, init) => {
+      if (init.headers.Authorization !== 'Bearer ${token}') throw Error('鉴权失败');
+      return Response.json({text: new URL(String(input)).searchParams.toString()});
+    };`);
+    const cases = [
+      { tool: "antigravity", input: { cwd: "/synthetic", workspacePaths: ["/ignored"], conversationId: "ag" }, session: "ag", event: "startup" },
+      { tool: "antigravity", input: { workspacePaths: ["/synthetic"], conversationId: "ag" }, session: "ag", event: "startup" },
+      { tool: "cursor", input: { workspace_roots: ["/synthetic", "/ignored"], session_id: "cur", conversation_id: "ignored" }, session: "cur", event: "startup" },
+      { tool: "cursor", input: { workspace_roots: ["/synthetic"], conversation_id: "cur" }, session: "cur", event: "startup" },
+      { tool: "gemini-cli", input: { cwd: "/synthetic", session_id: "gem", source: "clear" }, session: "gem", event: "clear" },
+    ];
+    for (const { tool, input, session, event } of cases) {
+      const text = new URLSearchParams({ cwd: "/synthetic", event, tool, session }).toString();
+      const outputs = {
+        antigravity: { injectSteps: [{ systemMessage: { systemMessage: text } }] },
+        cursor: { additional_context: text },
+        "gemini-cli": { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } },
+      };
+      const result = await run(ctx.dir, ["hook", "session-start", "--tool", tool], JSON.stringify(input), {}, mock);
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toBe(JSON.stringify(outputs[tool as keyof typeof outputs]) + "\n");
+    }
+    const unknown = await run(ctx.dir, ["hook", "session-start", "--tool", "unknown"], '{"cwd":"/synthetic"}', {}, mock);
+    expect(unknown.stdout).toBe("");
+    expect(unknown.stderr).toContain("does not support SessionStart");
+  } finally { ctx.cleanup(); }
+});
+
 test("hook 总超时覆盖尚未关闭的 stdin，不加载重模块", async () => {
   const ctx = environment();
   const probe = join(ctx.dir, "imports.ts");
@@ -151,7 +184,7 @@ plugin({name:'cold-start-probe', setup(build) {
 }});`);
   const start = performance.now();
   const child = Bun.spawn([Bun.which("bun")!, "--preload", probe, cli, "hook", "session-start", "--tool", "codex"], {
-    env: { ...Bun.env, RA_DATA_DIR: ctx.dir, RA_PORT: "1" }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    env: { ...Bun.env, HOME: ctx.dir, RA_DATA_DIR: ctx.dir, RA_PORT: "1" }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   // 独立看门狗只防测试挂死，生产命令应自行在两秒内结束。
   const watchdog = setTimeout(() => child.kill(), 3500);

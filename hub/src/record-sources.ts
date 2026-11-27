@@ -1,4 +1,11 @@
+import { AGENT_SESSION_SOURCES } from "../../packages/record/agent-tools.ts";
 import type { HubDB } from "./db.ts";
+
+export { AGENT_SESSION_SOURCES };
+
+export function requiresSourceRef(source: string): boolean {
+  return source === "mac.browser" || AGENT_SESSION_SOURCES.has(source);
+}
 
 export const AUDIO_SOURCES = new Set(["mac.audio", "android.audio"]);
 export const SKELETON_SOURCES = new Set(["mac.screen", "mac.browser", "mac.app", "android.usage"]);

@@ -1,3 +1,4 @@
+import { AGENT_SESSION_SOURCES } from "../record-sources.ts";
 import type { RecordV1 } from "../../../packages/record/index.ts";
 import { cleanUserText } from "../../../plugins/agent-sessions/filters.ts";
 import { redactString } from "../redact.ts";
@@ -9,7 +10,7 @@ export function materialBody(record: Pick<RecordV1, "source" | "body" | "context
     const conversation = /^(?:You said:|ChatGPT said:)\s*$/m.exec(body);
     if (conversation) body = body.slice(conversation.index);
   }
-  if (record.source === "codex.session" || record.source === "claude_code.session") {
+  if (AGENT_SESSION_SOURCES.has(record.source)) {
     body = body.replace(/(^|\n\n)\[我\] ([\s\S]*?)(?=\n\n\[(?:我|AI)\] |$)/g, (_all, prefix: string, value: string) => {
       const cleaned = cleanUserText(value);
       return cleaned ? `${prefix}[我] ${cleaned}` : "";

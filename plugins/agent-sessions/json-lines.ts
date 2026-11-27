@@ -33,9 +33,13 @@ export class EventParser {
   private nonempty = false;
   private result: Json | null = null;
 
+  constructor(private readonly additionalRootFields?: ReadonlySet<string>) {}
+
   private keep(): boolean {
     const top = this.stack.at(-1);
-    return !!top && top.kind === "object" && !!fields[top.context]?.has(top.key);
+    return !!top && top.kind === "object" && (
+      !!fields[top.context]?.has(top.key) || (top.context === "root" && !!this.additionalRootFields?.has(top.key))
+    );
   }
   private append(value: string) {
     if (this.capture && this.token.length + value.length > (this.keyToken ? 512 : STRING_LIMIT)) this.truncated = true;
@@ -198,14 +202,14 @@ export class EventParser {
 }
 
 /** 普通日志只读新增字节；压缩归档逐块解压。offset 均以解压后的完整行字节计。 */
-export async function* readEvents(file: string, offset: number, size: number) {
+export async function* readEvents(file: string, offset: number, size: number, additionalRootFields?: ReadonlySet<string>) {
   const compressed = file.endsWith(".zst");
   if (!compressed && offset >= size) return;
   const input = fs.createReadStream(file, { highWaterMark: 64 * 1024, ...(compressed ? {} : { start: offset, end: size - 1 }) });
   const stream = compressed ? input.pipe(createZstdDecompress({ chunkSize: 64 * 1024 })) : input;
   // pipe 默认不会把源的错误传给目标。
   if (compressed) input.on("error", error => stream.destroy(error));
-  let parser = new EventParser(); let decoder = new StringDecoder("utf8");
+  let parser = new EventParser(additionalRootFields); let decoder = new StringDecoder("utf8");
   let position = compressed ? 0 : offset;
   let lineStart = position;
   try {
@@ -222,7 +226,7 @@ export async function* readEvents(file: string, offset: number, size: number) {
         if (newline < 0) break;
         position++;
         if (position > offset) { parser.push(decoder.end()); yield { ...parser.finish(), end: position }; }
-        parser = new EventParser(); decoder = new StringDecoder("utf8"); lineStart = position; start = end + 1;
+        parser = new EventParser(additionalRootFields); decoder = new StringDecoder("utf8"); lineStart = position; start = end + 1;
       }
     }
     // 归档是完整文件，允许最后一行无换行；活动日志半行留给下次。

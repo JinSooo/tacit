@@ -286,3 +286,110 @@ test("Codex 从旧服务名改连：旧名称下的用户工具规则沿用到�
   expect(data.mcp_servers.other.command).toBe("other");
   expect(ctx.calls.some(call => call[2] === "remove" && call[3] === "record-anything")).toBe(true);
 });
+
+test("Antigravity 预览、连接、重复连接和断开保留其他条目，每个文件只留一份备份", () => {
+  const ctx = setup();
+  ctx.env.which = () => null;
+  ctx.env.appExists = path => path === join(ctx.home, "Applications/Antigravity.app");
+  const mcp = join(ctx.home, ".gemini/config/mcp_config.json"), hooks = join(ctx.home, ".gemini/config/hooks.json");
+  const servers = { mcpServers: { other: { command: "other", env: { TOKEN: "synthetic-private-do-not-print" } } } };
+  const groups = { other: { SessionStart: [{ type: "command", command: "echo other" }] } };
+  ctx.write(servers, mcp);
+  ctx.write(groups, hooks);
+  const before = [mcp, hooks].map(file => readFileSync(file, "utf8"));
+  runAgents(["install", "--tool", "antigravity"], ctx.env);
+  expect([mcp, hooks].map(file => readFileSync(file, "utf8"))).toEqual(before);
+  const preview = ctx.output.join("\n");
+  expect(preview).toContain(`--- ${mcp}`);
+  expect(preview).toContain(`+++ ${hooks}`);
+  expect(preview).toContain("hook session-start --tool antigravity");
+  expect(preview).not.toContain("synthetic-private-do-not-print");
+  const getStatus = () => agentStatus(ctx.env).find(t => t.id === "antigravity");
+  expect(getStatus()).toMatchObject({ installed: true, connected: false, partial: false });
+  connectAgent("antigravity", true, ctx.env);
+  expect(getStatus()).toMatchObject({ connected: true, partial: false });
+  expect(JSON.parse(readFileSync(mcp, "utf8"))).toEqual({
+    mcpServers: { ...servers.mcpServers, tacit: { command: ctx.env.bun, args: [ctx.env.repo + "/hub/src/cli.ts", "mcp", "--tool", "antigravity"] } },
+  });
+  expect(JSON.parse(readFileSync(hooks, "utf8"))).toEqual({
+    ...groups, tacit: { SessionStart: [{ type: "command", command: expect.stringContaining("hook session-start --tool antigravity"), timeout: 5 }] },
+  });
+  const backup = (file: string) => readdirSync(dirname(file)).filter(name => name.startsWith(file.split("/").at(-1) + ".ra-backup-"));
+  const connected = [mcp, hooks].map(file => readFileSync(file, "utf8"));
+  const firstBackups = [mcp, hooks].map(backup);
+  connectAgent("antigravity", true, ctx.env);
+  expect([mcp, hooks].map(backup)).toEqual(firstBackups);
+  expect([mcp, hooks].map(file => readFileSync(file, "utf8"))).toEqual(connected);
+  expect(firstBackups.map(names => names.length)).toEqual([1, 1]);
+  connectAgent("antigravity", false, ctx.env);
+  expect(getStatus()).toMatchObject({ connected: false, partial: false });
+  expect([mcp, hooks].map(file => readFileSync(file, "utf8"))).toEqual(before);
+  expect([mcp, hooks].map(backup).map(names => names.length)).toEqual([1, 1]);
+  expect([mcp, hooks].map(file => readFileSync(join(dirname(file), backup(file)[0]!), "utf8"))).toEqual(connected);
+  expect(ctx.calls).toEqual([]);
+});
+
+test("Antigravity 遇到同名 MCP 或钩子组冲突时不改任何文件", () => {
+  const ctx = setup();
+  const mcp = join(ctx.home, ".gemini/config/mcp_config.json"), hooks = join(ctx.home, ".gemini/config/hooks.json");
+  for (const [servers, groups] of [
+    [{ mcpServers: { tacit: { command: "other" } } }, {}],
+    [{}, { tacit: { SessionStart: [{ command: "echo other" }] } }],
+  ]) {
+    ctx.write(servers, mcp);
+    ctx.write(groups, hooks);
+    const before = [mcp, hooks].map(file => readFileSync(file, "utf8"));
+    for (const on of [true, false]) expect(() => connectAgent("antigravity", on, ctx.env)).toThrow("已被其他配置占用");
+    expect([mcp, hooks].map(file => readFileSync(file, "utf8"))).toEqual(before);
+    expect(readdirSync(dirname(mcp)).sort()).toEqual(["hooks.json", "mcp_config.json"]);
+  }
+});
+
+test("Cursor 和 Gemini CLI 片段使用实际安装路径，只读检测两个配置，兼容 Cursor 省略 stdio", () => {
+  const ctx = setup(), cli = ctx.env.repo + "/hub/src/cli.ts";
+  ctx.env.which = command => command === "gemini" ? "/synthetic/gemini" : null;
+  ctx.env.appExists = path => path === join(ctx.home, "Applications/Cursor.app");
+  const cursorMcp = join(ctx.home, ".cursor/mcp.json"), cursorHook = join(ctx.home, ".cursor/hooks.json");
+  const gemini = join(ctx.home, ".gemini/settings.json");
+  const manual = (id: string) => agentStatus(ctx.env).find(tool => tool.id === id)!;
+  const cursor = manual("cursor"), gem = manual("gemini-cli");
+  expect(cursor).toMatchObject({ installed: true, connected: false, partial: false });
+  expect(gem).toMatchObject({ installed: true, connected: false, partial: false });
+  expect(readdirSync(ctx.home)).toEqual([]);
+
+  const cursorDocs = cursor.manual!;
+  expect(cursorDocs.map(({ file, action }) => [file, action])).toEqual([["~/.cursor/mcp.json", "create"], ["~/.cursor/hooks.json", "create"]]);
+  const cursorServer = JSON.parse(cursorDocs[0]!.code), cursorHooks = JSON.parse(cursorDocs[1]!.code);
+  expect(cursorServer).toEqual({ mcpServers: { tacit: { type: "stdio", command: ctx.env.bun, args: [cli, "mcp", "--tool", "cursor"] } } });
+  expect(cursorHooks).toEqual({ version: 1, hooks: { sessionStart: [{ command: expect.stringContaining("hook session-start --tool cursor"), timeout: 5 }] } });
+  delete cursorServer.mcpServers.tacit.type;
+  ctx.write(cursorServer, cursorMcp);
+  expect(manual("cursor")).toMatchObject({ connected: false, partial: true });
+  ctx.write(cursorHooks, cursorHook);
+  expect(manual("cursor")).toMatchObject({ connected: true, partial: false });
+  expect(manual("cursor").manual![1]).toMatchObject({ action: "replace", section: "hooks.sessionStart[0]" });
+
+  const [gemMcp, gemHook] = gem.manual!;
+  expect(gemMcp).toMatchObject({ file: "~/.gemini/settings.json", action: "create" });
+  expect(gemHook).toMatchObject({ file: gemMcp!.file, action: "add", section: undefined });
+  const geminiConfig = { ...JSON.parse(gemMcp!.code), ...JSON.parse(`{${gemHook!.code}}`) };
+  expect(geminiConfig.mcpServers.tacit).toEqual({ command: ctx.env.bun, args: [cli, "mcp", "--tool", "gemini-cli"] });
+  expect(geminiConfig.hooks.SessionStart).toEqual([{ matcher: "startup|resume|clear", hooks: [
+    { name: "tacit-session-start", type: "command", command: expect.stringContaining("hook session-start --tool gemini-cli"), timeout: 5000 },
+  ] }]);
+  ctx.write(geminiConfig, gemini);
+  expect(manual("gemini-cli")).toMatchObject({ connected: true, partial: false });
+  const before = [cursorMcp, cursorHook, gemini].map(file => readFileSync(file, "utf8"));
+  for (const id of ["cursor", "gemini-cli"]) for (const action of ["install", "uninstall"]) {
+    expect(() => runAgents([action, "--tool", id, "--yes"], ctx.env)).toThrow();
+  }
+  expect([cursorMcp, cursorHook, gemini].map(file => readFileSync(file, "utf8"))).toEqual(before);
+  expect(ctx.calls).toEqual([]);
+
+  ctx.write({ mcpServers: { another: { command: "synthetic" } }, hooks: { SessionStart: [{ matcher: "startup", hooks: [] }] } }, gemini);
+  const existing = manual("gemini-cli").manual!;
+  expect(existing[0]).toMatchObject({ action: "add", section: "mcpServers" });
+  expect(Object.keys(JSON.parse(`{${existing[0]!.code}}`))).toEqual(["tacit"]);
+  expect(existing[1]).toMatchObject({ action: "add", section: "hooks.SessionStart" });
+  expect(JSON.parse(existing[1]!.code).hooks[0].timeout).toBe(5000);
+});
