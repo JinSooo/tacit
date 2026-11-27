@@ -125,19 +125,19 @@ test("认可的任一版本都能装上，已装的旧版不重下，其他内�
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("SenseVoice 有 ModelScope、Release 和 Hugging Face 候选，校验值与契约一致", () => {
+test("每个模型都有 ModelScope 候选（固定提交），校验值与契约一致", () => {
   const contract = readFileSync(join(import.meta.dir, "../../docs/contracts.md"), "utf8");
   for (const model of AUDIO_MODELS) {
     if (model.file.startsWith("sense-voice/")) {
       const file = model.file.slice("sense-voice/".length);
       expect(model.urls).toEqual([
-        `https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master/${file}`,
+        `https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/73eca476/${file}`,
         `${MIRROR}/sense-voice-${file}`,
         `https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/${file}`,
       ]);
     } else {
       expect(model.urls[0]!.startsWith(`${MIRROR}/`)).toBe(true);
-      expect(model.urls.length).toBeGreaterThan(1);
+      expect(model.urls.filter(url => /^https:\/\/www\.modelscope\.cn\/models\/[^/]+\/[^/]+\/resolve\/[0-9a-f]{8}\//.test(url))).toHaveLength(1);
     }
     for (const hash of model.sha256) expect(contract).toContain(hash);
   }
@@ -164,8 +164,8 @@ test("下载源并行探测，按吞吐排序，保留探测失败的候选兜�
 });
 
 test("候选只有一个主机时跳过测速并保留候选顺序", async () => {
-  const vad = AUDIO_MODELS.find(item => item.file === "silero_vad.onnx")!;
-  const urls = [...vad.urls, "https://GITHUB.COM:444/another/model"];
+  const urls = [`${MIRROR}/silero_vad.onnx`, "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+    "https://GITHUB.COM:444/another/model"];
   for (const candidates of [urls.slice(0, 1), urls]) {
     const probes: string[] = [];
     const ranked = await rankDownloadSources(candidates, async url => {

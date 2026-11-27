@@ -10,7 +10,10 @@ const GITHUB = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
 // 我们自己 Release 上的原样副本，排在上游前面：上游重传文件（2026-11-19 换了声纹模型）不会再挡住新安装。
 export const MIRROR = "https://github.com/JinSooo/tacit/releases/download/models-v1";
 const SENSE = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17";
-const SENSE_MODELSCOPE = "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master";
+// ModelScope 上别人传的原样副本，国内直连快；锁在固定提交，内容仍按 sha256 校验，仓库没了就退回其他来源。
+const MODELSCOPE = "https://www.modelscope.cn/models";
+const SENSE_MODELSCOPE = `${MODELSCOPE}/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/73eca476`;
+const VAD_MODELSCOPE = `${MODELSCOPE}/xnnehang/k2-fsa-silero-vad/resolve/e64bab14/silero_vad.onnx`;
 const SPEAKER = "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx";
 
 export interface Model {
@@ -24,11 +27,12 @@ export interface Model {
 }
 export const AUDIO_MODELS: Model[] = [
   { file: "silero_vad.onnx", sha256: ["9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"],
-    urls: [`${MIRROR}/silero_vad.onnx`, `${GITHUB}/asr-models/silero_vad.onnx`] },
+    urls: [`${MIRROR}/silero_vad.onnx`, VAD_MODELSCOPE, `${GITHUB}/asr-models/silero_vad.onnx`] },
   // 上游 2026-11-19 重新导出（多 1 字节、几乎每个字节都变），实测同一段语音两版声纹余弦为 1.000000，两版都认。
   { file: SPEAKER, sha256: ["1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
     "f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498"],
-    urls: [`${MIRROR}/${SPEAKER}`, `${GITHUB}/speaker-recongition-models/${SPEAKER}`] },
+    urls: [`${MIRROR}/${SPEAKER}`, `${MODELSCOPE}/zyaztec/sherpa-onnx-3dspeaker-eres2net-base-sv-zh-cn/resolve/5766f8a5/${SPEAKER}`,
+      `${GITHUB}/speaker-recongition-models/${SPEAKER}`] },
   // 单独下载约 240MB；GitHub 只有约 1GB 的整包，单独下载都失败时才用。
   { file: "sense-voice/model.int8.onnx", sha256: ["c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"],
     urls: [`${SENSE_MODELSCOPE}/model.int8.onnx`, `${MIRROR}/sense-voice-model.int8.onnx`, `https://huggingface.co/csukuangfj/${SENSE}/resolve/main/model.int8.onnx`],

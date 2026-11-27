@@ -42,7 +42,8 @@ internal fun rememberPermissionRecovery(notify: (String) -> Unit): (String, Stri
     explanation?.let { message ->
         AlertDialog(
             onDismissRequest = { explanation = null },
-            text = { Text(message) },
+            title = { Text(message) },
+            text = { Text(strings.text(R.string.permission_blocked_hint)) },
             confirmButton = {
                 TextAction(strings.text(R.string.go_to_system_settings), {
                     explanation = null

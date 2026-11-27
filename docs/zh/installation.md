@@ -1,4 +1,4 @@
-<!-- source: docs/installation.md @ 3939a8465ae0009a25fd16b36fd7d9d78e1e0c2e -->
+<!-- source: docs/installation.md @ b51b5287ef3c9b66a81ae86addc7a910bd877d93 -->
 
 [English](../installation.md) | 简体中文
 
@@ -38,7 +38,7 @@
 
 ## 语音模型
 
-第一次开启录音时，应用调用 `cli.ts audio-models` 把约 270MB 的模型下载到数据目录的 `models/`，逐个校验 sha256 后再放进去（`hub/src/audio-models.ts`）。VAD 和声纹模型从项目自己的 GitHub Release 副本（`models-v1`）下载，失败再回退到 `sherpa-onnx` 的 GitHub Release。SenseVoice 的两个文件有三个内容完全相同的来源：ModelScope、项目副本和 Hugging Face。下载前先向每个来源取一小段测速，从最快的下载，失败或校验不符再换下一个；都不行时最后才从 GitHub 下载约 1GB 的整包取出。下载失败的，录音状态里会显示原因，60 秒后随下一次启动录音重试。
+第一次开启录音时，应用调用 `cli.ts audio-models` 把约 270MB 的模型下载到数据目录的 `models/`，逐个校验 sha256 后再放进去（`hub/src/audio-models.ts`）。每个文件都有三个内容完全相同的来源：ModelScope（国内直连快）、项目自己的 GitHub Release 副本（`models-v1`），以及 `sherpa-onnx` 的 GitHub Release（VAD、声纹）或 Hugging Face（SenseVoice）。下载前先向每个来源取一小段测速，从最快的下载，失败或校验不符再换下一个；都不行时最后才从 GitHub 下载约 1GB 的整包取出。下载失败的，录音状态里会显示原因，60 秒后随下一次启动录音重试。
 
 ## 从源码安装
 

@@ -55,10 +55,14 @@ class SpeechModelDownloadTest {
         SpeechModelCatalog.resources.take(2).forEach {
             val name = File(it.path).name
             assertEquals(listOf(
-                "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master/$name",
+                "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/73eca476/$name",
                 "${SpeechModelCatalog.mirror}/sense-voice-$name",
                 "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/$name",
             ), listOf(it.url) + it.fallbackUrls)
+        }
+        SpeechModelCatalog.resources.drop(2).forEach {
+            assertEquals("ModelScope copy: ${it.path}", 1, it.fallbackUrls.count { url ->
+                Regex("^https://www\\.modelscope\\.cn/models/[^/]+/[^/]+/resolve/[0-9a-f]{8}/").containsMatchIn(url) })
         }
         (SpeechModelCatalog.resources.drop(2) + SpeechModelCatalog.taggingArchive + QnnCatalog.archive).forEach {
             assertTrue("Mirror first: ${it.path}", it.url.startsWith(SpeechModelCatalog.mirror + "/") && it.fallbackUrls.isNotEmpty())

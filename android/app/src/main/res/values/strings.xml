@@ -369,6 +369,7 @@
     <string name="models_import_folder_hint">Choose the folder that contains these files: %1$s.</string>
     <string name="model_folder_duplicate">More than one file or folder is named %1$s.</string>
     <string name="go_to_system_settings">Go to system settings</string>
+    <string name="permission_blocked_hint">Android won\'t ask again. Turn it on in system settings.</string>
     <string name="confirm_mac_online">Check that your Mac is on and connected to the internet.</string>
     <string name="sync_pair_timed_out">No reply yet. Try connecting again with the same invite link.</string>
     <string name="invite_format_hint">Paste the full link starting with tacit://pair?d=.</string>

@@ -35,7 +35,9 @@ internal data class SpeechModelResource(
 
 /** The four artifacts and hashes specified in docs/contracts.md; no archive or extra fp32 model download. */
 internal object SpeechModelCatalog {
-    private const val modelScope = "https://www.modelscope.cn/models/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/master"
+    /** Exact copies others uploaded to ModelScope, pinned to a commit; hashes still decide, other sources remain. */
+    private const val modelScopeRoot = "https://www.modelscope.cn/models"
+    private const val modelScope = "$modelScopeRoot/pengzhendong/sherpa-onnx-sense-voice-zh-en-ja-ko-yue/resolve/73eca476"
     private const val sense = "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07"
     private const val release = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
     /** Unmodified copies on our own release so an upstream re-upload cannot block new installs. */
@@ -47,10 +49,11 @@ internal object SpeechModelCatalog {
         SpeechModelResource("sense-voice/tokens.txt", "$modelScope/tokens.txt", 315894,
             "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc", listOf("$mirror/sense-voice-tokens.txt", "$sense/tokens.txt")),
         SpeechModelResource("silero_vad.onnx", "$mirror/silero_vad.onnx", 643854,
-            "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6", listOf("$release/asr-models/silero_vad.onnx")),
+            "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6", listOf("$modelScopeRoot/xnnehang/k2-fsa-silero-vad/resolve/e64bab14/silero_vad.onnx", "$release/asr-models/silero_vad.onnx")),
         // Upstream re-exported this file on 2026-11-19; both versions give identical embeddings (cosine 1.000000).
         SpeechModelResource(speaker, "$mirror/$speaker", 39593761,
-            "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b", listOf("$release/speaker-recongition-models/$speaker"),
+            "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b", listOf("$modelScopeRoot/zyaztec/sherpa-onnx-3dspeaker-eres2net-base-sv-zh-cn/resolve/5766f8a5/$speaker",
+                "$release/speaker-recongition-models/$speaker"),
             alternates = listOf(39593762L to "f1ee61be04000b50392a63442e5dd9feaea7e81dddd494d3647cf1c3d88a1498"))
     )
     val totalBytes = resources.sumOf { it.bytes }
