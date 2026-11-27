@@ -357,10 +357,11 @@ export async function setup(o: SetupOptions): Promise<{ full: boolean; restarted
     let ready = await healthy(port);
     if (!ready && !needsLoad && source === "default") {
       const code = readJSON(startupMarker)?.code;
-      if (code === "port_in_use" || (!code && await probe(port, "127.0.0.1") === null)) {
+      // 只认后台自己写下的“端口被占”：自家后台正监听这个端口、只是启动慢时，探测也会显示被占（第 2 轮审查）。
+      if (code === "port_in_use") {
         for (const job of ["distill", "hub"] as const) await unload(job);
         rmSync(startupMarker, { force: true });
-        await startHub(true);
+        await startHub(await probe(port, "127.0.0.1") === null);
         restart = true;
         ready = await healthy(port);
       }

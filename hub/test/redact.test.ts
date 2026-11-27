@@ -171,3 +171,11 @@ test("Basic credentials and single-component URL user information are redacted",
     text: "https://example.invalid/path/user@example.invalid", count: 0,
   });
 });
+
+// 回归（第 2 轮审查）：普通英文里的 Basic 和 ssh 用户名不是凭据。
+test("plain English after Basic and ssh user names stay readable", () => {
+  for (const text of ["Use basic authentication for the demo", "Basic configuration steps", "basic implementation notes",
+    "Basic QWxwaGFCZXRhR2FtbWE=", "ssh://git@github.com/example/plugin.git", "git@github.com:example/plugin.git"]) {
+    expect(redactString(text)).toEqual({ text, count: 0 });
+  }
+});

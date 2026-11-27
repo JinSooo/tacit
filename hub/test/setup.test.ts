@@ -384,10 +384,11 @@ test("normal startup restarts an already registered hub once after a default por
       }
       return 0;
     };
-    const options = { launchctl, healthy: async (port: number) => {
-      healthPorts.push(port);
-      return port === 47825;
-    } };
+    const options = { launchctl, probePort: async (port: number) => port === DEFAULT_PORT ? null : port,
+      healthy: async (port: number) => {
+        healthPorts.push(port);
+        return port === 47825;
+      } };
     setConflict();
     expect(await f.run(options)).toEqual({ full: false, restarted: true });
     expect(healthPorts).toEqual([DEFAULT_PORT, 47825]);
@@ -397,5 +398,22 @@ test("normal startup restarts an already registered hub once after a default por
     setConflict();
     await expect(f.run(options)).rejects.toMatchObject({ reason: "port_in_use" });
     expect(restarts).toBe(1);
+  } finally { f.cleanup(); }
+});
+
+// 回归（第 2 轮审查）：自家后台正监听默认端口、只是健康检查慢时，探测也显示“被占”，不能因此卸载并改端口。
+test("a slow but registered hub without a port_in_use record keeps its port", async () => {
+  const f = fixture();
+  try {
+    await f.run();
+    let bootouts = 0;
+    const launchctl = (args: string[]) => {
+      if (args[0] === "bootout") bootouts++;
+      return args[0] === "print" ? 0 : 0;
+    };
+    await expect(f.run({ launchctl, probePort: async () => null, healthy: async () => false }))
+      .rejects.toMatchObject({ reason: "service_unhealthy" });
+    expect(bootouts).toBe(0);
+    expect(existsSync(join(f.data, "hub.json")) ? JSON.parse(readFileSync(join(f.data, "hub.json"), "utf8")).port : undefined).toBeUndefined();
   } finally { f.cleanup(); }
 });
