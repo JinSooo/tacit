@@ -15,8 +15,19 @@ stdout 按契约输出 record，最后输出 checkpoint。state 文件只读，�
 | GitHub Copilot CLI | `~/.copilot/session-state/<会话 ID>/events.jsonl`，同目录的 `workspace.yaml` 提供工作目录 | `RA_COPILOT_DIR`，其次 `COPILOT_HOME` | `copilot_cli.session` |
 | CodeBuddy Code | `~/.codebuddy/projects/<项目>/<会话 ID>.jsonl` | `RA_CODEBUDDY_DIR`，其次 `CODEBUDDY_CONFIG_DIR` | `codebuddy.session` |
 | WorkBuddy | `~/.workbuddy/projects/<项目>/<会话 ID>.jsonl` | `RA_WORKBUDDY_DIR` | `workbuddy.session` |
+| Gemini CLI | `~/.gemini/tmp/<项目>/chats/session-*.jsonl` | `RA_GEMINI_DIR`；`GEMINI_CLI_HOME` 覆盖主目录 | `gemini_cli.session` |
+| Qwen Code | `~/.qwen/projects/<项目>/chats/<会话 ID>.jsonl` | `RA_QWEN_DIR`、`QWEN_RUNTIME_DIR`、`QWEN_HOME` | `qwen_code.session` |
+| OpenCode（v1.2.0 起） | `~/.local/share/opencode/opencode.db` | `RA_OPENCODE_DIR`、`OPENCODE_DB`、`OPENCODE_DATA_DIR`、`XDG_DATA_HOME` | `opencode.session` |
 
 Claude Code 和 Codex 读取 JSONL 及 Zstandard 压缩归档。Antigravity 在每个数据目录下读取 `brain/<会话 ID>/.system_generated/logs/transcript_full.jsonl`，缺少完整转录时读取同目录的 `transcript.jsonl`。工作目录和子会话关系来自同一数据目录下的 `conversation_summaries.db`。索引无法读取时仍采集转录，工作目录留空。采集范围限于表中列出的三个 Antigravity 数据目录及这两种转录文件。
+
+Gemini CLI 按上游源码实现、未真机验证。工作目录优先取 `~/.gemini/projects.json`，再取项目的 `.project_root` 或会话首行的 `directories[0]`。Seatbelt 沙盒的会话从 `~/.cache/.gemini/tmp/` 读取。只采 `chats/` 下的主会话，元数据更新、补丁和回退事件按非消息跳过。
+
+Qwen Code 按上游源码实现、未真机验证。工作目录取逐条记录中的 `cwd`。当 `QWEN_RUNTIME_DIR` 未设置时，运行时目录优先取设置中的 `runtimeOutputDir`，然后使用 `QWEN_HOME` 或默认目录。
+
+OpenCode 按上游源码实现、未真机验证。只读查询 SQLite 的 `session`、`message` 和 `part` 表，工作目录来自 `session.directory`。按消息与内容块的更新时间推进游标，回复完成后才收录。数据库锁住时保留游标，下一轮重试。频道版数据库可通过 `OPENCODE_DB` 指定，旧版 `storage/` 下的 JSON 不采集。
+
+Kimi 只接查询，不读会话：逐条时刻未核实。待核对的新版主会话日志位于 `~/.kimi-code/sessions/<分桶>/<会话 ID>/agents/main/wire.jsonl`。旧版会话目录为 `~/.kimi/sessions/<工作目录哈希>/<会话 ID>/`。
 
 - `filters.ts` 集中列出丢弃规则及原因。只读取双方可见文字；澄清回答只保留用户答案。消息内部保留真实换行，消息之间空一行，各以 `[我] ` 或 `[AI] ` 开头。
 - 首次默认按文件 mtime 和消息时间回溯七天。已有 checkpoint 时再传 `--since` 表示重新导入：该时刻之后改过的文件从头重读，只取该时刻之后的消息；八天窗口内已输出的消息靠 seen 哈希跳过，更早的会以相同 `source_ref` 再输出一次由 hub 去重；checkpoint 的 since 和重放下界不倒退。普通 JSONL 按完整行字节偏移续读，末尾未换行的半行下次再读。完整行 JSON 损坏则跳过，结束时仅向 stderr 汇总“跳过 N 行损坏数据”，不回显路径或正文。

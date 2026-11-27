@@ -9,7 +9,7 @@ import { readEvents } from "./json-lines.ts";
 import { clampTitle, parsePluginArgs, toLocalIso, ulid, validateRecord, type RecordV1 } from "../../packages/record/index.ts";
 import { messageBuffer, type Message } from "./message-buffer.ts";
 import { adapters, adaptersByCheckpointKey } from "./adapters/index.ts";
-import type { SessionDirectories } from "./adapters/types.ts";
+import type { DatabaseProgress, SessionDirectories } from "./adapters/types.ts";
 
 const HOUR = 3_600_000;
 // 会话安静满 3 分钟，或一批最早的消息已等了 15 分钟，就先输出这一批；同一小时后续内容用 #2、#3 接着编号。
@@ -25,7 +25,7 @@ interface SessionWarnings { unrecognized?: number; damaged?: number }
 interface Bucket { part: number; messages: Message[] }
 interface Session { provider: string; id: string; cwd: string | null; seen: { [hour: string]: string[] }; buckets: { [hour: string]: Bucket }; mtime: number; lastActivity?: number }
 interface FileProgress { offset: number; mtime: number; size: number; identity: string; session: string | null; cwd?: string | null; skipped?: true }
-export interface State { version: 2; since: number; replaySince: number; files: { [file: string]: FileProgress }; sessions: { [id: string]: Session } }
+export interface State { version: 2; since: number; replaySince: number; files: { [file: string]: FileProgress }; sessions: { [id: string]: Session }; databases?: { [file: string]: DatabaseProgress } }
 export interface Options extends SessionDirectories { device: string; lang?: Lang; now?: number; since?: number; state?: State; excludeDirs?: string[]; onRecord?: (record: RecordV1) => void | Promise<void>; onWarning?: (message: string) => void; onDiagnostics?: (warnings: SessionWarnings) => void }
 
 function repoRoot(cwd: string | null): string | null {
@@ -110,11 +110,22 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     if (id === undefined) { id = bucketIds.size; bucketIds.set(bucket, id); }
     getBuffer().add(id, message, hash);
   };
+  const queueMessage = (key: string, session: Session, message: Message | undefined) => {
+    if (!message || message.time < floor) return;
+    session.lastActivity = Math.max(session.lastActivity ?? session.mtime, message.time);
+    const hash = createHash("sha256").update(JSON.stringify([message.time, message.role, message.text])).digest("hex");
+    let known = seen.get(key);
+    if (!known) { known = new Set(Object.values(session.seen).flat()); seen.set(key, known); }
+    if (known.has(hash)) return;
+    const hour = String(Math.floor(message.time / HOUR) * HOUR);
+    const bucket = session.buckets[hour] ??= { part: 0, messages: [] };
+    add(bucket, message, hash);
+  };
   for (const session of Object.values(state.sessions)) for (const bucket of Object.values(session.buckets)) {
     for (const message of bucket.messages) add(bucket, message, null);
     bucket.messages = [];
   }
-  for (const adapter of adapters) for (const sessionFile of adapter.files(options)) {
+  for (const adapter of adapters) if ("files" in adapter) for (const sessionFile of adapter.files(options)) {
     const provider = adapter.checkpointKey;
     const file = sessionFile.path;
     const metadata = sessionFile.session;
@@ -129,7 +140,8 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     if (!old && stat.mtimeMs < (rescan ? floor : state.since)) continue;
     const identity = `${stat.dev}:${stat.ino}`;
     const reset = (rescan && stat.mtimeMs >= floor) || (file.endsWith(".zst") && (stat.size !== old?.size || stat.mtimeMs !== old?.mtime)) || !old || old.identity !== identity || stat.size < old.size || (stat.size === old.size && stat.mtimeMs !== old.mtime);
-    const progress: FileProgress = reset ? { offset: 0, mtime: stat.mtimeMs, size: stat.size, identity, session: old?.session ?? null, cwd: old?.cwd ?? null } : { ...old };
+    const fallback = sessionFile.fallbackSessionId;
+    const progress: FileProgress = reset ? { offset: 0, mtime: stat.mtimeMs, size: stat.size, identity, session: old?.session ?? (fallback ? `${provider}:${fallback}` : null), cwd: old?.cwd ?? null } : { ...old };
     if (!progress.skipped && metadata && sessionKey) {
       progress.session = sessionKey;
       if (metadata.cwd !== undefined) {
@@ -142,7 +154,7 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     if (!progress.skipped && (reset || stat.size !== old?.size || stat.mtimeMs !== old?.mtime)) {
       let fileParsed = 0, fileUnknown = 0;
       const events = adapter.readEvents ?? readEvents;
-      for await (const line of events(file, progress.offset, stat.size, adapter.additionalRootFields, adapter.additionalMessageFields)) {
+      for await (const line of events(file, progress.offset, stat.size, adapter.additionalRootFields, adapter.additionalMessageFields, adapter.genaiParts)) {
         progress.offset = line.end;
         if (line.damaged) { damaged++; continue; }
         const event = line.event;
@@ -163,16 +175,7 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
         const cwd = adapter.cwd?.(event, sessionFile);
         if (typeof cwd === "string") session.cwd = cwd;
         progress.cwd = session.cwd;
-        const message = result.message;
-        if (!message || message.time < floor) continue;
-        session.lastActivity = Math.max(session.lastActivity ?? session.mtime, message.time);
-        const hash = createHash("sha256").update(JSON.stringify([message.time, message.role, message.text])).digest("hex");
-        let known = seen.get(progress.session);
-        if (!known) { known = new Set(Object.values(session.seen).flat()); seen.set(progress.session, known); }
-        if (known.has(hash)) continue;
-        const hour = String(Math.floor(message.time / HOUR) * HOUR);
-        const bucket = session.buckets[hour] ??= { part: 0, messages: [] };
-        add(bucket, message, hash);
+        queueMessage(progress.session, session, result.message);
       }
       parsed += fileParsed;
       unrecognized += fileUnknown;
@@ -180,6 +183,26 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     }
     progress.mtime = stat.mtimeMs; progress.size = stat.size;
     state.files[file] = progress;
+  }
+  for (const adapter of adapters) if ("readDatabase" in adapter) {
+    const file = adapter.database(options);
+    if (!file) continue;
+    const scan = adapter.readDatabase(file, state.databases?.[file], floor, rescan);
+    if (!scan) continue;
+    (state.databases ??= {})[file] = scan.progress;
+    const provider = adapter.checkpointKey;
+    let databaseUnknown = 0;
+    for (const { sessionId, cwd, mtime, result } of scan.rows) {
+      if (!result.recognized) databaseUnknown++;
+      const key = `${provider}:${sessionId}`;
+      const session = state.sessions[key] ??= { provider, id: sessionId, cwd, seen: {}, buckets: {}, mtime };
+      session.cwd = cwd;
+      session.mtime = Math.max(session.mtime, mtime);
+      queueMessage(key, session, result.message);
+    }
+    parsed += scan.rows.length;
+    unrecognized += databaseUnknown;
+    if (databaseUnknown >= 20 && databaseUnknown === scan.rows.length) unrecognizedFile = true;
   }
   // 同一会话可能同时出现在活动目录和归档目录，统一去重、分桶和计算最近修改时间。
   // 保留已移走文件的最近活动时间，避免把仍有待输出内容的会话误判为空。

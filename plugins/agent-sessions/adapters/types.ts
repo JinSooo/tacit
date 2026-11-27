@@ -11,10 +11,15 @@ export interface SessionDirectories {
   copilotDir?: string;
   codebuddyDir?: string;
   workbuddyDir?: string;
+  geminiDir?: string;
+  qwenDir?: string;
+  opencodeDir?: string;
 }
 
 export interface SessionFile {
   path: string;
+  cwd?: string;
+  fallbackSessionId?: string;
   session?: { id: string; cwd?: string | null; subagent: boolean };
 }
 
@@ -23,9 +28,11 @@ export interface SessionAdapter {
   checkpointKey?: string;
   additionalRootFields?: ReadonlySet<string>;
   additionalMessageFields?: ReadonlySet<string>;
+  genaiParts?: "content" | "parts";
   files(directories: SessionDirectories): Iterable<SessionFile>;
   readEvents?: typeof readEvents;
   sessionId?(event: Json | null, file: SessionFile): unknown;
+  /** 子 Agent、分叉等不属于用户直接参与的会话：返回 true 时整段跳过。 */
   skipSession?(event: Json): boolean;
   cwd?(event: Json, file: SessionFile): unknown;
   parse(event: Json | null, hasSession: boolean): Parsed;
@@ -39,6 +46,29 @@ export function directoryEntries(root: string): fs.Dirent[] {
 export function* jsonlFiles(root: string): Generator<SessionFile> {
   for (const entry of directoryEntries(root)) {
     if (entry.isFile() && entry.name.endsWith(".jsonl")) yield { path: path.join(root, entry.name) };
+  }
+}
+
+export interface DatabaseProgress {
+  identity: string;
+  updated: number;
+  boundary: string[];
+}
+
+export interface DatabaseSessionAdapter {
+  id: string;
+  checkpointKey?: string;
+  database(directories: SessionDirectories): string | null;
+  readDatabase(file: string, previous: DatabaseProgress | undefined, floor: number, rescan: boolean): {
+    progress: DatabaseProgress;
+    rows: { sessionId: string; cwd: string | null; mtime: number; result: Parsed }[];
+  } | null;
+}
+
+export function* directoriesIn(root: string): Generator<string> {
+  if (!fs.lstatSync(root, { throwIfNoEntry: false })?.isDirectory()) return;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory()) yield path.join(root, entry.name);
   }
 }
 
