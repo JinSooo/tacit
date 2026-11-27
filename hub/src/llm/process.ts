@@ -23,20 +23,31 @@ export function cliEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
 export function run(ctx: BackendContext, command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = "", stderr = "", settled = false, failure: ModelError | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stderrLimit = 64 * 1024;
+    let stderrTruncated = false;
     observeRequest(ctx, "cli", { input: JSON.parse(input(ctx)), schema: ctx.req.schema });
     // 不继承额外的终端输入通道；认证仍由 CLI 自己处理。
     let child: ReturnType<Spawn>;
     try { child = ctx.spawn(command, args, { cwd: ctx.cwd, stdio: "pipe", detached: process.platform !== "win32", env: cliEnv() }); }
-    catch (error) { reject(new ModelError(spawnFailure(error))); return; }
+    catch (error) { cannotStart(error); return; }
     function stop() {
       try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); }
       catch { child.kill("SIGKILL"); }
     }
-    function fail(error: ModelError) {
+    function fail(error: ModelError, detail?: string) {
       if (settled) return;
-      settled = true; clearTimeout(timer); reject(error);
+      settled = true;
+      clearTimeout(timer);
+      try { if (detail) ctx.observer?.failure?.(detail); }
+      catch { reject(new ModelError("usage_record_failed")); return; }
+      reject(error);
     }
-    const timer = setTimeout(() => { failure = new ModelError("timeout"); stop(); }, ctx.timeoutMs);
+    function cannotStart(error: unknown) {
+      const code = spawnFailure(error);
+      fail(new ModelError(code), code === "cli_missing" ? "The selected command was not found." : "The selected command could not be started.");
+    }
+    timer = setTimeout(() => { failure = new ModelError("timeout"); stop(); }, ctx.timeoutMs);
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       if (failure) return;
@@ -44,17 +55,25 @@ export function run(ctx: BackendContext, command: string, args: string[]): Promi
       ctx.metrics.outputChars += Array.from(chunk).length;
       if (stdout.length > 8 * 1024 * 1024) { failure = new ModelError("schema_mismatch"); stop(); }
     });
-    child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(0, 500); });
-    child.on("error", error => fail(new ModelError(spawnFailure(error))));
+    child.stderr.on("data", (chunk: string) => {
+      const remaining = stderrLimit - stderr.length;
+      stderr += chunk.slice(0, remaining);
+      stderrTruncated ||= chunk.length > remaining;
+    });
+    child.on("error", cannotStart);
     child.stdin.on("error", () => { /* 提前退出时由 close 统一报告。 */ });
     child.on("close", code => {
       if (settled) return;
       try { ctx.observer?.response(stdout); }
       catch { fail(new ModelError("usage_record_failed")); return; }
-      if (failure) { fail(failure); return; }
+      if (failure) {
+        fail(failure, failure.code === "timeout" ? "The command was stopped after it exceeded the time limit." : undefined);
+        return;
+      }
       if (code !== 0) {
         // claude -p 出错时常把原因写在 stdout 的 JSON（result 字段）里，stderr 是空的，例如"额度用完"。
-        let reason = stderr;
+        // 丢弃可能截在凭据中间的不完整末行，保留的内容由快照脱敏后再截短。
+        let reason = (stderrTruncated ? stderr.slice(0, Math.max(0, stderr.lastIndexOf("\n"))) : stderr).trim();
         try { const o = JSON.parse(stdout); if (o?.is_error && typeof o.result === "string") reason = o.result; } catch { /* 不是 JSON 就用 stderr */ }
         if (command === "codex") {
           // --json 的错误在 stdout 的 JSONL 事件里，stderr 经常为空。
@@ -67,7 +86,8 @@ export function run(ctx: BackendContext, command: string, args: string[]): Promi
             } catch { /* 非事件行忽略。 */ }
           }
         }
-        fail(new ModelError(classifyModelError(reason, "cli_failed"))); return;
+        fail(new ModelError(classifyModelError(reason, "cli_failed")), reason.trim() || "The command exited without an error message.");
+        return;
       }
       settled = true; clearTimeout(timer); resolve(stdout);
     });

@@ -88,7 +88,12 @@ export async function httpComplete(ctx: BackendContext, readKey: ReadKey): Promi
       return parseJSON(choice.message.content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, ""));
     })()]);
   } catch (error) {
-    if (controller.signal.aborted) throw new ModelError("timeout");
-    throw error;
+    const failure = controller.signal.aborted ? new ModelError("timeout") : error;
+    // 有响应的服务错误已进快照。这里只补没有响应正文时的固定说明。
+    if (failure instanceof ModelError && (failure.code === "timeout" || failure.code === "network")) {
+      const detail = failure.code === "timeout" ? "The model service did not reply before the time limit." : "The connection to the model service failed.";
+      try { ctx.observer?.failure?.(detail); } catch { throw new ModelError("usage_record_failed"); }
+    }
+    throw failure;
   } finally { clearTimeout(timer); }
 }

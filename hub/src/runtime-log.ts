@@ -4,11 +4,12 @@ import { InputError, type HubDB } from "./db.ts";
 import { redactString } from "./redact.ts";
 import { eraseAuditQueries, expireAuditQueries } from "./agent-audit.ts";
 import { classifyModelError, ModelError } from "./llm/error-category.ts";
-import type { LLMRequest, ModelConfig, UsageRow, CallObserver } from "./llm/types.ts";
+import type { LLMRequest, ModelConfig, UsageRow, CallObserver, Tier } from "./llm/types.ts";
 
 export const SNAPSHOT_DAYS = 7;
 const RETENTION = SNAPSHOT_DAYS * 86400_000;
 const OUTPUT_LIMIT = 128_000;
+const FAILURE_MARKER = "\n--- failure detail ---\n";
 export const runtimeSchema = `
 CREATE TABLE runtime_calls (
   id TEXT PRIMARY KEY, at TEXT NOT NULL, at_ms INTEGER NOT NULL, kind TEXT NOT NULL,
@@ -22,6 +23,30 @@ CREATE INDEX runtime_calls_time ON runtime_calls(kind,at_ms DESC,id DESC);
 PRAGMA user_version=11;`;
 
 type Row = Record<string, any>;
+type FailureSnapshot = { response_text: string | null; transport: string | null; error: string | null };
+
+function failureDetailFrom(row?: FailureSnapshot): string | null {
+  if (!row?.error || !row.response_text) return null;
+  const { response_text: text } = row;
+  const marker = text.indexOf(FAILURE_MARKER);
+  let detail: string | undefined;
+  if (marker >= 0) detail = text.slice(marker + FAILURE_MARKER.length);
+  // API 后端已保存服务错误的响应且拦掉了该次使用的 key。带 HTTP 状态的类别来自服务错误，
+  // 不能用普通校验失败的输出充当原因，后者可能是用户记录或生成正文。
+  else if (row.transport === "api" && /:[1-5]\d{2}$/.test(row.error)) {
+    try {
+      const body = JSON.parse(text);
+      detail = [body?.error?.message, body?.error, body?.base_resp?.status_msg, body?.message]
+        .find((value): value is string => typeof value === "string" && Boolean(value.trim()));
+    } catch { detail = text; }
+  }
+  return detail?.trim() ? Array.from(detail.trim()).slice(0, 300).join("") : null;
+}
+
+function snapshotResponse(text: string | null): string | null {
+  const marker = text?.indexOf(FAILURE_MARKER) ?? -1;
+  return marker < 0 ? text : text!.slice(0, marker) || null;
+}
 export function contentRevision(hub: HubDB): number {
   const row = hub.db.prepare("SELECT v FROM distill_state WHERE k='content_revision'").get() as { v: string } | undefined;
   return row ? Number(JSON.parse(row.v)) || 0 : 0;
@@ -87,15 +112,29 @@ export class RuntimeLog {
         }
       }
       const safe = redactString(text); // 先完整脱敏再截断，避免在密钥中间截断而漏检。
+      const body = safe.text.replaceAll(FAILURE_MARKER, "\n--- failure detail --- \n");
       this.hub.db.transaction(() => {
         expireSnapshots(this.hub);
         this.hub.db.prepare(`UPDATE runtime_calls SET provider_state='returned',
           response_text=CASE WHEN content_state='available' AND revision=? THEN ? ELSE NULL END,
           response_truncated=?,redactions=redactions+? WHERE id=?`)
-          .run(contentRevision(this.hub),safe.text.slice(0,OUTPUT_LIMIT),Number(safe.text.length > OUTPUT_LIMIT),safe.count + keyRedactions,id);
+          .run(contentRevision(this.hub),body.slice(0,OUTPUT_LIMIT),Number(body.length > OUTPUT_LIMIT),safe.count + keyRedactions,id);
       }).immediate();
     };
-    return { request, response };
+    const failure = (text: string) => {
+      const safe = redactString(text);
+      const detail = Array.from(safe.text.trim()).slice(0, 500).join("").replaceAll(FAILURE_MARKER, "\n--- failure detail --- \n");
+      if (!detail) return;
+      this.hub.db.transaction(() => {
+        expireSnapshots(this.hub);
+        const row = this.hub.db.prepare("SELECT response_text FROM runtime_calls WHERE id=? AND content_state='available' AND revision=?")
+          .get(id, contentRevision(this.hub)) as Pick<FailureSnapshot, "response_text"> | undefined;
+        if (!row) return;
+        this.hub.db.prepare("UPDATE runtime_calls SET response_text=?,redactions=redactions+? WHERE id=?")
+          .run((snapshotResponse(row.response_text) ?? "") + FAILURE_MARKER + detail, safe.count, id);
+      }).immediate();
+    };
+    return { request, response, failure };
   }
 
   finish(row: UsageRow, validated: boolean) {
@@ -143,12 +182,27 @@ export class RuntimeLog {
     return { calls: page, next_cursor: rows.length > limit && last ? Buffer.from(JSON.stringify([last.at_ms,last.id])).toString("base64url") : null };
   }
 
+  failureDetail(id: string | undefined): string | null {
+    if (!id) return null;
+    expireSnapshots(this.hub);
+    const row = this.hub.db.prepare("SELECT response_text,transport,error FROM runtime_calls WHERE id=? AND content_state='available'").get(id);
+    return failureDetailFrom(row as FailureSnapshot | undefined);
+  }
+
+  lastFailureDetails(tiers: readonly Tier[]): Record<string, string | null> {
+    expireSnapshots(this.hub);
+    // 以用量表最后一次整理失败为准，测试连接和没有快照的失败都不能串用旧原因。
+    const query = this.hub.db.prepare(`SELECT response_text,transport,error FROM runtime_calls WHERE content_state='available'
+      AND id=(SELECT id FROM llm_usage WHERE tier=? AND ok=0 ORDER BY id DESC LIMIT 1)`);
+    return Object.fromEntries(tiers.map(tier => [tier, failureDetailFrom(query.get(tier) as FailureSnapshot | undefined)]));
+  }
+
   detail(id: string): (Row & { request: any; response: string | null }) | null {
     expireSnapshots(this.hub);
     const row = this.hub.db.prepare("SELECT * FROM runtime_calls WHERE id=?").get(id) as Row | undefined;
     if (!row) return null;
     const { request_json, response_text, ...meta } = row;
-    return { ...meta, request: request_json ? JSON.parse(request_json) : null, response: response_text };
+    return { ...meta, request: request_json ? JSON.parse(request_json) : null, response: snapshotResponse(response_text) };
   }
 }
 

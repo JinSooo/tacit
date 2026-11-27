@@ -19,5 +19,9 @@ export interface UsageRow {
 export type ReadKey = (provider: Provider) => string | Promise<string>;
 export type Spawn = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
 export interface Metrics { outputChars: number; inputTokens: number | null; outputTokens: number | null }
-export interface CallObserver { request(transport: "api" | "cli", payload: unknown): void; response(text: string, apiKey?: string): void }
+export interface CallObserver {
+  request(transport: "api" | "cli", payload: unknown): void;
+  response(text: string, apiKey?: string): void;
+  failure?(detail: string): void;
+}
 export interface BackendContext { req: LLMRequest; config: ModelConfig; cwd: string; spawn: Spawn; metrics: Metrics; timeoutMs: number; observer?: CallObserver }
