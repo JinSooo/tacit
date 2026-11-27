@@ -198,6 +198,18 @@ private func record(_ id: String, _ source: String, _ title: String, _ start: St
   #expect(failed.activityNotice == .failed("最近一次整理失败，请检查 AI 模型。"))
 }
 
+@Test(arguments: [
+  "最近 24 小时还没有整理出的活动。", "No activity summaries in the last 24 hours.",
+  "最近 24 小时没有活跃的线程。", "No active tasks in the last 24 hours.",
+  "New activity is waiting to be summarized.",
+])
+func menuBarSummaryHidesBackgroundPlaceholders(_ brief: String) throws {
+  let empty = try decode(NowState.self, "{\"brief\":\"\(brief)\"}")
+  #expect(empty.activitySummary == nil)
+  let actual = try decode(NowState.self, #"{"brief":"确认了潮位观测时间。"}"#)
+  #expect(actual.activitySummary == "确认了潮位观测时间。")
+}
+
 @Test func decodesHubRecordWithNestedContextAndMixedBooleans() throws {
   let r = try decode(HistoryRecord.self, """
     {"id":"01M6Z55ER9BPCTVCYA6ZANFBVM","schema":1,"device":"mac","source":"mac.git","kind":"event",
