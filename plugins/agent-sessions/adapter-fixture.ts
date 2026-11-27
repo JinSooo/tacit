@@ -25,6 +25,7 @@ export function sessionFixture() {
       device: "mac", now: base + 50 * 60_000, state, since: undefined,
       claudeDir: path.join(root, "claude"), codexDir: path.join(root, "codex"), antigravityDir: path.join(root, "gemini"),
       factoryDir: path.join(root, "factory"),
+      copilotDir: path.join(root, "copilot"),
       ...options,
       onRecord: record => { records.push(record); },
       onWarning: () => {},

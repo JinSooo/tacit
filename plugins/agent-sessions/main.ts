@@ -132,14 +132,17 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
     const progress: FileProgress = reset ? { offset: 0, mtime: stat.mtimeMs, size: stat.size, identity, session: old?.session ?? null, cwd: old?.cwd ?? null } : { ...old };
     if (!progress.skipped && metadata && sessionKey) {
       progress.session = sessionKey;
-      progress.cwd = metadata.cwd;
-      const session = state.sessions[sessionKey];
-      if (session) session.cwd = metadata.cwd;
+      if (metadata.cwd !== undefined) {
+        progress.cwd = metadata.cwd;
+        const session = state.sessions[sessionKey];
+        if (session) session.cwd = metadata.cwd;
+      }
     }
     // 未修改文件不读取，但仍在下面检查它的待关闭桶。
     if (!progress.skipped && (reset || stat.size !== old?.size || stat.mtimeMs !== old?.mtime)) {
       let fileParsed = 0, fileUnknown = 0;
-      for await (const line of readEvents(file, progress.offset, stat.size, adapter.additionalRootFields, adapter.additionalMessageFields)) {
+      const events = adapter.readEvents ?? readEvents;
+      for await (const line of events(file, progress.offset, stat.size, adapter.additionalRootFields, adapter.additionalMessageFields)) {
         progress.offset = line.end;
         if (line.damaged) { damaged++; continue; }
         const event = line.event;
@@ -157,7 +160,7 @@ async function collectSessions(options: Options, getBuffer: () => ReturnType<typ
         if (!result.recognized) fileUnknown++;
         if (!progress.session || !event) continue;
         const session = state.sessions[progress.session] ??= { provider, id: progress.session.slice(provider.length + 1), cwd: progress.cwd ?? null, seen: {}, buckets: {}, mtime: stat.mtimeMs };
-        const cwd = adapter.cwd?.(event);
+        const cwd = adapter.cwd?.(event, sessionFile);
         if (typeof cwd === "string") session.cwd = cwd;
         progress.cwd = session.cwd;
         const message = result.message;

@@ -12,6 +12,7 @@ stdout 按契约输出 record，最后输出 checkpoint。state 文件只读，�
 | Codex | `~/.codex/sessions/`、`~/.codex/archived_sessions/` | `RA_CODEX_DIR`（默认 `~/.codex`） | `codex.session` |
 | Antigravity 桌面、CLI、IDE | `~/.gemini/antigravity/`、`~/.gemini/antigravity-cli/`、`~/.gemini/antigravity-ide/` | `RA_ANTIGRAVITY_DIR`（默认 `~/.gemini`） | `antigravity.session` |
 | Factory Droid | `~/.factory/sessions/<项目>/<会话 ID>.jsonl`（也读平铺及 `btw/` 会话） | `RA_FACTORY_DIR`，其次 `FACTORY_HOME_OVERRIDE/.factory` | `droid.session` |
+| GitHub Copilot CLI | `~/.copilot/session-state/<会话 ID>/events.jsonl`，同目录的 `workspace.yaml` 提供工作目录 | `RA_COPILOT_DIR`，其次 `COPILOT_HOME` | `copilot_cli.session` |
 
 Claude Code 和 Codex 读取 JSONL 及 Zstandard 压缩归档。Antigravity 在每个数据目录下读取 `brain/<会话 ID>/.system_generated/logs/transcript_full.jsonl`，缺少完整转录时读取同目录的 `transcript.jsonl`。工作目录和子会话关系来自同一数据目录下的 `conversation_summaries.db`。索引无法读取时仍采集转录，工作目录留空。采集范围限于表中列出的三个 Antigravity 数据目录及这两种转录文件。
 
@@ -28,5 +29,7 @@ Claude Code 和 Codex 读取 JSONL 及 Zstandard 压缩归档。Antigravity 在�
 ## 验证
 
 Factory Droid 读取器按上游打包代码实现，未真机验证。
+
+GitHub Copilot CLI 读取器按上游 SDK 事件定义实现，未真机验证。
 
 `bun test plugins/agent-sessions`、`bun test`、`bunx tsc --noEmit -p .`。所有 fixture 均为合成数据，覆盖过滤、关闭时机、拆桶、迟到追加、字节增量、UTF-8 半行、巨型工具输出、字段乱序、压缩流、文件替换、八天清理及恢复、v1 迁移、CLI 协议和逐条 schema 校验。Antigravity 用例还覆盖子会话过滤、索引不可读、追加和旧游标续用。真机验证仅保留统计。

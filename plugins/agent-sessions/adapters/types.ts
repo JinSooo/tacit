@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { readEvents } from "../json-lines.ts";
 import type { Json, Parsed } from "../session-events.ts";
 
 export interface SessionDirectories {
@@ -7,11 +8,12 @@ export interface SessionDirectories {
   codexDir?: string;
   antigravityDir?: string;
   factoryDir?: string;
+  copilotDir?: string;
 }
 
 export interface SessionFile {
   path: string;
-  session?: { id: string; cwd: string | null; subagent: boolean };
+  session?: { id: string; cwd?: string | null; subagent: boolean };
 }
 
 export interface SessionAdapter {
@@ -20,9 +22,10 @@ export interface SessionAdapter {
   additionalRootFields?: ReadonlySet<string>;
   additionalMessageFields?: ReadonlySet<string>;
   files(directories: SessionDirectories): Iterable<SessionFile>;
+  readEvents?: typeof readEvents;
   sessionId?(event: Json | null, file: SessionFile): unknown;
   skipSession?(event: Json): boolean;
-  cwd?(event: Json): unknown;
+  cwd?(event: Json, file: SessionFile): unknown;
   parse(event: Json | null, hasSession: boolean): Parsed;
 }
 
